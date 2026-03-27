@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import STAGING_DIR
+from ..state import StateManager, TraceStatus
 
 
 def _load_staged_traces(staging_dir: Path) -> list[dict[str, Any]]:
@@ -112,7 +113,16 @@ def run_cli_review(staging_dir: Path = None) -> None:
         print("Run 'opentraces enrich' to stage traces for review.")
         return
 
+    state = StateManager()
     decisions: dict[str, str] = {}
+
+    # Load existing decisions from StateManager
+    for t in traces:
+        tid = t["trace_id"]
+        entry = state.get_trace(tid)
+        if entry and entry.status in (TraceStatus.APPROVED, TraceStatus.REJECTED):
+            decisions[tid] = entry.status.value
+
     pending = [t for t in traces if t["trace_id"] not in decisions]
 
     print(f"\nopentraces CLI Review")
@@ -134,10 +144,12 @@ def run_cli_review(staging_dir: Path = None) -> None:
 
         if choice == "a":
             decisions[tid] = "approved"
+            state.set_trace_status(tid, TraceStatus.APPROVED, session_id=tid)
             print(f"  -> Approved\n")
             idx += 1
         elif choice == "r":
             decisions[tid] = "rejected"
+            state.set_trace_status(tid, TraceStatus.REJECTED, session_id=tid)
             print(f"  -> Rejected\n")
             idx += 1
         elif choice == "s":

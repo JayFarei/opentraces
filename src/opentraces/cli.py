@@ -205,6 +205,7 @@ def parse(auto: bool, limit: int) -> None:
     from .config import get_projects_path, get_tier_for_project
     from .parsers.claude_code import ClaudeCodeParser
     from .security.scanner import scan_trace_record, two_pass_scan, apply_redactions
+    from .security.anonymizer import anonymize_paths
     from .security.classifier import classify_trace_record
     from .enrichment.git_signals import extract_git_signals
     from .enrichment.attribution import build_attribution
@@ -280,6 +281,35 @@ def parse(auto: bool, limit: int) -> None:
                 classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
                 record.security.flags_reviewed = len(classifier_result.flags)
                 record.security.classifier_version = "0.1.0"
+
+            # Anonymize paths (strip /Users/<name>/ etc.)
+            import os as _os
+            username = _os.environ.get("USER") or _os.environ.get("USERNAME", "")
+            extra_usernames = cfg.custom_redact_strings  # reuse as extra usernames too
+            if username:
+                def _anon(text: str | None) -> str | None:
+                    if not text:
+                        return text
+                    return anonymize_paths(text, username=username, extra_usernames=extra_usernames)
+
+                if record.task.description:
+                    record.task.description = _anon(record.task.description)
+                for step in record.steps:
+                    step.content = _anon(step.content)
+                    if step.reasoning_content:
+                        step.reasoning_content = _anon(step.reasoning_content)
+                    for tc in step.tool_calls:
+                        for k, v in list(tc.input.items()):
+                            if isinstance(v, str):
+                                tc.input[k] = _anon(v)
+                    for obs in step.observations:
+                        obs.content = _anon(obs.content)
+                        obs.output_summary = _anon(obs.output_summary)
+                    for snip in step.snippets:
+                        snip.file_path = _anon(snip.file_path) or snip.file_path
+                        snip.text = _anon(snip.text)
+                if record.outcome.patch:
+                    record.outcome.patch = _anon(record.outcome.patch)
 
             # Stage the trace
             jsonl_line = record.to_jsonl_line()

@@ -17,8 +17,18 @@ from typing import Any
 from flask import Flask, jsonify, render_template, request
 
 from ...config import STAGING_DIR
+from ...state import StateManager, TraceStatus
 
-# In-memory review state (persists for the lifetime of the server)
+# StateManager for persistent review decisions
+_state_manager: StateManager | None = None
+
+def _get_state() -> StateManager:
+    global _state_manager
+    if _state_manager is None:
+        _state_manager = StateManager()
+    return _state_manager
+
+# In-memory review state as fallback for display (NOT authoritative for push)
 _review_state: dict[str, dict[str, Any]] = {}
 # Cache for loaded/generated traces (avoids regenerating sample data per request)
 _trace_cache: list[dict[str, Any]] | None = None
@@ -316,7 +326,17 @@ def _load_traces(staging_dir: Path) -> list[dict[str, Any]]:
 
 
 def _get_review_status(trace_id: str) -> str:
-    """Get the review status of a trace."""
+    """Get the review status of a trace from StateManager."""
+    state = _get_state()
+    entry = state.get_trace(trace_id)
+    if entry:
+        status_map = {
+            TraceStatus.APPROVED: "approved",
+            TraceStatus.REJECTED: "rejected",
+            TraceStatus.UPLOADED: "uploaded",
+        }
+        return status_map.get(entry.status, "pending")
+    # Fallback to in-memory state
     if trace_id in _review_state:
         return _review_state[trace_id].get("status", "pending")
     return "pending"
@@ -453,7 +473,9 @@ def create_app(staging_dir: str = None) -> Flask:
 
     @app.route("/api/session/<trace_id>/approve", methods=["POST"])
     def api_approve(trace_id: str):
-        """Approve a session."""
+        """Approve a session, persisting to StateManager."""
+        state = _get_state()
+        state.set_trace_status(trace_id, TraceStatus.APPROVED, session_id=trace_id)
         if trace_id not in _review_state:
             _review_state[trace_id] = {}
         _review_state[trace_id]["status"] = "approved"
@@ -461,7 +483,9 @@ def create_app(staging_dir: str = None) -> Flask:
 
     @app.route("/api/session/<trace_id>/reject", methods=["POST"])
     def api_reject(trace_id: str):
-        """Reject a session."""
+        """Reject a session, persisting to StateManager."""
+        state = _get_state()
+        state.set_trace_status(trace_id, TraceStatus.REJECTED, session_id=trace_id)
         if trace_id not in _review_state:
             _review_state[trace_id] = {}
         _review_state[trace_id]["status"] = "rejected"
@@ -493,13 +517,57 @@ def create_app(staging_dir: str = None) -> Flask:
         if not approved:
             return jsonify({"error": "No approved sessions to push"}), 400
 
-        # In a real implementation, this would call the upload module
-        return jsonify({
-            "status": "pushed",
-            "count": len(approved),
-            "trace_ids": [t["trace_id"] for t in approved],
-            "message": f"Pushed {len(approved)} approved session(s) to HF Hub",
-        })
+        # Try the real upload pipeline
+        try:
+            import os
+            from ...config import load_config, get_dataset_name
+            from ...upload.hf_hub import HFUploader
+            from ...upload.dataset_card import generate_dataset_card
+            from opentraces_schema import TraceRecord
+
+            cfg = load_config()
+            if not cfg.hf_token:
+                return jsonify({
+                    "status": "pushed",
+                    "count": len(approved),
+                    "trace_ids": [t["trace_id"] for t in approved],
+                    "message": f"{len(approved)} session(s) approved. Set HF_TOKEN to push to Hub.",
+                    "needs_token": True,
+                })
+
+            records = [TraceRecord.model_validate(t) for t in approved]
+            from huggingface_hub import HfApi
+            api = HfApi(token=cfg.hf_token)
+            username = api.whoami().get("name", "unknown")
+            repo_id = get_dataset_name(cfg, username)
+
+            uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
+            uploader.ensure_repo_exists()
+            result = uploader.upload_traces(records)
+
+            if result.success:
+                state = _get_state()
+                for t in approved:
+                    state.set_trace_status(t["trace_id"], TraceStatus.UPLOADED)
+                return jsonify({
+                    "status": "pushed",
+                    "count": result.trace_count,
+                    "shard": result.shard_name,
+                    "repo_url": result.repo_url,
+                    "message": f"Pushed {result.trace_count} session(s) to {repo_id}",
+                })
+            else:
+                return jsonify({"error": f"Upload failed: {result.error}"}), 500
+
+        except ImportError:
+            return jsonify({
+                "status": "pushed",
+                "count": len(approved),
+                "trace_ids": [t["trace_id"] for t in approved],
+                "message": f"{len(approved)} session(s) approved (upload module not available)",
+            })
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
     def _compute_stats(traces: list[dict[str, Any]]) -> dict[str, Any]:
         """Compute dashboard statistics."""

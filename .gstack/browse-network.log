@@ -51,3 +51,6 @@
 [2026-03-27T20:56:46.860Z] GET http://localhost:8765/logo-test.html → 200 (1ms, 2225B)
 [2026-03-27T20:58:08.173Z] GET http://localhost:8765/logo-test.html → 200 (1ms, 6357B)
 [2026-03-27T20:58:35.510Z] GET http://localhost:8765/logo-test.html → 200 (1ms, 6389B)
+[2026-03-27T21:23:10.622Z] GET http://localhost:8765/logo-vector-test.html → 200 (1ms, 939B)
+[2026-03-27T21:23:10.626Z] GET http://localhost:8765/logo-vector-test.svg → 200 (1ms, 1707B)
+[2026-03-27T21:24:17.967Z] GET http://localhost:8765/logo-final-test.html → 200 (1ms, 6605B)
