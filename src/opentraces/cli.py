@@ -351,6 +351,7 @@ def push(approved_only: bool) -> None:
     from .config import get_dataset_name
     from .state import StateManager, TraceStatus, StagingLock, STAGING_DIR
     from .upload.hf_hub import HFUploader
+    from .upload.dataset_card import generate_dataset_card
     from opentraces_schema import TraceRecord
 
     cfg = load_config()
@@ -408,6 +409,28 @@ def push(approved_only: bool) -> None:
             uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
             uploader.ensure_repo_exists()
             result = uploader.upload_traces(records)
+
+            # Generate and upload dataset card
+            if result.success:
+                try:
+                    existing_card = None
+                    try:
+                        from huggingface_hub import HfApi as _HfApi
+                        _api = _HfApi(token=cfg.hf_token)
+                        existing_card = _api.hf_hub_download(repo_id, "README.md", repo_type="dataset")
+                        existing_card = Path(existing_card).read_text()
+                    except Exception:
+                        pass
+                    card = generate_dataset_card(repo_id, records, existing_card)
+                    import io as _io
+                    uploader.api.upload_file(
+                        path_or_fileobj=_io.BytesIO(card.encode("utf-8")),
+                        path_in_repo="README.md",
+                        repo_id=repo_id,
+                        repo_type="dataset",
+                    )
+                except Exception as e:
+                    click.echo(f"  Warning: dataset card update failed: {e}", err=True)
 
             if result.success:
                 # Only mark traces that were actually loaded and uploaded
@@ -527,3 +550,38 @@ def capabilities(as_json: bool) -> None:
         ],
     }
     click.echo(json.dumps(caps, indent=2))
+
+
+@main.command()
+def introspect() -> None:
+    """Show full API schema for machine discovery."""
+    from opentraces_schema import TraceRecord, SCHEMA_VERSION
+
+    schema = {
+        "name": "opentraces",
+        "version": __version__,
+        "schema_version": SCHEMA_VERSION,
+        "trace_record_schema": TraceRecord.model_json_schema(),
+        "commands": {
+            "auth": {"description": "Authenticate with HuggingFace Hub"},
+            "config": {"description": "Manage configuration", "subcommands": ["set", "show"]},
+            "discover": {"description": "List available sessions"},
+            "parse": {"description": "Parse sessions into enriched JSONL", "options": ["--auto", "--limit"]},
+            "review": {"description": "Review pending traces", "options": ["--web", "--port"]},
+            "push": {"description": "Upload to HuggingFace Hub", "options": ["--approved-only"]},
+            "import": {"description": "Import from other formats", "options": ["--from dataclaw"]},
+            "export": {"description": "Export to other formats", "options": ["--format atif"]},
+            "migrate": {"description": "Schema version check + migration"},
+            "capabilities": {"description": "Machine-discoverable feature list"},
+            "introspect": {"description": "Full API schema (this command)"},
+        },
+        "exit_codes": {
+            "0": "OK",
+            "2": "Usage error",
+            "3": "Missing config",
+            "4": "Network error",
+            "5": "Data corrupt",
+            "7": "Lock/busy",
+        },
+    }
+    click.echo(json.dumps(schema, indent=2))

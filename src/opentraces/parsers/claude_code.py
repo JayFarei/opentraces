@@ -86,9 +86,11 @@ class ClaudeCodeParser:
         # Build tool_result map (pre-pass)
         tool_result_map = self._build_tool_result_map(lines)
 
-        # Parse steps
+        # Parse steps (with visited set for circular reference detection)
+        visited_sessions: set[str] = {session_id}
         steps, system_prompts = self._parse_steps(
-            lines, tool_result_map, session_path, depth=0
+            lines, tool_result_map, session_path, depth=0,
+            visited_sessions=visited_sessions,
         )
 
         if not steps:
@@ -264,6 +266,7 @@ class ClaudeCodeParser:
         session_path: Path,
         depth: int = 0,
         parent_step_index: int | None = None,
+        visited_sessions: set[str] | None = None,
     ) -> tuple[list[Step], dict[str, str]]:
         """Parse JSONL lines into Step objects."""
         steps: list[Step] = []
@@ -427,7 +430,8 @@ class ClaudeCodeParser:
             for tc in tool_calls:
                 if tc.tool_name in ("Agent", "Task") and depth < MAX_SUBAGENT_DEPTH:
                     subagent_ref = self._load_subagent(
-                        session_path, tc, step_index, steps, system_prompts, depth
+                        session_path, tc, step_index, steps, system_prompts, depth,
+                        visited_sessions=visited_sessions or set(),
                     )
                     if subagent_ref:
                         step.subagent_trajectory_ref = subagent_ref
@@ -451,6 +455,7 @@ class ClaudeCodeParser:
         parent_steps: list[Step],
         system_prompts: dict[str, str],
         depth: int,
+        visited_sessions: set[str] | None = None,
     ) -> str | None:
         """Recursively load a sub-agent session and inline its steps."""
         session_dir = parent_session_path.parent / parent_session_path.stem
@@ -473,7 +478,7 @@ class ClaudeCodeParser:
                     if jsonl_file.exists():
                         return self._inline_subagent(
                             jsonl_file, parent_step_index, parent_steps,
-                            system_prompts, depth, subagent_type
+                            system_prompts, depth, subagent_type, visited_sessions,
                         )
             except (json.JSONDecodeError, OSError):
                 continue
@@ -482,7 +487,7 @@ class ClaudeCodeParser:
         for jsonl_file in subagents_dir.glob("*.jsonl"):
             return self._inline_subagent(
                 jsonl_file, parent_step_index, parent_steps,
-                system_prompts, depth, subagent_type
+                system_prompts, depth, subagent_type, visited_sessions,
             )
 
         return None
@@ -495,9 +500,17 @@ class ClaudeCodeParser:
         system_prompts: dict[str, str],
         depth: int,
         subagent_type: str,
+        visited_sessions: set[str] | None = None,
     ) -> str:
         """Parse and inline a sub-agent session."""
         subagent_id = subagent_path.stem
+
+        # Circular reference detection
+        if visited_sessions is not None and subagent_id in visited_sessions:
+            logger.warning(f"Circular sub-agent reference detected: {subagent_id}")
+            return subagent_id
+        if visited_sessions is not None:
+            visited_sessions.add(subagent_id)
 
         lines = self._read_lines(subagent_path)
         if not lines:
@@ -508,6 +521,7 @@ class ClaudeCodeParser:
         sub_steps, sub_prompts = self._parse_steps(
             lines, tool_result_map, subagent_path,
             depth=depth + 1, parent_step_index=parent_step_index,
+            visited_sessions=visited_sessions,
         )
 
         # Set agent_role based on subagent_type
