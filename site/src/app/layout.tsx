@@ -24,12 +24,12 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "opentraces.ai - The Commons for Agent Traces",
+  title: "open traces - The Commons for Agent Traces",
   description:
     "Open-source CLI for crowdsourcing AI coding agent session traces as structured JSONL datasets on Hugging Face Hub. Three security tiers. Training-first schema.",
   keywords: ["agent traces", "training data", "hugging face", "open source", "SFT", "RLHF", "Claude Code", "Codex"],
   openGraph: {
-    title: "opentraces.ai",
+    title: "open traces",
     description: "Your agent traces are training data.",
     type: "website",
   },
@@ -43,9 +43,17 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      data-theme="dark"
+      data-theme="light"
+      suppressHydrationWarning
       className={`${spaceGrotesk.variable} ${ibmPlexMono.variable} ${jetbrainsMono.variable}`}
     >
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('theme');if(t)document.documentElement.setAttribute('data-theme',t)}catch(e){}})()`,
+          }}
+        />
+      </head>
       <body>{children}</body>
     </html>
   );

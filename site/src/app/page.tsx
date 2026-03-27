@@ -3,10 +3,10 @@ import Nav from "@/components/Nav";
 import Hero from "@/components/Hero";
 import Features from "@/components/Features";
 import UseCases from "@/components/UseCases";
-import Stats from "@/components/Stats";
 import SecurityTiers from "@/components/SecurityTiers";
 import InfraDiagram from "@/components/InfraDiagram";
 import SchemaExplorer from "@/components/SchemaExplorer";
+import About from "@/components/About";
 import GetStarted from "@/components/GetStarted";
 import Footer from "@/components/Footer";
 import SectionRule from "@/components/SectionRule";
@@ -20,7 +20,6 @@ export default function Home() {
         <Hero />
         <Features />
         <UseCases />
-        <Stats />
 
         {/* Security Tiers Section */}
         <section>
@@ -34,6 +33,7 @@ export default function Home() {
 
         <InfraDiagram />
         <SchemaExplorer />
+        <About />
         <GetStarted />
         <Footer />
       </div>

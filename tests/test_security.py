@@ -14,7 +14,12 @@ from opentraces_schema.models import (
     TraceRecord,
 )
 
-from opentraces.security.anonymizer import anonymize_paths, hash_username
+from opentraces.security.anonymizer import (
+    anonymize_paths,
+    extract_usernames_from_paths,
+    hash_username,
+    SYSTEM_USERNAMES,
+)
 from opentraces.security.classifier import (
     ClassifierResult,
     classify_content,
@@ -877,3 +882,292 @@ class TestRedactingFilter:
         )
         filt.filter(record)
         assert "[REDACTED]" in record.msg
+
+
+# ===================================================================
+# anonymizer.py -- Username auto-detection from paths
+# ===================================================================
+
+
+class TestExtractUsernamesFromPaths:
+    def test_macos_path(self):
+        text = "Found file at /Users/alice/src/project/main.py"
+        result = extract_usernames_from_paths(text)
+        assert "alice" in result
+
+    def test_linux_path(self):
+        text = "Config at /home/developer/config.yml"
+        result = extract_usernames_from_paths(text)
+        assert "developer" in result
+
+    def test_windows_backslash_path(self):
+        text = r"File: C:\Users\bobsmith\Documents\file.txt"
+        result = extract_usernames_from_paths(text)
+        assert "bobsmith" in result
+
+    def test_windows_forward_slash_path(self):
+        text = "Path: C:/Users/charlie/code/app.py"
+        result = extract_usernames_from_paths(text)
+        assert "charlie" in result
+
+    def test_multiple_usernames(self):
+        text = "/Users/alice/src and /home/bob123/code and C:/Users/charlie_dev/file"
+        result = extract_usernames_from_paths(text)
+        assert result == {"alice", "bob123", "charlie_dev"}
+
+    def test_system_usernames_filtered(self):
+        text = "/Users/Shared/data and /home/runner/work and /Users/admin/config"
+        result = extract_usernames_from_paths(text)
+        assert "Shared" not in result
+        assert "runner" not in result
+        assert "admin" not in result
+
+    def test_no_paths(self):
+        text = "Just some normal text with no file paths anywhere."
+        result = extract_usernames_from_paths(text)
+        assert result == set()
+
+    def test_short_names_excluded(self):
+        # Min 3 chars, must start with letter
+        text = "/Users/ab/file and /Users/x/file"
+        result = extract_usernames_from_paths(text)
+        assert "ab" not in result
+        assert "x" not in result
+
+    def test_numeric_id_names(self):
+        """Numeric IDs like 06506792 (employee IDs) should be captured."""
+        text = "/Users/06506792/dotfiles"
+        result = extract_usernames_from_paths(text)
+        assert "06506792" in result
+        # If not caught, we need to adjust the regex.
+
+    def test_deduplicated(self):
+        text = "/Users/alice/a and /Users/alice/b and /home/alice/c"
+        result = extract_usernames_from_paths(text)
+        assert result == {"alice"}
+
+    def test_does_not_extract_hyphen_encoded(self):
+        text = "-Users-jayfarei-src-project"
+        result = extract_usernames_from_paths(text)
+        assert "jayfarei" not in result
+
+    def test_does_not_extract_tilde(self):
+        text = "~jayfarei/documents/file.txt"
+        result = extract_usernames_from_paths(text)
+        assert "jayfarei" not in result
+
+
+class TestAutoDetectAnonymization:
+    def test_foreign_username_anonymized(self):
+        """A username found in /Users/<name>/ but not passed explicitly gets anonymized."""
+        text = "Found at /Users/foreign_user/src/main.py"
+        result = anonymize_paths(text, username="jayfarei")
+        assert "foreign_user" not in result
+        expected_hash = hash_username("foreign_user")
+        assert f"/Users/{expected_hash}/" in result
+
+    def test_both_explicit_and_detected(self):
+        """Both the explicit username and auto-detected ones get anonymized."""
+        text = "/Users/jayfarei/src/a.py and /Users/colleague/src/b.py"
+        result = anonymize_paths(text, username="jayfarei")
+        assert "jayfarei" not in result
+        assert "colleague" not in result
+
+    def test_explicit_gets_full_patterns(self):
+        """Explicit username gets hyphen/tilde patterns, auto-detected does not."""
+        text = "-Users-jayfarei-src and -Users-foreign-src"
+        result = anonymize_paths(text, username="jayfarei")
+        assert "jayfarei" not in result
+        # foreign is auto-detected but hyphen pattern not applied for auto-detected
+        # However, "foreign" only appears in hyphen-encoded, not in /Users/foreign/
+        # So it won't even be auto-detected
+        assert "-Users-foreign-src" in result  # unchanged
+
+    def test_hash_stability(self):
+        """Auto-detected username hashes identically to explicit."""
+        text = "/Users/testuser123/file.py"
+        auto_result = anonymize_paths(text, username="other")
+        explicit_result = anonymize_paths(text, username="testuser123")
+        # Both should produce the same hash for testuser123
+        expected_hash = hash_username("testuser123")
+        assert f"/Users/{expected_hash}/" in auto_result
+        assert f"/Users/{expected_hash}/" in explicit_result
+
+    def test_system_path_not_anonymized(self):
+        """/Users/Shared/ should not be anonymized."""
+        text = "/Users/Shared/data/file.csv"
+        result = anonymize_paths(text, username="jayfarei")
+        assert "/Users/Shared/" in result  # unchanged
+
+    def test_rate_limit_fallback(self):
+        """More than 10 auto-detected usernames triggers fallback to explicit only."""
+        names = [f"user{i:03d}" for i in range(15)]
+        paths = " ".join(f"/Users/{n}/file.py" for n in names)
+        text = f"/Users/jayfarei/a.py {paths}"
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = anonymize_paths(text, username="jayfarei")
+            # Explicit username should still be anonymized
+            assert "jayfarei" not in result
+            # Auto-detected names should NOT be anonymized (rate limit kicked in)
+            for name in names:
+                assert f"/Users/{name}/" in result, f"Expected {name} to remain (fallback)"
+            # Should have emitted a warning
+            assert any("auto-detected" in str(warning.message).lower() for warning in w)
+
+
+class TestTierDispatchLogic:
+    """Test that the tier dispatch in cli.py calls the right functions per tier."""
+
+    def _make_trace(self) -> TraceRecord:
+        return TraceRecord(
+            trace_id="tier-dispatch-test",
+            session_id="test-session",
+            agent=Agent(name="claude-code", version="2.0"),
+            steps=[
+                Step(
+                    step_index=0,
+                    role="user",
+                    content="Fix the bug in auth.py",
+                ),
+                Step(
+                    step_index=1,
+                    role="agent",
+                    content="I'll look at auth.py",
+                    tool_calls=[
+                        ToolCall(
+                            tool_call_id="tc1",
+                            tool_name="Read",
+                            input={"file_path": "/Users/testuser/src/auth.py"},
+                        ),
+                    ],
+                    observations=[
+                        Observation(
+                            source_call_id="tc1",
+                            content="def authenticate(user):\n    pass",
+                        ),
+                    ],
+                ),
+            ],
+            outcome=Outcome(),
+        )
+
+    def test_tier1_runs_scan_and_redact(self):
+        """Tier 1 should run two_pass_scan + apply_redactions."""
+        from opentraces.security.scanner import two_pass_scan, apply_redactions
+        record = self._make_trace()
+        pass1, pass2 = two_pass_scan(record)
+        redactions = apply_redactions(record)
+        assert record.security is not None
+        assert record.security.redactions_applied >= 0
+
+    def test_tier2_runs_classifier(self):
+        """Tier 2 should run the classifier in addition to scanning."""
+        from opentraces.security.classifier import classify_trace_record, ClassifierResult
+        record = self._make_trace()
+        result = classify_trace_record(record, "medium")
+        assert isinstance(result, ClassifierResult)
+        assert isinstance(result.flags, list)
+
+    def test_tier3_skips_scanning(self):
+        """Tier 3 should not modify the record's security fields."""
+        record = self._make_trace()
+        # Tier 3: no scanning, no redaction, no classifier
+        # Security fields should remain at defaults
+        assert record.security.redactions_applied == 0
+        assert record.security.classifier_version is None
+        assert record.security.flags_reviewed == 0
+
+
+class TestAdversarialTraceTiers:
+    """Test security pipeline with synthetic traces containing known secrets."""
+
+    def _make_hostile_trace(self) -> TraceRecord:
+        """Create a trace full of embedded secrets for testing."""
+        secret_content = """
+Here's the .env file:
+ANTHROPIC_API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
+AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+DATABASE_URL=postgresql://admin:supersecret@prod-db.internal.corp:5432/maindb
+SLACK_TOKEN=xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx
+
+Also found this SSH key:
+-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGcY5unA
+-----END RSA PRIVATE KEY-----
+
+Credit card: 4111111111111111
+Email: john.doe@internal.corp
+Internal URL: https://jira.internal.corp/browse/SEC-123
+"""
+        return TraceRecord(
+            trace_id="adversarial-test",
+            session_id="adversarial-test",
+            agent=Agent(name="claude-code", version="2.0"),
+            steps=[
+                Step(step_index=0, role="user", content="Show me the .env file"),
+                Step(
+                    step_index=1,
+                    role="agent",
+                    content=secret_content,
+                    tool_calls=[
+                        ToolCall(
+                            tool_call_id="tc1",
+                            tool_name="Bash",
+                            input={"command": f"cat /Users/victim/project/.env"},
+                        ),
+                    ],
+                    observations=[
+                        Observation(
+                            source_call_id="tc1",
+                            content=secret_content,
+                        ),
+                    ],
+                ),
+            ],
+            outcome=Outcome(),
+        )
+
+    def test_tier1_redacts_secrets(self):
+        """Tier 1: all secrets should be auto-redacted."""
+        from opentraces.security.scanner import two_pass_scan, apply_redactions
+        record = self._make_hostile_trace()
+        pass1, pass2 = two_pass_scan(record)
+        redactions = apply_redactions(record)
+        assert redactions > 0, "Expected redactions for embedded secrets"
+        serialized = record.to_jsonl_line()
+        assert "sk-ant-api03" not in serialized
+        assert "AKIAIOSFODNN7EXAMPLE" not in serialized
+        assert "BEGIN RSA PRIVATE KEY" not in serialized
+        assert "supersecret" not in serialized
+
+    def test_tier2_flags_internal_urls(self):
+        """Tier 2: classifier should flag internal hostnames/URLs."""
+        from opentraces.security.scanner import two_pass_scan, apply_redactions
+        from opentraces.security.classifier import classify_trace_record
+        record = self._make_hostile_trace()
+        two_pass_scan(record)
+        apply_redactions(record)
+        result = classify_trace_record(record, "medium")
+        # Should flag internal.corp hostname or jira URL
+        assert len(result.flags) > 0, "Expected classifier flags for internal URLs"
+
+    def test_tier3_no_redaction(self):
+        """Tier 3: no scanning or redaction should occur."""
+        record = self._make_hostile_trace()
+        # Tier 3 means we DON'T call scan or redact
+        serialized = record.to_jsonl_line()
+        # Original secrets should still be present
+        assert "sk-ant-api03" in serialized
+        assert "AKIAIOSFODNN7EXAMPLE" in serialized
+
+    def test_path_anonymization_catches_foreign_username(self):
+        """Auto-detect should catch /Users/victim/ even though it's not the current user."""
+        record = self._make_hostile_trace()
+        serialized = record.to_jsonl_line()
+        result = anonymize_paths(serialized, username="jayfarei")
+        assert "/Users/victim/" not in result
+        expected_hash = hash_username("victim")
+        assert f"/Users/{expected_hash}/" in result

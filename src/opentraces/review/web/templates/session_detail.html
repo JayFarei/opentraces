@@ -173,6 +173,7 @@
 
         {% endif %}
 
+        {% if step.step_index not in trace._redacted_steps %}
         {% set step_flags = [] %}
         {% for flag in trace.get('_security_flags', []) %}
         {% if flag.step_index == step.step_index %}
@@ -182,19 +183,23 @@
         </div>
         {% endif %}
         {% endfor %}
+        {% endif %}
     </div>
     {% endfor %}
 </section>
 
-<section class="ot-session-verdict">
+<section class="ot-session-verdict ot-sticky-verdict">
     <h3>Verdict</h3>
     <div class="ot-verdict-buttons">
-        <button class="ot-btn ot-btn-approve" onclick="approveSession('{{ trace.trace_id }}')">
+        <button class="ot-btn ot-btn-approve" id="btn-approve" onclick="approveSession('{{ trace.trace_id }}')">
             Approve Session
         </button>
-        <button class="ot-btn ot-btn-reject" onclick="rejectSession('{{ trace.trace_id }}')">
+        <button class="ot-btn ot-btn-reject" id="btn-reject" onclick="rejectSession('{{ trace.trace_id }}')">
             Reject Session
         </button>
+    </div>
+    <div id="verdict-next-link" class="ot-next-pending" style="display:none;">
+        <a href="/?status=pending" class="ot-next-pending-link">Next pending &rarr;</a>
     </div>
 </section>
 {% endblock %}

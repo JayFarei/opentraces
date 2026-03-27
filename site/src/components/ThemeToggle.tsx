@@ -3,14 +3,13 @@
 import { useEffect, useState } from "react";
 
 export default function ThemeToggle() {
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [theme, setTheme] = useState<"dark" | "light" | null>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem("theme") as "dark" | "light" | null;
-    if (stored) {
-      setTheme(stored);
-      document.documentElement.setAttribute("data-theme", stored);
-    }
+    const initial = stored || "light";
+    setTheme(initial);
+    document.documentElement.setAttribute("data-theme", initial);
   }, []);
 
   function toggle() {
@@ -20,8 +19,10 @@ export default function ThemeToggle() {
     localStorage.setItem("theme", next);
   }
 
+  if (!theme) return null;
+
   return (
-    <button className="theme-toggle" onClick={toggle}>
+    <button className="theme-toggle" onClick={toggle} aria-label="Toggle theme">
       [{theme === "dark" ? "light" : "dark"}]
     </button>
   );

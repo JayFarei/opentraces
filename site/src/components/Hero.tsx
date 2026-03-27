@@ -5,11 +5,11 @@ export default function Hero() {
     <section className="hero">
       <div className="hero-grid">
         <div>
-          <div className="hero-pill">opentraces.ai &nbsp; v0.1.0</div>
+          <div className="hero-pill">open traces &nbsp; v0.1.0</div>
           <div style={{ height: 16 }} />
           <h1>Your agent traces are training data.</h1>
           <p className="hero-sub">
-            One CLI. Real-world coding agent sessions published as structured JSONL on Hugging Face Hub. Three security tiers. Open data for the training community.
+            Open-source CLI that publishes coding agent sessions as structured JSONL on Hugging Face Hub. Three security tiers. Training-first schema.
           </p>
           <div className="hero-cli-wrap">
             <span className="hero-cli-prefix">$</span>
@@ -18,7 +18,7 @@ export default function Hero() {
           </div>
           <div className="hero-actions">
             <a className="btn btn-primary" href="#">Start contributing</a>
-            <a className="btn btn-outline" href="#">Read documentation</a>
+            <a className="btn btn-outline" href="/docs/">Documentation</a>
           </div>
         </div>
         <div>
@@ -36,7 +36,6 @@ export default function Hero() {
             <span className="terminal-line"><span className="di">found</span> <span className="n">23</span> <span className="di">sessions across</span> <span className="n">4</span> <span className="di">projects</span></span>
             <span className="terminal-line terminal-line-gap" />
             <span className="terminal-line"><span className="di">{"\u251C\u2500"} security tier:</span>   <span className="s">automated</span></span>
-            <span className="terminal-line"><span className="di">{"\u251C\u2500"} regex patterns:</span>  <span className="n">22</span> <span className="di">matched</span></span>
             <span className="terminal-line"><span className="di">{"\u251C\u2500"} auto-redacted:</span>   <span className="n">3</span> <span className="di">secrets</span></span>
             <span className="terminal-line"><span className="di">{"\u2514\u2500"} flagged:</span>         <span className="w">1</span> <span className="di">session</span></span>
             <span className="terminal-line terminal-line-gap" />

@@ -41,23 +41,32 @@
         <table class="ot-session-table">
             <thead>
                 <tr>
-                    <th>Trace ID</th>
+                    <th>Status</th>
+                    <th>Flags</th>
                     <th>Task</th>
                     <th>Steps</th>
                     <th>Tools</th>
                     <th>Model</th>
                     <th>Timestamp</th>
-                    <th>Status</th>
-                    <th>Flags</th>
+                    <th>Trace ID</th>
                 </tr>
             </thead>
             <tbody>
                 {% for trace in traces %}
                 <tr class="ot-row-{{ trace._review_status }}" data-trace-id="{{ trace.trace_id }}">
                     <td>
-                        <a href="/session/{{ trace.trace_id }}">
-                            <code>{{ trace.trace_id[:12] }}...</code>
-                        </a>
+                        <span class="ot-badge ot-badge-{{ trace._review_status }}{% if trace._review_status == 'staged' %} ot-badge-staged{% endif %}" id="badge-{{ trace.trace_id }}">
+                            {{ trace._review_status }}
+                        </span>
+                    </td>
+                    <td>
+                        {% if trace._security_flag_count > 0 %}
+                        <span class="ot-badge ot-badge-flag">
+                            {{ trace._security_flag_count }}
+                        </span>
+                        {% else %}
+                        <span class="ot-badge ot-badge-clear">0</span>
+                        {% endif %}
                     </td>
                     <td class="ot-task-cell" title="{{ trace.task.description or 'No description' }}">
                         {{ (trace.task.description or 'No description')[:100] }}{% if (trace.task.description or '')|length > 100 %}...{% endif %}
@@ -71,18 +80,9 @@
                         <small>{{ trace.timestamp_start or 'N/A' }}</small>
                     </td>
                     <td>
-                        <span class="ot-badge ot-badge-{{ trace._review_status }}" id="badge-{{ trace.trace_id }}">
-                            {{ trace._review_status }}
-                        </span>
-                    </td>
-                    <td>
-                        {% if trace._security_flag_count > 0 %}
-                        <span class="ot-badge ot-badge-flag">
-                            {{ trace._security_flag_count }}
-                        </span>
-                        {% else %}
-                        <span class="ot-badge ot-badge-clear">0</span>
-                        {% endif %}
+                        <a href="/session/{{ trace.trace_id }}">
+                            <code>{{ trace.trace_id[:12] }}...</code>
+                        </a>
                     </td>
                 </tr>
                 {% endfor %}
@@ -91,7 +91,11 @@
     </figure>
 
     {% if not traces %}
-    <p class="ot-empty">No sessions found matching the current filters.</p>
+        {% if total_count is defined and total_count > 0 %}
+        <p class="ot-empty">No sessions found matching the current filters. <a href="/" class="ot-clear-filters">Clear filters</a></p>
+        {% else %}
+        <p class="ot-empty">No traces staged yet. Run <code>opentraces parse</code> to get started.</p>
+        {% endif %}
     {% endif %}
 </section>
 {% endblock %}

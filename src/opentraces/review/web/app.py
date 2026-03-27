@@ -7,8 +7,10 @@ approve/reject/redact traces, then push to HF Hub.
 from __future__ import annotations
 
 import json
+import os
 import random
 import string
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -331,6 +333,7 @@ def _get_review_status(trace_id: str) -> str:
     entry = state.get_trace(trace_id)
     if entry:
         status_map = {
+            TraceStatus.STAGED: "staged",
             TraceStatus.APPROVED: "approved",
             TraceStatus.REJECTED: "rejected",
             TraceStatus.UPLOADED: "uploaded",
@@ -409,6 +412,7 @@ def create_app(staging_dir: str = None) -> Flask:
         return render_template(
             "sessions.html",
             traces=filtered,
+            total_count=len(traces),
             projects=projects,
             models=models,
             project_filter=project_filter,
@@ -493,13 +497,70 @@ def create_app(staging_dir: str = None) -> Flask:
 
     @app.route("/api/session/<trace_id>/step/<int:step_index>/redact", methods=["POST"])
     def api_redact_step(trace_id: str, step_index: int):
-        """Redact a step's content."""
+        """Redact a step's content, persisting to the staging JSONL on disk."""
+        global _trace_cache
+
+        # Validate trace_id to prevent path traversal
+        import re as _re
+        if not _re.match(r'^[a-f0-9-]+$', trace_id):
+            return jsonify({"error": "Invalid trace ID format"}), 400
+
+        # Locate the staging JSONL file for this trace
+        staging_file = staging_path / f"{trace_id}.jsonl"
+        if not staging_file.exists():
+            return jsonify({"error": f"Staging file not found for {trace_id}"}), 404
+
+        # Load, modify, and atomically rewrite the staging file
+        text = staging_file.read_text().strip()
+        if not text:
+            return jsonify({"error": "Staging file is empty"}), 404
+
+        trace_data = json.loads(text.splitlines()[0])
+
+        # Find and redact the matching step
+        steps = trace_data.get("steps", [])
+        if step_index < 0 or step_index >= len(steps):
+            return jsonify({"error": f"Step index {step_index} out of range"}), 404
+
+        steps[step_index]["content"] = "[REDACTED]"
+        steps[step_index]["reasoning_content"] = None
+        steps[step_index]["tool_calls"] = []
+        steps[step_index]["observations"] = []
+        steps[step_index]["snippets"] = []
+
+        # Atomic write: temp file + os.replace for crash safety
+        new_line = json.dumps(trace_data, ensure_ascii=False)
+        fd = tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=str(staging_path),
+            suffix=".jsonl.tmp",
+            delete=False,
+        )
+        try:
+            fd.write(new_line + "\n")
+            fd.flush()
+            os.fsync(fd.fileno())
+            fd.close()
+            os.replace(fd.name, str(staging_file))
+        except BaseException:
+            fd.close()
+            try:
+                os.unlink(fd.name)
+            except OSError:
+                pass
+            raise
+
+        # Invalidate the in-memory trace cache so next request re-reads from disk
+        _trace_cache = None
+
+        # Update in-memory review state for immediate UI feedback
         if trace_id not in _review_state:
             _review_state[trace_id] = {}
         if "redacted_steps" not in _review_state[trace_id]:
             _review_state[trace_id]["redacted_steps"] = []
         if step_index not in _review_state[trace_id]["redacted_steps"]:
             _review_state[trace_id]["redacted_steps"].append(step_index)
+
         return jsonify({
             "status": "redacted",
             "trace_id": trace_id,
@@ -591,6 +652,14 @@ def create_app(staging_dir: str = None) -> Flask:
         )
         total_flags = sum(len(t.get("_security_flags", [])) for t in traces)
 
+        # Determine security tier from trace data if available
+        security_tier = None
+        for t in traces:
+            tier = t.get("security", {}).get("tier")
+            if tier is not None:
+                security_tier = f"Tier {tier}"
+                break
+
         return {
             "total": total,
             "approved": approved,
@@ -600,6 +669,7 @@ def create_app(staging_dir: str = None) -> Flask:
             "total_tool_calls": total_tool_calls,
             "total_cost_usd": round(total_cost, 4),
             "total_security_flags": total_flags,
+            "security_tier": security_tier,
         }
 
     return app

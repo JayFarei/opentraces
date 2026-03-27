@@ -45,21 +45,6 @@
     </article>
 </div>
 
-<section class="ot-push-section">
-    <h3>Push to HuggingFace Hub</h3>
-    {% if stats.approved > 0 %}
-    <p>{{ stats.approved }} session(s) approved and ready to push.</p>
-    <button class="ot-btn ot-btn-approve" onclick="pushApproved()">
-        Push {{ stats.approved }} Approved Session(s)
-    </button>
-    {% else %}
-    <p class="ot-empty">No approved sessions yet. Review and approve sessions before pushing.</p>
-    <button class="ot-btn ot-btn-approve" disabled>
-        Push to Hub (no approved sessions)
-    </button>
-    {% endif %}
-</section>
-
 <section class="ot-progress-section">
     <h3>Review Progress</h3>
     <div class="ot-progress-bar">
@@ -68,5 +53,23 @@
         <div class="ot-progress-fill" style="width: {{ pct }}%"></div>
     </div>
     <small>{{ reviewed }} of {{ stats.total }} sessions reviewed ({{ "%.0f"|format(pct) }}%)</small>
+</section>
+
+<section class="ot-push-section">
+    <h3>Push to HuggingFace Hub</h3>
+    {% if stats.security_tier is defined and stats.security_tier %}
+    <p><small>Security tier: <strong>{{ stats.security_tier }}</strong></small></p>
+    {% endif %}
+    {% if stats.approved > 0 %}
+    <p>{{ stats.approved }} session(s) approved and ready to push.</p>
+    <button class="ot-btn ot-btn-approve" id="stats-push-btn" onclick="pushApproved()">
+        Push {{ stats.approved }} Approved Session(s)
+    </button>
+    {% else %}
+    <p class="ot-empty">No approved sessions yet. Review and approve sessions before pushing.</p>
+    <button class="ot-btn ot-btn-approve" id="stats-push-btn" disabled>
+        Push to Hub (no approved sessions)
+    </button>
+    {% endif %}
 </section>
 {% endblock %}

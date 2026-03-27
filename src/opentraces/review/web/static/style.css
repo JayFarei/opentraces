@@ -200,6 +200,12 @@
     color: #92400e;
 }
 
+.ot-badge-staged {
+    background: #fbbf24;
+    color: #78350f;
+    border: 1px solid #f59e0b;
+}
+
 .ot-empty {
     text-align: center;
     color: var(--ot-gray);
@@ -568,6 +574,15 @@
     margin-top: 2rem;
 }
 
+.ot-sticky-verdict {
+    position: sticky;
+    bottom: 0;
+    background: var(--pico-background-color, #fff);
+    padding: 16px;
+    border-top: 1px solid var(--ot-gray-border);
+    z-index: 10;
+}
+
 .ot-verdict-buttons {
     display: flex;
     gap: 1rem;
@@ -614,6 +629,71 @@
     background: var(--ot-red-dark);
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.ot-btn-reject:disabled {
+    background: var(--ot-gray-light);
+    color: var(--ot-gray);
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+/* Push button disabled state */
+.ot-push-btn:disabled {
+    background: var(--ot-gray-light);
+    color: var(--ot-gray);
+    cursor: not-allowed;
+}
+
+/* Next pending link */
+.ot-next-pending {
+    margin-top: 0.75rem;
+    text-align: center;
+}
+
+.ot-next-pending-link {
+    display: inline-block;
+    padding: 0.5rem 1.5rem;
+    background: var(--ot-blue);
+    color: #fff;
+    border-radius: 6px;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.9rem;
+    transition: background 0.15s;
+}
+
+.ot-next-pending-link:hover {
+    background: #2563eb;
+    color: #fff;
+}
+
+/* Show more toggle for truncated tool inputs */
+.ot-show-more-btn {
+    display: inline-block;
+    margin-top: 0.35rem;
+    padding: 0.2rem 0.7rem;
+    background: var(--ot-gray-light);
+    border: 1px solid var(--ot-gray-border);
+    border-radius: 4px;
+    color: var(--ot-blue);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ot-show-more-btn:hover {
+    background: var(--ot-blue-bg);
+    border-color: var(--ot-blue);
+}
+
+/* Clear filters link */
+.ot-clear-filters {
+    color: var(--ot-blue);
+    text-decoration: underline;
+    font-weight: 600;
 }
 
 /* Stats page */

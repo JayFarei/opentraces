@@ -24,7 +24,7 @@ const cases = [
   {
     tag: "attribution",
     title: "Trace code to reasoning",
-    desc: "Agent Trace says which lines are AI. opentraces says which conversation produced them.",
+    desc: "Agent Trace says which lines are AI. open traces says which conversation produced them.",
   },
   {
     tag: "ecosystems",

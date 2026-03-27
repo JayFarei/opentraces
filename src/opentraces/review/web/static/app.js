@@ -4,7 +4,13 @@
  * Approve a session via the API.
  */
 async function approveSession(traceId) {
+    const approveBtn = document.getElementById('btn-approve');
+    const rejectBtn = document.getElementById('btn-reject');
+
     try {
+        if (approveBtn) { approveBtn.disabled = true; approveBtn.textContent = 'Approving...'; }
+        if (rejectBtn) { rejectBtn.disabled = true; }
+
         const resp = await fetch(`/api/session/${traceId}/approve`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -14,11 +20,17 @@ async function approveSession(traceId) {
             updateBadge('session-badge', 'approved');
             updateRowBadge(traceId, 'approved');
             showNotification('Session approved', 'success');
+            showNextPendingLink();
+            updateNavPushBtn();
         } else {
             showNotification(data.error || 'Failed to approve', 'error');
+            if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = 'Approve Session'; }
+            if (rejectBtn) { rejectBtn.disabled = false; }
         }
     } catch (err) {
         showNotification('Network error: ' + err.message, 'error');
+        if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = 'Approve Session'; }
+        if (rejectBtn) { rejectBtn.disabled = false; }
     }
 }
 
@@ -26,7 +38,13 @@ async function approveSession(traceId) {
  * Reject a session via the API.
  */
 async function rejectSession(traceId) {
+    const approveBtn = document.getElementById('btn-approve');
+    const rejectBtn = document.getElementById('btn-reject');
+
     try {
+        if (rejectBtn) { rejectBtn.disabled = true; rejectBtn.textContent = 'Rejecting...'; }
+        if (approveBtn) { approveBtn.disabled = true; }
+
         const resp = await fetch(`/api/session/${traceId}/reject`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -36,11 +54,16 @@ async function rejectSession(traceId) {
             updateBadge('session-badge', 'rejected');
             updateRowBadge(traceId, 'rejected');
             showNotification('Session rejected', 'success');
+            showNextPendingLink();
         } else {
             showNotification(data.error || 'Failed to reject', 'error');
+            if (rejectBtn) { rejectBtn.disabled = false; rejectBtn.textContent = 'Reject Session'; }
+            if (approveBtn) { approveBtn.disabled = false; }
         }
     } catch (err) {
         showNotification('Network error: ' + err.message, 'error');
+        if (rejectBtn) { rejectBtn.disabled = false; rejectBtn.textContent = 'Reject Session'; }
+        if (approveBtn) { approveBtn.disabled = false; }
     }
 }
 
@@ -48,7 +71,7 @@ async function rejectSession(traceId) {
  * Redact a step's content via the API.
  */
 async function redactStep(traceId, stepIndex) {
-    if (!confirm(`Redact step ${stepIndex}? This will hide the content during review.`)) {
+    if (!confirm("This will permanently remove this step's content from the staged file. This cannot be undone. Continue?")) {
         return;
     }
 
@@ -72,6 +95,9 @@ async function redactStep(traceId, stepIndex) {
                 if (toolCalls) toolCalls.remove();
                 const snippets = stepEl.querySelector('.ot-snippets');
                 if (snippets) snippets.remove();
+                // Remove step flags when redacted
+                const stepFlags = stepEl.querySelectorAll('.ot-step-flag');
+                stepFlags.forEach(function(flag) { flag.remove(); });
 
                 // Replace redact button with badge
                 const controls = stepEl.querySelector('.ot-step-controls');
@@ -96,7 +122,22 @@ async function pushApproved() {
         return;
     }
 
+    const navBtn = document.getElementById('nav-push-btn');
+    const statsBtn = document.getElementById('stats-push-btn');
+    var navOrigText, statsOrigText;
+
     try {
+        if (navBtn) {
+            navOrigText = navBtn.textContent;
+            navBtn.disabled = true;
+            navBtn.textContent = 'Pushing...';
+        }
+        if (statsBtn) {
+            statsOrigText = statsBtn.textContent;
+            statsBtn.disabled = true;
+            statsBtn.textContent = 'Pushing...';
+        }
+
         const resp = await fetch('/api/push', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -104,11 +145,37 @@ async function pushApproved() {
         const data = await resp.json();
         if (resp.ok) {
             showNotification(data.message || `Pushed ${data.count} sessions`, 'success');
+            if (navBtn) { navBtn.textContent = navOrigText; }
+            if (statsBtn) { statsBtn.textContent = statsOrigText; }
         } else {
             showNotification(data.error || 'Push failed', 'error');
+            if (navBtn) { navBtn.disabled = false; navBtn.textContent = navOrigText; }
+            if (statsBtn) { statsBtn.disabled = false; statsBtn.textContent = statsOrigText; }
         }
     } catch (err) {
         showNotification('Network error: ' + err.message, 'error');
+        if (navBtn) { navBtn.disabled = false; navBtn.textContent = navOrigText; }
+        if (statsBtn) { statsBtn.disabled = false; statsBtn.textContent = statsOrigText; }
+    }
+}
+
+/**
+ * Show the "Next pending" link after a verdict.
+ */
+function showNextPendingLink() {
+    var linkContainer = document.getElementById('verdict-next-link');
+    if (linkContainer) {
+        linkContainer.style.display = 'block';
+    }
+}
+
+/**
+ * Enable the nav push button if there are approved sessions.
+ */
+function updateNavPushBtn() {
+    var navBtn = document.getElementById('nav-push-btn');
+    if (navBtn) {
+        navBtn.disabled = false;
     }
 }
 
@@ -139,24 +206,30 @@ function updateRowBadge(traceId, status) {
 }
 
 /**
- * Show a temporary notification.
+ * Show a temporary notification with aria-live for accessibility.
  */
 function showNotification(message, type) {
-    const existing = document.querySelector('.ot-notification');
+    var container = document.getElementById('ot-notification-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'ot-notification-container';
+        container.setAttribute('aria-live', 'polite');
+        container.setAttribute('aria-atomic', 'true');
+        container.style.cssText = 'position:fixed;top:1rem;right:1rem;z-index:9999;';
+        document.body.appendChild(container);
+    }
+
+    const existing = container.querySelector('.ot-notification');
     if (existing) existing.remove();
 
     const notif = document.createElement('div');
     notif.className = `ot-notification ot-notification-${type}`;
     notif.textContent = message;
     notif.style.cssText = `
-        position: fixed;
-        top: 1rem;
-        right: 1rem;
         padding: 0.75rem 1.5rem;
         border-radius: 8px;
         font-weight: 600;
         font-size: 0.9rem;
-        z-index: 9999;
         animation: slideIn 0.3s ease;
         cursor: pointer;
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
@@ -170,20 +243,81 @@ function showNotification(message, type) {
         notif.style.color = '#fff';
     }
 
-    notif.onclick = () => notif.remove();
-    document.body.appendChild(notif);
+    notif.onclick = function() { notif.remove(); };
+    container.appendChild(notif);
 
-    setTimeout(() => {
+    setTimeout(function() {
         if (notif.parentNode) {
             notif.style.opacity = '0';
             notif.style.transition = 'opacity 0.3s';
-            setTimeout(() => notif.remove(), 300);
+            setTimeout(function() { notif.remove(); }, 300);
         }
     }, 3000);
 }
 
+/**
+ * Truncate tool input code blocks longer than 500 characters with a "Show more" toggle.
+ */
+function truncateToolInputs() {
+    var toolSections = document.querySelectorAll('.ot-tool-section');
+    toolSections.forEach(function(section) {
+        var strong = section.querySelector('strong');
+        if (!strong || strong.textContent.trim().toLowerCase() !== 'input:') return;
+
+        var codeBlock = section.querySelector('.ot-code-block');
+        if (!codeBlock) return;
+
+        var code = codeBlock.querySelector('code');
+        var textContent = code ? code.textContent : codeBlock.textContent;
+        if (textContent.length <= 500) return;
+
+        var truncated = textContent.substring(0, 500);
+        var fullContent = textContent;
+
+        if (code) {
+            code.textContent = truncated + '...';
+        } else {
+            codeBlock.textContent = truncated + '...';
+        }
+
+        var toggle = document.createElement('button');
+        toggle.className = 'ot-show-more-btn';
+        toggle.textContent = 'Show more';
+        toggle.setAttribute('type', 'button');
+
+        var expanded = false;
+        toggle.addEventListener('click', function() {
+            expanded = !expanded;
+            if (code) {
+                code.textContent = expanded ? fullContent : truncated + '...';
+            } else {
+                codeBlock.textContent = expanded ? fullContent : truncated + '...';
+            }
+            toggle.textContent = expanded ? 'Show less' : 'Show more';
+        });
+
+        section.appendChild(toggle);
+    });
+}
+
+/**
+ * On page load, check if nav push button should be enabled,
+ * and apply tool input truncation.
+ */
+document.addEventListener('DOMContentLoaded', function() {
+    /* Enable nav push button if there are approved badges on the page */
+    var approvedBadges = document.querySelectorAll('.ot-badge-approved');
+    if (approvedBadges.length > 0) {
+        var navBtn = document.getElementById('nav-push-btn');
+        if (navBtn) navBtn.disabled = false;
+    }
+
+    /* Apply tool input truncation */
+    truncateToolInputs();
+});
+
 /* Inject notification animation */
-const style = document.createElement('style');
+var style = document.createElement('style');
 style.textContent = `
     @keyframes slideIn {
         from { opacity: 0; transform: translateX(20px); }

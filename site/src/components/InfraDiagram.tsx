@@ -1,33 +1,70 @@
 import SectionRule from "./SectionRule";
 
+const agents = ["Claude Code", "Codex CLI", "Cursor", "Gemini CLI", "OpenCode", "Cline"];
+const steps = ["parse", "enrich", "sanitize", "publish"];
+const tiers = [
+  { name: "danger", label: "tier 1" },
+  { name: "automated", label: "tier 2" },
+  { name: "manual", label: "tier 3" },
+];
+
 export default function InfraDiagram() {
   return (
     <section>
       <SectionRule label="infrastructure" />
-      <div className="section-title" style={{ textAlign: "center" }}>Architecture</div>
-      <p className="section-sub" style={{ textAlign: "center", margin: "8px auto 40px" }}>
-        Three layers. Every trace sanitized before it leaves your machine.
+      <div className="section-title" style={{ textAlign: "center" }}>Infrastructure</div>
+      <p className="section-sub" style={{ textAlign: "center", margin: "8px auto 40px", maxWidth: 520 }}>
+        Agents connect via CLI, hook, or skill.
+        Every trace sanitized before it leaves your machine.
       </p>
 
-      <div className="infra">
-        <div><span className="infra-box hl">Agent Sessions</span></div>
-        <div className="infra-connector">{"\u2502"}</div>
-        <div style={{ fontSize: 10, color: "var(--text-dim)" }}>CLI / Hook / Skill</div>
-        <div className="infra-connector">{"\u2502"}</div>
-        <div className="infra-wide" style={{ borderColor: "var(--accent)" }}>
-          <span style={{ color: "var(--accent)" }}>opentraces</span>
-          <span style={{ color: "var(--text-dim)" }}> {"\u2500\u2500"} parse {"\u2192"} enrich {"\u2192"} sanitize {"\u2192"} publish</span>
-        </div>
-        <div className="infra-connector">{"\u2502"}</div>
-        <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Security Tier 1 / 2 / 3</div>
-        <div className="infra-connector">{"\u2502"}</div>
-        <div className="infra-row">
-          {["Claude Code", "Codex", "Cursor", "Gemini CLI", "OpenCode", "Cline"].map((name) => (
-            <span key={name} className="infra-box">{name}</span>
+      <div className="arch">
+        {/* Source agents row */}
+        <div className="arch-agents">
+          {agents.map((name) => (
+            <div key={name} className="arch-agent-box">{name}</div>
           ))}
         </div>
-        <div className="infra-connector" style={{ marginTop: 8 }}>{"\u2502"}</div>
-        <div><span className="infra-box" style={{ fontSize: 13 }}>{"\uD83E\uDD17"} Hugging Face Hub</span></div>
+
+        <div className="arch-line" />
+        <div className="arch-label">CLI / Hook / Skill</div>
+        <div className="arch-line" />
+
+        {/* Core pipeline */}
+        <div className="arch-core">
+          <div className="arch-core-brand">
+            <span className="brand-open">open</span>
+            <span className="brand-traces">traces</span>
+          </div>
+
+          <div className="arch-pipeline">
+            {steps.map((step, i) => (
+              <span key={step}>
+                {i > 0 && <span className="arch-arrow">{"\u2192"}</span>}
+                <span className="arch-step">{step}</span>
+              </span>
+            ))}
+          </div>
+
+          <div className="arch-tiers">
+            {tiers.map((t) => (
+              <div key={t.name} className="arch-tier-box">
+                <div className="arch-tier-name">{t.name}</div>
+                <div className="arch-tier-label">{t.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="arch-line" />
+        <div className="arch-label">JSONL shards, one per push</div>
+        <div className="arch-line" />
+
+        {/* HF Hub destination */}
+        <div className="arch-box arch-dest">
+          <span style={{ fontSize: 15 }}>{"\uD83E\uDD17"}</span>
+          <span>Hugging Face Hub</span>
+        </div>
       </div>
     </section>
   );

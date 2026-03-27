@@ -1,0 +1,50 @@
+site_name: open traces docs
+site_description: Open protocol + CLI for crowdsourcing agent traces to Hugging Face Hub
+use_directory_urls: false
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: IBM Plex Mono
+    code: JetBrains Mono
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - toc.integrate
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Schema:
+    - Overview: schema/index.md
+    - TraceRecord: schema/trace-record.md
+    - Steps: schema/steps.md
+    - Outcome & Attribution: schema/outcome-attribution.md
+  - Security Tiers: security-tiers.md
+  - Architecture: architecture.md
+  - CLI Reference: cli-reference.md
+  - Standards: standards.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+  - tables

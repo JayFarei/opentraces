@@ -23,7 +23,7 @@
                 <li><a href="/" {% if request.path == '/' %}class="active"{% endif %}>Sessions</a></li>
                 <li><a href="/stats" {% if request.path == '/stats' %}class="active"{% endif %}>Stats</a></li>
                 <li>
-                    <button class="ot-push-btn" id="nav-push-btn" onclick="pushApproved()">
+                    <button class="ot-push-btn" id="nav-push-btn" onclick="pushApproved()" disabled>
                         Push to Hub
                     </button>
                 </li>

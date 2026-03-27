@@ -1,20 +1,17 @@
 import Link from "next/link";
-import Logo from "./Logo";
 
 export default function Nav() {
   return (
     <nav className="nav">
-      <Link href="/" className="nav-logo logo-mark">
-        <Logo />
-        opentraces<span className="dot">.</span>ai
+      <Link href="/" className="nav-logo">
+        <span className="brand-open">open</span><span className="brand-traces">traces</span>
       </Link>
       <div className="nav-links">
         <Link href="/schema" className="nav-link">schema</Link>
-        <a href="#" className="nav-link">dashboard</a>
-        <a href="#" className="nav-link">datasets</a>
+        <Link href="/dashboard" className="nav-link">dashboard</Link>
+        <Link href="/docs" className="nav-link">docs</Link>
+        <a href="/llms.txt" className="nav-link">/llms.txt</a>
         <a href="https://github.com/opentraces" className="nav-link" target="_blank" rel="noopener noreferrer">github</a>
-        <span style={{ color: "var(--border)" }}>|</span>
-        <a href="#" className="btn btn-outline btn-sm">[sign in]</a>
       </div>
     </nav>
   );
