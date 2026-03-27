@@ -7,7 +7,10 @@ DataClaw stores flat JSONL with session-level aggregates and message lists.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 
 from opentraces_schema.models import (
@@ -119,11 +122,18 @@ def import_dataclaw(input_path: Path) -> list[TraceRecord]:
         List of TraceRecord objects.
     """
     traces: list[TraceRecord] = []
+    errors = 0
     with open(input_path) as f:
-        for line in f:
+        for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line:
                 continue
-            raw = json.loads(line)
-            traces.append(_convert_record(raw))
+            try:
+                raw = json.loads(line)
+                traces.append(_convert_record(raw))
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                errors += 1
+                logger.warning(f"Skipping line {line_num} in {input_path}: {e}")
+    if errors:
+        logger.info(f"DataClaw import: {errors} lines skipped due to errors")
     return traces

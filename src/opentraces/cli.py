@@ -83,9 +83,7 @@ def config_show() -> None:
     data = cfg.model_dump()
     # Mask redact strings
     if data.get("custom_redact_strings"):
-        data["custom_redact_strings"] = [
-            s[:2] + "***" for s in data["custom_redact_strings"]
-        ]
+        data["custom_redact_strings"] = ["***" for _ in data["custom_redact_strings"]]
     # Never show token
     if data.get("hf_token"):
         data["hf_token"] = "***"

@@ -140,6 +140,8 @@ class ClaudeCodeParser:
             with open(path, "r") as f:
                 if byte_offset > 0:
                     f.seek(byte_offset)
+                    # Discard partial line after seek (may have landed mid-UTF8)
+                    f.readline()
                 for raw_line in f:
                     total += 1
                     raw_line = raw_line.strip()

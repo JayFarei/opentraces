@@ -54,9 +54,16 @@ def ensure_dirs() -> None:
 
 
 def _secure_write(path: Path, data: str) -> None:
-    """Write file with 0600 permissions (owner read/write only)."""
-    path.write_text(data)
-    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    """Write file with 0600 permissions (owner read/write only).
+
+    Uses os.open with O_CREAT to avoid TOCTOU race where the file is
+    briefly world-readable between creation and chmod.
+    """
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, data.encode("utf-8"))
+    finally:
+        os.close(fd)
 
 
 def load_config() -> Config:
@@ -125,4 +132,4 @@ def get_tier_for_project(config: Config, project_path: str) -> int:
 
 def get_dataset_name(config: Config, username: str) -> str:
     """Get the HF dataset repo name for a user."""
-    return config.dataset_name_template.format(username=username)
+    return config.dataset_name_template.replace("{username}", username)
