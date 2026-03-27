@@ -7,3 +7,5 @@ build/
 .pytest_cache/
 .gstack/qa-reports/
 *.egg-link
+site/node_modules/
+site/.next/
