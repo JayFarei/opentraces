@@ -227,8 +227,12 @@ class TraceRecord(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def compute_content_hash(self) -> str:
-        """Compute SHA-256 hash of the trace content for deduplication."""
-        data = self.model_dump(exclude={"content_hash"})
+        """Compute SHA-256 hash of the trace content for deduplication.
+
+        Excludes content_hash and trace_id so re-parsing identical content
+        produces the same hash regardless of the random UUID assigned.
+        """
+        data = self.model_dump(exclude={"content_hash", "trace_id"})
         serialized = json.dumps(data, sort_keys=True, default=str)
         return hashlib.sha256(serialized.encode()).hexdigest()
 

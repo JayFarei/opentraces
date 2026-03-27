@@ -11,6 +11,7 @@ from .redactor import RedactingFilter, configure_logging
 from .scanner import (
     FieldType,
     ScanResult,
+    apply_redactions,
     scan_content,
     scan_serialized,
     scan_trace_record,
@@ -35,6 +36,7 @@ __all__ = [
     # scanner
     "FieldType",
     "ScanResult",
+    "apply_redactions",
     "scan_content",
     "scan_serialized",
     "scan_trace_record",

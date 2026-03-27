@@ -516,7 +516,11 @@ class ClaudeCodeParser:
         }
         agent_role = role_map.get(subagent_type, subagent_type.lower())
 
+        # Renumber sub-agent steps to avoid duplicates with parent
+        max_parent_index = max((s.step_index for s in parent_steps), default=0)
         for step in sub_steps:
+            max_parent_index += 1
+            step.step_index = max_parent_index
             if step.agent_role == "explore":
                 step.agent_role = agent_role
             step.call_type = "subagent"

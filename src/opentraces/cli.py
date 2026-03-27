@@ -206,7 +206,7 @@ def parse(auto: bool, limit: int) -> None:
     from pathlib import Path
     from .config import get_projects_path, get_tier_for_project
     from .parsers.claude_code import ClaudeCodeParser
-    from .security.scanner import scan_trace_record, two_pass_scan
+    from .security.scanner import scan_trace_record, two_pass_scan, apply_redactions
     from .security.classifier import classify_trace_record
     from .enrichment.git_signals import extract_git_signals
     from .enrichment.attribution import build_attribution
@@ -244,12 +244,16 @@ def parse(auto: bool, limit: int) -> None:
                 skipped_count += 1
                 continue
 
-            # Enrich: git signals
+            # Enrich: git signals (use session timestamps, not defaults)
             project_dir = session_path.parent
-            vcs, outcome = extract_git_signals(str(project_dir))
+            from .enrichment.git_signals import detect_vcs, check_committed
+            vcs = detect_vcs(project_dir)
             record.environment.vcs = vcs
-            if outcome.committed:
-                record.outcome = outcome
+            if vcs.type == "git" and record.timestamp_start:
+                ts_end = record.timestamp_end or record.timestamp_start
+                outcome = check_committed(project_dir, record.timestamp_start, ts_end)
+                if outcome.committed:
+                    record.outcome = outcome
 
             # Enrich: attribution
             attribution = build_attribution(record.steps, record.outcome.patch)
@@ -261,11 +265,18 @@ def parse(auto: bool, limit: int) -> None:
             # Enrich: metrics (recompute with full data)
             record.metrics = compute_metrics(record.steps)
 
-            # Security: scan based on tier
+            # Security: scan and redact based on tier
+            project_path_str = str(session_path.parent)
+            tier = get_tier_for_project(cfg, project_path_str)
+            if tier == -1:
+                skipped_count += 1
+                continue  # Excluded project
+
             if tier in (1, 2):
-                scan_result = two_pass_scan(record)
+                pass1, pass2 = two_pass_scan(record)
+                total_redactions = apply_redactions(record)
                 record.security.tier = tier
-                record.security.redactions_applied = scan_result.redaction_count
+                record.security.redactions_applied = total_redactions
 
             if tier == 2:
                 classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
@@ -351,15 +362,19 @@ def push(approved_only: bool) -> None:
         sys.exit(3)
 
     state = StateManager()
-    traces_to_upload = state.get_pending_upload_traces()
+    if approved_only:
+        traces_to_upload = state.get_traces_by_status(TraceStatus.APPROVED)
+    else:
+        traces_to_upload = state.get_pending_upload_traces()
 
     if not traces_to_upload:
         click.echo("No traces ready for upload.")
         emit_json({"status": "ok", "uploaded": 0, "message": "No approved traces to upload"})
         return
 
-    # Load trace records from staging files
+    # Load trace records from staging files, track which ones loaded successfully
     records = []
+    loaded_trace_ids = set()
     for entry in traces_to_upload:
         if entry.file_path:
             from pathlib import Path
@@ -369,6 +384,7 @@ def push(approved_only: bool) -> None:
                     data = staging_file.read_text().strip()
                     record = TraceRecord.model_validate_json(data)
                     records.append(record)
+                    loaded_trace_ids.add(entry.trace_id)
                 except Exception as e:
                     click.echo(f"  Error loading {entry.trace_id}: {e}", err=True)
 
@@ -396,8 +412,10 @@ def push(approved_only: bool) -> None:
             result = uploader.upload_traces(records)
 
             if result.success:
+                # Only mark traces that were actually loaded and uploaded
                 for entry in traces_to_upload:
-                    state.set_trace_status(entry.trace_id, TraceStatus.UPLOADED)
+                    if entry.trace_id in loaded_trace_ids:
+                        state.set_trace_status(entry.trace_id, TraceStatus.UPLOADED)
                 click.echo(f"Uploaded {result.trace_count} traces as {result.shard_name}")
                 emit_json({
                     "status": "ok",

@@ -84,10 +84,13 @@ def load_config() -> Config:
 
 
 def save_config(config: Config) -> None:
-    """Save config to disk with secure permissions."""
+    """Save config to disk with secure permissions.
+
+    Never persists hf_token to disk, it should stay in env vars.
+    """
     ensure_dirs()
-    data = config.model_dump_json(indent=2)
-    _secure_write(CONFIG_PATH, data)
+    data = config.model_dump(exclude={"hf_token"})
+    _secure_write(CONFIG_PATH, json.dumps(data, indent=2))
 
 
 def _migrate_config(raw: dict[str, Any], from_version: str) -> dict[str, Any]:

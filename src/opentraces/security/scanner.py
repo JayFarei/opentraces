@@ -189,6 +189,70 @@ def scan_serialized(jsonl_bytes: bytes) -> ScanResult:
     return scan_content(text, FieldType.GENERAL)
 
 
+def apply_redactions(record: TraceRecord) -> int:
+    """Apply redactions to all string fields in a TraceRecord in-place.
+
+    Scans each field with context-appropriate rules and replaces matches
+    with [REDACTED]. Returns total number of redactions applied.
+    """
+    total = 0
+
+    for _hash, prompt_text in list(record.system_prompts.items()):
+        matches = scan_text(prompt_text)
+        if matches:
+            record.system_prompts[_hash] = redact_text(prompt_text, matches)
+            total += len(matches)
+
+    if record.task.description:
+        matches = scan_text(record.task.description)
+        if matches:
+            record.task.description = redact_text(record.task.description, matches)
+            total += len(matches)
+
+    for step in record.steps:
+        if step.content:
+            matches = scan_text(step.content)
+            if matches:
+                step.content = redact_text(step.content, matches)
+                total += len(matches)
+
+        if step.reasoning_content:
+            matches = scan_text(step.reasoning_content, include_entropy=False)
+            if matches:
+                step.reasoning_content = redact_text(step.reasoning_content, matches)
+                total += len(matches)
+
+        for tc in step.tool_calls:
+            for key, val in list(tc.input.items()):
+                if isinstance(val, str):
+                    matches = scan_text(val)
+                    if matches:
+                        tc.input[key] = redact_text(val, matches)
+                        total += len(matches)
+
+        for obs in step.observations:
+            if obs.content:
+                matches = scan_text(obs.content, include_entropy=False)
+                if matches:
+                    obs.content = redact_text(obs.content, matches)
+                    total += len(matches)
+
+        for snippet in step.snippets:
+            if snippet.text:
+                matches = scan_text(snippet.text)
+                if matches:
+                    snippet.text = redact_text(snippet.text, matches)
+                    total += len(matches)
+
+    if record.outcome.patch:
+        matches = scan_text(record.outcome.patch)
+        if matches:
+            record.outcome.patch = redact_text(record.outcome.patch, matches)
+            total += len(matches)
+
+    return total
+
+
 def two_pass_scan(record: TraceRecord) -> tuple[ScanResult, ScanResult]:
     """Run the full two-pass scan on a trace record.
 

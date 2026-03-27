@@ -189,8 +189,14 @@ class TestContentHash:
 
     def test_different_content_different_hash(self):
         r1 = TraceRecord(trace_id="id-1", session_id="s-1", agent=Agent(name="claude-code"))
-        r2 = TraceRecord(trace_id="id-2", session_id="s-1", agent=Agent(name="claude-code"))
+        r2 = TraceRecord(trace_id="id-1", session_id="s-2", agent=Agent(name="claude-code"))
         assert r1.compute_content_hash() != r2.compute_content_hash()
+
+    def test_same_content_same_hash_regardless_of_trace_id(self):
+        """content_hash excludes trace_id for stable deduplication."""
+        r1 = TraceRecord(trace_id="id-1", session_id="s-1", agent=Agent(name="claude-code"))
+        r2 = TraceRecord(trace_id="id-2", session_id="s-1", agent=Agent(name="claude-code"))
+        assert r1.compute_content_hash() == r2.compute_content_hash()
 
     def test_to_jsonl_line_includes_hash(self):
         record = TraceRecord(
