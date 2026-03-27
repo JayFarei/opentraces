@@ -1,0 +1,879 @@
+"""Comprehensive tests for the opentraces security pipeline."""
+
+from __future__ import annotations
+
+import logging
+
+import pytest
+from opentraces_schema.models import (
+    Agent,
+    Observation,
+    Outcome,
+    Step,
+    ToolCall,
+    TraceRecord,
+)
+
+from opentraces.security.anonymizer import anonymize_paths, hash_username
+from opentraces.security.classifier import (
+    ClassifierResult,
+    classify_content,
+    classify_trace_record,
+)
+from opentraces.security.redactor import RedactingFilter
+from opentraces.security.scanner import (
+    FieldType,
+    ScanResult,
+    scan_content,
+    scan_trace_record,
+    two_pass_scan,
+)
+from opentraces.security.secrets import (
+    SecretMatch,
+    redact_text,
+    scan_text,
+    shannon_entropy,
+    _luhn_check,
+)
+
+
+# ===================================================================
+# secrets.py -- Regex patterns (positive + negative)
+# ===================================================================
+
+
+class TestJWT:
+    def test_detects_jwt(self):
+        token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+        matches = scan_text(token)
+        assert any(m.pattern_name == "jwt_token" for m in matches)
+
+    def test_ignores_short_eyj(self):
+        matches = scan_text("eyJhbG.eyJzd.short")
+        assert not any(m.pattern_name == "jwt_token" for m in matches)
+
+
+class TestAnthropicKey:
+    def test_detects_anthropic_key(self):
+        matches = scan_text("sk-ant-api03-abcdefghijklmnopqrstuvwxyz")
+        assert any(m.pattern_name == "anthropic_api_key" for m in matches)
+
+    def test_severity_is_critical(self):
+        matches = scan_text("sk-ant-api03-abcdefghijklmnopqrstuvwxyz")
+        anthropic = [m for m in matches if m.pattern_name == "anthropic_api_key"]
+        assert anthropic[0].severity == "critical"
+
+
+class TestOpenAIKey:
+    def test_detects_project_key(self):
+        matches = scan_text("sk-proj-abcdefghijklmnopqrstuvwxyz")
+        assert any(m.pattern_name == "openai_project_key" for m in matches)
+
+    def test_detects_generic_key(self):
+        matches = scan_text("sk-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234")
+        assert any(m.pattern_name == "openai_api_key" for m in matches)
+
+    def test_ignores_dummy_key(self):
+        matches = scan_text("sk-test-abcdefghijklmnopqrstuvwxyz")
+        assert not any(m.pattern_name == "openai_api_key" for m in matches)
+
+
+class TestHuggingFaceToken:
+    def test_detects_hf_token(self):
+        matches = scan_text("hf_ABCDEFGHIJKLMNOPQRSTuvwxyz")
+        assert any(m.pattern_name == "huggingface_token" for m in matches)
+
+
+class TestGitHubTokens:
+    def test_detects_ghp(self):
+        matches = scan_text("ghp_ABCDEFGHIJKLMNOPQRSTuvwxyz")
+        assert any(m.pattern_name == "github_token" for m in matches)
+
+    def test_detects_gho(self):
+        matches = scan_text("gho_ABCDEFGHIJKLMNOPQRSTuvwxyz")
+        assert any(m.pattern_name == "github_token" for m in matches)
+
+    def test_detects_ghs(self):
+        matches = scan_text("ghs_ABCDEFGHIJKLMNOPQRSTuvwxyz")
+        assert any(m.pattern_name == "github_token" for m in matches)
+
+    def test_detects_ghu(self):
+        matches = scan_text("ghu_ABCDEFGHIJKLMNOPQRSTuvwxyz")
+        assert any(m.pattern_name == "github_token" for m in matches)
+
+    def test_detects_github_pat(self):
+        matches = scan_text("github_pat_ABCDEFGHIJKLMNOPQRSTuvwxyz")
+        assert any(m.pattern_name == "github_pat" for m in matches)
+
+
+class TestPyPIToken:
+    def test_detects_pypi_token(self):
+        matches = scan_text("pypi-AgEIcHlwaS5vcmcCJGY5NjVm")
+        assert any(m.pattern_name == "pypi_token" for m in matches)
+
+
+class TestNPMToken:
+    def test_detects_npm_token(self):
+        matches = scan_text("npm_ABCDEFGHIJKLMNOPQRSTuvwxyz")
+        assert any(m.pattern_name == "npm_token" for m in matches)
+
+
+class TestAWSKey:
+    def test_detects_aws_access_key(self):
+        matches = scan_text("AKIAIOSFODNN7EXAMPLE")
+        assert any(m.pattern_name == "aws_access_key" for m in matches)
+
+    def test_ignores_non_akia_prefix(self):
+        matches = scan_text("ASIA1234567890123456")
+        assert not any(m.pattern_name == "aws_access_key" for m in matches)
+
+
+class TestSlackToken:
+    def test_detects_xoxb(self):
+        matches = scan_text("xoxb-12345678901-abcdefghij")
+        assert any(m.pattern_name == "slack_token" for m in matches)
+
+    def test_detects_xoxp(self):
+        matches = scan_text("xoxp-12345678901-abcdefghij")
+        assert any(m.pattern_name == "slack_token" for m in matches)
+
+    def test_detects_xoxe(self):
+        matches = scan_text("xoxe-12345678901-abcdefghij")
+        assert any(m.pattern_name == "slack_token" for m in matches)
+
+
+class TestDiscordWebhook:
+    def test_detects_discord_webhook(self):
+        url = "https://discord.com/api/webhooks/123456789/abcdef_GHIJKL"
+        matches = scan_text(url)
+        assert any(m.pattern_name == "discord_webhook" for m in matches)
+
+    def test_detects_discordapp_webhook(self):
+        url = "https://discordapp.com/api/webhooks/123456789/abcdef_GHIJKL"
+        matches = scan_text(url)
+        assert any(m.pattern_name == "discord_webhook" for m in matches)
+
+
+class TestPrivateKey:
+    def test_detects_rsa_private_key(self):
+        matches = scan_text("-----BEGIN RSA PRIVATE KEY-----")
+        assert any(m.pattern_name == "private_key" for m in matches)
+
+    def test_detects_ec_private_key(self):
+        matches = scan_text("-----BEGIN EC PRIVATE KEY-----")
+        assert any(m.pattern_name == "private_key" for m in matches)
+
+    def test_detects_openssh_private_key(self):
+        matches = scan_text("-----BEGIN OPENSSH PRIVATE KEY-----")
+        assert any(m.pattern_name == "private_key" for m in matches)
+
+
+class TestDatabaseURL:
+    def test_detects_postgresql(self):
+        matches = scan_text("postgresql://user:pass@host:5432/dbname")
+        assert any(m.pattern_name == "database_url" for m in matches)
+
+    def test_detects_mysql(self):
+        matches = scan_text("mysql://root:secret@mysql.internal:3306/app")
+        assert any(m.pattern_name == "database_url" for m in matches)
+
+    def test_detects_mongodb(self):
+        matches = scan_text("mongodb://admin:p4ss@mongo.prod:27017/mydb")
+        assert any(m.pattern_name == "database_url" for m in matches)
+
+    def test_detects_redis(self):
+        matches = scan_text("redis://default:pw@redis.internal:6379/0")
+        assert any(m.pattern_name == "database_url" for m in matches)
+
+    def test_ignores_example_url(self):
+        matches = scan_text("postgresql://user:pass@localhost:5432/dbname")
+        assert not any(m.pattern_name == "database_url" for m in matches)
+
+
+class TestBearerToken:
+    def test_detects_bearer(self):
+        matches = scan_text("Bearer eyJhbGciOiJSUzI1NiIs")
+        assert any(m.pattern_name == "bearer_token" for m in matches)
+
+    def test_ignores_dummy_bearer(self):
+        matches = scan_text("Bearer $TOKEN_VAR_PLACEHOLDER_XYZ")
+        assert not any(m.pattern_name == "bearer_token" for m in matches)
+
+
+class TestIPAddresses:
+    def test_detects_ipv4(self):
+        matches = scan_text("Server is at 203.0.113.42 running")
+        assert any(m.pattern_name == "ipv4_address" for m in matches)
+
+    def test_ignores_private_ipv4(self):
+        matches = scan_text("Server is at 192.168.1.1 running")
+        assert not any(m.pattern_name == "ipv4_address" for m in matches)
+
+    def test_ignores_loopback(self):
+        matches = scan_text("Listening on 127.0.0.1 port 8080")
+        assert not any(m.pattern_name == "ipv4_address" for m in matches)
+
+    def test_detects_ipv6(self):
+        matches = scan_text("address is 2001:0db8:85a3:0000:0000:8a2e:0370:7334 ok")
+        assert any(m.pattern_name == "ipv6_address" for m in matches)
+
+
+class TestEmailAddress:
+    def test_detects_email(self):
+        matches = scan_text("Contact user@company.com for help")
+        assert any(m.pattern_name == "email_address" for m in matches)
+
+    def test_ignores_noreply(self):
+        matches = scan_text("From noreply@github.com")
+        assert not any(m.pattern_name == "email_address" for m in matches)
+
+    def test_ignores_example_com(self):
+        matches = scan_text("test@example.com")
+        assert not any(m.pattern_name == "email_address" for m in matches)
+
+
+class TestCreditCard:
+    def test_detects_valid_visa(self):
+        # 4111111111111111 passes Luhn
+        matches = scan_text("Card: 4111111111111111")
+        assert any(m.pattern_name == "credit_card" for m in matches)
+
+    def test_detects_valid_with_spaces(self):
+        matches = scan_text("Card: 4111 1111 1111 1111")
+        assert any(m.pattern_name == "credit_card" for m in matches)
+
+    def test_ignores_invalid_luhn(self):
+        # 1234567890123456 does not pass Luhn
+        matches = scan_text("Number: 1234567890123456")
+        assert not any(m.pattern_name == "credit_card" for m in matches)
+
+
+class TestSSN:
+    def test_detects_ssn(self):
+        matches = scan_text("SSN: 123-45-6789")
+        assert any(m.pattern_name == "ssn" for m in matches)
+
+    def test_ignores_invalid_area(self):
+        # 000-xx-xxxx is invalid
+        matches = scan_text("SSN: 000-12-3456")
+        assert not any(m.pattern_name == "ssn" for m in matches)
+
+    def test_ignores_666_area(self):
+        matches = scan_text("SSN: 666-12-3456")
+        assert not any(m.pattern_name == "ssn" for m in matches)
+
+
+class TestPhoneNumber:
+    def test_detects_standard(self):
+        matches = scan_text("Call (555) 123-4567 for info")
+        assert any(m.pattern_name == "phone_number" for m in matches)
+
+    def test_detects_with_country_code(self):
+        matches = scan_text("Call +1 555-123-4567")
+        assert any(m.pattern_name == "phone_number" for m in matches)
+
+    def test_detects_dotted(self):
+        matches = scan_text("Phone: 555.123.4567")
+        assert any(m.pattern_name == "phone_number" for m in matches)
+
+
+# ===================================================================
+# secrets.py -- Shannon entropy
+# ===================================================================
+
+
+class TestShannonEntropy:
+    def test_empty_string(self):
+        assert shannon_entropy("") == 0.0
+
+    def test_single_char(self):
+        assert shannon_entropy("aaaa") == 0.0
+
+    def test_high_entropy(self):
+        # Random-looking string should have high entropy
+        ent = shannon_entropy("aB3$xY9@kL2!mN5^pQ8&rT1")
+        assert ent > 4.0
+
+    def test_low_entropy(self):
+        ent = shannon_entropy("aaabbbccc")
+        assert ent < 2.0
+
+    def test_entropy_flag_in_scan(self):
+        # High-entropy random string that is not caught by regex
+        high_ent = "Xk9mZr3pWq7vNt2sLf6yBh4jCe8gAa5d"
+        matches = scan_text(high_ent, include_entropy=True, entropy_threshold=3.5)
+        assert any(m.pattern_name == "high_entropy_string" for m in matches)
+
+    def test_entropy_excluded_when_disabled(self):
+        high_ent = "Xk9mZr3pWq7vNt2sLf6yBh4jCe8gAa5d"
+        matches = scan_text(high_ent, include_entropy=False)
+        assert not any(m.pattern_name == "high_entropy_string" for m in matches)
+
+
+# ===================================================================
+# secrets.py -- Luhn validation
+# ===================================================================
+
+
+class TestLuhnCheck:
+    def test_valid_visa(self):
+        assert _luhn_check("4111111111111111") is True
+
+    def test_valid_mastercard(self):
+        assert _luhn_check("5500000000000004") is True
+
+    def test_invalid_number(self):
+        assert _luhn_check("1234567890123456") is False
+
+    def test_too_short(self):
+        assert _luhn_check("12345") is False
+
+
+# ===================================================================
+# secrets.py -- Redaction
+# ===================================================================
+
+
+class TestRedaction:
+    def test_redact_single(self):
+        text = "Key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz here"
+        matches = scan_text(text)
+        redacted = redact_text(text, matches)
+        assert "sk-ant-" not in redacted
+        assert "[REDACTED]" in redacted
+
+    def test_redact_multiple(self):
+        text = "Key1: ghp_ABCDEFGHIJKLMNOPQRSTuvwxyz and Key2: hf_ABCDEFGHIJKLMNOPQRSTuvwxyz"
+        matches = scan_text(text)
+        redacted = redact_text(text, matches)
+        assert "ghp_" not in redacted
+        assert "hf_" not in redacted
+        assert redacted.count("[REDACTED]") >= 2
+
+    def test_redact_empty_matches(self):
+        text = "nothing secret here"
+        assert redact_text(text, []) == text
+
+
+# ===================================================================
+# secrets.py -- Allowlist
+# ===================================================================
+
+
+class TestAllowlist:
+    def test_decorator_not_flagged(self):
+        matches = scan_text("@property")
+        assert not any(m.pattern_name == "email_address" for m in matches)
+
+    def test_noreply_not_flagged(self):
+        matches = scan_text("noreply@github.com")
+        assert not any(m.pattern_name == "email_address" for m in matches)
+
+    def test_example_email_not_flagged(self):
+        matches = scan_text("test@example.com")
+        assert not any(m.pattern_name == "email_address" for m in matches)
+
+    def test_private_ip_not_flagged(self):
+        matches = scan_text("Server at 10.0.0.1 listening")
+        assert not any(m.pattern_name == "ipv4_address" for m in matches)
+
+    def test_172_private_ip_not_flagged(self):
+        matches = scan_text("Gateway 172.16.0.1 running")
+        assert not any(m.pattern_name == "ipv4_address" for m in matches)
+
+    def test_example_db_url_not_flagged(self):
+        matches = scan_text("postgresql://user:pass@example.com:5432/db")
+        assert not any(m.pattern_name == "database_url" for m in matches)
+
+
+# ===================================================================
+# anonymizer.py -- Path anonymization
+# ===================================================================
+
+
+class TestHashUsername:
+    def test_deterministic(self):
+        h1 = hash_username("jayfarei")
+        h2 = hash_username("jayfarei")
+        assert h1 == h2
+
+    def test_length(self):
+        assert len(hash_username("alice")) == 8
+
+    def test_hex_chars(self):
+        h = hash_username("bob")
+        assert all(c in "0123456789abcdef" for c in h)
+
+
+class TestAnonymizePaths:
+    USERNAME = "jayfarei"
+
+    def test_macos_path(self):
+        text = "/Users/jayfarei/src/project/file.py"
+        result = anonymize_paths(text, username=self.USERNAME)
+        expected_hash = hash_username(self.USERNAME)
+        assert f"/Users/{expected_hash}/" in result
+        assert "jayfarei" not in result
+
+    def test_linux_path(self):
+        text = "/home/jayfarei/projects/app.py"
+        result = anonymize_paths(text, username=self.USERNAME)
+        expected_hash = hash_username(self.USERNAME)
+        assert f"/home/{expected_hash}/" in result
+        assert "jayfarei" not in result
+
+    def test_windows_backslash_path(self):
+        text = r"C:\Users\jayfarei\Documents\code.py"
+        result = anonymize_paths(text, username=self.USERNAME)
+        expected_hash = hash_username(self.USERNAME)
+        assert f"C:\\Users\\{expected_hash}\\" in result
+        assert "jayfarei" not in result
+
+    def test_windows_forward_slash_path(self):
+        text = "C:/Users/jayfarei/Documents/code.py"
+        result = anonymize_paths(text, username=self.USERNAME)
+        assert "jayfarei" not in result
+
+    def test_wsl_path(self):
+        text = "/mnt/c/Users/jayfarei/code/app.py"
+        result = anonymize_paths(text, username=self.USERNAME)
+        expected_hash = hash_username(self.USERNAME)
+        assert f"/mnt/c/Users/{expected_hash}/" in result
+        assert "jayfarei" not in result
+
+    def test_wsl_unc_path(self):
+        text = r"\\wsl.localhost\Ubuntu\home\jayfarei\project"
+        result = anonymize_paths(text, username=self.USERNAME)
+        assert "jayfarei" not in result
+
+    def test_hyphen_encoded_path(self):
+        text = "-Users-jayfarei-src-project"
+        result = anonymize_paths(text, username=self.USERNAME)
+        expected_hash = hash_username(self.USERNAME)
+        assert f"-Users-{expected_hash}-" in result
+        assert "jayfarei" not in result
+
+    def test_tilde_path(self):
+        text = "~jayfarei/documents/file.txt"
+        result = anonymize_paths(text, username=self.USERNAME)
+        expected_hash = hash_username(self.USERNAME)
+        assert f"~{expected_hash}" in result
+        assert "jayfarei" not in result
+
+    def test_extra_usernames(self):
+        text = "/home/jayfarei/code and /home/ghuser/code"
+        result = anonymize_paths(text, username=self.USERNAME, extra_usernames=["ghuser"])
+        assert "jayfarei" not in result
+        assert "ghuser" not in result
+
+    def test_empty_text(self):
+        assert anonymize_paths("", username=self.USERNAME) == ""
+
+    def test_no_username_available(self):
+        # When no username provided and system detection fails
+        text = "/some/path/file.py"
+        result = anonymize_paths(text, username=None, extra_usernames=None)
+        # Should be unchanged if no username found (may detect system user)
+        assert "file.py" in result
+
+
+# ===================================================================
+# scanner.py -- Context-aware scanning
+# ===================================================================
+
+
+class TestFieldTypeScan:
+    def test_tool_input_includes_entropy(self):
+        high_ent = "Xk9mZr3pWq7vNt2sLf6yBh4jCe8gAa5d"
+        result = scan_content(high_ent, FieldType.TOOL_INPUT)
+        assert any(m.pattern_name == "high_entropy_string" for m in result.matches)
+
+    def test_tool_result_excludes_entropy(self):
+        high_ent = "Xk9mZr3pWq7vNt2sLf6yBh4jCe8gAa5d"
+        result = scan_content(high_ent, FieldType.TOOL_RESULT)
+        assert not any(m.pattern_name == "high_entropy_string" for m in result.matches)
+
+    def test_reasoning_excludes_entropy(self):
+        high_ent = "Xk9mZr3pWq7vNt2sLf6yBh4jCe8gAa5d"
+        result = scan_content(high_ent, FieldType.REASONING)
+        assert not any(m.pattern_name == "high_entropy_string" for m in result.matches)
+
+    def test_general_includes_entropy(self):
+        high_ent = "Xk9mZr3pWq7vNt2sLf6yBh4jCe8gAa5d"
+        result = scan_content(high_ent, FieldType.GENERAL)
+        assert any(m.pattern_name == "high_entropy_string" for m in result.matches)
+
+    def test_tool_result_still_catches_regex(self):
+        text = "Result contains sk-ant-api03-abcdefghijklmnopqrstuvwxyz"
+        result = scan_content(text, FieldType.TOOL_RESULT)
+        assert any(m.pattern_name == "anthropic_api_key" for m in result.matches)
+
+    def test_reasoning_still_catches_regex(self):
+        text = "Thinking about sk-ant-api03-abcdefghijklmnopqrstuvwxyz"
+        result = scan_content(text, FieldType.REASONING)
+        assert any(m.pattern_name == "anthropic_api_key" for m in result.matches)
+
+
+class TestScanTraceRecord:
+    def _make_record(self, **kwargs) -> TraceRecord:
+        defaults = {
+            "trace_id": "test-001",
+            "session_id": "sess-001",
+            "agent": Agent(name="test-agent"),
+        }
+        defaults.update(kwargs)
+        return TraceRecord(**defaults)
+
+    def test_scans_step_content(self):
+        record = self._make_record(
+            steps=[
+                Step(
+                    step_index=0,
+                    role="agent",
+                    content="Here is the key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+                )
+            ]
+        )
+        result = scan_trace_record(record)
+        assert result.redaction_count > 0
+
+    def test_scans_tool_call_input(self):
+        record = self._make_record(
+            steps=[
+                Step(
+                    step_index=0,
+                    role="agent",
+                    tool_calls=[
+                        ToolCall(
+                            tool_call_id="tc-1",
+                            tool_name="Bash",
+                            input={"command": "export API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz"},
+                        )
+                    ],
+                )
+            ]
+        )
+        result = scan_trace_record(record)
+        assert result.redaction_count > 0
+
+    def test_scans_observations(self):
+        record = self._make_record(
+            steps=[
+                Step(
+                    step_index=0,
+                    role="agent",
+                    observations=[
+                        Observation(
+                            source_call_id="tc-1",
+                            content="ghp_ABCDEFGHIJKLMNOPQRSTuvwxyz found in output",
+                        )
+                    ],
+                )
+            ]
+        )
+        result = scan_trace_record(record)
+        assert result.redaction_count > 0
+
+    def test_scans_reasoning_content(self):
+        record = self._make_record(
+            steps=[
+                Step(
+                    step_index=0,
+                    role="agent",
+                    reasoning_content="The user has key sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+                )
+            ]
+        )
+        result = scan_trace_record(record)
+        assert result.redaction_count > 0
+
+    def test_scans_system_prompts(self):
+        record = self._make_record(
+            system_prompts={"abc123": "Config: ghp_ABCDEFGHIJKLMNOPQRSTuvwxyz"},
+        )
+        result = scan_trace_record(record)
+        assert result.redaction_count > 0
+
+    def test_scans_outcome_patch(self):
+        record = self._make_record(
+            outcome=Outcome(patch="+API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz"),
+        )
+        result = scan_trace_record(record)
+        assert result.redaction_count > 0
+
+    def test_empty_record_no_matches(self):
+        record = self._make_record()
+        result = scan_trace_record(record)
+        assert result.redaction_count == 0
+
+
+# ===================================================================
+# scanner.py -- Two-pass scan
+# ===================================================================
+
+
+class TestTwoPassScan:
+    def test_pass1_catches_field_secret(self):
+        record = TraceRecord(
+            trace_id="test-2pass",
+            session_id="sess-2pass",
+            agent=Agent(name="test"),
+            steps=[
+                Step(
+                    step_index=0,
+                    role="agent",
+                    content="Key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+                )
+            ],
+        )
+        pass1, pass2 = two_pass_scan(record)
+        assert pass1.redaction_count > 0
+
+    def test_pass2_scans_serialized(self):
+        record = TraceRecord(
+            trace_id="test-2pass",
+            session_id="sess-2pass",
+            agent=Agent(name="test"),
+            steps=[
+                Step(
+                    step_index=0,
+                    role="agent",
+                    content="Key: sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+                )
+            ],
+        )
+        _pass1, pass2 = two_pass_scan(record)
+        # Pass 2 scans the full JSON, should also find the key
+        assert pass2.redaction_count > 0
+
+    def test_clean_record_no_flags(self):
+        record = TraceRecord(
+            trace_id="clean",
+            session_id="sess-clean",
+            agent=Agent(name="test"),
+            steps=[
+                Step(step_index=0, role="user", content="Hello world"),
+            ],
+        )
+        pass1, _pass2 = two_pass_scan(record)
+        assert pass1.redaction_count == 0
+
+
+# ===================================================================
+# classifier.py -- Heuristic classification
+# ===================================================================
+
+
+class TestClassifierInternalHostname:
+    def test_detects_internal_hostname(self):
+        result = classify_content("Connect to db.internal for production data")
+        assert any(f.pattern_name == "internal_hostname" for f in result.flags)
+
+    def test_detects_corp_hostname(self):
+        result = classify_content("api.corp is the main endpoint")
+        assert any(f.pattern_name == "internal_hostname" for f in result.flags)
+
+    def test_detects_local_hostname(self):
+        result = classify_content("service.local is running")
+        assert any(f.pattern_name == "internal_hostname" for f in result.flags)
+
+    def test_no_flag_for_normal_domain(self):
+        result = classify_content("Visit example.com for docs")
+        assert not any(f.pattern_name == "internal_hostname" for f in result.flags)
+
+
+class TestClassifierAWSAccountID:
+    def test_detects_aws_account_in_arn(self):
+        result = classify_content("arn:aws:s3:us-east-1:123456789012:bucket/data")
+        assert any(f.pattern_name == "aws_account_id" for f in result.flags)
+
+    def test_no_flag_without_arn(self):
+        result = classify_content("The number 123456789012 appeared")
+        assert not any(f.pattern_name == "aws_account_id" for f in result.flags)
+
+
+class TestClassifierDBConnectionString:
+    def test_detects_jdbc(self):
+        result = classify_content("jdbc:postgresql://db.internal:5432/mydb")
+        assert any(f.pattern_name == "db_connection_string" for f in result.flags)
+
+    def test_detects_mongodb_srv(self):
+        result = classify_content("mongodb+srv://user:pass@cluster.mongodb.net/db")
+        assert any(f.pattern_name == "db_connection_string" for f in result.flags)
+
+
+class TestClassifierInternalURL:
+    def test_detects_jira(self):
+        result = classify_content("See https://jira.company.com/browse/PROJ-123")
+        assert any(f.pattern_name == "internal_url" for f in result.flags)
+
+    def test_detects_confluence(self):
+        result = classify_content("Docs at https://confluence.company.com/wiki/page")
+        assert any(f.pattern_name == "internal_url" for f in result.flags)
+
+    def test_detects_atlassian(self):
+        result = classify_content("https://myteam.atlassian.net/browse/TASK-1")
+        assert any(f.pattern_name == "internal_url" for f in result.flags)
+
+    def test_detects_slack_archives(self):
+        result = classify_content("https://mycompany.slack.com/archives/C01234567")
+        assert any(f.pattern_name == "internal_url" for f in result.flags)
+
+
+class TestClassifierIdentifierDensity:
+    def test_high_uuid_density(self):
+        uuids = " ".join(
+            f"id-{i} 550e8400-e29b-41d4-a716-44665544000{i}" for i in range(5)
+        )
+        text = f"Processing records: {uuids}"
+        result = classify_content(text, sensitivity="high")
+        assert any(f.pattern_name == "identifier_density" for f in result.flags)
+
+    def test_low_density_ok(self):
+        text = "One uuid 550e8400-e29b-41d4-a716-446655440000 in long text " * 10
+        result = classify_content(text, sensitivity="low")
+        # With low sensitivity, only high-confidence matters
+        density_flags = [f for f in result.flags if f.pattern_name == "identifier_density"]
+        # Low density should not trigger
+        assert len(density_flags) == 0
+
+
+class TestClassifierFilePathDepth:
+    def test_deep_path_flagged(self):
+        text = "/very/deep/nested/path/to/some/internal/system/config/file.yaml"
+        result = classify_content(text, sensitivity="high")
+        assert any(f.pattern_name == "deep_file_path" for f in result.flags)
+
+
+class TestClassifierSensitivity:
+    def test_low_sensitivity_fewer_flags(self):
+        text = "service.local and https://jira.company.com/browse/T-1"
+        result_low = classify_content(text, sensitivity="low")
+        result_high = classify_content(text, sensitivity="high")
+        assert len(result_high.flags) >= len(result_low.flags)
+
+
+class TestClassifyTraceRecord:
+    def test_classifies_step_content(self):
+        record = TraceRecord(
+            trace_id="cls-test",
+            session_id="sess-cls",
+            agent=Agent(name="test"),
+            steps=[
+                Step(
+                    step_index=0,
+                    role="agent",
+                    content="Deploy to api.internal using jdbc:postgresql://db:5432/prod",
+                )
+            ],
+        )
+        result = classify_trace_record(record)
+        assert len(result.flags) > 0
+        assert result.risk_score > 0.0
+
+
+class TestClassifierRiskScore:
+    def test_risk_score_bounded(self):
+        text = (
+            "arn:aws:s3:us-east-1:123456789012:bucket "
+            "db.internal api.corp service.local "
+            "jdbc:postgresql://db.internal:5432/mydb "
+            "https://jira.company.com/browse/T-1"
+        )
+        result = classify_content(text)
+        assert 0.0 <= result.risk_score <= 1.0
+
+
+# ===================================================================
+# redactor.py -- RedactingFilter
+# ===================================================================
+
+
+class TestRedactingFilter:
+    def test_redacts_secret_in_log_message(self):
+        filt = RedactingFilter()
+        record = logging.LogRecord(
+            name="test",
+            level=logging.WARNING,
+            pathname="test.py",
+            lineno=1,
+            msg="API key is sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+            args=None,
+            exc_info=None,
+        )
+        filt.filter(record)
+        assert "sk-ant-" not in record.msg
+        assert "[REDACTED]" in record.msg
+
+    def test_redacts_secret_in_args_tuple(self):
+        filt = RedactingFilter()
+        record = logging.LogRecord(
+            name="test",
+            level=logging.WARNING,
+            pathname="test.py",
+            lineno=1,
+            msg="Key: %s",
+            args=("ghp_ABCDEFGHIJKLMNOPQRSTuvwxyz",),
+            exc_info=None,
+        )
+        filt.filter(record)
+        assert "ghp_" not in record.args[0]
+
+    def test_redacts_secret_in_args_dict(self):
+        filt = RedactingFilter()
+        record = logging.LogRecord(
+            name="test",
+            level=logging.WARNING,
+            pathname="test.py",
+            lineno=1,
+            msg="%(key)s",
+            args=({"key": "hf_ABCDEFGHIJKLMNOPQRSTuvwxyz"},),
+            exc_info=None,
+        )
+        # LogRecord unpacks single-element mapping tuples; manually set dict args
+        record.args = {"key": "hf_ABCDEFGHIJKLMNOPQRSTuvwxyz"}
+        filt.filter(record)
+        assert "hf_" not in record.args["key"]
+
+    def test_returns_true_always(self):
+        filt = RedactingFilter()
+        record = logging.LogRecord(
+            name="test",
+            level=logging.WARNING,
+            pathname="test.py",
+            lineno=1,
+            msg="clean message",
+            args=None,
+            exc_info=None,
+        )
+        assert filt.filter(record) is True
+
+    def test_no_entropy_by_default(self):
+        filt = RedactingFilter()
+        record = logging.LogRecord(
+            name="test",
+            level=logging.WARNING,
+            pathname="test.py",
+            lineno=1,
+            msg="Xk9mZr3pWq7vNt2sLf6yBh4jCe8gAa5d",
+            args=None,
+            exc_info=None,
+        )
+        original_msg = record.msg
+        filt.filter(record)
+        # Without entropy scanning, high-entropy string should not be redacted
+        assert record.msg == original_msg
+
+    def test_entropy_when_enabled(self):
+        filt = RedactingFilter(include_entropy=True)
+        record = logging.LogRecord(
+            name="test",
+            level=logging.WARNING,
+            pathname="test.py",
+            lineno=1,
+            msg="Xk9mZr3pWq7vNt2sLf6yBh4jCe8gAa5d",
+            args=None,
+            exc_info=None,
+        )
+        filt.filter(record)
+        assert "[REDACTED]" in record.msg

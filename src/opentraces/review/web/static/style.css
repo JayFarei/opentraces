@@ -1,0 +1,723 @@
+/* opentraces review - Custom CSS overrides for Pico */
+
+:root {
+    --ot-green: #22c55e;
+    --ot-green-dark: #16a34a;
+    --ot-green-bg: #f0fdf4;
+    --ot-red: #ef4444;
+    --ot-red-dark: #dc2626;
+    --ot-red-bg: #fef2f2;
+    --ot-orange: #f97316;
+    --ot-orange-bg: #fff7ed;
+    --ot-yellow: #fef08a;
+    --ot-yellow-dark: #eab308;
+    --ot-gray: #6b7280;
+    --ot-gray-light: #f3f4f6;
+    --ot-gray-border: #e5e7eb;
+    --ot-blue: #3b82f6;
+    --ot-blue-bg: #eff6ff;
+    --ot-header-bg: #14532d;
+    --ot-header-text: #ffffff;
+    --ot-subagent-border: #818cf8;
+}
+
+/* Header */
+.ot-header {
+    background: var(--ot-header-bg);
+    padding: 0.5rem 0;
+    margin-bottom: 2rem;
+}
+
+.ot-header nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.ot-header nav ul {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    margin: 0;
+    padding: 0;
+}
+
+.ot-header nav a {
+    color: var(--ot-header-text);
+    text-decoration: none;
+    opacity: 0.85;
+    transition: opacity 0.15s;
+}
+
+.ot-header nav a:hover,
+.ot-header nav a.active {
+    opacity: 1;
+    text-decoration: underline;
+}
+
+.ot-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 1.1rem;
+}
+
+.ot-brand strong {
+    color: var(--ot-header-text);
+}
+
+.ot-brand small {
+    color: var(--ot-green);
+    font-weight: 600;
+}
+
+.ot-shield {
+    font-size: 1.4rem;
+}
+
+.ot-push-btn {
+    background: var(--ot-green);
+    color: #fff;
+    border: none;
+    padding: 0.4rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    transition: background 0.15s;
+}
+
+.ot-push-btn:hover {
+    background: var(--ot-green-dark);
+}
+
+/* Footer */
+.ot-footer {
+    margin-top: 3rem;
+    padding-bottom: 2rem;
+    text-align: center;
+    color: var(--ot-gray);
+}
+
+/* Filters */
+.ot-filters {
+    margin-bottom: 1.5rem;
+}
+
+.ot-filter-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1rem;
+    align-items: end;
+}
+
+.ot-filter-grid label {
+    margin-bottom: 0;
+}
+
+.ot-filter-grid select {
+    margin-bottom: 0;
+}
+
+/* Session table */
+.ot-session-table {
+    width: 100%;
+}
+
+.ot-session-table th {
+    background: var(--ot-gray-light);
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+}
+
+.ot-session-table td {
+    vertical-align: middle;
+    font-size: 0.9rem;
+}
+
+.ot-task-cell {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ot-row-approved {
+    background: var(--ot-green-bg);
+}
+
+.ot-row-rejected {
+    background: var(--ot-red-bg);
+}
+
+/* Badges */
+.ot-badge {
+    display: inline-block;
+    padding: 0.15rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.ot-badge-pending {
+    background: var(--ot-gray-light);
+    color: var(--ot-gray);
+    border: 1px solid var(--ot-gray-border);
+}
+
+.ot-badge-approved {
+    background: var(--ot-green);
+    color: #fff;
+}
+
+.ot-badge-rejected {
+    background: var(--ot-red);
+    color: #fff;
+}
+
+.ot-badge-flag {
+    background: var(--ot-orange);
+    color: #fff;
+}
+
+.ot-badge-clear {
+    background: var(--ot-gray-light);
+    color: var(--ot-gray);
+}
+
+.ot-badge-subagent {
+    background: var(--ot-subagent-border);
+    color: #fff;
+}
+
+.ot-badge-redacted {
+    background: var(--ot-yellow);
+    color: #92400e;
+}
+
+.ot-empty {
+    text-align: center;
+    color: var(--ot-gray);
+    padding: 2rem;
+}
+
+/* Session detail */
+.ot-back-link {
+    display: inline-block;
+    margin-bottom: 1rem;
+    color: var(--ot-gray);
+    text-decoration: none;
+    font-size: 0.9rem;
+}
+
+.ot-back-link:hover {
+    color: var(--ot-green-dark);
+}
+
+.ot-session-header {
+    margin-bottom: 2rem;
+}
+
+.ot-trace-id {
+    color: var(--ot-gray);
+    margin-top: 0.25rem;
+}
+
+.ot-session-actions {
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.ot-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.75rem;
+    margin-top: 1rem;
+}
+
+.ot-meta-card {
+    background: var(--ot-gray-light);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+}
+
+.ot-meta-card small {
+    color: var(--ot-gray);
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+}
+
+.ot-meta-card p {
+    margin: 0.25rem 0 0;
+    font-weight: 500;
+    font-size: 0.9rem;
+    word-break: break-word;
+}
+
+/* Security flags section */
+.ot-flags-section {
+    background: var(--ot-orange-bg);
+    border: 1px solid var(--ot-orange);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-top: 1rem;
+}
+
+.ot-flags-section h4 {
+    margin: 0 0 0.5rem;
+    color: var(--ot-orange);
+}
+
+.ot-flag-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0;
+    font-size: 0.85rem;
+    border-bottom: 1px solid rgba(249, 115, 22, 0.2);
+}
+
+.ot-flag-item:last-child {
+    border-bottom: none;
+}
+
+/* Conversation flow */
+.ot-conversation {
+    margin-bottom: 2rem;
+}
+
+.ot-step {
+    border: 1px solid var(--ot-gray-border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    transition: background 0.15s;
+}
+
+.ot-step-user {
+    background: var(--ot-blue-bg);
+    border-color: #bfdbfe;
+}
+
+.ot-step-agent {
+    background: #fff;
+}
+
+.ot-step-system {
+    background: var(--ot-gray-light);
+    border-color: var(--ot-gray-border);
+    font-style: italic;
+}
+
+.ot-subagent {
+    margin-left: 2rem;
+    border-left: 3px solid var(--ot-subagent-border);
+}
+
+.ot-redacted {
+    background: var(--ot-yellow) !important;
+    opacity: 0.8;
+}
+
+.ot-step-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.5rem;
+}
+
+.ot-step-role {
+    font-weight: 700;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.1rem 0.5rem;
+    border-radius: 4px;
+}
+
+.ot-role-user {
+    background: var(--ot-blue);
+    color: #fff;
+}
+
+.ot-role-agent {
+    background: var(--ot-green);
+    color: #fff;
+}
+
+.ot-role-system {
+    background: var(--ot-gray);
+    color: #fff;
+}
+
+.ot-step-index {
+    font-size: 0.8rem;
+    color: var(--ot-gray);
+}
+
+.ot-step-model,
+.ot-step-time {
+    color: var(--ot-gray);
+    font-size: 0.75rem;
+}
+
+.ot-step-controls {
+    margin-left: auto;
+}
+
+.ot-btn-redact {
+    background: transparent;
+    border: 1px solid var(--ot-orange);
+    color: var(--ot-orange);
+    padding: 0.2rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.ot-btn-redact:hover {
+    background: var(--ot-orange);
+    color: #fff;
+}
+
+.ot-step-content {
+    font-size: 0.9rem;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.ot-redacted-content {
+    color: #92400e;
+    font-size: 0.9rem;
+    padding: 0.5rem;
+    background: rgba(254, 240, 138, 0.5);
+    border-radius: 4px;
+}
+
+/* Reasoning blocks */
+.ot-reasoning {
+    margin: 0.5rem 0;
+    border: 1px solid var(--ot-gray-border);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.ot-reasoning summary {
+    background: var(--ot-gray-light);
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--ot-gray);
+}
+
+.ot-reasoning summary:hover {
+    background: #e5e7eb;
+}
+
+.ot-reasoning-content {
+    padding: 0.75rem;
+    font-size: 0.85rem;
+    color: #4b5563;
+    line-height: 1.5;
+    background: #f9fafb;
+}
+
+/* Tool calls */
+.ot-tool-calls {
+    margin-top: 0.5rem;
+}
+
+.ot-tool-call {
+    border: 1px solid var(--ot-gray-border);
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    overflow: hidden;
+}
+
+.ot-tool-call summary {
+    padding: 0.5rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #fafafa;
+}
+
+.ot-tool-call summary:hover {
+    background: var(--ot-gray-light);
+}
+
+.ot-tool-name {
+    font-weight: 700;
+    color: var(--ot-green-dark);
+}
+
+.ot-tool-id {
+    font-size: 0.7rem;
+    color: var(--ot-gray);
+}
+
+.ot-tool-detail {
+    padding: 0.75rem;
+    border-top: 1px solid var(--ot-gray-border);
+}
+
+.ot-tool-section {
+    margin-bottom: 0.75rem;
+}
+
+.ot-tool-section:last-child {
+    margin-bottom: 0;
+}
+
+.ot-tool-section strong {
+    display: block;
+    font-size: 0.8rem;
+    margin-bottom: 0.25rem;
+    color: var(--ot-gray);
+    text-transform: uppercase;
+}
+
+.ot-output-summary {
+    color: var(--ot-gray);
+    display: block;
+    margin-top: 0.25rem;
+}
+
+/* Code blocks */
+.ot-code-block {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    padding: 0.75rem 1rem;
+    border-radius: 6px;
+    font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Cascadia Code', Menlo, monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    margin: 0.25rem 0;
+    white-space: pre;
+}
+
+.ot-code-block.ot-error {
+    background: #2d1b1b;
+    color: #fca5a5;
+    border: 1px solid var(--ot-red);
+}
+
+/* Snippets */
+.ot-snippets {
+    margin-top: 0.5rem;
+}
+
+.ot-snippet {
+    border: 1px solid var(--ot-gray-border);
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    overflow: hidden;
+}
+
+.ot-snippet summary {
+    padding: 0.4rem 0.75rem;
+    cursor: pointer;
+    font-size: 0.85rem;
+    background: #fafafa;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.ot-snippet-path {
+    font-weight: 600;
+    font-family: monospace;
+    color: var(--ot-blue);
+}
+
+/* Step flags */
+.ot-step-flag {
+    margin-top: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    background: var(--ot-orange-bg);
+    border: 1px solid var(--ot-orange);
+    border-radius: 6px;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Verdict section */
+.ot-session-verdict {
+    border-top: 2px solid var(--ot-gray-border);
+    padding-top: 2rem;
+    margin-top: 2rem;
+}
+
+.ot-verdict-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+}
+
+.ot-btn {
+    padding: 0.75rem 2.5rem;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.ot-btn-approve {
+    background: var(--ot-green);
+    color: #fff;
+}
+
+.ot-btn-approve:hover {
+    background: var(--ot-green-dark);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+}
+
+.ot-btn-approve:disabled {
+    background: var(--ot-gray-light);
+    color: var(--ot-gray);
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.ot-btn-reject {
+    background: var(--ot-red);
+    color: #fff;
+}
+
+.ot-btn-reject:hover {
+    background: var(--ot-red-dark);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+/* Stats page */
+.ot-stats-grid {
+    margin-bottom: 1.5rem;
+}
+
+.ot-stat-card {
+    text-align: center;
+    border-radius: 8px;
+    margin: 0;
+}
+
+.ot-stat-card header {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--ot-gray);
+    font-weight: 600;
+    padding: 0.75rem 1rem 0;
+}
+
+.ot-stat-number {
+    font-size: 2rem;
+    font-weight: 700;
+    margin: 0.5rem 0 1rem;
+    color: #1f2937;
+}
+
+.ot-stat-approved .ot-stat-number {
+    color: var(--ot-green);
+}
+
+.ot-stat-rejected .ot-stat-number {
+    color: var(--ot-red);
+}
+
+.ot-stat-pending .ot-stat-number {
+    color: var(--ot-orange);
+}
+
+.ot-flags-warn {
+    color: var(--ot-orange) !important;
+}
+
+/* Push section */
+.ot-push-section {
+    margin: 2rem 0;
+    padding: 1.5rem;
+    background: var(--ot-green-bg);
+    border: 1px solid var(--ot-green);
+    border-radius: 8px;
+    text-align: center;
+}
+
+/* Progress bar */
+.ot-progress-section {
+    margin: 2rem 0;
+    text-align: center;
+}
+
+.ot-progress-bar {
+    width: 100%;
+    height: 12px;
+    background: var(--ot-gray-light);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+}
+
+.ot-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--ot-green), var(--ot-green-dark));
+    border-radius: 999px;
+    transition: width 0.5s ease;
+}
+
+/* Animations */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.ot-step {
+    animation: fadeIn 0.2s ease;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .ot-filter-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .ot-meta-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .ot-subagent {
+        margin-left: 0.75rem;
+    }
+
+    .ot-verdict-buttons {
+        flex-direction: column;
+    }
+
+    .ot-btn {
+        width: 100%;
+    }
+}

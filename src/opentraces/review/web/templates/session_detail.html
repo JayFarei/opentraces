@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+
+{% block title %}Session {{ trace.trace_id[:12] }} - opentraces review{% endblock %}
+
+{% block content %}
+<a href="/" class="ot-back-link">&larr; Back to sessions</a>
+
+<section class="ot-session-header">
+    <div class="grid">
+        <div>
+            <h2>Session Review</h2>
+            <p class="ot-trace-id"><code>{{ trace.trace_id }}</code></p>
+        </div>
+        <div class="ot-session-actions">
+            <span class="ot-badge ot-badge-{{ trace._review_status }}" id="session-badge">
+                {{ trace._review_status }}
+            </span>
+        </div>
+    </div>
+
+    <div class="ot-meta-grid">
+        <div class="ot-meta-card">
+            <small>Task</small>
+            <p>{{ trace.task.description or 'No description' }}</p>
+        </div>
+        <div class="ot-meta-card">
+            <small>Agent</small>
+            <p>{{ trace.agent.name }} {{ trace.agent.version or '' }}</p>
+        </div>
+        <div class="ot-meta-card">
+            <small>Model</small>
+            <p>{{ trace.agent.model or 'unknown' }}</p>
+        </div>
+        <div class="ot-meta-card">
+            <small>Duration</small>
+            <p>{{ "%.1f"|format(trace.metrics.total_duration_s or 0) }}s</p>
+        </div>
+        <div class="ot-meta-card">
+            <small>Total Tokens</small>
+            <p>{{ "{:,}".format((trace.metrics.total_input_tokens or 0) + (trace.metrics.total_output_tokens or 0)) }}</p>
+        </div>
+        <div class="ot-meta-card">
+            <small>Estimated Cost</small>
+            <p>${{ "%.4f"|format(trace.metrics.estimated_cost_usd or 0) }}</p>
+        </div>
+    </div>
+
+    {% if trace._security_flags %}
+    <div class="ot-flags-section">
+        <h4>Security Flags ({{ trace._security_flags|length }})</h4>
+        {% for flag in trace._security_flags %}
+        <div class="ot-flag-item" title="{{ flag.reason }}">
+            <span class="ot-badge ot-badge-flag">{{ flag.severity }}</span>
+            <strong>{{ flag.type }}</strong>
+            <span>Step {{ flag.step_index }} - {{ flag.reason }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</section>
+
+<section class="ot-conversation">
+    <h3>Conversation Flow</h3>
+
+    {% for step in trace.steps %}
+    <div class="ot-step ot-step-{{ step.role }} {% if step.call_type == 'subagent' %}ot-subagent{% endif %} {% if step.step_index in trace._redacted_steps %}ot-redacted{% endif %}"
+         id="step-{{ step.step_index }}"
+         data-step-index="{{ step.step_index }}">
+
+        <div class="ot-step-header">
+            <span class="ot-step-role ot-role-{{ step.role }}">{{ step.role }}</span>
+            <span class="ot-step-index">Step {{ step.step_index }}</span>
+            {% if step.call_type == 'subagent' %}
+            <span class="ot-badge ot-badge-subagent">sub-agent</span>
+            {% endif %}
+            {% if step.model %}
+            <small class="ot-step-model">{{ step.model.split('/')[-1] }}</small>
+            {% endif %}
+            {% if step.timestamp %}
+            <small class="ot-step-time">{{ step.timestamp }}</small>
+            {% endif %}
+
+            <div class="ot-step-controls">
+                {% if step.step_index not in trace._redacted_steps %}
+                <button class="ot-btn-redact" onclick="redactStep('{{ trace.trace_id }}', {{ step.step_index }})">
+                    Redact
+                </button>
+                {% else %}
+                <span class="ot-badge ot-badge-redacted">REDACTED</span>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if step.step_index in trace._redacted_steps %}
+        <div class="ot-redacted-content">
+            <em>[Content redacted during review]</em>
+        </div>
+        {% else %}
+
+        {% if step.reasoning_content %}
+        <details class="ot-reasoning">
+            <summary>Reasoning (chain of thought)</summary>
+            <div class="ot-reasoning-content">
+                {{ step.reasoning_content }}
+            </div>
+        </details>
+        {% endif %}
+
+        {% if step.content %}
+        <div class="ot-step-content">
+            {{ step.content }}
+        </div>
+        {% endif %}
+
+        {% if step.tool_calls %}
+        <div class="ot-tool-calls">
+            {% for tc in step.tool_calls %}
+            <details class="ot-tool-call">
+                <summary>
+                    <span class="ot-tool-name">{{ tc.tool_name }}</span>
+                    <code class="ot-tool-id">{{ tc.tool_call_id }}</code>
+                    {% if tc.duration_ms %}
+                    <small>{{ tc.duration_ms }}ms</small>
+                    {% endif %}
+                </summary>
+                <div class="ot-tool-detail">
+                    <div class="ot-tool-section">
+                        <strong>Input:</strong>
+                        <pre class="ot-code-block"><code>{{ tc.input | tojson(indent=2) }}</code></pre>
+                    </div>
+                    {% for obs in step.observations %}
+                    {% if obs.source_call_id == tc.tool_call_id %}
+                    <div class="ot-tool-section">
+                        <strong>Output:</strong>
+                        {% if obs.error %}
+                        <pre class="ot-code-block ot-error"><code>Error: {{ obs.error }}</code></pre>
+                        {% endif %}
+                        {% if obs.content %}
+                        <pre class="ot-code-block"><code>{{ obs.content }}</code></pre>
+                        {% endif %}
+                        {% if obs.output_summary %}
+                        <small class="ot-output-summary">{{ obs.output_summary }}</small>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </details>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if step.snippets %}
+        <div class="ot-snippets">
+            {% for snippet in step.snippets %}
+            <details class="ot-snippet">
+                <summary>
+                    <span class="ot-snippet-path">{{ snippet.file_path }}</span>
+                    {% if snippet.language %}
+                    <small>({{ snippet.language }})</small>
+                    {% endif %}
+                    {% if snippet.start_line %}
+                    <small>L{{ snippet.start_line }}-{{ snippet.end_line }}</small>
+                    {% endif %}
+                </summary>
+                {% if snippet.text %}
+                <pre class="ot-code-block"><code>{{ snippet.text }}</code></pre>
+                {% endif %}
+            </details>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% endif %}
+
+        {% set step_flags = [] %}
+        {% for flag in trace.get('_security_flags', []) %}
+        {% if flag.step_index == step.step_index %}
+        <div class="ot-step-flag" title="{{ flag.reason }}">
+            <span class="ot-badge ot-badge-flag">{{ flag.type }}</span>
+            {{ flag.reason }}
+        </div>
+        {% endif %}
+        {% endfor %}
+    </div>
+    {% endfor %}
+</section>
+
+<section class="ot-session-verdict">
+    <h3>Verdict</h3>
+    <div class="ot-verdict-buttons">
+        <button class="ot-btn ot-btn-approve" onclick="approveSession('{{ trace.trace_id }}')">
+            Approve Session
+        </button>
+        <button class="ot-btn ot-btn-reject" onclick="rejectSession('{{ trace.trace_id }}')">
+            Reject Session
+        </button>
+    </div>
+</section>
+{% endblock %}

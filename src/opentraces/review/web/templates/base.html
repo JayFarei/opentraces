@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}opentraces review{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header class="ot-header">
+        <nav class="container">
+            <ul>
+                <li>
+                    <a href="/" class="ot-brand">
+                        <span class="ot-shield">&#x1f6e1;</span>
+                        <strong>opentraces</strong>
+                        <small>review</small>
+                    </a>
+                </li>
+            </ul>
+            <ul>
+                <li><a href="/" {% if request.path == '/' %}class="active"{% endif %}>Sessions</a></li>
+                <li><a href="/stats" {% if request.path == '/stats' %}class="active"{% endif %}>Stats</a></li>
+                <li>
+                    <button class="ot-push-btn" id="nav-push-btn" onclick="pushApproved()">
+                        Push to Hub
+                    </button>
+                </li>
+            </ul>
+        </nav>
+    </header>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="container ot-footer">
+        <hr>
+        <p>
+            <small>
+                <strong>opentraces.ai</strong> &mdash; Security-first agent trace review
+                &bull; Tier 3 Manual Review
+            </small>
+        </p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

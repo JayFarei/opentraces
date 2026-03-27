@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Stats - opentraces review{% endblock %}
+
+{% block content %}
+<h2>Review Dashboard</h2>
+
+<div class="grid ot-stats-grid">
+    <article class="ot-stat-card">
+        <header>Total Sessions</header>
+        <p class="ot-stat-number">{{ stats.total }}</p>
+    </article>
+    <article class="ot-stat-card ot-stat-approved">
+        <header>Approved</header>
+        <p class="ot-stat-number">{{ stats.approved }}</p>
+    </article>
+    <article class="ot-stat-card ot-stat-rejected">
+        <header>Rejected</header>
+        <p class="ot-stat-number">{{ stats.rejected }}</p>
+    </article>
+    <article class="ot-stat-card ot-stat-pending">
+        <header>Pending</header>
+        <p class="ot-stat-number">{{ stats.pending }}</p>
+    </article>
+</div>
+
+<div class="grid ot-stats-grid">
+    <article class="ot-stat-card">
+        <header>Total Tokens</header>
+        <p class="ot-stat-number">{{ "{:,}".format(stats.total_tokens) }}</p>
+    </article>
+    <article class="ot-stat-card">
+        <header>Total Tool Calls</header>
+        <p class="ot-stat-number">{{ "{:,}".format(stats.total_tool_calls) }}</p>
+    </article>
+    <article class="ot-stat-card">
+        <header>Estimated Cost</header>
+        <p class="ot-stat-number">${{ "%.2f"|format(stats.total_cost_usd) }}</p>
+    </article>
+    <article class="ot-stat-card">
+        <header>Security Flags</header>
+        <p class="ot-stat-number {% if stats.total_security_flags > 0 %}ot-flags-warn{% endif %}">
+            {{ stats.total_security_flags }}
+        </p>
+    </article>
+</div>
+
+<section class="ot-push-section">
+    <h3>Push to HuggingFace Hub</h3>
+    {% if stats.approved > 0 %}
+    <p>{{ stats.approved }} session(s) approved and ready to push.</p>
+    <button class="ot-btn ot-btn-approve" onclick="pushApproved()">
+        Push {{ stats.approved }} Approved Session(s)
+    </button>
+    {% else %}
+    <p class="ot-empty">No approved sessions yet. Review and approve sessions before pushing.</p>
+    <button class="ot-btn ot-btn-approve" disabled>
+        Push to Hub (no approved sessions)
+    </button>
+    {% endif %}
+</section>
+
+<section class="ot-progress-section">
+    <h3>Review Progress</h3>
+    <div class="ot-progress-bar">
+        {% set reviewed = stats.approved + stats.rejected %}
+        {% set pct = (reviewed / stats.total * 100) if stats.total > 0 else 0 %}
+        <div class="ot-progress-fill" style="width: {{ pct }}%"></div>
+    </div>
+    <small>{{ reviewed }} of {{ stats.total }} sessions reviewed ({{ "%.0f"|format(pct) }}%)</small>
+</section>
+{% endblock %}
