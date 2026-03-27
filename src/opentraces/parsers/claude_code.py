@@ -96,6 +96,11 @@ class ClaudeCodeParser:
         if not steps:
             return None
 
+        # Renumber all steps sequentially to guarantee uniqueness
+        # (subagent inlining can create duplicates)
+        for i, step in enumerate(steps, 1):
+            step.step_index = i
+
         # Build trace record
         record = TraceRecord(
             trace_id=str(uuid.uuid4()),
@@ -360,6 +365,10 @@ class ClaudeCodeParser:
 
                 elif block_type == "tool_result":
                     # Tool results are in user messages, handled by tool_result_map
+                    pass
+
+                elif block_type == "image":
+                    # Image blocks (screenshots) are captured but not parsed
                     pass
 
                 else:
