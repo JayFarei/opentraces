@@ -310,6 +310,10 @@ def parse(auto: bool, limit: int) -> None:
                         snip.text = _anon(snip.text)
                 if record.outcome.patch:
                     record.outcome.patch = _anon(record.outcome.patch)
+                # Anonymize attribution file paths
+                if record.attribution:
+                    for attr_file in record.attribution.files:
+                        attr_file.path = _anon(attr_file.path) or attr_file.path
 
             # Stage the trace
             jsonl_line = record.to_jsonl_line()
