@@ -113,6 +113,7 @@ def check_committed(
         _, patch = _run_git(["show", "--format=", "--patch", commit_sha], project_path)
 
     return Outcome(
+        success=True,  # A session that produced a commit is a reasonable success proxy
         committed=True,
         commit_sha=commit_sha,
         patch=patch or None,
@@ -188,6 +189,7 @@ def detect_commits_from_steps(steps: list[Step]) -> Outcome:
     # but the commit SHA is the definitive signal.
 
     return Outcome(
+        success=True,  # Session produced a commit, reasonable success proxy
         committed=True,
         commit_sha=last_sha,
         patch=patch,

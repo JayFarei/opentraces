@@ -47,9 +47,9 @@ FIELD_SPECS: list[FieldSpec] = [
 
     # --- Task ---
     FieldSpec("task.description", "First user message (<=500 chars)", "parser", "always", ["training", "domain"]),
-    FieldSpec("task.source", "How the task was initiated", "parser", "always", ["domain"]),
-    FieldSpec("task.repository", "owner/repo format", "parser", "git_repo", ["domain"]),
-    FieldSpec("task.base_commit", "Git SHA at task start", "parser", "git_repo", ["rl"]),
+    FieldSpec("task.source", "How the task was initiated", "parser", "optional", ["domain"]),
+    FieldSpec("task.repository", "owner/repo format", "enrichment:git", "git_repo", ["domain"]),
+    FieldSpec("task.base_commit", "Git SHA at task start", "enrichment:git", "git_repo", ["rl"]),
 
     # --- Agent ---
     FieldSpec("agent.name", "Agent identifier", "parser", "always", ["domain"]),
@@ -58,7 +58,7 @@ FIELD_SPECS: list[FieldSpec] = [
 
     # --- Environment ---
     FieldSpec("environment.os", "Operating system", "parser", "always", ["domain", "analytics"]),
-    FieldSpec("environment.shell", "Shell type", "parser", "always", ["domain"]),
+    FieldSpec("environment.shell", "Shell type", "parser", "optional", ["domain"]),
     FieldSpec("environment.vcs.type", "git or none", "enrichment:git", "always", ["domain"]),
     FieldSpec("environment.vcs.base_commit", "HEAD SHA", "enrichment:git", "git_repo", ["rl"]),
     FieldSpec("environment.vcs.branch", "Branch name", "enrichment:git", "git_repo", ["domain"]),
@@ -66,16 +66,16 @@ FIELD_SPECS: list[FieldSpec] = [
     FieldSpec("environment.language_ecosystem", "Detected languages", "enrichment:dependencies", "has_manifests", ["domain"]),
 
     # --- System prompts ---
-    FieldSpec("system_prompts", "Deduplicated system prompts by hash", "parser", "always", ["training"]),
+    FieldSpec("system_prompts", "Deduplicated system prompts by hash", "parser", "optional", ["training"]),
 
     # --- Tool definitions ---
-    FieldSpec("tool_definitions", "Tool schemas from session", "parser", "always", ["training"]),
+    FieldSpec("tool_definitions", "Tool schemas from session", "parser", "optional", ["training"]),
 
     # --- Steps (sampled) ---
     FieldSpec("steps", "TAO loop steps", "parser", "always", ["training", "rl", "analytics"]),
-    FieldSpec("steps[].content", "Text content", "parser", "always", ["training"]),
+    FieldSpec("steps[].content", "Text content", "parser", "optional", ["training"]),
     FieldSpec("steps[].reasoning_content", "Chain-of-thought", "parser", "optional", ["training", "rl"]),
-    FieldSpec("steps[].model", "Per-step model ID", "parser", "always", ["analytics", "rl"]),
+    FieldSpec("steps[].model", "Per-step model ID", "parser", "optional", ["analytics", "rl"]),
     FieldSpec("steps[].system_prompt_hash", "Ref into system_prompts map", "parser", "optional", ["training"]),
     FieldSpec("steps[].agent_role", "main/explore/plan", "parser", "has_subagents", ["rl"]),
     FieldSpec("steps[].parent_step", "Sub-agent hierarchy link", "parser", "has_subagents", ["rl"]),
@@ -290,10 +290,9 @@ class FieldCheckResult:
 
 # Fields known to be not yet implemented in the parser/enrichment pipeline
 _NOT_YET_IMPLEMENTED = {
-    "environment.shell",
-    "task.repository",
-    "task.base_commit",
-    "security.classifier_version",
+    "task.repository",      # Needs git remote URL extraction in enrichment
+    "task.base_commit",     # Needs wiring from vcs.base_commit in enrichment
+    "security.classifier_version",  # Only set during tier-2 scans
 }
 
 # Fields that are inherently session-dependent (empty is valid for some sessions)

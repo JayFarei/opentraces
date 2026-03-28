@@ -292,10 +292,10 @@ class TestAuditSchemaCompleteness:
     def test_known_not_yet_implemented(self):
         """Fields in _NOT_YET_IMPLEMENTED should be classified correctly."""
         report = audit_schema_completeness([_make_minimal_trace()])
-        # environment.os is now inferred from cwd, check a still-missing field
-        shell_field = next((f for f in report.fields if f.path == "environment.shell"), None)
-        assert shell_field is not None
-        assert shell_field.classification == "not_yet_implemented"
+        # task.repository is not yet implemented (needs git remote enrichment)
+        repo_field = next((f for f in report.fields if f.path == "task.repository"), None)
+        assert repo_field is not None
+        assert repo_field.classification == "not_yet_implemented"
 
     def test_session_dependent_fields(self):
         """Fields like outcome.committed should be session_dependent when missing."""
@@ -310,13 +310,13 @@ class TestAuditSchemaCompleteness:
 
     def test_with_raw_signal_map(self):
         """Raw signal map should influence classification."""
-        raw_map = {"environment.shell": True}  # Raw has shell data
+        raw_map = {"task.repository": True}  # Raw has repo data
         report = audit_schema_completeness([_make_minimal_trace()], raw_signal_map=raw_map)
-        shell_field = next((f for f in report.fields if f.path == "environment.shell"), None)
+        repo_field = next((f for f in report.fields if f.path == "task.repository"), None)
         # With raw signal present but field empty, and it's in NOT_YET_IMPLEMENTED,
         # it should still be not_yet_implemented (specific classification takes precedence)
-        assert shell_field is not None
-        assert shell_field.classification == "not_yet_implemented"
+        assert repo_field is not None
+        assert repo_field.classification == "not_yet_implemented"
 
     def test_mixed_batch(self):
         """Mix of full and minimal traces should show partial population rates."""

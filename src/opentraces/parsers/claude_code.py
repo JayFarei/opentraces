@@ -210,14 +210,20 @@ class ClaudeCodeParser:
             if "version" in line and not metadata.get("version"):
                 metadata["version"] = line["version"]
 
-            # Extract model and tools from queue-operation content
+            # Extract model from assistant message lines (most reliable source)
+            if line_type == "assistant" and not metadata.get("model"):
+                msg = line.get("message", {})
+                if isinstance(msg, dict) and msg.get("model"):
+                    metadata["model"] = msg["model"]
+
+            # Extract model and tools from queue-operation content (fallback)
             if line_type == "queue-operation" and "content" in line:
                 content = line["content"]
                 if isinstance(content, str):
                     try:
                         inner = json.loads(content)
                         if isinstance(inner, dict):
-                            if "model" in inner:
+                            if "model" in inner and not metadata.get("model"):
                                 metadata["model"] = inner["model"]
                             if "tools" in inner:
                                 metadata["tool_definitions"] = [
@@ -282,6 +288,7 @@ class ClaudeCodeParser:
                             "content": result_content,
                             "tool_use_result": line.get("toolUseResult"),
                             "timestamp": line.get("timestamp"),
+                            "is_error": block.get("is_error", False),
                         }
 
         return result_map
@@ -370,10 +377,12 @@ class ClaudeCodeParser:
                     result = tool_result_map.get(tool_call_id)
                     if result:
                         obs_content = result.get("content", "")
+                        is_error = result.get("is_error", False)
                         obs = Observation(
                             source_call_id=tool_call_id,
                             content=str(obs_content)[:10000] if obs_content else None,
                             output_summary=self._summarize_output(obs_content),
+                            error="tool_error" if is_error else None,
                         )
                         observations.append(obs)
 
@@ -385,8 +394,16 @@ class ClaudeCodeParser:
 
                         # Compute duration from toolUseResult
                         tur = result.get("tool_use_result")
-                        if isinstance(tur, dict) and "duration" in tur:
-                            tc.duration_ms = int(tur["duration"] * 1000) if isinstance(tur["duration"], (int, float)) else None
+                        if isinstance(tur, dict):
+                            if "durationMs" in tur:
+                                val = tur["durationMs"]
+                                tc.duration_ms = int(val) if isinstance(val, (int, float)) else None
+                            elif "durationSeconds" in tur:
+                                val = tur["durationSeconds"]
+                                tc.duration_ms = int(val * 1000) if isinstance(val, (int, float)) else None
+                            elif "duration" in tur:
+                                val = tur["duration"]
+                                tc.duration_ms = int(val * 1000) if isinstance(val, (int, float)) else None
                     else:
                         observations.append(Observation(
                             source_call_id=tool_call_id,

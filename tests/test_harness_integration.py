@@ -131,11 +131,11 @@ class TestSchemaAudit:
         )
         assert os_field is not None
         # After parser fix, OS is inferred from cwd. Check a still-missing field instead.
-        shell_field = next(
-            (f for f in report.fields if f.path == "environment.shell"), None
+        repo_field = next(
+            (f for f in report.fields if f.path == "task.repository"), None
         )
-        assert shell_field is not None
-        assert shell_field.classification in ("not_yet_implemented", "enrichment_gap")
+        assert repo_field is not None
+        assert repo_field.classification in ("not_yet_implemented", "enrichment_gap")
 
     def test_always_populated_fields(self, parsed_traces):
         """Fields that should always be populated must have high rates."""
