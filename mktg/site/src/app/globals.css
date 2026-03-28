@@ -216,12 +216,15 @@ html { color-scheme: dark light; }
   z-index: 100;
   background: var(--surface);
   border: 1px solid var(--border);
-  padding: 6px 14px;
+  padding: 10px 14px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);
   cursor: pointer;
   transition: all 0.15s;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
 }
 .theme-toggle:hover { color: var(--text); border-color: var(--border-strong); }
 
