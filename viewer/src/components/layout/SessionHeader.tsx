@@ -44,8 +44,12 @@ export function SessionHeader() {
     ? formatDuration(trace.metrics.total_duration_s * 1000)
     : null;
 
-  // Model
-  const model = trace.agent.model ?? "unknown";
+  // Model: extract short name from "anthropic/claude-sonnet-4-20250514" -> "sonnet-4"
+  const rawModel = trace.agent.model ?? trace.agent.name ?? "";
+  const model = rawModel
+    .replace(/^anthropic\//, "")
+    .replace(/^claude-/, "")
+    .replace(/-\d{8}$/, "") || trace.agent.name;
 
   // Tokens
   const inputTokens = formatTokens(trace.metrics.total_input_tokens);
@@ -81,7 +85,7 @@ export function SessionHeader() {
       <div className="flex items-center gap-3 text-[10px] font-[family-name:var(--font-mono)] mt-0.5">
         <span className="text-[var(--text-muted)]">{model}</span>
         <span className="text-[var(--text-dim)]">
-          tokens: {inputTokens}/{outputTokens}
+          {inputTokens} in / {outputTokens} out
         </span>
         {cacheStr && (
           <span className="text-[var(--text-dim)]">cache: {cacheStr}</span>
@@ -94,7 +98,7 @@ export function SessionHeader() {
         </span>
         {redactionCount > 0 && (
           <span className="text-[var(--yellow)] flex-none">
-            {redactionCount}r
+            {redactionCount} redactions
           </span>
         )}
       </div>

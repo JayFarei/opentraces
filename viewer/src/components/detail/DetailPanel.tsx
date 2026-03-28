@@ -10,8 +10,9 @@ export function DetailPanel() {
 
   if (!selectedSessionId || !selectedNodeId) {
     return (
-      <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)]">
-        select a step to view details
+      <div className="h-full flex flex-col items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)] gap-1">
+        <span>click a step in the tree to view details</span>
+        <span className="text-[9px] text-[var(--text-dim)]">j/k to navigate, ? for shortcuts</span>
       </div>
     );
   }
@@ -25,11 +26,17 @@ export function DetailPanel() {
     );
   }
 
+  // Tool nodes from merged steps have both step and toolCall
+  const showToolDetail = node.toolCall !== undefined;
+  const showStepDetail = node.step !== undefined && !showToolDetail;
+
   return (
     <div className="h-full overflow-y-auto bg-[var(--bg)] p-3">
-      {node.step && <StepDetail step={node.step} security={trace?.security ?? null} />}
-      {node.toolCall && !node.step && (
-        <ToolCallDetail toolCall={node.toolCall} observation={node.observation ?? null} />
+      {showStepDetail && (
+        <StepDetail step={node.step!} security={trace?.security ?? null} />
+      )}
+      {showToolDetail && (
+        <ToolCallDetail toolCall={node.toolCall!} observation={node.observation ?? null} />
       )}
     </div>
   );

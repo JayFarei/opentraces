@@ -18,9 +18,9 @@ export function AppLayout() {
         <SessionSidebar />
       </div>
 
-      {/* Resize handle (simple drag) */}
+      {/* Resize handle with visual affordance */}
       <div
-        className="w-[3px] flex-none cursor-col-resize bg-transparent hover:bg-[var(--accent)] transition-colors duration-100"
+        className="w-[5px] flex-none cursor-col-resize bg-[var(--border)] hover:bg-[var(--accent)] transition-colors duration-100"
         onMouseDown={(e) => {
           e.preventDefault();
           const startX = e.clientX;

@@ -42,14 +42,7 @@ export function TraceView() {
 
   return (
     <div className="h-full flex flex-col bg-[var(--bg)]">
-      {/* Minimal header: just step count */}
-      {trace && (
-        <div className="flex-none flex items-center justify-end px-3 py-1 border-b border-[var(--border)]">
-          <span className="text-[9px] text-[var(--text-dim)] font-[family-name:var(--font-mono)]">
-            {trace.steps.length} steps
-          </span>
-        </div>
-      )}
+      {/* No header here, step count is in SessionHeader */}
 
       {/* The trace tree */}
       <div className="flex-1 overflow-hidden">
