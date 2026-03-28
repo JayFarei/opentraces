@@ -242,7 +242,10 @@ def capture(session_dir: str, project_dir: str) -> None:
 
     cfg = load_config()
     parser = ClaudeCodeParser()
-    state = StateManager()
+
+    # Use project-local state if available, otherwise global
+    state_path = get_project_state_path(proj_path)
+    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
 
     parsed_count = 0
     error_count = 0
@@ -273,7 +276,8 @@ def capture(session_dir: str, project_dir: str) -> None:
                     record.outcome = outcome
 
             # Enrich: attribution
-            attribution = build_attribution(record.steps, record.outcome.patch)
+            patch = record.outcome.patch if record.outcome else None
+            attribution = build_attribution(record.steps, patch)
             record.attribution = attribution
 
             # Enrich: dependencies
@@ -294,37 +298,37 @@ def capture(session_dir: str, project_dir: str) -> None:
                 record.security.flags_reviewed = len(classifier_result.flags)
                 record.security.classifier_version = "0.1.0"
 
-            # Anonymize paths
+            # Anonymize paths (always runs, auto-detects usernames even if USER env unset)
             import os as _os
-            username = _os.environ.get("USER") or _os.environ.get("USERNAME", "")
-            extra_usernames = cfg.custom_redact_strings
-            if username:
-                def _anon(text: str | None) -> str | None:
-                    if not text:
-                        return text
-                    return anonymize_paths(text, username=username, extra_usernames=extra_usernames)
+            username = _os.environ.get("USER") or _os.environ.get("USERNAME") or None
+            extra_usernames = cfg.custom_redact_strings or None
 
-                if record.task.description:
-                    record.task.description = _anon(record.task.description)
-                for step in record.steps:
-                    step.content = _anon(step.content)
-                    if step.reasoning_content:
-                        step.reasoning_content = _anon(step.reasoning_content)
-                    for tc in step.tool_calls:
-                        for k, v in list(tc.input.items()):
-                            if isinstance(v, str):
-                                tc.input[k] = _anon(v)
-                    for obs in step.observations:
-                        obs.content = _anon(obs.content)
-                        obs.output_summary = _anon(obs.output_summary)
-                    for snip in step.snippets:
-                        snip.file_path = _anon(snip.file_path) or snip.file_path
-                        snip.text = _anon(snip.text)
-                if record.outcome.patch:
-                    record.outcome.patch = _anon(record.outcome.patch)
-                if record.attribution:
-                    for attr_file in record.attribution.files:
-                        attr_file.path = _anon(attr_file.path) or attr_file.path
+            def _anon(text: str | None) -> str | None:
+                if not text:
+                    return text
+                return anonymize_paths(text, username=username, extra_usernames=extra_usernames)
+
+            if record.task.description:
+                record.task.description = _anon(record.task.description)
+            for step in record.steps:
+                step.content = _anon(step.content)
+                if step.reasoning_content:
+                    step.reasoning_content = _anon(step.reasoning_content)
+                for tc in step.tool_calls:
+                    for k, v in list(tc.input.items()):
+                        if isinstance(v, str):
+                            tc.input[k] = _anon(v)
+                for obs in step.observations:
+                    obs.content = _anon(obs.content)
+                    obs.output_summary = _anon(obs.output_summary)
+                for snip in step.snippets:
+                    snip.file_path = _anon(snip.file_path) or snip.file_path
+                    snip.text = _anon(snip.text)
+            if record.outcome and record.outcome.patch:
+                record.outcome.patch = _anon(record.outcome.patch)
+            if record.attribution:
+                for attr_file in record.attribution.files:
+                    attr_file.path = _anon(attr_file.path) or attr_file.path
 
             # Stage to project-local staging
             jsonl_line = record.to_jsonl_line()
@@ -616,7 +620,8 @@ def parse(auto: bool, limit: int) -> None:
                     record.outcome = outcome
 
             # Enrich: attribution
-            attribution = build_attribution(record.steps, record.outcome.patch)
+            patch = record.outcome.patch if record.outcome else None
+            attribution = build_attribution(record.steps, patch)
             record.attribution = attribution
 
             # Enrich: dependencies
@@ -643,38 +648,37 @@ def parse(auto: bool, limit: int) -> None:
                 record.security.flags_reviewed = len(classifier_result.flags)
                 record.security.classifier_version = "0.1.0"
 
-            # Anonymize paths (strip /Users/<name>/ etc.)
+            # Anonymize paths (always runs, auto-detects usernames even if USER env unset)
             import os as _os
-            username = _os.environ.get("USER") or _os.environ.get("USERNAME", "")
-            extra_usernames = cfg.custom_redact_strings  # reuse as extra usernames too
-            if username:
-                def _anon(text: str | None) -> str | None:
-                    if not text:
-                        return text
-                    return anonymize_paths(text, username=username, extra_usernames=extra_usernames)
+            username = _os.environ.get("USER") or _os.environ.get("USERNAME") or None
+            extra_usernames = cfg.custom_redact_strings or None
 
-                if record.task.description:
-                    record.task.description = _anon(record.task.description)
-                for step in record.steps:
-                    step.content = _anon(step.content)
-                    if step.reasoning_content:
-                        step.reasoning_content = _anon(step.reasoning_content)
-                    for tc in step.tool_calls:
-                        for k, v in list(tc.input.items()):
-                            if isinstance(v, str):
-                                tc.input[k] = _anon(v)
-                    for obs in step.observations:
-                        obs.content = _anon(obs.content)
-                        obs.output_summary = _anon(obs.output_summary)
-                    for snip in step.snippets:
-                        snip.file_path = _anon(snip.file_path) or snip.file_path
-                        snip.text = _anon(snip.text)
-                if record.outcome.patch:
-                    record.outcome.patch = _anon(record.outcome.patch)
-                # Anonymize attribution file paths
-                if record.attribution:
-                    for attr_file in record.attribution.files:
-                        attr_file.path = _anon(attr_file.path) or attr_file.path
+            def _anon(text: str | None) -> str | None:
+                if not text:
+                    return text
+                return anonymize_paths(text, username=username, extra_usernames=extra_usernames)
+
+            if record.task.description:
+                record.task.description = _anon(record.task.description)
+            for step in record.steps:
+                step.content = _anon(step.content)
+                if step.reasoning_content:
+                    step.reasoning_content = _anon(step.reasoning_content)
+                for tc in step.tool_calls:
+                    for k, v in list(tc.input.items()):
+                        if isinstance(v, str):
+                            tc.input[k] = _anon(v)
+                for obs in step.observations:
+                    obs.content = _anon(obs.content)
+                    obs.output_summary = _anon(obs.output_summary)
+                for snip in step.snippets:
+                    snip.file_path = _anon(snip.file_path) or snip.file_path
+                    snip.text = _anon(snip.text)
+            if record.outcome and record.outcome.patch:
+                record.outcome.patch = _anon(record.outcome.patch)
+            if record.attribution:
+                for attr_file in record.attribution.files:
+                    attr_file.path = _anon(attr_file.path) or attr_file.path
 
             # Stage the trace
             jsonl_line = record.to_jsonl_line()

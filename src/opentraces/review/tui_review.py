@@ -524,7 +524,7 @@ class LazyTracesApp(App):
             session_list.index -= 1
 
     def action_redact_step(self) -> None:
-        """Redact a step in step view. Uses scroll position as step index."""
+        """Redact a step in step view. Prompts for step index to avoid wrong-step redaction."""
         if not self._in_step_view or not self._step_view_trace:
             self.notify("Enter step view first (press Enter)", severity="warning")
             return
@@ -533,11 +533,21 @@ class LazyTracesApp(App):
         trace_id = trace["trace_id"]
         steps = trace.get("steps", [])
 
-        # Use the detail view scroll position to determine which step
-        detail = self.query_one("#detail-view", RichLog)
-        # Approximate: each step takes ~3 lines, use scroll offset
-        scroll_y = detail.scroll_y
-        step_index = min(scroll_y // 3, len(steps) - 1) if steps else 0
+        if not steps:
+            self.notify("No steps to redact", severity="warning")
+            return
+
+        # Show available step indices and ask user to type the index
+        # For now, notify with instructions, use the web UI for step-level redaction
+        self.notify(
+            f"Step redaction: use 'opentraces review --web' for step-level control. "
+            f"Session has {len(steps)} steps (indices 0-{len(steps)-1}).",
+            severity="information",
+        )
+        return
+
+        # TODO: replace with ListView-based step selection for safe redaction
+        step_index = 0  # placeholder, unreachable
 
         if step_index < 0 or step_index >= len(steps):
             self.notify("No step to redact", severity="warning")

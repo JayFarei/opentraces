@@ -61,20 +61,21 @@ class TraceStagingEntry:
 class StateManager:
     """Manages persistent state for incremental processing and upload tracking."""
 
-    def __init__(self) -> None:
+    def __init__(self, state_path: Path | None = None) -> None:
+        self._state_path = state_path or STATE_PATH
         self._state: dict[str, Any] = {"processed_files": {}, "traces": {}}
         self._load()
 
     def _load(self) -> None:
-        if STATE_PATH.exists():
+        if self._state_path.exists():
             try:
-                self._state = json.loads(STATE_PATH.read_text())
+                self._state = json.loads(self._state_path.read_text())
             except (json.JSONDecodeError, OSError):
                 self._state = {"processed_files": {}, "traces": {}}
 
     def save(self) -> None:
-        OPENTRACES_DIR.mkdir(parents=True, exist_ok=True)
-        STATE_PATH.write_text(json.dumps(self._state, indent=2, default=str))
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._state_path.write_text(json.dumps(self._state, indent=2, default=str))
 
     # --- Processed files tracking ---
 
