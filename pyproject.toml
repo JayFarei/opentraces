@@ -17,10 +17,12 @@ dependencies = [
 
 [project.optional-dependencies]
 web = ["flask>=3.0"]
+tui = ["textual>=0.50.0"]
 dev = ["pytest>=8.0", "pytest-cov", "ruff"]
 
 [project.scripts]
 opentraces = "opentraces.cli:main"
+lazytraces = "opentraces.review.tui_review:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opentraces"]

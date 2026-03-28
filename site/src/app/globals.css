@@ -266,6 +266,19 @@ html { color-scheme: dark light; }
 }
 .nav-link:hover { color: var(--text); }
 .nav-link.active { color: var(--accent); }
+.nav-theme-btn {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  padding: 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.15s;
+  line-height: 1;
+  min-height: 32px;
+}
+.nav-theme-btn:hover { color: var(--text); border-color: var(--text-muted); background: var(--surface-hover); }
 
 /* ═══ Hero Pill ═══ */
 .hero-pill {
@@ -452,6 +465,15 @@ html { color-scheme: dark light; }
 .terminal-body .di { color: var(--text-dim); }
 .terminal-line { display: block; }
 .terminal-line + .terminal-line-gap { margin-top: 8px; }
+.terminal-tui-mockup {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre;
+  color: #B0B0B0;
+  margin: 0;
+  padding: 0;
+}
 
 /* ═══ Section ═══ */
 section {

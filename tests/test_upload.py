@@ -212,6 +212,7 @@ class TestEnsureRepo:
             repo_id="user/dataset",
             repo_type="dataset",
             exist_ok=True,
+            private=False,
         )
         assert "user/dataset" in url
 

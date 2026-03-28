@@ -41,12 +41,13 @@ class HFUploader:
         self.repo_id = repo_id
         self.api = HfApi(token=token)
 
-    def ensure_repo_exists(self) -> str:
+    def ensure_repo_exists(self, private: bool = False) -> str:
         """Create the dataset repo if it doesn't exist. Return repo URL."""
         repo_url = self.api.create_repo(
             repo_id=self.repo_id,
             repo_type="dataset",
             exist_ok=True,
+            private=private,
         )
         # Tag the repo
         try:

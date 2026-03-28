@@ -11,6 +11,8 @@ import sys
 
 import click
 
+from pathlib import Path
+
 from . import __version__
 from .config import load_config, save_config, Config
 
@@ -144,6 +146,366 @@ def config_set(
 
 
 @main.command()
+@click.option("--tier", type=click.IntRange(1, 3), default=None, help="Security tier (1, 2, or 3)")
+def init(tier: int | None) -> None:
+    """Initialize opentraces in the current project directory."""
+    project_dir = Path.cwd()
+    ot_dir = project_dir / ".opentraces"
+    staging_dir = ot_dir / "staging"
+    config_file = ot_dir / "config.yml"
+
+    if config_file.exists():
+        click.echo(f"Already initialized: {config_file}")
+        emit_json({"status": "ok", "message": "Already initialized", "config": str(config_file)})
+        return
+
+    # Prompt interactively if --tier not provided
+    if tier is None:
+        tier = click.prompt(
+            "Security tier (1=redact secrets, 2=classifier review, 3=manual review)",
+            type=click.IntRange(1, 3),
+            default=2,
+        )
+
+    # Create directories
+    ot_dir.mkdir(parents=True, exist_ok=True)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write config.yml
+    config_content = (
+        "# opentraces configuration\n"
+        "# https://opentraces.ai/docs/security-tiers\n"
+        f"tier: {tier}\n"
+    )
+    config_file.write_text(config_content)
+
+    # Add staging dir to .gitignore
+    gitignore_path = project_dir / ".gitignore"
+    gitignore_line = ".opentraces/staging/"
+    if gitignore_path.exists():
+        existing = gitignore_path.read_text()
+        if gitignore_line not in existing.splitlines():
+            with open(gitignore_path, "a") as f:
+                if not existing.endswith("\n"):
+                    f.write("\n")
+                f.write(f"{gitignore_line}\n")
+            click.echo(f"  Added '{gitignore_line}' to .gitignore")
+    else:
+        click.echo("  No .gitignore found, skipping")
+
+    click.echo(f"\nInitialized opentraces (tier {tier}) in {ot_dir}")
+    click.echo(f"  Config:  {config_file}")
+    click.echo(f"  Staging: {staging_dir}")
+    click.echo(f"\nNext steps:")
+    click.echo(f"  opentraces _capture --session-dir <path> --project-dir .")
+    click.echo(f"  opentraces status")
+
+    emit_json({
+        "status": "ok",
+        "tier": tier,
+        "config_path": str(config_file),
+        "staging_path": str(staging_dir),
+        "next_steps": [
+            "Run 'opentraces _capture' after a Claude Code session",
+            "Run 'opentraces status' to see staged traces",
+        ],
+        "next_command": "opentraces status",
+    })
+
+
+@main.command("_capture", hidden=True)
+@click.option("--session-dir", required=True, type=click.Path(exists=True), help="Path to Claude Code session dir")
+@click.option("--project-dir", required=True, type=click.Path(exists=True), help="Path to project root")
+def capture(session_dir: str, project_dir: str) -> None:
+    """Capture a Claude Code session (hidden, for automation)."""
+    from .config import load_project_config, get_project_staging_dir, get_project_state_path
+    from .parsers.claude_code import ClaudeCodeParser
+    from .security.scanner import two_pass_scan, apply_redactions
+    from .security.anonymizer import anonymize_paths
+    from .security.classifier import classify_trace_record
+    from .enrichment.git_signals import extract_git_signals, detect_vcs, check_committed
+    from .enrichment.attribution import build_attribution
+    from .enrichment.dependencies import extract_dependencies
+    from .enrichment.metrics import compute_metrics
+    from .state import StateManager, TraceStatus, ProcessedFile
+
+    session_path = Path(session_dir)
+    proj_path = Path(project_dir)
+
+    # Read project config
+    proj_config = load_project_config(proj_path)
+    tier = proj_config.get("tier", 3)
+
+    # Setup project-local staging
+    staging = get_project_staging_dir(proj_path)
+    staging.mkdir(parents=True, exist_ok=True)
+
+    cfg = load_config()
+    parser = ClaudeCodeParser()
+    state = StateManager()
+
+    parsed_count = 0
+    error_count = 0
+
+    # Find JSONL files in session dir
+    session_files = list(session_path.glob("*.jsonl"))
+    if not session_files:
+        click.echo("No session files found.", err=True)
+        return
+
+    for sf in session_files:
+        should_process, offset = state.should_reprocess(str(sf))
+        if not should_process:
+            continue
+
+        try:
+            record = parser.parse_session(sf, byte_offset=offset)
+            if record is None:
+                continue
+
+            # Enrich: git signals
+            vcs = detect_vcs(proj_path)
+            record.environment.vcs = vcs
+            if vcs.type == "git" and record.timestamp_start:
+                ts_end = record.timestamp_end or record.timestamp_start
+                outcome = check_committed(proj_path, record.timestamp_start, ts_end)
+                if outcome.committed:
+                    record.outcome = outcome
+
+            # Enrich: attribution
+            attribution = build_attribution(record.steps, record.outcome.patch)
+            record.attribution = attribution
+
+            # Enrich: dependencies
+            record.dependencies = extract_dependencies(str(proj_path))
+
+            # Enrich: metrics
+            record.metrics = compute_metrics(record.steps)
+
+            # Security: scan and redact based on tier
+            if tier in (1, 2):
+                pass1, pass2 = two_pass_scan(record)
+                total_redactions = apply_redactions(record)
+                record.security.tier = tier
+                record.security.redactions_applied = total_redactions
+
+            if tier == 2:
+                classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
+                record.security.flags_reviewed = len(classifier_result.flags)
+                record.security.classifier_version = "0.1.0"
+
+            # Anonymize paths
+            import os as _os
+            username = _os.environ.get("USER") or _os.environ.get("USERNAME", "")
+            extra_usernames = cfg.custom_redact_strings
+            if username:
+                def _anon(text: str | None) -> str | None:
+                    if not text:
+                        return text
+                    return anonymize_paths(text, username=username, extra_usernames=extra_usernames)
+
+                if record.task.description:
+                    record.task.description = _anon(record.task.description)
+                for step in record.steps:
+                    step.content = _anon(step.content)
+                    if step.reasoning_content:
+                        step.reasoning_content = _anon(step.reasoning_content)
+                    for tc in step.tool_calls:
+                        for k, v in list(tc.input.items()):
+                            if isinstance(v, str):
+                                tc.input[k] = _anon(v)
+                    for obs in step.observations:
+                        obs.content = _anon(obs.content)
+                        obs.output_summary = _anon(obs.output_summary)
+                    for snip in step.snippets:
+                        snip.file_path = _anon(snip.file_path) or snip.file_path
+                        snip.text = _anon(snip.text)
+                if record.outcome.patch:
+                    record.outcome.patch = _anon(record.outcome.patch)
+                if record.attribution:
+                    for attr_file in record.attribution.files:
+                        attr_file.path = _anon(attr_file.path) or attr_file.path
+
+            # Stage to project-local staging
+            jsonl_line = record.to_jsonl_line()
+            staging_file = staging / f"{record.trace_id}.jsonl"
+            staging_file.write_text(jsonl_line + "\n")
+
+            state.set_trace_status(
+                record.trace_id,
+                TraceStatus.STAGED,
+                session_id=record.session_id,
+                file_path=str(staging_file),
+            )
+
+            # Track processed file
+            stat = sf.stat()
+            state.mark_file_processed(ProcessedFile(
+                file_path=str(sf),
+                inode=stat.st_ino,
+                mtime=stat.st_mtime,
+                last_byte_offset=stat.st_size,
+            ))
+
+            parsed_count += 1
+
+        except Exception as e:
+            error_count += 1
+            click.echo(f"  Error: {sf.name}: {e}", err=True)
+
+    # Update project state
+    state_path = get_project_state_path(proj_path)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    import json as _json
+    project_state = {}
+    if state_path.exists():
+        try:
+            project_state = _json.loads(state_path.read_text())
+        except Exception:
+            pass
+    project_state["last_capture"] = str(Path(session_dir))
+    project_state["total_staged"] = project_state.get("total_staged", 0) + parsed_count
+    state_path.write_text(_json.dumps(project_state, indent=2))
+
+    click.echo(f"Captured {parsed_count} sessions ({error_count} errors)", err=True)
+
+
+@main.command()
+def status() -> None:
+    """Show status of the current opentraces project."""
+    import time as _time
+    from .config import load_project_config, get_project_staging_dir, get_project_state_path
+
+    project_dir = Path.cwd()
+    ot_dir = project_dir / ".opentraces"
+
+    if not ot_dir.exists():
+        click.echo("Not an opentraces project. Run 'opentraces init' first.")
+        sys.exit(3)
+
+    proj_config = load_project_config(project_dir)
+    tier = proj_config.get("tier", 3)
+    remote = proj_config.get("remote", None)
+    project_name = project_dir.name
+
+    # Tier descriptions
+    tier_desc = {1: "redact secrets", 2: "classifier review", 3: "manual review"}
+    desc = tier_desc.get(tier, "unknown")
+
+    click.echo(f"{project_name} (tier {tier}, {desc})")
+    if remote:
+        click.echo(f"remote: {remote}")
+    else:
+        click.echo("remote: not configured")
+    click.echo()
+
+    # Load staged traces
+    staging_dir = get_project_staging_dir(project_dir)
+    staged_files = list(staging_dir.glob("*.jsonl")) if staging_dir.exists() else []
+
+    # Load state
+    state_path = get_project_state_path(project_dir)
+    project_state: dict = {}
+    if state_path.exists():
+        try:
+            project_state = json.loads(state_path.read_text())
+        except Exception:
+            pass
+
+    if not staged_files:
+        click.echo("0 sessions staged")
+    else:
+        click.echo(f"{len(staged_files)} sessions staged")
+
+        # Try to parse each trace for summary info
+        from opentraces_schema import TraceRecord
+        now = _time.time()
+        for i, sf in enumerate(sorted(staged_files)):
+            is_last = (i == len(staged_files) - 1)
+            prefix = "└── " if is_last else "├── "
+            try:
+                data = sf.read_text().strip()
+                record = TraceRecord.model_validate_json(data)
+                # Relative timestamp
+                if record.timestamp_end:
+                    from datetime import datetime
+                    ts = record.timestamp_end.timestamp()
+                    diff_seconds = now - ts
+                    if diff_seconds < 3600:
+                        rel_time = f"{int(diff_seconds / 60)}m ago"
+                    elif diff_seconds < 86400:
+                        rel_time = f"{int(diff_seconds / 3600)}h ago"
+                    elif diff_seconds < 172800:
+                        rel_time = "yesterday"
+                    else:
+                        rel_time = f"{int(diff_seconds / 86400)}d ago"
+                else:
+                    rel_time = "unknown"
+
+                task_desc = (record.task.description or "untitled")[:40]
+                n_steps = len(record.steps)
+                n_tools = sum(len(s.tool_calls) for s in record.steps)
+                n_flags = record.security.flags_reviewed or 0
+                click.echo(f"{prefix}{rel_time:<12} \"{task_desc}\"  {n_steps} steps  {n_tools} tools  {n_flags} flags")
+            except Exception:
+                click.echo(f"{prefix}{sf.name}")
+
+    # Count reviewed and pushed from global state
+    from .state import StateManager, TraceStatus
+    state = StateManager()
+    reviewed = len(state.get_traces_by_status(TraceStatus.APPROVED))
+    pushed = len(state.get_traces_by_status(TraceStatus.UPLOADED))
+    click.echo(f"\n{reviewed} reviewed, {pushed} pushed")
+
+
+@main.command()
+def remote() -> None:
+    """Show the configured remote dataset."""
+    from .config import load_project_config
+
+    project_dir = Path.cwd()
+    proj_config = load_project_config(project_dir)
+    remote_name = proj_config.get("remote")
+
+    if not remote_name:
+        click.echo("No remote configured. Run 'opentraces push' to create one.")
+        return
+
+    click.echo(f"origin  {remote_name} (huggingface.co)")
+
+
+@main.command()
+def log() -> None:
+    """List uploaded traces grouped by date."""
+    from .state import StateManager, TraceStatus
+    from datetime import datetime
+
+    state = StateManager()
+    uploaded = state.get_traces_by_status(TraceStatus.UPLOADED)
+
+    if not uploaded:
+        click.echo("No traces have been pushed yet.")
+        return
+
+    # Group by date
+    by_date: dict[str, int] = {}
+    for entry in uploaded:
+        if entry.uploaded_at:
+            try:
+                dt = datetime.fromisoformat(entry.uploaded_at)
+                date_str = dt.strftime("%Y-%m-%d")
+            except Exception:
+                date_str = "unknown"
+        else:
+            date_str = datetime.fromtimestamp(entry.created_at).strftime("%Y-%m-%d")
+        by_date[date_str] = by_date.get(date_str, 0) + 1
+
+    for date_str in sorted(by_date.keys(), reverse=True):
+        count = by_date[date_str]
+        click.echo(f"{date_str}  pushed {count} sessions")
+
+
+@main.command()
 def discover() -> None:
     """List available agent sessions across projects."""
     from .config import get_projects_path
@@ -201,7 +563,6 @@ def discover() -> None:
 @click.option("--limit", type=int, default=0, help="Max sessions to parse (0=all)")
 def parse(auto: bool, limit: int) -> None:
     """Parse agent sessions into enriched JSONL traces."""
-    from pathlib import Path
     from .config import get_projects_path, get_tier_for_project
     from .parsers.claude_code import ClaudeCodeParser
     from .security.scanner import scan_trace_record, two_pass_scan, apply_redactions
@@ -359,14 +720,24 @@ def parse(auto: bool, limit: int) -> None:
 @main.command()
 @click.option("--web", is_flag=True, help="Launch local web review interface")
 @click.option("--port", type=int, default=5050, help="Port for web review server")
-def review(web: bool, port: int) -> None:
+@click.option("--tui", is_flag=True, help="Launch TUI review interface")
+def review(web: bool, port: int, tui: bool) -> None:
     """Review pending traces before upload (Tier 3)."""
     from .state import STAGING_DIR
+    from .config import get_project_staging_dir
+
+    if tui:
+        click.echo("Install TUI with: pip install opentraces[tui]")
+        return
+
+    # Prefer project-local staging, fall back to global
+    project_staging = get_project_staging_dir(Path.cwd())
+    staging = project_staging if project_staging.exists() else STAGING_DIR
 
     if web:
         try:
             from .review.web.app import create_app
-            app = create_app(str(STAGING_DIR))
+            app = create_app(str(staging))
             click.echo(f"Starting web review at http://localhost:{port}")
             click.echo("Press Ctrl+C to stop.")
             app.run(host="127.0.0.1", port=port, debug=False)
@@ -375,14 +746,18 @@ def review(web: bool, port: int) -> None:
             sys.exit(2)
     else:
         from .review.cli_review import run_cli_review
-        run_cli_review(STAGING_DIR)
+        run_cli_review(staging)
 
 
 @main.command()
 @click.option("--approved-only", is_flag=True, help="Only push approved traces")
-def push(approved_only: bool) -> None:
+@click.option("--private", is_flag=True, help="Create the HF dataset as private")
+def push(approved_only: bool, private: bool) -> None:
     """Upload approved traces to HuggingFace Hub."""
-    from .config import get_dataset_name
+    from .config import (
+        get_dataset_name, get_project_staging_dir,
+        load_project_config, save_project_config,
+    )
     from .state import StateManager, TraceStatus, StagingLock, STAGING_DIR
     from .upload.hf_hub import HFUploader
     from .upload.dataset_card import generate_dataset_card
@@ -406,11 +781,12 @@ def push(approved_only: bool) -> None:
         return
 
     # Load trace records from staging files, track which ones loaded successfully
+    # Check project-local staging first, fall back to global
+    project_staging = get_project_staging_dir(Path.cwd())
     records = []
     loaded_trace_ids = set()
     for entry in traces_to_upload:
         if entry.file_path:
-            from pathlib import Path
             staging_file = Path(entry.file_path)
             if staging_file.exists():
                 try:
@@ -435,13 +811,15 @@ def push(approved_only: bool) -> None:
         click.echo(f"Could not get HF username: {e}")
         sys.exit(4)
 
-    repo_id = get_dataset_name(cfg, username)
+    # Derive dataset name from project directory
+    project_dir_name = Path.cwd().name
+    repo_id = f"{username}/opentraces-{project_dir_name}"
     click.echo(f"Uploading {len(records)} traces to {repo_id}...")
 
     try:
         with StagingLock():
             uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
-            uploader.ensure_repo_exists()
+            uploader.ensure_repo_exists(private=private)
             result = uploader.upload_traces(records)
 
             # Generate and upload dataset card
@@ -472,6 +850,17 @@ def push(approved_only: bool) -> None:
                     if entry.trace_id in loaded_trace_ids:
                         state.set_trace_status(entry.trace_id, TraceStatus.UPLOADED)
                 click.echo(f"Uploaded {result.trace_count} traces as {result.shard_name}")
+
+                # Save remote URL to project config
+                try:
+                    proj_config = load_project_config(Path.cwd())
+                    proj_config["remote"] = repo_id
+                    ot_dir = Path.cwd() / ".opentraces"
+                    if ot_dir.exists():
+                        save_project_config(Path.cwd(), proj_config)
+                except Exception:
+                    pass
+
                 emit_json({
                     "status": "ok",
                     "uploaded": result.trace_count,
@@ -496,7 +885,6 @@ def push(approved_only: bool) -> None:
 @click.argument("path")
 def import_traces(from_format: str, path: str) -> None:
     """Import traces from other formats."""
-    from pathlib import Path
     from .state import StateManager, TraceStatus, STAGING_DIR
 
     input_path = Path(path)

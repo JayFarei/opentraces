@@ -133,3 +133,55 @@ def get_tier_for_project(config: Config, project_path: str) -> int:
 def get_dataset_name(config: Config, username: str) -> str:
     """Get the HF dataset repo name for a user."""
     return config.dataset_name_template.replace("{username}", username)
+
+
+def load_project_config(project_dir: Path) -> dict:
+    """Read .opentraces/config.yml from a project directory and return a dict.
+
+    Returns at least a 'tier' key (defaults to 3 if file missing or unparseable).
+    """
+    config_file = project_dir / ".opentraces" / "config.yml"
+    result: dict = {"tier": 3}
+    if not config_file.exists():
+        return result
+    try:
+        text = config_file.read_text()
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("#") or not line:
+                continue
+            if ":" in line:
+                key, _, value = line.partition(":")
+                key = key.strip()
+                value = value.strip()
+                if key == "tier":
+                    result["tier"] = int(value)
+                elif key == "remote":
+                    result["remote"] = value
+                else:
+                    result[key] = value
+    except Exception:
+        pass
+    return result
+
+
+def save_project_config(project_dir: Path, data: dict) -> None:
+    """Write .opentraces/config.yml with the given dict values."""
+    config_file = project_dir / ".opentraces" / "config.yml"
+    lines = [
+        "# opentraces configuration",
+        "# https://opentraces.ai/docs/security-tiers",
+    ]
+    for key, value in data.items():
+        lines.append(f"{key}: {value}")
+    config_file.write_text("\n".join(lines) + "\n")
+
+
+def get_project_staging_dir(project_dir: Path) -> Path:
+    """Return the project-local staging directory."""
+    return project_dir / ".opentraces" / "staging"
+
+
+def get_project_state_path(project_dir: Path) -> Path:
+    """Return the project-local state.json path."""
+    return project_dir / ".opentraces" / "state.json"

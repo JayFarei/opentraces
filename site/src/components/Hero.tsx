@@ -1,6 +1,91 @@
+"use client";
+
+import { useState } from "react";
 import Terminal from "./Terminal";
 
+const tabLabels = ["init", "status", "review", "push"];
+
+function InitContent() {
+  return (
+    <>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces init</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  opentraces: initializing trace collection</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  Security tier?</span></span>
+      <span className="terminal-line"><span className="di">  [1] danger</span>    <span className="di">{"\u2014"} auto-share, regex redaction</span></span>
+      <span className="terminal-line"><span className="di">  [2] automated</span> <span className="di">{"\u2014"} scan + review flagged (default)</span>  <span className="s">{"\u2190"}</span></span>
+      <span className="terminal-line"><span className="di">  [3] manual</span>    <span className="di">{"\u2014"} review every session</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Created .opentraces/config.yml</span></span>
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Installed Claude Code session hook</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  Sessions will be collected automatically.</span></span>
+    </>
+  );
+}
+
+function StatusContent() {
+  return (
+    <>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces status</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  my-project (tier 2, automated)</span></span>
+      <span className="terminal-line"><span className="di">  remote: </span><span className="s">jayfarei/opentraces-my-project</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  </span><span className="n">3</span> <span className="di">sessions staged</span></span>
+      <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 2h ago    </span><span className="s">{"\u201C"}refactor auth middleware{"\u201D"}</span>   <span className="n">47</span> <span className="di">steps</span>  <span className="di">0 flags</span></span>
+      <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 5h ago    </span><span className="s">{"\u201C"}fix billing webhook{"\u201D"}</span>        <span className="n">23</span> <span className="di">steps</span>  <span className="w">1 flag {"\u26A0"}</span></span>
+      <span className="terminal-line"><span className="di">  {"\u2514\u2500\u2500"} yesterday </span><span className="s">{"\u201C"}add settings page{"\u201D"}</span>          <span className="n">65</span> <span className="di">steps</span>  <span className="di">0 flags</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  0 reviewed {"\u00B7"} 0 pushed</span></span>
+    </>
+  );
+}
+
+function ReviewContent() {
+  return (
+    <pre className="terminal-tui-mockup">{`┌─ SESSIONS (3 staged) ──────────┬─ DETAIL ─────────────────────────┐
+│                                 │                                   │
+│  ● "refactor auth"    47 steps  │  refactor auth middleware         │
+│  ○ "fix billing"      23 steps  │  claude-code · opus-4-6           │
+│  ○ "add settings"     65 steps  │  233s · 42,891 tokens · $3.21    │
+│                                 │  tier 2 · 2 redacted · 0 flags   │
+│                                 │                                   │
+│                                 │  ── steps ──────────────────────  │
+│                                 │  [0] user  "refactor the auth.."  │
+│                                 │  [1] agent Read auth.py           │
+│                                 │  [2] agent Edit auth.py L42-67   │
+│                                 │  [3] user  "looks good, also.."   │
+│                                 │  [4] agent Write tests/auth.py   │
+│                                 │                                   │
+├─ approved: 0 · pushed: 0 ──────┴───────────────────────────────────┤
+│ j/k navigate · a approve · r reject · p push · q quit             │
+└─────────────────────────────────────────────────────────────────────┘`}</pre>
+  );
+}
+
+function PushContent() {
+  return (
+    <>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces push</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  Pushing 3 approved sessions...</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Pushed 3 sessions {"\u2192"}</span> <span className="s">jayfarei/opentraces-my-project</span></span>
+      <span className="terminal-line"><span className="di">    135 steps {"\u00B7"} 42,891 tokens {"\u00B7"} $3.21 estimated</span></span>
+      <span className="terminal-line"><span className="di">    </span><span className="s">https://huggingface.co/datasets/jayfarei/opentraces-my-project</span></span>
+    </>
+  );
+}
+
+const tabContents = [InitContent, StatusContent, ReviewContent, PushContent];
+
 export default function Hero() {
+  const [activeTab, setActiveTab] = useState(0);
+
+  const ActiveContent = tabContents[activeTab];
+
   return (
     <section className="hero">
       <div className="hero-grid">
@@ -23,24 +108,14 @@ export default function Hero() {
         </div>
         <div>
           <Terminal
-            tabs={[
-              { label: "publish", active: true },
-              { label: "review" },
-              { label: "status" },
-            ]}
+            tabs={tabLabels.map((label, i) => ({
+              label,
+              active: i === activeTab,
+            }))}
             title="opentraces — zsh"
+            onTabClick={setActiveTab}
           >
-            <span className="terminal-line"><span className="p">~$</span> <span className="c">opentraces publish</span> <span className="f">--tier</span> <span className="s">automated</span></span>
-            <span className="terminal-line terminal-line-gap" />
-            <span className="terminal-line"><span className="di">scanning ~/.claude/projects ...</span></span>
-            <span className="terminal-line"><span className="di">found</span> <span className="n">23</span> <span className="di">sessions across</span> <span className="n">4</span> <span className="di">projects</span></span>
-            <span className="terminal-line terminal-line-gap" />
-            <span className="terminal-line"><span className="di">{"\u251C\u2500"} security tier:</span>   <span className="s">automated</span></span>
-            <span className="terminal-line"><span className="di">{"\u251C\u2500"} auto-redacted:</span>   <span className="n">3</span> <span className="di">secrets</span></span>
-            <span className="terminal-line"><span className="di">{"\u2514\u2500"} flagged:</span>         <span className="w">1</span> <span className="di">session</span></span>
-            <span className="terminal-line terminal-line-gap" />
-            <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">published</span> <span className="n">22</span> <span className="di">traces {"\u2192"}</span> <span className="s">jayfarei/opentraces-claude</span></span>
-            <span className="terminal-line"><span className="di">  {"\u21B3"} 1 pending review. run</span> <span className="c">opentraces review</span></span>
+            <ActiveContent />
           </Terminal>
         </div>
       </div>
