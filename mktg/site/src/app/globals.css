@@ -89,38 +89,9 @@
   --border-strong: #9A9895;
 }
 
-/* ═══ Brutalist Light Mode Overrides ═══ */
-[data-theme="light"] h1 {
-  font-weight: 700 !important;
-  letter-spacing: -0.04em !important;
-  color: #000000 !important;
-}
-[data-theme="light"] .section-title {
-  font-weight: 700 !important;
-  letter-spacing: -0.03em !important;
-  color: #000000 !important;
-  text-transform: uppercase;
-}
-[data-theme="light"] .feature-cell h4,
-[data-theme="light"] .use-card h4 {
-  font-weight: 600 !important;
-  color: #000000 !important;
-}
-[data-theme="light"] .stat-value {
-  font-weight: 700 !important;
-  color: #000000 !important;
-}
-[data-theme="light"] .section-rule .label {
-  font-weight: 500;
-  color: #000000;
-  letter-spacing: 0.14em;
-}
+/* ═══ Light Mode Overrides ═══ */
 [data-theme="light"] .section-rule {
   color: var(--border-strong);
-}
-[data-theme="light"] .nav-logo {
-  font-weight: 600;
-  letter-spacing: -0.02em;
 }
 [data-theme="light"] .terminal {
   background: var(--surface);
@@ -144,11 +115,6 @@
 [data-theme="light"] .terminal-body .di { color: var(--text-muted); }
 [data-theme="light"] .terminal-tab { color: var(--text-dim); }
 [data-theme="light"] .terminal-tab.active { color: var(--text); border-bottom-color: #C2410C; }
-[data-theme="light"] .tbl-title {
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
 [data-theme="light"] .btn-primary {
   background: #000000;
   color: #E4E2DF;
