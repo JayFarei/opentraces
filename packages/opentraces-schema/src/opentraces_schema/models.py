@@ -171,7 +171,7 @@ class Attribution(BaseModel):
     Marked experimental in v0.1 - confidence varies by session complexity.
     """
 
-    version: str = "0.1.0"
+    version: str = SCHEMA_VERSION
     experimental: bool = True
     files: list[AttributionFile] = Field(default_factory=list)
 

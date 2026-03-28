@@ -112,11 +112,12 @@ def _convert_record(raw: dict) -> TraceRecord:
     return trace
 
 
-def import_dataclaw(input_path: Path) -> list[TraceRecord]:
+def import_dataclaw(input_path: Path, max_records: int = 0) -> list[TraceRecord]:
     """Read DataClaw conversations.jsonl and convert to opentraces schema.
 
     Args:
         input_path: Path to the DataClaw JSONL file.
+        max_records: Maximum records to import (0 = unlimited).
 
     Returns:
         List of TraceRecord objects.
@@ -125,6 +126,8 @@ def import_dataclaw(input_path: Path) -> list[TraceRecord]:
     errors = 0
     with open(input_path) as f:
         for line_num, line in enumerate(f, 1):
+            if max_records > 0 and len(traces) >= max_records:
+                break
             line = line.strip()
             if not line:
                 continue
@@ -137,3 +140,17 @@ def import_dataclaw(input_path: Path) -> list[TraceRecord]:
     if errors:
         logger.info(f"DataClaw import: {errors} lines skipped due to errors")
     return traces
+
+
+class DataClawImporter:
+    """File-based importer for DataClaw conversations.jsonl exports.
+
+    Internal migration utility for users moving from DataClaw to opentraces.
+    Satisfies FormatImporter Protocol.
+    """
+
+    format_name = "dataclaw-jsonl"
+    file_extensions = [".jsonl"]
+
+    def import_traces(self, input_path: Path, max_records: int = 0) -> list[TraceRecord]:
+        return import_dataclaw(input_path, max_records=max_records)

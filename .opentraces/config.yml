@@ -1,0 +1,5 @@
+# opentraces configuration
+# https://opentraces.ai/docs/security-tiers
+tier: 1
+remote: Jayfarei/opentraces
+visibility: private

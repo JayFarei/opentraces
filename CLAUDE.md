@@ -10,8 +10,8 @@ Open protocol + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses Cl
 - **Schema**: `opentraces-schema` (standalone Pydantic v2 package in `packages/`)
 - **CLI**: Click-based (`src/opentraces/cli.py`)
 - **Web review**: Flask (`src/opentraces/review/web/`)
-- **HF Space explorer**: Gradio (`explorer/`)
-- **Marketing site**: Static HTML (`site/`)
+- **Marketing site**: Next.js (`mktg/site/`)
+- **Coming soon page**: Static HTML (`mktg/coming-soon/`)
 
 ## Development
 
@@ -33,8 +33,11 @@ pytest tests/ -v
   - `enrichment/` - Git signals, attribution, dependencies, metrics
   - `upload/` - HF Hub sharded upload, dataset card generation
   - `review/` - CLI and web review interfaces
-- `explorer/` - HF Space Gradio app
-- `site/` - Marketing website
+- `mktg/` - Marketing
+  - `site/` - Next.js marketing site
+  - `coming-soon/` - Teaser landing page (Vercel)
+  - `strategy/` - Positioning, design system, domain research
+  - `assets/` - Logos
 - `tests/` - Test suite
 - `resources/` - Design docs (intent.md, outcome.md)
 - `kb/` - Research and discussion logs

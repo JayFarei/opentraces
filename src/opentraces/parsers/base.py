@@ -1,4 +1,4 @@
-"""Adapter contract for agent session parsers.
+"""Adapter contracts for agent session parsers and file-based importers.
 
 Uses typing.Protocol (structural typing, not inheritance) so new adapters
 only need to implement the interface without importing this module.
@@ -14,7 +14,10 @@ from opentraces_schema import TraceRecord
 
 @runtime_checkable
 class SessionParser(Protocol):
-    """Protocol that all agent parsers must satisfy."""
+    """Protocol that all agent parsers must satisfy.
+
+    For live discovery and incremental parsing of agent session files on disk.
+    """
 
     agent_name: str
 
@@ -31,5 +34,29 @@ class SessionParser(Protocol):
 
         Returns:
             TraceRecord if session meets quality thresholds, None otherwise.
+        """
+        ...
+
+
+@runtime_checkable
+class FormatImporter(Protocol):
+    """Protocol for file-based trace importers.
+
+    For importing traces from external file formats (e.g. DataClaw JSONL,
+    ADP trajectories) into TraceRecord format.
+    """
+
+    format_name: str
+    file_extensions: list[str]
+
+    def import_traces(self, input_path: Path, max_records: int = 0) -> list[TraceRecord]:
+        """Read a file and produce TraceRecords.
+
+        Args:
+            input_path: Path to the source file.
+            max_records: Maximum records to import (0 = unlimited).
+
+        Returns:
+            List of TraceRecords. May be empty if file has no valid records.
         """
         ...

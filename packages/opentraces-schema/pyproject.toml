@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "opentraces-schema"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Schema models for the opentraces.ai agent trace JSONL format"
 readme = "README.md"
 license = "Apache-2.0"
@@ -12,6 +12,10 @@ requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.0",
 ]
+
+[tool.hatch.version]
+path = "src/opentraces_schema/version.py"
+pattern = "SCHEMA_VERSION = \"(?P<version>[^\"]+)\""
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opentraces_schema"]

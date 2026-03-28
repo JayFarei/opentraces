@@ -1,0 +1,255 @@
+{
+  "processed_files": {
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/dbf3cfa2-e08b-4812-b843-1054bc475b6d.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/dbf3cfa2-e08b-4812-b843-1054bc475b6d.jsonl",
+      "inode": 111710135,
+      "mtime": 1774631709.2229602,
+      "last_byte_offset": 1312626
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/0ec97810-1b67-48aa-a779-6d76ce898e3f.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/0ec97810-1b67-48aa-a779-6d76ce898e3f.jsonl",
+      "inode": 111753683,
+      "mtime": 1774635312.3162305,
+      "last_byte_offset": 16506
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/063b9c64-086d-42ea-8287-d033e2b6e90c.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/063b9c64-086d-42ea-8287-d033e2b6e90c.jsonl",
+      "inode": 111803307,
+      "mtime": 1774660087.527339,
+      "last_byte_offset": 7550157
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/b3176292-ea21-47f8-af41-8781ef4befdd.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/b3176292-ea21-47f8-af41-8781ef4befdd.jsonl",
+      "inode": 111747746,
+      "mtime": 1774634356.7084022,
+      "last_byte_offset": 4490297
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/a231b7cd-2841-4c35-8f4d-bc41d48e5fa9.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/a231b7cd-2841-4c35-8f4d-bc41d48e5fa9.jsonl",
+      "inode": 111743923,
+      "mtime": 1774633663.6764786,
+      "last_byte_offset": 829403
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/b2470532-8b23-4753-9a05-37ee913a25fb.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/b2470532-8b23-4753-9a05-37ee913a25fb.jsonl",
+      "inode": 111777506,
+      "mtime": 1774639183.874591,
+      "last_byte_offset": 17202
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/f56dc5f8-4cfd-4112-96be-a42b1ca16971.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/f56dc5f8-4cfd-4112-96be-a42b1ca16971.jsonl",
+      "inode": 111764181,
+      "mtime": 1774647104.206787,
+      "last_byte_offset": 7049516
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/2bb95f28-c831-445f-a09a-ee0528086f67.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/2bb95f28-c831-445f-a09a-ee0528086f67.jsonl",
+      "inode": 111756892,
+      "mtime": 1774636351.9279084,
+      "last_byte_offset": 364184
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/729d83b1-02f0-4186-a9ef-2a4e3a480b20.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/729d83b1-02f0-4186-a9ef-2a4e3a480b20.jsonl",
+      "inode": 111756649,
+      "mtime": 1774635809.1628547,
+      "last_byte_offset": 151644
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/76c16ee4-7820-41a2-b172-1d1b2003d513.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/76c16ee4-7820-41a2-b172-1d1b2003d513.jsonl",
+      "inode": 111734166,
+      "mtime": 1774632067.6866982,
+      "last_byte_offset": 291596
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/4d405044-c519-43fb-a3fe-ce2b58e242ed.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/4d405044-c519-43fb-a3fe-ce2b58e242ed.jsonl",
+      "inode": 111761545,
+      "mtime": 1774660430.3785756,
+      "last_byte_offset": 11264309
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/0c11a99f-7e25-48a4-b15b-12ac7d42a9e1.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/0c11a99f-7e25-48a4-b15b-12ac7d42a9e1.jsonl",
+      "inode": 111734937,
+      "mtime": 1774632470.5588055,
+      "last_byte_offset": 1970226
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/0429e22a-63a6-4c5d-ad7f-5221548f65c8.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/0429e22a-63a6-4c5d-ad7f-5221548f65c8.jsonl",
+      "inode": 111924711,
+      "mtime": 1774660109.0677578,
+      "last_byte_offset": 149627
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/3c34486f-c410-402c-a10c-de71e20dba4d.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/3c34486f-c410-402c-a10c-de71e20dba4d.jsonl",
+      "inode": 111710657,
+      "mtime": 1774633661.8113942,
+      "last_byte_offset": 1121727
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/1a9d946b-1ba8-4c1e-96a5-5721ccf7cb4b.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/1a9d946b-1ba8-4c1e-96a5-5721ccf7cb4b.jsonl",
+      "inode": 111753667,
+      "mtime": 1774642059.5368576,
+      "last_byte_offset": 346599
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/d201339d-1cfc-4d34-989b-882badb5fca4.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/d201339d-1cfc-4d34-989b-882badb5fca4.jsonl",
+      "inode": 111710853,
+      "mtime": 1774632058.262747,
+      "last_byte_offset": 1863659
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/ec64f10f-85c3-472a-9913-e3b0af0ffc22.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/ec64f10f-85c3-472a-9913-e3b0af0ffc22.jsonl",
+      "inode": 111866853,
+      "mtime": 1774654227.825694,
+      "last_byte_offset": 34087
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/42ddfd23-5355-4efc-832e-d2f1aca2cd1a.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/42ddfd23-5355-4efc-832e-d2f1aca2cd1a.jsonl",
+      "inode": 111710193,
+      "mtime": 1774629411.9802418,
+      "last_byte_offset": 455118
+    },
+    "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/ea0ba2a8-47ab-4970-9108-fb9db09a8946.jsonl": {
+      "file_path": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf/ea0ba2a8-47ab-4970-9108-fb9db09a8946.jsonl",
+      "inode": 111710515,
+      "mtime": 1774632253.7196507,
+      "last_byte_offset": 1764747
+    }
+  },
+  "traces": {
+    "63f6153d-93dc-4802-acba-f750b4fe208c": {
+      "trace_id": "63f6153d-93dc-4802-acba-f750b4fe208c",
+      "session_id": "dbf3cfa2-e08b-4812-b843-1054bc475b6d",
+      "status": "uploaded",
+      "created_at": 1774660430.710197,
+      "file_path": ".opentraces/staging/63f6153d-93dc-4802-acba-f750b4fe208c.jsonl"
+    },
+    "443fe70a-d487-4db9-af1a-b461cd279125": {
+      "trace_id": "443fe70a-d487-4db9-af1a-b461cd279125",
+      "session_id": "0ec97810-1b67-48aa-a779-6d76ce898e3f",
+      "status": "uploaded",
+      "created_at": 1774660430.9490602,
+      "file_path": ".opentraces/staging/443fe70a-d487-4db9-af1a-b461cd279125.jsonl"
+    },
+    "1b14a908-0071-4068-b11a-9e8042b61c9a": {
+      "trace_id": "1b14a908-0071-4068-b11a-9e8042b61c9a",
+      "session_id": "063b9c64-086d-42ea-8287-d033e2b6e90c",
+      "status": "uploaded",
+      "created_at": 1774660431.6366951,
+      "file_path": ".opentraces/staging/1b14a908-0071-4068-b11a-9e8042b61c9a.jsonl"
+    },
+    "a0867b30-5505-4674-8c96-30d52f9c6380": {
+      "trace_id": "a0867b30-5505-4674-8c96-30d52f9c6380",
+      "session_id": "b3176292-ea21-47f8-af41-8781ef4befdd",
+      "status": "uploaded",
+      "created_at": 1774660432.043333,
+      "file_path": ".opentraces/staging/a0867b30-5505-4674-8c96-30d52f9c6380.jsonl"
+    },
+    "4b5ef476-a3d2-44c2-b205-2464c89595a5": {
+      "trace_id": "4b5ef476-a3d2-44c2-b205-2464c89595a5",
+      "session_id": "a231b7cd-2841-4c35-8f4d-bc41d48e5fa9",
+      "status": "uploaded",
+      "created_at": 1774660432.7305028,
+      "file_path": ".opentraces/staging/4b5ef476-a3d2-44c2-b205-2464c89595a5.jsonl"
+    },
+    "ee53301a-fb8b-451b-9aca-6d9a6769f460": {
+      "trace_id": "ee53301a-fb8b-451b-9aca-6d9a6769f460",
+      "session_id": "b2470532-8b23-4753-9a05-37ee913a25fb",
+      "status": "uploaded",
+      "created_at": 1774660432.856878,
+      "file_path": ".opentraces/staging/ee53301a-fb8b-451b-9aca-6d9a6769f460.jsonl"
+    },
+    "f472f4d4-fdac-4f8c-a305-34bd4f29649d": {
+      "trace_id": "f472f4d4-fdac-4f8c-a305-34bd4f29649d",
+      "session_id": "f56dc5f8-4cfd-4112-96be-a42b1ca16971",
+      "status": "uploaded",
+      "created_at": 1774660433.3337889,
+      "file_path": ".opentraces/staging/f472f4d4-fdac-4f8c-a305-34bd4f29649d.jsonl"
+    },
+    "7eb4e74d-e630-4cd7-9907-1aed1851a47d": {
+      "trace_id": "7eb4e74d-e630-4cd7-9907-1aed1851a47d",
+      "session_id": "2bb95f28-c831-445f-a09a-ee0528086f67",
+      "status": "uploaded",
+      "created_at": 1774660433.490454,
+      "file_path": ".opentraces/staging/7eb4e74d-e630-4cd7-9907-1aed1851a47d.jsonl"
+    },
+    "1f967872-f202-433b-8ea1-da2bfd3d0f0a": {
+      "trace_id": "1f967872-f202-433b-8ea1-da2bfd3d0f0a",
+      "session_id": "729d83b1-02f0-4186-a9ef-2a4e3a480b20",
+      "status": "uploaded",
+      "created_at": 1774660433.615325,
+      "file_path": ".opentraces/staging/1f967872-f202-433b-8ea1-da2bfd3d0f0a.jsonl"
+    },
+    "fb666fe2-eeca-46e3-9023-557dfab83c67": {
+      "trace_id": "fb666fe2-eeca-46e3-9023-557dfab83c67",
+      "session_id": "76c16ee4-7820-41a2-b172-1d1b2003d513",
+      "status": "uploaded",
+      "created_at": 1774660433.787981,
+      "file_path": ".opentraces/staging/fb666fe2-eeca-46e3-9023-557dfab83c67.jsonl"
+    },
+    "c2b87d41-d90c-4f89-9b66-b9d938193138": {
+      "trace_id": "c2b87d41-d90c-4f89-9b66-b9d938193138",
+      "session_id": "4d405044-c519-43fb-a3fe-ce2b58e242ed",
+      "status": "uploaded",
+      "created_at": 1774660437.344546,
+      "file_path": ".opentraces/staging/c2b87d41-d90c-4f89-9b66-b9d938193138.jsonl"
+    },
+    "c69cd337-479a-4ef1-bc5f-4e259833aa74": {
+      "trace_id": "c69cd337-479a-4ef1-bc5f-4e259833aa74",
+      "session_id": "0c11a99f-7e25-48a4-b15b-12ac7d42a9e1",
+      "status": "uploaded",
+      "created_at": 1774660438.13726,
+      "file_path": ".opentraces/staging/c69cd337-479a-4ef1-bc5f-4e259833aa74.jsonl"
+    },
+    "0b3cfc23-b548-4919-8a5b-9341c843a79b": {
+      "trace_id": "0b3cfc23-b548-4919-8a5b-9341c843a79b",
+      "session_id": "0429e22a-63a6-4c5d-ad7f-5221548f65c8",
+      "status": "uploaded",
+      "created_at": 1774660438.4420962,
+      "file_path": ".opentraces/staging/0b3cfc23-b548-4919-8a5b-9341c843a79b.jsonl"
+    },
+    "585deaca-d79f-4d94-a212-213a616fabe8": {
+      "trace_id": "585deaca-d79f-4d94-a212-213a616fabe8",
+      "session_id": "3c34486f-c410-402c-a10c-de71e20dba4d",
+      "status": "uploaded",
+      "created_at": 1774660438.6817532,
+      "file_path": ".opentraces/staging/585deaca-d79f-4d94-a212-213a616fabe8.jsonl"
+    },
+    "645b81ed-683b-496c-bb93-2ae3f18aaf26": {
+      "trace_id": "645b81ed-683b-496c-bb93-2ae3f18aaf26",
+      "session_id": "1a9d946b-1ba8-4c1e-96a5-5721ccf7cb4b",
+      "status": "uploaded",
+      "created_at": 1774660438.8574562,
+      "file_path": ".opentraces/staging/645b81ed-683b-496c-bb93-2ae3f18aaf26.jsonl"
+    },
+    "728b04fe-3ab8-4a55-afb8-7a1a80f0dd8b": {
+      "trace_id": "728b04fe-3ab8-4a55-afb8-7a1a80f0dd8b",
+      "session_id": "d201339d-1cfc-4d34-989b-882badb5fca4",
+      "status": "uploaded",
+      "created_at": 1774660440.9424372,
+      "file_path": ".opentraces/staging/728b04fe-3ab8-4a55-afb8-7a1a80f0dd8b.jsonl"
+    },
+    "19024850-ae2a-404f-a0cf-3f268720a3af": {
+      "trace_id": "19024850-ae2a-404f-a0cf-3f268720a3af",
+      "session_id": "ec64f10f-85c3-472a-9913-e3b0af0ffc22",
+      "status": "uploaded",
+      "created_at": 1774660441.0410829,
+      "file_path": ".opentraces/staging/19024850-ae2a-404f-a0cf-3f268720a3af.jsonl"
+    },
+    "0fca8183-44d1-4a7d-bd62-5ae549f9063f": {
+      "trace_id": "0fca8183-44d1-4a7d-bd62-5ae549f9063f",
+      "session_id": "42ddfd23-5355-4efc-832e-d2f1aca2cd1a",
+      "status": "uploaded",
+      "created_at": 1774660441.2403378,
+      "file_path": ".opentraces/staging/0fca8183-44d1-4a7d-bd62-5ae549f9063f.jsonl"
+    },
+    "16489907-dd9c-4a1b-961f-133935362465": {
+      "trace_id": "16489907-dd9c-4a1b-961f-133935362465",
+      "session_id": "ea0ba2a8-47ab-4970-9108-fb9db09a8946",
+      "status": "uploaded",
+      "created_at": 1774660442.113696,
+      "file_path": ".opentraces/staging/16489907-dd9c-4a1b-961f-133935362465.jsonl"
+    }
+  },
+  "last_capture": "/Users/jayfarei/.claude/projects/-Users-jayfarei-src-tries-2026-03-27-community-traces-hf",
+  "total_staged": 19
+}
