@@ -15,6 +15,12 @@ interface Field {
 function FieldTable({ fields }: { fields: Field[] }) {
   return (
     <table className="field-table">
+      <colgroup>
+        <col style={{ width: "22%" }} />
+        <col style={{ width: "16%" }} />
+        <col style={{ width: "5%" }} />
+        <col style={{ width: "57%" }} />
+      </colgroup>
       <thead>
         <tr>
           <th>field</th>
@@ -295,37 +301,6 @@ export default function SchemaPage() {
           <a href="https://github.com/opentraces/opentraces/issues" style={{ color: "var(--cyan)" }}>
             Feedback / change requests
           </a>
-        </div>
-      </section>
-
-      {/* Changelog summary */}
-      <section style={{ marginBottom: 40 }}>
-        <div style={{
-          border: "1px solid var(--border)",
-          borderRadius: 4,
-          padding: "16px 20px",
-          background: "var(--bg-alt)",
-        }}>
-          <div style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.1em",
-            color: "var(--text-dim)",
-            marginBottom: 10,
-          }}>
-            v{schema.version} changelog
-          </div>
-          <ul style={{
-            margin: 0,
-            padding: "0 0 0 16px",
-            fontSize: 12,
-            color: "var(--text-muted)",
-            lineHeight: 1.8,
-          }}>
-            {schema.highlights.map((h, i) => (
-              <li key={i}>{h}</li>
-            ))}
-          </ul>
         </div>
       </section>
 

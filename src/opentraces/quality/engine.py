@@ -560,6 +560,7 @@ def assess_multi_project(
     from ..parsers.claude_code import ClaudeCodeParser
     from ..enrichment.metrics import compute_metrics
     from ..enrichment.attribution import build_attribution
+    from ..enrichment.git_signals import detect_commits_from_steps
     from ..enrichment.dependencies import (
         infer_language_ecosystem,
         extract_dependencies_from_imports,
@@ -610,6 +611,10 @@ def assess_multi_project(
                 )
                 record.dependencies = sorted(set(step_deps + import_deps))
                 record.attribution = build_attribution(record.steps)
+                # Detect commits from Bash tool calls in the session itself
+                step_outcome = detect_commits_from_steps(record.steps)
+                if step_outcome.committed:
+                    record.outcome = step_outcome
                 record.content_hash = record.compute_content_hash()
                 traces.append(record)
             except Exception as e:

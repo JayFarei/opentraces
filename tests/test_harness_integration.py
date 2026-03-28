@@ -125,12 +125,17 @@ class TestSchemaAudit:
         """Known missing fields should be classified correctly."""
         report = audit_schema_completeness(parsed_traces)
 
-        # environment.os is not yet implemented
+        # environment.os is now inferred from cwd path, should be populated
         os_field = next(
             (f for f in report.fields if f.path == "environment.os"), None
         )
         assert os_field is not None
-        assert os_field.classification in ("not_yet_implemented", "enrichment_gap")
+        # After parser fix, OS is inferred from cwd. Check a still-missing field instead.
+        shell_field = next(
+            (f for f in report.fields if f.path == "environment.shell"), None
+        )
+        assert shell_field is not None
+        assert shell_field.classification in ("not_yet_implemented", "enrichment_gap")
 
     def test_always_populated_fields(self, parsed_traces):
         """Fields that should always be populated must have high rates."""

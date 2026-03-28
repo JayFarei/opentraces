@@ -1,12 +1,22 @@
-"""Git signal extraction: VCS metadata and commit outcome detection."""
+"""Git signal extraction: VCS metadata and commit outcome detection.
+
+Two commit detection strategies:
+1. detect_commits_from_steps() -- scans Bash tool calls in the session for
+   `git commit` commands with successful output. Works from session data alone,
+   no project directory needed. Strict: only claims committed=True when the
+   session itself contains the commit.
+2. check_committed() -- runs `git log` against the project directory with a
+   time window. Requires the project directory to exist on disk.
+"""
 
 from __future__ import annotations
 
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from opentraces_schema.models import Outcome, VCS
+from opentraces_schema.models import Outcome, Step, VCS
 
 
 def _run_git(args: list[str], cwd: Path) -> tuple[bool, str]:
@@ -106,6 +116,82 @@ def check_committed(
         committed=True,
         commit_sha=commit_sha,
         patch=patch or None,
+        signal_source="deterministic",
+        signal_confidence="derived",
+    )
+
+
+def detect_commits_from_steps(steps: list[Step]) -> Outcome:
+    """Detect commits by scanning Bash tool calls in the session.
+
+    Looks for `git commit` commands in Bash tool_call inputs and extracts
+    the commit SHA from the observation stdout (the [branch sha] pattern).
+
+    This is the strict approach: only claims committed=True when the session
+    itself contains the git commit command with a successful result.
+    No time-window correlation, no guessing.
+
+    Works from session data alone, no project directory needed.
+    """
+    commit_shas: list[str] = []
+    commit_messages: list[str] = []
+
+    for step in steps:
+        for i, tc in enumerate(step.tool_calls):
+            if tc.tool_name != "Bash":
+                continue
+
+            command = tc.input.get("command", "")
+            if not command or "git commit" not in command:
+                continue
+
+            # Found a git commit command. Check the observation for success.
+            # The observation is linked by source_call_id.
+            obs = None
+            for o in step.observations:
+                if o.source_call_id == tc.tool_call_id:
+                    obs = o
+                    break
+
+            if obs is None or not obs.content:
+                continue
+
+            # Successful git commit output looks like:
+            # [main abc1234] commit message here
+            # or [main (root-commit) abc1234] for first commits
+            sha_match = re.search(
+                r"\[[\w/.-]+(?:\s+\(root-commit\))?\s+([a-f0-9]{7,40})\]",
+                obs.content,
+            )
+            if sha_match:
+                commit_shas.append(sha_match.group(1))
+
+                # Try to extract commit message from the same output line
+                msg_match = re.search(
+                    r"\[[^\]]+\]\s+(.+?)(?:\n|$)",
+                    obs.content,
+                )
+                if msg_match:
+                    commit_messages.append(msg_match.group(1).strip())
+
+    if not commit_shas:
+        return Outcome(committed=False)
+
+    # Use the last commit (most recent in the session)
+    last_sha = commit_shas[-1]
+    description = commit_messages[-1] if commit_messages else None
+
+    # Build a patch from git diff if we have multiple commits,
+    # or from the commit message context
+    patch = None
+    # We can't get the actual diff without the project directory,
+    # but the commit SHA is the definitive signal.
+
+    return Outcome(
+        committed=True,
+        commit_sha=last_sha,
+        patch=patch,
+        description=description,
         signal_source="deterministic",
         signal_confidence="derived",
     )

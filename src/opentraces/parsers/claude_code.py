@@ -96,6 +96,21 @@ class ClaudeCodeParser:
         if not steps:
             return None
 
+        # Populate system_prompts from metadata if parser didn't find them inline
+        if not system_prompts and metadata.get("system_prompt_raw"):
+            raw = metadata["system_prompt_raw"]
+            # system_prompt_raw can be a list of blocks or a string
+            if isinstance(raw, list):
+                text = "\n".join(
+                    b.get("text", "") if isinstance(b, dict) else str(b)
+                    for b in raw
+                )
+            else:
+                text = str(raw)
+            if text.strip():
+                prompt_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
+                system_prompts[prompt_hash] = text
+
         # Renumber all steps sequentially to guarantee uniqueness
         # (subagent inlining can create duplicates)
         # Build old_index -> new_index map and fix parent_step references
@@ -124,9 +139,9 @@ class ClaudeCodeParser:
                 model=metadata.get("model"),
             ),
             environment=Environment(
-                os=metadata.get("os"),
+                os=self._infer_os(metadata.get("cwd", "")),
                 shell=metadata.get("shell"),
-                vcs=VCS(type="none"),  # Git signals added during enrichment
+                vcs=self._infer_vcs(metadata),
                 language_ecosystem=[],
             ),
             system_prompts=system_prompts,
@@ -329,7 +344,15 @@ class ClaudeCodeParser:
                     step_content += block.get("text", "")
 
                 elif block_type == "thinking":
-                    reasoning += block.get("thinking", "")
+                    thinking_text = block.get("thinking", "")
+                    if thinking_text:
+                        reasoning += thinking_text
+                    elif block.get("signature"):
+                        # Encrypted/redacted thinking: model reasoned but
+                        # content was withheld by provider. Mark as redacted
+                        # so consumers know reasoning occurred.
+                        if not reasoning:
+                            reasoning = "[redacted: model produced reasoning but content was withheld by provider]"
 
                 elif block_type == "tool_use":
                     tool_call_id = block.get("id", str(uuid.uuid4()))
@@ -410,12 +433,14 @@ class ClaudeCodeParser:
                 if depth > 0:
                     agent_role = "explore"  # Default for subagents
 
-            # System prompt handling
-            system_prompt_hash = None
-            # (System prompts are extracted from queue-operation in metadata)
-
             # Build step
             mapped_role = "agent" if role == "assistant" else "user"
+
+            # System prompt handling: link agent steps to the system prompt
+            system_prompt_hash = None
+            if mapped_role == "agent" and system_prompts:
+                # Use the first (and typically only) system prompt hash
+                system_prompt_hash = next(iter(system_prompts), None)
 
             # Skip user messages that only contain tool_results (they're observations, not steps)
             if mapped_role == "user" and not step_content and all(
@@ -631,6 +656,30 @@ class ClaudeCodeParser:
                                 ))
 
         return snippets
+
+    @staticmethod
+    def _infer_os(cwd: str) -> str | None:
+        """Infer operating system from cwd path prefix."""
+        if not cwd:
+            return None
+        if cwd.startswith("/Users/"):
+            return "darwin"
+        if cwd.startswith("/home/") or cwd.startswith("/root/"):
+            return "linux"
+        if len(cwd) >= 3 and cwd[1] == ":" and cwd[2] in ("/", "\\"):
+            return "windows"
+        return None
+
+    @staticmethod
+    def _infer_vcs(metadata: dict[str, Any]) -> VCS:
+        """Infer VCS info from session metadata."""
+        git_branch = metadata.get("git_branch")
+        if git_branch and git_branch != "HEAD":
+            return VCS(type="git", branch=git_branch)
+        if git_branch == "HEAD":
+            # HEAD means detached head or git is present but branch unknown
+            return VCS(type="git")
+        return VCS(type="none")
 
     def _detect_language(self, file_path: str) -> str | None:
         """Detect programming language from file extension."""
