@@ -475,9 +475,7 @@ html { color-scheme: dark light; }
 /* ═══ Section ═══ */
 section {
   padding: 64px 0;
-  border-bottom: 1px solid var(--border);
 }
-section:last-of-type { border-bottom: none; }
 
 .section-rule {
   font-family: var(--font-mono);
@@ -766,6 +764,14 @@ tr:hover td { background: var(--surface-hover); }
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
+}
+.hf-logo {
+  display: inline-block;
+  vertical-align: middle;
+}
+[data-theme="dark"] .hf-logo,
+.theme-dark .hf-logo {
+  filter: brightness(0) invert(1);
 }
 
 /* Responsive arch */
