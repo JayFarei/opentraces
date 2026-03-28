@@ -84,11 +84,55 @@ def load_config() -> Config:
 
     config = Config.model_validate(raw)
 
-    # Pick up HF token from env if not in config
+    # Token resolution chain: env var > opentraces credentials > huggingface-cli token
     if config.hf_token is None:
-        config.hf_token = os.environ.get("HF_TOKEN")
+        config.hf_token = _resolve_hf_token()
 
     return config
+
+
+CREDENTIALS_PATH = OPENTRACES_DIR / "credentials"
+
+
+def _resolve_hf_token() -> str | None:
+    """Resolve HF token from multiple sources in priority order."""
+    # 1. Environment variable (highest priority, CI/CD)
+    token = os.environ.get("HF_TOKEN")
+    if token:
+        return token
+
+    # 2. opentraces-managed credentials file
+    if CREDENTIALS_PATH.exists():
+        try:
+            text = CREDENTIALS_PATH.read_text().strip()
+            if text.startswith("hf_"):
+                return text
+        except OSError:
+            pass
+
+    # 3. huggingface-cli login token (fallback)
+    hf_cache_token = Path.home() / ".cache" / "huggingface" / "token"
+    if hf_cache_token.exists():
+        try:
+            text = hf_cache_token.read_text().strip()
+            if text.startswith("hf_"):
+                return text
+        except OSError:
+            pass
+
+    return None
+
+
+def save_credentials(token: str) -> None:
+    """Save HF token to ~/.opentraces/credentials with 0600 permissions."""
+    ensure_dirs()
+    _secure_write(CREDENTIALS_PATH, token)
+
+
+def clear_credentials() -> None:
+    """Remove stored HF credentials."""
+    if CREDENTIALS_PATH.exists():
+        CREDENTIALS_PATH.unlink()
 
 
 def save_config(config: Config) -> None:

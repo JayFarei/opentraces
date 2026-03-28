@@ -46,30 +46,97 @@ def main() -> None:
 
 
 @main.command()
-def auth() -> None:
-    """Authenticate with HuggingFace Hub."""
+def login() -> None:
+    """Log in to HuggingFace Hub (like gh auth login)."""
+    from .config import save_credentials, clear_credentials, CREDENTIALS_PATH
+
     config = load_config()
     if config.hf_token:
-        click.echo("Already authenticated with HuggingFace Hub.")
-        emit_json({
-            "status": "ok",
-            "authenticated": True,
-            "next_steps": ["Run 'opentraces discover' to find available sessions"],
-            "next_command": "opentraces discover",
-        })
-        return
+        # Already authenticated, verify and show status
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi(token=config.hf_token)
+            user_info = api.whoami()
+            username = user_info.get("name", "unknown")
+            click.echo(f"Already authenticated as {username}.")
+            emit_json({
+                "status": "ok",
+                "authenticated": True,
+                "username": username,
+                "next_steps": ["Run 'opentraces init' to set up a project"],
+                "next_command": "opentraces init",
+            })
+        except Exception:
+            click.echo("Token found but invalid. Re-authenticating...")
+            clear_credentials()
+            # Fall through to login flow below
 
-    click.echo("No HF token found. Set HF_TOKEN environment variable or run:")
-    click.echo("  huggingface-cli login")
+        if config.hf_token:
+            return
+
+    # Interactive login
+    click.echo("Log in to HuggingFace Hub.")
+    click.echo("Get your token at: https://huggingface.co/settings/tokens")
+    click.echo()
+    token = click.prompt("Token", hide_input=True)
+
+    if not token.startswith("hf_"):
+        click.echo("Invalid token format (should start with hf_).")
+        emit_json(error_response("INVALID_TOKEN", "auth", "Token must start with hf_"))
+        sys.exit(3)
+
+    # Validate token
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi(token=token)
+        user_info = api.whoami()
+        username = user_info.get("name", "unknown")
+    except Exception as e:
+        click.echo(f"Token validation failed: {e}")
+        emit_json(error_response("TOKEN_INVALID", "auth", str(e)))
+        sys.exit(3)
+
+    # Save credentials
+    save_credentials(token)
+    click.echo(f"\nAuthenticated as {username}.")
+    click.echo(f"Token saved to {CREDENTIALS_PATH}")
+    click.echo("\nYou can now push traces with 'opentraces push'.")
+
     emit_json({
-        "status": "needs_action",
-        "authenticated": False,
-        "next_steps": [
-            "Set HF_TOKEN environment variable",
-            "Or run: huggingface-cli login",
-        ],
-        "next_command": "huggingface-cli login",
+        "status": "ok",
+        "authenticated": True,
+        "username": username,
+        "credentials_path": str(CREDENTIALS_PATH),
+        "next_steps": ["Run 'opentraces init' to set up a project"],
+        "next_command": "opentraces init",
     })
+
+
+@main.command()
+def logout() -> None:
+    """Log out from HuggingFace Hub."""
+    from .config import clear_credentials, CREDENTIALS_PATH
+
+    if CREDENTIALS_PATH.exists():
+        clear_credentials()
+        click.echo("Logged out. Credentials removed.")
+    else:
+        click.echo("Not logged in (no stored credentials).")
+
+    emit_json({"status": "ok", "authenticated": False})
+
+
+@main.command(hidden=True)
+def auth() -> None:
+    """Authenticate with HuggingFace Hub (alias for login)."""
+    # Backward compatibility alias
+    config = load_config()
+    if config.hf_token:
+        click.echo("Authenticated. Run 'opentraces login' to manage credentials.")
+        emit_json({"status": "ok", "authenticated": True})
+        return
+    click.echo("Not authenticated. Run 'opentraces login' to connect.")
+    emit_json({"status": "needs_action", "authenticated": False, "next_command": "opentraces login"})
 
 
 @main.group()
@@ -772,8 +839,8 @@ def push(approved_only: bool, private: bool, public: bool, publish: bool, gated:
 
     cfg = load_config()
     if not cfg.hf_token:
-        click.echo("Not authenticated. Run 'opentraces auth' first.")
-        emit_json(error_response("NOT_AUTHENTICATED", "auth", "No HF token", "Run: opentraces auth"))
+        click.echo("Not authenticated. Run 'opentraces login' first.")
+        emit_json(error_response("NOT_AUTHENTICATED", "auth", "No HF token", "Run: opentraces login"))
         sys.exit(3)
 
     if private and public:

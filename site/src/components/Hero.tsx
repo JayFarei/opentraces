@@ -3,7 +3,25 @@
 import { useState } from "react";
 import Terminal from "./Terminal";
 
-const tabLabels = ["init", "status", "review", "push"];
+const tabLabels = ["login", "init", "status", "review", "push"];
+
+function LoginContent() {
+  return (
+    <>
+      <span className="terminal-line"><span className="p">~$</span> <span className="c">opentraces login</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  Log in to HuggingFace Hub.</span></span>
+      <span className="terminal-line"><span className="di">  Get your token at: </span><span className="s">huggingface.co/settings/tokens</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  Token: </span><span className="s">hf_****</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Authenticated as </span><span className="s">jayfarei</span></span>
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Token saved to ~/.opentraces/credentials</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  You can now push traces with </span><span className="c">opentraces push</span></span>
+    </>
+  );
+}
 
 function InitContent() {
   return (
@@ -80,7 +98,7 @@ function PushContent() {
   );
 }
 
-const tabContents = [InitContent, StatusContent, ReviewContent, PushContent];
+const tabContents = [LoginContent, InitContent, StatusContent, ReviewContent, PushContent];
 
 export default function Hero() {
   const [activeTab, setActiveTab] = useState(0);
