@@ -1,30 +1,45 @@
+import { useRef, type ComponentType } from "react";
 import { useSelection } from "../../contexts/SelectionContext";
 import { formatTokens, formatDuration } from "../../lib/format";
 import type { TreeNode } from "../../types/trace";
+import type { AnimatedIconProps, AnimatedIconHandle } from "../icons/types";
+import {
+  FileDescriptionIcon,
+  PenIcon,
+  CodeIcon,
+  TerminalIcon,
+  MagnifierIcon,
+  GlobeIcon,
+  BrainCircuitIcon,
+  UserIcon,
+  SparklesIcon,
+  CodeXmlIcon,
+} from "../icons";
 
-/** Tool-specific icons (monospace-friendly characters). */
-const TOOL_ICONS: Record<string, string> = {
-  Read: "\u{1F4C4}",      // 📄
-  Edit: "\u{270F}\u{FE0F}", // ✏️
-  Write: "\u{1F4DD}",     // 📝
-  Bash: "\u{1F4BB}",      // 💻
-  Grep: "\u{1F50D}",      // 🔍
-  Glob: "\u{1F4C1}",      // 📁
-  WebSearch: "\u{1F310}",  // 🌐
-  WebFetch: "\u{1F310}",   // 🌐
-  Agent: "\u{1F916}",     // 🤖
-  ToolSearch: "\u{1F50E}", // 🔎
-  AskUserQuestion: "\u{2753}", // ❓
-  Skill: "\u{26A1}",      // ⚡
+/** Tool name -> itshover icon component. */
+const TOOL_ICON_MAP: Record<string, ComponentType<AnimatedIconProps>> = {
+  Read: FileDescriptionIcon,
+  Edit: PenIcon,
+  Write: CodeIcon,
+  Bash: TerminalIcon,
+  Grep: MagnifierIcon,
+  Glob: FileDescriptionIcon,
+  WebSearch: GlobeIcon,
+  WebFetch: GlobeIcon,
+  Agent: BrainCircuitIcon,
+  ToolSearch: MagnifierIcon,
+  AskUserQuestion: UserIcon,
+  Skill: SparklesIcon,
+  NotebookEdit: CodeXmlIcon,
 };
 
-/** Role icons for step-level nodes. */
-const ROLE_ICONS: Record<TreeNode["type"], string> = {
-  user: "\u{1F464}",    // 👤
-  agent: "\u{1F916}",   // 🤖
-  tool: "\u{1F527}",    // 🔧
-  system: "\u{2699}\u{FE0F}", // ⚙️
-  subagent: "\u{1F500}", // 🔀
+/** Role type -> itshover icon component. */
+const ROLE_ICON_MAP: Record<TreeNode["type"], ComponentType<AnimatedIconProps>> = {
+  user: UserIcon,
+  agent: BrainCircuitIcon,
+  tool: TerminalIcon,
+  system: SparklesIcon,
+  subagent: BrainCircuitIcon,
 };
 
 const ROLE_COLORS: Record<TreeNode["type"], string> = {
@@ -53,18 +68,19 @@ interface StepNodeProps {
 
 export function StepNode({ node }: StepNodeProps) {
   const { selectedNodeId, setSelectedNodeId } = useSelection();
+  const iconRef = useRef<AnimatedIconHandle>(null);
   const isSelected = selectedNodeId === node.id;
 
   const isTool = node.type === "tool" && node.toolCall;
   const toolName = node.toolCall?.tool_name ?? "";
 
-  // Icon: tool-specific or role-based
-  const icon = isTool
-    ? (TOOL_ICONS[toolName] ?? "\u{1F527}")
-    : ROLE_ICONS[node.type];
+  // Resolve icon component
+  const IconComponent = isTool
+    ? (TOOL_ICON_MAP[toolName] ?? TerminalIcon)
+    : ROLE_ICON_MAP[node.type];
 
-  // Color for the tool name text
-  const nameColor = isTool
+  // Color for the icon and tool name
+  const iconColor = isTool
     ? (TOOL_COLORS[toolName] ?? "var(--text)")
     : ROLE_COLORS[node.type];
 
@@ -77,6 +93,8 @@ export function StepNode({ node }: StepNodeProps) {
   return (
     <button
       onClick={() => setSelectedNodeId(node.id)}
+      onMouseEnter={() => iconRef.current?.startAnimation()}
+      onMouseLeave={() => iconRef.current?.stopAnimation()}
       className={`w-full h-full flex items-center pr-3 transition-colors duration-100 cursor-pointer ${
         isSelected
           ? "bg-[var(--surface-hover)] border-l-2 border-l-[var(--accent)]"
@@ -84,9 +102,9 @@ export function StepNode({ node }: StepNodeProps) {
       } ${node.type === "subagent" ? "!border-l-2 !border-l-[var(--cyan)]" : ""}`}
       style={{ paddingLeft: `${node.depth * 16 + 8}px` }}
     >
-      {/* Icon */}
-      <span className="flex-none w-5 text-center text-[12px] mr-1.5">
-        {icon}
+      {/* Animated icon */}
+      <span className="flex-none flex items-center justify-center w-5 h-5 mr-1.5" style={{ color: iconColor }}>
+        <IconComponent ref={iconRef} size={14} color={iconColor} strokeWidth={2} />
       </span>
 
       {/* Tool name (colored) + label */}
@@ -94,20 +112,20 @@ export function StepNode({ node }: StepNodeProps) {
         <span className="flex-1 flex items-baseline gap-1.5 truncate text-left min-w-0">
           <span
             className="flex-none text-[11px] font-[family-name:var(--font-mono)] font-semibold"
-            style={{ color: nameColor }}
+            style={{ color: iconColor }}
           >
             {toolName}
           </span>
           <span className="text-[10px] font-[family-name:var(--font-mono)] text-[var(--text-muted)] truncate">
             {node.label.startsWith(toolName + ": ")
               ? node.label.slice(toolName.length + 2)
-              : node.label}
+              : node.label !== toolName ? node.label : ""}
           </span>
         </span>
       ) : (
         <span
           className="flex-1 text-[11px] font-[family-name:var(--font-mono)] truncate text-left"
-          style={{ color: nameColor }}
+          style={{ color: node.type === "user" ? iconColor : "var(--text)" }}
         >
           {node.label}
         </span>
