@@ -1,0 +1,99 @@
+/**
+ * Content cleaning and formatting utilities.
+ * Strip XML/HTML tags, system noise, and extract human-readable text.
+ */
+
+/** Strip XML/HTML tags and common system noise from content. */
+export function cleanContent(text: string): string {
+  if (!text) return "";
+
+  let clean = text
+    // Strip XML-style tags: <command-message>, <local-command-stdout>, etc.
+    .replace(/<\/?[a-z][a-z0-9_-]*>/gi, "")
+    // Strip self-closing XML tags
+    .replace(/<[a-z][a-z0-9_-]*\s*\/>/gi, "")
+    // Strip HTML entities
+    .replace(/&[a-z]+;/gi, " ")
+    // Collapse multiple newlines
+    .replace(/\n{3,}/g, "\n\n")
+    // Collapse multiple spaces
+    .replace(/  +/g, " ")
+    .trim();
+
+  return clean;
+}
+
+/** Extract a human-readable summary from step content. */
+export function summarizeContent(text: string, maxLen: number = 80): string {
+  const cleaned = cleanContent(text);
+  if (!cleaned) return "";
+
+  // Take first meaningful line (skip empty lines)
+  const lines = cleaned.split("\n").filter((l) => l.trim().length > 0);
+  const firstLine = lines[0] ?? "";
+
+  if (firstLine.length <= maxLen) return firstLine;
+  return firstLine.slice(0, maxLen - 1) + "\u2026";
+}
+
+/** Extract the primary argument from a tool call input for display. */
+export function toolDisplayArg(
+  toolName: string,
+  input: Record<string, unknown>,
+): string {
+  // Map tool names to their primary argument
+  const primaryKeys: Record<string, string[]> = {
+    Read: ["file_path"],
+    Edit: ["file_path"],
+    Write: ["file_path"],
+    Bash: ["command"],
+    Grep: ["pattern"],
+    Glob: ["pattern"],
+    WebSearch: ["query"],
+    WebFetch: ["url", "prompt"],
+    Agent: ["prompt", "description"],
+    ToolSearch: ["query"],
+    AskUserQuestion: ["questions"],
+    Skill: ["skill"],
+  };
+
+  const keys = primaryKeys[toolName] ?? Object.keys(input).slice(0, 1);
+  for (const key of keys) {
+    const val = input[key];
+    if (typeof val === "string" && val.length > 0) {
+      // For file paths, show just the filename
+      if (key === "file_path") {
+        const parts = val.split("/");
+        return parts[parts.length - 1] ?? val;
+      }
+      // For commands, show first line
+      if (key === "command") {
+        const firstLine = val.split("\n")[0] ?? val;
+        return firstLine.length > 60 ? firstLine.slice(0, 59) + "\u2026" : firstLine;
+      }
+      // For queries/patterns, show as-is (truncated)
+      return val.length > 50 ? val.slice(0, 49) + "\u2026" : val;
+    }
+  }
+  return "";
+}
+
+/** Format token count for display. */
+export function formatTokens(count: number): string {
+  if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
+  return String(count);
+}
+
+/** Format duration in ms for display. */
+export function formatDuration(ms: number): string {
+  if (ms >= 60000) return `${(ms / 60000).toFixed(1)}m`;
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${String(ms)}ms`;
+}
+
+/** Format cost in USD. */
+export function formatCost(usd: number): string {
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  if (usd < 1) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(2)}`;
+}

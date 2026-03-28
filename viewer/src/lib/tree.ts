@@ -1,11 +1,5 @@
 import type { Step, ToolCall, SecurityFlag, TreeNode } from "../types/trace";
-
-const LABEL_MAX = 60;
-
-function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return text.slice(0, max - 3) + "...";
-}
+import { summarizeContent, toolDisplayArg } from "./format";
 
 function stepType(step: Step): TreeNode["type"] {
   if (step.call_type === "subagent") return "subagent";
@@ -22,15 +16,24 @@ function stepType(step: Step): TreeNode["type"] {
 }
 
 function stepLabel(step: Step): string {
-  if (step.content) return truncate(step.content, LABEL_MAX);
-  if (step.role === "system") return "[system prompt]";
-  return `[step ${String(step.step_index)}]`;
+  // Try content first, cleaned of XML/HTML
+  if (step.content) {
+    const summary = summarizeContent(step.content, 80);
+    if (summary) return summary;
+  }
+  // For agent steps with tool calls but no content, describe what they do
+  if (step.role === "agent" && step.tool_calls.length > 0) {
+    const toolNames = [...new Set(step.tool_calls.map((tc) => tc.tool_name))];
+    return toolNames.join(", ");
+  }
+  if (step.role === "system") return "system prompt";
+  if (step.agent_role) return step.agent_role;
+  return `step ${String(step.step_index)}`;
 }
 
 function toolLabel(tc: ToolCall): string {
-  const firstArg = Object.keys(tc.input)[0];
-  const suffix = firstArg ? ` (${firstArg})` : "";
-  return truncate(`${tc.tool_name}${suffix}`, LABEL_MAX);
+  const arg = toolDisplayArg(tc.tool_name, tc.input);
+  return arg ? `${tc.tool_name}: ${arg}` : tc.tool_name;
 }
 
 function toolNodeId(stepIndex: number, toolIndex: number): string {

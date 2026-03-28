@@ -64,10 +64,11 @@ describe("buildTree", () => {
     expect(tree).toHaveLength(1);
     expect(tree[0]!.children).toHaveLength(3);
     expect(tree[0]!.children[0]!.type).toBe("tool");
-    expect(tree[0]!.children[0]!.label).toBe("Read (path)");
+    // Tool labels now show tool_name: primary_arg_value (not param name)
+    expect(tree[0]!.children[0]!.label).toBe("Read");  // no file_path key match for "path"
     expect(tree[0]!.children[0]!.observation?.content).toBe("file content");
-    expect(tree[0]!.children[1]!.label).toBe("Write (path)");
-    expect(tree[0]!.children[2]!.label).toBe("Bash (cmd)");
+    expect(tree[0]!.children[1]!.label).toBe("Write"); // no file_path key match for "path"
+    expect(tree[0]!.children[2]!.label).toBe("Bash");  // no "command" key match for "cmd"
   });
 
   it("builds nested tree from parent_step chain (subagent)", () => {
@@ -113,12 +114,12 @@ describe("buildTree", () => {
     expect(tree).toHaveLength(2);
   });
 
-  it("truncates labels at 60 characters", () => {
-    const longContent = "a".repeat(100);
+  it("truncates labels at ~80 characters", () => {
+    const longContent = "a".repeat(200);
     const steps = [makeStep({ step_index: 0, content: longContent })];
     const tree = buildTree(steps);
-    expect(tree[0]!.label).toHaveLength(60);
-    expect(tree[0]!.label.endsWith("...")).toBe(true);
+    expect(tree[0]!.label.length).toBeLessThanOrEqual(80);
+    expect(tree[0]!.label.endsWith("\u2026")).toBe(true);
   });
 
   it("uses tool_name as label for tool nodes", () => {
@@ -151,7 +152,7 @@ describe("buildTree", () => {
     const steps = [makeStep({ step_index: 0, role: "system" })];
     const tree = buildTree(steps);
     expect(tree[0]!.type).toBe("system");
-    expect(tree[0]!.label).toBe("[system prompt]");
+    expect(tree[0]!.label).toBe("system prompt");
   });
 });
 
