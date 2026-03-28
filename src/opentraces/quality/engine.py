@@ -33,10 +33,14 @@ logger = logging.getLogger(__name__)
 class PersonaScore:
     """Score for one persona on one trace."""
     persona_name: str
-    total_score: float  # 0-100
+    total_score: float  # 0-100 (deterministic only, or hybrid when judge ran)
     pass_rate: float  # 0-100
     items: list[RubricItem] = field(default_factory=list)
     category_scores: dict[str, float] = field(default_factory=dict)
+    # LLM judge fields (populated when enable_judge=True)
+    deterministic_score: float | None = None  # original deterministic score before blending
+    judge_score: float | None = None  # 0-100, from LLM judge
+    judge_result: Any = None  # JudgeResult | None
 
 
 @dataclass
@@ -135,6 +139,9 @@ def assess_trace(
     record: TraceRecord,
     raw_session_path: Path | str | None = None,
     personas: list[PersonaDef] | None = None,
+    enable_judge: bool = False,
+    judge_model: str = "haiku",
+    deterministic_weight: float = 0.6,
 ) -> TraceAssessment:
     """Assess a single trace against all personas.
 
@@ -142,6 +149,10 @@ def assess_trace(
         record: Parsed TraceRecord to assess.
         raw_session_path: Path to raw session JSONL for preservation comparison.
         personas: Custom persona list. If None, uses all default personas.
+        enable_judge: If True, run LLM judge for qualitative scoring.
+        judge_model: Model for the judge ("haiku", "sonnet", "opus").
+        deterministic_weight: Weight for deterministic score in hybrid blend
+            (0.0-1.0, default 0.6). Judge weight is 1 - deterministic_weight.
 
     Returns:
         TraceAssessment with per-persona scores and optional preservation.
@@ -161,10 +172,44 @@ def assess_trace(
         task_description=(record.task.description or "")[:100],
     )
 
-    # Run each persona
+    # Run each persona (deterministic checks)
     for persona in personas:
         score = _run_persona(persona, record, raw_data)
         assessment.persona_scores[persona.name] = score
+
+    # LLM judge pass (optional)
+    if enable_judge:
+        try:
+            from .judge import run_judge, summarize_for_judge
+
+            # Collect deterministic issues for judge context
+            det_issues = []
+            for name, ps in assessment.persona_scores.items():
+                if name == "conformance":
+                    continue
+                for item in ps.items:
+                    if not item.passed:
+                        det_issues.append(f"{item.name}: {item.evidence}")
+
+            trace_summary = summarize_for_judge(record, deterministic_issues=det_issues)
+
+            for name, ps in assessment.persona_scores.items():
+                if name == "conformance":
+                    continue  # no brief for conformance
+                judge_result = run_judge(name, trace_summary, model=judge_model)
+                ps.judge_result = judge_result
+
+                if not judge_result.skipped:
+                    ps.deterministic_score = ps.total_score
+                    ps.judge_score = judge_result.overall_score
+                    # Hybrid blend
+                    ps.total_score = round(
+                        deterministic_weight * ps.deterministic_score
+                        + (1 - deterministic_weight) * ps.judge_score,
+                        1,
+                    )
+        except Exception as e:
+            logger.warning("Judge pass failed: %s", e)
 
     # Preservation comparison
     if raw_session_path is not None:
@@ -189,6 +234,8 @@ def assess_batch(
     traces: list[TraceRecord],
     raw_session_dir: Path | str | None = None,
     personas: list[PersonaDef] | None = None,
+    enable_judge: bool = False,
+    judge_model: str = "haiku",
 ) -> BatchAssessment:
     """Assess a batch of traces with all layers.
 
@@ -197,6 +244,8 @@ def assess_batch(
         raw_session_dir: Directory containing raw session JSONL files.
             Files are matched to traces via session_id.
         personas: Custom persona list. If None, uses all defaults.
+        enable_judge: If True, run LLM judge for qualitative scoring.
+        judge_model: Model for the judge ("haiku", "sonnet", "opus").
 
     Returns:
         BatchAssessment with per-trace assessments, schema audit,
@@ -219,7 +268,10 @@ def assess_batch(
     # Assess each trace
     for record in traces:
         raw_path = raw_path_map.get(record.session_id)
-        assessment = assess_trace(record, raw_path, personas)
+        assessment = assess_trace(
+            record, raw_path, personas,
+            enable_judge=enable_judge, judge_model=judge_model,
+        )
         batch.assessments.append(assessment)
 
     # Schema completeness audit across the full batch
@@ -328,8 +380,15 @@ def generate_report(batch: BatchAssessment) -> str:
         lines.append("")
 
         for name, ps in a.persona_scores.items():
-            lines.append(f"**{name}**: {ps.total_score:.0f}% "
-                         f"(pass rate: {ps.pass_rate:.0f}%)")
+            score_parts = f"**{name}**: {ps.total_score:.0f}%"
+            if ps.deterministic_score is not None and ps.judge_score is not None:
+                score_parts += (
+                    f" (deterministic: {ps.deterministic_score:.0f}%, "
+                    f"judge: {ps.judge_score:.0f}%)"
+                )
+            else:
+                score_parts += f" (pass rate: {ps.pass_rate:.0f}%)"
+            lines.append(score_parts)
 
             # Show failing items
             failures = [i for i in ps.items if not i.passed]
@@ -338,6 +397,15 @@ def generate_report(batch: BatchAssessment) -> str:
                     lines.append(f"  - FAIL: {item.name} ({item.evidence})")
                     if item.note:
                         lines.append(f"    Note: {item.note}")
+
+            # Show judge dimensions when available
+            if ps.judge_result is not None and not ps.judge_result.skipped:
+                lines.append(f"  Judge ({ps.judge_result.model_used}):")
+                for dim in ps.judge_result.dimensions:
+                    lines.append(
+                        f"    {dim.name}: {dim.score:.0f}/5 - {dim.rationale}"
+                    )
+
             lines.append("")
 
     # ===== Preservation analysis =====
@@ -491,6 +559,12 @@ def assess_multi_project(
     """
     from ..parsers.claude_code import ClaudeCodeParser
     from ..enrichment.metrics import compute_metrics
+    from ..enrichment.attribution import build_attribution
+    from ..enrichment.dependencies import (
+        infer_language_ecosystem,
+        extract_dependencies_from_imports,
+        extract_dependencies_from_steps,
+    )
 
     if personas is None:
         personas = _get_default_personas()
@@ -524,8 +598,18 @@ def assess_multi_project(
                 if record is None:
                     failed += 1
                     continue
-                # Parser-only enrichment: metrics from token data
+                # Parser-only enrichment (no project directory needed)
                 record.metrics = compute_metrics(record.steps)
+                record.environment.language_ecosystem = infer_language_ecosystem(record.steps)
+                # Infer project name from cwd for internal package filtering
+                cwd = record.metadata.get("cwd", "")
+                proj_basename = cwd.rstrip("/").rsplit("/", 1)[-1] if cwd else None
+                step_deps = extract_dependencies_from_steps(record.steps)
+                import_deps = extract_dependencies_from_imports(
+                    record.steps, project_name=proj_basename,
+                )
+                record.dependencies = sorted(set(step_deps + import_deps))
+                record.attribution = build_attribution(record.steps)
                 record.content_hash = record.compute_content_hash()
                 traces.append(record)
             except Exception as e:

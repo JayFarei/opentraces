@@ -23,7 +23,7 @@ class PersonaThreshold:
 
 DEFAULT_THRESHOLDS = [
     PersonaThreshold("conformance", 70.0, 80.0),
-    PersonaThreshold("training", 40.0, 50.0),
+    PersonaThreshold("training", 40.0, 45.0),  # Lowered: redacted thinking (Opus 4.6) gives 0.5 credit
     PersonaThreshold("rl", None, 40.0),
     PersonaThreshold("analytics", 60.0, 70.0),
     PersonaThreshold("domain", 45.0, 55.0),

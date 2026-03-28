@@ -26,7 +26,9 @@ def _t1_alternating_roles(record: TraceRecord, raw_data: dict | None) -> CheckRe
             evidence=f"{len(steps)} steps, too few to check alternation",
         )
 
-    non_system = [s for s in steps if s.role != "system"]
+    # Filter out system steps AND subagent steps (they're nested execution,
+    # not top-level conversational turns, and break alternation at boundaries)
+    non_system = [s for s in steps if s.role != "system" and s.call_type != "subagent"]
     if len(non_system) < 2:
         return CheckResult(
             passed=True, score=1.0,
@@ -159,17 +161,25 @@ def _t6_reasoning_coverage(record: TraceRecord, raw_data: dict | None) -> CheckR
     if not agent_steps_with_tools:
         return CheckResult(passed=True, score=1.0, evidence="No agent steps with tool calls")
 
-    with_reasoning = sum(
-        1 for s in agent_steps_with_tools
-        if s.reasoning_content and s.reasoning_content.strip()
-    )
-    ratio = with_reasoning / len(agent_steps_with_tools)
+    readable = 0
+    redacted = 0
+    for s in agent_steps_with_tools:
+        if s.reasoning_content and s.reasoning_content.strip():
+            if s.reasoning_content.startswith("[redacted"):
+                redacted += 1
+            else:
+                readable += 1
+
+    # Readable reasoning is full credit, redacted is 0.5 credit
+    # (model DID reason, but content is not available for SFT)
+    effective = readable + (redacted * 0.5)
+    ratio = effective / len(agent_steps_with_tools)
     passed = ratio >= 0.8
     return CheckResult(
         passed=passed,
-        score=round(ratio, 3),
-        evidence=f"{with_reasoning}/{len(agent_steps_with_tools)} agent+tool steps have reasoning ({ratio:.0%})",
-        note="ADP quality gate: >=80% reasoning coverage",
+        score=round(min(ratio, 1.0), 3),
+        evidence=f"{readable} readable + {redacted} redacted / {len(agent_steps_with_tools)} agent+tool steps ({ratio:.0%} effective)",
+        note="ADP quality gate: >=80% reasoning coverage. Redacted thinking counts as 0.5.",
     )
 
 

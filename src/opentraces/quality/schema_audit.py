@@ -290,9 +290,7 @@ class FieldCheckResult:
 
 # Fields known to be not yet implemented in the parser/enrichment pipeline
 _NOT_YET_IMPLEMENTED = {
-    "environment.os",
     "environment.shell",
-    "task.source",
     "task.repository",
     "task.base_commit",
     "security.classifier_version",

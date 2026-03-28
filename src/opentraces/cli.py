@@ -948,6 +948,80 @@ def review(web: bool, port: int, tui: bool) -> None:
         run_cli_review(staging)
 
 
+@main.command()
+@click.option("--judge/--no-judge", default=False, help="Enable LLM judge for qualitative scoring")
+@click.option("--judge-model", default="haiku", type=click.Choice(["haiku", "sonnet", "opus"]),
+              help="Model for LLM judge")
+@click.option("--limit", type=int, default=0, help="Max traces to assess (0=all)")
+def assess(judge: bool, judge_model: str, limit: int) -> None:
+    """Run quality assessment on staged traces."""
+    staging = Path(".opentraces/staging")
+    if not staging.exists():
+        click.echo("No staged traces found. Run 'opentraces parse' first.")
+        emit_json(error_response("NO_TRACES", "assessment", "No staged traces", hint="Run opentraces parse first"))
+        return
+
+    jsonl_files = sorted(staging.glob("*.jsonl"))
+    if not jsonl_files:
+        click.echo("No JSONL files in staging.")
+        emit_json(error_response("NO_TRACES", "assessment", "No JSONL files in staging"))
+        return
+
+    from opentraces_schema import TraceRecord
+    from .quality.engine import assess_batch, generate_report
+
+    traces = []
+    for f in jsonl_files:
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = TraceRecord.model_validate_json(line)
+                traces.append(record)
+            except Exception:
+                continue
+
+    if limit > 0:
+        traces = traces[:limit]
+
+    if not traces:
+        click.echo("No valid traces found.")
+        emit_json(error_response("NO_TRACES", "assessment", "No valid traces"))
+        return
+
+    click.echo(f"Assessing {len(traces)} traces...")
+    if judge:
+        click.echo(f"LLM judge enabled (model: {judge_model})")
+
+    batch = assess_batch(traces, enable_judge=judge, judge_model=judge_model)
+    report = generate_report(batch)
+
+    # Write to .gstack/qa/
+    from datetime import datetime
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    report_dir = Path(".gstack/qa")
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / f"assess-{ts}.md"
+    report_path.write_text(report)
+
+    click.echo(f"\nReport written to {report_path}")
+    click.echo(f"Traces assessed: {len(traces)}")
+    for name, avg in batch.persona_averages.items():
+        click.echo(f"  {name}: {avg:.1f}%")
+
+    emit_json({
+        "status": "ok",
+        "command": "assess",
+        "traces_assessed": len(traces),
+        "report_path": str(report_path),
+        "persona_averages": batch.persona_averages,
+        "judge_enabled": judge,
+        "next_steps": ["Review the report", "Run opentraces push to upload"],
+        "next_command": "opentraces push",
+    })
+
+
 def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
     """Resolve the HF dataset repo_id using priority chain.
 

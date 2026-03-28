@@ -1,7 +1,7 @@
 ---
 title: "feat: Hybrid deterministic + LLM persona rubrics"
 type: feat
-status: active
+status: completed
 date: 2026-03-28
 origin: kb/plans/2026-03-28-001-feat-persona-rubric-harness-plan.md
 ---
