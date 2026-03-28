@@ -13,11 +13,11 @@ function ResizeHandle({ direction = "horizontal" }: { direction?: "horizontal" |
 interface AppLayoutProps {
   sessionsPanel: ReactNode;
   tracePanel: ReactNode;
-  timelineStrip: ReactNode;
+  contextPanel: ReactNode;
   detailPanel: ReactNode;
 }
 
-export function AppLayout({ sessionsPanel, tracePanel, timelineStrip, detailPanel }: AppLayoutProps) {
+export function AppLayout({ sessionsPanel, tracePanel, contextPanel, detailPanel }: AppLayoutProps) {
   return (
     <div className="flex-1 overflow-hidden">
       <Group orientation="horizontal" id="opentraces-main">
@@ -25,17 +25,17 @@ export function AppLayout({ sessionsPanel, tracePanel, timelineStrip, detailPane
           {sessionsPanel}
         </Panel>
         <ResizeHandle />
-        <Panel defaultSize={25} minSize={18} id="trace">
+        <Panel defaultSize={30} minSize={20} id="trace">
           {tracePanel}
         </Panel>
         <ResizeHandle />
-        <Panel defaultSize={55} minSize={30} id="right">
+        <Panel defaultSize={50} minSize={30} id="right">
           <Group orientation="vertical" id="opentraces-right">
-            <Panel defaultSize={25} minSize={15} id="timeline">
-              {timelineStrip}
+            <Panel defaultSize={30} minSize={15} id="context">
+              {contextPanel}
             </Panel>
             <ResizeHandle direction="vertical" />
-            <Panel defaultSize={75} id="detail">
+            <Panel defaultSize={70} id="detail">
               {detailPanel}
             </Panel>
           </Group>

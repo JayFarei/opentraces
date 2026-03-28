@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useSelection } from "../../contexts/SelectionContext";
 import { useTraceData } from "../../hooks/useTraceData";
 import { TraceTree } from "./TraceTree";
+import { ContextFlow } from "./ContextFlow";
 
-type Tab = "tree" | "timeline" | "search";
+type Tab = "tree" | "context" | "search";
 
 export function TracePanel() {
   const { selectedSessionId } = useSelection();
@@ -34,7 +35,7 @@ export function TracePanel() {
     );
   }
 
-  const tabs: Tab[] = ["tree", "timeline", "search"];
+  const tabs: Tab[] = ["tree", "context", "search"];
 
   return (
     <div className="h-full flex flex-col bg-[var(--bg)]">
@@ -61,11 +62,7 @@ export function TracePanel() {
 
       <div className="flex-1 overflow-hidden">
         {activeTab === "tree" && <TraceTree tree={tree} />}
-        {activeTab === "timeline" && (
-          <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)]">
-            timeline view
-          </div>
-        )}
+        {activeTab === "context" && <ContextFlow tree={tree} />}
         {activeTab === "search" && (
           <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)]">
             search

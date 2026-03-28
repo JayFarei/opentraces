@@ -123,9 +123,11 @@ describe("buildTree", () => {
   });
 
   it("uses tool_name as label for tool nodes", () => {
+    // Step with content keeps tool calls as children
     const steps = [
       makeStep({
         step_index: 0,
+        content: "Making an edit",
         tool_calls: [
           { tool_call_id: "tc1", tool_name: "Edit", input: {}, duration_ms: null },
         ],
@@ -133,6 +135,26 @@ describe("buildTree", () => {
     ];
     const tree = buildTree(steps);
     expect(tree[0]!.children[0]!.label).toBe("Edit");
+  });
+
+  it("merges contentless step with its tool calls", () => {
+    // Step with no content and only tool calls promotes tools to root
+    const steps = [
+      makeStep({
+        step_index: 0,
+        content: null,
+        tool_calls: [
+          { tool_call_id: "tc1", tool_name: "Read", input: {}, duration_ms: null },
+          { tool_call_id: "tc2", tool_name: "Grep", input: {}, duration_ms: null },
+        ],
+      }),
+    ];
+    const tree = buildTree(steps);
+    // Tool calls promoted to root level, no wrapper step node
+    expect(tree).toHaveLength(2);
+    expect(tree[0]!.type).toBe("tool");
+    expect(tree[0]!.label).toBe("Read");
+    expect(tree[1]!.label).toBe("Grep");
   });
 
   it("propagates security flags to hasFlag", () => {

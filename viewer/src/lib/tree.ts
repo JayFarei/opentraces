@@ -105,33 +105,63 @@ export function buildTree(
     }
   }
 
-  function buildNode(step: Step, depth: number): TreeNode {
-    const children: TreeNode[] = [];
+  /** Check if a step has no meaningful content (empty or just system noise). */
+  function isContentless(step: Step): boolean {
+    if (!step.content) return true;
+    const cleaned = summarizeContent(step.content, 10);
+    return cleaned.length === 0;
+  }
 
-    // Child steps
+  function buildToolNode(step: Step, tc: ToolCall, index: number, depth: number): TreeNode {
+    const obs = step.observations.find(
+      (o) => o.source_call_id === tc.tool_call_id,
+    );
+    return {
+      id: toolNodeId(step.step_index, index),
+      type: "tool",
+      label: toolLabel(tc),
+      depth,
+      children: [],
+      step, // link back to parent step for metadata access
+      toolCall: tc,
+      observation: obs,
+      hasFlag: false,
+      hasRedaction: false,
+    };
+  }
+
+  function buildNode(step: Step, depth: number): TreeNode | TreeNode[] {
     const childSteps = childrenOf.get(step.step_index) ?? [];
     childSteps.sort((a, b) => a.step_index - b.step_index);
-    for (const child of childSteps) {
-      children.push(buildNode(child, depth + 1));
+
+    // Merge optimization: if this step has no content and ONLY has tool calls
+    // (no child steps), promote tool calls to this level instead of nesting
+    if (
+      isContentless(step) &&
+      step.tool_calls.length > 0 &&
+      childSteps.length === 0 &&
+      step.role === "agent"
+    ) {
+      return step.tool_calls.map((tc, i) =>
+        buildToolNode(step, tc, i, depth),
+      );
     }
 
-    // Tool call children
+    const children: TreeNode[] = [];
+
+    // Child steps (recursively, may return arrays from merging)
+    for (const child of childSteps) {
+      const result = buildNode(child, depth + 1);
+      if (Array.isArray(result)) {
+        children.push(...result);
+      } else {
+        children.push(result);
+      }
+    }
+
+    // Tool call children (only if step has content, otherwise they were promoted)
     for (let i = 0; i < step.tool_calls.length; i++) {
-      const tc = step.tool_calls[i]!;
-      const obs = step.observations.find(
-        (o) => o.source_call_id === tc.tool_call_id,
-      );
-      children.push({
-        id: toolNodeId(step.step_index, i),
-        type: "tool",
-        label: toolLabel(tc),
-        depth: depth + 1,
-        children: [],
-        toolCall: tc,
-        observation: obs,
-        hasFlag: false,
-        hasRedaction: false,
-      });
+      children.push(buildToolNode(step, step.tool_calls[i]!, i, depth + 1));
     }
 
     return {
@@ -147,7 +177,16 @@ export function buildTree(
   }
 
   rootSteps.sort((a, b) => a.step_index - b.step_index);
-  return rootSteps.map((s) => buildNode(s, 0));
+  const result: TreeNode[] = [];
+  for (const s of rootSteps) {
+    const node = buildNode(s, 0);
+    if (Array.isArray(node)) {
+      result.push(...node);
+    } else {
+      result.push(node);
+    }
+  }
+  return result;
 }
 
 /**

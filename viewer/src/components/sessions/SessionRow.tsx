@@ -1,5 +1,5 @@
 import { useSelection } from "../../contexts/SelectionContext";
-import { cleanContent } from "../../lib/format";
+import { cleanSessionName } from "../../lib/format";
 import type { SessionListItem } from "../../types/trace";
 
 interface SessionRowProps {
@@ -23,7 +23,7 @@ export function SessionRow({ session }: SessionRowProps) {
       }`}
     >
       <div className="text-[11px] font-[family-name:var(--font-mono)] text-[var(--text)] truncate leading-tight">
-        {cleanContent(session.task_description) || "untitled session"}
+        {cleanSessionName(session.task_description, session.timestamp)}
       </div>
       <div className="flex items-center gap-2 mt-0.5">
         <span className="text-[9px] font-[family-name:var(--font-mono)] text-[var(--text-muted)]">
