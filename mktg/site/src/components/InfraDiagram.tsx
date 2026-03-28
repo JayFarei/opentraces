@@ -35,10 +35,6 @@ export default function InfraDiagram() {
   return (
     <section>
       <SectionRule label="how it works" />
-      <div className="section-title" style={{ textAlign: "center" }}>How It Works</div>
-      <p className="section-sub" style={{ textAlign: "center", margin: "8px auto 40px", maxWidth: 520 }}>
-        Hook captures sessions automatically. Review locally, push to HF Hub as private or public datasets.
-      </p>
 
       <div className="arch">
         {/* Source agents row */}
