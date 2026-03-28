@@ -581,7 +581,8 @@ def status() -> None:
     if remote:
         click.echo(f"remote: {remote}")
     else:
-        click.echo("remote: not configured")
+        # Show the default that will be used on push
+        click.echo("remote: <username>/opentraces (default, set on first push)")
     click.echo()
 
     # Load staged traces
@@ -934,13 +935,34 @@ def review(web: bool, port: int, tui: bool) -> None:
         run_cli_review(staging)
 
 
+def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
+    """Resolve the HF dataset repo_id using priority chain.
+
+    Priority:
+      1. --repo flag (highest)
+      2. .opentraces/config.yml 'remote' field
+      3. Default: {username}/opentraces
+    """
+    if repo_flag:
+        return repo_flag
+
+    from .config import load_project_config
+    proj_config = load_project_config(Path.cwd())
+    config_remote = proj_config.get("remote")
+    if config_remote:
+        return config_remote
+
+    return f"{username}/opentraces"
+
+
 @main.command()
 @click.option("--approved-only", is_flag=True, help="Only push approved traces")
 @click.option("--private", is_flag=True, help="Force private visibility (overrides config)")
 @click.option("--public", is_flag=True, help="Force public visibility (overrides config)")
 @click.option("--publish", is_flag=True, help="Change an existing private dataset to public (no upload)")
 @click.option("--gated", is_flag=True, help="Enable gated access (auto-approve) on the dataset")
-def push(approved_only: bool, private: bool, public: bool, publish: bool, gated: bool) -> None:
+@click.option("--repo", default=None, help="HF dataset repo (default: username/opentraces)")
+def push(approved_only: bool, private: bool, public: bool, publish: bool, gated: bool, repo: str | None) -> None:
     """Upload approved traces to HuggingFace Hub."""
     from .config import (
         get_dataset_name, get_project_staging_dir,
@@ -971,9 +993,8 @@ def push(approved_only: bool, private: bool, public: bool, publish: bool, gated:
         click.echo(f"Could not get HF username: {e}")
         sys.exit(4)
 
-    # Derive dataset name from project directory
-    project_dir_name = Path.cwd().name
-    repo_id = f"{username}/opentraces-{project_dir_name}"
+    # Resolve repo_id: --repo flag > config remote > default
+    repo_id = _resolve_repo_id(username, repo)
 
     # Handle --publish: just change visibility, no upload
     if publish:

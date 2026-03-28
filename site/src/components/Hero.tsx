@@ -51,7 +51,7 @@ function StatusContent() {
       <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces status</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  my-project (tier 2, automated)</span></span>
-      <span className="terminal-line"><span className="di">  remote: </span><span className="s">jayfarei/opentraces-my-project</span></span>
+      <span className="terminal-line"><span className="di">  remote: </span><span className="s">jayfarei/opentraces</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  </span><span className="n">3</span> <span className="di">sessions staged</span></span>
       <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 2h ago    </span><span className="s">{"\u201C"}refactor auth middleware{"\u201D"}</span>   <span className="n">47</span> <span className="di">steps</span>  <span className="di">0 flags</span></span>
@@ -92,7 +92,7 @@ function PushContent() {
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  Pushing 3 approved sessions (private)...</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Pushed {"\u2192"}</span> <span className="s">jayfarei/opentraces-my-project</span> <span className="di">(private)</span></span>
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Pushed {"\u2192"}</span> <span className="s">jayfarei/opentraces</span> <span className="di">(private)</span></span>
       <span className="terminal-line"><span className="di">    135 steps {"\u00B7"} 42,891 tokens {"\u00B7"} $3.21 estimated</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  Run </span><span className="c">opentraces push --publish</span><span className="di"> to make public.</span></span>
