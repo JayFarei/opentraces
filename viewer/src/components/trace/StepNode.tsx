@@ -42,24 +42,33 @@ const ROLE_ICON_MAP: Record<TreeNode["type"], ComponentType<AnimatedIconProps>> 
   subagent: BrainCircuitIcon,
 };
 
+/**
+ * Color system: each context source gets ONE color, no collisions.
+ *   user = blue
+ *   agent/LLM = purple (reasoning, distinct from tools)
+ *   proj/local = green (file operations)
+ *   ext/network = orange/accent
+ *   subagent = cyan
+ */
 const ROLE_COLORS: Record<TreeNode["type"], string> = {
   user: "var(--blue)",
-  agent: "var(--green)",
-  tool: "var(--purple, #A855F7)",
+  agent: "var(--purple, #A855F7)",
+  tool: "var(--text-secondary)",
   system: "var(--text-muted)",
   subagent: "var(--cyan)",
 };
 
 const TOOL_COLORS: Record<string, string> = {
-  Read: "var(--blue)",
+  Read: "var(--green)",
   Edit: "var(--yellow, #EAB308)",
-  Write: "var(--accent)",
+  Write: "var(--yellow, #EAB308)",
   Bash: "var(--green)",
-  Grep: "var(--purple, #A855F7)",
-  Glob: "var(--cyan)",
-  WebSearch: "var(--blue)",
-  WebFetch: "var(--blue)",
+  Grep: "var(--green)",
+  Glob: "var(--green)",
+  WebSearch: "var(--accent)",
+  WebFetch: "var(--accent)",
   Agent: "var(--cyan)",
+  ToolSearch: "var(--accent)",
 };
 
 /** Classify a node's context source for the source tag. */
@@ -83,7 +92,7 @@ function classifySource(node: TreeNode): ContextSource {
 
 const SOURCE_COLORS: Record<ContextSource, string> = {
   user: "var(--blue)",
-  agent: "var(--green)",
+  agent: "var(--purple, #A855F7)",
   proj: "var(--green)",
   ext: "var(--accent)",
 };
