@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useSelection } from "../../contexts/SelectionContext";
 import { useTraceData } from "../../hooks/useTraceData";
 import { TraceTree } from "./TraceTree";
@@ -6,9 +6,19 @@ import { ContextFlow } from "./ContextFlow";
 
 type Tab = "tree" | "context" | "search";
 
+/** @deprecated Use TraceView instead. Kept for backward compatibility. */
 export function TracePanel() {
   const { selectedSessionId } = useSelection();
   const { data: trace, tree, isLoading, error } = useTraceData(selectedSessionId);
+
+  const traceStartMs = useMemo(() => {
+    if (!trace?.timestamp_start) return null;
+    try {
+      return new Date(trace.timestamp_start).getTime();
+    } catch {
+      return null;
+    }
+  }, [trace?.timestamp_start]);
   const [activeTab, setActiveTab] = useState<Tab>("tree");
 
   if (!selectedSessionId) {
@@ -61,7 +71,7 @@ export function TracePanel() {
       </div>
 
       <div className="flex-1 overflow-hidden">
-        {activeTab === "tree" && <TraceTree tree={tree} />}
+        {activeTab === "tree" && <TraceTree tree={tree} traceStartMs={traceStartMs} />}
         {activeTab === "context" && <ContextFlow tree={tree} />}
         {activeTab === "search" && (
           <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)]">

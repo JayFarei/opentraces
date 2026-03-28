@@ -6,9 +6,10 @@ import type { TreeNode } from "../../types/trace";
 
 interface TraceTreeProps {
   tree: TreeNode[];
+  traceStartMs: number | null;
 }
 
-export function TraceTree({ tree }: TraceTreeProps) {
+export function TraceTree({ tree, traceStartMs }: TraceTreeProps) {
   const parentRef = useRef<HTMLDivElement>(null);
 
   const flatNodes = useMemo(() => flattenTree(tree), [tree]);
@@ -47,7 +48,7 @@ export function TraceTree({ tree }: TraceTreeProps) {
                 transform: `translateY(${virtualRow.start}px)`,
               }}
             >
-              <StepNode node={node} />
+              <StepNode node={node} traceStartMs={traceStartMs} />
             </div>
           );
         })}

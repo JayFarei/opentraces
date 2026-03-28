@@ -1,6 +1,6 @@
 import { useRef, type ComponentType } from "react";
 import { useSelection } from "../../contexts/SelectionContext";
-import { formatTokens, formatDuration } from "../../lib/format";
+import { formatTokens, formatDuration, formatTimeOffset } from "../../lib/format";
 import type { TreeNode } from "../../types/trace";
 import type { AnimatedIconProps, AnimatedIconHandle } from "../icons/types";
 import {
@@ -62,11 +62,38 @@ const TOOL_COLORS: Record<string, string> = {
   Agent: "var(--cyan)",
 };
 
-interface StepNodeProps {
-  node: TreeNode;
+/** Classify a node's context source for the source tag. */
+type ContextSource = "user" | "agent" | "proj" | "ext";
+
+function classifySource(node: TreeNode): ContextSource {
+  if (node.type === "user") return "user";
+
+  if (node.type === "tool" && node.toolCall) {
+    const tool = node.toolCall.tool_name;
+    if (["Read", "Edit", "Write", "Glob", "Grep", "Bash"].includes(tool)) return "proj";
+    if (["WebSearch", "WebFetch"].includes(tool)) return "ext";
+  }
+
+  if (node.type === "subagent") return "agent";
+  if (node.type === "agent") return "agent";
+  if (node.type === "system") return "proj";
+
+  return "agent";
 }
 
-export function StepNode({ node }: StepNodeProps) {
+const SOURCE_COLORS: Record<ContextSource, string> = {
+  user: "var(--blue)",
+  agent: "var(--green)",
+  proj: "var(--green)",
+  ext: "var(--accent)",
+};
+
+interface StepNodeProps {
+  node: TreeNode;
+  traceStartMs: number | null;
+}
+
+export function StepNode({ node, traceStartMs }: StepNodeProps) {
   const { selectedNodeId, setSelectedNodeId } = useSelection();
   const iconRef = useRef<AnimatedIconHandle>(null);
   const isSelected = selectedNodeId === node.id;
@@ -90,6 +117,25 @@ export function StepNode({ node }: StepNodeProps) {
     : null;
   const duration = node.toolCall?.duration_ms ?? null;
 
+  // Time offset: only on step-level nodes (not tool calls without their own step)
+  const isStepLevel = node.step && !node.toolCall;
+  let timeOffsetStr: string | null = null;
+  if (isStepLevel && traceStartMs !== null && node.step?.timestamp) {
+    try {
+      const stepMs = new Date(node.step.timestamp).getTime();
+      const offsetMs = stepMs - traceStartMs;
+      if (offsetMs >= 0) {
+        timeOffsetStr = formatTimeOffset(offsetMs);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Source tag
+  const source = classifySource(node);
+  const sourceColor = SOURCE_COLORS[source];
+
   return (
     <button
       onClick={() => setSelectedNodeId(node.id)}
@@ -100,11 +146,28 @@ export function StepNode({ node }: StepNodeProps) {
           ? "bg-[var(--surface-hover)] border-l-2 border-l-[var(--accent)]"
           : "hover:bg-[var(--surface-hover)] border-l-2 border-l-transparent"
       } ${node.type === "subagent" ? "!border-l-2 !border-l-[var(--cyan)]" : ""}`}
-      style={{ paddingLeft: `${node.depth * 16 + 8}px` }}
     >
+      {/* Time column: fixed 40px */}
+      <span className="flex-none w-[40px] text-[9px] font-[family-name:var(--font-mono)] text-[var(--text-dim)] tabular-nums text-right pr-2">
+        {timeOffsetStr ?? ""}
+      </span>
+
+      {/* Source tag: fixed 44px */}
+      <span
+        className="flex-none w-[44px] text-[9px] font-[family-name:var(--font-mono)] tabular-nums"
+        style={{ color: sourceColor }}
+      >
+        [{source}]
+      </span>
+
+      {/* Indent spacer for depth */}
+      {node.depth > 0 && (
+        <span className="flex-none" style={{ width: `${node.depth * 14}px` }} />
+      )}
+
       {/* Animated icon */}
-      <span className="flex-none flex items-center justify-center w-5 h-5 mr-1.5" style={{ color: iconColor }}>
-        <IconComponent ref={iconRef} size={14} color={iconColor} strokeWidth={2} />
+      <span className="flex-none flex items-center justify-center w-4 h-4 mr-1.5" style={{ color: iconColor }}>
+        <IconComponent ref={iconRef} size={13} color={iconColor} strokeWidth={2} />
       </span>
 
       {/* Tool name (colored) + label */}
@@ -143,7 +206,7 @@ export function StepNode({ node }: StepNodeProps) {
         </span>
       )}
 
-      {/* Metrics (Langfuse-style: inline duration + tokens) */}
+      {/* Metrics (right-aligned: duration + tokens) */}
       <span className="flex items-center gap-1.5 flex-none text-[9px] font-[family-name:var(--font-mono)] text-[var(--text-muted)] ml-2 tabular-nums">
         {duration !== null && (
           <span>{formatDuration(duration)}</span>

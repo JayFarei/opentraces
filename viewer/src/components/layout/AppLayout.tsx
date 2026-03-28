@@ -1,5 +1,8 @@
 import { Panel, Group, Separator } from "react-resizable-panels";
-import type { ReactNode } from "react";
+import { SessionSidebar } from "../sessions/SessionSidebar";
+import { SessionHeader } from "./SessionHeader";
+import { TraceView } from "../trace/TraceView";
+import { DetailPanel } from "../detail/DetailPanel";
 
 function ResizeHandle({ direction = "horizontal" }: { direction?: "horizontal" | "vertical" }) {
   const isHorizontal = direction === "horizontal";
@@ -10,35 +13,39 @@ function ResizeHandle({ direction = "horizontal" }: { direction?: "horizontal" |
   );
 }
 
-interface AppLayoutProps {
-  sessionsPanel: ReactNode;
-  tracePanel: ReactNode;
-  contextPanel: ReactNode;
-  detailPanel: ReactNode;
-}
-
-export function AppLayout({ sessionsPanel, tracePanel, contextPanel, detailPanel }: AppLayoutProps) {
+export function AppLayout() {
   return (
     <div className="flex-1 overflow-hidden">
       <Group orientation="horizontal" id="opentraces-main">
-        <Panel defaultSize={20} minSize={15} id="sessions">
-          {sessionsPanel}
+        {/* Session sidebar: 15%, narrow */}
+        <Panel defaultSize={15} minSize={10} maxSize={25} id="sessions">
+          <SessionSidebar />
         </Panel>
         <ResizeHandle />
-        <Panel defaultSize={30} minSize={20} id="trace">
-          {tracePanel}
-        </Panel>
-        <ResizeHandle />
-        <Panel defaultSize={50} minSize={30} id="right">
-          <Group orientation="vertical" id="opentraces-right">
-            <Panel defaultSize={30} minSize={15} id="context">
-              {contextPanel}
-            </Panel>
-            <ResizeHandle direction="vertical" />
-            <Panel defaultSize={70} id="detail">
-              {detailPanel}
-            </Panel>
-          </Group>
+
+        {/* Main content: trace hero + detail */}
+        <Panel defaultSize={85} minSize={60} id="main-content">
+          <div className="h-full flex flex-col overflow-hidden">
+            {/* Session stats header */}
+            <SessionHeader />
+
+            {/* Trace + Detail vertical split */}
+            <div className="flex-1 overflow-hidden">
+              <Group orientation="vertical" id="opentraces-vertical">
+                {/* Trace view: the hero */}
+                <Panel defaultSize={70} minSize={30} id="trace-view">
+                  <TraceView />
+                </Panel>
+
+                <ResizeHandle direction="vertical" />
+
+                {/* Detail panel: below trace, always present */}
+                <Panel defaultSize={30} minSize={10} id="detail-panel">
+                  <DetailPanel />
+                </Panel>
+              </Group>
+            </div>
+          </div>
         </Panel>
       </Group>
     </div>
