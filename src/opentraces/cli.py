@@ -923,7 +923,20 @@ def review(web: bool, port: int, tui: bool) -> None:
     if web:
         try:
             from .review.web.app import create_app
-            app = create_app(str(staging))
+            from .config import get_project_state_path
+            project_state = get_project_state_path(Path.cwd())
+            state_path_str = str(project_state) if project_state.parent.exists() else None
+
+            # Resolve viewer dist for SPA serving
+            viewer_dist = Path(__file__).parent.parent.parent / "viewer" / "dist"
+            if not viewer_dist.exists():
+                viewer_dist = None
+
+            app = create_app(
+                str(staging),
+                state_path=state_path_str,
+                viewer_dist=str(viewer_dist) if viewer_dist else None,
+            )
             click.echo(f"Starting web review at http://localhost:{port}")
             click.echo("Press Ctrl+C to stop.")
             app.run(host="127.0.0.1", port=port, debug=False)

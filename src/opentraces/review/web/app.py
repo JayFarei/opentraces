@@ -16,18 +16,22 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_from_directory
 
 from ...config import STAGING_DIR
 from ...state import StateManager, TraceStatus
 
 # StateManager for persistent review decisions
 _state_manager: StateManager | None = None
+_custom_state_path: Path | None = None
 
 def _get_state() -> StateManager:
     global _state_manager
     if _state_manager is None:
-        _state_manager = StateManager()
+        if _custom_state_path is not None:
+            _state_manager = StateManager(state_path=_custom_state_path)
+        else:
+            _state_manager = StateManager()
     return _state_manager
 
 # In-memory review state as fallback for display (NOT authoritative for push)
@@ -352,8 +356,48 @@ def _get_redacted_steps(trace_id: str) -> set[int]:
     return set()
 
 
-def create_app(staging_dir: str = None) -> Flask:
+def _stage_from_status(status: TraceStatus) -> str:
+    """Map TraceStatus to a stage bucket for the React visualizer."""
+    mapping = {
+        TraceStatus.DISCOVERED: "unstaged",
+        TraceStatus.PARSED: "unstaged",
+        TraceStatus.STAGED: "staged",
+        TraceStatus.REVIEWING: "staged",
+        TraceStatus.COMMITTED: "committed",
+        TraceStatus.APPROVED: "committed",  # backward compat
+        TraceStatus.UPLOADED: "pushed",
+        TraceStatus.REJECTED: "rejected",
+    }
+    return mapping.get(status, "unstaged")
+
+
+def _is_sample_data(traces: list[dict[str, Any]], staging_path: Path) -> bool:
+    """Check if traces are sample data (no corresponding JSONL files on disk)."""
+    if not traces:
+        return True
+    # Sample traces have no file on disk
+    for t in traces[:3]:
+        trace_id = t.get("trace_id", "")
+        jsonl_file = staging_path / f"{trace_id}.jsonl"
+        if jsonl_file.exists():
+            return False
+    # Also check if any JSONL files exist at all
+    if staging_path.exists() and list(staging_path.glob("*.jsonl")):
+        return False
+    return True
+
+
+def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str = None) -> Flask:
     """Create the Flask review app."""
+    global _custom_state_path, _state_manager
+
+    # Reset state manager when custom path is provided
+    if state_path is not None:
+        _custom_state_path = Path(state_path)
+        _state_manager = None  # Force re-creation with new path
+    else:
+        _custom_state_path = None
+
     app = Flask(
         __name__,
         template_folder=str(Path(__file__).parent / "templates"),
@@ -362,88 +406,107 @@ def create_app(staging_dir: str = None) -> Flask:
     app.secret_key = "opentraces-review-" + uuid.uuid4().hex[:8]
 
     staging_path = Path(staging_dir) if staging_dir else STAGING_DIR
+    viewer_dist_path = Path(viewer_dist) if viewer_dist else None
 
     def _traces() -> list[dict[str, Any]]:
         return _load_traces(staging_path)
 
     # --- Page routes ---
 
-    @app.route("/")
-    def index():
-        """Session list page."""
-        traces = _traces()
-        # Extract filter options
-        projects = sorted({
-            t.get("metadata", {}).get("project", "unknown")
-            for t in traces
-        })
-        models = sorted({
-            t.get("agent", {}).get("model", "unknown")
-            for t in traces
-        })
+    if viewer_dist_path and viewer_dist_path.exists():
+        # SPA mode: serve the React viewer
+        @app.route("/")
+        def serve_index():
+            return send_from_directory(str(viewer_dist_path), "index.html")
 
-        # Apply filters
-        project_filter = request.args.get("project", "")
-        model_filter = request.args.get("model", "")
-        status_filter = request.args.get("status", "")
+        @app.route("/assets/<path:filename>")
+        def serve_assets(filename):
+            return send_from_directory(str(viewer_dist_path / "assets"), filename)
 
-        filtered = traces
-        if project_filter:
-            filtered = [
-                t for t in filtered
-                if t.get("metadata", {}).get("project") == project_filter
-            ]
-        if model_filter:
-            filtered = [
-                t for t in filtered
-                if t.get("agent", {}).get("model") == model_filter
-            ]
-        if status_filter:
-            filtered = [
-                t for t in filtered
-                if _get_review_status(t["trace_id"]) == status_filter
-            ]
+        # Catch-all for SPA client-side routing (but not API routes)
+        @app.errorhandler(404)
+        def not_found(e):
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "not found"}), 404
+            return send_from_directory(str(viewer_dist_path), "index.html")
+    else:
+        # Template mode: serve Jinja2 templates (legacy)
+        @app.route("/")
+        def index():
+            """Session list page."""
+            traces = _traces()
+            # Extract filter options
+            projects = sorted({
+                t.get("metadata", {}).get("project", "unknown")
+                for t in traces
+            })
+            models = sorted({
+                t.get("agent", {}).get("model", "unknown")
+                for t in traces
+            })
 
-        # Enrich with review status
-        for t in filtered:
-            t["_review_status"] = _get_review_status(t["trace_id"])
-            t["_security_flag_count"] = len(t.get("_security_flags", []))
+            # Apply filters
+            project_filter = request.args.get("project", "")
+            model_filter = request.args.get("model", "")
+            status_filter = request.args.get("status", "")
 
-        return render_template(
-            "sessions.html",
-            traces=filtered,
-            total_count=len(traces),
-            projects=projects,
-            models=models,
-            project_filter=project_filter,
-            model_filter=model_filter,
-            status_filter=status_filter,
-        )
+            filtered = traces
+            if project_filter:
+                filtered = [
+                    t for t in filtered
+                    if t.get("metadata", {}).get("project") == project_filter
+                ]
+            if model_filter:
+                filtered = [
+                    t for t in filtered
+                    if t.get("agent", {}).get("model") == model_filter
+                ]
+            if status_filter:
+                filtered = [
+                    t for t in filtered
+                    if _get_review_status(t["trace_id"]) == status_filter
+                ]
 
-    @app.route("/session/<trace_id>")
-    def session_detail(trace_id: str):
-        """Session detail page."""
-        traces = _traces()
-        trace = None
-        for t in traces:
-            if t["trace_id"] == trace_id:
-                trace = t
-                break
+            # Enrich with review status
+            for t in filtered:
+                t["_review_status"] = _get_review_status(t["trace_id"])
+                t["_security_flag_count"] = len(t.get("_security_flags", []))
 
-        if trace is None:
-            return "Session not found", 404
+            return render_template(
+                "sessions.html",
+                traces=filtered,
+                total_count=len(traces),
+                projects=projects,
+                models=models,
+                project_filter=project_filter,
+                model_filter=model_filter,
+                status_filter=status_filter,
+            )
 
-        trace["_review_status"] = _get_review_status(trace_id)
-        trace["_redacted_steps"] = _get_redacted_steps(trace_id)
+        @app.route("/session/<trace_id>")
+        def session_detail(trace_id: str):
+            """Session detail page."""
+            traces = _traces()
+            trace = None
+            for t in traces:
+                if t["trace_id"] == trace_id:
+                    trace = t
+                    break
 
-        return render_template("session_detail.html", trace=trace)
+            if trace is None:
+                return "Session not found", 404
 
-    @app.route("/stats")
-    def stats_page():
-        """Stats dashboard page."""
-        traces = _traces()
-        stats = _compute_stats(traces)
-        return render_template("stats.html", stats=stats)
+            trace["_review_status"] = _get_review_status(trace_id)
+            trace["_redacted_steps"] = _get_redacted_steps(trace_id)
+
+            return render_template("session_detail.html", trace=trace)
+
+        @app.route("/stats")
+        def stats_page():
+            """Stats dashboard page."""
+            traces = _traces()
+            stats = _compute_stats(traces)
+            return render_template("stats.html", stats=stats)
 
     # --- API routes ---
 
@@ -451,10 +514,19 @@ def create_app(staging_dir: str = None) -> Flask:
     def api_sessions():
         """JSON API for session list."""
         traces = _traces()
+        state = _get_state()
         sessions = []
         for t in traces:
+            trace_id = t["trace_id"]
+            entry = state.get_trace(trace_id)
+            status_enum = entry.status if entry else TraceStatus.PARSED
+            if isinstance(status_enum, str):
+                try:
+                    status_enum = TraceStatus(status_enum)
+                except ValueError:
+                    status_enum = TraceStatus.PARSED
             sessions.append({
-                "trace_id": t["trace_id"],
+                "trace_id": trace_id,
                 "task": (t.get("task", {}).get("description") or "")[:100],
                 "model": t.get("agent", {}).get("model", "unknown"),
                 "agent": t.get("agent", {}).get("name", "unknown"),
@@ -463,7 +535,8 @@ def create_app(staging_dir: str = None) -> Flask:
                     len(s.get("tool_calls", [])) for s in t.get("steps", [])
                 ),
                 "timestamp": t.get("timestamp_start"),
-                "status": _get_review_status(t["trace_id"]),
+                "status": _get_review_status(trace_id),
+                "_stage": _stage_from_status(status_enum),
                 "security_flags": len(t.get("_security_flags", [])),
                 "project": t.get("metadata", {}).get("project", "unknown"),
             })
@@ -567,10 +640,167 @@ def create_app(staging_dir: str = None) -> Flask:
             "step_index": step_index,
         })
 
+    @app.route("/api/session/<trace_id>/detail")
+    def api_session_detail(trace_id: str):
+        """Return full trace JSON for a single session."""
+        traces = _traces()
+        trace = None
+        for t in traces:
+            if t["trace_id"] == trace_id:
+                trace = t
+                break
+        if trace is None:
+            return jsonify({"error": "Session not found"}), 404
+
+        state = _get_state()
+        entry = state.get_trace(trace_id)
+        status_enum = entry.status if entry else TraceStatus.PARSED
+        if isinstance(status_enum, str):
+            try:
+                status_enum = TraceStatus(status_enum)
+            except ValueError:
+                status_enum = TraceStatus.PARSED
+
+        result = dict(trace)
+        result["_stage"] = _stage_from_status(status_enum)
+        return jsonify(result)
+
+    @app.route("/api/session/<trace_id>/stage", methods=["POST"])
+    def api_stage(trace_id: str):
+        """Transition a session to STAGED status."""
+        state = _get_state()
+        state.set_trace_status(trace_id, TraceStatus.STAGED, session_id=trace_id)
+        return jsonify({"status": "staged"})
+
+    @app.route("/api/session/<trace_id>/unstage", methods=["POST"])
+    def api_unstage(trace_id: str):
+        """Revert a session to PARSED status."""
+        state = _get_state()
+        state.set_trace_status(trace_id, TraceStatus.PARSED, session_id=trace_id)
+        return jsonify({"status": "unstaged"})
+
+    @app.route("/api/commit", methods=["POST"])
+    def api_commit():
+        """Create a commit group from staged sessions."""
+        data = request.get_json(silent=True) or {}
+        session_ids = data.get("session_ids", [])
+        message = data.get("message", "")
+
+        if not session_ids:
+            return jsonify({"error": "No session_ids provided"}), 400
+
+        # Validate all sessions exist and are in STAGED/REVIEWING status
+        traces = _traces()
+        trace_ids = {t["trace_id"] for t in traces}
+        state = _get_state()
+
+        for sid in session_ids:
+            if sid not in trace_ids:
+                return jsonify({"error": f"Session {sid} not found"}), 404
+            entry = state.get_trace(sid)
+            if entry:
+                status_val = entry.status
+                if isinstance(status_val, str):
+                    try:
+                        status_val = TraceStatus(status_val)
+                    except ValueError:
+                        pass
+                if status_val not in (TraceStatus.STAGED, TraceStatus.REVIEWING):
+                    return jsonify({"error": f"Session {sid} is not staged (status: {status_val})"}), 400
+
+        # Create the commit group
+        commit_id = state.create_commit_group(session_ids, message)
+        group = state.get_commit_group(commit_id)
+
+        # Transition each session to COMMITTED
+        for sid in session_ids:
+            state.set_trace_status(sid, TraceStatus.COMMITTED, session_id=sid)
+
+        return jsonify({
+            "commit_id": commit_id,
+            "session_count": len(session_ids),
+            "created_at": group.created_at if group else "",
+        })
+
+    @app.route("/api/session/<trace_id>/redaction-preview")
+    def api_redaction_preview(trace_id: str):
+        """Preview redaction for a trace at a given security tier."""
+        tier = request.args.get("tier", "3")
+        try:
+            tier_int = int(tier)
+        except ValueError:
+            return jsonify({"error": "Invalid tier, must be 1, 2, or 3"}), 400
+
+        traces = _traces()
+        trace = None
+        for t in traces:
+            if t["trace_id"] == trace_id:
+                trace = t
+                break
+        if trace is None:
+            return jsonify({"error": "Session not found"}), 404
+
+        # Build a simplified redaction preview based on security flags
+        preview_steps = []
+        security_flags = trace.get("_security_flags", [])
+        flagged_steps = {}
+        for flag in security_flags:
+            si = flag.get("step_index", -1)
+            if si not in flagged_steps:
+                flagged_steps[si] = []
+            flagged_steps[si].append(flag)
+
+        steps = trace.get("steps", [])
+        total_fields = 0
+        redacted_fields = 0
+
+        for i, step in enumerate(steps):
+            total_fields += 1  # content
+            if step.get("tool_calls"):
+                total_fields += len(step["tool_calls"])
+            if step.get("observations"):
+                total_fields += len(step["observations"])
+
+            if i in flagged_steps:
+                redactions = []
+                for flag in flagged_steps[i]:
+                    # At higher tiers, more fields get redacted
+                    if tier_int >= 2 or flag.get("severity") == "high":
+                        redactions.append({
+                            "field": f"steps[{i}].content",
+                            "reason": flag.get("reason", "security flag"),
+                            "before": (step.get("content") or "")[:80] + "...",
+                            "after": "[REDACTED]",
+                        })
+                        redacted_fields += 1
+                if redactions:
+                    preview_steps.append({
+                        "step_index": i,
+                        "redactions": redactions,
+                    })
+
+        signal_kept = round(1.0 - (redacted_fields / max(total_fields, 1)), 2)
+
+        return jsonify({
+            "trace_id": trace_id,
+            "tier": tier_int,
+            "steps": preview_steps,
+            "signal_kept": signal_kept,
+        })
+
     @app.route("/api/push", methods=["POST"])
     def api_push():
         """Push all approved sessions to HF Hub."""
         traces = _traces()
+
+        # Guard against pushing sample data
+        if _is_sample_data(traces, staging_path):
+            return jsonify({"error": "Cannot push sample data. Parse real sessions first."}), 400
+
+        # Accept optional commit_message from request body
+        req_data = request.get_json(silent=True) or {}
+        commit_message = req_data.get("commit_message")
+
         approved = [
             t for t in traces
             if _get_review_status(t["trace_id"]) == "approved"

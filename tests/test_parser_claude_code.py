@@ -355,6 +355,156 @@ class TestClaudeCodeParser:
         pytest.fail("Dangling tool_use observation not found")
 
 
+class TestParentStepIntegrity:
+    """Verify parent_step references remain valid after renumbering."""
+
+    def test_parent_step_updated_after_renumber(self, tmp_path):
+        """Simulate a session with subagent steps to verify parent_step fixup."""
+        # Create a main session that triggers an Agent tool call
+        main_lines = [
+            {
+                "type": "user",
+                "sessionId": "main-sess",
+                "timestamp": "2026-03-27T10:00:00Z",
+                "version": "1.0.83",
+                "message": {"role": "user", "content": "Investigate the bug"},
+            },
+            {
+                "type": "assistant",
+                "sessionId": "main-sess",
+                "timestamp": "2026-03-27T10:00:05Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Let me look into this."},
+                        {
+                            "type": "tool_use",
+                            "id": "tc_agent_1",
+                            "name": "Agent",
+                            "input": {"description": "explore the codebase", "subagent_type": "Explore"},
+                        },
+                    ],
+                    "usage": {"input_tokens": 100, "output_tokens": 50,
+                              "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+                },
+            },
+            {
+                "type": "user",
+                "sessionId": "main-sess",
+                "timestamp": "2026-03-27T10:00:10Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tc_agent_1", "content": "Done exploring"},
+                    ],
+                },
+            },
+            {
+                "type": "assistant",
+                "sessionId": "main-sess",
+                "timestamp": "2026-03-27T10:00:15Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Based on my exploration, the bug is in parser.ts."},
+                        {
+                            "type": "tool_use",
+                            "id": "tc_read_1",
+                            "name": "Read",
+                            "input": {"file_path": "src/parser.ts"},
+                        },
+                    ],
+                    "usage": {"input_tokens": 200, "output_tokens": 100,
+                              "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+                },
+            },
+            {
+                "type": "user",
+                "sessionId": "main-sess",
+                "timestamp": "2026-03-27T10:00:16Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tc_read_1", "content": "function parse() {}"},
+                    ],
+                },
+            },
+        ]
+
+        # Create the subagent session files
+        main_session_dir = tmp_path / "main-sess"
+        subagents_dir = main_session_dir / "subagents"
+        subagents_dir.mkdir(parents=True)
+
+        # Write meta.json for the subagent
+        meta = {"description": "explore the codebase"}
+        (subagents_dir / "sub-agent-1.meta.json").write_text(json.dumps(meta))
+
+        # Write subagent session JSONL
+        sub_lines = [
+            {
+                "type": "user",
+                "sessionId": "sub-agent-1",
+                "timestamp": "2026-03-27T10:00:06Z",
+                "message": {"role": "user", "content": "Explore the codebase"},
+            },
+            {
+                "type": "assistant",
+                "sessionId": "sub-agent-1",
+                "timestamp": "2026-03-27T10:00:07Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tc_sub_1",
+                            "name": "Glob",
+                            "input": {"pattern": "**/*.ts"},
+                        },
+                    ],
+                    "usage": {"input_tokens": 50, "output_tokens": 30,
+                              "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+                },
+            },
+            {
+                "type": "user",
+                "sessionId": "sub-agent-1",
+                "timestamp": "2026-03-27T10:00:08Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "tc_sub_1", "content": "src/parser.ts"},
+                    ],
+                },
+            },
+        ]
+        with open(subagents_dir / "sub-agent-1.jsonl", "w") as f:
+            for line in sub_lines:
+                f.write(json.dumps(line) + "\n")
+
+        # Write main session
+        main_file = _write_session(tmp_path, main_lines, "main-sess.jsonl")
+
+        parser = ClaudeCodeParser()
+        record = parser.parse_session(main_file)
+        assert record is not None
+
+        # Verify all parent_step references point to valid step indices
+        valid_indices = {s.step_index for s in record.steps}
+        for step in record.steps:
+            if step.parent_step is not None:
+                assert step.parent_step in valid_indices, (
+                    f"Step {step.step_index} has parent_step={step.parent_step} "
+                    f"which is not in valid indices {valid_indices}"
+                )
+
+        # Verify step indices are sequential starting from 1
+        indices = [s.step_index for s in record.steps]
+        assert indices == list(range(1, len(record.steps) + 1)), (
+            f"Step indices not sequential: {indices}"
+        )
+
+
 class TestParserOnRealSessions:
     """Integration tests using real Claude Code sessions if available."""
 

@@ -15,6 +15,7 @@ import fcntl
 import json
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -28,11 +29,22 @@ class TraceStatus(str, Enum):
     PARSED = "parsed"
     STAGED = "staged"
     REVIEWING = "reviewing"
+    COMMITTED = "committed"
     APPROVED = "approved"
     UPLOADING = "uploading"
     UPLOADED = "uploaded"
     REJECTED = "rejected"
     FAILED = "failed"
+
+
+@dataclass
+class CommitGroup:
+    """A group of sessions committed together for push."""
+
+    commit_id: str
+    session_ids: list[str]
+    message: str
+    created_at: str
 
 
 @dataclass
@@ -63,15 +75,18 @@ class StateManager:
 
     def __init__(self, state_path: Path | None = None) -> None:
         self._state_path = state_path or STATE_PATH
-        self._state: dict[str, Any] = {"processed_files": {}, "traces": {}}
+        self._state: dict[str, Any] = {"processed_files": {}, "traces": {}, "commit_groups": {}}
         self._load()
 
     def _load(self) -> None:
         if self._state_path.exists():
             try:
                 self._state = json.loads(self._state_path.read_text())
+                # Ensure commit_groups key exists for older state files
+                if "commit_groups" not in self._state:
+                    self._state["commit_groups"] = {}
             except (json.JSONDecodeError, OSError):
-                self._state = {"processed_files": {}, "traces": {}}
+                self._state = {"processed_files": {}, "traces": {}, "commit_groups": {}}
 
     def save(self) -> None:
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -150,6 +165,32 @@ class StateManager:
             for v in self._state["traces"].values()
             if v.get("status") in (TraceStatus.APPROVED.value, TraceStatus.FAILED.value)
         ]
+
+    # --- Commit groups ---
+
+    def create_commit_group(self, session_ids: list[str], message: str) -> str:
+        """Create a commit group from staged sessions. Returns commit_id."""
+        import datetime
+
+        commit_id = uuid.uuid4().hex[:12]
+        created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self._state["commit_groups"][commit_id] = {
+            "commit_id": commit_id,
+            "session_ids": session_ids,
+            "message": message,
+            "created_at": created_at,
+        }
+        self.save()
+        return commit_id
+
+    def get_commit_group(self, commit_id: str) -> CommitGroup | None:
+        entry = self._state["commit_groups"].get(commit_id)
+        if entry is None:
+            return None
+        return CommitGroup(**entry)
+
+    def get_commit_groups(self) -> list[CommitGroup]:
+        return [CommitGroup(**v) for v in self._state["commit_groups"].values()]
 
 
 class StagingLock:

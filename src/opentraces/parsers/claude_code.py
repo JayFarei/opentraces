@@ -98,8 +98,15 @@ class ClaudeCodeParser:
 
         # Renumber all steps sequentially to guarantee uniqueness
         # (subagent inlining can create duplicates)
+        # Build old_index -> new_index map and fix parent_step references
+        old_to_new: dict[int, int] = {}
         for i, step in enumerate(steps, 1):
+            old_to_new[step.step_index] = i
             step.step_index = i
+
+        for step in steps:
+            if step.parent_step is not None and step.parent_step in old_to_new:
+                step.parent_step = old_to_new[step.parent_step]
 
         # Build trace record
         record = TraceRecord(

@@ -1,0 +1,6 @@
+{
+  "name": "@opentraces/ui",
+  "version": "0.1.0",
+  "main": "tokens.css",
+  "files": ["tokens.css"]
+}
