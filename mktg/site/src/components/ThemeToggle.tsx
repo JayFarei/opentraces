@@ -14,7 +14,7 @@ export default function ThemeToggle() {
     const stored = localStorage.getItem("theme") as "dark" | "light" | null;
     const initial = stored || getSystemTheme();
     setTheme(initial);
-    document.documentElement.setAttribute("data-theme", initial);
+    applyTheme(initial);
 
     // Listen for system preference changes (only if user hasn't manually set)
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -22,17 +22,24 @@ export default function ThemeToggle() {
       if (!localStorage.getItem("theme")) {
         const next = e.matches ? "dark" : "light";
         setTheme(next);
-        document.documentElement.setAttribute("data-theme", next);
+        applyTheme(next);
       }
     }
     mq.addEventListener("change", onSystemChange);
     return () => mq.removeEventListener("change", onSystemChange);
   }, []);
 
+  function applyTheme(t: "dark" | "light") {
+    const el = document.documentElement;
+    el.setAttribute("data-theme", t);
+    el.classList.remove("theme-dark", "theme-light");
+    el.classList.add(t === "dark" ? "theme-dark" : "theme-light");
+  }
+
   function toggle() {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
-    document.documentElement.setAttribute("data-theme", next);
+    applyTheme(next);
     localStorage.setItem("theme", next);
   }
 
