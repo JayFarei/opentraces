@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
-import { MagnifierIcon } from "../icons";
+import { SparklesIcon } from "../icons";
 
 /**
  * Redaction Wand: a mode toggle that lets users select text to redact.
@@ -98,7 +98,7 @@ export function RedactionWand({ onRedact }: RedactionWandProps) {
         }`}
         title={active ? "Deactivate redaction wand" : "Activate redaction wand: select text to redact"}
       >
-        <MagnifierIcon size={12} color="currentColor" strokeWidth={2} />
+        <SparklesIcon size={12} color="currentColor" strokeWidth={2} />
         <span>{active ? "[wand on]" : "[redact]"}</span>
       </button>
 
