@@ -3,9 +3,9 @@
 {% block title %}Stats - opentraces review{% endblock %}
 
 {% block content %}
-<h2>Review Dashboard</h2>
+<div class="ot-section-title">REVIEW DASHBOARD <span class="ot-ascii-rule">────────────────────────────</span></div>
 
-<div class="grid ot-stats-grid">
+<div class="ot-stats-grid">
     <article class="ot-stat-card">
         <header>Total Sessions</header>
         <p class="ot-stat-number">{{ stats.total }}</p>
@@ -24,7 +24,7 @@
     </article>
 </div>
 
-<div class="grid ot-stats-grid">
+<div class="ot-stats-grid">
     <article class="ot-stat-card">
         <header>Total Tokens</header>
         <p class="ot-stat-number">{{ "{:,}".format(stats.total_tokens) }}</p>
@@ -46,7 +46,7 @@
 </div>
 
 <section class="ot-progress-section">
-    <h3>Review Progress</h3>
+    <div class="ot-section-title">REVIEW PROGRESS <span class="ot-ascii-rule">────────────────────────────</span></div>
     <div class="ot-progress-bar">
         {% set reviewed = stats.approved + stats.rejected %}
         {% set pct = (reviewed / stats.total * 100) if stats.total > 0 else 0 %}
@@ -56,19 +56,19 @@
 </section>
 
 <section class="ot-push-section">
-    <h3>Push to HuggingFace Hub</h3>
+    <div class="ot-section-title">PUSH TO HUB <span class="ot-ascii-rule">────────────────────────────────</span></div>
     {% if stats.security_tier is defined and stats.security_tier %}
     <p><small>Security tier: <strong>{{ stats.security_tier }}</strong></small></p>
     {% endif %}
     {% if stats.approved > 0 %}
     <p>{{ stats.approved }} session(s) approved and ready to push.</p>
     <button class="ot-btn ot-btn-approve" id="stats-push-btn" onclick="pushApproved()">
-        Push {{ stats.approved }} Approved Session(s)
+        [push {{ stats.approved }} approved session(s)]
     </button>
     {% else %}
     <p class="ot-empty">No approved sessions yet. Review and approve sessions before pushing.</p>
     <button class="ot-btn ot-btn-approve" id="stats-push-btn" disabled>
-        Push to Hub (no approved sessions)
+        [push to hub]
     </button>
     {% endif %}
 </section>

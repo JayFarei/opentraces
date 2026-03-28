@@ -1,31 +1,110 @@
-/* opentraces review - Custom CSS overrides for Pico */
+/* opentraces review - TUI Design System */
 
-:root {
-    --ot-green: #22c55e;
-    --ot-green-dark: #16a34a;
-    --ot-green-bg: #f0fdf4;
-    --ot-red: #ef4444;
-    --ot-red-dark: #dc2626;
-    --ot-red-bg: #fef2f2;
-    --ot-orange: #f97316;
-    --ot-orange-bg: #fff7ed;
-    --ot-yellow: #fef08a;
-    --ot-yellow-dark: #eab308;
-    --ot-gray: #6b7280;
-    --ot-gray-light: #f3f4f6;
-    --ot-gray-border: #e5e7eb;
-    --ot-blue: #3b82f6;
-    --ot-blue-bg: #eff6ff;
-    --ot-header-bg: #14532d;
-    --ot-header-text: #ffffff;
-    --ot-subagent-border: #818cf8;
+/* ── Global Reset ── */
+*, *::before, *::after {
+    border-radius: 0 !important;
 }
 
-/* Header */
+/* ── Design Tokens ── */
+:root {
+    --ot-bg: #111111;
+    --ot-bg-alt: #0A0A0A;
+    --ot-surface: #191919;
+    --ot-surface-hover: #222222;
+    --ot-text: #E0E0E0;
+    --ot-text-secondary: #B0B0B0;
+    --ot-text-muted: #666666;
+    --ot-text-dim: #444444;
+    --ot-accent: #F97316;
+    --ot-accent-dim: #9A3412;
+    --ot-accent-soft: rgba(249, 115, 22, 0.08);
+    --ot-green: #22C55E;
+    --ot-green-soft: rgba(34, 197, 94, 0.08);
+    --ot-red: #EF4444;
+    --ot-red-soft: rgba(239, 68, 68, 0.08);
+    --ot-yellow: #EAB308;
+    --ot-yellow-soft: rgba(234, 179, 8, 0.08);
+    --ot-blue: #3B82F6;
+    --ot-blue-soft: rgba(59, 130, 246, 0.08);
+    --ot-cyan: #22D3EE;
+    --ot-border: #2A2A2A;
+    --ot-border-strong: #3A3A3A;
+    --ot-subagent-border: #818cf8;
+
+    /* Font families */
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-body: 'IBM Plex Mono', monospace;
+    --font-code: 'JetBrains Mono', monospace;
+    --font-label: 'Space Mono', monospace;
+}
+
+/* ── Base ── */
+html, body {
+    background: var(--ot-bg);
+    color: var(--ot-text);
+    font-family: var(--font-body);
+    font-size: 13px;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0;
+}
+
+a {
+    color: var(--ot-blue);
+    text-decoration: none;
+    transition: color 0.1s;
+}
+
+a:hover {
+    text-decoration: underline;
+}
+
+h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    letter-spacing: -0.03em;
+    color: var(--ot-text);
+}
+
+h2 {
+    font-size: 28px;
+}
+
+h3 {
+    font-size: 18px;
+}
+
+small {
+    font-size: 12px;
+}
+
+code {
+    font-family: var(--font-code);
+    font-size: 12px;
+    color: var(--ot-cyan);
+    background: var(--ot-bg-alt);
+    padding: 2px 6px;
+    border: 1px solid var(--ot-border);
+}
+
+hr {
+    border: none;
+    border-top: 1px solid var(--ot-border);
+}
+
+/* ── Container ── */
+.container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 24px;
+}
+
+/* ── Header ── */
 .ot-header {
-    background: var(--ot-header-bg);
-    padding: 0.5rem 0;
-    margin-bottom: 2rem;
+    background: var(--ot-bg);
+    border-bottom: 1px solid var(--ot-border);
+    padding: 12px 0;
+    margin-bottom: 32px;
 }
 
 .ot-header nav {
@@ -38,104 +117,178 @@
     list-style: none;
     display: flex;
     align-items: center;
-    gap: 1.5rem;
+    gap: 24px;
     margin: 0;
     padding: 0;
 }
 
 .ot-header nav a {
-    color: var(--ot-header-text);
+    color: var(--ot-text-secondary);
     text-decoration: none;
-    opacity: 0.85;
-    transition: opacity 0.15s;
+    font-family: var(--font-code);
+    font-size: 12px;
+    transition: color 0.1s;
 }
 
 .ot-header nav a:hover,
 .ot-header nav a.active {
-    opacity: 1;
-    text-decoration: underline;
+    color: var(--ot-text);
 }
 
 .ot-brand {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-size: 1.1rem;
+    gap: 0;
+    font-size: 14px;
 }
 
 .ot-brand strong {
-    color: var(--ot-header-text);
+    color: var(--ot-text);
+    font-family: var(--font-code);
+    font-weight: 400;
 }
 
-.ot-brand small {
-    color: var(--ot-green);
-    font-weight: 600;
-}
-
-.ot-shield {
-    font-size: 1.4rem;
+.ot-brand .ot-brand-dot {
+    color: var(--ot-accent);
+    font-family: var(--font-code);
+    font-weight: 400;
 }
 
 .ot-push-btn {
-    background: var(--ot-green);
-    color: #fff;
-    border: none;
-    padding: 0.4rem 1rem;
-    border-radius: 6px;
+    background: transparent;
+    color: var(--ot-accent);
+    border: 1px solid var(--ot-accent);
+    padding: 5px 14px;
     cursor: pointer;
-    font-size: 0.85rem;
-    font-weight: 600;
-    transition: background 0.15s;
+    font-family: var(--font-code);
+    font-size: 12px;
+    transition: background 0.1s, color 0.1s;
 }
 
 .ot-push-btn:hover {
-    background: var(--ot-green-dark);
+    background: var(--ot-accent-soft);
 }
 
-/* Footer */
+.ot-push-btn:disabled {
+    border-color: var(--ot-border);
+    color: var(--ot-text-dim);
+    cursor: not-allowed;
+    background: transparent;
+}
+
+/* ── Footer ── */
 .ot-footer {
-    margin-top: 3rem;
-    padding-bottom: 2rem;
+    margin-top: 48px;
+    padding-bottom: 32px;
     text-align: center;
-    color: var(--ot-gray);
 }
 
-/* Filters */
+.ot-footer p {
+    margin: 16px 0 0;
+}
+
+.ot-footer small {
+    color: var(--ot-text-muted);
+    font-family: var(--font-code);
+    font-size: 12px;
+}
+
+.ot-footer strong {
+    color: var(--ot-text-muted);
+    font-weight: 400;
+}
+
+/* ── Section Headers (ASCII rule style) ── */
+.ot-section-title {
+    font-family: var(--font-label);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ot-text-secondary);
+    margin-bottom: 16px;
+}
+
+.ot-section-title .ot-ascii-rule {
+    color: var(--ot-text-dim);
+    margin-left: 8px;
+}
+
+/* ── Filters ── */
 .ot-filters {
-    margin-bottom: 1.5rem;
+    margin-bottom: 24px;
 }
 
 .ot-filter-grid {
+    display: grid;
     grid-template-columns: 1fr 1fr 1fr;
-    gap: 1rem;
+    gap: 16px;
     align-items: end;
 }
 
 .ot-filter-grid label {
+    display: block;
     margin-bottom: 0;
+    font-family: var(--font-label);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--ot-text-secondary);
 }
 
 .ot-filter-grid select {
-    margin-bottom: 0;
+    width: 100%;
+    margin-top: 4px;
+    padding: 8px 12px;
+    background: var(--ot-surface);
+    color: var(--ot-text);
+    border: 1px solid var(--ot-border);
+    font-family: var(--font-code);
+    font-size: 12px;
+    appearance: auto;
 }
 
-/* Session table */
+.ot-filter-grid select:focus {
+    outline: 1px solid var(--ot-accent);
+    border-color: var(--ot-accent);
+}
+
+/* ── Data Table ── */
 .ot-session-table {
     width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-code);
+    font-size: 12px;
 }
 
 .ot-session-table th {
-    background: var(--ot-gray-light);
-    font-weight: 600;
-    font-size: 0.85rem;
+    background: var(--ot-surface);
+    font-family: var(--font-label);
+    font-size: 10px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.1em;
+    color: var(--ot-text-secondary);
+    padding: 8px 12px;
+    border: 1px solid var(--ot-border);
     white-space: nowrap;
+    text-align: left;
 }
 
 .ot-session-table td {
+    padding: 8px 12px;
+    border: 1px solid var(--ot-border);
     vertical-align: middle;
-    font-size: 0.9rem;
+    color: var(--ot-text);
+}
+
+.ot-session-table tbody tr {
+    background: var(--ot-bg);
+    transition: background 0.1s;
+}
+
+.ot-session-table tbody tr:hover {
+    background: var(--ot-surface-hover);
 }
 
 .ot-task-cell {
@@ -146,235 +299,269 @@
 }
 
 .ot-row-approved {
-    background: var(--ot-green-bg);
+    background: rgba(34, 197, 94, 0.04) !important;
 }
 
 .ot-row-rejected {
-    background: var(--ot-red-bg);
+    background: rgba(239, 68, 68, 0.04) !important;
 }
 
-/* Badges */
+/* Remove figure/table wrapper default styles */
+figure {
+    margin: 0;
+    padding: 0;
+    overflow-x: auto;
+}
+
+/* ── Badges ── */
 .ot-badge {
     display: inline-block;
-    padding: 0.15rem 0.6rem;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 600;
+    padding: 2px 8px;
+    font-family: var(--font-code);
+    font-size: 11px;
+    font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.03em;
+    border: 1px solid;
 }
 
-.ot-badge-pending {
-    background: var(--ot-gray-light);
-    color: var(--ot-gray);
-    border: 1px solid var(--ot-gray-border);
+.ot-badge-pending,
+.ot-badge-staged {
+    border-color: var(--ot-yellow);
+    background: var(--ot-yellow-soft);
+    color: var(--ot-yellow);
 }
 
 .ot-badge-approved {
-    background: var(--ot-green);
-    color: #fff;
+    border-color: var(--ot-green);
+    background: var(--ot-green-soft);
+    color: var(--ot-green);
 }
 
 .ot-badge-rejected {
-    background: var(--ot-red);
-    color: #fff;
+    border-color: var(--ot-red);
+    background: var(--ot-red-soft);
+    color: var(--ot-red);
 }
 
 .ot-badge-flag {
-    background: var(--ot-orange);
-    color: #fff;
+    border-color: var(--ot-accent);
+    background: var(--ot-accent-soft);
+    color: var(--ot-accent);
 }
 
 .ot-badge-clear {
-    background: var(--ot-gray-light);
-    color: var(--ot-gray);
+    border-color: var(--ot-border);
+    background: transparent;
+    color: var(--ot-text-dim);
 }
 
 .ot-badge-subagent {
-    background: var(--ot-subagent-border);
-    color: #fff;
+    border-color: var(--ot-subagent-border);
+    background: rgba(129, 140, 248, 0.08);
+    color: var(--ot-subagent-border);
 }
 
 .ot-badge-redacted {
-    background: var(--ot-yellow);
-    color: #92400e;
-}
-
-.ot-badge-staged {
-    background: #fbbf24;
-    color: #78350f;
-    border: 1px solid #f59e0b;
+    border-color: var(--ot-yellow);
+    background: var(--ot-yellow-soft);
+    color: var(--ot-yellow);
 }
 
 .ot-empty {
     text-align: center;
-    color: var(--ot-gray);
-    padding: 2rem;
+    color: var(--ot-text-muted);
+    padding: 32px;
+    font-family: var(--font-body);
 }
 
-/* Session detail */
+.ot-empty code {
+    color: var(--ot-accent);
+}
+
+/* ── Session Detail ── */
 .ot-back-link {
     display: inline-block;
-    margin-bottom: 1rem;
-    color: var(--ot-gray);
+    margin-bottom: 16px;
+    color: var(--ot-text-muted);
     text-decoration: none;
-    font-size: 0.9rem;
+    font-family: var(--font-code);
+    font-size: 12px;
 }
 
 .ot-back-link:hover {
-    color: var(--ot-green-dark);
+    color: var(--ot-text);
 }
 
 .ot-session-header {
-    margin-bottom: 2rem;
+    margin-bottom: 32px;
+}
+
+.ot-session-header .grid {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px;
+    align-items: start;
 }
 
 .ot-trace-id {
-    color: var(--ot-gray);
-    margin-top: 0.25rem;
+    color: var(--ot-text-muted);
+    margin-top: 4px;
 }
 
 .ot-session-actions {
     display: flex;
     align-items: flex-start;
     justify-content: flex-end;
-    gap: 0.5rem;
+    gap: 8px;
 }
 
+/* Meta cards grid */
 .ot-meta-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 0.75rem;
-    margin-top: 1rem;
+    margin-top: 16px;
 }
 
 .ot-meta-card {
-    background: var(--ot-gray-light);
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
+    background: var(--ot-surface);
+    border: 1px solid var(--ot-border);
+    padding: 12px 16px;
+    /* Collapse adjacent borders */
+    margin-right: -1px;
+    margin-bottom: -1px;
 }
 
 .ot-meta-card small {
-    color: var(--ot-gray);
+    font-family: var(--font-label);
+    font-size: 10px;
+    font-weight: 700;
     text-transform: uppercase;
-    font-size: 0.7rem;
-    font-weight: 600;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.1em;
+    color: var(--ot-text-muted);
 }
 
 .ot-meta-card p {
-    margin: 0.25rem 0 0;
+    margin: 4px 0 0;
+    font-family: var(--font-code);
+    font-size: 12px;
     font-weight: 500;
-    font-size: 0.9rem;
+    color: var(--ot-cyan);
     word-break: break-word;
 }
 
 /* Security flags section */
 .ot-flags-section {
-    background: var(--ot-orange-bg);
-    border: 1px solid var(--ot-orange);
-    border-radius: 8px;
-    padding: 1rem;
-    margin-top: 1rem;
+    background: var(--ot-surface);
+    border: 1px solid var(--ot-accent);
+    padding: 16px;
+    margin-top: 16px;
 }
 
 .ot-flags-section h4 {
-    margin: 0 0 0.5rem;
-    color: var(--ot-orange);
+    margin: 0 0 8px;
+    color: var(--ot-accent);
+    font-family: var(--font-display);
+    font-size: 14px;
 }
 
 .ot-flag-item {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.35rem 0;
-    font-size: 0.85rem;
-    border-bottom: 1px solid rgba(249, 115, 22, 0.2);
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 12px;
+    border-bottom: 1px solid var(--ot-border);
+    color: var(--ot-text-secondary);
 }
 
 .ot-flag-item:last-child {
     border-bottom: none;
 }
 
-/* Conversation flow */
+/* ── Conversation Flow ── */
 .ot-conversation {
-    margin-bottom: 2rem;
+    margin-bottom: 32px;
 }
 
 .ot-step {
-    border: 1px solid var(--ot-gray-border);
-    border-radius: 8px;
-    padding: 1rem;
-    margin-bottom: 0.75rem;
-    transition: background 0.15s;
+    border: 1px solid var(--ot-border);
+    padding: 16px;
+    margin-bottom: -1px;
+    transition: background 0.1s;
 }
 
 .ot-step-user {
-    background: var(--ot-blue-bg);
-    border-color: #bfdbfe;
+    background: var(--ot-surface);
+    border-color: var(--ot-border);
 }
 
 .ot-step-agent {
-    background: #fff;
+    background: var(--ot-bg);
 }
 
 .ot-step-system {
-    background: var(--ot-gray-light);
-    border-color: var(--ot-gray-border);
-    font-style: italic;
+    background: var(--ot-bg-alt);
+    border-color: var(--ot-border);
 }
 
 .ot-subagent {
-    margin-left: 2rem;
-    border-left: 3px solid var(--ot-subagent-border);
+    margin-left: 32px;
+    border-left: 2px solid var(--ot-subagent-border);
 }
 
 .ot-redacted {
-    background: var(--ot-yellow) !important;
+    background: var(--ot-yellow-soft) !important;
     opacity: 0.8;
 }
 
 .ot-step-header {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 12px;
     flex-wrap: wrap;
-    margin-bottom: 0.5rem;
+    margin-bottom: 8px;
 }
 
 .ot-step-role {
-    font-weight: 700;
-    font-size: 0.8rem;
+    font-family: var(--font-code);
+    font-weight: 600;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    padding: 0.1rem 0.5rem;
-    border-radius: 4px;
+    padding: 2px 8px;
+    border: 1px solid;
 }
 
 .ot-role-user {
-    background: var(--ot-blue);
-    color: #fff;
+    border-color: var(--ot-blue);
+    color: var(--ot-blue);
+    background: var(--ot-blue-soft);
 }
 
 .ot-role-agent {
-    background: var(--ot-green);
-    color: #fff;
+    border-color: var(--ot-accent);
+    color: var(--ot-accent);
+    background: var(--ot-accent-soft);
 }
 
 .ot-role-system {
-    background: var(--ot-gray);
-    color: #fff;
+    border-color: var(--ot-text-dim);
+    color: var(--ot-text-dim);
+    background: transparent;
 }
 
 .ot-step-index {
-    font-size: 0.8rem;
-    color: var(--ot-gray);
+    font-family: var(--font-code);
+    font-size: 12px;
+    color: var(--ot-text-muted);
 }
 
 .ot-step-model,
 .ot-step-time {
-    color: var(--ot-gray);
-    font-size: 0.75rem;
+    color: var(--ot-text-muted);
+    font-family: var(--font-code);
+    font-size: 11px;
 }
 
 .ot-step-controls {
@@ -383,107 +570,113 @@
 
 .ot-btn-redact {
     background: transparent;
-    border: 1px solid var(--ot-orange);
-    color: var(--ot-orange);
-    padding: 0.2rem 0.6rem;
-    border-radius: 4px;
-    font-size: 0.75rem;
+    border: 1px solid var(--ot-accent);
+    color: var(--ot-accent);
+    padding: 2px 10px;
+    font-family: var(--font-code);
+    font-size: 11px;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background 0.1s;
 }
 
 .ot-btn-redact:hover {
-    background: var(--ot-orange);
-    color: #fff;
+    background: var(--ot-accent-soft);
 }
 
 .ot-step-content {
-    font-size: 0.9rem;
+    font-size: 13px;
     line-height: 1.6;
     white-space: pre-wrap;
     word-break: break-word;
+    color: var(--ot-text);
 }
 
 .ot-redacted-content {
-    color: #92400e;
-    font-size: 0.9rem;
-    padding: 0.5rem;
-    background: rgba(254, 240, 138, 0.5);
-    border-radius: 4px;
+    color: var(--ot-yellow);
+    font-size: 13px;
+    padding: 8px;
+    background: var(--ot-yellow-soft);
+    border: 1px solid var(--ot-border);
 }
 
-/* Reasoning blocks */
+/* ── Reasoning Blocks (terminal-like collapsible) ── */
 .ot-reasoning {
-    margin: 0.5rem 0;
-    border: 1px solid var(--ot-gray-border);
-    border-radius: 6px;
+    margin: 8px 0;
+    border: 1px solid var(--ot-border);
     overflow: hidden;
 }
 
 .ot-reasoning summary {
-    background: var(--ot-gray-light);
-    padding: 0.5rem 0.75rem;
+    background: var(--ot-bg-alt);
+    padding: 8px 12px;
     cursor: pointer;
-    font-size: 0.85rem;
-    font-weight: 600;
-    color: var(--ot-gray);
+    font-family: var(--font-code);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ot-text-muted);
+    transition: background 0.1s;
 }
 
 .ot-reasoning summary:hover {
-    background: #e5e7eb;
+    background: var(--ot-surface);
 }
 
 .ot-reasoning-content {
-    padding: 0.75rem;
-    font-size: 0.85rem;
-    color: #4b5563;
+    padding: 12px;
+    font-size: 12px;
+    color: var(--ot-text-secondary);
     line-height: 1.5;
-    background: #f9fafb;
+    background: var(--ot-bg-alt);
+    font-family: var(--font-code);
+    border-top: 1px solid var(--ot-border);
 }
 
-/* Tool calls */
+/* ── Tool Calls ── */
 .ot-tool-calls {
-    margin-top: 0.5rem;
+    margin-top: 8px;
 }
 
 .ot-tool-call {
-    border: 1px solid var(--ot-gray-border);
-    border-radius: 6px;
-    margin-bottom: 0.5rem;
+    border: 1px solid var(--ot-border);
+    margin-bottom: -1px;
     overflow: hidden;
 }
 
 .ot-tool-call summary {
-    padding: 0.5rem 0.75rem;
+    padding: 8px 12px;
     cursor: pointer;
-    font-size: 0.85rem;
+    font-size: 12px;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    background: #fafafa;
+    gap: 8px;
+    background: var(--ot-surface);
+    font-family: var(--font-code);
+    color: var(--ot-text-secondary);
+    transition: background 0.1s;
 }
 
 .ot-tool-call summary:hover {
-    background: var(--ot-gray-light);
+    background: var(--ot-surface-hover);
 }
 
 .ot-tool-name {
-    font-weight: 700;
-    color: var(--ot-green-dark);
+    font-weight: 600;
+    color: var(--ot-green);
 }
 
 .ot-tool-id {
-    font-size: 0.7rem;
-    color: var(--ot-gray);
+    font-size: 10px;
+    color: var(--ot-text-dim);
 }
 
 .ot-tool-detail {
-    padding: 0.75rem;
-    border-top: 1px solid var(--ot-gray-border);
+    padding: 12px;
+    border-top: 1px solid var(--ot-border);
+    background: var(--ot-bg);
 }
 
 .ot-tool-section {
-    margin-bottom: 0.75rem;
+    margin-bottom: 12px;
 }
 
 .ot-tool-section:last-child {
@@ -492,235 +685,240 @@
 
 .ot-tool-section strong {
     display: block;
-    font-size: 0.8rem;
-    margin-bottom: 0.25rem;
-    color: var(--ot-gray);
+    font-family: var(--font-label);
+    font-size: 10px;
+    font-weight: 700;
     text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 4px;
+    color: var(--ot-text-muted);
 }
 
 .ot-output-summary {
-    color: var(--ot-gray);
+    color: var(--ot-text-muted);
     display: block;
-    margin-top: 0.25rem;
+    margin-top: 4px;
+    font-family: var(--font-body);
 }
 
-/* Code blocks */
+/* ── Code Blocks ── */
 .ot-code-block {
-    background: #1e1e2e;
-    color: #cdd6f4;
-    padding: 0.75rem 1rem;
-    border-radius: 6px;
-    font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', 'Cascadia Code', Menlo, monospace;
-    font-size: 0.8rem;
+    background: var(--ot-bg-alt);
+    color: var(--ot-text);
+    padding: 12px 16px;
+    font-family: var(--font-code);
+    font-size: 12px;
     line-height: 1.5;
     overflow-x: auto;
     max-height: 300px;
     overflow-y: auto;
-    margin: 0.25rem 0;
+    margin: 4px 0;
     white-space: pre;
+    border: 1px solid var(--ot-border);
 }
 
 .ot-code-block.ot-error {
-    background: #2d1b1b;
-    color: #fca5a5;
-    border: 1px solid var(--ot-red);
+    background: rgba(239, 68, 68, 0.06);
+    color: var(--ot-red);
+    border-color: var(--ot-red);
 }
 
-/* Snippets */
+/* ── Snippets ── */
 .ot-snippets {
-    margin-top: 0.5rem;
+    margin-top: 8px;
 }
 
 .ot-snippet {
-    border: 1px solid var(--ot-gray-border);
-    border-radius: 6px;
-    margin-bottom: 0.5rem;
+    border: 1px solid var(--ot-border);
+    margin-bottom: -1px;
     overflow: hidden;
 }
 
 .ot-snippet summary {
-    padding: 0.4rem 0.75rem;
+    padding: 6px 12px;
     cursor: pointer;
-    font-size: 0.85rem;
-    background: #fafafa;
+    font-size: 12px;
+    background: var(--ot-surface);
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 8px;
+    font-family: var(--font-code);
+    color: var(--ot-text-secondary);
+    transition: background 0.1s;
+}
+
+.ot-snippet summary:hover {
+    background: var(--ot-surface-hover);
 }
 
 .ot-snippet-path {
     font-weight: 600;
-    font-family: monospace;
+    font-family: var(--font-code);
     color: var(--ot-blue);
 }
 
-/* Step flags */
+/* ── Step Flags ── */
 .ot-step-flag {
-    margin-top: 0.5rem;
-    padding: 0.4rem 0.6rem;
-    background: var(--ot-orange-bg);
-    border: 1px solid var(--ot-orange);
-    border-radius: 6px;
-    font-size: 0.8rem;
+    margin-top: 8px;
+    padding: 6px 10px;
+    background: var(--ot-accent-soft);
+    border: 1px solid var(--ot-accent);
+    border-left: 2px solid var(--ot-accent);
+    font-size: 12px;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 8px;
+    color: var(--ot-text-secondary);
 }
 
-/* Verdict section */
+/* ── Verdict Section ── */
 .ot-session-verdict {
-    border-top: 2px solid var(--ot-gray-border);
-    padding-top: 2rem;
-    margin-top: 2rem;
+    border-top: 1px solid var(--ot-border);
+    padding-top: 24px;
+    margin-top: 32px;
 }
 
 .ot-sticky-verdict {
     position: sticky;
     bottom: 0;
-    background: var(--pico-background-color, #fff);
+    background: var(--ot-surface);
     padding: 16px;
-    border-top: 1px solid var(--ot-gray-border);
+    border-top: 1px solid var(--ot-border);
     z-index: 10;
 }
 
 .ot-verdict-buttons {
     display: flex;
-    gap: 1rem;
+    gap: 16px;
     justify-content: center;
 }
 
 .ot-btn {
-    padding: 0.75rem 2.5rem;
-    border: none;
-    border-radius: 8px;
-    font-size: 1rem;
-    font-weight: 700;
+    padding: 10px 32px;
+    border: 1px solid;
+    background: transparent;
+    font-family: var(--font-code);
+    font-size: 12px;
+    font-weight: 500;
     cursor: pointer;
-    transition: all 0.15s;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    transition: background 0.1s;
+    text-transform: none;
+    letter-spacing: 0;
 }
 
 .ot-btn-approve {
-    background: var(--ot-green);
-    color: #fff;
+    border-color: var(--ot-green);
+    color: var(--ot-green);
 }
 
 .ot-btn-approve:hover {
-    background: var(--ot-green-dark);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+    background: rgba(34, 197, 94, 0.1);
 }
 
 .ot-btn-approve:disabled {
-    background: var(--ot-gray-light);
-    color: var(--ot-gray);
+    border-color: var(--ot-border);
+    color: var(--ot-text-dim);
     cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
+    background: transparent;
 }
 
 .ot-btn-reject {
-    background: var(--ot-red);
-    color: #fff;
+    border-color: var(--ot-red);
+    color: var(--ot-red);
 }
 
 .ot-btn-reject:hover {
-    background: var(--ot-red-dark);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+    background: rgba(239, 68, 68, 0.1);
 }
 
 .ot-btn-reject:disabled {
-    background: var(--ot-gray-light);
-    color: var(--ot-gray);
+    border-color: var(--ot-border);
+    color: var(--ot-text-dim);
     cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
+    background: transparent;
 }
 
-/* Push button disabled state */
-.ot-push-btn:disabled {
-    background: var(--ot-gray-light);
-    color: var(--ot-gray);
-    cursor: not-allowed;
-}
-
-/* Next pending link */
+/* ── Next Pending Link ── */
 .ot-next-pending {
-    margin-top: 0.75rem;
+    margin-top: 12px;
     text-align: center;
 }
 
 .ot-next-pending-link {
     display: inline-block;
-    padding: 0.5rem 1.5rem;
-    background: var(--ot-blue);
-    color: #fff;
-    border-radius: 6px;
+    padding: 8px 24px;
+    border: 1px solid var(--ot-blue);
+    color: var(--ot-blue);
     text-decoration: none;
-    font-weight: 600;
-    font-size: 0.9rem;
-    transition: background 0.15s;
+    font-family: var(--font-code);
+    font-size: 12px;
+    transition: background 0.1s;
 }
 
 .ot-next-pending-link:hover {
-    background: #2563eb;
-    color: #fff;
+    background: var(--ot-blue-soft);
+    text-decoration: none;
 }
 
-/* Show more toggle for truncated tool inputs */
+/* ── Show More Toggle ── */
 .ot-show-more-btn {
     display: inline-block;
-    margin-top: 0.35rem;
-    padding: 0.2rem 0.7rem;
-    background: var(--ot-gray-light);
-    border: 1px solid var(--ot-gray-border);
-    border-radius: 4px;
+    margin-top: 6px;
+    padding: 2px 10px;
+    background: transparent;
+    border: 1px solid var(--ot-border);
     color: var(--ot-blue);
-    font-size: 0.75rem;
-    font-weight: 600;
+    font-family: var(--font-code);
+    font-size: 11px;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background 0.1s, border-color 0.1s;
 }
 
 .ot-show-more-btn:hover {
-    background: var(--ot-blue-bg);
+    background: var(--ot-blue-soft);
     border-color: var(--ot-blue);
 }
 
-/* Clear filters link */
+/* ── Clear Filters ── */
 .ot-clear-filters {
     color: var(--ot-blue);
     text-decoration: underline;
-    font-weight: 600;
 }
 
-/* Stats page */
+/* ── Stats Page ── */
 .ot-stats-grid {
-    margin-bottom: 1.5rem;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    margin-bottom: 0;
 }
 
 .ot-stat-card {
     text-align: center;
-    border-radius: 8px;
     margin: 0;
+    background: var(--ot-surface);
+    border: 1px solid var(--ot-border);
+    /* Collapse borders */
+    margin-right: -1px;
+    margin-bottom: -1px;
+    padding: 0;
 }
 
 .ot-stat-card header {
-    font-size: 0.8rem;
+    font-family: var(--font-label);
+    font-size: 10px;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--ot-gray);
-    font-weight: 600;
-    padding: 0.75rem 1rem 0;
+    letter-spacing: 0.1em;
+    color: var(--ot-text-muted);
+    padding: 12px 16px 0;
 }
 
 .ot-stat-number {
-    font-size: 2rem;
-    font-weight: 700;
-    margin: 0.5rem 0 1rem;
-    color: #1f2937;
+    font-family: var(--font-display);
+    font-size: 32px;
+    font-weight: 300;
+    margin: 8px 0 16px;
+    color: var(--ot-text);
 }
 
 .ot-stat-approved .ot-stat-number {
@@ -732,56 +930,69 @@
 }
 
 .ot-stat-pending .ot-stat-number {
-    color: var(--ot-orange);
+    color: var(--ot-accent);
 }
 
 .ot-flags-warn {
-    color: var(--ot-orange) !important;
+    color: var(--ot-accent) !important;
 }
 
-/* Push section */
+/* ── Push Section ── */
 .ot-push-section {
-    margin: 2rem 0;
-    padding: 1.5rem;
-    background: var(--ot-green-bg);
-    border: 1px solid var(--ot-green);
-    border-radius: 8px;
+    margin: 32px 0;
+    padding: 24px;
+    background: var(--ot-surface);
+    border: 1px solid var(--ot-border);
     text-align: center;
+    color: var(--ot-text-secondary);
 }
 
-/* Progress bar */
+.ot-push-section p {
+    margin: 8px 0;
+}
+
+/* ── Progress Bar ── */
 .ot-progress-section {
-    margin: 2rem 0;
+    margin: 32px 0;
     text-align: center;
+    color: var(--ot-text-secondary);
 }
 
 .ot-progress-bar {
     width: 100%;
-    height: 12px;
-    background: var(--ot-gray-light);
-    border-radius: 999px;
+    height: 8px;
+    background: var(--ot-surface);
+    border: 1px solid var(--ot-border);
     overflow: hidden;
-    margin-bottom: 0.5rem;
+    margin-bottom: 8px;
 }
 
 .ot-progress-fill {
     height: 100%;
-    background: linear-gradient(90deg, var(--ot-green), var(--ot-green-dark));
-    border-radius: 999px;
-    transition: width 0.5s ease;
+    background: var(--ot-green);
+    transition: width 0.15s;
 }
 
-/* Animations */
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to { opacity: 1; transform: translateY(0); }
+/* ── Notifications ── */
+.ot-notification {
+    font-family: var(--font-code) !important;
 }
 
-.ot-step {
-    animation: fadeIn 0.2s ease;
+.ot-notification-success {
+    background: var(--ot-surface) !important;
+    color: var(--ot-green) !important;
+    border: 1px solid var(--ot-green) !important;
+    border-left: 3px solid var(--ot-green) !important;
 }
 
-/* Responsive */
+.ot-notification-error {
+    background: var(--ot-surface) !important;
+    color: var(--ot-red) !important;
+    border: 1px solid var(--ot-red) !important;
+    border-left: 3px solid var(--ot-red) !important;
+}
+
+/* ── Responsive ── */
 @media (max-width: 768px) {
     .ot-filter-grid {
         grid-template-columns: 1fr;
@@ -791,8 +1002,12 @@
         grid-template-columns: 1fr 1fr;
     }
 
+    .ot-stats-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+
     .ot-subagent {
-        margin-left: 0.75rem;
+        margin-left: 12px;
     }
 
     .ot-verdict-buttons {
@@ -801,5 +1016,9 @@
 
     .ot-btn {
         width: 100%;
+    }
+
+    .ot-session-header .grid {
+        grid-template-columns: 1fr;
     }
 }

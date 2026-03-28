@@ -3,12 +3,12 @@
 {% block title %}Session {{ trace.trace_id[:12] }} - opentraces review{% endblock %}
 
 {% block content %}
-<a href="/" class="ot-back-link">&larr; Back to sessions</a>
+<a href="/" class="ot-back-link">&larr; back to sessions</a>
 
 <section class="ot-session-header">
     <div class="grid">
         <div>
-            <h2>Session Review</h2>
+            <div class="ot-section-title">SESSION REVIEW <span class="ot-ascii-rule">────────────────────────────</span></div>
             <p class="ot-trace-id"><code>{{ trace.trace_id }}</code></p>
         </div>
         <div class="ot-session-actions">
@@ -60,7 +60,7 @@
 </section>
 
 <section class="ot-conversation">
-    <h3>Conversation Flow</h3>
+    <div class="ot-section-title">CONVERSATION FLOW <span class="ot-ascii-rule">────────────────────────</span></div>
 
     {% for step in trace.steps %}
     <div class="ot-step ot-step-{{ step.role }} {% if step.call_type == 'subagent' %}ot-subagent{% endif %} {% if step.step_index in trace._redacted_steps %}ot-redacted{% endif %}"
@@ -83,7 +83,7 @@
             <div class="ot-step-controls">
                 {% if step.step_index not in trace._redacted_steps %}
                 <button class="ot-btn-redact" onclick="redactStep('{{ trace.trace_id }}', {{ step.step_index }})">
-                    Redact
+                    [redact]
                 </button>
                 {% else %}
                 <span class="ot-badge ot-badge-redacted">REDACTED</span>
@@ -189,17 +189,17 @@
 </section>
 
 <section class="ot-session-verdict ot-sticky-verdict">
-    <h3>Verdict</h3>
+    <div class="ot-section-title">VERDICT <span class="ot-ascii-rule">────────────────────────────────────</span></div>
     <div class="ot-verdict-buttons">
         <button class="ot-btn ot-btn-approve" id="btn-approve" onclick="approveSession('{{ trace.trace_id }}')">
-            Approve Session
+            [approve session]
         </button>
         <button class="ot-btn ot-btn-reject" id="btn-reject" onclick="rejectSession('{{ trace.trace_id }}')">
-            Reject Session
+            [reject session]
         </button>
     </div>
     <div id="verdict-next-link" class="ot-next-pending" style="display:none;">
-        <a href="/?status=pending" class="ot-next-pending-link">Next pending &rarr;</a>
+        <a href="/?status=pending" class="ot-next-pending-link">[next pending &rarr;]</a>
     </div>
 </section>
 {% endblock %}
