@@ -299,7 +299,6 @@ html { color-scheme: dark light; }
 /* ═══ Hero ═══ */
 .hero {
   padding: 48px 0 40px;
-  border-bottom: 1px solid var(--border);
 }
 .hero h1 {
   font-family: var(--font-display);
@@ -769,10 +768,11 @@ tr:hover td { background: var(--surface-hover); }
   display: inline-block;
   vertical-align: middle;
 }
-[data-theme="dark"] .hf-logo,
-.theme-dark .hf-logo {
-  filter: brightness(0) invert(1);
-}
+.hf-logo-dark { display: none; }
+[data-theme="dark"] .hf-logo-light,
+.theme-dark .hf-logo-light { display: none; }
+[data-theme="dark"] .hf-logo-dark,
+.theme-dark .hf-logo-dark { display: inline-block; }
 
 /* Responsive arch */
 @media (max-width: 600px) {
@@ -905,6 +905,7 @@ footer {
 .field-table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-family: var(--font-mono);
   font-size: 12px;
   margin-bottom: 24px;

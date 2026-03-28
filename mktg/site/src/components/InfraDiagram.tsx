@@ -80,7 +80,8 @@ export default function InfraDiagram() {
 
         {/* HF Hub destination */}
         <div className="arch-box arch-dest">
-          <img src="/hf-logo.svg" alt="Hugging Face" width={18} height={18} className="hf-logo" />
+          <img src="/hf-logo.svg" alt="Hugging Face" width={18} height={18} className="hf-logo hf-logo-light" />
+          <img src="/hf-logo-pirate.svg" alt="Hugging Face" width={18} height={18} className="hf-logo hf-logo-dark" />
           <span>Hugging Face Hub</span>
         </div>
       </div>
