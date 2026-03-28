@@ -10,15 +10,17 @@ function LoginContent() {
     <>
       <span className="terminal-line"><span className="p">~$</span> <span className="c">opentraces login</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Log in to HuggingFace Hub.</span></span>
-      <span className="terminal-line"><span className="di">  Get your token at: </span><span className="s">huggingface.co/settings/tokens</span></span>
+      <span className="terminal-line"><span className="di">  Authenticating with HuggingFace Hub...</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Token: </span><span className="s">hf_****</span></span>
+      <span className="terminal-line"><span className="di">  Open this URL in your browser:</span></span>
+      <span className="terminal-line"><span className="di">    </span><span className="s">https://huggingface.co/device</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Authenticated as </span><span className="s">jayfarei</span></span>
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Token saved to ~/.opentraces/credentials</span></span>
+      <span className="terminal-line"><span className="di">  And enter code: </span><span className="n">WDJB-MJHT</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  You can now push traces with </span><span className="c">opentraces push</span></span>
+      <span className="terminal-line"><span className="di">  Waiting for authorization...</span> <span className="ok">done</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  Authenticated as </span><span className="s">jayfarei</span></span>
+      <span className="terminal-line"><span className="di">  Token saved to ~/.opentraces/credentials</span></span>
     </>
   );
 }

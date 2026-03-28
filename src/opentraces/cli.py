@@ -45,8 +45,16 @@ def main() -> None:
     pass
 
 
+HF_OAUTH_CLIENT_ID = "dc6cdff4-4835-462b-84fa-6aa3328a26f9"
+HF_OAUTH_SCOPES = "openid profile write-repos manage-repos"
+HF_DEVICE_CODE_URL = "https://huggingface.co/oauth/device"
+HF_TOKEN_URL = "https://huggingface.co/oauth/token"
+HF_DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
+
+
 @main.command()
-def login() -> None:
+@click.option("--token", is_flag=True, help="Use token paste instead of browser login")
+def login(token: bool) -> None:
     """Log in to HuggingFace Hub (like gh auth login)."""
     from .config import save_credentials, clear_credentials, CREDENTIALS_PATH
 
@@ -66,29 +74,136 @@ def login() -> None:
                 "next_steps": ["Run 'opentraces init' to set up a project"],
                 "next_command": "opentraces init",
             })
+            return
         except Exception:
             click.echo("Token found but invalid. Re-authenticating...")
             clear_credentials()
-            # Fall through to login flow below
 
-        if config.hf_token:
-            return
+    if token:
+        # Fallback: manual token paste (for CI, Docker, headless)
+        _login_with_token(save_credentials, CREDENTIALS_PATH)
+    else:
+        # Primary: OAuth device code flow (like gh auth login)
+        _login_with_device_code(save_credentials, CREDENTIALS_PATH)
 
-    # Interactive login
-    click.echo("Log in to HuggingFace Hub.")
-    click.echo("Get your token at: https://huggingface.co/settings/tokens")
+
+def _login_with_device_code(save_credentials, credentials_path) -> None:
+    """OAuth device code flow. User authorizes in browser with a short code."""
+    import time as _time
+
+    try:
+        import requests
+    except ImportError:
+        click.echo("'requests' package required for device login. Falling back to token paste.")
+        click.echo("Install with: pip install requests")
+        click.echo()
+        _login_with_token(save_credentials, credentials_path)
+        return
+
+    click.echo("Authenticating with HuggingFace Hub...\n")
+
+    # Step 1: Request device code
+    try:
+        resp = requests.post(HF_DEVICE_CODE_URL, data={
+            "client_id": HF_OAUTH_CLIENT_ID,
+            "scope": HF_OAUTH_SCOPES,
+        }, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        click.echo(f"Failed to start device login: {e}")
+        click.echo("Falling back to token paste.\n")
+        _login_with_token(save_credentials, credentials_path)
+        return
+
+    device_code = data["device_code"]
+    user_code = data["user_code"]
+    verification_uri = data.get("verification_uri", "https://huggingface.co/device")
+    interval = data.get("interval", 5)
+    expires_in = data.get("expires_in", 900)
+
+    # Step 2: Show code and try to open browser
+    click.echo(f"  Open this URL in your browser:")
+    click.echo(f"    {verification_uri}")
     click.echo()
-    token = click.prompt("Token", hide_input=True)
+    click.echo(f"  And enter code: {user_code}")
+    click.echo()
 
-    if not token.startswith("hf_"):
+    # Try to open browser automatically
+    try:
+        import webbrowser
+        webbrowser.open(verification_uri)
+    except Exception:
+        pass
+
+    # Step 3: Poll for authorization
+    click.echo("  Waiting for authorization...", nl=False)
+
+    deadline = _time.time() + expires_in
+    access_token = None
+
+    while _time.time() < deadline:
+        _time.sleep(interval)
+
+        try:
+            resp = requests.post(HF_TOKEN_URL, data={
+                "grant_type": HF_DEVICE_GRANT_TYPE,
+                "device_code": device_code,
+                "client_id": HF_OAUTH_CLIENT_ID,
+            }, timeout=15)
+
+            token_data = resp.json()
+
+            if "access_token" in token_data:
+                access_token = token_data["access_token"]
+                break
+            elif token_data.get("error") == "authorization_pending":
+                click.echo(".", nl=False)
+                continue
+            elif token_data.get("error") == "slow_down":
+                interval = min(interval + 2, 15)
+                click.echo(".", nl=False)
+                continue
+            elif token_data.get("error") == "expired_token":
+                click.echo("\n  Code expired. Please try again.")
+                sys.exit(3)
+            else:
+                error = token_data.get("error_description", token_data.get("error", "Unknown error"))
+                click.echo(f"\n  Authorization failed: {error}")
+                sys.exit(3)
+        except requests.RequestException:
+            click.echo(".", nl=False)
+            continue
+
+    if not access_token:
+        click.echo("\n  Timed out waiting for authorization.")
+        sys.exit(3)
+
+    click.echo(" done\n")
+
+    # Step 4: Validate and save
+    _validate_and_save(access_token, save_credentials, credentials_path)
+
+
+def _login_with_token(save_credentials, credentials_path) -> None:
+    """Manual token paste flow for CI/headless environments."""
+    click.echo("Log in with a HuggingFace access token.")
+    click.echo("Get your token at: https://huggingface.co/settings/tokens\n")
+    token_input = click.prompt("Token", hide_input=True)
+
+    if not token_input.startswith("hf_"):
         click.echo("Invalid token format (should start with hf_).")
         emit_json(error_response("INVALID_TOKEN", "auth", "Token must start with hf_"))
         sys.exit(3)
 
-    # Validate token
+    _validate_and_save(token_input, save_credentials, credentials_path)
+
+
+def _validate_and_save(token_value: str, save_credentials, credentials_path) -> None:
+    """Validate a token with HF API and save to credentials file."""
     try:
         from huggingface_hub import HfApi
-        api = HfApi(token=token)
+        api = HfApi(token=token_value)
         user_info = api.whoami()
         username = user_info.get("name", "unknown")
     except Exception as e:
@@ -96,17 +211,16 @@ def login() -> None:
         emit_json(error_response("TOKEN_INVALID", "auth", str(e)))
         sys.exit(3)
 
-    # Save credentials
-    save_credentials(token)
-    click.echo(f"\nAuthenticated as {username}.")
-    click.echo(f"Token saved to {CREDENTIALS_PATH}")
-    click.echo("\nYou can now push traces with 'opentraces push'.")
+    save_credentials(token_value)
+    click.echo(f"  Authenticated as {username}.")
+    click.echo(f"  Token saved to {credentials_path}")
+    click.echo(f"\n  You can now push traces with 'opentraces push'.")
 
     emit_json({
         "status": "ok",
         "authenticated": True,
         "username": username,
-        "credentials_path": str(CREDENTIALS_PATH),
+        "credentials_path": str(credentials_path),
         "next_steps": ["Run 'opentraces init' to set up a project"],
         "next_command": "opentraces init",
     })
