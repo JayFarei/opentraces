@@ -4,6 +4,10 @@ import { useState } from "react";
 import Terminal from "./Terminal";
 
 const tabLabels = ["init", "status", "review", "push"];
+const installMethods = [
+  { label: "pip", cmd: "pip install opentraces" },
+  { label: "brew", cmd: "brew install opentraces" },
+] as const;
 
 function InitContent() {
   return (
@@ -92,6 +96,7 @@ const tabContents = [InitContent, StatusContent, ReviewContent, PushContent];
 
 export default function Hero() {
   const [activeTab, setActiveTab] = useState(0);
+  const [installIdx, setInstallIdx] = useState(0);
 
   const ActiveContent = tabContents[activeTab];
 
@@ -105,9 +110,20 @@ export default function Hero() {
           <p className="hero-sub">
             Commit your agent traces to HuggingFace Hub. Private or public, like GitHub for code. One init, automatic collection, push when ready.
           </p>
+          <div className="hero-install-tabs">
+            {installMethods.map((m, i) => (
+              <button
+                key={m.label}
+                className={`hero-install-tab${i === installIdx ? " active" : ""}`}
+                onClick={() => setInstallIdx(i)}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
           <div className="hero-cli-wrap">
             <span className="hero-cli-prefix">$</span>
-            <span className="hero-cli-input">pip install opentraces</span>
+            <span className="hero-cli-input">{installMethods[installIdx].cmd}</span>
             <span className="hero-cli-copy" title="Copy">[cp]</span>
           </div>
           <div className="hero-actions">

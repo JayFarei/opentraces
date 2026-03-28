@@ -318,6 +318,36 @@ html { color-scheme: dark light; }
   max-width: 520px;
   margin-bottom: 24px;
 }
+.hero-install-tabs {
+  display: flex;
+  gap: 0;
+  max-width: 420px;
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 1;
+}
+.hero-install-tab {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 14px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color 0.1s;
+}
+.hero-install-tab + .hero-install-tab {
+  border-left: none;
+}
+.hero-install-tab.active {
+  color: var(--text);
+  background: var(--bg-alt);
+  border-bottom-color: var(--bg-alt);
+}
+.hero-install-tab:hover:not(.active) {
+  color: var(--text-muted);
+}
 .hero-cli-wrap {
   display: flex;
   align-items: stretch;

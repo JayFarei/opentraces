@@ -23,6 +23,9 @@ export default function ShareFrom() {
               <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
                 <span style={{ color: "var(--text-dim)" }}>$ </span>pip install opentraces
               </div>
+              <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+                <span style={{ color: "var(--text-dim)" }}>$ </span>brew install opentraces
+              </div>
             </div>
           </div>
 
