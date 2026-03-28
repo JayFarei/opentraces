@@ -1,6 +1,5 @@
 import { useSessionList } from "../../hooks/useSessionList";
 import { useViewPreferences } from "../../contexts/ViewPreferencesContext";
-import { Logo } from "../icons/Logo";
 import type { SessionStage } from "../../types/trace";
 
 export function Header() {
@@ -29,12 +28,9 @@ export function Header() {
       style={{ fontFamily: "var(--font-mono)", fontSize: "14px" }}
     >
       <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2">
-          <Logo size={22} />
-          <span className="font-[family-name:var(--font-display)] text-[16px] font-bold tracking-tight">
-            opentraces<span className="text-[var(--accent)]">.</span>ai
-          </span>
-        </div>
+        <span className="font-[family-name:var(--font-body)] text-[15px] tracking-tight">
+          open<span className="font-bold">traces</span>
+        </span>
 
         <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
           <span>unstaged: {counts.unstaged}</span>
