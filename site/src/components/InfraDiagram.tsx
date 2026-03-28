@@ -1,7 +1,7 @@
 import SectionRule from "./SectionRule";
 
 const agents = ["Claude Code", "Codex CLI", "Cursor", "Gemini CLI", "OpenCode", "Cline"];
-const steps = ["parse", "enrich", "sanitize", "publish"];
+const steps = ["init", "capture", "stage", "review", "push"];
 const tiers = [
   { name: "danger", label: "tier 1" },
   { name: "automated", label: "tier 2" },
@@ -14,8 +14,7 @@ export default function InfraDiagram() {
       <SectionRule label="infrastructure" />
       <div className="section-title" style={{ textAlign: "center" }}>Infrastructure</div>
       <p className="section-sub" style={{ textAlign: "center", margin: "8px auto 40px", maxWidth: 520 }}>
-        Agents connect via CLI, hook, or skill.
-        Every trace sanitized before it leaves your machine.
+        Hook captures sessions automatically. Review locally, push to HF Hub as private or public datasets.
       </p>
 
       <div className="arch">
@@ -27,7 +26,7 @@ export default function InfraDiagram() {
         </div>
 
         <div className="arch-line" />
-        <div className="arch-label">CLI / Hook / Skill</div>
+        <div className="arch-label">Session Hook</div>
         <div className="arch-line" />
 
         {/* Core pipeline */}
@@ -57,7 +56,7 @@ export default function InfraDiagram() {
         </div>
 
         <div className="arch-line" />
-        <div className="arch-label">JSONL shards, one per push</div>
+        <div className="arch-label">JSONL shards, private or public</div>
         <div className="arch-line" />
 
         {/* HF Hub destination */}

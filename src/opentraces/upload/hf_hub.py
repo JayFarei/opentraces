@@ -128,6 +128,22 @@ class HFUploader:
             error=f"Upload failed after {self.MAX_RETRIES} retries: {last_error}",
         )
 
+    def publish_dataset(self, repo_id: str) -> None:
+        """Change a private dataset to public."""
+        self.api.update_repo_settings(
+            repo_id=repo_id,
+            repo_type="dataset",
+            private=False,
+        )
+
+    def set_gated(self, repo_id: str, gated: str = "auto") -> None:
+        """Enable gated access on a dataset."""
+        self.api.update_repo_settings(
+            repo_id=repo_id,
+            repo_type="dataset",
+            gated=gated,
+        )
+
     def get_existing_shards(self) -> list[str]:
         """List existing trace shard files in the repo."""
         try:

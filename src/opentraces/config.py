@@ -45,6 +45,7 @@ class Config(BaseModel):
         description="Override for ~/.claude/projects/ location",
     )
     classifier_sensitivity: str = Field("medium", pattern="^(low|medium|high)$")
+    dataset_visibility: str = Field("private", pattern="^(public|private)$")
 
 
 def ensure_dirs() -> None:

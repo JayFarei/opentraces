@@ -751,8 +751,11 @@ def review(web: bool, port: int, tui: bool) -> None:
 
 @main.command()
 @click.option("--approved-only", is_flag=True, help="Only push approved traces")
-@click.option("--private", is_flag=True, help="Create the HF dataset as private")
-def push(approved_only: bool, private: bool) -> None:
+@click.option("--private", is_flag=True, help="Force private visibility (overrides config)")
+@click.option("--public", is_flag=True, help="Force public visibility (overrides config)")
+@click.option("--publish", is_flag=True, help="Change an existing private dataset to public (no upload)")
+@click.option("--gated", is_flag=True, help="Enable gated access (auto-approve) on the dataset")
+def push(approved_only: bool, private: bool, public: bool, publish: bool, gated: bool) -> None:
     """Upload approved traces to HuggingFace Hub."""
     from .config import (
         get_dataset_name, get_project_staging_dir,
@@ -769,6 +772,57 @@ def push(approved_only: bool, private: bool) -> None:
         emit_json(error_response("NOT_AUTHENTICATED", "auth", "No HF token", "Run: opentraces auth"))
         sys.exit(3)
 
+    if private and public:
+        click.echo("Cannot use both --private and --public.")
+        sys.exit(3)
+
+    # Get username from HF (needed for all paths)
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi(token=cfg.hf_token)
+        user_info = api.whoami()
+        username = user_info.get("name", "unknown")
+    except Exception as e:
+        click.echo(f"Could not get HF username: {e}")
+        sys.exit(4)
+
+    # Derive dataset name from project directory
+    project_dir_name = Path.cwd().name
+    repo_id = f"{username}/opentraces-{project_dir_name}"
+
+    # Handle --publish: just change visibility, no upload
+    if publish:
+        try:
+            uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
+            uploader.publish_dataset(repo_id)
+
+            # Save visibility to project config
+            try:
+                proj_config = load_project_config(Path.cwd())
+                proj_config["remote"] = repo_id
+                proj_config["visibility"] = "public"
+                ot_dir = Path.cwd() / ".opentraces"
+                if ot_dir.exists():
+                    save_project_config(Path.cwd(), proj_config)
+            except Exception:
+                pass
+
+            click.echo(f"Dataset is now public: https://huggingface.co/datasets/{repo_id}")
+            emit_json({
+                "status": "ok",
+                "repo_url": f"https://huggingface.co/datasets/{repo_id}",
+                "visibility": "public",
+            })
+        except Exception as e:
+            click.echo(f"Failed to publish dataset: {e}")
+            sys.exit(4)
+        return
+
+    # Handle --gated (can be combined with upload or standalone)
+    if gated and not approved_only and private is False and public is False:
+        # Standalone --gated usage (no upload flags)
+        pass  # will apply gated after upload below, or standalone if no traces
+
     state = StateManager()
     if approved_only:
         traces_to_upload = state.get_traces_by_status(TraceStatus.APPROVED)
@@ -776,6 +830,17 @@ def push(approved_only: bool, private: bool) -> None:
         traces_to_upload = state.get_pending_upload_traces()
 
     if not traces_to_upload:
+        # If --gated was passed standalone, apply it even without uploading
+        if gated:
+            try:
+                uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
+                uploader.set_gated(repo_id)
+                click.echo(f"Gated access enabled on {repo_id}")
+            except Exception as e:
+                click.echo(f"Failed to set gated access: {e}")
+                sys.exit(4)
+            return
+
         click.echo("No traces ready for upload.")
         emit_json({"status": "ok", "uploaded": 0, "message": "No approved traces to upload"})
         return
@@ -801,25 +866,21 @@ def push(approved_only: bool, private: bool) -> None:
         click.echo("No valid traces to upload.")
         return
 
-    # Get username from HF
-    try:
-        from huggingface_hub import HfApi
-        api = HfApi(token=cfg.hf_token)
-        user_info = api.whoami()
-        username = user_info.get("name", "unknown")
-    except Exception as e:
-        click.echo(f"Could not get HF username: {e}")
-        sys.exit(4)
+    # Determine visibility: --public/--private flags override config
+    if public:
+        is_private = False
+    elif private:
+        is_private = True
+    else:
+        is_private = cfg.dataset_visibility == "private"
 
-    # Derive dataset name from project directory
-    project_dir_name = Path.cwd().name
-    repo_id = f"{username}/opentraces-{project_dir_name}"
+    visibility_label = "private" if is_private else "public"
     click.echo(f"Uploading {len(records)} traces to {repo_id}...")
 
     try:
         with StagingLock():
             uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
-            uploader.ensure_repo_exists(private=private)
+            uploader.ensure_repo_exists(private=is_private)
             result = uploader.upload_traces(records)
 
             # Generate and upload dataset card
@@ -845,16 +906,30 @@ def push(approved_only: bool, private: bool) -> None:
                     click.echo(f"  Warning: dataset card update failed: {e}", err=True)
 
             if result.success:
+                # Apply gated access if requested
+                if gated:
+                    try:
+                        uploader.set_gated(repo_id)
+                    except Exception as e:
+                        click.echo(f"  Warning: failed to set gated access: {e}", err=True)
+
                 # Only mark traces that were actually loaded and uploaded
                 for entry in traces_to_upload:
                     if entry.trace_id in loaded_trace_ids:
                         state.set_trace_status(entry.trace_id, TraceStatus.UPLOADED)
-                click.echo(f"Uploaded {result.trace_count} traces as {result.shard_name}")
 
-                # Save remote URL to project config
+                # Print visibility-aware success message
+                if is_private:
+                    click.echo(f"Pushed {result.trace_count} sessions (private) -- only you can see this dataset")
+                    click.echo("  Run 'opentraces push --publish' when ready to share")
+                else:
+                    click.echo(f"Pushed {result.trace_count} sessions (public) -- visible to everyone")
+
+                # Save remote URL and visibility to project config
                 try:
                     proj_config = load_project_config(Path.cwd())
                     proj_config["remote"] = repo_id
+                    proj_config["visibility"] = visibility_label
                     ot_dir = Path.cwd() / ".opentraces"
                     if ot_dir.exists():
                         save_project_config(Path.cwd(), proj_config)
@@ -866,6 +941,7 @@ def push(approved_only: bool, private: bool) -> None:
                     "uploaded": result.trace_count,
                     "shard": result.shard_name,
                     "repo_url": result.repo_url,
+                    "visibility": visibility_label,
                     "next_steps": [f"View at https://huggingface.co/datasets/{repo_id}"],
                 })
             else:

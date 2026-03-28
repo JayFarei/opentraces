@@ -13,9 +13,9 @@ function InitContent() {
       <span className="terminal-line"><span className="di">  opentraces: initializing trace collection</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  Security tier?</span></span>
-      <span className="terminal-line"><span className="di">  [1] danger</span>    <span className="di">{"\u2014"} auto-share, regex redaction</span></span>
-      <span className="terminal-line"><span className="di">  [2] automated</span> <span className="di">{"\u2014"} scan + review flagged (default)</span>  <span className="s">{"\u2190"}</span></span>
-      <span className="terminal-line"><span className="di">  [3] manual</span>    <span className="di">{"\u2014"} review every session</span></span>
+      <span className="terminal-line"><span className="di">  [1] danger</span>    <span className="di">auto-share, regex redaction</span></span>
+      <span className="terminal-line"><span className="di">  [2] automated</span> <span className="di">scan + review flagged (default)</span>  <span className="s">{"\u2190"}</span></span>
+      <span className="terminal-line"><span className="di">  [3] manual</span>    <span className="di">review every session</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Created .opentraces/config.yml</span></span>
       <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Installed Claude Code session hook</span></span>
@@ -70,11 +70,12 @@ function PushContent() {
     <>
       <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces push</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Pushing 3 approved sessions...</span></span>
+      <span className="terminal-line"><span className="di">  Pushing 3 approved sessions (private)...</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Pushed 3 sessions {"\u2192"}</span> <span className="s">jayfarei/opentraces-my-project</span></span>
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Pushed {"\u2192"}</span> <span className="s">jayfarei/opentraces-my-project</span> <span className="di">(private)</span></span>
       <span className="terminal-line"><span className="di">    135 steps {"\u00B7"} 42,891 tokens {"\u00B7"} $3.21 estimated</span></span>
-      <span className="terminal-line"><span className="di">    </span><span className="s">https://huggingface.co/datasets/jayfarei/opentraces-my-project</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  Run </span><span className="c">opentraces push --publish</span><span className="di"> to make public.</span></span>
     </>
   );
 }
@@ -92,9 +93,9 @@ export default function Hero() {
         <div>
           <div className="hero-pill">open traces &nbsp; v0.1.0</div>
           <div style={{ height: 16 }} />
-          <h1>Your agent traces are training data.</h1>
+          <h1>Open data is the new open source.</h1>
           <p className="hero-sub">
-            Open-source CLI that publishes coding agent sessions as structured JSONL on Hugging Face Hub. Three security tiers. Training-first schema.
+            Commit your agent traces to HuggingFace Hub. Private or public, like GitHub for code. One init, automatic collection, push when ready.
           </p>
           <div className="hero-cli-wrap">
             <span className="hero-cli-prefix">$</span>
@@ -102,8 +103,8 @@ export default function Hero() {
             <span className="hero-cli-copy" title="Copy">[cp]</span>
           </div>
           <div className="hero-actions">
-            <a className="btn btn-primary" href="#">Start contributing</a>
-            <a className="btn btn-outline" href="/docs/">Documentation</a>
+            <a className="btn btn-primary" href="#">[init your project]</a>
+            <a className="btn btn-outline" href="/docs/">[documentation]</a>
           </div>
         </div>
         <div>

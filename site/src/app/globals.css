@@ -821,6 +821,39 @@ tr:hover td { background: var(--surface-hover); }
   margin-bottom: 32px;
 }
 
+/* ═══ Get Started Steps ═══ */
+.get-started-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--border);
+  max-width: 520px;
+  margin: 24px auto 0;
+}
+.get-started-step {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+.get-started-step:last-child {
+  border-bottom: none;
+}
+.get-started-step code {
+  font-family: var(--font-code);
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.get-started-step span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 /* ═══ Schema Explorer ═══ */
 .schema-block {
   border: 1px solid var(--border);

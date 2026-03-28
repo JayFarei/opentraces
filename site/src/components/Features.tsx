@@ -2,8 +2,12 @@ import SectionRule from "./SectionRule";
 
 const features = [
   {
-    title: "passive capture",
-    desc: "Reads existing agent log files from disk. No hooks, no daemons, no runtime overhead.",
+    title: "git for traces",
+    desc: "init, status, review, push. The workflow you already know, applied to agent sessions.",
+  },
+  {
+    title: "private first",
+    desc: "Traces push to private HF datasets by default. Publish when ready, like open-sourcing a repo.",
   },
   {
     title: "three security tiers",
@@ -18,24 +22,20 @@ const features = [
     desc: "Publishes JSONL to HF Hub. Loadable via datasets.load_dataset(). No proprietary lock-in.",
   },
   {
-    title: "multi-agent support",
-    desc: "Claude Code, Codex, Gemini CLI, Cursor, Cline. One schema, many agents.",
+    title: "lazytraces",
+    desc: "Full TUI for reviewing traces. Like lazygit, but for your agent sessions. Approve, reject, redact.",
   },
   {
-    title: "agent trace attribution",
-    desc: "Embeds code attribution at file:line granularity. Bridges trajectory and code output.",
+    title: "automatic collection",
+    desc: "Claude Code hook captures sessions after every conversation. No manual parsing.",
+  },
+  {
+    title: "agent-native cli",
+    desc: "Every command outputs structured JSON. Built for agents to drive agents.",
   },
   {
     title: "contributor dashboard",
     desc: "Your personal analytics. Cost, cache efficiency, tool usage, success rates.",
-  },
-  {
-    title: "agent-native cli",
-    desc: "Every command outputs structured JSON with next_steps. Built for agents to drive.",
-  },
-  {
-    title: "zero config",
-    desc: "One pip install. One command. Auto-discovers sessions, auto-detects agents.",
   },
 ];
 
