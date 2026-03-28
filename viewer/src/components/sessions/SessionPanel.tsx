@@ -42,7 +42,13 @@ export function SessionPanel() {
   };
 
   for (const s of sessions) {
-    grouped[s.stage].push(s);
+    const bucket = grouped[s.stage];
+    if (bucket) {
+      bucket.push(s);
+    } else {
+      // Unknown stage falls into unstaged
+      grouped.unstaged.push(s);
+    }
   }
 
   return (

@@ -35,16 +35,19 @@ interface RawSession {
   project: string;
 }
 
+const VALID_STAGES = new Set(["unstaged", "staged", "committed", "pushed", "rejected"]);
+
 function mapSession(raw: RawSession): SessionListItem {
+  const rawStage = raw._stage ?? "unstaged";
   return {
     trace_id: raw.trace_id,
-    task_description: raw.task,
-    agent_name: raw.agent,
+    task_description: raw.task ?? "",
+    agent_name: raw.agent ?? "unknown",
     model: raw.model ?? "unknown",
-    step_count: raw.steps,
-    flag_count: raw.security_flags,
-    stage: (raw._stage ?? "unstaged") as SessionListItem["stage"],
-    timestamp: raw.timestamp,
+    step_count: raw.steps ?? 0,
+    flag_count: raw.security_flags ?? 0,
+    stage: (VALID_STAGES.has(rawStage) ? rawStage : "unstaged") as SessionListItem["stage"],
+    timestamp: raw.timestamp ?? "",
   };
 }
 
