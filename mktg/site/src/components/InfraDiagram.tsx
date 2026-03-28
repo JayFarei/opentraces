@@ -80,7 +80,7 @@ export default function InfraDiagram() {
 
         {/* HF Hub destination */}
         <div className="arch-box arch-dest">
-          <span style={{ fontSize: 15 }}>{"\uD83E\uDD17"}</span>
+          <img src="/hf-logo.svg" alt="Hugging Face" width={18} height={18} style={{ display: "inline-block", verticalAlign: "middle" }} />
           <span>Hugging Face Hub</span>
         </div>
       </div>
