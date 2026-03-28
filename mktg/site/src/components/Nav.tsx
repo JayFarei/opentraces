@@ -12,6 +12,7 @@ function resolveTheme(): "dark" | "light" {
 
 function applyTheme(t: "dark" | "light") {
   const el = document.documentElement;
+  el.setAttribute("data-theme", t);
   el.classList.remove("theme-dark", "theme-light");
   el.classList.add(t === "dark" ? "theme-dark" : "theme-light");
   el.style.colorScheme = t;
