@@ -21,28 +21,56 @@ async function request<T>(
   return res.json() as Promise<T>;
 }
 
+interface RawSession {
+  trace_id: string;
+  task: string;
+  agent: string;
+  model: string | null;
+  steps: number;
+  security_flags: number;
+  _stage: string;
+  status: string;
+  timestamp: string;
+  tool_calls: number;
+  project: string;
+}
+
+function mapSession(raw: RawSession): SessionListItem {
+  return {
+    trace_id: raw.trace_id,
+    task_description: raw.task,
+    agent_name: raw.agent,
+    model: raw.model ?? "unknown",
+    step_count: raw.steps,
+    flag_count: raw.security_flags,
+    stage: (raw._stage ?? "unstaged") as SessionListItem["stage"],
+    timestamp: raw.timestamp,
+  };
+}
+
 export async function fetchSessions(): Promise<SessionListItem[]> {
-  return request<SessionListItem[]>("/api/sessions");
+  const raw = await request<RawSession[]>("/api/sessions");
+  return raw.map(mapSession);
 }
 
 export async function fetchTrace(traceId: string): Promise<TraceRecord> {
-  return request<TraceRecord>(`/api/traces/${traceId}`);
+  return request<TraceRecord>(`/api/session/${traceId}/detail`);
 }
 
 export async function stageSession(traceId: string): Promise<void> {
-  await request<unknown>(`/api/sessions/${traceId}/stage`, { method: "POST" });
+  await request<unknown>(`/api/session/${traceId}/stage`, { method: "POST" });
 }
 
 export async function unstageSession(traceId: string): Promise<void> {
-  await request<unknown>(`/api/sessions/${traceId}/unstage`, { method: "POST" });
+  await request<unknown>(`/api/session/${traceId}/unstage`, { method: "POST" });
 }
 
 export async function approveSession(traceId: string): Promise<void> {
-  await request<unknown>(`/api/sessions/${traceId}/approve`, { method: "POST" });
+  await request<unknown>(`/api/session/${traceId}/approve`, { method: "POST" });
 }
 
 export async function rejectSession(traceId: string): Promise<void> {
-  await request<unknown>(`/api/sessions/${traceId}/reject`, { method: "POST" });
+  await request<unknown>(`/api/session/${traceId}/reject`, { method: "POST" });
 }
 
 export async function redactStep(
@@ -50,7 +78,7 @@ export async function redactStep(
   stepIndex: number,
 ): Promise<void> {
   await request<unknown>(
-    `/api/sessions/${traceId}/steps/${String(stepIndex)}/redact`,
+    `/api/session/${traceId}/step/${String(stepIndex)}/redact`,
     { method: "POST" },
   );
 }
@@ -68,8 +96,9 @@ export async function commitSessions(
 export async function pushCommit(
   commitId: string,
 ): Promise<{ hf_commit_sha: string }> {
-  return request<{ hf_commit_sha: string }>(`/api/push/${commitId}`, {
+  return request<{ hf_commit_sha: string }>("/api/push", {
     method: "POST",
+    body: JSON.stringify({ commit_id: commitId }),
   });
 }
 
@@ -78,6 +107,6 @@ export async function fetchRedactionPreview(
   tier: number,
 ): Promise<RedactionPreview> {
   return request<RedactionPreview>(
-    `/api/sessions/${traceId}/redaction-preview?tier=${String(tier)}`,
+    `/api/session/${traceId}/redaction-preview?tier=${String(tier)}`,
   );
 }
