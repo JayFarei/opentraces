@@ -1029,7 +1029,12 @@ def push(approved_only: bool, private: bool, public: bool, publish: bool, gated:
         # Standalone --gated usage (no upload flags)
         pass  # will apply gated after upload below, or standalone if no traces
 
-    state = StateManager()
+    # Use project-local state if available, fall back to global
+    from .config import get_project_state_path
+    proj_state_path = get_project_state_path(Path.cwd())
+    state = StateManager(
+        state_path=proj_state_path if proj_state_path.exists() else None
+    )
     if approved_only:
         traces_to_upload = state.get_traces_by_status(TraceStatus.APPROVED)
     else:
