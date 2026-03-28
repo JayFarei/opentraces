@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useSelection } from "../../contexts/SelectionContext";
 import { useSessionList } from "../../hooks/useSessionList";
 import { useReviewActions } from "../../hooks/useReviewActions";
 import { CommitDialog } from "../review/CommitDialog";
+import { RedactionWand } from "../review/RedactionWand";
 import type { SessionStage } from "../../types/trace";
 
 function ActionButton({
@@ -34,6 +35,13 @@ export function ReviewBar() {
   const { stage, unstage, approve, reject, push } = useReviewActions();
   const [showCommitDialog, setShowCommitDialog] = useState(false);
 
+  const handleWandRedact = useCallback((text: string) => {
+    // For now, log the redaction. Full API integration when backend supports text-based redaction.
+    console.log("[redaction-wand] User selected for redaction:", text);
+    // TODO: POST /api/session/<id>/redact-text { text, trace_id }
+    alert(`Marked for redaction: "${text.length > 50 ? text.slice(0, 49) + "\u2026" : text}"`);
+  }, []);
+
   const session = sessions?.find((s) => s.trace_id === selectedSessionId);
   if (!session) return null;
 
@@ -45,6 +53,9 @@ export function ReviewBar() {
   return (
     <>
       <div className="flex items-center gap-3 px-4 py-2 border-t border-[var(--border)] bg-[var(--bg-alt)]">
+        {/* Redaction wand - always available */}
+        <RedactionWand onRedact={handleWandRedact} />
+
         <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] mr-2">
           {currentStage}
         </span>
