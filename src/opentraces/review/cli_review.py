@@ -1,6 +1,6 @@
 """Interactive CLI for reviewing staged traces.
 
-Provides a terminal-based interface for Tier 3 manual review,
+Provides a terminal-based interface for Tier 3 strict review,
 an alternative to the web UI for quick reviews.
 """
 

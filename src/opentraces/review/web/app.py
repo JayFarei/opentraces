@@ -1,6 +1,6 @@
 """Flask application for the opentraces web review interface.
 
-Serves a local web UI for Tier 3 manual review: browse sessions,
+Serves a local web UI for Tier 3 strict review: browse sessions,
 approve/reject/redact traces, then push to HF Hub.
 """
 

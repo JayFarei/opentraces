@@ -176,7 +176,7 @@ Low effort since DataClaw's format is simple flat JSONL. Captures ~25 existing c
 
 ## Phase 2: Security Pipeline (Days 3-5)
 
-### 2.1 Tier 1 - Danger Mode (Regex Auto-Redact)
+### 2.1 Tier 1 - Open Mode (Regex Auto-Redact)
 
 Vendor DataClaw's `secrets.py` (273 lines, MIT) + `anonymizer.py` (105 lines, MIT).
 
@@ -198,14 +198,14 @@ JWT, API keys (Anthropic/OpenAI/HF/GitHub/PyPI/NPM/AWS/Slack/Discord), private k
 
 **RedactingFilter:** Applied to all log handlers to prevent credentials leaking into opentraces' own debug logs.
 
-### 2.2 Tier 2 - Automated (Deferred to v0.2)
+### 2.2 Tier 2 - Guarded (Deferred to v0.2)
 
 Per discussion-log Q15: Drop LLM classifier. Realistic middle ground for v0.2:
 - Regex scan (Tier 1 baseline)
 - Heuristic flagging (internal hostnames, AWS account IDs, DB connection strings)
 - Escalation to human review for flagged items
 
-### 2.3 Tier 3 - Manual Review
+### 2.3 Tier 3 - Strict Review
 
 Nothing uploads until user reviews. Sessions buffered locally in `~/.opentraces/staging/`.
 
@@ -296,7 +296,7 @@ opentraces config set        # Per-project/global config
 opentraces config show       # Display current config (redact_strings masked)
 opentraces discover          # List available sessions across projects
 opentraces parse             # Parse sessions into enriched JSONL (local)
-opentraces review            # Tier 3 manual review (CLI or --web)
+opentraces review            # Tier 3 strict review (CLI or --web)
 opentraces push              # Upload approved traces to HF Hub
 opentraces import --from dataclaw <path>  # Import DataClaw exports
 opentraces export --format atif           # Lossy ATIF conversion
@@ -322,7 +322,7 @@ def upload_traces(traces: list[TraceRecord], config: Config) -> str:
 
 **Dataset card:** Auto-generated README.md with YAML frontmatter, schema documentation, model distribution, token counts, outcome signal distribution, security tier used, contributor stats, `datasets.load_dataset()` snippet. License: CC-BY-4.0.
 
-**Consent model (per discussion-log Q4):** Per-project with per-session override. `opentraces config set --project . --tier danger` for persistent config.
+**Consent model (per discussion-log Q4):** Per-project with per-session override. `opentraces config set --project . --tier open` for persistent config.
 
 ### 4.3 Skill File
 
@@ -463,7 +463,7 @@ Phases 1-4 are sequential (each builds on the previous). Phases 5-7 can overlap.
 ## Out of Scope for v0.1
 
 - Multi-agent support beyond Claude Code (adapter contract ready)
-- Tier 2 automated classifier (requires training data from v0.1)
+- Tier 2 guarded classifier (requires training data from v0.1)
 - Real-time capture / stop-hooks (passive only)
 - Canonical aggregated dataset curation
 - Parquet dual-write
@@ -481,7 +481,7 @@ Phases 1-4 are sequential (each builds on the previous). Phases 5-7 can overlap.
 |------|--------|------------|
 | Claude Code session format changes | Parser breaks | Pin to known format, version detection |
 | HF Hub API rate limits | Upload failures | Batched upload with retry + exponential backoff |
-| Secret detection false negatives | Leaked credentials in public dataset | Two-pass scan + Tier 3 manual review as default |
+| Secret detection false negatives | Leaked credentials in public dataset | Two-pass scan + Tier 3 strict review as default |
 | Schema too complex for adoption | Low contribution rate | Zero required annotation, deterministic enrichment |
 | DataClaw captures mindshare first | Reduced adoption | Ship faster, differentiate on schema depth + dashboard |
 

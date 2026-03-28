@@ -5,15 +5,15 @@ import SectionRule from "./SectionRule";
 
 const tiers = [
   {
-    id: "danger",
-    name: "Danger",
+    id: "open",
+    name: "Open",
     label: "tier 1",
     color: "var(--red)",
     desc: "Regex auto-redact, no human review. For open-source and benchmarks.",
     terminal: [
       { p: "~$", c: "opentraces init", f: "--tier", s: "1" },
       { gap: true },
-      { ok: "\u2713", di: " tier 1 (danger), sessions auto-stage" },
+      { ok: "\u2713", di: " tier 1 (open), sessions auto-stage" },
       { ok: "\u2713", di: " installed Claude Code hook" },
       { gap: true },
       { p: "~$", c: "opentraces push" },
@@ -22,15 +22,15 @@ const tiers = [
     ],
   },
   {
-    id: "automated",
-    name: "Automated",
+    id: "guarded",
+    name: "Guarded",
     label: "tier 2 (default)",
     color: "var(--accent)",
     desc: "Heuristic classifier flags internal hostnames, proprietary patterns, de-anonymization risks. Flagged traces need your approval.",
     terminal: [
       { p: "~$", c: "opentraces init" },
       { gap: true },
-      { ok: "\u2713", di: " tier 2 (automated), default" },
+      { ok: "\u2713", di: " tier 2 (guarded), default" },
       { ok: "\u2713", di: " installed Claude Code hook" },
       { gap: true },
       { p: "~$", c: "opentraces push" },
@@ -40,15 +40,15 @@ const tiers = [
     ],
   },
   {
-    id: "manual",
-    name: "Manual",
+    id: "strict",
+    name: "Strict",
     label: "tier 3",
     color: "var(--text)",
     desc: "Nothing leaves your machine without explicit approval. Full human-in-the-loop review via TUI or local web UI.",
     terminal: [
       { p: "~$", c: "opentraces init", f: "--tier", s: "3" },
       { gap: true },
-      { ok: "\u2713", di: " tier 3 (manual), review everything" },
+      { ok: "\u2713", di: " tier 3 (strict), review everything" },
       { ok: "\u2713", di: " installed Claude Code hook" },
       { gap: true },
       { p: "~$", c: "opentraces review" },
@@ -103,7 +103,7 @@ function TerminalLine({ line }: { line: TermLine }) {
 }
 
 export default function PrivacyTrust() {
-  const [activeTier, setActiveTier] = useState("automated");
+  const [activeTier, setActiveTier] = useState("guarded");
   const active = tiers.find((t) => t.id === activeTier)!;
 
   return (
@@ -149,7 +149,7 @@ export default function PrivacyTrust() {
                 style={{
                   flex: 1,
                   padding: "10px 12px",
-                  borderRight: t.id !== "manual" ? "1px solid var(--border)" : "none",
+                  borderRight: t.id !== "strict" ? "1px solid var(--border)" : "none",
                   border: "none",
                   borderBottom: activeTier === t.id ? `2px solid ${t.color}` : "2px solid transparent",
                   background: activeTier === t.id ? "var(--surface)" : "transparent",

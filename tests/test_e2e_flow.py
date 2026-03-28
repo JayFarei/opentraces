@@ -57,8 +57,10 @@ def real_session_file():
     sessions = list(THIS_PROJECT_DIR.glob("*.jsonl"))
     if not sessions:
         pytest.skip("No session files found")
-    # Pick the smallest file for speed
-    return min(sessions, key=lambda p: p.stat().st_size)
+    # Pick a mid-sized file (smallest may have 0 tool calls and get filtered)
+    sorted_by_size = sorted(sessions, key=lambda p: p.stat().st_size)
+    # Use the median file, not the smallest
+    return sorted_by_size[len(sorted_by_size) // 2]
 
 
 class TestInit:

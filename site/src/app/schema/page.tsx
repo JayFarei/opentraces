@@ -1,4 +1,3 @@
-import ThemeToggle from "@/components/ThemeToggle";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import SectionRule from "@/components/SectionRule";
@@ -50,7 +49,7 @@ const traceRecordFields: Field[] = [
   { name: "outcome", type: "Outcome", required: false, description: "Session outcome with success/failure signal" },
   { name: "tokens", type: "TokenUsage", required: false, description: "Aggregate token usage for the session" },
   { name: "cost_usd", type: "number", required: false, description: "Total cost in USD" },
-  { name: "security_tier", type: "string", required: true, description: "Security tier applied: danger, automated, manual" },
+  { name: "security_tier", type: "string", required: true, description: "Security tier applied: open, guarded, strict" },
   { name: "dependencies", type: "string[]", required: false, description: "Detected project dependencies" },
   { name: "contributor", type: "string", required: true, description: "HF username of the contributor" },
   { name: "timestamp", type: "string", required: true, description: "ISO 8601 timestamp of session start" },
@@ -98,7 +97,6 @@ const models = [
 export default function SchemaPage() {
   return (
     <>
-      <ThemeToggle />
       <div className="container">
         <Nav />
 
@@ -174,7 +172,7 @@ export default function SchemaPage() {
   "outcome": { "success": true, "metrics": { "tests_passed": 12 } },
   "tokens": { "input": 12400, "output": 3200, "cache_read": 8100 },
   "cost_usd": 2.40,
-  "security_tier": "automated",
+  "security_tier": "guarded",
   "dependencies": ["react", "zod", "typescript"],
   "contributor": "jayfarei",
   "timestamp": "2026-03-27T14:30:00Z"

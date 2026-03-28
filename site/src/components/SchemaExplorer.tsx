@@ -22,7 +22,7 @@ export default function SchemaExplorer() {
 {"\n"}  <span className="schema-key">&quot;outcome&quot;</span>: {"{"} <span className="schema-key">&quot;success&quot;</span>: <span className="schema-type">true</span>, <span className="schema-key">&quot;committed&quot;</span>: <span className="schema-type">true</span>, <span className="schema-key">&quot;patch&quot;</span>: <span className="schema-str">&quot;...&quot;</span> {"}"},
 {"\n"}  <span className="schema-key">&quot;attribution&quot;</span>: {"{"} <span className="schema-key">&quot;files&quot;</span>: [{"{"} <span className="schema-key">&quot;path&quot;</span>: <span className="schema-str">&quot;src/parser.ts&quot;</span>, <span className="schema-key">&quot;ranges&quot;</span>: [...] {"}"}] {"}"},
 {"\n"}  <span className="schema-key">&quot;metrics&quot;</span>: {"{"} <span className="schema-key">&quot;total_steps&quot;</span>: <span className="schema-type">42</span>, <span className="schema-key">&quot;estimated_cost_usd&quot;</span>: <span className="schema-type">2.40</span> {"}"},
-{"\n"}  <span className="schema-key">&quot;security&quot;</span>: {"{"} <span className="schema-key">&quot;tier&quot;</span>: <span className="schema-str">&quot;automated&quot;</span> {"}"},
+{"\n"}  <span className="schema-key">&quot;security&quot;</span>: {"{"} <span className="schema-key">&quot;tier&quot;</span>: <span className="schema-str">&quot;guarded&quot;</span> {"}"},
 {"\n"}  <span className="schema-key">&quot;dependencies&quot;</span>: [<span className="schema-str">&quot;react&quot;</span>, <span className="schema-str">&quot;typescript&quot;</span>]
 {"\n"}{`}`}</pre>
       </div>

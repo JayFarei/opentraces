@@ -9,3 +9,5 @@ build/
 *.egg-link
 site/node_modules/
 site/.next/
+.gstack/
+.opentraces/staging/

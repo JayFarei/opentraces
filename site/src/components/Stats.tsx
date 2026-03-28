@@ -8,10 +8,10 @@ const stats = [
 ];
 
 const sessions = [
-  { id: "a4f2b8c1", agent: "claude-code", steps: 42, cost: "$2.40", outcome: "success", outcomeClass: "badge-ok", tier: "automated", tierClass: "badge-ac" },
-  { id: "b8c1d9e3", agent: "claude-code", steps: 18, cost: "$0.87", outcome: "failed", outcomeClass: "badge-er", tier: "automated", tierClass: "badge-ac" },
-  { id: "d9e3f1a2", agent: "codex", steps: 31, cost: "$1.92", outcome: "success", outcomeClass: "badge-ok", tier: "danger", tierClass: "badge-wa" },
-  { id: "f1a2c3b4", agent: "gemini-cli", steps: 7, cost: "$0.34", outcome: "flagged", outcomeClass: "badge-wa", tier: "manual", tierClass: "badge-bl" },
+  { id: "a4f2b8c1", agent: "claude-code", steps: 42, cost: "$2.40", outcome: "success", outcomeClass: "badge-ok", tier: "guarded", tierClass: "badge-ac" },
+  { id: "b8c1d9e3", agent: "claude-code", steps: 18, cost: "$0.87", outcome: "failed", outcomeClass: "badge-er", tier: "guarded", tierClass: "badge-ac" },
+  { id: "d9e3f1a2", agent: "codex", steps: 31, cost: "$1.92", outcome: "success", outcomeClass: "badge-ok", tier: "open", tierClass: "badge-wa" },
+  { id: "f1a2c3b4", agent: "gemini-cli", steps: 7, cost: "$0.34", outcome: "flagged", outcomeClass: "badge-wa", tier: "strict", tierClass: "badge-bl" },
 ];
 
 const tools = [

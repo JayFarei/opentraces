@@ -994,7 +994,7 @@ Traces.com and opentraces.ai address overlapping problem spaces, both normalize 
 
 3. **Sub-agent hierarchy**: Traces.com counts messages by type but does not model parent-child agent relationships. Our explicit delegation tracking with agent roles (explore/plan/main) provides richer training signal.
 
-4. **Configurable redaction**: Traces.com offers automatic scrubbing with no user control. We offer DataClaw-inspired 3-tier security (Danger/Automated/Manual) with configurable regex patterns, entropy analysis, custom redaction strings, and attestation gates.
+4. **Configurable redaction**: Traces.com offers automatic scrubbing with no user control. We offer DataClaw-inspired 3-tier security (Open/Guarded/Strict) with configurable regex patterns, entropy analysis, custom redaction strings, and attestation gates.
 
 5. **Per-message metadata**: Traces.com stores only trace-level aggregates (messageTypeCounts, toolTypeCounts). Our schema includes per-message timestamps, token counts, and cost data, critical for training data quality and cost analysis.
 

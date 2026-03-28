@@ -2,7 +2,7 @@
 
 The plugin offers three modes for controlling what gets uploaded. These are configured per-project or per-session, not globally, because the sensitivity of a personal side-project differs enormously from a client codebase.
 
-## Tier 1: Danger Mode (Minimal Gate)
+## Tier 1: Open Mode (Minimal Gate)
 
 Traces are uploaded with minimal friction, but not blindly. Before any upload a lightweight baseline security check runs: regex-based scanning for high-confidence secrets (API keys, tokens, passwords) and obvious PII (emails, IP addresses). Anything that trips the baseline is auto-redacted, not escalated.
 
@@ -12,7 +12,7 @@ Traces are uploaded with minimal friction, but not blindly. Before any upload a 
 - Benchmark runs (SWE-bench, Aider-bench) where there's nothing to protect
 - Researchers who want maximum throughput and accept the risk
 
-The "danger" label is intentional UX, it should feel like `git push --force`.
+The "open" label signals that this tier is for projects where the codebase is already public.
 
 ```
 Trace captured
@@ -31,7 +31,7 @@ Trace captured
 
 **Security principle:** Even the lowest-friction tier guarantees no raw secrets or credentials leak into the public dataset.
 
-## Tier 2: Automated Screening + Escalation (Default)
+## Tier 2: Guarded Screening + Escalation (Default)
 
 Traces pass through a classifier/extraction pipeline before upload:
 
@@ -75,7 +75,7 @@ Trace captured
 
 **Security principle:** Machine classifiers handle the bulk. Humans only see edge cases the classifier is uncertain about.
 
-## Tier 3: Manual Post-Session Review (Human-in-the-Loop)
+## Tier 3: Strict Post-Session Review (Human-in-the-Loop)
 
 Nothing is uploaded during the session. All traces are buffered locally. After the session ends, the user manually reviews every trace before anything leaves their machine.
 

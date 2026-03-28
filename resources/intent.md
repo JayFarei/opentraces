@@ -33,7 +33,7 @@ opentraces.ai sits in the gap: it takes captured traces, normalises them to a ge
 
 The plugin offers three modes for controlling what gets uploaded. These are configured per-project or per-session, not globally, because the sensitivity of a personal side-project differs enormously from a client codebase.
 
-**Tier 1 — Danger Mode (Minimal Gate)**
+**Tier 1 — Open Mode (Minimal Gate)**
 
 Traces are uploaded with minimal friction, but not blindly. Before any upload a lightweight baseline security check runs: regex-based scanning for high-confidence secrets (API keys, tokens, passwords) and obvious PII (emails, IP addresses). Anything that trips the baseline is auto-redacted, not escalated. The user never reviews individual traces, but the floor of "no raw credentials in a public dataset" is maintained.
 
@@ -43,7 +43,7 @@ This is for:
 - Benchmark runs (SWE-bench, Aider-bench) where there's nothing to protect
 - Researchers who want maximum throughput and accept the risk
 
-The "danger" label is intentional UX, it should feel like `git push --force`. The user must explicitly opt in with a confirmation that names the target dataset and acknowledges only baseline checks will occur.
+The "open" label signals this tier is for projects where the codebase is already public. The user must explicitly opt in with a confirmation that names the target dataset and acknowledges only baseline checks will occur.
 
 ```
 Trace captured
@@ -64,7 +64,7 @@ Trace captured
 
 ---
 
-**Tier 2 — Automated Screening + Escalation**
+**Tier 2 — Guarded Screening + Escalation**
 
 Traces pass through a classifier/extraction pipeline before upload. This pipeline:
 
@@ -112,7 +112,7 @@ Trace captured
 
 ---
 
-**Tier 3 — Manual Post-Session Review (Human-in-the-Loop)**
+**Tier 3 — Strict Post-Session Review (Human-in-the-Loop)**
 
 Nothing is uploaded during the session. All traces are buffered locally. After the session ends, the user manually reviews every trace before anything leaves their machine, either through a CLI review interface or a local web UI. They can:
 
@@ -333,7 +333,7 @@ Each line in the JSONL file represents one complete agent session or task unit. 
     "estimated_cost_usd": 2.4
   },
   "security": {
-    "tier": "automated",
+    "tier": "guarded",
     "flags_reviewed": 3,
     "redactions_applied": 1
   },
@@ -407,7 +407,7 @@ Key design decisions:
 **Why not fork**: Forking inherits DataClaw's tightly-coupled CLI architecture and ties us to their release cadence. DataClaw is a 1-month-old project with version string drift (`pyproject.toml` says 0.3.2, `__init__.py` says 0.3.0), CI that publishes to PyPI on every merge to main, and a "performance art protest" framing that creates branding risk for enterprise/institutional adoption.
 
 **What we vendor (MIT license, copy directly)**:
-- `secrets.py` (~273 lines): 19 regex patterns + Shannon entropy analysis + allowlist for false positives. This IS our Tier 1 "Danger" security layer. Battle-tested patterns covering JWT, API keys by provider prefix, DB URLs, private keys, Bearer tokens, IPs, emails, high-entropy strings. We extend with: credit card numbers (Luhn), SSNs, phone numbers.
+- `secrets.py` (~273 lines): 19 regex patterns + Shannon entropy analysis + allowlist for false positives. This IS our Tier 1 "Open" security layer. Battle-tested patterns covering JWT, API keys by provider prefix, DB URLs, private keys, Bearer tokens, IPs, emails, high-entropy strings. We extend with: credit card numbers (Luhn), SSNs, phone numbers.
 - `anonymizer.py` (~105 lines): SHA-256 username hashing, `/Users/`/`/home/` path stripping, macOS hyphen-encoded path handling. Small, proven, exactly what we need for universal path sanitization.
 
 **What we reference (study, port the edge cases, write our own)**:
@@ -476,9 +476,9 @@ opentraces.ai operates as three layers, with its own parsers (referencing DataCl
 │    → Attach outcome signals (user annotation / CI)  │
 │                                                     │
 │  Security tiers:                                    │
-│    → Tier 1 (Danger): vendored patterns + extras    │
-│    → Tier 2 (Automated): classifier + escalation    │
-│    → Tier 3 (Manual): CLI/web review interface      │
+│    → Tier 1 (Open): vendored patterns + extras      │
+│    → Tier 2 (Guarded): classifier + escalation      │
+│    → Tier 3 (Strict): CLI/web review interface      │
 │                                                     │
 │  Quality filter:                                    │
 │    → Min 1 tool call, min 2 steps                   │
@@ -740,7 +740,7 @@ opentraces.ai solves this by giving contributors something back. Publish your tr
 1. **Open data, not walled garden**: Traces published to HF Hub in standard JSONL/Parquet, directly consumable by `datasets.load_dataset()`. No vendor lock-in, no proprietary API dependency, no undisclosed pricing. Contributors own their data under CC-BY-4.0.
 2. **ADP + Agent Trace, the unified format**: opentraces.ai is the only tool that bridges trajectory data (what the agent thought and did) with code attribution (which lines it produced). By embedding Agent Trace-compatible attribution blocks inside trajectory records, every trace is a complete record of process + output. Neither DataClaw, traces.com, ATIF, nor Agent Trace alone provides this mapping. This is the single strongest differentiator.
 3. **Training-first schema depth**: Outcome signals for RL/reward modeling, sub-agent hierarchy for orchestration research, per-step token counts and cost data for efficiency analysis, commit-signal quality filtering, dependency-based dataset discovery, schema versioning for pipeline stability. traces.com's 5-type message classification is optimized for human browsing, not model training.
-4. **Configurable security, not one-size-fits-all**: Three tiers (Danger/Automated/Manual) with per-project configuration, versus traces.com's single automatic scrub with no user control over sensitivity thresholds.
+4. **Configurable security, not one-size-fits-all**: Three tiers (Open/Guarded/Strict) with per-project configuration, versus traces.com's single automatic scrub with no user control over sensitivity thresholds.
 
 The competitive differentiation is not capture (commodity, both traces.com and DataClaw do this) or storage (HF provides this). It is the combination of the trajectory + attribution bridge, training-ready schema depth, configurable security tiers, open infrastructure, and contributor incentives (the analytics dashboard) that no competitor delivers.
 
@@ -778,7 +778,7 @@ A proprietary platform (CLI + web app) that captures conversations between devel
 | **Sharing-first schema** (5 message types, trace-level aggregates only) | Training-first schema (per-step tokens, cost, reasoning, outcome signals) | SFT/RL require step-level metadata that traces.com does not capture |
 | **No outcome signals** | `outcome` field: `{success, signal_source, description, patch}` | Without success/failure signals, traces cannot train reward models |
 | **No sub-agent hierarchy** | `parent_step` links + `agent_role` labels + `subagent_trajectory_ref` | Claude Code spawns subagents every session, flattening loses orchestration signal |
-| **Single automatic scrub, no user control** | 3 configurable security tiers (Danger/Automated/Manual) per-project | One-size-fits-all fails: too permissive for enterprise, too restrictive for open-source |
+| **Single automatic scrub, no user control** | 3 configurable security tiers (Open/Guarded/Strict) per-project | One-size-fits-all fails: too permissive for enterprise, too restrictive for open-source |
 | **No per-message metadata** | Per-step timestamps, token counts (input/output/cache), cost data | Critical for training data quality, cost analysis, and cache efficiency research |
 | **No environment metadata** | `environment` block: OS, shell, VCS (base_commit, branch, diff), language_ecosystem | Enables filtering by ecosystem, reproducing conditions, and correlating with outcomes |
 | **No schema versioning** | `schema_version: "0.1.0"` with migration path | Format changes in traces.com break consumers silently |
@@ -852,7 +852,7 @@ These are gaps in DataClaw's design that opentraces.ai fills:
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **No outcome signals**             | `outcome` field: `{success: bool, signal_source, description, patch}`                                | Critical for RL/reward modeling. Without outcome signals, traces are only useful for SFT on raw conversations. DataClaw's schema cannot train reward models.                                               |
 | **No sub-agent hierarchy**         | `parent_step` links + `agent_role` labels (`main`, `explore`, `plan`) + `subagent_trajectory_ref`    | Claude Code spawns subagents on every session. DataClaw includes subagent JSONL but flattens the hierarchy. opentraces.ai preserves the delegation tree, enabling research on agent orchestration strategies. |
-| **Single security tier**           | 3 tiers: Danger (regex auto-redact), Automated (classifier + escalation), Manual (human-in-the-loop) | DataClaw's single tier is too permissive for teams with sensitive codebases and too restrictive for open-source contributors who want zero friction. Configurable tiers per-project is the right model.    |
+| **Single security tier**           | 3 tiers: Open (regex auto-redact), Guarded (classifier + escalation), Strict (human-in-the-loop) | DataClaw's single tier is too permissive for teams with sensitive codebases and too restrictive for open-source contributors who want zero friction. Configurable tiers per-project is the right model.    |
 | **No environment metadata**        | `environment` block: OS, shell, VCS (base_commit, branch, diff), language_ecosystem                  | Enables filtering by ecosystem, correlating trace quality with environment factors, and reproducing conditions.                                                                                            |
 | **No code attribution**            | Embedded Agent Trace-compatible `attribution` block linking files/lines to conversation steps         | The single biggest differentiator. DataClaw captures conversations but cannot tell you which lines of code the agent actually produced. opentraces.ai bridges trajectory and attribution.                  |
 | **No git diff/commit correlation** | `task.base_commit`, `outcome.patch` (unified diff), `outcome.committed`, `outcome.commit_sha`        | Enables matching traces to code changes, essential for SWE-bench-style evaluation. Committed sessions are higher-signal than abandoned ones.                                                               |
@@ -1001,7 +1001,7 @@ These questions from the original intent have been answered by the background re
 
 - **Own parsers, vendored security**: opentraces.ai ships its own Claude Code parser (v0.1) that outputs the enriched schema directly, with vendored DataClaw `secrets.py` + `anonymizer.py` (MIT, ~380 lines) for baseline security. No `pip install dataclaw` required. Adapter contract ready for multi-agent expansion.
 - **DataClaw JSONL import adapter**: Accept existing DataClaw `conversations.jsonl` exports as an input source, enriching them with opentraces.ai's schema fields where possible. This captures DataClaw's existing community as a migration path without making DataClaw a runtime dependency.
-- **Tier 1 (danger) and Tier 3 (manual review) only**, defer the Tier 2 classifier pipeline
+- **Tier 1 (open) and Tier 3 (strict review) only**, defer the Tier 2 classifier pipeline
 - **Upload to personal HF dataset repos** (defer community dataset PRs)
 - **CLI-based review interface** for Tier 3 (`opentraces review`), defer web UI
 - **Python implementation** (matches HF Hub SDK ecosystem)
@@ -1049,7 +1049,7 @@ The research draws a clean line between two kinds of enrichment. v0.1 includes e
 
 - **Layer 1 (Ingestion)**: Own Claude Code parser reading `~/.claude/projects/*/session.jsonl` directly, outputting enriched schema (steps with token_usage, parent_step hierarchy, agent_role labels, system_prompt extraction, tool_definitions, tools_available per step). Vendored `anonymizer` + `secrets` modules (~380 lines from DataClaw, MIT) for path sanitization and 19-pattern secret redaction.
 - **Layer 2 (Enrichment + Security)**: Attribution block construction from edit operations, dependency extraction from manifest files (`package.json`, `Gemfile`, `requirements.txt`, `pyproject.toml`), git commit correlation (`outcome.committed`, `outcome.commit_sha`), content_hash computation, metrics aggregation, quality filter (min 1 tool call, min 2 steps), content dedup.
-- **Tier 1 (Danger)**: Vendored patterns + extensions (credit cards with Luhn, SSNs, phone numbers). Maintained as versioned config. Include allowlist for false positives.
+- **Tier 1 (Open)**: Vendored patterns + extensions (credit cards with Luhn, SSNs, phone numbers). Maintained as versioned config. Include allowlist for false positives.
 - **Tier 3: CLI review interface** (`opentraces review` with per-trace approve/redact/reject/annotate)
 - **Layer 3 (HF Experience)**: Batched upload via `huggingface_hub`, auto-generated dataset card with attribution summaries and dependency tags, `opentraces` HF tag, dependency-based tags.
 - **Agent-native CLI**: JSON output with `next_steps`/`next_command` on every command. Claude Code `SKILL.md`. Git post-commit hook.
@@ -1068,7 +1068,7 @@ Ship immediately after v0.1 to activate the growth loop:
 
 - **Community comparisons**: Percentile rankings ("you're in the top 20% for cache efficiency"), aggregate benchmarks, model comparison across contributors
 - **Shareable profile cards**: "Here's my coding agent stats", designed for Twitter/LinkedIn sharing
-- **Tier 2 automated classifier pipeline** (LLM/embedding-based sensitive content detection + de-anonymisation risk scoring)
+- **Tier 2 guarded classifier pipeline** (LLM/embedding-based sensitive content detection + de-anonymisation risk scoring)
 - **`claude-trace` adapter** (richer source than DataClaw's transcript parser)
 - **Web UI for Tier 3 review** (replace CLI-only review)
 

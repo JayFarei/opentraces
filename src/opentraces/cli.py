@@ -343,7 +343,7 @@ def init(tier: int | None) -> None:
     # Prompt interactively if --tier not provided
     if tier is None:
         tier = click.prompt(
-            "Security tier (1=redact secrets, 2=classifier review, 3=manual review)",
+            "Security tier (1=open, 2=guarded, 3=strict)",
             type=click.IntRange(1, 3),
             default=2,
         )
@@ -574,7 +574,7 @@ def status() -> None:
     project_name = project_dir.name
 
     # Tier descriptions
-    tier_desc = {1: "redact secrets", 2: "classifier review", 3: "manual review"}
+    tier_desc = {1: "open, auto-redact", 2: "guarded, scan + flag", 3: "strict, review all"}
     desc = tier_desc.get(tier, "unknown")
 
     click.echo(f"{project_name} (tier {tier}, {desc})")
@@ -745,7 +745,7 @@ def discover() -> None:
 
 
 @main.command()
-@click.option("--auto", is_flag=True, help="Auto-approve for Tier 1 (danger mode)")
+@click.option("--auto", is_flag=True, help="Auto-approve for Tier 1 (open mode)")
 @click.option("--limit", type=int, default=0, help="Max sessions to parse (0=all)")
 def parse(auto: bool, limit: int) -> None:
     """Parse agent sessions into enriched JSONL traces."""

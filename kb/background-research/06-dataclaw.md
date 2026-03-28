@@ -244,7 +244,7 @@ DataClaw and opentraces.ai solve the same core problem: getting real-world agent
 
 2. **Sub-agent hierarchy**: DataClaw flattens subagent sessions. Our explicit parent-child tracking with agent roles (explore/plan/main) provides richer training signal.
 
-3. **Security tier system**: DataClaw has one tier (regex + entropy + manual review). Our 3-tier system (Danger/Automated/Manual) gives users granular control.
+3. **Security tier system**: DataClaw has one tier (regex + entropy + manual review). Our 3-tier system (Open/Guarded/Strict) gives users granular control.
 
 4. **Schema richness**: Environment metadata, git diff correlation, cost tracking, annotation support, schema versioning, all absent from DataClaw.
 
@@ -257,7 +257,7 @@ DataClaw and opentraces.ai solve the same core problem: getting real-world agent
 ### Integration Points
 
 - DataClaw's parser module (`dataclaw.parser`) could be imported directly as a session discovery/ingestion layer, potentially avoiding reimplementation of 7 source-specific parsers
-- DataClaw's `secrets.py` (19 patterns + entropy analysis) could serve as our Tier 1 "Danger" redaction engine, or at minimum as a reference for pattern coverage
+- DataClaw's `secrets.py` (19 patterns + entropy analysis) could serve as our Tier 1 "Open" redaction engine, or at minimum as a reference for pattern coverage
 - DataClaw's output JSONL could be consumed as an input format for opentraces.ai (migration/compatibility path)
 - The `custom` source directory (`~/.dataclaw/custom/`) pattern could be adopted for our adapter system
 

@@ -19,14 +19,14 @@ export HF_TOKEN=hf_...
 ## Your First Publish
 
 ```bash
-opentraces publish --tier automated
+opentraces publish --tier guarded
 ```
 
 This will:
 
 1. Scan `~/.claude/projects` for Claude Code sessions
 2. Parse each session into the open traces schema
-3. Run automated security screening (Tier 2)
+3. Run guarded security screening (Tier 2)
 4. Upload approved traces to your HF dataset repo
 
 ## Configuration
@@ -35,15 +35,15 @@ This will:
 
 ```bash
 # In your project directory
-opentraces config --tier danger     # Tier 1: regex scan only
-opentraces config --tier automated  # Tier 2: classifier + escalation (default)
-opentraces config --tier manual     # Tier 3: full human review
+opentraces config --tier open       # Tier 1: regex scan only
+opentraces config --tier guarded    # Tier 2: classifier + escalation (default)
+opentraces config --tier strict     # Tier 3: full human review
 ```
 
 ### Per-Session Override
 
 ```bash
-opentraces publish --tier manual  # override for this run only
+opentraces publish --tier strict  # override for this run only
 ```
 
 ## Review Interface
@@ -79,10 +79,10 @@ open traces ships with a `SKILL.md` for Claude Code integration:
 
 ```bash
 # As a git post-commit hook
-opentraces publish --tier automated --json
+opentraces publish --tier guarded --json
 
 # As a Claude Code skill
-opentraces publish --tier automated --json
+opentraces publish --tier guarded --json
 ```
 
 Every command emits structured JSON with `next_steps` and `next_command` fields so agents can chain operations.

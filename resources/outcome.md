@@ -14,8 +14,8 @@
 
 - **Passive capture**: Reads existing Claude Code session logs from disk. No hooks, no daemons, no agent modification.
 - **Schema enrichment**: Outputs the full opentraces.ai JSONL schema, including `steps` with per-step `token_usage`, `parent_step` hierarchy, `reasoning_content`, `tool_definitions`, `snippets`, `attribution` blocks, `outcome` signals, `environment` metadata, `dependencies`, and `metrics`.
-- **Three security tiers**: Tier 1 (Danger, regex auto-redact), Tier 2 (Automated, classifier + escalation), Tier 3 (Manual, local web review UI). Configurable per-project.
-- **Local web review interface**: A lightweight local web app (served by the CLI on localhost) for Tier 3 manual review. Browse sessions, approve/reject/redact individual traces and turns, annotate outcome signals, then push approved traces to HF Hub.
+- **Three security tiers**: Tier 1 (Open, regex auto-redact), Tier 2 (Guarded, classifier + escalation), Tier 3 (Strict, local web review UI). Configurable per-project.
+- **Local web review interface**: A lightweight local web app (served by the CLI on localhost) for Tier 3 strict review. Browse sessions, approve/reject/redact individual traces and turns, annotate outcome signals, then push approved traces to HF Hub.
 - **Agent-native CLI protocol**: Every command emits structured JSON with `next_steps` and `next_command` fields. Designed to be driven by Claude Code itself via a bundled skill file.
 - **Staged pipeline**: auth -> configure -> review -> publish. Push is hard-gated behind review completion. State persisted to `~/.opentraces/config.json`.
 - **HuggingFace Hub upload**: Publishes enriched JSONL to personal dataset repos (e.g., `username/opentraces-claude-code`), tagged `opentraces` for community discovery. Auto-generated dataset card with schema docs, contributor stats, and load snippet.
@@ -201,7 +201,7 @@ Deliverable 2 (Marketing Website)  -- links to -->  Deliverable 4 (Trace Explore
 These are explicitly deferred:
 
 - Multi-agent support beyond Claude Code (v0.2, adapter contract ships in v0.1)
-- Tier 2 automated classifier (v0.2, requires training data from v0.1 contributions)
+- Tier 2 guarded classifier (v0.2, requires training data from v0.1 contributions)
 - Real-time capture / stop-hooks (intentionally excluded, passive-only)
 - Canonical aggregated dataset curation (v0.2, after schema stability)
 - Parquet dual-write (v0.2, after schema stability)

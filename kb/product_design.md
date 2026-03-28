@@ -213,7 +213,7 @@ All snippets tagged with source_step for attribution linking.
 
 ## Phase 3: Security Pipeline (All Three Tiers)
 
-### 3.1 Tier 1 — Danger Mode (Regex Auto-Redact)
+### 3.1 Tier 1 — Open Mode (Regex Auto-Redact)
 
 **Vendored from DataClaw (MIT)**: 19 regex patterns (JWT, API keys by provider, private keys, DB URLs, Bearer tokens, IPs, emails, high-entropy strings) + allowlist.
 
@@ -235,7 +235,7 @@ All snippets tagged with source_step for attribution linking.
 
 **RedactingFilter** on all log handlers. Default WARNING to stderr. DEBUG requires explicit flag.
 
-### 3.2 Tier 2 — Automated Screening + Heuristic Classifier
+### 3.2 Tier 2 — Guarded Screening + Heuristic Classifier
 
 Per discussion-log Q15: Drop LLM classifier. Build heuristic classifier instead.
 
@@ -259,7 +259,7 @@ Per discussion-log Q15: Drop LLM classifier. Build heuristic classifier instead.
 
 4. **Sensitivity configuration**: `classifier_sensitivity` in config (low/medium/high) controls flagging thresholds.
 
-### 3.3 Tier 3 — Manual Review
+### 3.3 Tier 3 — Strict Review
 
 Sessions buffered in `~/.opentraces/staging/`.
 
@@ -347,7 +347,7 @@ opentraces auth                    # HF Hub authentication + optional post-sessi
 opentraces config set/show         # Per-project/global config
 opentraces discover                # List available sessions across projects
 opentraces parse [--auto]          # Parse sessions into enriched JSONL
-opentraces review [--web]          # Tier 3 manual review (CLI or web)
+opentraces review [--web]          # Tier 3 strict review (CLI or web)
 opentraces push [--approved-only]  # Upload to HF Hub
 opentraces import --from dataclaw  # Import DataClaw exports
 opentraces export --format atif    # Lossy ATIF conversion

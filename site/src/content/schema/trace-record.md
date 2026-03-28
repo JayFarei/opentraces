@@ -123,7 +123,7 @@ Package/library names referenced during the session. Extracted from `package.jso
 ```json
 {
   "security": {
-    "tier": "automated",
+    "tier": "guarded",
     "flags_reviewed": 3,
     "redactions_applied": 1
   }

@@ -1,0 +1,980 @@
+# open traces
+
+> Open-source CLI for crowdsourcing AI coding agent session traces as structured JSONL datasets on Hugging Face Hub. Three security tiers. Training-first schema.
+
+## Links
+
+- Documentation: https://opentraces.ai/docs
+- GitHub: https://github.com/opentraces
+- Dashboard: https://opentraces.ai/dashboard
+- Schema: https://opentraces.ai/schema
+
+## Full Documentation
+
+---
+
+# open traces
+
+**Your agent traces are training data.**
+
+open traces is an open-source CLI for crowdsourcing AI coding agent session traces as structured JSONL datasets on Hugging Face Hub. Three security tiers. Training-first schema. Zero config.
+
+## The Problem
+
+There is a growing ecosystem of tools that _capture_ code-agent traces, but no standard path from capture to _contribution_. The training and RL communities are starved for high-quality agentic trajectory data.
+
+| Layer | Tools | Gap |
+|-------|-------|-----|
+| **Capture** | claude-trace, Langfuse hooks, OTel logs | Proprietary formats, no upload path |
+| **Sharing** | traces.com (proprietary SaaS) | Data locked in walled garden, no training utility |
+| **Datasets** | Nemotron-RL, SWE-bench traces | Synthetic/benchmark only, not real-world |
+| **Open Source** | DataClaw (2k stars, 32 HF datasets) | Shallow schema, single security tier |
+| **Standards** | Agent Trace spec (Cursor, 10+ backers) | Solves attribution, not trajectory |
+| **Privacy** | Anthropic sandboxing patterns | No reusable pipeline for trace sanitization |
+
+## The Insight
+
+Every commit systematically discards the reasoning that produced the code. Agent Trace preserves _which_ lines came from AI. ATIF/ADP preserve _how_ the agent reasoned. Neither alone tells the complete story.
+
+open traces is the format that connects the full conversation trajectory to the specific code output at line granularity. ADP + Agent Trace, unified.
+
+## Quick Start
+
+```bash
+pip install opentraces
+opentraces publish --tier guarded
+```
+
+That's it. Auto-discovers sessions, auto-detects agents, publishes to your HF dataset.
+
+## Features
+
+- **Passive capture** - Reads existing agent log files from disk. No hooks, no daemons, no runtime overhead.
+- **Three security tiers** - Open mode for OSS. Guarded screening for most. Strict review for sensitive code.
+- **Training-first schema** - Outcome signals, sub-agent hierarchy, per-step tokens. Designed for SFT and RL.
+- **HuggingFace native** - Publishes JSONL to HF Hub. Loadable via `datasets.load_dataset()`.
+- **Multi-agent support** - Claude Code, Codex, Gemini CLI, Cursor, Cline. One schema, many agents.
+- **Agent Trace attribution** - Embeds code attribution at file:line granularity.
+- **Agent-native CLI** - Every command outputs structured JSON with `next_steps`. Built for agents to drive.
+
+---
+
+# Getting Started
+
+## Installation
+
+```bash
+pip install opentraces
+```
+
+## Authentication
+
+open traces publishes to Hugging Face Hub. You need a HF token:
+
+```bash
+opentraces auth
+# or set the environment variable
+export HF_TOKEN=hf_...
+```
+
+## Your First Publish
+
+```bash
+opentraces publish --tier guarded
+```
+
+This will:
+
+1. Scan `~/.claude/projects` for Claude Code sessions
+2. Parse each session into the open traces schema
+3. Run guarded security screening (Tier 2)
+4. Upload approved traces to your HF dataset repo
+
+## Configuration
+
+### Per-Project Security Tier
+
+```bash
+# In your project directory
+opentraces config --tier open       # Tier 1: regex scan only
+opentraces config --tier guarded    # Tier 2: classifier + escalation (default)
+opentraces config --tier strict     # Tier 3: full human review
+```
+
+### Per-Session Override
+
+```bash
+opentraces publish --tier strict  # override for this run only
+```
+
+## Review Interface
+
+For Tier 2 (flagged traces) and Tier 3 (all traces):
+
+```bash
+# CLI review
+opentraces review
+
+# Web review (local)
+opentraces review --web
+```
+
+The review interface lets you:
+
+- Approve individual traces or the full session
+- Redact specific turns, tool outputs, or file contents
+- Annotate traces with quality signals
+- Skip the upload entirely
+
+## Status
+
+```bash
+opentraces status
+```
+
+Shows pending traces, published counts, and security tier configuration.
+
+## Agent Integration
+
+open traces ships with a `SKILL.md` for Claude Code integration:
+
+```bash
+# As a git post-commit hook
+opentraces publish --tier guarded --json
+
+# As a Claude Code skill
+opentraces publish --tier guarded --json
+```
+
+Every command emits structured JSON with `next_steps` and `next_command` fields so agents can chain operations.
+
+---
+
+# Schema Overview
+
+open traces uses a training-first JSONL schema where each line represents one complete agent session. The schema is informed by ATIF v1.6, ADP, and field patterns from existing HF datasets (nlile, Nebius, CoderForge).
+
+## Design Principles
+
+1. **Training / SFT** - Clean message sequences with role labels, tool-use structured as tool_call/tool_result pairs, and outcome signals.
+2. **RL / RLHF** - Trajectory-level reward signals, step-level annotations, decision point identification.
+3. **Telemetry / Analytics** - Token counts, latency, model identifiers, cache hit rates, cost estimates.
+4. **Cross-agent compatibility** - Represents traces from Claude Code, Cursor, Cline, Codex CLI, OpenCode, and future agents without agent-specific fields.
+
+## Top-Level Structure
+
+```json
+{
+  "schema_version": "0.1.0",
+  "trace_id": "uuid",
+  "session_id": "uuid",
+  "content_hash": "sha256-hex",
+  "timestamp_start": "ISO8601",
+  "timestamp_end": "ISO8601",
+  "task": { ... },
+  "agent": { ... },
+  "environment": { ... },
+  "system_prompts": { ... },
+  "tool_definitions": [ ... ],
+  "steps": [ ... ],
+  "outcome": { ... },
+  "dependencies": [ ... ],
+  "metrics": { ... },
+  "security": { ... },
+  "attribution": { ... },
+  "metadata": { }
+}
+```
+
+## Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| `steps` not `turns` | Each step is an LLM API call, not a conversational turn. Aligns with ATIF's TAO loop. |
+| `role: "agent"` not `"assistant"` | Follows ATIF/community convention (`system \| user \| agent`). |
+| Tool calls and observations separated | Preserves call/result separation that training pipelines depend on. |
+| System prompt dedup | `system_prompt_hash` + lookup table. A 20K-token prompt repeated 92 times would be wasteful. |
+| Per-step `parent_step` | Replaces session-level `sub_agents` array. Precise parent-child tree reconstruction. |
+| `agent_role` per step | Labels like `main`, `explore`, `plan` for filtering by phase. |
+| `content_hash` | SHA-256 for dedup at upload time (nlile pattern). |
+| `reasoning_content` | Explicit chain-of-thought. Improved SWE-Bench by ~3 pts (Cognition data). |
+| `outcome.committed` | Boolean: did the session's changes get committed? Cheap, deterministic quality signal. |
+| `attribution` | Embedded Agent Trace block. Bridges trajectory (process) with code attribution (output). |
+
+---
+
+# TraceRecord
+
+The top-level record. One per JSONL line, one per agent session.
+
+## Fields
+
+### Identification
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `schema_version` | string | yes | Schema version, e.g. `"0.1.0"` |
+| `trace_id` | string (UUID) | yes | Unique identifier for this trace |
+| `session_id` | string (UUID) | yes | Agent session reference |
+| `content_hash` | string | yes | SHA-256 of trace content for dedup |
+
+### Timestamps
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `timestamp_start` | string (ISO8601) | yes | Session start time |
+| `timestamp_end` | string (ISO8601) | yes | Session end time |
+
+### Task
+
+```json
+{
+  "task": {
+    "description": "Fix the failing test in src/parser.ts",
+    "source": "user_prompt",
+    "repository": "owner/repo",
+    "base_commit": "abc123def456..."
+  }
+}
+```
+
+### Agent
+
+```json
+{
+  "agent": {
+    "name": "claude-code",
+    "version": "1.0.83",
+    "model": "anthropic/claude-sonnet-4-20250514"
+  }
+}
+```
+
+Model identifiers follow the `provider/model-name` convention from Agent Trace / models.dev.
+
+### Environment
+
+```json
+{
+  "environment": {
+    "os": "darwin",
+    "shell": "zsh",
+    "vcs": {
+      "type": "git",
+      "base_commit": "abc123...",
+      "branch": "main",
+      "diff": "unified diff string or null"
+    },
+    "language_ecosystem": ["typescript", "python"]
+  }
+}
+```
+
+### System Prompts
+
+Deduplicated into a top-level lookup table. Steps reference by hash.
+
+```json
+{
+  "system_prompts": {
+    "sp_a1b2c3": "You are Claude Code..."
+  }
+}
+```
+
+### Tool Definitions
+
+Complete set of available tools at session level.
+
+```json
+{
+  "tool_definitions": [
+    {
+      "name": "bash",
+      "description": "Execute shell commands",
+      "parameters": {}
+    }
+  ]
+}
+```
+
+### Dependencies
+
+Package/library names referenced during the session. Extracted from `package.json`, `Gemfile`, `requirements.txt`, `pyproject.toml`, or tool call arguments.
+
+```json
+{
+  "dependencies": ["stripe", "prisma", "next"]
+}
+```
+
+### Metrics
+
+```json
+{
+  "metrics": {
+    "total_steps": 42,
+    "total_input_tokens": 1800000,
+    "total_output_tokens": 34000,
+    "total_duration_s": 780,
+    "cache_hit_rate": 0.92,
+    "estimated_cost_usd": 2.4
+  }
+}
+```
+
+### Security
+
+```json
+{
+  "security": {
+    "tier": "guarded",
+    "flags_reviewed": 3,
+    "redactions_applied": 1
+  }
+}
+```
+
+### Metadata
+
+Open-ended object for future extensions.
+
+```json
+{
+  "metadata": {}
+}
+```
+
+---
+
+# Steps
+
+The `steps` array contains the conversation as a sequence of LLM API calls (not conversational turns). Each step follows the TAO (Thought-Action-Observation) pattern.
+
+## Step Structure
+
+```json
+{
+  "step_index": 2,
+  "role": "agent",
+  "content": "I'll investigate the failing test...",
+  "reasoning_content": "The user wants me to...",
+  "model": "anthropic/claude-sonnet-4-20250514",
+  "system_prompt_hash": "sp_a1b2c3",
+  "agent_role": "main",
+  "parent_step": null,
+  "call_type": "main",
+  "tools_available": ["bash", "read", "edit", "glob", "grep", "write", "agent"],
+  "tool_calls": [ ... ],
+  "observations": [ ... ],
+  "snippets": [ ... ],
+  "token_usage": { ... },
+  "timestamp": "ISO8601"
+}
+```
+
+## Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `step_index` | integer | yes | Sequential step number |
+| `role` | string | yes | `"system"`, `"user"`, or `"agent"` |
+| `content` | string | yes | Message content |
+| `reasoning_content` | string | no | Chain-of-thought / thinking content |
+| `model` | string | no | Model used for this step (`provider/model-name`) |
+| `system_prompt_hash` | string | no | Reference to `system_prompts` lookup table |
+| `agent_role` | string | no | `"main"`, `"explore"`, `"plan"`, etc. |
+| `parent_step` | integer | no | Step index of parent (for sub-agents) |
+| `call_type` | string | no | `"main"`, `"subagent"`, or `"warmup"` |
+| `tools_available` | string[] | no | Tools available at this step |
+| `timestamp` | string | no | ISO8601 timestamp |
+
+### call_type Values
+
+| Value | Description |
+|-------|-------------|
+| `main` | Primary agent step |
+| `subagent` | Sub-agent invocation (e.g. Explore, Plan) |
+| `warmup` | KV cache priming call with empty output. Noise for SFT, signal for caching research. |
+
+## Tool Calls
+
+```json
+{
+  "tool_calls": [
+    {
+      "tool_call_id": "tc_001",
+      "tool_name": "bash",
+      "input": {
+        "command": "npm test -- --grep parser"
+      },
+      "duration_ms": 3400
+    }
+  ]
+}
+```
+
+Tool calls carry a `tool_call_id`. Observations link back via `source_call_id`. This preserves the call/result separation that training pipelines depend on.
+
+## Observations
+
+```json
+{
+  "observations": [
+    {
+      "source_call_id": "tc_001",
+      "content": "FAIL src/parser.test.ts...",
+      "output_summary": "1 test failed: parser.test.ts line 42 assertion error"
+    }
+  ]
+}
+```
+
+`output_summary` is a lightweight preview so consumers can assess relevance without downloading full multi-KB outputs.
+
+## Snippets
+
+Code blocks extracted from tool results and agent responses:
+
+```json
+{
+  "snippets": [
+    {
+      "file_path": "src/parser.ts",
+      "start_line": 42,
+      "end_line": 55,
+      "language": "typescript",
+      "text": "function parseToken(input: string)..."
+    }
+  ]
+}
+```
+
+Useful for code-search training and as raw material for constructing the `attribution` block.
+
+## Token Usage
+
+Per-step token breakdown:
+
+```json
+{
+  "token_usage": {
+    "input_tokens": 12400,
+    "output_tokens": 890,
+    "cache_read_tokens": 11200,
+    "cache_write_tokens": 1200,
+    "prefix_reuse_tokens": 11200
+  }
+}
+```
+
+## Sub-Agent Hierarchy
+
+Sub-agent steps use `parent_step` to link back to the invoking step:
+
+```json
+{
+  "step_index": 5,
+  "role": "agent",
+  "agent_role": "explore",
+  "parent_step": 3,
+  "call_type": "subagent",
+  "content": "Searching for related parser implementations...",
+  "subagent_trajectory_ref": "session_id_of_explore_subagent"
+}
+```
+
+Sub-agent transcripts are linked by `session_id` reference to separate trajectory records (ATIF pattern), not embedded. This separates storage depth from schema design.
+
+---
+
+# Outcome & Attribution
+
+## Outcome
+
+The `outcome` object captures whether the session succeeded, providing training signals:
+
+```json
+{
+  "outcome": {
+    "success": true,
+    "signal_source": "user_annotation",
+    "description": "Test passes after fix",
+    "patch": "unified diff string",
+    "committed": true,
+    "commit_sha": "def789abc..."
+  }
+}
+```
+
+### Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `success` | boolean | no | Did the task succeed? |
+| `signal_source` | string | no | How success was determined: `"user_annotation"`, `"ci_result"`, `"heuristic"` |
+| `description` | string | no | Human-readable outcome description |
+| `patch` | string | no | Unified diff produced by the session |
+| `committed` | boolean | no | Whether changes were committed to git |
+| `commit_sha` | string | no | The specific commit, if committed |
+
+### committed as a Quality Signal
+
+A session that results in a commit is higher-signal than one that was abandoned or reverted. This is a cheap, deterministic quality signal derived from git history without user annotation. When `true`, `commit_sha` links to the specific commit, enabling cross-referencing with `git diff` and CI results.
+
+## Attribution
+
+The `attribution` block embeds Agent Trace-compatible attribution that records which files and line ranges were produced by the agent session.
+
+```json
+{
+  "attribution": {
+    "version": "0.1.0",
+    "files": [
+      {
+        "path": "src/parser.ts",
+        "conversations": [
+          {
+            "contributor": {
+              "type": "ai",
+              "model_id": "anthropic/claude-sonnet-4-20250514"
+            },
+            "url": "opentraces://trace_id/step_2",
+            "ranges": [
+              {
+                "start_line": 42,
+                "end_line": 55,
+                "content_hash": "murmur3:9f2e8a1b"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### How Attribution is Constructed
+
+Attribution is constructed **deterministically** from trace data, no user annotation or LLM enrichment needed:
+
+1. **Edit tool calls** provide `file_path` and line ranges
+2. **outcome.patch** provides the unified diff
+3. **snippets** provide extracted code blocks with file positions
+
+These are synthesized into Agent Trace `attribution` records.
+
+### The Bridge
+
+This is the field that bridges trajectory (process) and attribution (output), making open traces the ADP + Agent Trace unified format.
+
+- `conversation.url` uses `opentraces://trace_id/step_N` to link each attributed range back to the specific step that produced it
+- `content_hash` (murmur3, matching Agent Trace convention) enables tracking attribution across refactors and file moves
+- Sessions that produce no code changes (pure research/exploration) have `attribution: null`
+
+### Why Embed, Not Link
+
+URLs may not persist in a crowdsourced dataset. Embedding creates a self-contained record that pairs reasoning with output. An Agent Trace record says "lines 42-55 of parser.ts were AI-generated." An open traces record says "here is the full conversation that produced lines 42-55, including the reasoning, the failed attempts, the tool calls, and the final edit."
+
+## Optional RL Fields (Reserved)
+
+Not in v0.1, but the schema reserves space:
+
+- `token_usage.completion_token_ids` - Token ID sequence for RL training without retokenization drift
+- `token_usage.logprobs` - Log probabilities per token, required for PPO/DPO-style training
+- Step-level reward annotations for process reward models
+
+---
+
+# Security Tiers
+
+The plugin offers three modes for controlling what gets uploaded. These are configured per-project or per-session, not globally, because the sensitivity of a personal side-project differs enormously from a client codebase.
+
+## Tier 1: Open Mode (Minimal Gate)
+
+Traces are uploaded with minimal friction, but not blindly. Before any upload a lightweight baseline security check runs: regex-based scanning for high-confidence secrets (API keys, tokens, passwords) and obvious PII (emails, IP addresses). Anything that trips the baseline is auto-redacted, not escalated.
+
+**For:**
+
+- Open-source projects where the codebase is already public
+- Benchmark runs (SWE-bench, Aider-bench) where there's nothing to protect
+- Researchers who want maximum throughput and accept the risk
+
+The "open" label signals that this tier is for projects where the codebase is already public.
+
+```
+Trace captured
+    |
+    v
++----------------------+
+| Baseline secret/PII  |  regex scan only
+| scan + auto-redact   |  no human review
++----------+-----------+
+           |
+           v
++----------------------+
+| Upload to HF Hub     |  continuous, per-turn
++----------------------+
+```
+
+**Security principle:** Even the lowest-friction tier guarantees no raw secrets or credentials leak into the public dataset.
+
+## Tier 2: Guarded Screening + Escalation (Default)
+
+Traces pass through a classifier/extraction pipeline before upload:
+
+1. **PII detection** - Scans for emails, API keys, tokens, credentials, internal hostnames, IP addresses, filesystem paths that reveal org structure. Regex patterns + lightweight classifier.
+2. **Sensitive content classification** - Flags traces that reference proprietary codebases, internal tool names, customer data. LLM or embedding-based classifier.
+3. **De-anonymization risk scoring** - Estimates how identifiable the contributor is from the trace content. Stylometric and contextual signals beyond explicit PII.
+4. **Escalation** - Anything flagged gets surfaced in an interactive review before upload.
+
+```
+Trace captured
+    |
+    v
++----------------------+
+| Baseline secret/PII  |  same regex layer as Tier 1
+| scan + auto-redact   |
++----------+-----------+
+           |
+           v
++----------------------+
+| Classifier pipeline  |  LLM/embedding-based
+|  - sensitive content |
+|  - de-anon risk      |
++----------+-----------+
+           |
+      +----+----+
+      |         |
+   clean     flagged
+      |         |
+      v         v
++----------+ +--------------+
+| Upload   | | Interactive  |
+| to HF    | | review       |
++----------+ | (approve /   |
+             |  redact /    |
+             |  reject)     |
+             +------+-------+
+                    |
+                    v
+              Upload or discard
+```
+
+**Security principle:** Machine classifiers handle the bulk. Humans only see edge cases the classifier is uncertain about.
+
+## Tier 3: Strict Post-Session Review (Human-in-the-Loop)
+
+Nothing is uploaded during the session. All traces are buffered locally. After the session ends, the user manually reviews every trace before anything leaves their machine.
+
+```
+Trace captured
+    |
+    v
++----------------------+
+| Buffer locally       |  nothing leaves the machine
+| (session JSONL)      |
++----------+-----------+
+           |
+     session ends
+           |
+           v
++----------------------+
+| Human review         |  CLI: `opentraces review`
+|  - per-trace approve |  or local web UI
+|  - redact turns      |
+|  - annotate quality  |
+|  - reject / skip     |
++----------+-----------+
+           |
+    user confirms push
+           |
+           v
++----------------------+
+| Upload to HF Hub     |  explicit, deliberate action
++----------------------+
+```
+
+**Security principle:** Full human-in-the-loop. Nothing is uploaded without the contributor seeing and approving it.
+
+## Vendored Security Patterns
+
+The baseline security layer (used across all tiers) vendors DataClaw's battle-tested modules (MIT licensed):
+
+- **secrets.py** (~273 lines): 19 regex patterns + Shannon entropy analysis + allowlist for false positives. Covers JWT, API keys by provider prefix, DB URLs, private keys, Bearer tokens, IPs, emails, high-entropy strings. Extended with: credit card numbers (Luhn), SSNs, phone numbers.
+- **anonymizer.py** (~105 lines): SHA-256 username hashing, `/Users/`/`/home/` path stripping, macOS hyphen-encoded path handling.
+
+---
+
+# Architecture
+
+open traces operates as three layers, with its own parsers and vendored security modules.
+
+## Three-Layer Architecture
+
+```
++-----------------------------------------------------+
+|  Layer 1: INGESTION (open traces parsers)            |
+|                                                      |
+|  opentraces.discover_projects()                      |
+|    -> scans ~/.claude, ~/.codex, ~/.gemini, etc.     |
+|  opentraces.parse_session()                          |
+|    -> adapter-per-agent (v0.1: Claude Code)          |
+|    -> outputs rich schema directly (steps, tokens,   |
+|      parent_step, system_prompts, tool_definitions)  |
+|  Vendored from DataClaw (MIT):                       |
+|    -> anonymizer: path/username sanitization          |
+|    -> secrets: 19 regex + entropy + allowlist         |
+|                                                      |
+|  Output: enriched session data                       |
++------------------------+----------------------------+
+                         |
+                         v
++-----------------------------------------------------+
+|  Layer 2: ENRICHMENT + SECURITY                      |
+|                                                      |
+|  Schema enrichment:                                  |
+|    -> Add schema_version, content_hash               |
+|    -> Construct attribution block from edit ops      |
+|    -> Extract dependencies from manifest files       |
+|    -> Correlate with git (committed, commit_sha)     |
+|    -> Compute metrics (cost, cache_hit_rate)         |
+|    -> Attach outcome signals                         |
+|                                                      |
+|  Security tiers:                                     |
+|    -> Tier 1 (Open): vendored patterns + extras      |
+|    -> Tier 2 (Guarded): classifier + escalation      |
+|    -> Tier 3 (Strict): CLI/web review interface      |
+|                                                      |
+|  Quality filter:                                     |
+|    -> Min 1 tool call, min 2 steps                   |
+|    -> Content dedup via SHA-256 content_hash          |
+|                                                      |
+|  Output: enriched JSONL                              |
++------------------------+----------------------------+
+                         |
+                         v
++-----------------------------------------------------+
+|  Layer 3: HF EXPERIENCE                              |
+|                                                      |
+|  Upload:                                             |
+|    -> huggingface_hub SDK to personal dataset repos  |
+|    -> Auto-generated dataset card                    |
+|    -> Tagged 'opentraces' for community discovery    |
+|    -> Batched upload (local buffer, threshold flush) |
+|                                                      |
+|  Contributor Dashboard (HF Space):                   |
+|    -> Personal analytics from your published traces  |
+|    -> Community comparisons and benchmarks            |
+|                                                      |
+|  Staged pipeline:                                    |
+|    -> auth -> configure -> review -> publish          |
+|    -> Push hard-gated behind review completion       |
+|    -> Agent-native JSON output on every command      |
++-----------------------------------------------------+
+```
+
+## Passive Capture Only
+
+open traces reads existing agent log files from disk after sessions end. No stop-hooks, no runtime instrumentation, no background daemons.
+
+**Rationale:**
+
+- Agent log files are already on disk after every session. There is nothing to "capture" that isn't already captured.
+- Nobody consumes traces in real-time. Training pipelines run hours or days later.
+- Real-time capture adds hook complexity, crash recovery, state management, and mid-session security exposure.
+- This eliminates an entire class of bugs (hook registration failures, file locking, partial trace corruption) without sacrificing any capability.
+
+## CLI-First, Agent-Operable Design
+
+open traces is a CLI tool first, designed to be operated by agents as easily as by humans.
+
+- **Git post-commit hook** integration: after a commit, `opentraces publish` runs automatically, enriching the trace with commit metadata.
+- **Agent-native JSON output** on every command. Every command emits structured JSON with `next_steps` and `next_command` fields so agents can chain operations.
+- **Skill file** (`SKILL.md`) ships with the package for Claude Code integration.
+- **Structured errors** with `{code, kind, message, hint, retryable}` fields and a defined exit code vocabulary.
+- **Machine-discoverable API**: `opentraces capabilities --json` for feature/version discovery.
+
+## Vendor and Reference, Not Depend
+
+open traces vendors DataClaw's small utility modules and writes its own parsers that reference DataClaw's implementations for agent-specific edge cases.
+
+**Why not runtime dependency:** DataClaw's parsers output "flat session dicts." open traces needs access to raw trace data to construct `parent_step` links, `attribution` blocks, `system_prompt_hash`, step-level `token_usage`, and `snippets` with file positions.
+
+**What we vendor (MIT license):**
+
+- `secrets.py` (~273 lines): 19 regex patterns + Shannon entropy analysis + allowlist
+- `anonymizer.py` (~105 lines): SHA-256 username hashing, path stripping
+
+**What we write ourselves:**
+
+- Parsers that output our enriched schema directly, including step-level token usage, parent_step hierarchy, system prompt extraction, tool definitions, and attribution data. v0.1 ships only the Claude Code parser, with the adapter contract ready for multi-agent expansion.
+
+---
+
+# CLI Reference
+
+## Commands
+
+### `opentraces publish`
+
+Parse, enrich, and publish traces to Hugging Face Hub.
+
+```bash
+opentraces publish [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--tier` | `guarded` | Security tier: `open`, `guarded`, or `strict` |
+| `--dataset` | auto | Target HF dataset repo (default: `{username}/opentraces-{agent}`) |
+| `--json` | off | Emit structured JSON output for agent consumption |
+| `--dry-run` | off | Parse and enrich without uploading |
+
+### `opentraces review`
+
+Interactive review interface for flagged or buffered traces.
+
+```bash
+opentraces review [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--web` | off | Launch local web UI instead of CLI review |
+| `--session` | all | Review a specific session ID |
+
+### `opentraces status`
+
+Show pending traces, published counts, and configuration.
+
+```bash
+opentraces status [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--json` | off | Structured JSON output |
+
+### `opentraces auth`
+
+Authenticate with Hugging Face Hub.
+
+```bash
+opentraces auth
+```
+
+### `opentraces config`
+
+Configure per-project settings.
+
+```bash
+opentraces config [OPTIONS]
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--tier` | - | Set default security tier for this project |
+| `--dataset` | - | Set target dataset repo |
+
+### `opentraces capabilities`
+
+Machine-discoverable feature and version info.
+
+```bash
+opentraces capabilities --json
+```
+
+### `opentraces introspect`
+
+Full API schema for agent integration.
+
+```bash
+opentraces introspect --json
+```
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | OK |
+| 2 | Usage error |
+| 3 | Missing configuration |
+| 4 | Network error |
+| 5 | Data corruption |
+| 7 | Lock/busy |
+
+## JSON Output Format
+
+When `--json` is passed, every command emits:
+
+```json
+{
+  "status": "ok",
+  "data": { ... },
+  "next_steps": ["Review 1 flagged trace"],
+  "next_command": "opentraces review"
+}
+```
+
+On error:
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": 4,
+    "kind": "network",
+    "message": "HF Hub unreachable",
+    "hint": "Check your internet connection or HF_TOKEN",
+    "retryable": true
+  }
+}
+```
+
+---
+
+# Standards Alignment
+
+open traces positions itself at the intersection of three existing standards:
+
+## ATIF / Harbor (v1.6)
+
+A training trajectory serialization format. Defines the step-based TAO (Thought-Action-Observation) loop structure. ATIF is the closest thing to a standard for what open traces' schema is trying to be.
+
+**Relationship:** open traces' schema is a superset of ATIF. We adopt ATIF's step-based model, role conventions (`system | user | agent`), and field patterns. We add: attribution blocks, per-step token breakdowns, environment metadata, dependency tracking, and security metadata. Export to ATIF via `opentraces export --format atif`.
+
+## ADP (Agent Data Protocol)
+
+An interlingua for normalizing diverse agent trace formats into a common structure for training. Core argument: O(D+A) adapters instead of O(D*A). ADP has been used to normalize 1.3M+ trajectories.
+
+**Relationship:** open traces' adapter-based normalization layer follows the same pattern. Our per-agent parsers are ADP-style adapters that output our enriched schema.
+
+## Agent Trace spec (Cursor/community, v0.1.0 RFC)
+
+Solves the adjacent problem of attributing which lines of code came from which agent conversation, at file/line granularity. Backed by 10+ corporate sponsors (Cloudflare, Vercel, Google Jules, Cognition).
+
+**Relationship:** open traces embeds Agent Trace attribution blocks directly in the trace record. Agent Trace focuses on the _output_ (code attribution), while ATIF/ADP focus on the _process_ (trajectory). open traces bridges both, the complete record of process + output.
+
+## AAIF (Agentic AI Foundation)
+
+Launched Dec 2025 by Anthropic, OpenAI, Block/Linux Foundation. Governs AGENTS.md, MCP, and Goose. open traces aligns with AAIF standards from the start.
+
+## The Core Insight
+
+Agent Trace preserves _which_ lines came from AI. ATIF/ADP preserve _how_ the agent reasoned. Neither alone tells the complete story. open traces connects the full conversation trajectory to the specific code output at line granularity.
+
+## Message Taxonomy
+
+open traces adopts a training-oriented message taxonomy that is a superset of traces.com's sharing-oriented 5-type classification:
+
+| traces.com type | open traces fields |
+|---|---|
+| `user_message` | `role: "user"` |
+| `agent_text` | `role: "agent"`, no tool_calls |
+| `agent_thinking` | `role: "agent"`, `reasoning_content` populated |
+| `tool_call` | `role: "agent"`, `tool_calls` array |
+| `agent_context` | `role: "agent"`, `call_type: "warmup"` |
+
+The `mcp__{server}__{tool}` naming convention for MCP tools is adopted directly from traces.com, aligning with the AAIF/MCP ecosystem.

@@ -37,7 +37,7 @@ Low effort (their format is simple flat JSONL), signals "we're the upgrade path"
 
 **Decision: Per-project with per-session override.**
 
-Dominant workflow is "this repo is open-source, always share" or "this repo is a client project, never share." Per-project persistence (`opentraces config set --project . --tier danger`) handles 90% of cases. Per-session override handles the rest. Per-turn is too granular.
+Dominant workflow is "this repo is open-source, always share" or "this repo is a client project, never share." Per-project persistence (`opentraces config set --project . --tier open`) handles 90% of cases. Per-session override handles the rest. Per-turn is too granular.
 
 ### Q5: Annotation Burden (intent.md open question #2)
 

@@ -3,9 +3,9 @@ import SectionRule from "./SectionRule";
 const agents = ["Claude Code", "Codex CLI", "Cursor", "Gemini CLI", "OpenCode", "Cline"];
 const steps = ["init", "capture", "stage", "review", "push"];
 const tiers = [
-  { name: "danger", label: "tier 1" },
-  { name: "automated", label: "tier 2" },
-  { name: "manual", label: "tier 3" },
+  { name: "open", label: "tier 1" },
+  { name: "guarded", label: "tier 2" },
+  { name: "strict", label: "tier 3" },
 ];
 
 export default function InfraDiagram() {

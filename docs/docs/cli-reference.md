@@ -12,7 +12,7 @@ opentraces publish [OPTIONS]
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--tier` | `automated` | Security tier: `danger`, `automated`, or `manual` |
+| `--tier` | `guarded` | Security tier: `open`, `guarded`, or `strict` |
 | `--dataset` | auto | Target HF dataset repo (default: `{username}/opentraces-{agent}`) |
 | `--json` | off | Emit structured JSON output for agent consumption |
 | `--dry-run` | off | Parse and enrich without uploading |

@@ -34,9 +34,9 @@ open traces operates as three layers, with its own parsers and vendored security
 |    -> Attach outcome signals                         |
 |                                                      |
 |  Security tiers:                                     |
-|    -> Tier 1 (Danger): vendored patterns + extras    |
-|    -> Tier 2 (Automated): classifier + escalation    |
-|    -> Tier 3 (Manual): CLI/web review interface      |
+|    -> Tier 1 (Open): vendored patterns + extras      |
+|    -> Tier 2 (Guarded): classifier + escalation      |
+|    -> Tier 3 (Strict): CLI/web review interface      |
 |                                                      |
 |  Quality filter:                                     |
 |    -> Min 1 tool call, min 2 steps                   |

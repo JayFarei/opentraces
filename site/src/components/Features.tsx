@@ -11,7 +11,7 @@ const features = [
   },
   {
     title: "three security tiers",
-    desc: "Danger mode for OSS. Automated screening for most. Manual review for sensitive code.",
+    desc: "Open mode for OSS. Guarded screening for most. Strict review for sensitive code.",
   },
   {
     title: "training-first schema",

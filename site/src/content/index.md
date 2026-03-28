@@ -27,7 +27,7 @@ open traces is the format that connects the full conversation trajectory to the 
 
 ```bash
 pip install opentraces
-opentraces publish --tier automated
+opentraces publish --tier guarded
 ```
 
 That's it. Auto-discovers sessions, auto-detects agents, publishes to your HF dataset.
@@ -35,7 +35,7 @@ That's it. Auto-discovers sessions, auto-detects agents, publishes to your HF da
 ## Features
 
 - **Passive capture** - Reads existing agent log files from disk. No hooks, no daemons, no runtime overhead.
-- **Three security tiers** - Danger mode for OSS. Automated screening for most. Manual review for sensitive code.
+- **Three security tiers** - Open mode for OSS. Guarded screening for most. Strict review for sensitive code.
 - **Training-first schema** - Outcome signals, sub-agent hierarchy, per-step tokens. Designed for SFT and RL.
 - **HuggingFace native** - Publishes JSONL to HF Hub. Loadable via `datasets.load_dataset()`.
 - **Multi-agent support** - Claude Code, Codex, Gemini CLI, Cursor, Cline. One schema, many agents.

@@ -3,44 +3,32 @@
 import { useState } from "react";
 import Terminal from "./Terminal";
 
-const tabLabels = ["login", "init", "status", "review", "push"];
-
-function LoginContent() {
-  return (
-    <>
-      <span className="terminal-line"><span className="p">~$</span> <span className="c">opentraces login</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Authenticating with HuggingFace Hub...</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Open this URL in your browser:</span></span>
-      <span className="terminal-line"><span className="di">    </span><span className="s">https://huggingface.co/device</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  And enter code: </span><span className="n">WDJB-MJHT</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Waiting for authorization...</span> <span className="ok">done</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Authenticated as </span><span className="s">jayfarei</span></span>
-      <span className="terminal-line"><span className="di">  Token saved to ~/.opentraces/credentials</span></span>
-    </>
-  );
-}
+const tabLabels = ["init", "status", "review", "push"];
 
 function InitContent() {
   return (
     <>
       <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces init</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  opentraces: initializing trace collection</span></span>
+      <span className="terminal-line"><span className="di">  Authenticating with HuggingFace Hub...</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  Open this URL in your browser:</span></span>
+      <span className="terminal-line"><span className="di">    </span><span className="s">https://hf.co/oauth/device</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  And enter code: </span><span className="n">K7R2-X9FN</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  Waiting for authorization....... </span><span className="ok">done</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Authenticated as </span><span className="s">alice-dev</span></span>
+      <span className="terminal-line"><span className="di">  Token saved to ~/.opentraces/credentials</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  Security tier?</span></span>
-      <span className="terminal-line"><span className="di">  [1] danger</span>    <span className="di">auto-share, regex redaction</span></span>
-      <span className="terminal-line"><span className="di">  [2] automated</span> <span className="di">scan + review flagged (default)</span>  <span className="s">{"\u2190"}</span></span>
-      <span className="terminal-line"><span className="di">  [3] manual</span>    <span className="di">review every session</span></span>
+      <span className="terminal-line"><span className="di">  [1] open</span>      <span className="di">auto-share, regex redaction</span></span>
+      <span className="terminal-line"><span className="di">  [2] guarded</span>   <span className="di">scan + flag, review flagged (default)</span>  <span className="s">{"\u2190"}</span></span>
+      <span className="terminal-line"><span className="di">  [3] strict</span>    <span className="di">review every session</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Created .opentraces/config.yml</span></span>
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Installed Claude Code session hook</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Sessions will be collected automatically.</span></span>
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Created .opentraces/config.yml</span></span>
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Installed Claude Code session hook</span></span>
     </>
   );
 }
@@ -50,7 +38,7 @@ function StatusContent() {
     <>
       <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces status</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  my-project (tier 2, automated)</span></span>
+      <span className="terminal-line"><span className="di">  my-project (tier 2, guarded)</span></span>
       <span className="terminal-line"><span className="di">  remote: </span><span className="s">jayfarei/opentraces</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  </span><span className="n">3</span> <span className="di">sessions staged</span></span>
@@ -100,7 +88,7 @@ function PushContent() {
   );
 }
 
-const tabContents = [LoginContent, InitContent, StatusContent, ReviewContent, PushContent];
+const tabContents = [InitContent, StatusContent, ReviewContent, PushContent];
 
 export default function Hero() {
   const [activeTab, setActiveTab] = useState(0);

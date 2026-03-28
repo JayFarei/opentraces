@@ -30,7 +30,7 @@ When the user says "share this session to opentraces", "publish traces",
 - opentraces CLI installed: `pip install opentraces`
 - HF Hub authenticated: `opentraces auth` or set `HF_TOKEN` environment variable
 
-## Quick Share (Tier 1, Danger Mode)
+## Quick Share (Tier 1, Open Mode)
 
 For open-source projects where you trust the content:
 
