@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { Panel, Group, Separator } from "react-resizable-panels";
+import { useState, useRef, useCallback } from "react";
 import { SessionSidebar } from "../sessions/SessionSidebar";
 import { SessionHeader } from "./SessionHeader";
 import { TraceView } from "../trace/TraceView";
@@ -7,10 +6,44 @@ import { DetailPanel } from "../detail/DetailPanel";
 
 export function AppLayout() {
   const [sidebarWidth, setSidebarWidth] = useState(240);
+  const [detailHeight, setDetailHeight] = useState(220);
+  const mainRef = useRef<HTMLDivElement>(null);
+
+  const handleSidebarDrag = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    const onMove = (ev: MouseEvent) => {
+      setSidebarWidth(Math.max(180, Math.min(400, startWidth + ev.clientX - startX)));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [sidebarWidth]);
+
+  const handleDetailDrag = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startHeight = detailHeight;
+    const onMove = (ev: MouseEvent) => {
+      const containerHeight = mainRef.current?.getBoundingClientRect().height ?? 600;
+      const maxHeight = containerHeight - 100;
+      setDetailHeight(Math.max(80, Math.min(maxHeight, startHeight - (ev.clientY - startY))));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [detailHeight]);
 
   return (
     <div className="flex-1 overflow-hidden flex">
-      {/* Session sidebar: fixed width with drag handle */}
+      {/* Session sidebar */}
       <div
         className="h-full flex-none overflow-hidden border-r border-[var(--border)]"
         style={{ width: `${String(sidebarWidth)}px` }}
@@ -18,42 +51,33 @@ export function AppLayout() {
         <SessionSidebar />
       </div>
 
-      {/* Resize handle with visual affordance */}
+      {/* Sidebar resize handle */}
       <div
         className="w-[5px] flex-none cursor-col-resize bg-[var(--border)] hover:bg-[var(--accent)] transition-colors duration-100"
-        onMouseDown={(e) => {
-          e.preventDefault();
-          const startX = e.clientX;
-          const startWidth = sidebarWidth;
-          const onMove = (ev: MouseEvent) => {
-            const newWidth = Math.max(180, Math.min(400, startWidth + ev.clientX - startX));
-            setSidebarWidth(newWidth);
-          };
-          const onUp = () => {
-            document.removeEventListener("mousemove", onMove);
-            document.removeEventListener("mouseup", onUp);
-          };
-          document.addEventListener("mousemove", onMove);
-          document.addEventListener("mouseup", onUp);
-        }}
+        onMouseDown={handleSidebarDrag}
       />
 
-      {/* Main content: trace hero + detail */}
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {/* Session stats header */}
+      {/* Main content: header + trace + detail */}
+      <div ref={mainRef} className="flex-1 flex flex-col overflow-hidden min-w-0">
         <SessionHeader />
 
-        {/* Trace + Detail vertical split */}
-        <div className="flex-1 overflow-hidden">
-          <Group orientation="vertical" id="opentraces-vertical" className="h-full">
-            <Panel defaultSize={70} minSize={30} id="trace-view">
-              <TraceView />
-            </Panel>
-            <Separator className="h-[3px] bg-transparent hover:bg-[var(--accent)] transition-colors duration-100 flex-none" />
-            <Panel defaultSize={30} minSize={10} id="detail-panel">
-              <DetailPanel />
-            </Panel>
-          </Group>
+        {/* Trace view: takes remaining space minus detail */}
+        <div className="flex-1 overflow-hidden min-h-0">
+          <TraceView />
+        </div>
+
+        {/* Detail resize handle */}
+        <div
+          className="h-[5px] flex-none cursor-row-resize bg-[var(--border)] hover:bg-[var(--accent)] transition-colors duration-100"
+          onMouseDown={handleDetailDrag}
+        />
+
+        {/* Detail panel: fixed height from bottom */}
+        <div
+          className="flex-none overflow-hidden"
+          style={{ height: `${String(detailHeight)}px` }}
+        >
+          <DetailPanel />
         </div>
       </div>
     </div>
