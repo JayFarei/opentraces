@@ -83,7 +83,7 @@ opentraces web
 opentraces tui
 ```
 
-![Terminal inbox](assets/tui.png)
+![Terminal inbox](/docs/assets/tui.png)
 
 Then `opentraces commit` and `opentraces push` when ready.
 
@@ -122,3 +122,4 @@ ds = load_dataset("your-org/agent-traces")
 - [GitHub](https://github.com/jayfarei/opentraces)
 - [Schema Rationale](/docs/schema/overview)
 - [opentraces.ai](https://opentraces.ai)
+
