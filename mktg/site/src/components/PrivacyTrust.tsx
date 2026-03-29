@@ -95,7 +95,7 @@ export default function PrivacyTrust() {
       <div className="section-title">Every trace scrubbed before it leaves your machine.</div>
 
       {/* Redaction demo as the hero visual */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32, marginBottom: 48, alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32, marginBottom: 48, alignItems: "stretch" }}>
         <div>
           <p className="section-sub" style={{ marginBottom: 20 }}>
             19 regex patterns, Shannon entropy analysis, context-aware scanning. API keys, emails, database credentials, filesystem paths, all auto-redacted.
@@ -151,11 +151,11 @@ export default function PrivacyTrust() {
           </div>
 
           {/* Terminal preview per tier */}
-          <div className="terminal" style={{ minHeight: 200 }}>
+          <div className="terminal">
             <div className="terminal-bar">
               <span>{active.name.toLowerCase()} mode</span>
             </div>
-            <div className="terminal-body" style={{ minHeight: 160 }}>
+            <div className="terminal-body" style={{ height: 260, overflowY: "hidden" }}>
               {active.terminal.map((line, i) => (
                 <TerminalLine key={i} line={line} />
               ))}
