@@ -1,0 +1,64 @@
+monorepo:
+  tool: none  # no turborepo/nx/lerna, manual workspace layout
+  package_manager: pip  # hatchling build backend, pip for install
+  workspace_globs:
+    - "packages/*"
+    - "src/*"
+    - "web/viewer/"
+    - "web/site/"
+
+apps:
+  opentraces-cli:
+    path: src/opentraces
+    framework: click
+    version: "0.1.0"
+    purpose: "CLI for parsing agent sessions, reviewing traces, and uploading to HuggingFace Hub"
+    loc: 12257
+
+  viewer:
+    path: web/viewer
+    framework: react
+    version: "1.0.0"
+    purpose: "React/Vite trace viewer with session browsing, step detail, and review workflow"
+    loc: 5060
+
+  mktg-site:
+    path: web/site
+    framework: next.js
+    version: "16.2.1"
+    purpose: "Marketing website for opentraces.ai with docs, schema explorer, and getting started"
+    loc: 3493
+
+  mktg-coming-soon:
+    path: mktg/coming-soon
+    framework: static-html
+    version: null
+    purpose: "Teaser landing page deployed on Vercel"
+    loc: 326
+
+  review-web:
+    path: src/opentraces/clients/web_server.py
+    framework: flask
+    version: null
+    purpose: "Local Flask web review server with Jinja2 templates for session approval/rejection"
+    loc: 2686  # 906 py + 1780 html/css/js
+
+packages:
+  opentraces-schema:
+    path: packages/opentraces-schema
+    purpose: "Standalone Pydantic v2 schema models for the JSONL trace format"
+    key_exports: [TraceRecord, Step, ToolCall, Observation, Outcome, Attribution, Metrics, SecurityMetadata]
+    loc: 288
+
+tests:
+  path: tests
+  purpose: "Test suite covering parsers, security, enrichment, upload, schema, quality engine"
+  loc: 7438
+
+naming_conventions:
+  directories: snake_case
+  files:
+    components: PascalCase.tsx  # viewer React components
+    utilities: snake_case.py  # Python modules
+    routes: snake_case.py  # Flask routes in app.py
+  packages: kebab-case  # opentraces-schema

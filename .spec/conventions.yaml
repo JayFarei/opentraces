@@ -1,0 +1,86 @@
+schema_version: "1.0"
+title: Coding Conventions
+
+naming:
+  python:
+    modules: snake_case
+    functions: snake_case
+    classes: PascalCase
+    constants: UPPER_SNAKE_CASE
+    protocols: PascalCase, @runtime_checkable
+  typescript:
+    components: PascalCase.tsx
+    hooks: useCamelCase.ts (in hooks/ directory)
+    utilities: camelCase.ts (in lib/ directory)
+    types: PascalCase (in types/ directory)
+  directories: snake_case (Python), kebab-case or concern-grouped (TypeScript)
+  packages: kebab-case (opentraces-schema)
+
+file_organization:
+  python:
+    - "One module per concern (e.g., secrets.py, scanner.py, classifier.py)"
+    - "Protocol definitions in base.py files"
+    - "__init__.py with __all__ exports"
+    - "Top-level tests/ directory, test_ prefix"
+  typescript:
+    - "Components grouped by concern (trace/, detail/, layout/, sessions/, review/, icons/)"
+    - "Hooks in src/hooks/"
+    - "Shared types in src/types/"
+    - "API client in src/lib/"
+
+import_patterns:
+  python:
+    - "Lazy imports inside CLI command functions to minimize startup time"
+    - "Schema package is only cross-package import"
+    - "No circular dependencies"
+    - "Standard lib first, third-party second, local third"
+  typescript:
+    - "React imports first, third-party second, local components/hooks third"
+    - "No barrel file re-exports (direct imports)"
+
+error_handling:
+  python:
+    - "Skip-and-continue for data processing (corrupted lines, failed checks)"
+    - "Structured exit codes: 0=OK, 2=usage, 3=config, 4=network, 5=corrupt, 7=lock"
+    - "Quality checks catch all exceptions, record as score=0.0"
+    - "Upload retries with exponential backoff (3 attempts)"
+    - "Git subprocess calls have 10-second timeouts"
+
+extension_points:
+  - "typing.Protocol for all adapter contracts (no ABC inheritance)"
+  - "Three protocols: SessionParser, FormatImporter, FormatExporter"
+  - "Quality personas as pluggable modules with PersonaDef"
+  - "New parsers only need to implement the protocol, no base import needed"
+
+state_management:
+  python:
+    - "JSON file-based StateManager for trace lifecycle"
+    - "File-based locks (fcntl.flock) for concurrent upload prevention"
+    - "Atomic writes with 0600 permissions for sensitive files"
+    - "Config hierarchy: global (~/.opentraces/) with per-project overrides"
+  typescript:
+    - "React Context for selection and view preferences"
+    - "TanStack Query for server state (trace data)"
+    - "No Redux or external state library"
+
+testing:
+  python:
+    - "pytest with fixtures in conftest.py"
+    - "test_ prefix on all test files"
+    - "E2E flow tests exercise full pipeline"
+    - "Conformance checks double as regression tests"
+  typescript:
+    - "vitest for unit tests"
+
+css:
+  - "Tailwind v4 with CSS-first @theme configuration"
+  - "CSS custom properties for design tokens"
+  - "No utility merge library (cn/clsx), raw template literals"
+  - "Dark theme default for viewer and marketing"
+  - "Motion/framer-motion for animations"
+
+cli_design:
+  - "Git-analogy workflow: init/status/review/commit/push"
+  - "Agent-native output: structured JSON after ---OPENTRACES_JSON--- sentinel"
+  - "Machine-discoverable capabilities via introspect command"
+  - "Click command groups: main, config, remote"

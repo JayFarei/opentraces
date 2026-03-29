@@ -1,0 +1,278 @@
+# Internal extraction plan - consumed by other agents, not part of final manifest
+
+extraction_units:
+  - package: opentraces-schema
+    path: packages/opentraces-schema/src/opentraces_schema
+    type: package
+    loc: 288
+    frameworks: [pydantic]
+    extract_interfaces: true
+    deep_extraction: true
+    sub_modules:
+      - path: models.py
+        concern: "All Pydantic v2 schema models (TraceRecord, Step, ToolCall, etc.)"
+        estimated_loc: 243
+      - path: version.py
+        concern: "Schema version constant"
+        estimated_loc: 3
+
+  - package: opentraces-cli
+    path: src/opentraces
+    type: app
+    loc: 12257
+    frameworks: [click, flask, pydantic, textual]
+    extract_interfaces: true
+    deep_extraction: true
+    sub_modules:
+      - path: cli.py
+        concern: "Click CLI entry point with all commands (parse, review, upload, auth, config, etc.)"
+        estimated_loc: 1683
+      - path: config.py
+        concern: "Configuration management (~/.opentraces/config.json)"
+        estimated_loc: 274
+      - path: state.py
+        concern: "State persistence for incremental processing"
+        estimated_loc: 239
+      - path: parsers/
+        concern: "Agent session parsers with Protocol-based adapter contract"
+        estimated_loc: 915
+      - path: security/
+        concern: "Secret scanning, anonymization, content classification, redaction"
+        estimated_loc: 1372
+      - path: enrichment/
+        concern: "Git signals, attribution, dependency extraction, metrics, snippets"
+        estimated_loc: 1301
+      - path: upload/
+        concern: "HF Hub sharded upload and dataset card generation"
+        estimated_loc: 381
+      - path: review/
+        concern: "CLI review, TUI (Textual) review, and Flask web review interfaces"
+        estimated_loc: 1730
+      - path: exporters/
+        concern: "Format exporters (ATIF) with Protocol-based contract"
+        estimated_loc: 242
+      - path: quality/
+        concern: "Multi-persona quality engine with conformance checks, judge, schema audit"
+        estimated_loc: 4117
+
+  - package: viewer
+    path: viewer
+    type: app
+    loc: 5060
+    frameworks: [react, vite, tailwindcss, tanstack-query, tanstack-virtual, motion, d3-scale]
+    extract_interfaces: true
+    deep_extraction: true
+    sub_modules:
+      - path: src/components/trace/
+        concern: "Trace visualization (tree, timeline, context flow, step nodes)"
+        estimated_loc: 800
+      - path: src/components/layout/
+        concern: "App layout, session header, review bar, keyboard help"
+        estimated_loc: 600
+      - path: src/components/detail/
+        concern: "Step detail panel, tool call detail, redaction preview, security badges"
+        estimated_loc: 800
+      - path: src/components/sessions/
+        concern: "Session list panel with stage grouping and onboarding"
+        estimated_loc: 400
+      - path: src/components/review/
+        concern: "Review-specific UI components"
+        estimated_loc: 300
+      - path: src/components/icons/
+        concern: "Custom icon components"
+        estimated_loc: 200
+      - path: src/hooks/
+        concern: "Custom hooks (keyboard nav, review actions, session list, trace data)"
+        estimated_loc: 400
+      - path: src/lib/
+        concern: "API client, formatting utilities, tree data structure"
+        estimated_loc: 300
+      - path: src/contexts/
+        concern: "React contexts (selection, view preferences)"
+        estimated_loc: 200
+      - path: src/types/
+        concern: "TypeScript type definitions for traces"
+        estimated_loc: 100
+
+  - package: mktg-site
+    path: mktg/site
+    type: app
+    loc: 3493
+    frameworks: [next.js, react, tailwindcss, react-markdown]
+    extract_interfaces: false
+    deep_extraction: false
+    sub_modules:
+      - path: src/app/
+        concern: "Next.js pages (landing, docs, schema explorer)"
+        estimated_loc: 800
+      - path: src/components/
+        concern: "Marketing page components (Hero, Features, Terminal, SecurityTiers, etc.)"
+        estimated_loc: 2500
+
+  - package: tests
+    path: tests
+    type: tests
+    loc: 7438
+    frameworks: [pytest]
+    extract_interfaces: false
+    deep_extraction: false
+    sub_modules:
+      - path: test_parser_claude_code.py
+        concern: "Claude Code parser tests"
+        estimated_loc: 500
+      - path: test_security.py
+        concern: "Security scanning and anonymizer tests"
+        estimated_loc: 500
+      - path: test_schema.py
+        concern: "Schema model validation tests"
+        estimated_loc: 400
+      - path: test_e2e_flow.py
+        concern: "End-to-end pipeline flow tests"
+        estimated_loc: 400
+      - path: test_judge.py
+        concern: "Quality judge tests"
+        estimated_loc: 400
+
+exemplars:
+  - pattern: "Quality persona rubric modules"
+    directory: src/opentraces/quality/personas
+    total_files: 4
+    selected: [training.py, domain.py, analytics.py]
+    pattern_description: >
+      Each persona module defines a set of check functions (_tN_check_name) that evaluate
+      a TraceRecord against persona-specific criteria. Functions return CheckResult with
+      passed/score/evidence. Module exports a PersonaDef with name, brief description,
+      list of CheckDefs (each wrapping a check function with weight and description).
+      Personas: training (SFT pipeline fitness), domain (domain expert), rl (RL/reward modeling),
+      analytics (usage analytics).
+
+  - pattern: "Viewer React components"
+    directory: viewer/src/components
+    total_files: 43
+    selected: [trace/TracePanel.tsx, detail/StepDetail.tsx, sessions/SessionPanel.tsx]
+    pattern_description: >
+      React functional components using TypeScript, Tailwind CSS classes, motion (framer-motion)
+      for animations, and @tanstack/react-virtual for virtualized lists. Components follow
+      PascalCase naming, grouped by concern (trace/, detail/, layout/, sessions/, review/, icons/).
+      State management via React contexts (SelectionContext, ViewPreferencesContext).
+
+  - pattern: "Marketing site page components"
+    directory: mktg/site/src/components
+    total_files: 18
+    selected: [Hero.tsx, SecurityTiers.tsx, SchemaExplorer.tsx]
+    pattern_description: >
+      Next.js 16 React server/client components with Tailwind v4 styling. Marketing-focused
+      with interactive elements (Terminal demo, schema explorer, infrastructure diagram).
+      Dark theme with security-oriented visual language.
+
+  - pattern: "Security scanner modules"
+    directory: src/opentraces/security
+    total_files: 5
+    selected: [secrets.py, scanner.py, classifier.py]
+    pattern_description: >
+      secrets.py defines regex patterns for 19+ secret types with allowlists. scanner.py
+      orchestrates multi-pass scanning. classifier.py applies context-aware classification
+      (different rules per field type). anonymizer.py handles username hashing and path
+      stripping. redactor.py provides a logging filter to prevent credential leaks.
+
+  - pattern: "Enrichment pipeline modules"
+    directory: src/opentraces/enrichment
+    total_files: 6
+    selected: [git_signals.py, attribution.py, metrics.py]
+    pattern_description: >
+      Each module enriches a TraceRecord with one signal type. git_signals.py extracts
+      VCS metadata via subprocess git calls. attribution.py builds Agent Trace-compatible
+      attribution blocks from diffs. metrics.py computes aggregated session metrics
+      (tokens, cost, cache hit rate). dependencies.py reads manifest files. snippets.py
+      extracts code blocks.
+
+domain_areas:
+  - name: trace-schema
+    packages: [opentraces-schema]
+    key_files:
+      - packages/opentraces-schema/src/opentraces_schema/models.py
+
+  - name: session-parsing
+    packages: [opentraces-cli]
+    key_files:
+      - src/opentraces/parsers/base.py
+      - src/opentraces/parsers/claude_code.py
+
+  - name: security-pipeline
+    packages: [opentraces-cli]
+    key_files:
+      - src/opentraces/security/secrets.py
+      - src/opentraces/security/scanner.py
+      - src/opentraces/security/classifier.py
+      - src/opentraces/security/anonymizer.py
+
+  - name: enrichment-pipeline
+    packages: [opentraces-cli]
+    key_files:
+      - src/opentraces/enrichment/git_signals.py
+      - src/opentraces/enrichment/attribution.py
+      - src/opentraces/enrichment/metrics.py
+      - src/opentraces/enrichment/dependencies.py
+
+  - name: quality-engine
+    packages: [opentraces-cli]
+    key_files:
+      - src/opentraces/quality/engine.py
+      - src/opentraces/quality/judge.py
+      - src/opentraces/quality/conformance.py
+      - src/opentraces/quality/schema_audit.py
+      - src/opentraces/quality/personas/training.py
+
+  - name: review-interfaces
+    packages: [opentraces-cli, viewer]
+    key_files:
+      - src/opentraces/review/cli_review.py
+      - src/opentraces/review/tui_review.py
+      - src/opentraces/review/web/app.py
+      - viewer/src/App.tsx
+
+  - name: upload-distribution
+    packages: [opentraces-cli]
+    key_files:
+      - src/opentraces/upload/hf_hub.py
+      - src/opentraces/upload/dataset_card.py
+
+  - name: export-formats
+    packages: [opentraces-cli]
+    key_files:
+      - src/opentraces/exporters/base.py
+      - src/opentraces/exporters/atif.py
+
+style_sources:
+  - viewer/src/globals.css
+  - viewer/postcss.config.mjs
+  - mktg/site/postcss.config.mjs
+  - src/opentraces/review/web/static/style.css
+
+critical_files:
+  - path: packages/opentraces-schema/src/opentraces_schema/models.py
+    reason: "Central schema definition consumed by every other module, defines the TraceRecord JSONL format"
+
+  - path: src/opentraces/parsers/base.py
+    reason: "Defines SessionParser and FormatImporter protocols, the adapter contract for all parsers"
+
+  - path: src/opentraces/parsers/claude_code.py
+    reason: "Primary parser (761 LOC), the core data ingestion path for the entire pipeline"
+
+  - path: src/opentraces/cli.py
+    reason: "CLI entry point (1683 LOC), defines all user-facing commands and the pipeline orchestration"
+
+  - path: src/opentraces/security/secrets.py
+    reason: "Secret detection patterns (441 LOC), critical for the security guarantee of zero credential leaks"
+
+  - path: src/opentraces/quality/engine.py
+    reason: "Quality evaluation engine (862 LOC), orchestrates multi-persona trace quality assessment"
+
+  - path: src/opentraces/upload/hf_hub.py
+    reason: "HuggingFace Hub upload integration, the final output stage of the pipeline"
+
+  - path: src/opentraces/config.py
+    reason: "Config management, defines security tier defaults and per-project overrides"
+
+  - path: viewer/src/App.tsx
+    reason: "React viewer entry point, main application shell for the trace visualization UI"

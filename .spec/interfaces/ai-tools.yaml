@@ -1,0 +1,281 @@
+# AI/LLM Tool Integration: Quality Judge
+# Extracted from src/opentraces/quality/judge.py
+
+judge:
+  source: src/opentraces/quality/judge.py
+  description: >
+    LLM-based qualitative judge for trace quality assessment. Complements
+    deterministic persona checks with an LLM evaluator that reads persona briefs
+    (markdown rubric definitions) and scores traces on subjective quality dimensions
+    that code cannot measure. Gracefully degrades to skipped results when no API key
+    is available.
+
+  briefs_directory: src/opentraces/quality/personas/briefs/
+  brief_format: "YAML frontmatter (dimensions with name/weight/description/scoring) + markdown prose"
+
+  models:
+    - name: BriefDimension
+      fields:
+        - name: name
+          type: str
+        - name: weight
+          type: float
+        - name: description
+          type: str
+        - name: scoring
+          type: str
+
+    - name: PersonaBrief
+      fields:
+        - name: persona
+          type: str
+        - name: description
+          type: str
+        - name: dimensions
+          type: "list[BriefDimension]"
+        - name: prose
+          type: str
+
+    - name: JudgeDimension
+      fields:
+        - name: name
+          type: str
+        - name: score
+          type: float
+          description: "1-5 scale"
+        - name: rationale
+          type: str
+
+    - name: JudgeResult
+      fields:
+        - name: persona_name
+          type: str
+        - name: dimensions
+          type: "list[JudgeDimension]"
+        - name: overall_score
+          type: float
+          description: "0-100 (weighted, scaled from 1-5 to 0-100)"
+        - name: model_used
+          type: str
+        - name: skipped
+          type: bool
+        - name: skip_reason
+          type: str
+
+  functions:
+    - name: load_brief
+      params: "(persona_name: str)"
+      returns: "PersonaBrief | None"
+      description: "Load and parse a persona brief from the briefs directory"
+
+    - name: summarize_for_judge
+      params: "(record: TraceRecord, ...)"
+      returns: dict
+      description: "Create a compact summary of a trace for LLM consumption, selecting representative steps"
+
+    - name: run_judge
+      params: "(record: TraceRecord, persona_name: str, model: str, ...)"
+      returns: JudgeResult
+      description: "Run the LLM judge for one persona on one trace"
+
+  cli_integration:
+    command: "opentraces assess"
+    options:
+      - "--judge / --no-judge (default: false)"
+      - "--judge-model haiku|sonnet|opus (default: haiku)"
+    blending: "When judge is enabled, total_score blends deterministic + judge scores"
+
+quality_personas:
+  pattern: >
+    Each persona module defines check functions (_tN_check_name) that evaluate
+    a TraceRecord against persona-specific criteria. Functions return CheckResult
+    with passed/score/evidence. Module exports a PersonaDef with name, brief
+    description, list of CheckDefs (each wrapping a check function with weight
+    and description).
+
+  personas:
+    - name: conformance
+      source: src/opentraces/quality/conformance.py
+      description: "Structural checks from test_e2e_dogfood.py"
+      check_count: 25
+      categories: [schema, parser, security, enrichment, structure]
+
+    - name: training
+      source: src/opentraces/quality/personas/training.py
+      description: "SFT pipeline fitness"
+      check_count: 10
+      checks:
+        - _t1_alternating_roles
+        - _t2_tool_call_observation_pairing
+        - _t3_no_dangling_observations
+        - _t4_system_prompts_deduplicated
+        - _t5_agent_steps_have_content
+        - _t6_reasoning_coverage
+        - _t7_reasoning_content_present
+        - _t8_task_description_present
+        - _t9_outcome_signals_present
+        - _t10_warmup_steps_labeled
+
+    - name: domain
+      source: src/opentraces/quality/personas/domain.py
+      description: "Domain expert checks"
+      check_count: 8
+      checks:
+        - _d1_language_ecosystem
+        - _d2_dependencies_extracted
+        - _d3_task_description_meaningful
+        - _d4_vcs_info
+        - _d5_snippets_with_language
+        - _d6_attribution_when_edits
+        - _d7_agent_name_version
+        - _d8_environment_os
+
+    - name: rl
+      source: src/opentraces/quality/personas/rl.py
+      description: "RL/reward modeling fitness"
+      check_count: 8
+      checks:
+        - _rl1_committed_explicitly_set
+        - _rl2_signal_confidence_set
+        - _rl3_patch_when_committed
+        - _rl4_per_step_token_usage
+        - _rl5_estimated_cost
+        - _rl6_subagent_hierarchy
+        - _rl7_outcome_success
+        - _rl8_model_on_agent_steps
+
+    - name: analytics
+      source: src/opentraces/quality/personas/analytics.py
+      description: "Usage analytics fitness"
+      check_count: 8
+      checks:
+        - _a1_cache_hit_rate
+        - _a2_estimated_cost
+        - _a3_total_duration
+        - _a4_step_timestamps
+        - _a5_token_breakdown
+        - _a6_agent_model_identified
+        - _a7_total_steps_consistent
+        - _a8_warmup_distinction
+
+quality_engine:
+  source: src/opentraces/quality/engine.py
+  description: "Scoring engine integrating schema audit, persona rubrics, and preservation"
+
+  functions:
+    - name: assess_trace
+      params: "(record: TraceRecord, personas: list[PersonaDef], ...)"
+      returns: TraceAssessment
+      description: "Run all personas against one trace"
+
+    - name: assess_batch
+      params: "(traces: list[TraceRecord], enable_judge: bool, judge_model: str)"
+      returns: BatchAssessment
+      description: "Assess a batch with optional LLM judge"
+
+    - name: generate_report
+      params: "(batch: BatchAssessment)"
+      returns: str
+      description: "Generate markdown report from batch assessment"
+
+    - name: assess_multi_project
+      params: "(staging_root: Path, ...)"
+      returns: MultiProjectAssessment
+      description: "Assess traces across multiple projects"
+
+  supplementary_modules:
+    - name: schema_audit
+      source: src/opentraces/quality/schema_audit.py
+      key_function: "audit_schema_completeness(records: list[TraceRecord]) -> SchemaAuditReport"
+      description: "Field-level completeness audit against the schema specification"
+
+    - name: preservation
+      source: src/opentraces/quality/preservation.py
+      key_function: "compare_preservation(record: TraceRecord, raw: RawSessionSummary) -> PreservationReport"
+      description: "Measures signal preservation ratio between raw session and parsed TraceRecord"
+
+    - name: gates
+      source: src/opentraces/quality/gates.py
+      key_function: "check_gate(batch, thresholds, preservation_threshold) -> GateResult"
+      description: "Quality gates for CI/CD integration"
+
+    - name: raw_reader
+      source: src/opentraces/quality/raw_reader.py
+      key_function: "read_raw_session(path: Path) -> RawSessionSummary"
+      description: "Read raw Claude Code session JSONL for preservation comparison"
+
+security_pipeline:
+  description: "Multi-pass security scanning, classification, anonymization, and redaction"
+
+  modules:
+    - name: secrets
+      source: src/opentraces/security/secrets.py
+      key_functions:
+        - "scan_text(text: str, include_entropy: bool) -> list[SecretMatch]"
+        - "redact_text(text: str, matches: list[SecretMatch]) -> str"
+        - "shannon_entropy(text: str) -> float"
+      pattern_count: "19+ secret types"
+
+    - name: scanner
+      source: src/opentraces/security/scanner.py
+      key_functions:
+        - "scan_content(text: str, field_type: FieldType) -> ScanResult"
+        - "scan_trace_record(record: TraceRecord) -> ScanResult"
+        - "two_pass_scan(record: TraceRecord) -> tuple[ScanResult, ScanResult]"
+        - "apply_redactions(record: TraceRecord) -> int"
+
+    - name: classifier
+      source: src/opentraces/security/classifier.py
+      key_functions:
+        - "classify_content(text: str, sensitivity: str) -> ClassifierResult"
+        - "classify_trace_record(record: TraceRecord, sensitivity: str) -> ClassifierResult"
+      heuristics: [internal_hostname, aws_account_id, db_connection_string, internal_url, uuid_density, hex_hash_density, file_path_depth]
+
+    - name: anonymizer
+      source: src/opentraces/security/anonymizer.py
+      key_functions:
+        - "anonymize_paths(text: str, username: str | None, extra_usernames: list[str] | None) -> str"
+        - "hash_username(username: str) -> str"
+        - "extract_usernames_from_paths(text: str) -> set[str]"
+
+    - name: redactor
+      source: src/opentraces/security/redactor.py
+      key_class: "RedactingFilter(logging.Filter)"
+      key_function: "configure_logging(...)"
+      description: "Logging filter to prevent credential leaks in log output"
+
+enrichment_pipeline:
+  description: "Each module enriches a TraceRecord with one signal type"
+
+  modules:
+    - name: git_signals
+      source: src/opentraces/enrichment/git_signals.py
+      key_functions:
+        - "detect_vcs(project_path: Path) -> VCS"
+        - "check_committed(project_path: Path, ts_start: str, ts_end: str) -> Outcome"
+        - "detect_commits_from_steps(steps: list[Step]) -> Outcome"
+        - "extract_git_signals(project_path: Path) -> tuple[VCS, Outcome]"
+
+    - name: attribution
+      source: src/opentraces/enrichment/attribution.py
+      key_functions:
+        - "build_attribution(steps: list[Step], patch: str | None) -> Attribution"
+
+    - name: dependencies
+      source: src/opentraces/enrichment/dependencies.py
+      key_functions:
+        - "extract_dependencies(project_path: str | Path) -> list[str]"
+        - "extract_dependencies_from_steps(steps: list[Step]) -> list[str]"
+        - "infer_language_ecosystem(steps: list[Step]) -> list[str]"
+      supported_manifests: [package.json, requirements.txt, pyproject.toml, Gemfile, go.mod]
+
+    - name: metrics
+      source: src/opentraces/enrichment/metrics.py
+      key_functions:
+        - "compute_metrics(steps: list[Step], pricing_file: str | None) -> Metrics"
+
+    - name: snippets
+      source: src/opentraces/enrichment/snippets.py
+      key_functions:
+        - "detect_language(file_path: str) -> str | None"
+        - "extract_edited_lines(...) -> list[Snippet]"

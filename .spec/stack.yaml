@@ -1,0 +1,75 @@
+schema_version: "1.0"
+title: Technology Stack
+
+primary_language: Python
+secondary_languages: [TypeScript, CSS]
+runtime: python3.10+
+
+backend:
+  cli_framework: click
+  web_framework: flask
+  schema_library: pydantic-v2
+  build_backend: hatchling
+  test_framework: pytest
+  security:
+    secret_scanning: custom (regex + shannon entropy)
+    anonymization: custom (sha256 hashing)
+    classification: custom (heuristic)
+
+frontend:
+  viewer:
+    framework: react-19
+    bundler: vite
+    styling: tailwindcss-v4
+    state_management: react-context + tanstack-query
+    virtualization: tanstack-virtual
+    animation: motion (framer-motion v12)
+    data_viz: d3-scale
+    test_framework: vitest
+
+  marketing:
+    framework: next.js-16
+    styling: tailwindcss-v4
+    markdown: react-markdown
+
+infrastructure:
+  package_manager: pip
+  monorepo_tool: none (manual)
+  deployment:
+    cli: pip install (PyPI)
+    viewer: bundled with CLI (Flask serves built SPA)
+    marketing: vercel (Next.js)
+  data_distribution: huggingface-hub
+  ci: not detected
+
+key_libraries:
+  - name: click
+    version: ">=8.0"
+    role: CLI framework with command groups, options, and argument parsing
+  - name: pydantic
+    version: ">=2.0"
+    role: Schema validation and serialization for TraceRecord JSONL format
+  - name: flask
+    version: ">=3.0"
+    role: Local web review server serving React SPA and REST API
+  - name: textual
+    version: ">=0.50"
+    role: Terminal UI framework for rich TUI review interface
+  - name: huggingface-hub
+    version: ">=0.20"
+    role: Upload JSONL datasets to HuggingFace Hub
+  - name: react
+    version: "19.x"
+    role: Trace viewer UI with virtualized tree rendering
+  - name: "@tanstack/react-query"
+    version: "5.x"
+    role: Server state management for trace data fetching
+  - name: "@tanstack/react-virtual"
+    version: "3.x"
+    role: Virtualized rendering for large trace trees
+  - name: motion
+    version: "12.x"
+    role: Animations in viewer components
+  - name: d3-scale
+    version: "4.x"
+    role: Timeline visualization color scales

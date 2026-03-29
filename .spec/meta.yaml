@@ -1,0 +1,38 @@
+schema_version: "1.0"
+format: generalizable-manifest
+
+project:
+  name: opentraces
+  description: "Open protocol and CLI for crowdsourcing agent traces to HuggingFace Hub, with configurable security tiers and structured JSONL output"
+  repository: git@github.com:JayFarei/opentraces.git
+  license: Apache-2.0
+  language: Python
+  runtime: python3.10+
+
+classification:
+  domain: developer-tools
+  app_type: CLI
+  architecture: monorepo
+  rendering: hybrid  # SSR (Next.js mktg site) + CSR (React viewer) + server-rendered (Flask review)
+  api_style: [rest]
+  has_ai: false
+  has_desktop: false
+
+tags:
+  - agent-traces
+  - huggingface
+  - jsonl
+  - pydantic
+  - click-cli
+  - security-scanning
+  - code-attribution
+  - dataset-curation
+  - open-data
+
+pattern_tags:
+  - protocol-adapter  # SessionParser/FormatImporter protocols
+  - pipeline-architecture  # parse -> security -> enrich -> review -> upload
+  - persona-rubric  # quality engine with pluggable persona evaluators
+  - agent-native-cli  # structured JSON output with sentinel for machine parsing
+  - schema-first  # standalone schema package consumed by CLI
+  - tiered-security  # 3-tier security model (open/guarded/strict)

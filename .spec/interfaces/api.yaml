@@ -1,0 +1,403 @@
+# API Surface: CLI Commands, Flask Routes, REST Endpoints
+# Extracted from opentraces-cli and review web server
+
+cli:
+  entry_point: src/opentraces/cli.py
+  framework: click
+  group: main
+  sentinel: "---OPENTRACES_JSON---"  # All commands emit structured JSON after this marker
+  exit_codes:
+    0: OK
+    2: Usage error
+    3: Missing config
+    4: Network error
+    5: Data corrupt
+    7: Lock/busy
+
+  commands:
+    - name: login
+      description: "Log in to HuggingFace Hub (like gh auth login)"
+      options:
+        - name: --token
+          type: flag
+          help: "Use token paste instead of browser login"
+      auth_flow: OAuth device code (primary), token paste (fallback)
+
+    - name: logout
+      description: "Log out from HuggingFace Hub"
+      options: []
+
+    - name: auth
+      description: "Authenticate with HuggingFace Hub (alias for login)"
+      hidden: true
+
+    - name: init
+      description: "Initialize opentraces in the current project directory"
+      options:
+        - name: --mode
+          type: "Choice[auto, review]"
+          default: null
+          help: "Sharing mode"
+        - name: --remote
+          type: str
+          default: null
+          help: "HF dataset repo (owner/name)"
+        - name: --no-hook
+          type: flag
+          help: "Skip Claude Code hook installation"
+        - name: --tier
+          type: "IntRange[1, 3]"
+          hidden: true
+          help: "Legacy tier (use --mode instead)"
+      side_effects:
+        - "Creates .opentraces/ directory and config.json"
+        - "Creates .opentraces/staging/ directory"
+        - "Installs SessionEnd hook in .claude/settings.json"
+        - "Appends .opentraces/staging/ to .gitignore"
+
+    - name: status
+      description: "Show status of the current opentraces project"
+      options: []
+
+    - name: discover
+      description: "List available agent sessions across projects"
+      options: []
+
+    - name: parse
+      description: "Parse agent sessions into enriched JSONL traces"
+      options:
+        - name: --auto
+          type: flag
+          help: "Auto-approve for Tier 1 (open mode)"
+        - name: --limit
+          type: int
+          default: 0
+          help: "Max sessions to parse (0=all)"
+      pipeline:
+        - parse session via ClaudeCodeParser
+        - enrich with git signals
+        - enrich with attribution
+        - enrich with dependencies
+        - enrich with metrics
+        - security scan and redact (tier-based)
+        - classify (tier 2)
+        - anonymize paths
+        - stage to STAGING_DIR
+
+    - name: review
+      description: "Review pending traces before upload"
+      options:
+        - name: --web
+          type: flag
+          help: "Launch local web review interface"
+        - name: --port
+          type: int
+          default: 5050
+          help: "Port for web review server"
+        - name: --tui
+          type: flag
+          help: "Launch TUI review interface"
+
+    - name: assess
+      description: "Run quality assessment on staged traces"
+      options:
+        - name: --judge/--no-judge
+          type: flag
+          default: false
+          help: "Enable LLM judge for qualitative scoring"
+        - name: --judge-model
+          type: "Choice[haiku, sonnet, opus]"
+          default: haiku
+          help: "Model for LLM judge"
+        - name: --limit
+          type: int
+          default: 0
+          help: "Max traces to assess (0=all)"
+
+    - name: commit
+      description: "Bundle approved traces into a commit group for push"
+      options:
+        - name: -m/--message
+          type: str
+          default: null
+          help: "Commit message"
+        - name: --all
+          type: flag
+          help: "Commit all approved traces"
+
+    - name: push
+      description: "Upload committed traces to HuggingFace Hub"
+      options:
+        - name: --private
+          type: flag
+          help: "Force private visibility"
+        - name: --public
+          type: flag
+          help: "Force public visibility"
+        - name: --publish
+          type: flag
+          help: "Change existing private dataset to public (no upload)"
+        - name: --gated
+          type: flag
+          help: "Enable gated access (auto-approve) on the dataset"
+        - name: --repo
+          type: str
+          default: null
+          help: "HF dataset repo (default: username/opentraces)"
+
+    - name: export
+      description: "Export traces to other formats"
+      options:
+        - name: --format
+          type: "Choice[atif]"
+          required: true
+
+    - name: migrate
+      description: "Check schema version and run migrations if needed"
+      options: []
+
+    - name: capabilities
+      description: "Show machine-discoverable feature list"
+      options:
+        - name: --json
+          type: flag
+          default: true
+
+    - name: introspect
+      description: "Show full API schema for machine discovery"
+      options: []
+
+    - name: log
+      description: "List uploaded traces grouped by date"
+      options: []
+
+    - name: _capture
+      description: "Capture a Claude Code session (hidden, for automation)"
+      hidden: true
+      options:
+        - name: --session-dir
+          type: path
+          required: true
+        - name: --project-dir
+          type: path
+          required: true
+
+  subgroups:
+    - name: config
+      description: "Manage opentraces configuration"
+      commands:
+        - name: show
+          description: "Display current configuration (redact_strings masked)"
+        - name: set
+          description: "Set configuration values"
+          options:
+            - name: --project
+              type: str
+              help: "Project path for per-project config"
+            - name: --tier
+              type: int
+              help: "Security tier (1, 2, or 3)"
+            - name: --exclude
+              type: str
+              help: "Project path to exclude (appends)"
+            - name: --redact
+              type: str
+              help: "Custom redaction string (appends)"
+            - name: --pricing-file
+              type: str
+              help: "Path to custom pricing table"
+            - name: --classifier-sensitivity
+              type: "Choice[low, medium, high]"
+
+    - name: remote
+      description: "Manage the HF dataset remote"
+      commands:
+        - name: set
+          description: "Set the dataset remote (interactive if no argument)"
+          arguments:
+            - name: repo
+              required: false
+        - name: remove
+          description: "Remove the configured remote"
+
+flask_routes:
+  source: src/opentraces/review/web/app.py
+  factory: create_app(staging_dir, state_path, viewer_dist)
+  serves_viewer_spa: true  # When viewer dist exists, serves React SPA
+
+  page_routes:
+    - path: /
+      method: GET
+      description: "Session list page (SPA or Jinja2 template)"
+    - path: /session/<trace_id>
+      method: GET
+      description: "Session detail page (template mode only)"
+    - path: /stats
+      method: GET
+      description: "Stats dashboard page (template mode only)"
+    - path: /assets/<path:filename>
+      method: GET
+      description: "Serve SPA static assets"
+
+  api_routes:
+    - path: /api/sessions
+      method: GET
+      returns: "SessionListItem[]"
+      description: "JSON API for session list with stage info"
+
+    - path: /api/stats
+      method: GET
+      returns: "StatsObject"
+      description: "Dashboard stats (model counts, tool usage, etc.)"
+
+    - path: /api/session/<trace_id>/detail
+      method: GET
+      returns: TraceRecord
+      description: "Return full trace JSON for a single session"
+
+    - path: /api/session/<trace_id>/approve
+      method: POST
+      returns: "{status, trace_id}"
+      description: "Approve a session, persisting to StateManager"
+
+    - path: /api/session/<trace_id>/reject
+      method: POST
+      returns: "{status, trace_id}"
+      description: "Reject a session, persisting to StateManager"
+
+    - path: /api/session/<trace_id>/step/<step_index>/redact
+      method: POST
+      returns: "{status, trace_id, step_index}"
+      description: "Redact a step's content, persisting to staging JSONL on disk"
+
+    - path: /api/session/<trace_id>/stage
+      method: POST
+      returns: "{status: staged}"
+      description: "Transition a session to STAGED status"
+
+    - path: /api/session/<trace_id>/unstage
+      method: POST
+      returns: "{status: unstaged}"
+      description: "Revert a session to PARSED status"
+
+    - path: /api/commit
+      method: POST
+      body: "{session_ids: string[], message: string}"
+      returns: "{status, commit_id, committed, message}"
+      description: "Create a commit group from staged sessions"
+
+    - path: /api/push
+      method: POST
+      returns: "{status, uploaded, shard, repo_url, hf_commit_sha}"
+      description: "Push all approved sessions to HF Hub"
+
+    - path: /api/session/<trace_id>/redaction-preview
+      method: GET
+      query_params: "tier=1|2|3"
+      returns: RedactionPreview
+      description: "Preview redaction for a trace at a given security tier"
+
+viewer_api_client:
+  source: viewer/src/lib/api.ts
+  base_url: "''  # proxied by Vite dev server"
+  functions:
+    - name: fetchSessions
+      returns: "SessionListItem[]"
+      endpoint: "GET /api/sessions"
+
+    - name: fetchTrace
+      params: "(traceId: string)"
+      returns: TraceRecord
+      endpoint: "GET /api/session/{traceId}/detail"
+
+    - name: stageSession
+      params: "(traceId: string)"
+      returns: void
+      endpoint: "POST /api/session/{traceId}/stage"
+
+    - name: unstageSession
+      params: "(traceId: string)"
+      returns: void
+      endpoint: "POST /api/session/{traceId}/unstage"
+
+    - name: approveSession
+      params: "(traceId: string)"
+      returns: void
+      endpoint: "POST /api/session/{traceId}/approve"
+
+    - name: rejectSession
+      params: "(traceId: string)"
+      returns: void
+      endpoint: "POST /api/session/{traceId}/reject"
+
+    - name: redactStep
+      params: "(traceId: string, stepIndex: number)"
+      returns: void
+      endpoint: "POST /api/session/{traceId}/step/{stepIndex}/redact"
+
+    - name: commitSessions
+      params: "(sessionIds: string[], message: string)"
+      returns: "{commit_id: string}"
+      endpoint: "POST /api/commit"
+
+    - name: pushCommit
+      params: "(commitId: string)"
+      returns: "{hf_commit_sha: string}"
+      endpoint: "POST /api/push"
+
+    - name: fetchRedactionPreview
+      params: "(traceId: string, tier: number)"
+      returns: RedactionPreview
+      endpoint: "GET /api/session/{traceId}/redaction-preview?tier={tier}"
+
+protocols:
+  - name: SessionParser
+    source: src/opentraces/parsers/base.py
+    runtime_checkable: true
+    description: "Adapter contract for agent session parsers"
+    attributes:
+      - name: agent_name
+        type: str
+    methods:
+      - name: discover_sessions
+        params: "(projects_path: Path)"
+        returns: "Iterator[Path]"
+      - name: parse_session
+        params: "(session_path: Path, byte_offset: int = 0)"
+        returns: "TraceRecord | None"
+
+  - name: FormatImporter
+    source: src/opentraces/parsers/base.py
+    runtime_checkable: true
+    description: "Adapter contract for file-based trace importers"
+    attributes:
+      - name: format_name
+        type: str
+      - name: file_extensions
+        type: "list[str]"
+    methods:
+      - name: import_traces
+        params: "(input_path: Path, max_records: int = 0)"
+        returns: "list[TraceRecord]"
+
+  - name: FormatExporter
+    source: src/opentraces/exporters/base.py
+    runtime_checkable: true
+    description: "Adapter contract for trace format exporters"
+    attributes:
+      - name: format_name
+        type: str
+      - name: file_extension
+        type: str
+      - name: description
+        type: str
+    methods:
+      - name: export_traces
+        params: "(records: list[TraceRecord])"
+        returns: "Iterator[str]"
+      - name: field_coverage
+        params: "()"
+        returns: "dict[str, FieldStatus]"
+    types:
+      - name: FieldStatus
+        definition: "Literal['full', 'partial', 'dropped']"
