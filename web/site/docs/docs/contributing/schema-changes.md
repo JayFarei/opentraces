@@ -1,6 +1,6 @@
 # Schema Changes
 
-The opentraces schema is open source. Feedback, questions, and proposals are welcome via [GitHub Issues](https://github.com/opentraces/opentraces/issues).
+The opentraces schema is open source. Feedback, questions, and proposals are welcome via [GitHub Issues](https://github.com/jayfarei/opentraces/issues).
 
 ## How to Propose a Change
 
@@ -51,4 +51,4 @@ Register the parser in `src/opentraces/parsers/__init__.py`. See `claude_code.py
 
 - Schema changes are reviewed by the maintainers
 - Breaking changes require a new rationale document
-- All changes are documented in the [CHANGELOG](https://github.com/opentraces/opentraces/blob/main/packages/opentraces-schema/CHANGELOG.md)
+- All changes are documented in the [CHANGELOG](https://github.com/jayfarei/opentraces/blob/main/packages/opentraces-schema/CHANGELOG.md)

@@ -38,6 +38,6 @@ That gives you the browser inbox backed by the React viewer in `web/viewer/`. Re
 
 ## Links
 
-- [GitHub](https://github.com/opentraces/opentraces)
+- [GitHub](https://github.com/jayfarei/opentraces)
 - [Schema Rationale](/docs/schema/overview)
 - [opentraces.ai](https://opentraces.ai)

@@ -19,10 +19,12 @@ Use `HF_TOKEN` instead if you are running headless.
 ## 3. Initialize the Project
 
 ```bash
-opentraces init --review-policy review --push-policy manual
+opentraces init --review-policy review --push-policy manual --start-fresh
 ```
 
 This creates `.opentraces/config.json`, `.opentraces/staging/`, and the session hook for Claude Code. If you omit the flags, `opentraces init` will prompt for the same choices interactively.
+
+If Claude Code already has session logs for this repo, pass `--import-existing` to pull that backlog into the inbox now. Use `--start-fresh` if you only want capture from your next connected session onward.
 
 ## 4. Open the Inbox
 

@@ -5,10 +5,29 @@ When the user says "share this session to opentraces", "publish traces",
 
 ## Workflow
 
-1. **Initialize** the repo inbox:
+1. **If the repo is not initialized, gather setup choices in chat first.**
+   Do not default to interactive `opentraces init` prompts when you can ask the
+   user directly in the coding agent.
+
+   Ask for:
+   - review policy: `review` or `auto-ready`
+   - push policy: `manual` or `auto-push`
+   - whether to configure a Hugging Face remote now
+   - if existing Claude Code sessions already exist for this repo, whether to import that backlog now or start fresh
+
+   Then run an explicit init command, for example:
    ```bash
-   opentraces init
+   opentraces init --agent claude-code --review-policy review --push-policy manual --start-fresh
    ```
+
+   If the user chose a remote during setup, include:
+   ```bash
+   opentraces init --agent claude-code --review-policy review --push-policy manual --import-existing --remote your-name/opentraces
+   ```
+
+   Use `--import-existing` when the user wants past Claude Code sessions for this repo
+   pulled into the inbox now. Use `--start-fresh` when they only want capture from the
+   next session onward.
 
 2. **Check project state** (what's in the inbox, auth status, next action):
    ```bash
@@ -62,6 +81,10 @@ opentraces --json push                       # upload to HF Hub
 Every command emits structured JSON after a `---OPENTRACES_JSON---` sentinel
 with `status`, `next_steps`, and `next_command` fields.
 
+For agent-led onboarding, prefer explicit flags over interactive prompts.
+The coding agent should discover setup preferences in conversation, then run
+the exact `opentraces init ...` command matching those choices.
+
 ## Prerequisites
 
 - opentraces CLI installed: `pip install opentraces`
@@ -76,6 +99,12 @@ opentraces init --review-policy auto-ready
 ```
 
 Then commit and push: `opentraces commit --all && opentraces push`.
+
+## Recommended Onboarding Shape
+
+- Human in terminal: plain `opentraces init` is fine, interactive prompts are expected.
+- Agent in code chat: ask the setup questions explicitly, then run a fully specified `opentraces init --agent ... --review-policy ... --push-policy ... <--import-existing|--start-fresh> [--remote ...]`.
+- If backlog exists for this repo: do not leave the choice implicit, pass either `--import-existing` or `--start-fresh`.
 
 ## Other Commands
 

@@ -32,7 +32,7 @@ function ActionButton({
 export function ReviewBar() {
   const { selectedSessionId } = useSelection();
   const { data: sessions } = useSessionList();
-  const { stage, unstage, approve, reject, push } = useReviewActions();
+  const { commit: commitSession, reject, push } = useReviewActions();
   const [showCommitDialog, setShowCommitDialog] = useState(false);
 
   const handleWandRedact = useCallback((text: string) => {
@@ -48,7 +48,7 @@ export function ReviewBar() {
   const currentStage: SessionStage = session.stage;
   const traceId = session.trace_id;
   const isBusy =
-    stage.isPending || unstage.isPending || approve.isPending || reject.isPending || push.isPending;
+    commitSession.isPending || reject.isPending || push.isPending;
 
   return (
     <>
@@ -63,32 +63,9 @@ export function ReviewBar() {
         {currentStage === "inbox" && (
           <>
             <ActionButton
-              label="ready"
-              color="var(--green)"
-              onClick={() => approve.mutate(traceId)}
-              disabled={isBusy}
-            />
-            <ActionButton
-              label="reject"
-              color="var(--red)"
-              onClick={() => reject.mutate(traceId)}
-              disabled={isBusy}
-            />
-          </>
-        )}
-
-        {currentStage === "ready" && (
-          <>
-            <ActionButton
               label="commit"
               color="var(--green)"
               onClick={() => setShowCommitDialog(true)}
-              disabled={isBusy}
-            />
-            <ActionButton
-              label="back to inbox"
-              color="var(--yellow)"
-              onClick={() => unstage.mutate(traceId)}
               disabled={isBusy}
             />
             <ActionButton
@@ -101,20 +78,12 @@ export function ReviewBar() {
         )}
 
         {currentStage === "committed" && (
-          <>
-            <ActionButton
-              label="push"
-              color="var(--accent)"
-              onClick={() => push.mutate(undefined)}
-              disabled={isBusy}
-            />
-            <ActionButton
-              label="back to inbox"
-              color="var(--yellow)"
-              onClick={() => unstage.mutate(traceId)}
-              disabled={isBusy}
-            />
-          </>
+          <ActionButton
+            label="push"
+            color="var(--accent)"
+            onClick={() => push.mutate(undefined)}
+            disabled={isBusy}
+          />
         )}
 
         {currentStage === "pushed" && (
@@ -130,7 +99,7 @@ export function ReviewBar() {
 
       {showCommitDialog && (
         <CommitDialog
-          sessions={sessions?.filter((s) => s.stage === "ready") ?? []}
+          sessions={sessions?.filter((s) => s.stage === "inbox") ?? []}
           onClose={() => setShowCommitDialog(false)}
         />
       )}

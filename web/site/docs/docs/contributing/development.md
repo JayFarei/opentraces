@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/opentraces/opentraces
+git clone https://github.com/jayfarei/opentraces
 cd opentraces
 python3 -m venv .venv
 source .venv/bin/activate

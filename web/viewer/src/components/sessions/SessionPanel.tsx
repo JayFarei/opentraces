@@ -2,7 +2,7 @@ import { useSessionList } from "../../hooks/useSessionList";
 import { StageGroup } from "./StageGroup";
 import type { SessionStage, SessionListItem } from "../../types/trace";
 
-const STAGE_ORDER: SessionStage[] = ["inbox", "ready", "committed", "pushed", "rejected"];
+const STAGE_ORDER: SessionStage[] = ["inbox", "committed", "pushed", "rejected"];
 
 export function SessionPanel() {
   const { data: sessions, isLoading, error } = useSessionList();
@@ -35,7 +35,6 @@ export function SessionPanel() {
 
   const grouped: Record<SessionStage, SessionListItem[]> = {
     inbox: [],
-    ready: [],
     committed: [],
     pushed: [],
     rejected: [],

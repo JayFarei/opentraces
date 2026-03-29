@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import textwrap
@@ -17,7 +18,7 @@ from textual.containers import Horizontal, Vertical
 from textual.events import Key
 from textual.widgets import ListItem, ListView, RichLog, Static
 
-from ..config import STAGING_DIR, load_project_config
+from ..config import STAGING_DIR, get_project_state_path, load_project_config
 from ..inbox import get_stage, load_traces
 from ..state import StateManager, TraceStatus
 from ..workflow import OPENTRACES_ASCII, VISIBLE_STAGE_ORDER, resolve_visible_stage, stage_label
@@ -27,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 def _status_icon(status: str) -> str:
     return {
-        "ready": "[green]\u2713[/green]",
         "committed": "[cyan]\u25A0[/cyan]",
         "rejected": "[red]\u2717[/red]",
         "inbox": "[yellow]\u25CB[/yellow]",
@@ -38,7 +38,6 @@ def _status_icon(status: str) -> str:
 def _stage_color(status: str) -> str:
     return {
         "inbox": "ansi_yellow",
-        "ready": "ansi_green",
         "committed": "ansi_bright_blue",
         "pushed": "ansi_cyan",
         "rejected": "ansi_red",
@@ -332,7 +331,6 @@ class TopBar(Static):
             f"[dim]{project_name}[/dim]  "
             f"[ansi_bright_blue]{remote}[/ansi_bright_blue]\n"
             f"[ansi_yellow]INBOX[/ansi_yellow]: {counts['inbox']}   "
-            f"[ansi_green]READY[/ansi_green]: {counts['ready']}   "
             f"[ansi_bright_blue]COMMITTED[/ansi_bright_blue]: {counts['committed']}   "
             f"[ansi_cyan]PUSHED[/ansi_cyan]: {counts['pushed']}   "
             f"[ansi_red]REJECTED[/ansi_red]: {counts['rejected']}"
@@ -360,9 +358,9 @@ class KeyBar(Static):
                 "[bold]1[/bold] sessions   [bold]2[/bold] summary   [bold]3[/bold] detail   "
                 f"{fullscreen_hint}"
                 "[bold]j/k[/bold] move   [bold]enter[/bold] inspect   "
-                "[bold]a[/bold] ready   [bold]c[/bold] commit   "
-                "[bold]r[/bold] reject   [bold]d[/bold] discard   "
-                "[bold]p[/bold] push   [bold]?[/bold] help   [bold]q[/bold] quit"
+                "[bold]c[/bold] commit   [bold]r[/bold] reject   "
+                "[bold]d[/bold] discard   [bold]p[/bold] push   "
+                "[bold]?[/bold] help   [bold]q[/bold] quit"
             )
         self.update(text)
 
@@ -381,8 +379,7 @@ class HelpOverlay(Static):
     HELP_TEXT = (
         "[bold]Keybindings[/bold]\n\n"
         "  [bold]j / k[/bold]  or  [bold]up / down[/bold]   Navigate sessions\n"
-        "  [bold]a[/bold]                        Move selected session to Ready\n"
-        "  [bold]c[/bold]                        Commit selected ready session\n"
+        "  [bold]c[/bold]                        Commit selected session for push\n"
         "  [bold]r[/bold]                        Reject selected session\n"
         "  [bold]d[/bold]                        Discard (delete staging file + state)\n"
         "  [bold]p[/bold]                        Push committed traces from the CLI\n"
@@ -690,7 +687,6 @@ class OpenTracesApp(App):
         Binding("2", "focus_summary", "Summary", show=False, priority=True),
         Binding("3", "focus_detail", "Detail", show=False, priority=True),
         Binding("f", "toggle_fullscreen", "Fullscreen", show=False, priority=True),
-        Binding("a", "approve", "Approve", priority=True),
         Binding("c", "commit", "Commit", priority=True),
         Binding("r", "reject", "Reject", priority=True),
         Binding("d", "discard", "Discard", priority=True),
@@ -708,7 +704,8 @@ class OpenTracesApp(App):
         self.staging_dir = staging_dir
         self.project_dir = _project_dir_from_staging(staging_dir)
         self.traces: list[dict[str, Any]] = []
-        self.state = StateManager()
+        state_path = get_project_state_path(self.project_dir)
+        self.state = StateManager(state_path=state_path if state_path.parent.exists() else None)
         self._in_step_view = False
         self._detail_fullscreen = False
         self._launch_fullscreen = fullscreen
@@ -824,7 +821,7 @@ class OpenTracesApp(App):
             f"[dim]remote[/dim] [ansi_bright_blue]{_truncate(self.remote_name, 22)}[/ansi_bright_blue]   "
             f"[dim]sessions[/dim] {total}   "
             f"[ansi_yellow]{counts['inbox']} inbox[/ansi_yellow]   "
-            f"[ansi_green]{counts['ready']} ready[/ansi_green]"
+            f"[ansi_bright_blue]{counts['committed']} committed[/ansi_bright_blue]"
         )
 
     def _move_to_first_session(self) -> None:
@@ -1110,15 +1107,6 @@ class OpenTracesApp(App):
             widget = widget.parent
         return False
 
-    def action_approve(self) -> None:
-        trace = self._get_selected_trace()
-        if not trace:
-            return
-        trace_id = trace["trace_id"]
-        self.state.set_trace_status(trace_id, TraceStatus.APPROVED, session_id=trace_id)
-        self._reload_traces(selected_trace_id=trace_id)
-        self.notify("Marked ready", severity="information")
-
     def action_commit(self) -> None:
         trace = self._get_selected_trace()
         if not trace:
@@ -1127,14 +1115,14 @@ class OpenTracesApp(App):
         trace_id = trace["trace_id"]
         entry = self.state.get_trace(trace_id)
         current_stage = resolve_visible_stage(entry.status if entry else None)
-        if current_stage != "ready":
-            self.notify("Move the session to Ready before committing", severity="warning")
+        if current_stage != "inbox":
+            self.notify("Only inbox sessions can be committed", severity="warning")
             return
 
         task = (trace.get("task", {}).get("description") or "trace")[:60]
-        self.state.create_commit_group([trace_id], f"Commit trace: {task}")
+        self.state.create_commit_group([trace_id], task)
         self._reload_traces(selected_trace_id=trace_id)
-        self.notify("Committed trace", severity="information")
+        self.notify("Committed", severity="information")
 
     def action_reject(self) -> None:
         trace = self._get_selected_trace()
@@ -1274,7 +1262,6 @@ class OpenTracesApp(App):
             "2": self.action_focus_summary,
             "3": self.action_focus_detail,
             "f": self.action_toggle_fullscreen,
-            "a": self.action_approve,
             "c": self.action_commit,
             "r": self.action_reject,
             "d": self.action_discard,

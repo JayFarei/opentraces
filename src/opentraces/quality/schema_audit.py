@@ -133,7 +133,7 @@ FIELD_SPECS: list[FieldSpec] = [
     FieldSpec("metrics.estimated_cost_usd", "Estimated cost in USD", "enrichment:metrics", "always", ["analytics", "rl"]),
 
     # --- SecurityMetadata ---
-    FieldSpec("security.tier", "Security tier 1/2/3", "security", "always", []),
+    FieldSpec("security.scanned", "Whether security scan was applied", "security", "always", []),
     FieldSpec("security.flags_reviewed", "Flags reviewed count", "security", "always", []),
     FieldSpec("security.redactions_applied", "Redactions applied count", "security", "always", []),
     FieldSpec("security.classifier_version", "Classifier version", "security", "optional", []),
@@ -292,7 +292,7 @@ class FieldCheckResult:
 _NOT_YET_IMPLEMENTED = {
     "task.repository",      # Needs git remote URL extraction in enrichment
     "task.base_commit",     # Needs wiring from vcs.base_commit in enrichment
-    "security.classifier_version",  # Only set during tier-2 scans
+    "security.classifier_version",  # Set when classifier runs
 }
 
 # Fields that are inherently session-dependent (empty is valid for some sessions)

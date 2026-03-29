@@ -67,7 +67,6 @@ def parsed_traces(project_sessions):
         processed = process_trace(
             record=record,
             project_dir=REPO_ROOT,
-            tier=2,
             cfg=cfg,
         )
         record = processed.record

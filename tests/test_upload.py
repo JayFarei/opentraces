@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from click.testing import CliRunner
+from huggingface_hub import HfApi
 
 from opentraces_schema.models import Agent, Metrics, Step, TokenUsage, TraceRecord
 from opentraces_schema.version import SCHEMA_VERSION
 
+from opentraces.cli import main
+from opentraces.config import Config, get_project_state_path, save_project_config
+from opentraces.state import StateManager, TraceStatus
 from opentraces.upload.hf_hub import HFUploader, UploadResult
 from opentraces.upload.dataset_card import (
     AUTO_END,
@@ -215,6 +223,92 @@ class TestEnsureRepo:
         assert "user/dataset" in url
 
 
+class TestFetchRemoteContentHashes:
+    def test_empty_repo_returns_empty_set(self):
+        """No shards on remote yields empty hash set."""
+        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+            mock_api = MockApi.return_value
+            mock_api.list_repo_files = MagicMock(return_value=["README.md"])
+
+            uploader = HFUploader(token="fake-token", repo_id="user/dataset")
+            uploader.api = mock_api
+
+            hashes = uploader.fetch_remote_content_hashes()
+
+        assert hashes == set()
+
+    def test_extracts_hashes_from_shards(self, tmp_path):
+        """Reads content_hash from JSONL lines in remote shards."""
+        shard_file = tmp_path / "shard.jsonl"
+        shard_file.write_text(
+            json.dumps({"trace_id": "t1", "content_hash": "aaa111"}) + "\n"
+            + json.dumps({"trace_id": "t2", "content_hash": "bbb222"}) + "\n"
+        )
+
+        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+            mock_api = MockApi.return_value
+            mock_api.list_repo_files = MagicMock(
+                return_value=["data/traces_20260301T000000Z_abcd1234.jsonl"]
+            )
+            mock_api.hf_hub_download = MagicMock(return_value=str(shard_file))
+
+            uploader = HFUploader(token="fake-token", repo_id="user/dataset")
+            uploader.api = mock_api
+
+            hashes = uploader.fetch_remote_content_hashes()
+
+        assert hashes == {"aaa111", "bbb222"}
+
+    def test_skips_lines_without_content_hash(self, tmp_path):
+        """Lines missing content_hash are silently skipped."""
+        shard_file = tmp_path / "shard.jsonl"
+        shard_file.write_text(
+            json.dumps({"trace_id": "t1", "content_hash": "aaa111"}) + "\n"
+            + json.dumps({"trace_id": "t2"}) + "\n"
+        )
+
+        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+            mock_api = MockApi.return_value
+            mock_api.list_repo_files = MagicMock(
+                return_value=["data/traces_20260301T000000Z_abcd1234.jsonl"]
+            )
+            mock_api.hf_hub_download = MagicMock(return_value=str(shard_file))
+
+            uploader = HFUploader(token="fake-token", repo_id="user/dataset")
+            uploader.api = mock_api
+
+            hashes = uploader.fetch_remote_content_hashes()
+
+        assert hashes == {"aaa111"}
+
+    def test_graceful_on_shard_download_failure(self, tmp_path):
+        """If one shard fails to download, others still contribute hashes."""
+        good_shard = tmp_path / "good.jsonl"
+        good_shard.write_text(json.dumps({"content_hash": "ccc333"}) + "\n")
+
+        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+            mock_api = MockApi.return_value
+            mock_api.list_repo_files = MagicMock(
+                return_value=[
+                    "data/traces_20260301T000000Z_bad00000.jsonl",
+                    "data/traces_20260302T000000Z_good0000.jsonl",
+                ]
+            )
+            mock_api.hf_hub_download = MagicMock(
+                side_effect=[
+                    ConnectionError("download failed"),
+                    str(good_shard),
+                ]
+            )
+
+            uploader = HFUploader(token="fake-token", repo_id="user/dataset")
+            uploader.api = mock_api
+
+            hashes = uploader.fetch_remote_content_hashes()
+
+        assert hashes == {"ccc333"}
+
+
 class TestGetExistingShards:
     def test_lists_shard_files(self):
         """get_existing_shards filters to trace shard files."""
@@ -236,6 +330,109 @@ class TestGetExistingShards:
 
         assert len(shards) == 2
         assert all(s.endswith(".jsonl") for s in shards)
+
+
+def _require_live_push_env() -> tuple[str, str]:
+    """Return live-test credentials or skip if not explicitly enabled."""
+    if os.environ.get("OPENTRACES_RUN_LIVE_PUSH_TESTS") != "1":
+        pytest.skip("set OPENTRACES_RUN_LIVE_PUSH_TESTS=1 to enable live HF push tests")
+
+    token = os.environ.get("OPENTRACES_LIVE_HF_TOKEN")
+    repo_id = os.environ.get("OPENTRACES_LIVE_HF_REPO_ID")
+    if not token or not repo_id:
+        pytest.skip(
+            "set OPENTRACES_LIVE_HF_TOKEN and OPENTRACES_LIVE_HF_REPO_ID for live HF push tests"
+        )
+    return token, repo_id
+
+
+class TestLivePushIntegration:
+    def test_push_cli_uploads_to_private_hf_repo(self, tmp_path, monkeypatch):
+        token, repo_id = _require_live_push_env()
+
+        project_dir = tmp_path / "push-project"
+        project_dir.mkdir()
+        ot_dir = project_dir / ".opentraces"
+        staging_dir = ot_dir / "staging"
+        staging_dir.mkdir(parents=True)
+
+        save_project_config(
+            project_dir,
+            {
+                "mode": "review",
+                "review_policy": "review",
+                "push_policy": "manual",
+                "agents": ["claude-code"],
+                "visibility": "private",
+                "remote": repo_id,
+            },
+        )
+
+        trace = _make_trace(trace_id=f"live-{uuid.uuid4().hex[:12]}")
+        trace.content_hash = trace.compute_content_hash()
+        staging_file = staging_dir / f"{trace.trace_id}.jsonl"
+        staging_file.write_text(trace.to_jsonl_line() + "\n")
+
+        state = StateManager(state_path=get_project_state_path(project_dir))
+        state.set_trace_status(
+            trace.trace_id,
+            TraceStatus.COMMITTED,
+            session_id=trace.session_id,
+            file_path=str(staging_file),
+        )
+
+        api = HfApi(token=token)
+        before_files = set()
+        try:
+            before_files = set(api.list_repo_files(repo_id=repo_id, repo_type="dataset"))
+        except Exception:
+            pass
+
+        monkeypatch.chdir(project_dir)
+        monkeypatch.setenv("HF_TOKEN", token)
+        monkeypatch.setattr(
+            "opentraces.cli.load_config",
+            lambda: Config(hf_token=token, dataset_visibility="private"),
+        )
+        monkeypatch.setattr("opentraces.state.STAGING_DIR", staging_dir)
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["push", "--private", "--repo", repo_id])
+
+        assert result.exit_code == 0, result.output
+        assert "Pushed 1 sessions (private)" in result.output
+
+        uploaded_entry = StateManager(state_path=get_project_state_path(project_dir)).get_trace(trace.trace_id)
+        assert uploaded_entry is not None
+        assert uploaded_entry.status == TraceStatus.UPLOADED
+
+        repo_info = api.repo_info(repo_id=repo_id, repo_type="dataset")
+        assert repo_info.private is True
+
+        after_files = before_files
+        new_shards: set[str] = set()
+        for _ in range(5):
+            after_files = set(api.list_repo_files(repo_id=repo_id, repo_type="dataset"))
+            new_shards = {
+                path for path in after_files - before_files
+                if path.startswith("data/traces_") and path.endswith(".jsonl")
+            }
+            if new_shards and "README.md" in after_files:
+                break
+            time.sleep(1)
+
+        assert new_shards, "expected a newly uploaded trace shard in the dataset repo"
+        assert "README.md" in after_files
+
+        newest_shard = sorted(new_shards)[-1]
+        local_shard = api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename=newest_shard)
+        shard_content = Path(local_shard).read_text()
+        assert trace.trace_id in shard_content
+
+        local_card = api.hf_hub_download(repo_id=repo_id, repo_type="dataset", filename="README.md")
+        card_content = Path(local_card).read_text()
+        assert AUTO_START in card_content
+        assert AUTO_END in card_content
 
 
 # --- Dataset Card Tests ---

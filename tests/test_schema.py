@@ -278,10 +278,10 @@ class TestAttributionExperimental:
 
 
 class TestSecurityMetadata:
-    def test_default_tier(self):
+    def test_default_scanned(self):
         sec = SecurityMetadata()
-        assert sec.tier == 3
+        assert sec.scanned is False
 
-    def test_tier2_with_classifier(self):
-        sec = SecurityMetadata(tier=2, classifier_version="0.1.0", flags_reviewed=5)
+    def test_scanned_with_classifier(self):
+        sec = SecurityMetadata(scanned=True, classifier_version="0.1.0", flags_reviewed=5)
         assert sec.classifier_version == "0.1.0"

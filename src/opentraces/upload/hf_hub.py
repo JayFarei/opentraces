@@ -7,11 +7,13 @@ Filename pattern: traces_{timestamp}_{uuid_short}.jsonl
 from __future__ import annotations
 
 import io
+import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 from huggingface_hub import HfApi
 
@@ -188,3 +190,36 @@ class HFUploader:
         except Exception as e:
             logger.warning("Failed to list shards for %s: %s", self.repo_id, e)
             return []
+
+    def fetch_remote_content_hashes(self) -> set[str]:
+        """Fetch content_hash values from all existing remote shards.
+
+        Best-effort: individual shard failures are logged and skipped.
+        Returns an empty set if the repo has no shards or on total failure.
+        """
+        shards = self.get_existing_shards()
+        if not shards:
+            return set()
+
+        hashes: set[str] = set()
+        for shard_path in shards:
+            try:
+                local_path = self.api.hf_hub_download(
+                    repo_id=self.repo_id,
+                    filename=shard_path,
+                    repo_type="dataset",
+                )
+                for line in Path(local_path).read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                        ch = record.get("content_hash")
+                        if ch:
+                            hashes.add(ch)
+                    except json.JSONDecodeError:
+                        continue
+            except Exception as e:
+                logger.warning("Could not fetch shard %s: %s", shard_path, e)
+        return hashes

@@ -32,8 +32,8 @@ function InitContent() {
       <span className="terminal-line"><span className="di">  Token saved to ~/.opentraces/credentials</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  Review policy?</span></span>
-      <span className="terminal-line"><span className="di">  [1] review</span>      <span className="di">every parsed session lands in Inbox</span>  <span className="s">{"\u2190"}</span></span>
-      <span className="terminal-line"><span className="di">  [2] auto-ready</span>  <span className="di">clean sessions can skip straight to Ready</span></span>
+      <span className="terminal-line"><span className="di">  [1] review</span>  <span className="di">sessions land in Inbox for you to review</span>  <span className="s">{"\u2190"}</span></span>
+      <span className="terminal-line"><span className="di">  [2] auto</span>    <span className="di">capture, sanitize, commit, and push automatically</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Created .opentraces/config.json</span></span>
       <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Installed Claude Code session hook</span></span>
@@ -50,8 +50,8 @@ function StatusContent() {
       <span className="terminal-line"><span className="di">  review policy: </span><span className="s">review</span></span>
       <span className="terminal-line"><span className="di">  remote: </span><span className="s">jayfarei/opentraces</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  inbox </span><span className="n">2</span> <span className="di"> ready </span><span className="n">1</span> <span className="di"> committed </span><span className="n">0</span> <span className="di"> pushed </span><span className="n">0</span></span>
-      <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 2h ago    </span><span className="s">{"\u201C"}refactor auth middleware{"\u201D"}</span>   <span className="n">47</span> <span className="di">steps</span>  <span className="di">ready</span></span>
+      <span className="terminal-line"><span className="di">  inbox </span><span className="n">3</span> <span className="di"> committed </span><span className="n">0</span> <span className="di"> pushed </span><span className="n">0</span></span>
+      <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 2h ago    </span><span className="s">{"\u201C"}refactor auth middleware{"\u201D"}</span>   <span className="n">47</span> <span className="di">steps</span>  <span className="di">inbox</span></span>
       <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 5h ago    </span><span className="s">{"\u201C"}fix billing webhook{"\u201D"}</span>        <span className="n">23</span> <span className="di">steps</span>  <span className="w">1 flag {"\u26A0"}</span></span>
       <span className="terminal-line"><span className="di">  {"\u2514\u2500\u2500"} yesterday </span><span className="s">{"\u201C"}add settings page{"\u201D"}</span>          <span className="n">65</span> <span className="di">steps</span>  <span className="di">inbox</span></span>
       <span className="terminal-line terminal-line-gap" />
@@ -87,8 +87,8 @@ function ReviewContent() {
         </div>
       </div>
       <div className="tui-row tui-footer">
-        <span>ready: 1 · committed: 0</span>
-        <span>j/k navigate · a approve · r reject · c commit · q quit</span>
+        <span>inbox: 3 · committed: 0</span>
+        <span>j/k navigate · c commit · r reject · q quit</span>
       </div>
     </div>
   );

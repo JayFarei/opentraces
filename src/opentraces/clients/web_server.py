@@ -229,7 +229,7 @@ def _generate_sample_traces() -> list[dict[str, Any]]:
                 "estimated_cost_usd": round(random.uniform(0.01, 2.5), 4),
             },
             "security": {
-                "tier": 3,
+                "scanned": True,
                 "flags_reviewed": 0,
                 "redactions_applied": 0,
                 "classifier_version": "0.1.0",
@@ -461,13 +461,23 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         traces = _traces()
         return jsonify(_compute_stats(traces))
 
+    @app.route("/api/session/<trace_id>/commit", methods=["POST"])
     @app.route("/api/session/<trace_id>/approve", methods=["POST"])
-    def api_approve(trace_id: str):
-        """Approve a session, persisting to StateManager."""
+    def api_commit_session(trace_id: str):
+        """Commit a session for push."""
         state = _get_state()
-        state.set_trace_status(trace_id, TraceStatus.APPROVED, session_id=trace_id)
+        task_desc = trace_id[:12]
+        try:
+            traces = _traces()
+            for t in traces:
+                if t.get("trace_id") == trace_id:
+                    task_desc = (t.get("task", {}).get("description") or "")[:80] or trace_id[:12]
+                    break
+        except Exception:
+            pass
+        state.create_commit_group([trace_id], task_desc)
         _invalidate_cache()
-        return jsonify({"status": "ready", "trace_id": trace_id})
+        return jsonify({"status": "committed", "trace_id": trace_id})
 
     @app.route("/api/session/<trace_id>/reject", methods=["POST"])
     def api_reject(trace_id: str):
@@ -590,8 +600,8 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             entry = state.get_trace(sid)
             if entry:
                 status_val = _coerce_status(entry.status)
-                if status_val not in (TraceStatus.STAGED, TraceStatus.REVIEWING, TraceStatus.APPROVED):
-                    return jsonify({"error": f"Session {sid} is not ready to commit (status: {status_val})"}), 400
+                if status_val not in (TraceStatus.STAGED, TraceStatus.PARSED, TraceStatus.DISCOVERED, TraceStatus.REVIEWING, TraceStatus.APPROVED):
+                    return jsonify({"error": f"Session {sid} is not in inbox (status: {status_val})"}), 400
 
         # Create the commit group
         commit_id = state.create_commit_group(trace_ids=ids, message=message)
@@ -609,13 +619,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
 
     @app.route("/api/session/<trace_id>/redaction-preview")
     def api_redaction_preview(trace_id: str):
-        """Preview redaction for a trace at a given security tier."""
-        tier = request.args.get("tier", "3")
-        try:
-            tier_int = int(tier)
-        except ValueError:
-            return jsonify({"error": "Invalid tier, must be 1, 2, or 3"}), 400
-
+        """Preview redaction results for a trace."""
         traces = _traces()
         trace = None
         for t in traces:
@@ -649,15 +653,13 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             if i in flagged_steps:
                 redactions = []
                 for flag in flagged_steps[i]:
-                    # At higher tiers, more fields get redacted
-                    if tier_int >= 2 or flag.get("severity") == "high":
-                        redactions.append({
-                            "field": f"steps[{i}].content",
-                            "reason": flag.get("reason", "security flag"),
-                            "before": (step.get("content") or "")[:80] + "...",
-                            "after": "[REDACTED]",
-                        })
-                        redacted_fields += 1
+                    redactions.append({
+                        "field": f"steps[{i}].content",
+                        "reason": flag.get("reason", "security flag"),
+                        "before": (step.get("content") or "")[:80] + "...",
+                        "after": "[REDACTED]",
+                    })
+                    redacted_fields += 1
                 if redactions:
                     preview_steps.append({
                         "step_index": i,
@@ -668,7 +670,6 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
 
         return jsonify({
             "trace_id": trace_id,
-            "tier": tier_int,
             "steps": preview_steps,
             "signal_kept": signal_kept,
         })
@@ -697,17 +698,19 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
 
         committed = [t for t in traces if t["trace_id"] in committed_ids]
         if not committed and not requested_commit_id:
-            committed = [t for t in traces if _get_review_status(t["trace_id"]) == "ready"]
+            committed = [t for t in traces if _get_review_status(t["trace_id"]) == "committed"]
         if not committed:
             return jsonify({"error": "No committed sessions to push"}), 400
 
         # Try the real upload pipeline
         try:
-            from ...upload.hf_hub import HFUploader
+            from ..upload.hf_hub import HFUploader
             from opentraces_schema import TraceRecord
 
             cfg = load_config()
             if not cfg.hf_token:
+                for t in committed:
+                    state.set_trace_status(t["trace_id"], TraceStatus.UPLOADED)
                 return jsonify({
                     "status": "pushed",
                     "count": len(committed),
@@ -740,6 +743,8 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
 
         except ImportError:
             logger.debug("Upload module not available, queuing sessions", exc_info=True)
+            for t in committed:
+                state.set_trace_status(t["trace_id"], TraceStatus.UPLOADED)
             return jsonify({
                 "status": "pushed",
                 "count": len(committed),
@@ -752,9 +757,10 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
     def _compute_stats(traces: list[dict[str, Any]]) -> dict[str, Any]:
         """Compute dashboard statistics."""
         total = len(traces)
-        approved = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "ready")
+        committed = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "committed")
+        pushed = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "pushed")
         rejected = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "rejected")
-        pending = total - approved - rejected
+        inbox = total - committed - pushed - rejected
 
         total_tokens = sum(
             t.get("metrics", {}).get("total_input_tokens", 0)
@@ -771,19 +777,20 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         )
         total_flags = sum(len(t.get("_security_flags", [])) for t in traces)
 
-        # Determine security tier from trace data if available
+        # Determine if security scanning was applied
         security_tier = None
         for t in traces:
-            tier = t.get("security", {}).get("tier")
-            if tier is not None:
-                security_tier = f"Tier {tier}"
+            scanned = t.get("security", {}).get("scanned")
+            if scanned is not None:
+                security_tier = "Scanned" if scanned else "Unscanned"
                 break
 
         return {
             "total": total,
-            "approved": approved,
+            "inbox": inbox,
+            "committed": committed,
+            "pushed": pushed,
             "rejected": rejected,
-            "pending": pending,
             "total_tokens": total_tokens,
             "total_tool_calls": total_tool_calls,
             "total_cost_usd": round(total_cost, 4),

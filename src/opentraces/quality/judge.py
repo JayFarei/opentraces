@@ -318,7 +318,7 @@ def summarize_for_judge(
     }
 
     # Security
-    summary["security_tier"] = record.security.tier
+    summary["security_scanned"] = record.security.scanned
 
     # Attribution
     if record.attribution and record.attribution.files:

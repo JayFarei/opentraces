@@ -4,7 +4,6 @@ import type { SessionStage, SessionListItem } from "../../types/trace";
 
 const STAGE_COLORS: Record<SessionStage, string> = {
   inbox: "var(--yellow)",
-  ready: "var(--green)",
   committed: "var(--green)",
   pushed: "var(--cyan)",
   rejected: "var(--red)",
@@ -12,7 +11,6 @@ const STAGE_COLORS: Record<SessionStage, string> = {
 
 const STAGE_LABELS: Record<SessionStage, string> = {
   inbox: "Inbox",
-  ready: "Ready",
   committed: "Committed",
   pushed: "Pushed",
   rejected: "Rejected",

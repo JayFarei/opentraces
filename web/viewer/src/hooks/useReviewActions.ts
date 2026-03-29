@@ -1,8 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  stageSession,
-  unstageSession,
-  approveSession,
   rejectSession,
   redactStep,
   commitSessions,
@@ -20,18 +17,9 @@ export function useReviewActions() {
     void qc.invalidateQueries({ queryKey: ["trace", traceId] });
   };
 
-  const stage = useMutation({
-    mutationFn: (traceId: string) => stageSession(traceId),
-    onSuccess: () => invalidateSessions(),
-  });
-
-  const unstage = useMutation({
-    mutationFn: (traceId: string) => unstageSession(traceId),
-    onSuccess: () => invalidateSessions(),
-  });
-
-  const approve = useMutation({
-    mutationFn: (traceId: string) => approveSession(traceId),
+  const commit = useMutation({
+    mutationFn: ({ sessionIds, message }: { sessionIds: string[]; message: string }) =>
+      commitSessions(sessionIds, message),
     onSuccess: () => invalidateSessions(),
   });
 
@@ -48,16 +36,13 @@ export function useReviewActions() {
     },
   });
 
-  const commit = useMutation({
-    mutationFn: ({ sessionIds, message }: { sessionIds: string[]; message: string }) =>
-      commitSessions(sessionIds, message),
-    onSuccess: () => invalidateSessions(),
-  });
-
   const push = useMutation({
     mutationFn: (commitId?: string) => pushCommit(commitId),
     onSuccess: () => invalidateSessions(),
+    onError: (err: Error) => {
+      console.error("[push] failed:", err.message);
+    },
   });
 
-  return { stage, unstage, approve, reject, redact, commit, push };
+  return { commit, reject, redact, push };
 }

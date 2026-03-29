@@ -276,13 +276,13 @@ def _c22_outcome_signal(record: TraceRecord, raw_data: dict | None) -> CheckResu
 # Security checks
 # ---------------------------------------------------------------------------
 
-def _c23_security_tier(record: TraceRecord, raw_data: dict | None) -> CheckResult:
-    """SEC1: security metadata present."""
-    passed = record.security.tier in (1, 2, 3)
+def _c23_security_scanned(record: TraceRecord, raw_data: dict | None) -> CheckResult:
+    """SEC1: security scan was applied."""
+    passed = record.security.scanned
     return CheckResult(
         passed=passed,
         score=1.0 if passed else 0.0,
-        evidence=f"tier={record.security.tier}",
+        evidence=f"scanned={record.security.scanned}",
     )
 
 
@@ -412,7 +412,7 @@ CONFORMANCE_PERSONA = PersonaDef(
         CheckDef("metrics.total_duration_s > 0", "enrichment", 0.6, _c21_duration),
         CheckDef("outcome.signal_confidence set", "enrichment", 0.7, _c22_outcome_signal),
         # Security
-        CheckDef("security.tier set", "security", 0.8, _c23_security_tier),
+        CheckDef("security.scanned", "security", 0.8, _c23_security_scanned),
         CheckDef("no real secrets in serialized output", "security", 1.0, _c24_no_secrets),
         CheckDef("paths anonymized (no raw /Users/<name>/)", "security", 0.8, _c25_paths_anonymized),
         # Structure

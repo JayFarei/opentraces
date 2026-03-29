@@ -14,7 +14,7 @@ cat > "$OUT" << 'HEADER'
 ## Links
 
 - Documentation: https://opentraces.ai/docs
-- GitHub: https://github.com/opentraces/opentraces
+- GitHub: https://github.com/jayfarei/opentraces
 - Explorer: https://opentraces.ai/explorer
 - Schema: https://opentraces.ai/schema
 

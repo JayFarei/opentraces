@@ -20,11 +20,9 @@ from .workflow import (
     DEFAULT_AGENT,
     DEFAULT_PUSH_POLICY,
     DEFAULT_REVIEW_POLICY,
-    legacy_mode_for_review_policy,
     normalize_agents,
     normalize_push_policy,
     normalize_review_policy,
-    review_policy_from_legacy_mode,
 )
 
 def auth_identity(token: str | None) -> dict | None:
@@ -54,9 +52,7 @@ CONFIG_VERSION = "0.1.0"
 class ProjectConfig(BaseModel):
     """Per-project configuration override."""
 
-    tier: int = 3
     excluded: bool = False
-    mode: str = "review"
     review_policy: str = DEFAULT_REVIEW_POLICY
     push_policy: str = DEFAULT_PUSH_POLICY
     remote: str | None = None
@@ -69,11 +65,9 @@ class Config(BaseModel):
 
     config_version: str = CONFIG_VERSION
     hf_token: str | None = None
-    default_tier: int = Field(3, ge=1, le=3)
     projects: dict[str, ProjectConfig] = Field(default_factory=dict)
     excluded_projects: list[str] = Field(default_factory=list)
     custom_redact_strings: list[str] = Field(default_factory=list)
-    default_mode: str = "review"
     pricing_file: str | None = None
     projects_path: str | None = Field(
         None,
@@ -200,25 +194,12 @@ def get_projects_path(config: Config) -> Path:
     return Path.home() / ".claude" / "projects"
 
 
-def get_tier_for_project(config: Config, project_path: str) -> int:
-    """Get the security tier for a specific project.
-
-    Returns the configured tier (1-3) for the project, or the default tier
-    if no project-specific config exists. Returns -1 if the project is
-    excluded from trace collection (via excluded_projects list or
-    per-project excluded=True flag).
-    """
+def is_project_excluded(config: Config, project_path: str) -> bool:
+    """Check if a project is excluded from trace collection."""
     if project_path in config.excluded_projects:
-        return -1  # Excluded
-
+        return True
     proj = config.projects.get(project_path)
-    if proj and proj.excluded:
-        return -1
-
-    if proj:
-        return proj.tier
-
-    return config.default_tier
+    return bool(proj and proj.excluded)
 
 
 def _parse_yaml_config(text: str) -> dict:
@@ -232,8 +213,10 @@ def _parse_yaml_config(text: str) -> dict:
             key, _, value = line.partition(":")
             key = key.strip()
             value = value.strip()
+            # Legacy tier -> review_policy migration
             if key == "tier":
-                result["tier"] = int(value)
+                tier = int(value)
+                result["review_policy"] = "auto" if tier == 1 else "review"
             elif key == "remote":
                 result["remote"] = value
             else:
@@ -241,22 +224,14 @@ def _parse_yaml_config(text: str) -> dict:
     return result
 
 
-def _backfill_mode(data: dict) -> bool:
-    """If config has tier but no mode, map tier to mode. Returns True if modified."""
-    if "tier" in data and "mode" not in data:
-        tier = int(data["tier"])
-        data["mode"] = "auto" if tier == 1 else "review"
-        return True
-    return False
-
-
 def _normalize_project_data(data: dict) -> bool:
     """Backfill new project config keys and normalize values."""
     modified = False
 
-    review_policy = normalize_review_policy(
-        data.get("review_policy") or review_policy_from_legacy_mode(data.get("mode"))
-    )
+    # Legacy mode -> review_policy migration
+    legacy_mode = data.get("mode")
+    fallback = "auto" if legacy_mode == "auto" else DEFAULT_REVIEW_POLICY
+    review_policy = normalize_review_policy(data.get("review_policy") or fallback)
     if data.get("review_policy") != review_policy:
         data["review_policy"] = review_policy
         modified = True
@@ -271,10 +246,11 @@ def _normalize_project_data(data: dict) -> bool:
         data["agents"] = agents
         modified = True
 
-    mode = legacy_mode_for_review_policy(review_policy)
-    if data.get("mode") != mode:
-        data["mode"] = mode
-        modified = True
+    # Strip legacy keys
+    for legacy_key in ("tier", "mode"):
+        if legacy_key in data:
+            del data[legacy_key]
+            modified = True
 
     return modified
 
@@ -314,16 +290,13 @@ def load_project_config(project_dir: Path) -> dict:
 
     if data is None:
         return {
-            "mode": "review",
             "review_policy": DEFAULT_REVIEW_POLICY,
             "push_policy": DEFAULT_PUSH_POLICY,
             "agents": [DEFAULT_AGENT],
         }
 
-    # Backward compat: map tier -> mode if mode is missing
-    changed = _backfill_mode(data)
-    if _normalize_project_data(data):
-        changed = True
+    # Migrate legacy keys and normalize values
+    changed = _normalize_project_data(data)
 
     if changed:
         try:

@@ -22,20 +22,20 @@ const features = [
     desc: "Publishes JSONL to HF Hub. Loadable via datasets.load_dataset(). No proprietary lock-in.",
   },
   {
-    title: "lazytraces",
-    desc: "Full TUI for reviewing traces. Like lazygit, but for your agent sessions. Approve, reject, redact.",
+    title: "traces inbox",
+    desc: "TUI and web interface to review redacted sessions before committing them to your dataset. Commit, reject, redact.",
   },
   {
     title: "automatic collection",
     desc: "Claude Code hook captures sessions after every conversation. No manual parsing.",
   },
   {
-    title: "agent-native cli",
-    desc: "Every command outputs structured JSON. Built for agents to drive agents.",
+    title: "automatic dedup",
+    desc: "Content-hash dedup on push. Reset your state, switch machines, re-push safely. No duplicates on the remote.",
   },
   {
-    title: "contributor dashboard",
-    desc: "Your personal analytics. Cost, cache efficiency, tool usage, success rates.",
+    title: "agent-native cli",
+    desc: "Every command outputs structured JSON. Built for agents to drive agents.",
   },
 ];
 

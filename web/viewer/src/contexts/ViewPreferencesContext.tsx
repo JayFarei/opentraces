@@ -1,13 +1,17 @@
 import { createContext, useContext, useState, useCallback, useEffect } from "react";
 import type { ReactNode } from "react";
 
+type TraceViewMode = "timeline" | "review";
+
 interface ViewPreferences {
   showReasoning: boolean;
   showTimeline: boolean;
   theme: "dark" | "light";
+  traceViewMode: TraceViewMode;
   toggleReasoning: () => void;
   toggleTimeline: () => void;
   toggleTheme: () => void;
+  setTraceViewMode: (mode: TraceViewMode) => void;
 }
 
 const ViewPreferencesContext = createContext<ViewPreferences | null>(null);
@@ -26,6 +30,7 @@ export function ViewPreferencesProvider({ children }: { children: ReactNode }) {
   const [showReasoning, setShowReasoning] = useState(true);
   const [showTimeline, setShowTimeline] = useState(true);
   const [theme, setTheme] = useState<"dark" | "light">(getInitialTheme);
+  const [traceViewMode, setTraceViewMode] = useState<TraceViewMode>("timeline");
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -45,7 +50,7 @@ export function ViewPreferencesProvider({ children }: { children: ReactNode }) {
 
   return (
     <ViewPreferencesContext.Provider
-      value={{ showReasoning, showTimeline, theme, toggleReasoning, toggleTimeline, toggleTheme }}
+      value={{ showReasoning, showTimeline, theme, traceViewMode, toggleReasoning, toggleTimeline, toggleTheme, setTraceViewMode }}
     >
       {children}
     </ViewPreferencesContext.Provider>

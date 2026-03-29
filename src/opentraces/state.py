@@ -159,11 +159,11 @@ class StateManager:
         ]
 
     def get_pending_upload_traces(self) -> list[TraceStagingEntry]:
-        """Get traces ready for upload (approved or previously failed)."""
+        """Get traces ready for upload (committed or previously failed)."""
         return [
             TraceStagingEntry(**v)
             for v in self._state["traces"].values()
-            if v.get("status") in (TraceStatus.APPROVED.value, TraceStatus.FAILED.value)
+            if v.get("status") in (TraceStatus.COMMITTED.value, TraceStatus.FAILED.value)
         ]
 
     # --- Commit groups ---

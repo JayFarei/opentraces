@@ -30,7 +30,6 @@ from .workflow import (
     normalize_push_policy,
     normalize_review_policy,
     resolve_visible_stage,
-    review_policy_from_legacy_mode,
     stage_label,
 )
 
@@ -38,6 +37,49 @@ SENTINEL = "---OPENTRACES_JSON---"
 
 # Global JSON mode flag, set by --json on the root group.
 _json_mode = False
+
+
+# -- Grouped help formatting --------------------------------------------------
+
+COMMAND_SECTIONS = [
+    ("Getting Started", ["login", "init", "status"]),
+    ("Review & Publish", ["session", "commit", "push", "log"]),
+    ("Inspect", ["stats", "web", "tui"]),
+    ("Settings", ["auth", "config", "remote", "whoami", "logout", "remove"]),
+]
+
+
+class GroupedGroup(click.Group):
+    """Click group that renders commands in named sections."""
+
+    def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        placed = set()
+        for section_name, cmd_names in COMMAND_SECTIONS:
+            rows: list[tuple[str, str]] = []
+            for name in cmd_names:
+                cmd = self.commands.get(name)
+                if cmd is None or cmd.hidden:
+                    continue
+                help_text = cmd.get_short_help_str(limit=formatter.width)
+                rows.append((name, help_text))
+                placed.add(name)
+            if rows:
+                with formatter.section(section_name):
+                    formatter.write_dl(rows)
+
+        # Anything not in a section goes under "Other"
+        other: list[tuple[str, str]] = []
+        for name in self.list_commands(ctx):
+            if name in placed:
+                continue
+            cmd = self.commands.get(name)
+            if cmd is None or cmd.hidden:
+                continue
+            help_text = cmd.get_short_help_str(limit=formatter.width)
+            other.append((name, help_text))
+        if other:
+            with formatter.section("Other"):
+                formatter.write_dl(other)
 
 
 def emit_json(data: dict) -> None:
@@ -94,9 +136,15 @@ def _launch_web_ui(port: int = 5050, open_browser: bool = False) -> None:
 
     project_staging = get_project_staging_dir(Path.cwd())
     project_state = get_project_state_path(Path.cwd())
-    viewer_dist = Path(__file__).parent.parent.parent / "web" / "viewer" / "dist"
-    if not viewer_dist.exists():
-        viewer_dist = None
+    # Installed wheel: <site-packages>/opentraces/static/viewer
+    pkg_path = Path(__file__).parent / "static" / "viewer"
+    if pkg_path.exists():
+        viewer_dist = pkg_path
+    else:
+        # Editable install / source tree: web/viewer/dist at repo root
+        viewer_dist = Path(__file__).parent.parent.parent / "web" / "viewer" / "dist"
+        if not viewer_dist.exists():
+            viewer_dist = None
 
     app = create_app(
         str(project_staging),
@@ -147,12 +195,12 @@ def _schedule_browser_open(url: str) -> None:
         logger.debug("Could not schedule browser open: %s", e)
 
 
-@click.group(invoke_without_command=True)
+@click.group(cls=GroupedGroup, invoke_without_command=True)
 @click.version_option(version=__version__)
 @click.option("--json", "json_mode", is_flag=True, help="Emit only machine-readable JSON output")
 @click.pass_context
 def main(ctx: click.Context, json_mode: bool) -> None:
-    """opentraces - repo-local inbox for agent traces."""
+    """opentraces - crowdsource agent traces to HuggingFace Hub."""
     global _json_mode
     _json_mode = json_mode
     ctx.ensure_object(dict)
@@ -241,6 +289,7 @@ def _auth_status_impl() -> None:
 @main.command()
 @click.option("--token", is_flag=True, help="Use token paste instead of browser login")
 def login(token: bool) -> None:
+    """Log in to HuggingFace Hub."""
     _login_impl(token)
 
 
@@ -461,10 +510,7 @@ def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=Non
         cfg = load_config()
 
     proj_config = load_project_config(project_dir)
-    review_policy = normalize_review_policy(
-        proj_config.get("review_policy") or review_policy_from_legacy_mode(proj_config.get("mode"))
-    )
-    tier = proj_config.get("tier", cfg.default_tier)
+    review_policy = normalize_review_policy(proj_config.get("review_policy"))
 
     staging = get_project_staging_dir(project_dir)
     staging.mkdir(parents=True, exist_ok=True)
@@ -487,16 +533,32 @@ def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=Non
             if record is None:
                 continue
 
-            result = process_trace(record, project_dir, tier, cfg)
+            result = process_trace(record, project_dir, cfg)
             staging_file = staging / f"{result.record.trace_id}.jsonl"
             staging_file.write_text(result.record.to_jsonl_line() + "\n")
 
-            state.set_trace_status(
-                result.record.trace_id,
-                TraceStatus.APPROVED if review_policy == "auto-ready" and not result.needs_review else TraceStatus.STAGED,
-                session_id=result.record.session_id,
-                file_path=str(staging_file),
-            )
+            if review_policy == "auto" and not result.needs_review:
+                # Auto mode: commit directly for push
+                state.set_trace_status(
+                    result.record.trace_id,
+                    TraceStatus.COMMITTED,
+                    session_id=result.record.session_id,
+                    file_path=str(staging_file),
+                )
+                task_desc = ""
+                if result.record.task:
+                    task_desc = (result.record.task.description or "")[:80] if hasattr(result.record.task, "description") else ""
+                state.create_commit_group(
+                    [result.record.trace_id],
+                    task_desc or result.record.trace_id[:12],
+                )
+            else:
+                state.set_trace_status(
+                    result.record.trace_id,
+                    TraceStatus.STAGED,
+                    session_id=result.record.session_id,
+                    file_path=str(staging_file),
+                )
 
             stat = session_file.stat()
             state.mark_file_processed(ProcessedFile(
@@ -580,14 +642,12 @@ def config_show() -> None:
 
 @config.command("set")
 @click.option("--project", type=str, help="Project path for per-project config")
-@click.option("--tier", type=int, help="Security tier (1, 2, or 3)")
 @click.option("--exclude", type=str, help="Project path to exclude (appends)")
 @click.option("--redact", type=str, help="Custom redaction string (appends)")
 @click.option("--pricing-file", type=str, help="Path to custom pricing table")
 @click.option("--classifier-sensitivity", type=click.Choice(["low", "medium", "high"]))
 def config_set(
     project: str | None,
-    tier: int | None,
     exclude: str | None,
     redact: str | None,
     pricing_file: str | None,
@@ -595,15 +655,6 @@ def config_set(
 ) -> None:
     """Set configuration values. Append-only for --exclude and --redact."""
     cfg = load_config()
-
-    if project and tier is not None:
-        from .config import ProjectConfig
-        cfg.projects[project] = ProjectConfig(tier=tier)
-        click.echo(f"Set tier {tier} for project: {project}")
-
-    if tier is not None and not project:
-        cfg.default_tier = tier
-        click.echo(f"Set default tier to {tier}")
 
     if exclude:
         if exclude not in cfg.excluded_projects:
@@ -633,7 +684,7 @@ def config_set(
 
 @main.command()
 @click.option("--agent", "agents", multiple=True, type=click.Choice(list(SUPPORTED_AGENTS)), help="Agent runtime to connect")
-@click.option("--review-policy", type=click.Choice(["review", "auto-ready"]), default=None, help="Whether safe sessions require review")
+@click.option("--review-policy", type=click.Choice(["review", "auto"]), default=None, help="Whether safe sessions require review")
 @click.option("--push-policy", type=click.Choice(["manual", "auto-push"]), default=None, help="Whether committed traces push automatically")
 @click.option(
     "--import-existing/--start-fresh",
@@ -644,7 +695,6 @@ def config_set(
 @click.option("--mode", type=click.Choice(["auto", "review"]), default=None, hidden=True, help="Legacy alias for --review-policy")
 @click.option("--remote", type=str, default=None, help="HF dataset repo (owner/name)")
 @click.option("--no-hook", is_flag=True, help="Skip Claude Code hook installation")
-@click.option("--tier", type=click.IntRange(1, 3), default=None, hidden=True, help="Legacy tier (use --review-policy instead)")
 def init(
     agents: tuple[str, ...],
     review_policy: str | None,
@@ -653,7 +703,6 @@ def init(
     mode: str | None,
     remote: str | None,
     no_hook: bool,
-    tier: int | None,
 ) -> None:
     """Initialize opentraces in the current project directory.
 
@@ -687,12 +736,9 @@ def init(
         )
         return
 
-    # Legacy --tier mapping
-    if review_policy is None:
-        if mode is not None:
-            review_policy = "auto-ready" if mode == "auto" else "review"
-        elif tier is not None:
-            review_policy = "auto-ready" if tier == 1 else "review"
+    # Legacy --mode mapping
+    if review_policy is None and mode is not None:
+        review_policy = "auto" if mode == "auto" else "review"
     review_policy = normalize_review_policy(review_policy)
     push_policy = normalize_push_policy(push_policy)
     selected_agents = normalize_agents(list(agents))
@@ -727,8 +773,8 @@ def init(
                 chosen_review = await select(
                     "Which review policy should this inbox use?",
                     [
-                        Option(value="review", label="Review every session", hint="Every parsed session lands in Inbox"),
-                        Option(value="auto-ready", label="Auto-ready safe sessions", hint="Safe sessions land in Ready automatically"),
+                        Option(value="review", label="Review every session", hint="Sessions land in Inbox for you to review"),
+                        Option(value="auto", label="Fully automatic", hint="Capture, sanitize, commit, and push automatically"),
                     ],
                     initial_value=review_policy,
                 )
@@ -772,7 +818,7 @@ def init(
             if review_policy == DEFAULT_REVIEW_POLICY:
                 review_policy = click.prompt(
                     "Review policy",
-                    type=click.Choice(["review", "auto-ready"]),
+                    type=click.Choice(["review", "auto"]),
                     default=DEFAULT_REVIEW_POLICY,
                 )
             if push_policy == DEFAULT_PUSH_POLICY:
@@ -789,7 +835,7 @@ def init(
     staging_dir.mkdir(parents=True, exist_ok=True)
 
     proj_config: dict = {
-        "mode": "auto" if review_policy == "auto-ready" else "review",
+        "mode": "auto" if review_policy == "auto" else "review",
         "review_policy": review_policy,
         "push_policy": push_policy,
         "agents": selected_agents,
@@ -876,7 +922,7 @@ def init(
         click.echo(f"     Session dir: {existing_session_dir}")
     else:
         click.echo("  1. Start a connected agent session; capture is automatic from now on")
-    click.echo("  2. Commit Ready traces with 'opentraces commit --all'")
+    click.echo("  2. Review and commit inbox traces with 'opentraces commit --all'")
     click.echo("  3. Publish committed traces with 'opentraces push'")
 
     emit_json({
@@ -1151,7 +1197,7 @@ def status() -> None:
 
     state_path = get_project_state_path(project_dir)
     state = StateManager(state_path=state_path if state_path.parent.exists() else None)
-    counts = {stage: 0 for stage in ("inbox", "ready", "committed", "pushed", "rejected")}
+    counts = {stage: 0 for stage in ("inbox", "committed", "pushed", "rejected")}
 
     if not staged_files:
         click.echo("0 sessions in inbox")
@@ -1198,7 +1244,6 @@ def status() -> None:
     click.echo(
         "\n"
         f"inbox {counts['inbox']}  "
-        f"ready {counts['ready']}  "
         f"committed {counts['committed']}  "
         f"pushed {counts['pushed']}  "
         f"rejected {counts['rejected']}"
@@ -1221,7 +1266,7 @@ def status() -> None:
 
 @main.group()
 def session() -> None:
-    """Manage individual trace sessions (list, show, approve, reject, reset, redact, discard)."""
+    """Manage individual trace sessions (list, show, commit, reject, reset, redact, discard)."""
     pass
 
 
@@ -1257,7 +1302,7 @@ def _load_trace_record(staging_dir: Path, trace_id: str):
 
 
 @session.command("list")
-@click.option("--stage", type=click.Choice(["inbox", "ready", "committed", "pushed", "rejected"]), default=None, help="Filter by stage")
+@click.option("--stage", type=click.Choice(["inbox", "committed", "pushed", "rejected"]), default=None, help="Filter by stage")
 @click.option("--model", type=str, default=None, help="Filter by model name (substring)")
 @click.option("--agent", type=str, default=None, help="Filter by agent name")
 @click.option("--limit", type=int, default=50, help="Max sessions to return")
@@ -1376,10 +1421,8 @@ def session_show(trace_id: str) -> None:
     })
 
 
-@session.command("approve")
-@click.argument("trace_id")
-def session_approve(trace_id: str) -> None:
-    """Approve a session (move to Ready stage)."""
+def _session_commit_impl(trace_id: str) -> None:
+    """Commit a single session for push."""
     from .state import TraceStatus
 
     state, staging_dir = _load_project_state()
@@ -1389,16 +1432,43 @@ def session_approve(trace_id: str) -> None:
         emit_json(error_response("NOT_FOUND", "session", f"No trace entry for {trace_id}"))
         sys.exit(3)
 
-    state.set_trace_status(trace_id, TraceStatus.APPROVED)
-    human_echo(f"Approved: {trace_id[:8]}")
+    # Build a commit message from the trace task description
+    message = trace_id[:12]
+    try:
+        if entry.file_path:
+            from opentraces_schema import TraceRecord
+            record = TraceRecord.model_validate_json(Path(entry.file_path).read_text().strip())
+            task_desc = (record.task or {}).get("description", "") if isinstance(record.task, dict) else (getattr(record.task, "description", "") if record.task else "")
+            if task_desc:
+                message = task_desc[:80]
+    except Exception:
+        pass
+
+    commit_id = state.create_commit_group([trace_id], message)
+    human_echo(f"Committed: {trace_id[:8]} (commit {commit_id})")
 
     emit_json({
         "status": "ok",
         "trace_id": trace_id,
-        "stage": "ready",
-        "next_steps": ["Run 'opentraces commit' to bundle ready traces"],
-        "next_command": "opentraces commit --all",
+        "commit_id": commit_id,
+        "stage": "committed",
+        "next_steps": ["Run 'opentraces push' to upload"],
+        "next_command": "opentraces push",
     })
+
+
+@session.command("commit")
+@click.argument("trace_id")
+def session_commit(trace_id: str) -> None:
+    """Commit a session for push."""
+    _session_commit_impl(trace_id)
+
+
+@session.command("approve", hidden=True)
+@click.argument("trace_id")
+def session_approve(trace_id: str) -> None:
+    """Backward-compatible alias for session commit."""
+    _session_commit_impl(trace_id)
 
 
 @session.command("reject")
@@ -1427,7 +1497,7 @@ def session_reject(trace_id: str) -> None:
 @session.command("reset")
 @click.argument("trace_id")
 def session_reset(trace_id: str) -> None:
-    """Reset a session back to Inbox (undo approve, reject, or uncommitted commit)."""
+    """Reset a session back to Inbox (undo commit or reject)."""
     from .state import TraceStatus
 
     state, staging_dir = _load_project_state()
@@ -1708,7 +1778,7 @@ def stats() -> None:
 
     staged_files = sorted(staging_dir.glob("*.jsonl")) if staging_dir.exists() else []
 
-    counts = {stage: 0 for stage in ("inbox", "ready", "committed", "pushed", "rejected")}
+    counts = {stage: 0 for stage in ("inbox", "committed", "pushed", "rejected")}
     models: dict[str, int] = {}
     agents: dict[str, int] = {}
     total_steps = 0
@@ -1790,7 +1860,7 @@ def context() -> None:
     state = StateManager(state_path=state_path if state_path.parent.exists() else None)
 
     staged_files = list(staging_dir.glob("*.jsonl")) if staging_dir.exists() else []
-    counts = {stage: 0 for stage in ("inbox", "ready", "committed", "pushed", "rejected")}
+    counts = {stage: 0 for stage in ("inbox", "committed", "pushed", "rejected")}
     for sf in staged_files:
         try:
             data = sf.read_text().strip()
@@ -1813,8 +1883,6 @@ def context() -> None:
         suggested_next = "opentraces login"
     elif counts["inbox"] > 0:
         suggested_next = "opentraces session list --stage inbox"
-    elif counts["ready"] > 0:
-        suggested_next = "opentraces commit --all"
     elif counts["committed"] > 0:
         suggested_next = "opentraces push"
     else:
@@ -1830,7 +1898,6 @@ def context() -> None:
             "push_policy": proj_config.get("push_policy", "manual"),
             "agents": proj_config.get("agents", ["claude-code"]),
             "remote": proj_config.get("remote"),
-            "tier": proj_config.get("tier", 2),
             "visibility": proj_config.get("visibility", "private"),
         },
         "auth": {
@@ -1845,7 +1912,7 @@ def context() -> None:
     human_echo(f"Project:  {project_dir.name}")
     human_echo(f"Remote:   {proj_config.get('remote', 'not set')}")
     human_echo(f"Auth:     {'yes (' + username + ')' if authenticated else 'no'}")
-    human_echo(f"Inbox:    {counts['inbox']}  Ready: {counts['ready']}  Committed: {counts['committed']}  Pushed: {counts['pushed']}")
+    human_echo(f"Inbox:    {counts['inbox']}  Committed: {counts['committed']}  Pushed: {counts['pushed']}")
     human_echo(f"Next:     {suggested_next}")
 
     emit_json(result)
@@ -1936,11 +2003,11 @@ def discover() -> None:
 
 
 @main.command(hidden=True)
-@click.option("--auto", is_flag=True, help="Auto-approve for Tier 1 (open mode)")
+@click.option("--auto", is_flag=True, help="Auto-approve (skip review)")
 @click.option("--limit", type=int, default=0, help="Max sessions to parse (0=all)")
 def parse(auto: bool, limit: int) -> None:
     """Parse agent sessions into enriched JSONL traces."""
-    from .config import get_projects_path, get_tier_for_project
+    from .config import get_projects_path, is_project_excluded
     from .parsers.claude_code import ClaudeCodeParser
     from .pipeline import process_trace
     from .state import StateManager, TraceStatus, ProcessedFile, STAGING_DIR
@@ -1974,14 +2041,13 @@ def parse(auto: bool, limit: int) -> None:
                 skipped_count += 1
                 continue
 
-            # Resolve per-project tier
+            # Check project exclusion
             project_dir = session_path.parent
-            tier = get_tier_for_project(cfg, str(project_dir))
-            if tier == -1:
+            if is_project_excluded(cfg, str(project_dir)):
                 skipped_count += 1
-                continue  # Excluded project
+                continue
 
-            result = process_trace(record, project_dir, tier, cfg)
+            result = process_trace(record, project_dir, cfg)
 
             # Stage the trace
             jsonl_line = result.record.to_jsonl_line()
@@ -2139,9 +2205,9 @@ def assess(judge: bool, judge_model: str, limit: int) -> None:
 
 @main.command("commit")
 @click.option("-m", "--message", type=str, default=None, help="Commit message")
-@click.option("--all", "commit_all", is_flag=True, help="Commit all ready traces")
+@click.option("--all", "commit_all", is_flag=True, help="Commit all inbox traces")
 def commit_traces(message: str | None, commit_all: bool) -> None:
-    """Bundle ready traces into a commit group for push."""
+    """Commit inbox traces for push."""
     from .state import StateManager, TraceStatus
     from .config import get_project_state_path
     from opentraces_schema import TraceRecord
@@ -2150,17 +2216,17 @@ def commit_traces(message: str | None, commit_all: bool) -> None:
     state_path = get_project_state_path(project_dir)
     state = StateManager(state_path=state_path if state_path.parent.exists() else None)
 
-    approved = state.get_traces_by_status(TraceStatus.APPROVED)
-    if not approved:
-        click.echo("No ready traces to commit. Run 'opentraces' or 'opentraces web' first.")
-        emit_json({"status": "ok", "committed": 0, "hint": "Open the inbox and move traces to Ready"})
+    inbox = state.get_traces_by_status(TraceStatus.STAGED)
+    if not inbox:
+        click.echo("No inbox traces to commit. Run 'opentraces' or 'opentraces web' to review sessions.")
+        emit_json({"status": "ok", "committed": 0, "hint": "Open the inbox to review traces"})
         return
 
     if commit_all:
-        trace_ids = [entry.trace_id for entry in approved]
+        trace_ids = [entry.trace_id for entry in inbox]
     else:
-        click.echo(f"{len(approved)} ready traces:\n")
-        for i, entry in enumerate(approved):
+        click.echo(f"{len(inbox)} inbox traces:\n")
+        for i, entry in enumerate(inbox):
             desc = "(no description)"
             if entry.file_path:
                 try:
@@ -2172,8 +2238,8 @@ def commit_traces(message: str | None, commit_all: bool) -> None:
             click.echo(f"  {i+1}. {entry.trace_id[:8]}  {desc}")
 
         click.echo()
-        if click.confirm(f"Commit all {len(approved)} traces?", default=True):
-            trace_ids = [entry.trace_id for entry in approved]
+        if click.confirm(f"Commit all {len(inbox)} traces?", default=True):
+            trace_ids = [entry.trace_id for entry in inbox]
         else:
             click.echo("Cancelled.")
             return
@@ -2181,7 +2247,7 @@ def commit_traces(message: str | None, commit_all: bool) -> None:
     # Auto-generate message if not provided
     if message is None:
         descriptions = []
-        for entry in approved:
+        for entry in inbox:
             if entry.file_path:
                 try:
                     data = Path(entry.file_path).read_text().strip()
@@ -2331,25 +2397,8 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     state = StateManager(
         state_path=proj_state_path if proj_state_path.parent.exists() else None
     )
-    # Check project mode for push behavior
-    proj_config = load_project_config(Path.cwd())
-    project_mode = proj_config.get("mode", "review")
-
-    # Get committed traces (the standard path after review → commit)
+    # Get committed traces
     traces_to_upload = state.get_traces_by_status(TraceStatus.COMMITTED)
-
-    # In auto mode, also pick up APPROVED traces (auto-committed by _capture)
-    if not traces_to_upload and project_mode == "auto":
-        traces_to_upload = state.get_traces_by_status(TraceStatus.APPROVED)
-
-    # If review mode and there are approved but uncommitted traces, hint
-    if not traces_to_upload:
-        approved = state.get_traces_by_status(TraceStatus.APPROVED)
-        if approved:
-            click.echo(f"{len(approved)} ready traces found, but not yet committed.")
-            click.echo("Run 'opentraces commit' to bundle them for push.")
-            emit_json({"status": "ok", "uploaded": 0, "hint": "Run opentraces commit first"})
-            return
 
     if not traces_to_upload:
         # If --gated was passed standalone, apply it even without uploading
@@ -2395,12 +2444,39 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
         is_private = cfg.dataset_visibility == "private"
 
     visibility_label = "private" if is_private else "public"
-    click.echo(f"Uploading {len(records)} traces to {repo_id}...")
 
     try:
         with StagingLock():
             uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
             uploader.ensure_repo_exists(private=is_private)
+
+            # Dedup: skip traces whose content_hash already exists on the remote
+            remote_hashes = uploader.fetch_remote_content_hashes()
+            if remote_hashes:
+                before_count = len(records)
+                duplicate_trace_ids: set[str] = set()
+                new_records = []
+                for record, entry in zip(records, traces_to_upload):
+                    if record.compute_content_hash() in remote_hashes:
+                        duplicate_trace_ids.add(entry.trace_id)
+                    else:
+                        new_records.append(record)
+
+                if duplicate_trace_ids:
+                    # Mark duplicates as uploaded (they exist on the remote)
+                    for entry in traces_to_upload:
+                        if entry.trace_id in duplicate_trace_ids:
+                            state.set_trace_status(entry.trace_id, TraceStatus.UPLOADED)
+                    click.echo(f"Skipped {len(duplicate_trace_ids)} duplicate trace(s) already on remote.")
+
+                if not new_records:
+                    click.echo("All traces already exist on remote. Nothing to upload.")
+                    emit_json({"status": "ok", "uploaded": 0, "skipped_duplicates": len(duplicate_trace_ids)})
+                    return
+
+                records = new_records
+
+            click.echo(f"Uploading {len(records)} traces to {repo_id}...")
             result = uploader.upload_traces(records)
 
             # Generate and upload dataset card
@@ -2549,9 +2625,9 @@ def introspect() -> None:
             "whoami": {"description": "Show the active HuggingFace identity"},
             "web": {"description": "Open the browser inbox", "options": ["--port"]},
             "tui": {"description": "Open the terminal inbox"},
-            "commit": {"description": "Bundle ready traces for push", "options": ["-m", "--all"]},
+            "commit": {"description": "Commit inbox traces for push", "options": ["-m", "--all"]},
             "push": {"description": "Upload committed traces to HuggingFace Hub", "options": ["--private", "--public"]},
-            "session": {"description": "Manage individual trace sessions", "subcommands": ["list", "show", "approve", "reject", "reset", "redact", "discard"]},
+            "session": {"description": "Manage individual trace sessions", "subcommands": ["list", "show", "commit", "reject", "reset", "redact", "discard"]},
             "remote": {"description": "Manage dataset remote", "subcommands": ["current", "list", "use", "remove"]},
             "status": {"description": "Show repo inbox status"},
             "stats": {"description": "Aggregate statistics (traces, tokens, cost, models)"},

@@ -35,12 +35,14 @@ If I'm using you (the agent running this prompt), detect which
 agent you are and suggest that. I can pick multiple.
 
 Step 4 - Initialize and install skill:
-opentraces init --agent <chosen-agent> --review-policy review --push-policy manual
+opentraces init --agent <chosen-agent> --review-policy review --push-policy manual --start-fresh
 
 This sets up automatic trace collection with manual review before
 anything is shared, and installs the opentraces agent skill into
 .agents/skills/opentraces/ (plus a symlink in .<agent>/skills/)
-so you have the full CLI reference for future sessions.
+so you have the full CLI reference for future sessions. If Claude Code
+already has past sessions for this repo, use `--import-existing` to bring
+that backlog into the inbox immediately, or `--start-fresh` to begin from now on.
 
 After setup, the workflow is:
 - `opentraces web` to inspect traces before sharing

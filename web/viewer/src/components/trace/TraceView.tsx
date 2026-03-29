@@ -1,11 +1,14 @@
 import { useMemo } from "react";
 import { useSelection } from "../../contexts/SelectionContext";
+import { useViewPreferences } from "../../contexts/ViewPreferencesContext";
 import { useTraceData } from "../../hooks/useTraceData";
 import { TraceTree } from "./TraceTree";
+import { ContextReview } from "../detail/ContextReview";
 
 export function TraceView() {
   const { selectedSessionId } = useSelection();
   const { data: trace, tree, isLoading, error } = useTraceData(selectedSessionId);
+  const { traceViewMode } = useViewPreferences();
 
   const traceStartMs = useMemo(() => {
     if (!trace?.timestamp_start) return null;
@@ -42,12 +45,15 @@ export function TraceView() {
 
   return (
     <div className="h-full flex flex-col bg-[var(--bg)]">
-      {/* No header here, step count is in SessionHeader */}
-
-      {/* The trace tree */}
-      <div className="flex-1 overflow-hidden">
-        <TraceTree tree={tree} traceStartMs={traceStartMs} />
-      </div>
+      {traceViewMode === "review" ? (
+        <div className="flex-1 overflow-hidden">
+          <ContextReview fullView />
+        </div>
+      ) : (
+        <div className="flex-1 overflow-hidden">
+          <TraceTree tree={tree} traceStartMs={traceStartMs} />
+        </div>
+      )}
     </div>
   );
 }

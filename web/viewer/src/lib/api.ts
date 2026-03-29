@@ -36,7 +36,7 @@ interface RawSession {
   project: string;
 }
 
-const VALID_STAGES = new Set(["inbox", "ready", "committed", "pushed", "rejected"]);
+const VALID_STAGES = new Set(["inbox", "committed", "pushed", "rejected"]);
 
 function mapSession(raw: RawSession): SessionListItem {
   const rawStage = raw._stage ?? "inbox";
@@ -65,16 +65,8 @@ export async function fetchTrace(traceId: string): Promise<TraceRecord> {
   return request<TraceRecord>(`/api/session/${traceId}/detail`);
 }
 
-export async function stageSession(traceId: string): Promise<void> {
-  await request<unknown>(`/api/session/${traceId}/stage`, { method: "POST" });
-}
-
-export async function unstageSession(traceId: string): Promise<void> {
-  await request<unknown>(`/api/session/${traceId}/unstage`, { method: "POST" });
-}
-
-export async function approveSession(traceId: string): Promise<void> {
-  await request<unknown>(`/api/session/${traceId}/approve`, { method: "POST" });
+export async function commitSession(traceId: string): Promise<void> {
+  await request<unknown>(`/api/session/${traceId}/commit`, { method: "POST" });
 }
 
 export async function rejectSession(traceId: string): Promise<void> {

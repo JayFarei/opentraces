@@ -20,17 +20,17 @@ function CopyBox({ cmd, desc }: { cmd: string; desc: string }) {
 }
 
 const terminalSteps = [
-  { cmd: "opentraces init --review-policy review --push-policy manual", desc: "connect agents and create the repo inbox" },
-  { cmd: "opentraces web", desc: "inspect traces in the browser inbox before sharing" },
-  { cmd: "opentraces commit --all", desc: "bundle Ready traces for an upload batch" },
-  { cmd: "opentraces push --private", desc: "publish committed traces to your HF dataset" },
+  { cmd: "pip install opentraces", desc: "install the CLI" },
+  { cmd: "opentraces init", desc: "set review policy, create a private HF dataset, install agent hook" },
+  { cmd: "opentraces tui", desc: "open the inbox to review, commit, redact, or reject traces" },
+  { cmd: "opentraces push", desc: "sync committed traces to your HuggingFace dataset" },
 ];
 
 const agentSteps = [
-  { cmd: "set up opentraces for this project", desc: "installs, authenticates, picks your agent" },
-  { cmd: "open my opentraces inbox", desc: "review traces after sanitisation in the browser inbox or TUI" },
-  { cmd: "commit my ready traces", desc: "bundle the ready set for upload" },
-  { cmd: "push committed traces to HuggingFace", desc: "publishes committed sessions to your private dataset" },
+  { cmd: "set up opentraces for this project", desc: "installs, authenticates, creates a private dataset, installs the hook" },
+  { cmd: "open my opentraces inbox and review my traces", desc: "deterministic scrubbing, then commit or reject in the TUI or browser" },
+  { cmd: "verify no information about $CLIENT leaks, then commit", desc: "agent checks redactions against your criteria before committing" },
+  { cmd: "push my committed traces to HuggingFace", desc: "syncs committed sessions to your private dataset" },
 ];
 
 export default function GetStarted() {

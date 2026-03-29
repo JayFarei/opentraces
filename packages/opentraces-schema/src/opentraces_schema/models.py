@@ -188,9 +188,9 @@ class Metrics(BaseModel):
 
 
 class SecurityMetadata(BaseModel):
-    """Records what security tier was used and what was flagged/redacted."""
+    """Records what security processing was applied and what was flagged/redacted."""
 
-    tier: Literal[1, 2, 3] = 3
+    scanned: bool = False
     flags_reviewed: int = 0
     redactions_applied: int = 0
     classifier_version: str | None = None

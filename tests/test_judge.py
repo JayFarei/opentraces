@@ -242,7 +242,7 @@ class TestSummarizer:
         assert "representative_steps" in summary
         assert "outcome" in summary
         assert "metrics" in summary
-        assert "security_tier" in summary
+        assert "security_scanned" in summary
         assert "attribution" in summary
 
     def test_rich_trace_summary_token_estimate(self):

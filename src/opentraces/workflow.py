@@ -11,7 +11,7 @@ DEFAULT_PUSH_POLICY = "manual"
 DEFAULT_REMOTE_NAME = "opentraces"
 DEFAULT_AGENT = "claude-code"
 
-VISIBLE_STAGE_ORDER = ("inbox", "ready", "committed", "pushed", "rejected")
+VISIBLE_STAGE_ORDER = ("inbox", "committed", "pushed", "rejected")
 
 OPENTRACES_ASCII = r"""
   ___  _____
@@ -32,8 +32,7 @@ class StagePresentation:
 
 STAGE_PRESENTATIONS = {
     "inbox": StagePresentation("inbox", "Inbox", "Needs review"),
-    "ready": StagePresentation("ready", "Ready", "Ready to commit"),
-    "committed": StagePresentation("committed", "Committed", "Queued for push"),
+    "committed": StagePresentation("committed", "Committed", "Ready to push"),
     "pushed": StagePresentation("pushed", "Pushed", "Published upstream"),
     "rejected": StagePresentation("rejected", "Rejected", "Kept local only"),
 }
@@ -61,7 +60,7 @@ def normalize_review_policy(value: str | None) -> str:
     if value in {"review", "manual"}:
         return "review"
     if value in {"auto", "auto-ready", "auto_ready"}:
-        return "auto-ready"
+        return "auto"
     return DEFAULT_REVIEW_POLICY
 
 
@@ -77,11 +76,11 @@ def normalize_agents(agents: list[str] | None) -> list[str]:
 
 
 def legacy_mode_for_review_policy(review_policy: str) -> str:
-    return "auto" if normalize_review_policy(review_policy) == "auto-ready" else "review"
+    return "auto" if normalize_review_policy(review_policy) == "auto" else "review"
 
 
 def review_policy_from_legacy_mode(mode: str | None) -> str:
-    return "auto-ready" if mode == "auto" else DEFAULT_REVIEW_POLICY
+    return "auto" if mode == "auto" else DEFAULT_REVIEW_POLICY
 
 
 def resolve_visible_stage(status: TraceStatus | str | None) -> str:
@@ -96,7 +95,7 @@ def resolve_visible_stage(status: TraceStatus | str | None) -> str:
         TraceStatus.PARSED: "inbox",
         TraceStatus.DISCOVERED: "inbox",
         TraceStatus.REVIEWING: "inbox",
-        TraceStatus.APPROVED: "ready",
+        TraceStatus.APPROVED: "committed",
         TraceStatus.COMMITTED: "committed",
         TraceStatus.UPLOADING: "committed",
         TraceStatus.UPLOADED: "pushed",

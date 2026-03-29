@@ -4,9 +4,8 @@ import SectionRule from "./SectionRule";
 const agents = ["Claude Code", "Codex CLI", "Cursor", "Gemini CLI", "OpenCode", "Cline"];
 const pipelineSteps = ["init", "capture", "parse", "enrich", "sanitise"];
 const pushModes = [
-  { name: "auto", label: "push automatically" },
-  { name: "agent", label: "agent reviews before commit" },
-  { name: "review", label: "human inbox (default)" },
+  { name: "auto", label: "capture, commit, push automatically" },
+  { name: "review", label: "human inbox, commit, push (default)" },
 ];
 
 const useCases = [

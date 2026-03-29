@@ -7,11 +7,15 @@ name = "opentraces-schema"
 dynamic = ["version"]
 description = "Schema models for the opentraces.ai agent trace JSONL format"
 readme = "README.md"
-license = "Apache-2.0"
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.0",
 ]
+
+[project.urls]
+Homepage = "https://opentraces.ai"
+Repository = "https://github.com/JayFarei/opentraces"
 
 [tool.hatch.version]
 path = "src/opentraces_schema/version.py"

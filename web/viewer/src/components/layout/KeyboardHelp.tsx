@@ -6,7 +6,6 @@ const SHORTCUTS = [
   { key: "j / k", desc: "navigate down / up" },
   { key: "Enter", desc: "expand / select" },
   { key: "Tab", desc: "switch panel focus" },
-  { key: "s", desc: "stage selected session" },
   { key: "c", desc: "open commit dialog" },
   { key: "p", desc: "push committed" },
   { key: "r", desc: "toggle redaction preview" },

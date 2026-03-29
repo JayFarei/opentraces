@@ -5,7 +5,7 @@
 ## Links
 
 - Documentation: https://opentraces.ai/docs
-- GitHub: https://github.com/opentraces/opentraces
+- GitHub: https://github.com/jayfarei/opentraces
 - Explorer: https://opentraces.ai/explorer
 - Schema: https://opentraces.ai/schema
 
@@ -53,7 +53,7 @@ That gives you the browser inbox backed by the React viewer in `web/viewer/`. Re
 
 ## Links
 
-- [GitHub](https://github.com/opentraces/opentraces)
+- [GitHub](https://github.com/jayfarei/opentraces)
 - [Schema Rationale](/docs/schema/overview)
 - [opentraces.ai](https://opentraces.ai)
 
@@ -72,7 +72,7 @@ pip install opentraces
 ## From Source
 
 ```bash
-git clone https://github.com/opentraces/opentraces
+git clone https://github.com/jayfarei/opentraces
 cd opentraces
 python3 -m venv .venv
 source .venv/bin/activate
@@ -190,10 +190,12 @@ Use `HF_TOKEN` instead if you are running headless.
 ## 3. Initialize the Project
 
 ```bash
-opentraces init --review-policy review --push-policy manual
+opentraces init --review-policy review --push-policy manual --start-fresh
 ```
 
 This creates `.opentraces/config.json`, `.opentraces/staging/`, and the session hook for Claude Code. If you omit the flags, `opentraces init` will prompt for the same choices interactively.
+
+If Claude Code already has session logs for this repo, pass `--import-existing` to pull that backlog into the inbox now. Use `--start-fresh` if you only want capture from your next connected session onward.
 
 ## 4. Open the Inbox
 
@@ -296,12 +298,13 @@ opentraces auth logout
 ### `opentraces init`
 
 Initialize opentraces in the current project directory. Creates `.opentraces/config.json`, `.opentraces/staging/`, and the Claude Code hook.
+If Claude Code already has session files for this repo, the interactive flow can import that backlog into the inbox immediately.
 
 ```bash
 opentraces init
-opentraces init --review-policy review --push-policy manual
-opentraces init --review-policy auto-ready --push-policy manual
-opentraces init --remote your-name/opentraces
+opentraces init --review-policy review --push-policy manual --start-fresh
+opentraces init --review-policy auto-ready --push-policy manual --import-existing
+opentraces init --review-policy review --push-policy manual --remote your-name/opentraces --start-fresh
 ```
 
 | Flag | Default | Description |
@@ -309,6 +312,7 @@ opentraces init --remote your-name/opentraces
 | `--agent` | detected interactively | Agent runtime to connect |
 | `--review-policy` | prompt | `review` or `auto-ready` |
 | `--push-policy` | prompt | `manual` or `auto-push` metadata |
+| `--import-existing / --start-fresh` | prompt when backlog exists | Whether to import existing Claude Code sessions for this repo during init |
 | `--remote` | unset | HF dataset repo (`owner/name`) |
 | `--no-hook` | off | Skip Claude Code hook installation |
 
@@ -1574,8 +1578,10 @@ Most commands emit structured JSON with `next_steps` and `next_command`, so an a
 
 ```bash
 opentraces login
-opentraces init --agent claude-code --review-policy review --push-policy manual
+opentraces init --agent claude-code --review-policy review --push-policy manual --start-fresh
 ```
+
+If the repo already has Claude Code session logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.
 
 After setup, the current surfaces are:
 
@@ -1672,7 +1678,7 @@ opentraces push --private
 ## Setup
 
 ```bash
-git clone https://github.com/opentraces/opentraces
+git clone https://github.com/jayfarei/opentraces
 cd opentraces
 python3 -m venv .venv
 source .venv/bin/activate
@@ -1736,7 +1742,7 @@ web/site/                     Next.js docs and marketing site
 
 # Schema Changes
 
-The opentraces schema is open source. Feedback, questions, and proposals are welcome via [GitHub Issues](https://github.com/opentraces/opentraces/issues).
+The opentraces schema is open source. Feedback, questions, and proposals are welcome via [GitHub Issues](https://github.com/jayfarei/opentraces/issues).
 
 ## How to Propose a Change
 
@@ -1787,4 +1793,4 @@ Register the parser in `src/opentraces/parsers/__init__.py`. See `claude_code.py
 
 - Schema changes are reviewed by the maintainers
 - Breaking changes require a new rationale document
-- All changes are documented in the [CHANGELOG](https://github.com/opentraces/opentraces/blob/main/packages/opentraces-schema/CHANGELOG.md)
+- All changes are documented in the [CHANGELOG](https://github.com/jayfarei/opentraces/blob/main/packages/opentraces-schema/CHANGELOG.md)

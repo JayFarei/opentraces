@@ -2,8 +2,6 @@ import { useEffect, useState, useCallback } from "react";
 import { useSelection } from "../contexts/SelectionContext";
 import { useSessionList } from "./useSessionList";
 import { useTraceData } from "./useTraceData";
-import { useReviewActions } from "./useReviewActions";
-
 export type FocusedPanel = "sessions" | "tree" | "detail";
 
 export function useKeyboardNav() {
@@ -11,7 +9,6 @@ export function useKeyboardNav() {
     useSelection();
   const { data: sessions } = useSessionList();
   const { tree } = useTraceData(selectedSessionId);
-  const { stage } = useReviewActions();
 
   const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("sessions");
   const [showHelp, setShowHelp] = useState(false);
@@ -80,14 +77,6 @@ export function useKeyboardNav() {
           break;
         }
 
-        case "s": {
-          // Stage selected session
-          if (selectedSessionId) {
-            stage.mutate(selectedSessionId);
-          }
-          break;
-        }
-
         case "c": {
           // Open commit dialog
           e.preventDefault();
@@ -133,7 +122,6 @@ export function useKeyboardNav() {
     showCommitDialog,
     setSelectedSessionId,
     setSelectedNodeId,
-    stage,
     cyclePanelForward,
   ]);
 

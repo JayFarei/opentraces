@@ -55,7 +55,7 @@ export default function Nav() {
         <Link href="/explorer" className="nav-link">explorer</Link>
         <Link href="/docs" className="nav-link">docs</Link>
         <a href="/llms.txt" className="nav-link">/llms.txt</a>
-        <a href="https://github.com/opentraces" className="nav-link" target="_blank" rel="noopener noreferrer">github</a>
+        <a href="https://github.com/jayfarei/opentraces" className="nav-link" target="_blank" rel="noopener noreferrer">github</a>
         <span style={{ color: "var(--border)" }}>|</span>
         <button className="nav-theme-btn" onClick={toggle} aria-label="Toggle theme">
           {theme === "dark" ? "light" : "dark"}

@@ -58,12 +58,13 @@ opentraces auth logout
 ### `opentraces init`
 
 Initialize opentraces in the current project directory. Creates `.opentraces/config.json`, `.opentraces/staging/`, and the Claude Code hook.
+If Claude Code already has session files for this repo, the interactive flow can import that backlog into the inbox immediately.
 
 ```bash
 opentraces init
-opentraces init --review-policy review --push-policy manual
-opentraces init --review-policy auto-ready --push-policy manual
-opentraces init --remote your-name/opentraces
+opentraces init --review-policy review --push-policy manual --start-fresh
+opentraces init --review-policy auto-ready --push-policy manual --import-existing
+opentraces init --review-policy review --push-policy manual --remote your-name/opentraces --start-fresh
 ```
 
 | Flag | Default | Description |
@@ -71,6 +72,7 @@ opentraces init --remote your-name/opentraces
 | `--agent` | detected interactively | Agent runtime to connect |
 | `--review-policy` | prompt | `review` or `auto-ready` |
 | `--push-policy` | prompt | `manual` or `auto-push` metadata |
+| `--import-existing / --start-fresh` | prompt when backlog exists | Whether to import existing Claude Code sessions for this repo during init |
 | `--remote` | unset | HF dataset repo (`owner/name`) |
 | `--no-hook` | off | Skip Claude Code hook installation |
 

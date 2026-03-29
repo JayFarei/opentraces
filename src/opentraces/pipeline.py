@@ -35,7 +35,6 @@ class ProcessedTrace:
 def process_trace(
     record: TraceRecord,
     project_dir: Path,
-    tier: int,
     cfg: Config,
 ) -> ProcessedTrace:
     """Run the full enrichment + security pipeline on a parsed trace.
@@ -45,8 +44,8 @@ def process_trace(
         2. Attribution (from Edit tool calls)
         3. Dependencies (from project directory)
         4. Metrics (from step data)
-        5. Security scan + redact (tier 1 or 2)
-        6. Classifier (tier 2 only)
+        5. Security scan + redact
+        6. Classifier
         7. Path anonymization
 
     Returns a ProcessedTrace with the enriched record, a needs_review flag,
@@ -72,20 +71,16 @@ def process_trace(
     record.metrics = compute_metrics(record.steps)
 
     # 5. Security scan + redact
-    needs_review = False
-    redaction_count = 0
-    if tier in (1, 2):
-        pass1, pass2 = two_pass_scan(record)
-        redaction_count = apply_redactions(record)
-        record.security.tier = tier
-        record.security.redactions_applied = redaction_count
-        needs_review = bool(pass1.matches or pass2.matches or redaction_count)
+    pass1, pass2 = two_pass_scan(record)
+    redaction_count = apply_redactions(record)
+    record.security.scanned = True
+    record.security.redactions_applied = redaction_count
+    needs_review = bool(pass1.matches or pass2.matches or redaction_count)
 
-    # 6. Classifier (tier 2 only)
-    if tier == 2:
-        classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
-        record.security.flags_reviewed = len(classifier_result.flags)
-        record.security.classifier_version = "0.1.0"
+    # 6. Classifier
+    classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
+    record.security.flags_reviewed = len(classifier_result.flags)
+    record.security.classifier_version = "0.1.0"
 
     # 7. Path anonymization
     anonymize_record(record, cfg)

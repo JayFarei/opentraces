@@ -31,7 +31,6 @@ from opentraces_schema import TraceRecord, SCHEMA_VERSION
 
 THIS_PROJECT_DIR = Path.home() / ".claude" / "projects" / "-Users-jayfarei-src-tries-2026-03-27-community-traces-hf"
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TEST_SECURITY_TIER = 2
 
 
 @pytest.fixture
@@ -49,7 +48,7 @@ def project_sessions():
 def parsed_traces(project_sessions):
     """Parse all sessions through the full pipeline."""
     parser = ClaudeCodeParser()
-    cfg = Config(default_tier=TEST_SECURITY_TIER)
+    cfg = Config()
     traces = []
 
     for session_path in project_sessions[:10]:  # Cap at 10 for speed
@@ -60,7 +59,6 @@ def parsed_traces(project_sessions):
         processed = process_trace(
             record=record,
             project_dir=REPO_ROOT,
-            tier=TEST_SECURITY_TIER,
             cfg=cfg,
         )
         record = processed.record

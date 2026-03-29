@@ -171,7 +171,6 @@ export interface TreeNode {
 
 export type SessionStage =
   | "inbox"
-  | "ready"
   | "committed"
   | "pushed"
   | "rejected";
@@ -190,7 +189,7 @@ export interface SessionListItem {
 export interface AppContext {
   project_name: string;
   remote: string | null;
-  review_policy: "review" | "auto-ready";
+  review_policy: "review" | "auto";
   push_policy: "manual" | "auto-push";
   agents: string[];
   authenticated: boolean;

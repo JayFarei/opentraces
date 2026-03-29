@@ -1,5 +1,6 @@
 import { useSelection } from "../../contexts/SelectionContext";
 import { useTraceData } from "../../hooks/useTraceData";
+import { useViewPreferences } from "../../contexts/ViewPreferencesContext";
 import { cleanSessionName, formatTokens, formatDuration } from "../../lib/format";
 
 const TIER_LABELS: Record<number, { label: string; color: string }> = {
@@ -11,6 +12,7 @@ const TIER_LABELS: Record<number, { label: string; color: string }> = {
 export function SessionHeader() {
   const { selectedSessionId } = useSelection();
   const { data: trace } = useTraceData(selectedSessionId);
+  const { traceViewMode, setTraceViewMode } = useViewPreferences();
 
   if (!selectedSessionId || !trace) {
     return null;
@@ -87,7 +89,7 @@ export function SessionHeader() {
         </span>
       </div>
 
-      {/* Line 2: model + tokens + cache + tier + redactions */}
+      {/* Line 2: model + tokens + cache + tier + view toggle */}
       <div className="flex items-center gap-3 text-[10px] font-[family-name:var(--font-mono)] mt-0.5">
         <span className="text-[var(--text-muted)]">{model}</span>
         <span className="text-[var(--text-dim)]">
@@ -107,6 +109,30 @@ export function SessionHeader() {
             {redactionCount} redactions
           </span>
         )}
+
+        {/* View mode toggle */}
+        <div className="ml-auto flex items-center gap-0.5">
+          <button
+            onClick={() => setTraceViewMode("timeline")}
+            className={`px-2 py-0.5 text-[9px] uppercase tracking-wider font-[family-name:var(--font-mono)] cursor-pointer transition-colors duration-100 ${
+              traceViewMode === "timeline"
+                ? "text-[var(--accent)] border border-[var(--accent)]"
+                : "text-[var(--text-dim)] border border-[var(--border)] hover:text-[var(--text-muted)]"
+            }`}
+          >
+            timeline
+          </button>
+          <button
+            onClick={() => setTraceViewMode("review")}
+            className={`px-2 py-0.5 text-[9px] uppercase tracking-wider font-[family-name:var(--font-mono)] cursor-pointer transition-colors duration-100 ${
+              traceViewMode === "review"
+                ? "text-[var(--accent)] border border-[var(--accent)]"
+                : "text-[var(--text-dim)] border border-[var(--border)] hover:text-[var(--text-muted)]"
+            }`}
+          >
+            review
+          </button>
+        </div>
       </div>
     </div>
   );

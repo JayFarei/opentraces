@@ -1,4 +1,4 @@
-export const AGENT_PROMPT = `I want you to set up opentraces in this project for trace collection.
+export const AGENT_PROMPT = `Set up opentraces in this project for trace collection.
 
 Step 1 - Install:
 pip install opentraces
@@ -8,21 +8,30 @@ Run \`opentraces auth status\` to check if already logged in.
 If not authenticated, ask me to run \`opentraces login\` myself,
 I need to authorize in the browser.
 
-Step 3 - Choose agent:
-Ask me which coding agent I'm using. Supported agents can be
-listed with \`opentraces init --help\` (the --agent option).
-If I'm using you (the agent running this prompt), detect which
-agent you are and suggest that. I can pick multiple.
+Step 3 - Initialize:
+Detect which agent you are (Claude Code, Cursor, etc.) and run:
+\`opentraces init --agent <agent> --review-policy auto --import-existing\`
 
-Step 4 - Initialize and install skill:
-opentraces init --agent <chosen-agent> --review-policy review --push-policy manual
+This will:
+- set the review policy to auto (traces are captured, sanitized, committed, and pushed automatically)
+- create a private dataset on HuggingFace
+- install the agent hook so traces are captured at the end of every session
+- import any existing sessions from this project
 
-This sets up automatic trace collection with manual review before
-anything is shared, and installs the opentraces agent skill into
-.agents/skills/opentraces/ (plus a symlink in .<agent>/skills/)
-so you have the full CLI reference for future sessions.
+If I want manual review instead, use \`--review-policy review\`.
 
-After setup, the workflow is:
-- \`opentraces web\` to inspect traces before sharing
-- \`opentraces commit --all\` to bundle ready traces
-- \`opentraces push\` to publish committed traces to HuggingFace`;
+Step 4 - Review (if review policy):
+Open the inbox to review, commit, redact, or reject traces:
+\`opentraces tui\` or \`opentraces web\`
+
+Step 5 - Push:
+Sync committed traces to the remote dataset:
+\`opentraces push\`
+
+With auto review policy, the hook handles this automatically
+at the end of each session, no manual push needed.
+
+After setup, the agent can also:
+- \`opentraces tui\` to open the inbox and review pending traces
+- verify that no information about a specific client or topic leaks
+- \`opentraces push\` to sync committed traces to HuggingFace`;
