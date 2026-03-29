@@ -1252,8 +1252,8 @@ footer {
   .schema-sidebar { position: static; display: flex; flex-wrap: wrap; gap: 4px 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
   .schema-sidebar > div { display: contents; }
   .schema-sidebar a { padding: 4px 0; }
-  .field-table { table-layout: auto; font-size: 10px; min-width: 420px; }
-  .field-table th, .field-table td { padding: 5px 6px; }
+  .field-table { table-layout: auto; font-size: 9px; min-width: 360px; }
+  .field-table th, .field-table td { padding: 5px 6px; word-break: break-word; }
   .field-table-colgroup { display: none; }
 }
 
