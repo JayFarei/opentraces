@@ -384,6 +384,12 @@ def _validate_and_save(token_value: str, save_credentials, credentials_path) -> 
 
 
 def _choose_remote_interactively(default_repo: str) -> str | None:
+    import asyncio
+
+    return asyncio.run(_choose_remote_interactively_async(default_repo))
+
+
+async def _choose_remote_interactively_async(default_repo: str) -> str | None:
     """Select an existing dataset remote or create a new one."""
     cfg = load_config()
     identity = _auth_identity(cfg.hf_token)
@@ -404,16 +410,12 @@ def _choose_remote_interactively(default_repo: str) -> str | None:
         try:
             from pyclack.prompts import select
             from pyclack.core import Option
-            import asyncio
 
             options = [Option(value=ds["id"], label=ds["id"]) for ds in existing]
             options.append(Option(value="__new__", label=f"Create new ({default_repo})"))
             options.append(Option(value="__later__", label="Skip for now"))
 
-            async def _select():
-                return await select("Choose a remote dataset", options)
-
-            choice = asyncio.run(_select())
+            choice = await select("Choose a remote dataset", options)
             if choice == "__new__":
                 return click.prompt("Dataset remote", default=default_repo)
             if choice == "__later__":
@@ -434,6 +436,81 @@ def _choose_remote_interactively(default_repo: str) -> str | None:
         if choice_num == len(existing) + 2:
             return None
     return click.prompt("Dataset remote", default=default_repo)
+
+
+def _current_project_session_dir(project_dir: Path, cfg=None) -> Path | None:
+    """Return the Claude Code session directory for the current repo, if present."""
+    from .config import get_projects_path
+
+    if cfg is None:
+        cfg = load_config()
+    projects_path = get_projects_path(cfg)
+    slug = project_dir.resolve().as_posix().replace("/", "-")
+    session_dir = projects_path / slug
+    return session_dir if session_dir.exists() else None
+
+
+def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=None) -> tuple[int, int]:
+    """Import existing session files into the project's local inbox."""
+    from .config import load_project_config, get_project_staging_dir, get_project_state_path
+    from .parsers.claude_code import ClaudeCodeParser
+    from .pipeline import process_trace
+    from .state import StateManager, TraceStatus, ProcessedFile
+
+    if cfg is None:
+        cfg = load_config()
+
+    proj_config = load_project_config(project_dir)
+    review_policy = normalize_review_policy(
+        proj_config.get("review_policy") or review_policy_from_legacy_mode(proj_config.get("mode"))
+    )
+    tier = proj_config.get("tier", cfg.default_tier)
+
+    staging = get_project_staging_dir(project_dir)
+    staging.mkdir(parents=True, exist_ok=True)
+
+    parser = ClaudeCodeParser()
+
+    state_path = get_project_state_path(project_dir)
+    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
+
+    parsed_count = 0
+    error_count = 0
+
+    for session_file in sorted(session_dir.glob("*.jsonl")):
+        should_process, offset = state.should_reprocess(str(session_file))
+        if not should_process:
+            continue
+
+        try:
+            record = parser.parse_session(session_file, byte_offset=offset)
+            if record is None:
+                continue
+
+            result = process_trace(record, project_dir, tier, cfg)
+            staging_file = staging / f"{result.record.trace_id}.jsonl"
+            staging_file.write_text(result.record.to_jsonl_line() + "\n")
+
+            state.set_trace_status(
+                result.record.trace_id,
+                TraceStatus.APPROVED if review_policy == "auto-ready" and not result.needs_review else TraceStatus.STAGED,
+                session_id=result.record.session_id,
+                file_path=str(staging_file),
+            )
+
+            stat = session_file.stat()
+            state.mark_file_processed(ProcessedFile(
+                file_path=str(session_file),
+                inode=stat.st_ino,
+                mtime=stat.st_mtime,
+                last_byte_offset=stat.st_size,
+            ))
+            parsed_count += 1
+        except Exception as e:
+            error_count += 1
+            click.echo(f"  Error: {session_file.name}: {e}", err=True)
+
+    return parsed_count, error_count
 
 
 @main.command()
@@ -558,6 +635,12 @@ def config_set(
 @click.option("--agent", "agents", multiple=True, type=click.Choice(list(SUPPORTED_AGENTS)), help="Agent runtime to connect")
 @click.option("--review-policy", type=click.Choice(["review", "auto-ready"]), default=None, help="Whether safe sessions require review")
 @click.option("--push-policy", type=click.Choice(["manual", "auto-push"]), default=None, help="Whether committed traces push automatically")
+@click.option(
+    "--import-existing/--start-fresh",
+    "import_existing",
+    default=None,
+    help="Whether to import existing Claude Code sessions for this repo during init",
+)
 @click.option("--mode", type=click.Choice(["auto", "review"]), default=None, hidden=True, help="Legacy alias for --review-policy")
 @click.option("--remote", type=str, default=None, help="HF dataset repo (owner/name)")
 @click.option("--no-hook", is_flag=True, help="Skip Claude Code hook installation")
@@ -566,6 +649,7 @@ def init(
     agents: tuple[str, ...],
     review_policy: str | None,
     push_policy: str | None,
+    import_existing: bool | None,
     mode: str | None,
     remote: str | None,
     no_hook: bool,
@@ -678,7 +762,7 @@ def init(
 
                             _login_with_device_code(save_credentials, CREDENTIALS_PATH)
                     identity = _auth_identity(load_config().hf_token)
-                    chosen_remote = _choose_remote_interactively(_default_repo(identity))
+                    chosen_remote = await _choose_remote_interactively_async(_default_repo(identity))
                 return normalize_agents(chosen_agents), normalize_review_policy(chosen_review), normalize_push_policy(chosen_push), chosen_remote
 
             selected_agents, review_policy, push_policy, remote = asyncio.run(_interactive_setup())
@@ -701,7 +785,6 @@ def init(
                 identity = _auth_identity(load_config().hf_token)
                 remote = _choose_remote_interactively(_default_repo(identity))
 
-    # Step 4: Create directories and config
     ot_dir.mkdir(parents=True, exist_ok=True)
     staging_dir.mkdir(parents=True, exist_ok=True)
 
@@ -716,7 +799,6 @@ def init(
         proj_config["remote"] = remote
     save_project_config(project_dir, proj_config)
 
-    # Add staging dir to .gitignore
     gitignore_path = project_dir / ".gitignore"
     gitignore_line = ".opentraces/staging/"
     if gitignore_path.exists():
@@ -726,22 +808,46 @@ def init(
                 if not existing_gi.endswith("\n"):
                     f.write("\n")
                 f.write(f"{gitignore_line}\n")
-    # Also add .opentraces/config.json
     if gitignore_path.exists():
         existing_gi = gitignore_path.read_text()
         if ".opentraces/config.json" not in existing_gi.splitlines():
             with open(gitignore_path, "a") as f:
                 f.write(".opentraces/config.json\n")
 
-    # Step 5: Hook installation
     hook_installed = False
     if not no_hook:
         hook_installed = _install_capture_hook(project_dir, selected_agents)
 
-    # Step 6: Skill installation
     skill_installed = _install_skill(project_dir, selected_agents)
 
-    # Summary
+    cfg = load_config()
+    existing_session_dir = _current_project_session_dir(project_dir, cfg=cfg)
+    existing_session_files = sorted(existing_session_dir.glob("*.jsonl")) if existing_session_dir else []
+    existing_session_count = len(existing_session_files)
+    imported_existing = 0
+    import_errors = 0
+    if existing_session_count and import_existing is None and _is_interactive_terminal():
+        try:
+            from pyclack.prompts import confirm
+            import asyncio
+
+            import_existing = asyncio.run(
+                confirm(
+                    f"Import {existing_session_count} existing Claude Code session(s) for this repo now?",
+                    initial_value=True,
+                    active="Import now",
+                    inactive="Start fresh",
+                )
+            )
+        except ImportError:
+            import_existing = click.confirm(
+                f"Import {existing_session_count} existing Claude Code session(s) for this repo now?",
+                default=True,
+            )
+
+    if existing_session_count and import_existing:
+        imported_existing, import_errors = _capture_sessions_into_project(existing_session_dir, project_dir, cfg=cfg)
+
     click.echo(f"\nInitialized opentraces ({review_policy} policy) in {ot_dir}")
     if remote:
         click.echo(f"  Remote:  {remote}")
@@ -756,8 +862,22 @@ def init(
     click.echo(f"  Agents:  {', '.join(selected_agents)}")
     click.echo(f"  Policy:  {review_policy}")
     click.echo(f"  Push:    {push_policy}")
-    click.echo("\nYour next connected agent session will be parsed into this repo inbox.")
-    click.echo("Run 'opentraces' for the default TUI inbox or 'opentraces web' for the browser UI.")
+    if existing_session_count:
+        click.echo(f"  Existing Claude sessions: {existing_session_count}")
+        if imported_existing or import_errors:
+            click.echo(f"  Imported existing: {imported_existing} ({import_errors} errors)")
+        else:
+            click.echo("  Existing sessions were left untouched; new sessions will capture automatically.")
+    click.echo("\nRecommended flow:")
+    if existing_session_count and imported_existing:
+        click.echo("  1. Review the imported inbox with 'opentraces web' or 'opentraces tui'")
+    elif existing_session_count:
+        click.echo("  1. Decide whether to import past sessions or just start from now on")
+        click.echo(f"     Session dir: {existing_session_dir}")
+    else:
+        click.echo("  1. Start a connected agent session; capture is automatic from now on")
+    click.echo("  2. Commit Ready traces with 'opentraces commit --all'")
+    click.echo("  3. Publish committed traces with 'opentraces push'")
 
     emit_json({
         "status": "ok",
@@ -768,12 +888,20 @@ def init(
         "agents": selected_agents,
         "hook_installed": hook_installed,
         "skill_installed": skill_installed,
+        "existing_session_count": existing_session_count,
+        "import_existing": import_existing,
+        "imported_existing": imported_existing,
+        "import_errors": import_errors,
         "config_path": str(config_json),
         "staging_path": str(staging_dir),
         "next_steps": [
-            "Start a connected agent session, traces will be captured automatically",
+            "Review imported traces with opentraces web" if imported_existing else (
+                "Import past sessions or start a connected agent session; future traces will be captured automatically"
+                if existing_session_count
+                else "Start a connected agent session, traces will be captured automatically"
+            ),
         ],
-        "next_command": "opentraces",
+        "next_command": "opentraces web" if imported_existing else "opentraces",
     })
 
 
@@ -977,34 +1105,8 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
 @click.option("--project-dir", required=True, type=click.Path(exists=True), help="Path to project root")
 def capture(session_dir: str, project_dir: str) -> None:
     """Capture a Claude Code session (hidden, for automation)."""
-    from .config import load_project_config, get_project_staging_dir, get_project_state_path
-    from .parsers.claude_code import ClaudeCodeParser
-    from .pipeline import process_trace
-    from .state import StateManager, TraceStatus, ProcessedFile
-
     session_path = Path(session_dir)
     proj_path = Path(project_dir)
-
-    # Read project config
-    proj_config = load_project_config(proj_path)
-    review_policy = normalize_review_policy(
-        proj_config.get("review_policy") or review_policy_from_legacy_mode(proj_config.get("mode"))
-    )
-    tier = proj_config.get("tier", 2)  # backward compat for security pipeline
-
-    # Setup project-local staging
-    staging = get_project_staging_dir(proj_path)
-    staging.mkdir(parents=True, exist_ok=True)
-
-    cfg = load_config()
-    parser = ClaudeCodeParser()
-
-    # Use project-local state if available, otherwise global
-    state_path = get_project_state_path(proj_path)
-    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
-
-    parsed_count = 0
-    error_count = 0
 
     # Find JSONL files in session dir
     session_files = list(session_path.glob("*.jsonl"))
@@ -1012,45 +1114,7 @@ def capture(session_dir: str, project_dir: str) -> None:
         click.echo("No session files found.", err=True)
         return
 
-    for sf in session_files:
-        should_process, offset = state.should_reprocess(str(sf))
-        if not should_process:
-            continue
-
-        try:
-            record = parser.parse_session(sf, byte_offset=offset)
-            if record is None:
-                continue
-
-            result = process_trace(record, proj_path, tier, cfg)
-
-            # Stage to project-local staging
-            jsonl_line = result.record.to_jsonl_line()
-            staging_file = staging / f"{result.record.trace_id}.jsonl"
-            staging_file.write_text(jsonl_line + "\n")
-
-            state.set_trace_status(
-                result.record.trace_id,
-                TraceStatus.APPROVED if review_policy == "auto-ready" and not result.needs_review else TraceStatus.STAGED,
-                session_id=result.record.session_id,
-                file_path=str(staging_file),
-            )
-
-            # Track processed file
-            stat = sf.stat()
-            state.mark_file_processed(ProcessedFile(
-                file_path=str(sf),
-                inode=stat.st_ino,
-                mtime=stat.st_mtime,
-                last_byte_offset=stat.st_size,
-            ))
-
-            parsed_count += 1
-
-        except Exception as e:
-            error_count += 1
-            click.echo(f"  Error: {sf.name}: {e}", err=True)
-
+    parsed_count, error_count = _capture_sessions_into_project(session_path, proj_path)
     click.echo(f"Captured {parsed_count} sessions ({error_count} errors)", err=True)
 
 
