@@ -10,7 +10,7 @@ const AGENT_LINES = AGENT_PROMPT.split("\n").length;
 
 const installMethods = [
   { label: "pip", cmd: "pip install opentraces", copyText: "pip install opentraces" },
-  { label: "brew", cmd: "brew install opentraces", copyText: "brew install opentraces" },
+  { label: "brew", cmd: "brew install JayFarei/opentraces/opentraces", copyText: "brew install JayFarei/opentraces/opentraces" },
   { label: "agent", cmd: `agent setup prompt +${AGENT_LINES} lines`, copyText: AGENT_PROMPT, prefix: ">" },
 ];
 

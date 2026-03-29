@@ -3,19 +3,17 @@ class Opentraces < Formula
 
   desc "Crowdsource agent traces to HuggingFace Hub"
   homepage "https://opentraces.ai"
-  url "https://files.pythonhosted.org/packages/source/o/opentraces/opentraces-0.1.0.tar.gz"
-  sha256 "PLACEHOLDER_SHA256"
+  url "https://github.com/JayFarei/opentraces/archive/refs/tags/v0.1.0.tar.gz"
+  sha256 "PLACEHOLDER"
   license "MIT"
+  head "https://github.com/JayFarei/opentraces.git", branch: "main"
 
   depends_on "python@3.12"
 
-  # NOTE: After the first PyPI publish, generate resource blocks with:
-  #   pip install homebrew-pypi-poet
-  #   poet opentraces
-  # Then paste the output here, replacing this comment.
-
   def install
-    virtualenv_install_with_resources
+    venv = virtualenv_create(libexec, "python3.12")
+    venv.pip_install buildpath/"packages/opentraces-schema"
+    venv.pip_install_and_link buildpath
   end
 
   test do
