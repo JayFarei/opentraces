@@ -78,23 +78,46 @@ export default function Dashboard() {
     setSampleRows([]);
 
     try {
-      const searchParam = isUser ? `author=${encodeURIComponent(query)}&search=opentraces` : "search=opentraces";
-      const res = await fetch(`${HF_API}/datasets?${searchParam}&sort=downloads&direction=-1&limit=50`);
-      if (!res.ok) throw new Error(`HF API ${res.status}`);
-      const data: HFDataset[] = await res.json();
+      // Strategy: query by tag (primary) and text search (fallback), then
+      // deduplicate and verify the opentraces tag client-side.
+      const tagBase = "tags=opentraces&sort=downloads&direction=-1&limit=50&full=true";
+      const searchBase = "sort=downloads&direction=-1&limit=50&full=true";
 
-      // For user mode, also search by username prefix in dataset name
-      let filtered = data;
+      const urls: string[] = [];
       if (isUser) {
-        const userRes = await fetch(`${HF_API}/datasets?search=${encodeURIComponent(query)}/opentraces&sort=downloads&direction=-1&limit=50`);
-        if (userRes.ok) {
-          const userData: HFDataset[] = await userRes.json();
-          const ids = new Set(filtered.map(d => d.id));
-          for (const d of userData) {
-            if (!ids.has(d.id)) filtered.push(d);
+        // Tag-filtered + author
+        urls.push(`${HF_API}/datasets?${tagBase}&author=${encodeURIComponent(query)}`);
+        // Text search: author's datasets named "opentraces"
+        urls.push(`${HF_API}/datasets?search=${encodeURIComponent(query)}/opentraces&${searchBase}`);
+        // Text search: author + opentraces keyword
+        urls.push(`${HF_API}/datasets?author=${encodeURIComponent(query)}&search=opentraces&${searchBase}`);
+      } else {
+        // Tag-filtered (exact tag match in dataset card YAML)
+        urls.push(`${HF_API}/datasets?${tagBase}`);
+        // Text search fallback (catches datasets not yet re-indexed)
+        urls.push(`${HF_API}/datasets?search=opentraces&${searchBase}`);
+      }
+
+      const results = await Promise.allSettled(urls.map(u => fetch(u).then(r => r.ok ? r.json() : [])));
+      const allData: HFDataset[] = [];
+      const seen = new Set<string>();
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          for (const d of r.value as HFDataset[]) {
+            if (!seen.has(d.id)) {
+              seen.add(d.id);
+              allData.push(d);
+            }
           }
         }
       }
+
+      // Verify: keep datasets that have the opentraces tag, or have
+      // "opentraces" in the repo name (convention: user/opentraces-*)
+      const filtered = allData.filter(d =>
+        d.tags?.some(t => t === "opentraces" || t === "agent-traces") ||
+        d.id.toLowerCase().includes("opentraces")
+      );
 
       setDatasets(filtered);
 
