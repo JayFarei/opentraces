@@ -11,25 +11,17 @@ enrich the sessions that built opentraces, something is wrong.
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import tempfile
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from opentraces.config import Config, save_config, OPENTRACES_DIR
+from opentraces.config import Config
+from opentraces.pipeline import process_trace
 from opentraces.parsers.claude_code import ClaudeCodeParser
 from opentraces.parsers.quality import meets_quality_threshold
-from opentraces.quality import RubricItem, RubricReport, score_trace
-from opentraces.security.scanner import scan_trace_record, two_pass_scan, apply_redactions
+from opentraces.quality import score_trace
+from opentraces.security.scanner import scan_trace_record
 from opentraces.security.classifier import classify_trace_record
-from opentraces.security.anonymizer import anonymize_paths
-from opentraces.enrichment.git_signals import detect_vcs, check_committed
-from opentraces.enrichment.attribution import build_attribution
-from opentraces.enrichment.dependencies import extract_dependencies
-from opentraces.enrichment.metrics import compute_metrics
 from opentraces_schema import TraceRecord, SCHEMA_VERSION
 
 
@@ -38,6 +30,8 @@ from opentraces_schema import TraceRecord, SCHEMA_VERSION
 # ---------------------------------------------------------------------------
 
 THIS_PROJECT_DIR = Path.home() / ".claude" / "projects" / "-Users-jayfarei-src-tries-2026-03-27-community-traces-hf"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+TEST_SECURITY_TIER = 2
 
 
 @pytest.fixture
@@ -55,6 +49,7 @@ def project_sessions():
 def parsed_traces(project_sessions):
     """Parse all sessions through the full pipeline."""
     parser = ClaudeCodeParser()
+    cfg = Config(default_tier=TEST_SECURITY_TIER)
     traces = []
 
     for session_path in project_sessions[:10]:  # Cap at 10 for speed
@@ -62,16 +57,13 @@ def parsed_traces(project_sessions):
         if record is None:
             continue
 
-        # Enrich
-        project_dir = session_path.parent
-        vcs = detect_vcs(project_dir)
-        record.environment.vcs = vcs
-
-        attribution = build_attribution(record.steps, record.outcome.patch)
-        record.attribution = attribution
-
-        record.dependencies = extract_dependencies(str(project_dir))
-        record.metrics = compute_metrics(record.steps)
+        processed = process_trace(
+            record=record,
+            project_dir=REPO_ROOT,
+            tier=TEST_SECURITY_TIER,
+            cfg=cfg,
+        )
+        record = processed.record
 
         # Compute content hash
         record.content_hash = record.compute_content_hash()

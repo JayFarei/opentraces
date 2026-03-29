@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,9 +24,7 @@ from opentraces_schema.models import (
 )
 
 from opentraces.quality.judge import (
-    BRIEFS_DIR,
     JudgeDimension,
-    JudgeResult,
     PersonaBrief,
     _compute_judge_overall,
     _parse_judge_response,
@@ -462,9 +459,6 @@ class TestRunJudge:
 
     def test_missing_sdk_returns_skipped(self):
         """Simulate anthropic not installed."""
-        import importlib
-        import opentraces.quality.judge as judge_mod
-
         with patch.dict("sys.modules", {"anthropic": None}):
             # Force re-import to fail
             result = run_judge("training", {})

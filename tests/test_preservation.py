@@ -17,7 +17,6 @@ from opentraces_schema.models import (
 )
 from opentraces.quality.preservation import (
     PreservationReport,
-    SignalLoss,
     compare_preservation,
 )
 from opentraces.quality.raw_reader import RawSessionSummary

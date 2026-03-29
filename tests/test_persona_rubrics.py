@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from opentraces_schema.models import (
     Agent,
     Attribution,
@@ -28,7 +26,7 @@ from opentraces_schema.models import (
     TraceRecord,
     VCS,
 )
-from opentraces.quality.types import CheckDef, CheckResult, PersonaDef
+from opentraces.quality.types import CheckResult, PersonaDef
 from opentraces.quality.personas import (
     ALL_PERSONAS,
     ANALYTICS_PERSONA,

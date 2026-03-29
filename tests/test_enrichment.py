@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
 from opentraces_schema.models import (
     Observation,
-    Outcome,
     Step,
     TokenUsage,
     ToolCall,
-    VCS,
 )
 from opentraces.enrichment.attribution import build_attribution
 from opentraces.enrichment.dependencies import (
@@ -24,6 +22,7 @@ from opentraces.enrichment.dependencies import (
     infer_language_ecosystem,
 )
 from opentraces.enrichment.git_signals import (
+    MAX_VCS_DIFF_CHARS,
     check_committed,
     detect_commits_from_steps,
     detect_vcs,
@@ -133,6 +132,29 @@ class TestDetectVCS:
         assert vcs.base_commit == "abc123def456"
         assert vcs.branch == "main"
         assert vcs.diff == "some diff"
+
+    @patch("opentraces.enrichment.git_signals._run_git")
+    def test_git_repo_truncates_large_diff(self, mock_run):
+        large_diff = "x" * (MAX_VCS_DIFF_CHARS + 25)
+
+        def side_effect(args, cwd):
+            if args[0] == "rev-parse" and "--is-inside-work-tree" in args:
+                return (True, "true")
+            if args[0] == "rev-parse" and "--abbrev-ref" in args:
+                return (True, "main")
+            if args[0] == "rev-parse" and "HEAD" in args:
+                return (True, "abc123def456")
+            if args[0] == "diff":
+                return (True, large_diff)
+            return (False, "")
+
+        mock_run.side_effect = side_effect
+        vcs = detect_vcs(Path("/tmp/myrepo"))
+        assert vcs.type == "git"
+        assert vcs.diff is not None
+        assert len(vcs.diff) == MAX_VCS_DIFF_CHARS
+        assert len(vcs.diff) < len(large_diff)
+        assert "[TRUNCATED opentraces.vcs.diff omitted_chars=25]" in vcs.diff
 
 
 class TestCheckCommitted:

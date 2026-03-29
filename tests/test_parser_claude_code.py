@@ -1,7 +1,6 @@
 """Tests for Claude Code session parser."""
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest

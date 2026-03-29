@@ -11,11 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from opentraces.config import Config
+from opentraces.pipeline import process_trace
 from opentraces.parsers.claude_code import ClaudeCodeParser
-from opentraces.enrichment.git_signals import detect_vcs
-from opentraces.enrichment.attribution import build_attribution
-from opentraces.enrichment.dependencies import extract_dependencies
-from opentraces.enrichment.metrics import compute_metrics
 from opentraces_schema import TraceRecord
 
 from opentraces.quality import (
@@ -40,6 +38,7 @@ THIS_PROJECT_DIR = (
     Path.home() / ".claude" / "projects"
     / "-Users-jayfarei-src-tries-2026-03-27-community-traces-hf"
 )
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
@@ -57,6 +56,7 @@ def project_sessions():
 def parsed_traces(project_sessions):
     """Parse all sessions through the full pipeline."""
     parser = ClaudeCodeParser()
+    cfg = Config()
     traces = []
 
     for session_path in project_sessions[:10]:
@@ -64,16 +64,13 @@ def parsed_traces(project_sessions):
         if record is None:
             continue
 
-        # Enrich
-        project_dir = session_path.parent
-        vcs = detect_vcs(project_dir)
-        record.environment.vcs = vcs
-
-        attribution = build_attribution(record.steps, record.outcome.patch)
-        record.attribution = attribution
-
-        record.dependencies = extract_dependencies(str(project_dir))
-        record.metrics = compute_metrics(record.steps)
+        processed = process_trace(
+            record=record,
+            project_dir=REPO_ROOT,
+            tier=2,
+            cfg=cfg,
+        )
+        record = processed.record
         record.content_hash = record.compute_content_hash()
 
         traces.append(record)

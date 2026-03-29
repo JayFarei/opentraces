@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from opentraces_schema import TraceRecord, SCHEMA_VERSION
 from opentraces_schema.models import (
     Agent, Task, Environment, VCS, Step, ToolCall, Observation,
@@ -12,9 +10,6 @@ from opentraces_schema.models import (
 )
 from opentraces.quality.schema_audit import (
     FIELD_SPECS,
-    FieldSpec,
-    FieldCheckResult,
-    SchemaAuditReport,
     audit_schema_completeness,
     format_audit_report,
     _is_populated,

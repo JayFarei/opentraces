@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 
-import pytest
 from opentraces_schema.models import (
     Agent,
     Observation,
@@ -18,23 +17,19 @@ from opentraces.security.anonymizer import (
     anonymize_paths,
     extract_usernames_from_paths,
     hash_username,
-    SYSTEM_USERNAMES,
 )
 from opentraces.security.classifier import (
-    ClassifierResult,
     classify_content,
     classify_trace_record,
 )
 from opentraces.security.redactor import RedactingFilter
 from opentraces.security.scanner import (
     FieldType,
-    ScanResult,
     scan_content,
     scan_trace_record,
     two_pass_scan,
 )
 from opentraces.security.secrets import (
-    SecretMatch,
     redact_text,
     scan_text,
     shannon_entropy,
@@ -1058,7 +1053,7 @@ class TestTierDispatchLogic:
         from opentraces.security.scanner import two_pass_scan, apply_redactions
         record = self._make_trace()
         pass1, pass2 = two_pass_scan(record)
-        redactions = apply_redactions(record)
+        _redactions = apply_redactions(record)
         assert record.security is not None
         assert record.security.redactions_applied >= 0
 
