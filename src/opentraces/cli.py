@@ -327,71 +327,167 @@ def config_set(
 
 
 @main.command()
-@click.option("--tier", type=click.IntRange(1, 3), default=None, help="Security tier (1, 2, or 3)")
-def init(tier: int | None) -> None:
-    """Initialize opentraces in the current project directory."""
+@click.option("--mode", type=click.Choice(["auto", "review"]), default=None, help="Sharing mode")
+@click.option("--remote", type=str, default=None, help="HF dataset repo (owner/name)")
+@click.option("--no-hook", is_flag=True, help="Skip Claude Code hook installation")
+@click.option("--tier", type=click.IntRange(1, 3), default=None, hidden=True, help="Legacy tier (use --mode instead)")
+def init(mode: str | None, remote: str | None, no_hook: bool, tier: int | None) -> None:
+    """Initialize opentraces in the current project directory.
+
+    Sets up local config and staging. Auth and remote are handled on first push,
+    just like git (you don't need a GitHub account to run git init).
+    """
+    from .config import load_project_config, save_project_config
+
     project_dir = Path.cwd()
     ot_dir = project_dir / ".opentraces"
     staging_dir = ot_dir / "staging"
-    config_file = ot_dir / "config.yml"
+    config_json = ot_dir / "config.json"
+    config_yml = ot_dir / "config.yml"
 
-    if config_file.exists():
-        click.echo(f"Already initialized: {config_file}")
-        emit_json({"status": "ok", "message": "Already initialized", "config": str(config_file)})
+    # Check if already initialized
+    if config_json.exists() or config_yml.exists():
+        proj_config = load_project_config(project_dir)
+        current_mode = proj_config.get("mode", "review")
+        current_remote = proj_config.get("remote", "not set")
+        click.echo(f"Already initialized (mode: {current_mode}, remote: {current_remote})")
+        click.echo("Run 'opentraces config set' to change settings.")
+        emit_json({"status": "ok", "message": "Already initialized", "mode": current_mode})
         return
 
-    # Prompt interactively if --tier not provided
-    if tier is None:
-        tier = click.prompt(
-            "Security tier (1=open, 2=guarded, 3=strict)",
-            type=click.IntRange(1, 3),
-            default=2,
-        )
+    # Legacy --tier mapping
+    if tier is not None and mode is None:
+        mode = "auto" if tier == 1 else "review"
 
-    # Create directories
+    # Step 1: Mode selection (no auth needed)
+    if mode is None:
+        try:
+            from pyclack.prompts import select, intro
+            from pyclack.core import Option
+            import asyncio
+
+            async def _select_mode():
+                intro("opentraces init")
+                return await select(
+                    "How should traces be shared?",
+                    [
+                        Option(value="auto", label="Auto", hint="scan, redact, push automatically after each session"),
+                        Option(value="review", label="Review", hint="I review and approve traces before pushing"),
+                    ],
+                )
+            mode = asyncio.run(_select_mode())
+            if mode is None:
+                click.echo("Cancelled.")
+                sys.exit(0)
+        except ImportError:
+            mode = click.prompt(
+                "Mode (auto=set-and-forget, review=human-in-the-loop)",
+                type=click.Choice(["auto", "review"]),
+                default="review",
+            )
+
+    # Step 4: Create directories and config
     ot_dir.mkdir(parents=True, exist_ok=True)
     staging_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write config.yml
-    config_content = (
-        "# opentraces configuration\n"
-        "# https://opentraces.ai/docs/security-tiers\n"
-        f"tier: {tier}\n"
-    )
-    config_file.write_text(config_content)
+    proj_config: dict = {"mode": mode, "visibility": "private"}
+    if remote:
+        proj_config["remote"] = remote
+    save_project_config(project_dir, proj_config)
 
     # Add staging dir to .gitignore
     gitignore_path = project_dir / ".gitignore"
     gitignore_line = ".opentraces/staging/"
     if gitignore_path.exists():
-        existing = gitignore_path.read_text()
-        if gitignore_line not in existing.splitlines():
+        existing_gi = gitignore_path.read_text()
+        if gitignore_line not in existing_gi.splitlines():
             with open(gitignore_path, "a") as f:
-                if not existing.endswith("\n"):
+                if not existing_gi.endswith("\n"):
                     f.write("\n")
                 f.write(f"{gitignore_line}\n")
-            click.echo(f"  Added '{gitignore_line}' to .gitignore")
-    else:
-        click.echo("  No .gitignore found, skipping")
+    # Also add .opentraces/config.json
+    if gitignore_path.exists():
+        existing_gi = gitignore_path.read_text()
+        if ".opentraces/config.json" not in existing_gi.splitlines():
+            with open(gitignore_path, "a") as f:
+                f.write(".opentraces/config.json\n")
 
-    click.echo(f"\nInitialized opentraces (tier {tier}) in {ot_dir}")
-    click.echo(f"  Config:  {config_file}")
+    # Step 5: Hook installation
+    hook_installed = False
+    if not no_hook:
+        hook_installed = _install_capture_hook(project_dir)
+
+    # Summary
+    click.echo(f"\nInitialized opentraces ({mode} mode) in {ot_dir}")
+    if remote:
+        click.echo(f"  Remote:  {remote}")
+    else:
+        click.echo(f"  Remote:  not set (will be configured on first push)")
+    click.echo(f"  Config:  {config_json}")
     click.echo(f"  Staging: {staging_dir}")
-    click.echo(f"\nNext steps:")
-    click.echo(f"  opentraces _capture --session-dir <path> --project-dir .")
-    click.echo(f"  opentraces status")
+    if hook_installed:
+        click.echo(f"  Hook:    .claude/settings.json (SessionEnd)")
+    if mode == "auto":
+        click.echo(f"\nYour next Claude Code session will be captured and pushed automatically.")
+        click.echo(f"  Run 'opentraces login' and 'opentraces push' to set up your remote.")
+    else:
+        click.echo(f"\nYour next Claude Code session will be captured locally.")
+        click.echo(f"  Run 'opentraces review' to review, then 'opentraces commit' and 'opentraces push'.")
 
     emit_json({
         "status": "ok",
-        "tier": tier,
-        "config_path": str(config_file),
+        "mode": mode,
+        "remote": remote,
+        "hook_installed": hook_installed,
+        "config_path": str(config_json),
         "staging_path": str(staging_dir),
         "next_steps": [
-            "Run 'opentraces _capture' after a Claude Code session",
-            "Run 'opentraces status' to see staged traces",
+            "Start a Claude Code session, traces will be captured automatically",
         ],
         "next_command": "opentraces status",
     })
+
+
+def _install_capture_hook(project_dir: Path) -> bool:
+    """Install a SessionEnd hook in .claude/settings.json for auto-parsing."""
+    claude_dir = project_dir / ".claude"
+    settings_path = claude_dir / "settings.json"
+
+    hook_entry = {
+        "type": "command",
+        "command": "opentraces _capture --session-dir \"$CLAUDE_SESSION_DIR\" --project-dir .",
+        "timeout": 60,
+    }
+
+    try:
+        claude_dir.mkdir(parents=True, exist_ok=True)
+
+        settings = {}
+        if settings_path.exists():
+            try:
+                settings = json.loads(settings_path.read_text())
+            except Exception:
+                settings = {}
+
+        hooks = settings.setdefault("hooks", {})
+        session_end = hooks.setdefault("SessionEnd", [])
+
+        # Check if hook already installed
+        for group in session_end:
+            for h in group.get("hooks", []):
+                if "opentraces" in h.get("command", ""):
+                    click.echo("  Hook already installed")
+                    return True
+
+        # Add the hook
+        session_end.append({"hooks": [hook_entry]})
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+        click.echo("  Installed SessionEnd hook in .claude/settings.json")
+        return True
+    except Exception as e:
+        click.echo(f"  Could not install hook: {e}")
+        click.echo(f"  Add manually to .claude/settings.json")
+        return False
 
 
 @main.command("_capture", hidden=True)
@@ -415,7 +511,8 @@ def capture(session_dir: str, project_dir: str) -> None:
 
     # Read project config
     proj_config = load_project_config(proj_path)
-    tier = proj_config.get("tier", 3)
+    mode = proj_config.get("mode", "review")
+    tier = proj_config.get("tier", 2)  # backward compat for security pipeline
 
     # Setup project-local staging
     staging = get_project_staging_dir(proj_path)
@@ -538,20 +635,6 @@ def capture(session_dir: str, project_dir: str) -> None:
             error_count += 1
             click.echo(f"  Error: {sf.name}: {e}", err=True)
 
-    # Update project state
-    state_path = get_project_state_path(proj_path)
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    import json as _json
-    project_state = {}
-    if state_path.exists():
-        try:
-            project_state = _json.loads(state_path.read_text())
-        except Exception:
-            pass
-    project_state["last_capture"] = str(Path(session_dir))
-    project_state["total_staged"] = project_state.get("total_staged", 0) + parsed_count
-    state_path.write_text(_json.dumps(project_state, indent=2))
-
     click.echo(f"Captured {parsed_count} sessions ({error_count} errors)", err=True)
 
 
@@ -569,15 +652,14 @@ def status() -> None:
         sys.exit(3)
 
     proj_config = load_project_config(project_dir)
-    tier = proj_config.get("tier", 3)
+    mode = proj_config.get("mode", "review")
     remote = proj_config.get("remote", None)
     project_name = project_dir.name
 
-    # Tier descriptions
-    tier_desc = {1: "open, auto-redact", 2: "guarded, scan + flag", 3: "strict, review all"}
-    desc = tier_desc.get(tier, "unknown")
+    mode_desc = {"auto": "set and forget", "review": "human in the loop"}
+    desc = mode_desc.get(mode, mode)
 
-    click.echo(f"{project_name} (tier {tier}, {desc})")
+    click.echo(f"{project_name} ({mode} mode, {desc})")
     if remote:
         click.echo(f"remote: {remote}")
     else:
@@ -644,20 +726,120 @@ def status() -> None:
     click.echo(f"\n{reviewed} reviewed, {pushed} pushed")
 
 
-@main.command()
-def remote() -> None:
-    """Show the configured remote dataset."""
-    from .config import load_project_config
+@main.group(invoke_without_command=True)
+@click.pass_context
+def remote(ctx) -> None:
+    """Manage the HF dataset remote."""
+    if ctx.invoked_subcommand is None:
+        # Default: show current remote
+        from .config import load_project_config
+        project_dir = Path.cwd()
+        proj_config = load_project_config(project_dir)
+        remote_name = proj_config.get("remote")
+
+        if not remote_name:
+            click.echo("No remote configured. Run 'opentraces remote set' to add one.")
+            return
+
+        click.echo(f"origin  {remote_name} (huggingface.co)")
+
+
+@remote.command("set")
+@click.argument("repo", required=False, default=None)
+def remote_set(repo: str | None) -> None:
+    """Set the dataset remote. Interactive if no argument given."""
+    from .config import load_project_config, save_project_config
+
+    project_dir = Path.cwd()
+
+    if repo is not None:
+        # Direct set: validate format
+        if "/" not in repo or repo.count("/") != 1:
+            click.echo("Invalid format. Use: owner/dataset")
+            sys.exit(2)
+        proj_config = load_project_config(project_dir)
+        proj_config["remote"] = repo
+        save_project_config(project_dir, proj_config)
+        click.echo(f"Remote set to: {repo}")
+        emit_json({"status": "ok", "remote": repo})
+        return
+
+    # Interactive: list existing opentraces datasets
+    cfg = load_config()
+    if not cfg.hf_token:
+        click.echo("Not authenticated. Run 'opentraces login' first.")
+        sys.exit(3)
+
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi(token=cfg.hf_token)
+        username = api.whoami().get("name", "unknown")
+    except Exception as e:
+        click.echo(f"Could not get HF username: {e}")
+        sys.exit(4)
+
+    try:
+        from .upload.hf_hub import HFUploader
+        uploader = HFUploader(token=cfg.hf_token, repo_id="placeholder")
+        existing = uploader.list_opentraces_datasets(username)
+    except Exception:
+        existing = []
+
+    if existing:
+        try:
+            from pyclack.prompts import select
+            from pyclack.core import Option
+            import asyncio
+
+            options = [Option(value=ds["id"], label=ds["id"]) for ds in existing]
+            options.append(Option(value="__new__", label="Create new dataset..."))
+
+            async def _select():
+                return await select("Select dataset remote", options)
+            choice = asyncio.run(_select())
+
+            if choice == "__new__":
+                repo = click.prompt("Dataset name", default=f"{username}/opentraces")
+            elif choice is not None:
+                repo = choice
+            else:
+                click.echo("Cancelled.")
+                return
+        except ImportError:
+            for i, ds in enumerate(existing):
+                click.echo(f"  {i+1}. {ds['id']}")
+            click.echo(f"  {len(existing)+1}. Create new dataset")
+            choice_num = click.prompt("Choose", type=int, default=1)
+            if choice_num <= len(existing):
+                repo = existing[choice_num - 1]["id"]
+            else:
+                repo = click.prompt("Dataset name", default=f"{username}/opentraces")
+    else:
+        repo = click.prompt("Dataset name", default=f"{username}/opentraces")
+
+    proj_config = load_project_config(project_dir)
+    proj_config["remote"] = repo
+    save_project_config(project_dir, proj_config)
+    click.echo(f"Remote set to: {repo}")
+    emit_json({"status": "ok", "remote": repo})
+
+
+@remote.command("remove")
+def remote_remove() -> None:
+    """Remove the configured remote."""
+    from .config import load_project_config, save_project_config
 
     project_dir = Path.cwd()
     proj_config = load_project_config(project_dir)
-    remote_name = proj_config.get("remote")
 
-    if not remote_name:
-        click.echo("No remote configured. Run 'opentraces push' to create one.")
+    if "remote" not in proj_config:
+        click.echo("No remote configured.")
         return
 
-    click.echo(f"origin  {remote_name} (huggingface.co)")
+    del proj_config["remote"]
+    save_project_config(project_dir, proj_config)
+    click.echo("Remote removed.")
+    emit_json({"status": "ok", "remote": None})
 
 
 @main.command()
@@ -908,7 +1090,7 @@ def parse(auto: bool, limit: int) -> None:
 @click.option("--port", type=int, default=5050, help="Port for web review server")
 @click.option("--tui", is_flag=True, help="Launch TUI review interface")
 def review(web: bool, port: int, tui: bool) -> None:
-    """Review pending traces before upload (Tier 3)."""
+    """Review pending traces before upload."""
     from .state import STAGING_DIR
     from .config import get_project_staging_dir
 
@@ -1022,12 +1204,90 @@ def assess(judge: bool, judge_model: str, limit: int) -> None:
     })
 
 
+@main.command("commit")
+@click.option("-m", "--message", type=str, default=None, help="Commit message")
+@click.option("--all", "commit_all", is_flag=True, help="Commit all approved traces")
+def commit_traces(message: str | None, commit_all: bool) -> None:
+    """Bundle approved traces into a commit group for push."""
+    from .state import StateManager, TraceStatus
+    from .config import get_project_state_path
+    from opentraces_schema import TraceRecord
+
+    project_dir = Path.cwd()
+    state_path = get_project_state_path(project_dir)
+    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
+
+    approved = state.get_traces_by_status(TraceStatus.APPROVED)
+    if not approved:
+        click.echo("No approved traces to commit. Run 'opentraces review' first.")
+        emit_json({"status": "ok", "committed": 0, "hint": "Run opentraces review to approve traces"})
+        return
+
+    if commit_all:
+        trace_ids = [entry.trace_id for entry in approved]
+    else:
+        click.echo(f"{len(approved)} approved traces:\n")
+        for i, entry in enumerate(approved):
+            desc = "(no description)"
+            if entry.file_path:
+                try:
+                    data = Path(entry.file_path).read_text().strip()
+                    record = TraceRecord.model_validate_json(data)
+                    desc = (record.task.description or "untitled")[:50]
+                except Exception:
+                    pass
+            click.echo(f"  {i+1}. {entry.trace_id[:8]}  {desc}")
+
+        click.echo()
+        if click.confirm(f"Commit all {len(approved)} traces?", default=True):
+            trace_ids = [entry.trace_id for entry in approved]
+        else:
+            click.echo("Cancelled.")
+            return
+
+    # Auto-generate message if not provided
+    if message is None:
+        descriptions = []
+        from .config import get_project_staging_dir
+        staging_dir = get_project_staging_dir(project_dir)
+        for entry in approved:
+            if entry.file_path:
+                try:
+                    data = Path(entry.file_path).read_text().strip()
+                    record = TraceRecord.model_validate_json(data)
+                    if record.task.description:
+                        descriptions.append(record.task.description[:60])
+                except Exception:
+                    pass
+        if descriptions:
+            message = "; ".join(descriptions[:3])
+            if len(descriptions) > 3:
+                message += f" (+{len(descriptions) - 3} more)"
+        else:
+            message = f"Commit {len(trace_ids)} traces"
+
+    commit_id = state.create_commit_group(trace_ids, message)
+
+    click.echo(f"\nCommitted {len(trace_ids)} traces (commit {commit_id})")
+    click.echo(f"  Message: {message}")
+    click.echo(f"\nRun 'opentraces push' to upload to HuggingFace Hub.")
+
+    emit_json({
+        "status": "ok",
+        "commit_id": commit_id,
+        "committed": len(trace_ids),
+        "message": message,
+        "next_steps": ["Run 'opentraces push' to upload committed traces"],
+        "next_command": "opentraces push",
+    })
+
+
 def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
     """Resolve the HF dataset repo_id using priority chain.
 
     Priority:
       1. --repo flag (highest)
-      2. .opentraces/config.yml 'remote' field
+      2. .opentraces/config.json 'remote' field
       3. Default: {username}/opentraces
     """
     if repo_flag:
@@ -1043,16 +1303,15 @@ def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
 
 
 @main.command()
-@click.option("--approved-only", is_flag=True, help="Only push approved traces")
 @click.option("--private", is_flag=True, help="Force private visibility (overrides config)")
 @click.option("--public", is_flag=True, help="Force public visibility (overrides config)")
 @click.option("--publish", is_flag=True, help="Change an existing private dataset to public (no upload)")
 @click.option("--gated", is_flag=True, help="Enable gated access (auto-approve) on the dataset")
 @click.option("--repo", default=None, help="HF dataset repo (default: username/opentraces)")
-def push(approved_only: bool, private: bool, public: bool, publish: bool, gated: bool, repo: str | None) -> None:
-    """Upload approved traces to HuggingFace Hub."""
+def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None) -> None:
+    """Upload committed traces to HuggingFace Hub."""
     from .config import (
-        get_dataset_name, get_project_staging_dir,
+        get_project_staging_dir,
         load_project_config, save_project_config,
     )
     from .state import StateManager, TraceStatus, StagingLock, STAGING_DIR
@@ -1080,8 +1339,35 @@ def push(approved_only: bool, private: bool, public: bool, publish: bool, gated:
         click.echo(f"Could not get HF username: {e}")
         sys.exit(4)
 
-    # Resolve repo_id: --repo flag > config remote > default
+    # Resolve repo_id: --repo flag > config remote > interactive selector > default
     repo_id = _resolve_repo_id(username, repo)
+
+    # If no remote was configured, offer interactive selection (like gh on first push)
+    proj_config = load_project_config(Path.cwd())
+    if not repo and not proj_config.get("remote"):
+        click.echo(f"No remote configured. Using default: {repo_id}")
+        try:
+            from .upload.hf_hub import HFUploader as _HFUp
+            _up = _HFUp(token=cfg.hf_token, repo_id="placeholder")
+            existing = _up.list_opentraces_datasets(username)
+            if existing:
+                click.echo("\nExisting opentraces datasets:")
+                for i, ds in enumerate(existing):
+                    click.echo(f"  {i+1}. {ds['id']}")
+                click.echo(f"  {len(existing)+1}. Create new: {repo_id}")
+                try:
+                    choice_num = click.prompt("Choose", type=int, default=len(existing)+1)
+                    if choice_num <= len(existing):
+                        repo_id = existing[choice_num - 1]["id"]
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Save the chosen remote for next time
+        proj_config["remote"] = repo_id
+        save_project_config(Path.cwd(), proj_config)
+        click.echo(f"Remote set to: {repo_id}\n")
 
     # Handle --publish: just change visibility, no upload
     if publish:
@@ -1122,10 +1408,25 @@ def push(approved_only: bool, private: bool, public: bool, publish: bool, gated:
     state = StateManager(
         state_path=proj_state_path if proj_state_path.exists() else None
     )
-    if approved_only:
+    # Check project mode for push behavior
+    proj_config = load_project_config(Path.cwd())
+    project_mode = proj_config.get("mode", "review")
+
+    # Get committed traces (the standard path after review → commit)
+    traces_to_upload = state.get_traces_by_status(TraceStatus.COMMITTED)
+
+    # In auto mode, also pick up APPROVED traces (auto-committed by _capture)
+    if not traces_to_upload and project_mode == "auto":
         traces_to_upload = state.get_traces_by_status(TraceStatus.APPROVED)
-    else:
-        traces_to_upload = state.get_pending_upload_traces()
+
+    # If review mode and there are approved but uncommitted traces, hint
+    if not traces_to_upload:
+        approved = state.get_traces_by_status(TraceStatus.APPROVED)
+        if approved:
+            click.echo(f"{len(approved)} approved traces found, but not yet committed.")
+            click.echo("Run 'opentraces commit' to bundle them for push.")
+            emit_json({"status": "ok", "uploaded": 0, "hint": "Run opentraces commit first"})
+            return
 
     if not traces_to_upload:
         # If --gated was passed standalone, apply it even without uploading
@@ -1254,44 +1555,6 @@ def push(approved_only: bool, private: bool, public: bool, publish: bool, gated:
         sys.exit(7)
 
 
-@main.command("import")
-@click.option("--from", "from_format", required=True, type=click.Choice(["dataclaw"]))
-@click.argument("path")
-def import_traces(from_format: str, path: str) -> None:
-    """Import traces from other formats."""
-    from .state import StateManager, TraceStatus, STAGING_DIR
-
-    input_path = Path(path)
-    if not input_path.exists():
-        click.echo(f"File not found: {path}")
-        emit_json(error_response("FILE_NOT_FOUND", "not_found", f"{path} not found"))
-        sys.exit(3)
-
-    if from_format == "dataclaw":
-        from .parsers.dataclaw_import import import_dataclaw
-        records = import_dataclaw(input_path)
-        click.echo(f"Imported {len(records)} traces from DataClaw format")
-
-        state = StateManager()
-        STAGING_DIR.mkdir(parents=True, exist_ok=True)
-
-        for record in records:
-            jsonl_line = record.to_jsonl_line()
-            staging_file = STAGING_DIR / f"{record.trace_id}.jsonl"
-            staging_file.write_text(jsonl_line + "\n")
-            state.set_trace_status(
-                record.trace_id, TraceStatus.STAGED,
-                session_id=record.session_id,
-                file_path=str(staging_file),
-            )
-
-        emit_json({
-            "status": "ok",
-            "imported": len(records),
-            "format": from_format,
-            "next_steps": ["Run 'opentraces review' to review imported traces"],
-            "next_command": "opentraces review",
-        })
 
 
 @main.command()
@@ -1331,18 +1594,18 @@ def capabilities(as_json: bool) -> None:
         "version": __version__,
         "schema_version": SCHEMA_VERSION,
         "agents": ["claude-code"],
-        "security_tiers": [1, 2, 3],
-        "import_formats": ["dataclaw"],
+        "modes": ["auto", "review"],
         "export_formats": ["atif"],
         "features": [
             "passive_capture",
+            "session_end_hook",
             "recursive_subagent_loading",
             "full_snippet_extraction",
             "attribution_blocks",
-            "tier2_classifier",
+            "classifier",
             "web_review",
             "sharded_upload",
-            "contributor_dashboard",
+            "commit_groups",
         ],
     }
     click.echo(json.dumps(caps, indent=2))
@@ -1359,15 +1622,17 @@ def introspect() -> None:
         "schema_version": SCHEMA_VERSION,
         "trace_record_schema": TraceRecord.model_json_schema(),
         "commands": {
-            "auth": {"description": "Authenticate with HuggingFace Hub"},
+            "init": {"description": "One-stop setup: auth + mode + remote + hook", "options": ["--mode", "--remote", "--no-hook"]},
+            "login": {"description": "Authenticate with HuggingFace Hub"},
             "config": {"description": "Manage configuration", "subcommands": ["set", "show"]},
             "discover": {"description": "List available sessions"},
             "parse": {"description": "Parse sessions into enriched JSONL", "options": ["--auto", "--limit"]},
             "review": {"description": "Review pending traces", "options": ["--web", "--port"]},
-            "push": {"description": "Upload to HuggingFace Hub", "options": ["--approved-only"]},
-            "import": {"description": "Import from other formats", "options": ["--from dataclaw"]},
+            "commit": {"description": "Bundle approved traces for push", "options": ["-m", "--all"]},
+            "push": {"description": "Upload committed traces to HuggingFace Hub", "options": ["--private", "--public"]},
+            "remote": {"description": "Manage dataset remote", "subcommands": ["set", "remove"]},
             "export": {"description": "Export to other formats", "options": ["--format atif"]},
-            "migrate": {"description": "Schema version check + migration"},
+            "status": {"description": "Show project status"},
             "capabilities": {"description": "Machine-discoverable feature list"},
             "introspect": {"description": "Full API schema (this command)"},
         },

@@ -1,7 +1,7 @@
 """Staging state machine and upload tracking.
 
 Manages the lifecycle of traces through:
-  discovered -> parsed -> staged -> reviewing -> approved -> uploading -> uploaded
+  discovered -> parsed -> staged -> reviewing -> approved -> committed -> uploading -> uploaded
                                               -> rejected
                                     uploading -> failed -> staged (retry)
 
@@ -39,10 +39,10 @@ class TraceStatus(str, Enum):
 
 @dataclass
 class CommitGroup:
-    """A group of sessions committed together for push."""
+    """A group of traces committed together for push."""
 
     commit_id: str
-    session_ids: list[str]
+    trace_ids: list[str]
     message: str
     created_at: str
 
@@ -168,20 +168,29 @@ class StateManager:
 
     # --- Commit groups ---
 
-    def create_commit_group(self, session_ids: list[str], message: str) -> str:
-        """Create a commit group from staged sessions. Returns commit_id."""
+    def create_commit_group(self, trace_ids: list[str], message: str) -> str:
+        """Create a commit group from approved traces. Returns commit_id."""
         import datetime
 
         commit_id = uuid.uuid4().hex[:12]
         created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         self._state["commit_groups"][commit_id] = {
             "commit_id": commit_id,
-            "session_ids": session_ids,
+            "trace_ids": trace_ids,
             "message": message,
             "created_at": created_at,
         }
+        for trace_id in trace_ids:
+            self.set_trace_status(trace_id, TraceStatus.COMMITTED)
         self.save()
         return commit_id
+
+    def get_committed_traces(self) -> dict[str, dict]:
+        """Get all traces with COMMITTED status."""
+        return {
+            tid: info for tid, info in self._state.get("traces", {}).items()
+            if info.get("status") == TraceStatus.COMMITTED.value
+        }
 
     def get_commit_group(self, commit_id: str) -> CommitGroup | None:
         entry = self._state["commit_groups"].get(commit_id)

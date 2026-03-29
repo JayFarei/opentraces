@@ -144,6 +144,34 @@ class HFUploader:
             gated=gated,
         )
 
+    def list_opentraces_datasets(self, username: str | None = None) -> list[dict]:
+        """List HuggingFace datasets tagged with 'opentraces'.
+
+        If username is provided, only returns datasets owned by that user.
+        Returns a list of dicts with keys: id, tags, private, last_modified.
+        """
+        try:
+            datasets = self.api.list_datasets(
+                search="opentraces",
+                author=username,
+                limit=50,
+            )
+
+            results = []
+            for ds in datasets:
+                tags = list(ds.tags) if ds.tags else []
+                if "opentraces" not in tags:
+                    continue
+                results.append({
+                    "id": ds.id,
+                    "tags": tags,
+                    "private": ds.private,
+                    "last_modified": str(ds.last_modified) if ds.last_modified else None,
+                })
+            return results
+        except Exception:
+            return []
+
     def get_existing_shards(self) -> list[str]:
         """List existing trace shard files in the repo."""
         try:

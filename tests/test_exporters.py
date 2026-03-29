@@ -78,12 +78,6 @@ class TestProtocolConformance:
 
         assert isinstance(ATIFExporter(), FormatExporter)
 
-    def test_dataclaw_importer_satisfies_protocol(self):
-        from opentraces.parsers.base import FormatImporter
-        from opentraces.parsers.dataclaw_import import DataClawImporter
-
-        assert isinstance(DataClawImporter(), FormatImporter)
-
 
 # ---------------------------------------------------------------------------
 # ATIF Exporter
@@ -356,11 +350,6 @@ class TestRegistries:
         parsers = get_parsers()
         assert "claude-code" in parsers
 
-    def test_importers_registry_has_dataclaw(self):
-        from opentraces.parsers import get_importers
-        importers = get_importers()
-        assert "dataclaw-jsonl" in importers
-
     def test_exporters_registry_has_atif(self):
         from opentraces.exporters import get_exporters
         exporters = get_exporters()
@@ -368,6 +357,4 @@ class TestRegistries:
 
     def test_import_alias_resolution(self):
         from opentraces.parsers import resolve_import_format
-        assert resolve_import_format("dataclaw-jsonl") == "dataclaw-jsonl"
-        assert resolve_import_format("dataclaw") == "dataclaw-jsonl"
         assert resolve_import_format("nonexistent") is None

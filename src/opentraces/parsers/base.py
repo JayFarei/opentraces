@@ -42,8 +42,8 @@ class SessionParser(Protocol):
 class FormatImporter(Protocol):
     """Protocol for file-based trace importers.
 
-    For importing traces from external file formats (e.g. DataClaw JSONL,
-    ADP trajectories) into TraceRecord format.
+    For importing traces from external file formats (e.g. ADP trajectories)
+    into TraceRecord format.
     """
 
     format_name: str

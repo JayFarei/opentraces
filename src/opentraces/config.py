@@ -27,6 +27,9 @@ class ProjectConfig(BaseModel):
 
     tier: int = 3
     excluded: bool = False
+    mode: str = "review"
+    remote: str | None = None
+    visibility: str = "private"
 
 
 class Config(BaseModel):
@@ -38,8 +41,8 @@ class Config(BaseModel):
     projects: dict[str, ProjectConfig] = Field(default_factory=dict)
     excluded_projects: list[str] = Field(default_factory=list)
     custom_redact_strings: list[str] = Field(default_factory=list)
+    default_mode: str = "review"
     pricing_file: str | None = None
-    dataset_name_template: str = "{username}/opentraces-claude-code"
     projects_path: str | None = Field(
         None,
         description="Override for ~/.claude/projects/ location",
@@ -175,51 +178,90 @@ def get_tier_for_project(config: Config, project_path: str) -> int:
     return config.default_tier
 
 
-def get_dataset_name(config: Config, username: str) -> str:
-    """Get the HF dataset repo name for a user."""
-    return config.dataset_name_template.replace("{username}", username)
-
-
-def load_project_config(project_dir: Path) -> dict:
-    """Read .opentraces/config.yml from a project directory and return a dict.
-
-    Returns at least a 'tier' key (defaults to 3 if file missing or unparseable).
-    """
-    config_file = project_dir / ".opentraces" / "config.yml"
-    result: dict = {"tier": 3}
-    if not config_file.exists():
-        return result
-    try:
-        text = config_file.read_text()
-        for line in text.splitlines():
-            line = line.strip()
-            if line.startswith("#") or not line:
-                continue
-            if ":" in line:
-                key, _, value = line.partition(":")
-                key = key.strip()
-                value = value.strip()
-                if key == "tier":
-                    result["tier"] = int(value)
-                elif key == "remote":
-                    result["remote"] = value
-                else:
-                    result[key] = value
-    except Exception:
-        pass
+def _parse_yaml_config(text: str) -> dict:
+    """Hand-parse a simple key: value YAML file into a dict."""
+    result: dict = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#") or not line:
+            continue
+        if ":" in line:
+            key, _, value = line.partition(":")
+            key = key.strip()
+            value = value.strip()
+            if key == "tier":
+                result["tier"] = int(value)
+            elif key == "remote":
+                result["remote"] = value
+            else:
+                result[key] = value
     return result
 
 
+def _backfill_mode(data: dict) -> bool:
+    """If config has tier but no mode, map tier to mode. Returns True if modified."""
+    if "tier" in data and "mode" not in data:
+        tier = int(data["tier"])
+        data["mode"] = "auto" if tier == 1 else "review"
+        return True
+    return False
+
+
+def load_project_config(project_dir: Path) -> dict:
+    """Read project config from .opentraces/config.json (or migrate from .yml).
+
+    Returns at least a 'mode' key (defaults to "review" if no config found).
+    """
+    config_dir = project_dir / ".opentraces"
+    json_file = config_dir / "config.json"
+    yml_file = config_dir / "config.yml"
+
+    data: dict | None = None
+
+    # Prefer JSON
+    if json_file.exists():
+        try:
+            data = json.loads(json_file.read_text())
+        except Exception:
+            data = None
+
+    # Fall back to YAML, migrate if found
+    if data is None and yml_file.exists():
+        try:
+            text = yml_file.read_text()
+            data = _parse_yaml_config(text)
+            # Migrate: write JSON, rename YAML to .bak
+            config_dir.mkdir(parents=True, exist_ok=True)
+            tmp_path = json_file.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(data, indent=2))
+            os.replace(str(tmp_path), str(json_file))
+            os.replace(str(yml_file), str(yml_file) + ".bak")
+        except Exception:
+            pass
+
+    if data is None:
+        return {"mode": "review"}
+
+    # Backward compat: map tier -> mode if mode is missing
+    if _backfill_mode(data):
+        try:
+            tmp_path = json_file.with_suffix(".tmp")
+            tmp_path.write_text(json.dumps(data, indent=2))
+            os.replace(str(tmp_path), str(json_file))
+        except Exception:
+            pass
+
+    return data
+
+
 def save_project_config(project_dir: Path, data: dict) -> None:
-    """Write .opentraces/config.yml with the given dict values."""
-    config_file = project_dir / ".opentraces" / "config.yml"
-    lines = [
-        "# opentraces configuration",
-        "# https://opentraces.ai/docs/security-tiers",
-    ]
-    for key, value in data.items():
-        lines.append(f"{key}: {value}")
-    config_file.write_text("\n".join(lines) + "\n")
+    """Write project config as .opentraces/config.json (atomic write)."""
+    config_dir = project_dir / ".opentraces"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "config.json"
+    tmp_path = config_file.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(data, indent=2))
+    os.replace(str(tmp_path), str(config_file))
 
 
 def get_project_staging_dir(project_dir: Path) -> Path:

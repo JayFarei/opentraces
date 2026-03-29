@@ -44,7 +44,7 @@ def initialized_project(runner, project_dir):
     """Run init on a temp project directory and return the path."""
     with runner.isolated_filesystem(temp_dir=project_dir.parent):
         os.chdir(str(project_dir))
-        result = runner.invoke(main, ["init", "--tier", "2"])
+        result = runner.invoke(main, ["init", "--mode", "review", "--remote", "test/opentraces", "--no-hook"])
         assert result.exit_code == 0, f"init failed: {result.output}"
     return project_dir
 
@@ -67,25 +67,26 @@ class TestInit:
     """Test the init command."""
 
     def test_init_creates_config_and_staging(self, runner, project_dir):
-        """init with tier 2 creates .opentraces/config.yml and staging/."""
+        """init with --mode review creates .opentraces/config.json and staging/."""
         os.chdir(str(project_dir))
-        result = runner.invoke(main, ["init", "--tier", "2"])
+        result = runner.invoke(main, ["init", "--mode", "review", "--remote", "test/repo", "--no-hook"])
 
         assert result.exit_code == 0
-        config_file = project_dir / ".opentraces" / "config.yml"
+        config_file = project_dir / ".opentraces" / "config.json"
         staging_dir = project_dir / ".opentraces" / "staging"
-        assert config_file.exists(), "config.yml not created"
+        assert config_file.exists(), "config.json not created"
         assert staging_dir.exists(), "staging/ not created"
 
         # Verify config content
-        content = config_file.read_text()
-        assert "tier: 2" in content
+        import json
+        content = json.loads(config_file.read_text())
+        assert content["mode"] == "review"
 
     def test_init_idempotent(self, runner, project_dir):
         """Running init twice does not error."""
         os.chdir(str(project_dir))
-        runner.invoke(main, ["init", "--tier", "2"])
-        result = runner.invoke(main, ["init", "--tier", "2"])
+        runner.invoke(main, ["init", "--mode", "review", "--remote", "test/repo", "--no-hook"])
+        result = runner.invoke(main, ["init", "--mode", "review", "--remote", "test/repo", "--no-hook"])
         assert result.exit_code == 0
         assert "Already initialized" in result.output
 
@@ -127,22 +128,21 @@ class TestStatus:
     """Test the status command."""
 
     def test_status_shows_project_info(self, runner, initialized_project):
-        """status shows tier info and session count."""
+        """status shows mode info and session count."""
         os.chdir(str(initialized_project))
         result = runner.invoke(main, ["status"])
 
         assert result.exit_code == 0
-        assert "tier 2" in result.output
+        assert "review mode" in result.output or "auto mode" in result.output
         assert "sessions staged" in result.output
 
-    def test_status_shows_default_remote(self, runner, initialized_project):
-        """status shows the default remote when none is configured."""
+    def test_status_shows_remote(self, runner, initialized_project):
+        """status shows the configured remote."""
         os.chdir(str(initialized_project))
         result = runner.invoke(main, ["status"])
 
         assert result.exit_code == 0
         assert "opentraces" in result.output
-        assert "default" in result.output
 
 
 class TestReview:

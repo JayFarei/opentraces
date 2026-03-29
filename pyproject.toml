@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "opentraces"
 version = "0.1.0"
-description = "Crowdsource agent traces to HuggingFace Hub with configurable security tiers"
+description = "Crowdsource agent traces to HuggingFace Hub"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -13,6 +13,7 @@ dependencies = [
     "opentraces-schema>=0.1.0",
     "click>=8.0",
     "huggingface_hub>=0.20.0",
+    "pyclack-cli>=0.4.0",
 ]
 
 [project.optional-dependencies]

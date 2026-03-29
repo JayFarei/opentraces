@@ -17,7 +17,6 @@ if TYPE_CHECKING:
 PARSERS: dict[str, type] = {}
 
 # File-based importers: format_name -> importer class
-# Instantiate on access: IMPORTERS["dataclaw-jsonl"]()
 IMPORTERS: dict[str, type] = {}
 
 # Accepted aliases for format names (old_name -> canonical_name)
@@ -31,12 +30,8 @@ def _register_defaults() -> None:
     at package import time.
     """
     from .claude_code import ClaudeCodeParser
-    from .dataclaw_import import DataClawImporter
 
     PARSERS["claude-code"] = ClaudeCodeParser
-    IMPORTERS["dataclaw-jsonl"] = DataClawImporter
-    # Accept legacy name with deprecation
-    _IMPORT_ALIASES["dataclaw"] = "dataclaw-jsonl"
 
 
 _registered = False
