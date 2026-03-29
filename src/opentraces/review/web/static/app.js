@@ -1,4 +1,4 @@
-/* opentraces review - Frontend interactivity (vanilla JS) */
+/* opentraces web - Frontend interactivity (vanilla JS) */
 
 /**
  * Approve a session via the API.
@@ -17,19 +17,19 @@ async function approveSession(traceId) {
         });
         const data = await resp.json();
         if (resp.ok) {
-            updateBadge('session-badge', 'approved');
-            updateRowBadge(traceId, 'approved');
-            showNotification('Session approved', 'success');
+            updateBadge('session-badge', 'ready');
+            updateRowBadge(traceId, 'ready');
+            showNotification('Session moved to Ready', 'success');
             showNextPendingLink();
             updateNavPushBtn();
         } else {
             showNotification(data.error || 'Failed to approve', 'error');
-            if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = 'Approve Session'; }
+            if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = 'Mark Ready'; }
             if (rejectBtn) { rejectBtn.disabled = false; }
         }
     } catch (err) {
         showNotification('Network error: ' + err.message, 'error');
-        if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = 'Approve Session'; }
+        if (approveBtn) { approveBtn.disabled = false; approveBtn.textContent = 'Mark Ready'; }
         if (rejectBtn) { rejectBtn.disabled = false; }
     }
 }
@@ -71,7 +71,7 @@ async function rejectSession(traceId) {
  * Redact a step's content via the API.
  */
 async function redactStep(traceId, stepIndex) {
-    if (!confirm("This will permanently remove this step's content from the staged file. This cannot be undone. Continue?")) {
+    if (!confirm("This will permanently remove this step's content from the local inbox file. This cannot be undone. Continue?")) {
         return;
     }
 
@@ -115,10 +115,10 @@ async function redactStep(traceId, stepIndex) {
 }
 
 /**
- * Push all approved sessions to HF Hub.
+ * Push ready or committed sessions to HF Hub.
  */
 async function pushApproved() {
-    if (!confirm('Push all approved sessions to HuggingFace Hub?')) {
+    if (!confirm('Push ready sessions to HuggingFace Hub?')) {
         return;
     }
 
@@ -170,7 +170,7 @@ function showNextPendingLink() {
 }
 
 /**
- * Enable the nav push button if there are approved sessions.
+ * Enable the nav push button if there are ready sessions.
  */
 function updateNavPushBtn() {
     var navBtn = document.getElementById('nav-push-btn');
@@ -305,8 +305,8 @@ function truncateToolInputs() {
  * and apply tool input truncation.
  */
 document.addEventListener('DOMContentLoaded', function() {
-    /* Enable nav push button if there are approved badges on the page */
-    var approvedBadges = document.querySelectorAll('.ot-badge-approved');
+    /* Enable nav push button if there are ready badges on the page */
+    var approvedBadges = document.querySelectorAll('.ot-badge-ready');
     if (approvedBadges.length > 0) {
         var navBtn = document.getElementById('nav-push-btn');
         if (navBtn) navBtn.disabled = false;

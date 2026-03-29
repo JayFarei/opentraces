@@ -5,46 +5,84 @@ When the user says "share this session to opentraces", "publish traces",
 
 ## Workflow
 
-1. **Discover** available sessions:
+1. **Initialize** the repo inbox:
    ```bash
-   opentraces discover
+   opentraces init
    ```
 
-2. **Parse** sessions into trace format:
+2. **Check project state** (what's in the inbox, auth status, next action):
    ```bash
-   opentraces parse
+   opentraces context
    ```
 
-3. **Review** pending traces (shows summary, lets user approve/reject):
+3. **Review sessions** via CLI:
    ```bash
-   opentraces review
+   opentraces session list --stage inbox
+   opentraces session show <TRACE_ID>
+   opentraces session approve <TRACE_ID>
    ```
 
-4. **Push** approved traces to HuggingFace Hub:
+4. **Commit** approved traces:
+   ```bash
+   opentraces commit --all
+   ```
+
+5. **Push** committed traces to HuggingFace Hub:
    ```bash
    opentraces push
    ```
 
+## Session Commands
+
+Full CRUD for trace review, no TUI or web UI needed:
+
+```bash
+opentraces session list [--stage inbox|ready|committed|pushed|rejected] [--model MODEL] [--agent AGENT] [--limit N]
+opentraces session show <TRACE_ID>
+opentraces session approve <TRACE_ID>
+opentraces session reject <TRACE_ID>
+opentraces session reset <TRACE_ID>          # undo approve/reject, back to inbox
+opentraces session redact <TRACE_ID> --step N  # redact a specific step
+opentraces session discard <TRACE_ID> --yes    # permanently delete
+```
+
+## Agent-Native Workflow
+
+For fully automated operation, use `--json` to get machine-readable output:
+
+```bash
+opentraces --json context                    # project state as JSON
+opentraces --json session list --stage inbox  # list inbox sessions
+opentraces --json session show <ID>          # full trace detail
+opentraces --json session approve <ID>       # approve, get next_command
+opentraces --json commit --all               # bundle for push
+opentraces --json push                       # upload to HF Hub
+```
+
+Every command emits structured JSON after a `---OPENTRACES_JSON---` sentinel
+with `status`, `next_steps`, and `next_command` fields.
+
 ## Prerequisites
 
 - opentraces CLI installed: `pip install opentraces`
-- HF Hub authenticated: `opentraces auth` or set `HF_TOKEN` environment variable
+- HF Hub authenticated: `opentraces auth login` or set `HF_TOKEN` environment variable
 
-## Quick Share (Tier 1, Open Mode)
+## Quick Share
 
-For open-source projects where you trust the content:
+For projects where safe sessions can be moved to `Ready` automatically:
 
 ```bash
-opentraces parse --auto && opentraces push --approved-only
+opentraces init --review-policy auto-ready
 ```
 
-This skips interactive review and uploads all successfully parsed traces.
+Then commit and push: `opentraces commit --all && opentraces push`.
 
-## Configuration
+## Other Commands
 
-- Set default security tier: `opentraces config set default_tier 3`
-- Exclude a project: `opentraces config exclude /path/to/project`
-- Set dataset name: `opentraces config set dataset_name_template "{username}/my-traces"`
+- `opentraces stats` - aggregate statistics (traces, tokens, cost, models)
+- `opentraces status` - tree view of inbox
+- `opentraces config show/set` - configuration management
+- `opentraces remote list/use/remove` - manage HF dataset remote
 
 ## Security Tiers
 
@@ -54,6 +92,6 @@ This skips interactive review and uploads all successfully parsed traces.
 
 ## Troubleshooting
 
-- If `opentraces push` fails with auth errors, run `opentraces auth` to refresh your token
+- If `opentraces push` fails with auth errors, run `opentraces auth login` to refresh your token
 - If no sessions are found, check that you have Claude Code session files in `~/.claude/projects/`
-- Use `opentraces status` to see the current state of all traces in the pipeline
+- Use `opentraces context` or `opentraces status` to inspect the current repo inbox

@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 
-{% block title %}Session {{ trace.trace_id[:12] }} - opentraces review{% endblock %}
+{% block title %}Session {{ trace.trace_id[:12] }} - opentraces web{% endblock %}
 
 {% block content %}
-<a href="/" class="ot-back-link">&larr; back to sessions</a>
+<a href="/" class="ot-back-link">&larr; back to inbox</a>
 
 <section class="ot-session-header">
     <div class="grid">
         <div>
-            <div class="ot-section-title">SESSION REVIEW <span class="ot-ascii-rule">────────────────────────────</span></div>
+            <div class="ot-section-title">SESSION INBOX <span class="ot-ascii-rule">────────────────────────────</span></div>
             <p class="ot-trace-id"><code>{{ trace.trace_id }}</code></p>
         </div>
         <div class="ot-session-actions">
@@ -93,7 +93,7 @@
 
         {% if step.step_index in trace._redacted_steps %}
         <div class="ot-redacted-content">
-            <em>[Content redacted during review]</em>
+            <em>[Content redacted in the inbox]</em>
         </div>
         {% else %}
 
@@ -192,14 +192,14 @@
     <div class="ot-section-title">VERDICT <span class="ot-ascii-rule">────────────────────────────────────</span></div>
     <div class="ot-verdict-buttons">
         <button class="ot-btn ot-btn-approve" id="btn-approve" onclick="approveSession('{{ trace.trace_id }}')">
-            [approve session]
+            [mark ready]
         </button>
         <button class="ot-btn ot-btn-reject" id="btn-reject" onclick="rejectSession('{{ trace.trace_id }}')">
             [reject session]
         </button>
     </div>
     <div id="verdict-next-link" class="ot-next-pending" style="display:none;">
-        <a href="/?status=pending" class="ot-next-pending-link">[next pending &rarr;]</a>
+        <a href="/?status=inbox" class="ot-next-pending-link">[next inbox &rarr;]</a>
     </div>
 </section>
 {% endblock %}

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Stats - opentraces review{% endblock %}
+{% block title %}Stats - opentraces web{% endblock %}
 
 {% block content %}
 <div class="ot-section-title">REVIEW DASHBOARD <span class="ot-ascii-rule">────────────────────────────</span></div>
@@ -11,7 +11,7 @@
         <p class="ot-stat-number">{{ stats.total }}</p>
     </article>
     <article class="ot-stat-card ot-stat-approved">
-        <header>Approved</header>
+        <header>Ready</header>
         <p class="ot-stat-number">{{ stats.approved }}</p>
     </article>
     <article class="ot-stat-card ot-stat-rejected">
@@ -19,7 +19,7 @@
         <p class="ot-stat-number">{{ stats.rejected }}</p>
     </article>
     <article class="ot-stat-card ot-stat-pending">
-        <header>Pending</header>
+        <header>Inbox</header>
         <p class="ot-stat-number">{{ stats.pending }}</p>
     </article>
 </div>
@@ -61,12 +61,12 @@
     <p><small>Security tier: <strong>{{ stats.security_tier }}</strong></small></p>
     {% endif %}
     {% if stats.approved > 0 %}
-    <p>{{ stats.approved }} session(s) approved and ready to push.</p>
+    <p>{{ stats.approved }} session(s) are ready to push.</p>
     <button class="ot-btn ot-btn-approve" id="stats-push-btn" onclick="pushApproved()">
-        [push {{ stats.approved }} approved session(s)]
+        [push {{ stats.approved }} ready session(s)]
     </button>
     {% else %}
-    <p class="ot-empty">No approved sessions yet. Review and approve sessions before pushing.</p>
+    <p class="ot-empty">No ready sessions yet. Review the inbox before pushing.</p>
     <button class="ot-btn ot-btn-approve" id="stats-push-btn" disabled>
         [push to hub]
     </button>

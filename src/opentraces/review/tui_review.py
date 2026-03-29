@@ -1,8 +1,4 @@
-"""Textual-based TUI for reviewing opentraces sessions.
-
-Provides a two-panel terminal UI (lazytraces) for browsing, approving,
-rejecting, redacting, and discarding staged trace sessions.
-"""
+"""Textual-based TUI for the OpenTraces repo inbox."""
 
 from __future__ import annotations
 
@@ -18,10 +14,11 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, ListItem, ListView, RichLog, Static
+from textual.widgets import ListItem, ListView, RichLog, Static
 
-from ..config import STAGING_DIR
+from ..config import STAGING_DIR, load_project_config
 from ..state import StateManager, TraceStatus
+from ..workflow import OPENTRACES_ASCII, VISIBLE_STAGE_ORDER, resolve_visible_stage, stage_label
 
 
 # ---------------------------------------------------------------------------
@@ -48,23 +45,28 @@ def _load_staged_traces(staging_dir: Path) -> list[dict[str, Any]]:
 def _get_review_status(state: StateManager, trace_id: str) -> str:
     entry = state.get_trace(trace_id)
     if entry:
-        status_map = {
-            TraceStatus.STAGED: "staged",
-            TraceStatus.APPROVED: "approved",
-            TraceStatus.REJECTED: "rejected",
-            TraceStatus.UPLOADED: "uploaded",
-        }
-        return status_map.get(entry.status, "pending")
-    return "pending"
+        return resolve_visible_stage(entry.status)
+    return "inbox"
 
 
 def _status_icon(status: str) -> str:
     return {
-        "approved": "[green]\u2713[/green]",
+        "ready": "[green]\u2713[/green]",
+        "committed": "[cyan]\u25A0[/cyan]",
         "rejected": "[red]\u2717[/red]",
-        "staged": "[yellow]\u25CB[/yellow]",
-        "uploaded": "[green]\u2713[/green]",
+        "inbox": "[yellow]\u25CB[/yellow]",
+        "pushed": "[green]\u2713[/green]",
     }.get(status, "[yellow]\u25CB[/yellow]")
+
+
+def _stage_color(status: str) -> str:
+    return {
+        "inbox": "ansi_yellow",
+        "ready": "ansi_green",
+        "committed": "ansi_bright_blue",
+        "pushed": "ansi_cyan",
+        "rejected": "ansi_red",
+    }.get(status, "ansi_yellow")
 
 
 def _relative_time(ts: str | None) -> str:
@@ -100,6 +102,29 @@ def _trace_summary(trace: dict[str, Any], status: str) -> str:
     return f"{icon} {task}  [dim]{steps}s {tool_calls}tc{flag_str} {ts}[/dim]"
 
 
+def _sort_key(trace: dict[str, Any], state: StateManager) -> tuple[int, str]:
+    status = _get_review_status(state, trace["trace_id"])
+    try:
+        stage_index = VISIBLE_STAGE_ORDER.index(status)
+    except ValueError:
+        stage_index = 0
+    timestamp = trace.get("timestamp_start") or ""
+    return (stage_index, timestamp)
+
+
+def _project_dir_from_staging(staging_dir: Path) -> Path:
+    if staging_dir.name == "staging" and staging_dir.parent.name == ".opentraces":
+        return staging_dir.parent.parent
+    return Path.cwd()
+
+
+def _truncate(text: str, limit: int) -> str:
+    compact = " ".join(text.replace("\n", " ").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 3)] + "..."
+
+
 # ---------------------------------------------------------------------------
 # Widgets
 # ---------------------------------------------------------------------------
@@ -113,28 +138,76 @@ class SessionListItem(ListItem):
         self.trace_status = status
 
     def compose(self) -> ComposeResult:
-        yield Static(_trace_summary(self.trace, self.trace_status), markup=True)
+        yield Static(self._render_row(), markup=True, classes="session-row")
+
+    def _render_row(self) -> str:
+        task = _truncate(self.trace.get("task", {}).get("description") or "No description", 30)
+        agent = self.trace.get("agent", {}).get("name", "unknown")
+        model = self.trace.get("agent", {}).get("model") or "unknown"
+        model = model.split("/")[-1]
+        steps = self.trace.get("metrics", {}).get("total_steps", len(self.trace.get("steps", [])))
+        tool_calls = sum(len(s.get("tool_calls", [])) for s in self.trace.get("steps", []))
+        flags = len(self.trace.get("_security_flags", []))
+        ts = _relative_time(self.trace.get("timestamp_start"))
+        stage = stage_label(self.trace_status).upper()
+        stage_color = _stage_color(self.trace_status)
+        flag_text = f"  [ansi_red]{flags}f[/ansi_red]" if flags else ""
+        return (
+            f"[bold]{task}[/bold]\n"
+            f"[{stage_color}]{stage}[/{stage_color}] [dim]{agent[:8]}/{model[:8]}  {steps}s {tool_calls}t  {ts}{flag_text}[/dim]"
+        )
 
     def refresh_label(self, status: str) -> None:
         self.trace_status = status
-        label = _trace_summary(self.trace, status)
-        self.query_one(Static).update(label)
+        self.query_one(Static).update(self._render_row())
 
 
-class StatusBar(Static):
-    """Aggregate counts bar at the top-right area."""
+class TopBar(Static):
+    """Compact app header with repo context and counts."""
 
-    def __init__(self) -> None:
-        super().__init__("")
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__("", *args, **kwargs)
 
-    def update_counts(self, staged: int, approved: int, rejected: int, pushed: int) -> None:
+    def update_context(self, project_name: str, remote: str, counts: dict[str, int]) -> None:
         text = (
-            f"[yellow]staged {staged}[/yellow] | "
-            f"[green]approved {approved}[/green] | "
-            f"[red]rejected {rejected}[/red] | "
-            f"[dim]pushed {pushed}[/dim]"
+            f"[bold ansi_bright_white]opentraces[/bold ansi_bright_white]  "
+            f"[dim]{project_name}[/dim]  "
+            f"[ansi_bright_blue]{remote}[/ansi_bright_blue]\n"
+            f"[ansi_yellow]INBOX[/ansi_yellow]: {counts['inbox']}   "
+            f"[ansi_green]READY[/ansi_green]: {counts['ready']}   "
+            f"[ansi_bright_blue]COMMITTED[/ansi_bright_blue]: {counts['committed']}   "
+            f"[ansi_cyan]PUSHED[/ansi_cyan]: {counts['pushed']}   "
+            f"[ansi_red]REJECTED[/ansi_red]: {counts['rejected']}"
         )
         self.update(text)
+
+
+class KeyBar(Static):
+    """Persistent keybinding footer."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__("", *args, **kwargs)
+
+    def update_mode(self, in_step_view: bool) -> None:
+        if in_step_view:
+            text = (
+                "[bold]1[/bold] sessions   [bold]2[/bold] summary   [bold]3[/bold] detail   "
+                "[bold]esc[/bold] back   [bold]x[/bold] redact hint   "
+                "[bold]?[/bold] help   [bold]q[/bold] quit"
+            )
+        else:
+            text = (
+                "[bold]1[/bold] sessions   [bold]2[/bold] summary   [bold]3[/bold] detail   "
+                "[bold]j/k[/bold] move   [bold]enter[/bold] inspect   "
+                "[bold]a[/bold] ready   [bold]c[/bold] commit   "
+                "[bold]r[/bold] reject   [bold]d[/bold] discard   "
+                "[bold]p[/bold] push   [bold]?[/bold] help   [bold]q[/bold] quit"
+            )
+        self.update(text)
+
+
+class PaneBody(Static, can_focus=True):
+    """Focusable pane body for keyboard navigation."""
 
 
 class HelpOverlay(Static):
@@ -143,10 +216,11 @@ class HelpOverlay(Static):
     HELP_TEXT = (
         "[bold]Keybindings[/bold]\n\n"
         "  [bold]j / k[/bold]  or  [bold]up / down[/bold]   Navigate sessions\n"
-        "  [bold]a[/bold]                        Approve selected session\n"
+        "  [bold]a[/bold]                        Move selected session to Ready\n"
+        "  [bold]c[/bold]                        Commit selected ready session\n"
         "  [bold]r[/bold]                        Reject selected session\n"
         "  [bold]d[/bold]                        Discard (delete staging file + state)\n"
-        "  [bold]p[/bold]                        Push all approved sessions\n"
+        "  [bold]p[/bold]                        Push committed traces from the CLI\n"
         "  [bold]Enter[/bold]                    Expand step-by-step detail view\n"
         "  [bold]x[/bold]                        Redact selected step (in step view)\n"
         "  [bold]Esc[/bold]                      Back from step view / close help\n"
@@ -154,13 +228,13 @@ class HelpOverlay(Static):
         "  [bold]q[/bold]                        Quit\n"
     )
 
-    def __init__(self) -> None:
-        super().__init__(self.HELP_TEXT, markup=True)
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(self.HELP_TEXT, markup=True, *args, **kwargs)
         self.styles.display = "none"
         self.styles.width = "100%"
         self.styles.height = "100%"
-        self.styles.background = "#1a1a2e"
-        self.styles.color = "#e0e0e0"
+        self.styles.background = "ansi_default"
+        self.styles.color = "ansi_default"
         self.styles.padding = (2, 4)
         self.styles.layer = "overlay"
 
@@ -177,101 +251,172 @@ class HelpOverlay(Static):
 
 CSS = """
 Screen {
-    background: #0f0f1a;
+    background: ansi_default;
+    color: ansi_default;
     layers: base overlay;
 }
 
-#main-container {
+#app-shell {
+    height: 100%;
+}
+
+#topbar {
+    height: 3;
+    padding: 0 2;
+    background: ansi_default;
+    color: ansi_default;
+    border-bottom: solid ansi_bright_black;
+}
+
+#workspace {
     height: 1fr;
+    padding: 1;
 }
 
-#left-panel {
-    width: 45%;
-    border-right: solid #333;
-    height: 100%;
+.panel {
+    background: ansi_default;
+    border: round ansi_bright_black;
+    color: ansi_default;
 }
 
-#right-panel {
-    width: 55%;
-    height: 100%;
+.panel:focus-within {
+    border: round ansi_white;
+}
+
+.panel-title {
+    height: 1;
     padding: 0 1;
+    background: ansi_default;
+    color: ansi_bright_black;
+    text-style: bold;
+}
+
+.panel:focus-within > .panel-title {
+    color: ansi_white;
+}
+
+#sidebar-panel {
+    width: 36;
+    min-width: 32;
+    margin-right: 1;
+}
+
+#sidebar-meta {
+    height: 4;
+    padding: 1 1 0 1;
+    color: ansi_bright_black;
+    border-bottom: solid ansi_bright_black;
 }
 
 #session-list {
     height: 1fr;
+    background: ansi_default;
 }
 
 #session-list > ListItem {
     padding: 0 1;
-    height: 1;
+    height: 3;
+    border-left: wide transparent;
 }
 
 #session-list > ListItem.-selected {
-    background: #f97316 30%;
-    color: #f97316;
+    background: ansi_default;
+    border-left: wide ansi_bright_black;
+    color: ansi_default;
+    text-style: bold;
 }
 
 #session-list:focus > ListItem.-selected {
-    background: #f97316 50%;
-    color: #ffffff;
+    background: ansi_default;
+    border-left: wide ansi_white;
+    color: ansi_default;
+    text-style: bold;
+}
+
+#main-column {
+    width: 1fr;
+    height: 100%;
+}
+
+#summary-panel {
+    height: 12;
+    margin-bottom: 1;
+}
+
+#summary-body {
+    padding: 1;
+    color: ansi_default;
+}
+
+#detail-panel {
+    height: 1fr;
 }
 
 #detail-view {
     height: 1fr;
-    scrollbar-size: 1 1;
-}
-
-#status-bar {
-    dock: top;
-    height: 1;
-    padding: 0 2;
-    background: #1a1a2e;
-}
-
-#step-list {
-    height: 1fr;
-}
-
-#step-list > ListItem {
+    scrollbar-size-vertical: 1;
+    scrollbar-size-horizontal: 1;
+    background: ansi_default;
     padding: 0 1;
-    height: auto;
-    max-height: 4;
-}
-
-#step-list > ListItem.-selected {
-    background: #f97316 30%;
-}
-
-#step-list:focus > ListItem.-selected {
-    background: #f97316 50%;
+    scrollbar-background: ansi_default;
+    scrollbar-background-hover: ansi_default;
+    scrollbar-background-active: ansi_default;
+    scrollbar-color: ansi_bright_black;
+    scrollbar-color-hover: ansi_bright_black;
+    scrollbar-color-active: ansi_bright_black;
+    scrollbar-corner-color: ansi_default;
 }
 
 HelpOverlay {
     layer: overlay;
 }
 
-Footer {
-    background: #1a1a2e;
+#keybar {
+    height: 2;
+    padding: 0 2;
+    background: ansi_default;
+    color: ansi_bright_black;
+    border-top: solid ansi_bright_black;
 }
 
-Header {
-    background: #1a1a2e;
-    color: #f97316;
+.session-row {
+    height: 2;
+}
+
+#empty-state {
+    padding: 2 3;
+    color: ansi_bright_black;
+}
+
+HelpOverlay {
+    width: 72;
+    height: auto;
+    max-height: 22;
+    align: center middle;
+    background: ansi_default;
+    border: round ansi_bright_blue;
+    color: ansi_default;
+    padding: 1 2;
 }
 """
 
 
-class LazyTracesApp(App):
-    """Textual TUI for reviewing opentraces sessions."""
+class OpenTracesApp(App):
+    """Textual TUI for the repo-local OpenTraces inbox."""
 
-    TITLE = "lazytraces"
-    SUB_TITLE = "opentraces session reviewer"
+    TITLE = "opentraces"
+    SUB_TITLE = "repo inbox"
+    AUTO_FOCUS = "#session-list"
     CSS = CSS
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
         Binding("question_mark", "toggle_help", "Help", key_display="?"),
+        Binding("1", "focus_sessions", "Sessions", show=False),
+        Binding("2", "focus_summary", "Summary", show=False),
+        Binding("3", "focus_detail", "Detail", show=False),
         Binding("a", "approve", "Approve"),
+        Binding("c", "commit", "Commit"),
         Binding("r", "reject", "Reject"),
         Binding("d", "discard", "Discard"),
         Binding("p", "push", "Push"),
@@ -283,31 +428,65 @@ class LazyTracesApp(App):
     ]
 
     def __init__(self, staging_dir: Path) -> None:
-        super().__init__()
+        super().__init__(ansi_color=True)
+        self.theme = "textual-ansi"
         self.staging_dir = staging_dir
+        self.project_dir = _project_dir_from_staging(staging_dir)
         self.traces: list[dict[str, Any]] = []
         self.state = StateManager()
         self._in_step_view = False
         self._step_view_trace: dict[str, Any] | None = None
+        self.project_name = self.project_dir.name
+        self.remote_name = "remote not set"
 
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield StatusBar(id="status-bar")
-        with Horizontal(id="main-container"):
-            with Vertical(id="left-panel"):
-                yield ListView(id="session-list")
-            with Vertical(id="right-panel"):
-                yield RichLog(id="detail-view", markup=True, wrap=True)
         yield HelpOverlay()
-        yield Footer()
+        with Vertical(id="app-shell"):
+            yield TopBar(id="topbar")
+            with Horizontal(id="workspace"):
+                with Vertical(id="sidebar-panel", classes="panel"):
+                    yield Static("[1] Sessions", id="sessions-title", classes="panel-title")
+                    yield Static("", id="sidebar-meta", markup=True)
+                    yield ListView(id="session-list")
+                with Vertical(id="main-column"):
+                    with Vertical(id="summary-panel", classes="panel"):
+                        yield Static("[2] Summary", id="summary-title", classes="panel-title")
+                        yield PaneBody("", id="summary-body", markup=True)
+                    with Vertical(id="detail-panel", classes="panel"):
+                        yield Static("[3] Detail", id="detail-title", classes="panel-title")
+                        yield RichLog(id="detail-view", markup=True, wrap=True)
+            yield KeyBar(id="keybar", markup=True)
 
     def on_mount(self) -> None:
+        self._load_project_context()
+        self.query_one(KeyBar).update_mode(False)
         self._reload_traces()
+        self.set_focus(self.query_one("#session-list", ListView))
 
     # --- Data loading ---
 
+    def _load_project_context(self) -> None:
+        try:
+            proj_config = load_project_config(self.project_dir)
+            self.remote_name = proj_config.get("remote") or "remote not set"
+        except Exception:
+            self.remote_name = "remote not set"
+
+    def _set_empty_state(self) -> None:
+        summary = self.query_one("#summary-body", Static)
+        detail = self.query_one("#detail-view", RichLog)
+        summary.update(
+            "[bold]No sessions in this inbox[/bold]\n"
+            "[dim]Run opentraces init in this repo and finish a connected agent session.[/dim]"
+        )
+        detail.clear()
+        detail.write(f"[bold ansi_bright_blue]{OPENTRACES_ASCII}[/bold ansi_bright_blue]")
+        detail.write("")
+        detail.write("[dim]This repo inbox is empty.[/dim]")
+        detail.write("[dim]OpenTraces will capture sessions here after setup.[/dim]")
+
     def _reload_traces(self) -> None:
-        self.traces = _load_staged_traces(self.staging_dir)
+        self.traces = sorted(_load_staged_traces(self.staging_dir), key=lambda trace: _sort_key(trace, self.state))
         session_list = self.query_one("#session-list", ListView)
         session_list.clear()
 
@@ -317,39 +496,76 @@ class LazyTracesApp(App):
             session_list.append(item)
 
         self._update_status_bar()
+        self._update_sidebar_meta()
 
         if self.traces:
             session_list.index = 0
             self._show_detail(self.traces[0])
+        else:
+            self._set_empty_state()
 
-    def _update_status_bar(self) -> None:
-        staged = approved = rejected = pushed = 0
+    def _stage_counts(self) -> dict[str, int]:
+        counts = {stage: 0 for stage in VISIBLE_STAGE_ORDER}
         for t in self.traces:
             s = _get_review_status(self.state, t["trace_id"])
-            if s == "approved":
-                approved += 1
-            elif s == "rejected":
-                rejected += 1
-            elif s == "uploaded":
-                pushed += 1
-            else:
-                staged += 1
-        self.query_one(StatusBar).update_counts(staged, approved, rejected, pushed)
+            counts[s if s in counts else "inbox"] += 1
+        return counts
+
+    def _update_status_bar(self) -> None:
+        self.query_one(TopBar).update_context(self.project_name, self.remote_name, self._stage_counts())
+
+    def _update_sidebar_meta(self) -> None:
+        total = len(self.traces)
+        counts = self._stage_counts()
+        self.query_one("#sidebar-meta", Static).update(
+            f"[dim]project[/dim]\n"
+            f"{self.project_name}\n"
+            f"[dim]remote[/dim] [ansi_bright_blue]{_truncate(self.remote_name, 22)}[/ansi_bright_blue]   "
+            f"[dim]sessions[/dim] {total}   "
+            f"[ansi_yellow]{counts['inbox']} inbox[/ansi_yellow]"
+        )
 
     # --- Detail panel ---
+
+    def _update_summary(self, trace: dict[str, Any], status: str) -> None:
+        summary = self.query_one("#summary-body", Static)
+        task = trace.get("task", {}).get("description") or "No description"
+        agent = trace.get("agent", {}).get("name", "unknown")
+        model = trace.get("agent", {}).get("model", "unknown")
+        steps = trace.get("steps", [])
+        total_steps = trace.get("metrics", {}).get("total_steps", len(steps))
+        tool_calls = sum(len(s.get("tool_calls", [])) for s in steps)
+        flags = trace.get("_security_flags", [])
+        ts_start = trace.get("timestamp_start", "")
+        cost = trace.get("metrics", {}).get("estimated_cost_usd")
+        tokens_in = trace.get("metrics", {}).get("total_input_tokens", 0)
+        tokens_out = trace.get("metrics", {}).get("total_output_tokens", 0)
+        summary.update(
+            f"[{_stage_color(status)}]{stage_label(status).upper()}[/{_stage_color(status)}]  "
+            f"[dim]{trace['trace_id']}[/dim]\n"
+            f"[bold]{task}[/bold]\n"
+            f"[dim]agent[/dim] {agent}   [dim]model[/dim] {model}\n"
+            f"[dim]steps[/dim] {total_steps}   [dim]tools[/dim] {tool_calls}   "
+            f"[dim]flags[/dim] {len(flags)}\n"
+            f"[dim]tokens[/dim] {tokens_in} in / {tokens_out} out   "
+            f"[dim]started[/dim] {ts_start[:19] if ts_start else 'unknown'}"
+            + (f"\n[dim]cost[/dim] ${cost:.4f}" if cost is not None else "")
+        )
+
+    def _set_detail_title(self, text: str) -> None:
+        self.query_one("#detail-title", Static).update(text)
 
     def _show_detail(self, trace: dict[str, Any]) -> None:
         detail = self.query_one("#detail-view", RichLog)
         detail.clear()
         self._in_step_view = False
         self._step_view_trace = None
-
-        # Hide step list if present
-        for sl in self.query("#step-list"):
-            sl.remove()
+        self.query_one(KeyBar).update_mode(False)
+        self._set_detail_title("[3] Detail")
 
         trace_id = trace["trace_id"]
         status = _get_review_status(self.state, trace_id)
+        self._update_summary(trace, status)
         task = trace.get("task", {}).get("description") or "No description"
         agent = trace.get("agent", {}).get("name", "unknown")
         model = trace.get("agent", {}).get("model", "unknown")
@@ -363,30 +579,43 @@ class LazyTracesApp(App):
         tokens_in = trace.get("metrics", {}).get("total_input_tokens", 0)
         tokens_out = trace.get("metrics", {}).get("total_output_tokens", 0)
 
-        detail.write(f"[bold]{_status_icon(status)} {status.upper()}[/bold]  {trace_id}")
+        detail.write(f"[bold]{task}[/bold]")
         detail.write("")
-        detail.write(f"[bold]Task:[/bold] {task}")
-        detail.write(f"[bold]Agent:[/bold] {agent}  [bold]Model:[/bold] {model}")
-        detail.write(f"[bold]Steps:[/bold] {total_steps}  [bold]Tool calls:[/bold] {tool_calls}")
-        detail.write(f"[bold]Tokens:[/bold] {tokens_in} in / {tokens_out} out")
+        detail.write(f"[dim]trace[/dim] {trace_id}")
+        detail.write(f"[dim]status[/dim] {stage_label(status)}   [dim]agent[/dim] {agent}   [dim]model[/dim] {model}")
+        detail.write(f"[dim]steps[/dim] {total_steps}   [dim]tool calls[/dim] {tool_calls}")
+        detail.write(f"[dim]tokens[/dim] {tokens_in} in / {tokens_out} out")
         if cost is not None:
-            detail.write(f"[bold]Cost:[/bold] ${cost:.4f}")
-        detail.write(f"[bold]Time:[/bold] {ts_start} - {ts_end}")
+            detail.write(f"[dim]cost[/dim] ${cost:.4f}")
+        detail.write(f"[dim]time[/dim] {ts_start} -> {ts_end}")
 
         if flags:
             detail.write("")
-            detail.write(f"[red bold]Security flags ({len(flags)}):[/red bold]")
+            detail.write(f"[bold ansi_red]Security flags ({len(flags)})[/bold ansi_red]")
             for f in flags:
                 sev = f.get("severity", "")
-                detail.write(f"  [{sev}] {f.get('type', '')} - {f.get('reason', '')} (step {f.get('step_index', '?')})")
+                detail.write(f"  [{sev}] {f.get('type', '')} -> {f.get('reason', '')} (step {f.get('step_index', '?')})")
+
+        if steps:
+            detail.write("")
+            detail.write("[bold]Recent steps[/bold]")
+            for i, step in enumerate(steps[:6]):
+                role = step.get("role", "?")
+                role_color = {"user": "cyan", "agent": "green", "system": "yellow"}.get(role, "white")
+                content = (step.get("content", "") or "").replace("\n", " ")
+                if len(content) > 110:
+                    content = content[:107] + "..."
+                detail.write(f"  [{role_color}]{role.upper()}[/{role_color}]  {content or '[no content]'}")
 
         detail.write("")
-        detail.write("[dim]Press Enter to expand step-by-step view[/dim]")
+        detail.write("[dim]Press Enter to inspect every step in this session.[/dim]")
 
     def _show_step_view(self, trace: dict[str, Any]) -> None:
         """Replace right panel content with scrollable step detail list."""
         self._in_step_view = True
         self._step_view_trace = trace
+        self.query_one(KeyBar).update_mode(True)
+        self._set_detail_title("[3] Detail [Inspecting]")
 
         detail = self.query_one("#detail-view", RichLog)
         detail.clear()
@@ -406,8 +635,9 @@ class LazyTracesApp(App):
             if content == "[REDACTED]":
                 detail.write(f"[{role_color} bold][{role.upper()}][/{role_color} bold] step {i}  [red][REDACTED][/red]")
             else:
-                truncated = (content or "")[:120].replace("\n", " ")
-                detail.write(f"[{role_color} bold][{role.upper()}][/{role_color} bold] step {i}  {truncated}")
+                detail.write(f"[{role_color} bold][{role.upper()}][/{role_color} bold] step {i}")
+                truncated = (content or "").replace("\n", " ")
+                detail.write(f"  {truncated[:160]}")
 
             # Tool calls
             for tc in step.get("tool_calls", []):
@@ -417,7 +647,8 @@ class LazyTracesApp(App):
 
             detail.write("")
 
-        detail.write("[dim]Press x to redact highlighted step, Esc to go back[/dim]")
+        detail.write("[dim]Press Esc to return. Use the web inbox for precise step redaction.[/dim]")
+        self.set_focus(detail)
 
     # --- Actions ---
 
@@ -447,10 +678,31 @@ class LazyTracesApp(App):
         self.state.set_trace_status(trace_id, TraceStatus.APPROVED, session_id=trace_id)
         item = self._get_selected_item()
         if item:
-            item.refresh_label("approved")
+            item.refresh_label("ready")
         self._show_detail(trace)
         self._update_status_bar()
-        self.notify("Approved", severity="information")
+        self.notify("Marked ready", severity="information")
+
+    def action_commit(self) -> None:
+        trace = self._get_selected_trace()
+        if not trace:
+            return
+
+        trace_id = trace["trace_id"]
+        entry = self.state.get_trace(trace_id)
+        current_stage = resolve_visible_stage(entry.status if entry else None)
+        if current_stage != "ready":
+            self.notify("Move the session to Ready before committing", severity="warning")
+            return
+
+        task = (trace.get("task", {}).get("description") or "trace")[:60]
+        self.state.create_commit_group([trace_id], f"Commit trace: {task}")
+        item = self._get_selected_item()
+        if item:
+            item.refresh_label("committed")
+        self._show_detail(trace)
+        self._update_status_bar()
+        self.notify("Committed trace", severity="information")
 
     def action_reject(self) -> None:
         trace = self._get_selected_trace()
@@ -488,10 +740,11 @@ class LazyTracesApp(App):
         self.notify("Discarded", severity="warning")
 
     def action_push(self) -> None:
-        self.notify("Push not yet wired in TUI", severity="information")
+        self.notify("Run 'opentraces push' to publish committed traces", severity="information")
 
     def action_expand(self) -> None:
         if self._in_step_view:
+            self.set_focus(self.query_one("#detail-view", RichLog))
             return
         trace = self._get_selected_trace()
         if trace:
@@ -508,20 +761,36 @@ class LazyTracesApp(App):
             trace = self._get_selected_trace()
             if trace:
                 self._show_detail(trace)
+            self.set_focus(self.query_one("#session-list", ListView))
             return
 
     def action_toggle_help(self) -> None:
         self.query_one(HelpOverlay).toggle()
 
     def action_cursor_down(self) -> None:
+        if self._in_step_view:
+            self.query_one("#detail-view", RichLog).scroll_down(animate=False, immediate=True)
+            return
         session_list = self.query_one("#session-list", ListView)
         if session_list.index is not None and session_list.index < len(self.traces) - 1:
             session_list.index += 1
 
     def action_cursor_up(self) -> None:
+        if self._in_step_view:
+            self.query_one("#detail-view", RichLog).scroll_up(animate=False, immediate=True)
+            return
         session_list = self.query_one("#session-list", ListView)
         if session_list.index is not None and session_list.index > 0:
             session_list.index -= 1
+
+    def action_focus_sessions(self) -> None:
+        self.set_focus(self.query_one("#session-list", ListView))
+
+    def action_focus_summary(self) -> None:
+        self.set_focus(self.query_one("#summary-body", PaneBody))
+
+    def action_focus_detail(self) -> None:
+        self.set_focus(self.query_one("#detail-view", RichLog))
 
     def action_redact_step(self) -> None:
         """Redact a step in step view. Prompts for step index to avoid wrong-step redaction."""
@@ -540,72 +809,25 @@ class LazyTracesApp(App):
         # Show available step indices and ask user to type the index
         # For now, notify with instructions, use the web UI for step-level redaction
         self.notify(
-            f"Step redaction: use 'opentraces review --web' for step-level control. "
+            f"Step redaction: use 'opentraces web' for step-level control. "
             f"Session has {len(steps)} steps (indices 0-{len(steps)-1}).",
             severity="information",
         )
-        return
-
-        # TODO: replace with ListView-based step selection for safe redaction
-        step_index = 0  # placeholder, unreachable
-
-        if step_index < 0 or step_index >= len(steps):
-            self.notify("No step to redact", severity="warning")
-            return
-
-        if steps[step_index].get("content") == "[REDACTED]":
-            self.notify(f"Step {step_index} already redacted", severity="information")
-            return
-
-        # Redact in memory
-        steps[step_index]["content"] = "[REDACTED]"
-        steps[step_index]["reasoning_content"] = None
-        steps[step_index]["tool_calls"] = []
-        steps[step_index]["observations"] = []
-        steps[step_index]["snippets"] = []
-
-        # Persist to staging JSONL
-        import re as _re
-        if _re.match(r'^[a-f0-9-]+$', trace_id):
-            staging_file = self.staging_dir / f"{trace_id}.jsonl"
-            if staging_file.exists():
-                try:
-                    new_line = json.dumps(trace, ensure_ascii=False)
-                    fd = tempfile.NamedTemporaryFile(
-                        mode="w",
-                        dir=str(self.staging_dir),
-                        suffix=".jsonl.tmp",
-                        delete=False,
-                    )
-                    try:
-                        fd.write(new_line + "\n")
-                        fd.flush()
-                        os.fsync(fd.fileno())
-                        fd.close()
-                        os.replace(fd.name, str(staging_file))
-                    except BaseException:
-                        fd.close()
-                        try:
-                            os.unlink(fd.name)
-                        except OSError:
-                            pass
-                        raise
-                except OSError:
-                    pass
-
-        self._show_step_view(trace)
-        self.notify(f"Step {step_index} redacted", severity="information")
 
     # --- Events ---
 
     @on(ListView.Selected, "#session-list")
     def on_session_selected(self, event: ListView.Selected) -> None:
+        if self._in_step_view:
+            return
         item = event.item
         if isinstance(item, SessionListItem):
-            self._show_detail(item.trace)
+            self._show_step_view(item.trace)
 
     @on(ListView.Highlighted, "#session-list")
     def on_session_highlighted(self, event: ListView.Highlighted) -> None:
+        if self._in_step_view:
+            return
         item = event.item
         if isinstance(item, SessionListItem):
             self._show_detail(item.trace)
@@ -616,7 +838,7 @@ class LazyTracesApp(App):
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Entry point for the lazytraces console script."""
+    """Entry point for the terminal inbox console script."""
     staging_dir = STAGING_DIR
 
     # Parse --staging-dir from sys.argv
@@ -632,7 +854,7 @@ def main() -> None:
         else:
             i += 1
 
-    app = LazyTracesApp(staging_dir=staging_dir)
+    app = OpenTracesApp(staging_dir=staging_dir)
     app.run()
 
 

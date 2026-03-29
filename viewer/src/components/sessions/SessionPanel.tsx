@@ -2,7 +2,7 @@ import { useSessionList } from "../../hooks/useSessionList";
 import { StageGroup } from "./StageGroup";
 import type { SessionStage, SessionListItem } from "../../types/trace";
 
-const STAGE_ORDER: SessionStage[] = ["unstaged", "staged", "committed", "pushed", "rejected"];
+const STAGE_ORDER: SessionStage[] = ["inbox", "ready", "committed", "pushed", "rejected"];
 
 export function SessionPanel() {
   const { data: sessions, isLoading, error } = useSessionList();
@@ -28,14 +28,14 @@ export function SessionPanel() {
       <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)] px-4 text-center">
         no sessions found.
         <br />
-        run opentraces to parse agent traces.
+        run opentraces init to create this repo inbox.
       </div>
     );
   }
 
   const grouped: Record<SessionStage, SessionListItem[]> = {
-    unstaged: [],
-    staged: [],
+    inbox: [],
+    ready: [],
     committed: [],
     pushed: [],
     rejected: [],
@@ -46,8 +46,7 @@ export function SessionPanel() {
     if (bucket) {
       bucket.push(s);
     } else {
-      // Unknown stage falls into unstaged
-      grouped.unstaged.push(s);
+      grouped.inbox.push(s);
     }
   }
 

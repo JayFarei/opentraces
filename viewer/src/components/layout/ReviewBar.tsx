@@ -60,12 +60,12 @@ export function ReviewBar() {
           {currentStage}
         </span>
 
-        {currentStage === "unstaged" && (
+        {currentStage === "inbox" && (
           <>
             <ActionButton
-              label="parse & stage"
-              color="var(--yellow)"
-              onClick={() => stage.mutate(traceId)}
+              label="ready"
+              color="var(--green)"
+              onClick={() => approve.mutate(traceId)}
               disabled={isBusy}
             />
             <ActionButton
@@ -77,7 +77,7 @@ export function ReviewBar() {
           </>
         )}
 
-        {currentStage === "staged" && (
+        {currentStage === "ready" && (
           <>
             <ActionButton
               label="commit"
@@ -86,7 +86,7 @@ export function ReviewBar() {
               disabled={isBusy}
             />
             <ActionButton
-              label="unstage"
+              label="back to inbox"
               color="var(--yellow)"
               onClick={() => unstage.mutate(traceId)}
               disabled={isBusy}
@@ -105,11 +105,11 @@ export function ReviewBar() {
             <ActionButton
               label="push"
               color="var(--accent)"
-              onClick={() => push.mutate(traceId)}
+              onClick={() => push.mutate(undefined)}
               disabled={isBusy}
             />
             <ActionButton
-              label="uncommit"
+              label="back to inbox"
               color="var(--yellow)"
               onClick={() => unstage.mutate(traceId)}
               disabled={isBusy}
@@ -130,7 +130,7 @@ export function ReviewBar() {
 
       {showCommitDialog && (
         <CommitDialog
-          sessions={sessions?.filter((s) => s.stage === "staged") ?? []}
+          sessions={sessions?.filter((s) => s.stage === "ready") ?? []}
           onClose={() => setShowCommitDialog(false)}
         />
       )}

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}opentraces review{% endblock %}</title>
+    <title>{% block title %}opentraces web{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -15,16 +15,16 @@
             <ul>
                 <li>
                     <a href="/" class="ot-brand">
-                        <strong>opentraces</strong><span class="ot-brand-dot">.review</span>
+                        <strong>opentraces</strong><span class="ot-brand-dot">.web</span>
                     </a>
                 </li>
             </ul>
             <ul>
-                <li><a href="/" {% if request.path == '/' %}class="active"{% endif %}>sessions</a></li>
+                <li><a href="/" {% if request.path == '/' %}class="active"{% endif %}>inbox</a></li>
                 <li><a href="/stats" {% if request.path == '/stats' %}class="active"{% endif %}>stats</a></li>
                 <li>
                     <button class="ot-push-btn" id="nav-push-btn" onclick="pushApproved()" disabled>
-                        [push to hub]
+                        [push ready]
                     </button>
                 </li>
             </ul>

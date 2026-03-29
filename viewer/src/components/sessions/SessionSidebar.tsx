@@ -1,11 +1,13 @@
 import { useSessionList } from "../../hooks/useSessionList";
+import { useAppContext } from "../../hooks/useAppContext";
 import { StageGroup } from "./StageGroup";
 import type { SessionStage, SessionListItem } from "../../types/trace";
 
-const STAGE_ORDER: SessionStage[] = ["unstaged", "staged", "committed", "pushed", "rejected"];
+const STAGE_ORDER: SessionStage[] = ["inbox", "ready", "committed", "pushed", "rejected"];
 
 export function SessionSidebar() {
   const { data: sessions, isLoading, error } = useSessionList();
+  const { data: appContext } = useAppContext();
 
   if (isLoading) {
     return (
@@ -28,14 +30,14 @@ export function SessionSidebar() {
       <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[10px] font-[family-name:var(--font-mono)] px-3 text-center leading-relaxed">
         no sessions found.
         <br />
-        run opentraces to parse agent traces.
+        run opentraces init to create this repo inbox.
       </div>
     );
   }
 
   const grouped: Record<SessionStage, SessionListItem[]> = {
-    unstaged: [],
-    staged: [],
+    inbox: [],
+    ready: [],
     committed: [],
     pushed: [],
     rejected: [],
@@ -46,7 +48,7 @@ export function SessionSidebar() {
     if (bucket) {
       bucket.push(s);
     } else {
-      grouped.unstaged.push(s);
+      grouped.inbox.push(s);
     }
   }
 
@@ -58,7 +60,7 @@ export function SessionSidebar() {
           remote
         </div>
         <div className="text-[10px] text-[var(--text-muted)] font-[family-name:var(--font-mono)] truncate">
-          hf/opentraces-data
+          {appContext?.remote ?? "not set"}
         </div>
       </div>
 

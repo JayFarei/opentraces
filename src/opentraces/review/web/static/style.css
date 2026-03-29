@@ -298,7 +298,8 @@ hr {
     white-space: nowrap;
 }
 
-.ot-row-approved {
+.ot-row-approved,
+.ot-row-ready {
     background: rgba(34, 197, 94, 0.04) !important;
 }
 
@@ -326,13 +327,15 @@ figure {
 }
 
 .ot-badge-pending,
-.ot-badge-staged {
+.ot-badge-staged,
+.ot-badge-inbox {
     border-color: var(--ot-yellow);
     background: var(--ot-yellow-soft);
     color: var(--ot-yellow);
 }
 
-.ot-badge-approved {
+.ot-badge-approved,
+.ot-badge-ready {
     border-color: var(--ot-green);
     background: var(--ot-green-soft);
     color: var(--ot-green);
@@ -921,7 +924,8 @@ figure {
     color: var(--ot-text);
 }
 
-.ot-stat-approved .ot-stat-number {
+.ot-stat-approved .ot-stat-number,
+.ot-stat-ready .ot-stat-number {
     color: var(--ot-green);
 }
 
@@ -929,7 +933,8 @@ figure {
     color: var(--ot-red);
 }
 
-.ot-stat-pending .ot-stat-number {
+.ot-stat-pending .ot-stat-number,
+.ot-stat-inbox .ot-stat-number {
     color: var(--ot-accent);
 }
 

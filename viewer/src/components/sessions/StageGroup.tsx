@@ -3,11 +3,19 @@ import { SessionRow } from "./SessionRow";
 import type { SessionStage, SessionListItem } from "../../types/trace";
 
 const STAGE_COLORS: Record<SessionStage, string> = {
-  unstaged: "var(--text-muted)",
-  staged: "var(--yellow)",
+  inbox: "var(--yellow)",
+  ready: "var(--green)",
   committed: "var(--green)",
   pushed: "var(--cyan)",
   rejected: "var(--red)",
+};
+
+const STAGE_LABELS: Record<SessionStage, string> = {
+  inbox: "Inbox",
+  ready: "Ready",
+  committed: "Committed",
+  pushed: "Pushed",
+  rejected: "Rejected",
 };
 
 interface StageGroupProps {
@@ -29,7 +37,7 @@ export function StageGroup({ stage, sessions }: StageGroupProps) {
           className="text-[10px] uppercase tracking-wider font-[family-name:var(--font-mono)]"
           style={{ color }}
         >
-          {collapsed ? "+" : "-"} {stage}
+          {collapsed ? "+" : "-"} {STAGE_LABELS[stage]}
         </span>
         <span
           className="text-[9px] font-[family-name:var(--font-mono)] px-1.5 py-0 border"

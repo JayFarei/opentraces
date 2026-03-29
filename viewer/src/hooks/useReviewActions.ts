@@ -55,7 +55,7 @@ export function useReviewActions() {
   });
 
   const push = useMutation({
-    mutationFn: (commitId: string) => pushCommit(commitId),
+    mutationFn: (commitId?: string) => pushCommit(commitId),
     onSuccess: () => invalidateSessions(),
   });
 

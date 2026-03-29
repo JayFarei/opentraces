@@ -1,4 +1,5 @@
 import type {
+  AppContext,
   SessionListItem,
   TraceRecord,
   RedactionPreview,
@@ -35,10 +36,10 @@ interface RawSession {
   project: string;
 }
 
-const VALID_STAGES = new Set(["unstaged", "staged", "committed", "pushed", "rejected"]);
+const VALID_STAGES = new Set(["inbox", "ready", "committed", "pushed", "rejected"]);
 
 function mapSession(raw: RawSession): SessionListItem {
-  const rawStage = raw._stage ?? "unstaged";
+  const rawStage = raw._stage ?? "inbox";
   return {
     trace_id: raw.trace_id,
     task_description: raw.task ?? "",
@@ -46,7 +47,7 @@ function mapSession(raw: RawSession): SessionListItem {
     model: raw.model ?? "unknown",
     step_count: raw.steps ?? 0,
     flag_count: raw.security_flags ?? 0,
-    stage: (VALID_STAGES.has(rawStage) ? rawStage : "unstaged") as SessionListItem["stage"],
+    stage: (VALID_STAGES.has(rawStage) ? rawStage : "inbox") as SessionListItem["stage"],
     timestamp: raw.timestamp ?? "",
   };
 }
@@ -54,6 +55,10 @@ function mapSession(raw: RawSession): SessionListItem {
 export async function fetchSessions(): Promise<SessionListItem[]> {
   const raw = await request<RawSession[]>("/api/sessions");
   return raw.map(mapSession);
+}
+
+export async function fetchAppContext(): Promise<AppContext> {
+  return request<AppContext>("/api/context");
 }
 
 export async function fetchTrace(traceId: string): Promise<TraceRecord> {
@@ -97,11 +102,11 @@ export async function commitSessions(
 }
 
 export async function pushCommit(
-  commitId: string,
+  commitId?: string,
 ): Promise<{ hf_commit_sha: string }> {
   return request<{ hf_commit_sha: string }>("/api/push", {
     method: "POST",
-    body: JSON.stringify({ commit_id: commitId }),
+    body: JSON.stringify(commitId ? { commit_id: commitId } : {}),
   });
 }
 

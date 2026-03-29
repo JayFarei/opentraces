@@ -170,8 +170,8 @@ export interface TreeNode {
 }
 
 export type SessionStage =
-  | "unstaged"
-  | "staged"
+  | "inbox"
+  | "ready"
   | "committed"
   | "pushed"
   | "rejected";
@@ -185,6 +185,16 @@ export interface SessionListItem {
   flag_count: number;
   stage: SessionStage;
   timestamp: string;
+}
+
+export interface AppContext {
+  project_name: string;
+  remote: string | null;
+  review_policy: "review" | "auto-ready";
+  push_policy: "manual" | "auto-push";
+  agents: string[];
+  authenticated: boolean;
+  username: string | null;
 }
 
 export interface RedactionPreview {

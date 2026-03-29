@@ -133,8 +133,8 @@ class TestStatus:
         result = runner.invoke(main, ["status"])
 
         assert result.exit_code == 0
-        assert "review mode" in result.output or "auto mode" in result.output
-        assert "sessions staged" in result.output
+        assert "review policy:" in result.output
+        assert "sessions in inbox" in result.output or "session files tracked" in result.output
 
     def test_status_shows_remote(self, runner, initialized_project):
         """status shows the configured remote."""

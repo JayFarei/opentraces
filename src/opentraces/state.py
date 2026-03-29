@@ -21,7 +21,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .config import OPENTRACES_DIR, STATE_PATH, STAGING_DIR, UPLOADED_DIR
+from .paths import OPENTRACES_DIR, STATE_PATH, STAGING_DIR, UPLOADED_DIR
 
 
 class TraceStatus(str, Enum):

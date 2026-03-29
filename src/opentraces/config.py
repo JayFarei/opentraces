@@ -14,6 +14,29 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from .workflow import (
+    DEFAULT_AGENT,
+    DEFAULT_PUSH_POLICY,
+    DEFAULT_REVIEW_POLICY,
+    legacy_mode_for_review_policy,
+    normalize_agents,
+    normalize_push_policy,
+    normalize_review_policy,
+    review_policy_from_legacy_mode,
+)
+
+def auth_identity(token: str | None) -> dict | None:
+    """Return HF whoami dict for *token*, or None on any failure."""
+    if not token:
+        return None
+    try:
+        from huggingface_hub import HfApi
+
+        return HfApi(token=token).whoami()
+    except Exception:
+        return None
+
+
 CONFIG_VERSION = "0.1.0"
 OPENTRACES_DIR = Path.home() / ".opentraces"
 CONFIG_PATH = OPENTRACES_DIR / "config.json"
@@ -28,8 +51,11 @@ class ProjectConfig(BaseModel):
     tier: int = 3
     excluded: bool = False
     mode: str = "review"
+    review_policy: str = DEFAULT_REVIEW_POLICY
+    push_policy: str = DEFAULT_PUSH_POLICY
     remote: str | None = None
     visibility: str = "private"
+    agents: list[str] = Field(default_factory=lambda: [DEFAULT_AGENT])
 
 
 class Config(BaseModel):
@@ -207,6 +233,35 @@ def _backfill_mode(data: dict) -> bool:
     return False
 
 
+def _normalize_project_data(data: dict) -> bool:
+    """Backfill new project config keys and normalize values."""
+    modified = False
+
+    review_policy = normalize_review_policy(
+        data.get("review_policy") or review_policy_from_legacy_mode(data.get("mode"))
+    )
+    if data.get("review_policy") != review_policy:
+        data["review_policy"] = review_policy
+        modified = True
+
+    push_policy = normalize_push_policy(data.get("push_policy"))
+    if data.get("push_policy") != push_policy:
+        data["push_policy"] = push_policy
+        modified = True
+
+    agents = normalize_agents(data.get("agents"))
+    if data.get("agents") != agents:
+        data["agents"] = agents
+        modified = True
+
+    mode = legacy_mode_for_review_policy(review_policy)
+    if data.get("mode") != mode:
+        data["mode"] = mode
+        modified = True
+
+    return modified
+
+
 def load_project_config(project_dir: Path) -> dict:
     """Read project config from .opentraces/config.json (or migrate from .yml).
 
@@ -240,10 +295,19 @@ def load_project_config(project_dir: Path) -> dict:
             pass
 
     if data is None:
-        return {"mode": "review"}
+        return {
+            "mode": "review",
+            "review_policy": DEFAULT_REVIEW_POLICY,
+            "push_policy": DEFAULT_PUSH_POLICY,
+            "agents": [DEFAULT_AGENT],
+        }
 
     # Backward compat: map tier -> mode if mode is missing
-    if _backfill_mode(data):
+    changed = _backfill_mode(data)
+    if _normalize_project_data(data):
+        changed = True
+
+    if changed:
         try:
             tmp_path = json_file.with_suffix(".tmp")
             tmp_path.write_text(json.dumps(data, indent=2))

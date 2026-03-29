@@ -18,8 +18,14 @@ from typing import Any
 
 from flask import Flask, jsonify, render_template, request, send_from_directory
 
-from ...config import STAGING_DIR
+from ...config import STAGING_DIR, auth_identity, load_config, load_project_config
 from ...state import StateManager, TraceStatus
+from ...workflow import (
+    DEFAULT_AGENT,
+    DEFAULT_PUSH_POLICY,
+    DEFAULT_REVIEW_POLICY,
+    resolve_visible_stage,
+)
 
 # StateManager for persistent review decisions
 _state_manager: StateManager | None = None
@@ -336,17 +342,11 @@ def _get_review_status(trace_id: str) -> str:
     state = _get_state()
     entry = state.get_trace(trace_id)
     if entry:
-        status_map = {
-            TraceStatus.STAGED: "staged",
-            TraceStatus.APPROVED: "approved",
-            TraceStatus.REJECTED: "rejected",
-            TraceStatus.UPLOADED: "uploaded",
-        }
-        return status_map.get(entry.status, "pending")
+        return resolve_visible_stage(entry.status)
     # Fallback to in-memory state
     if trace_id in _review_state:
-        return _review_state[trace_id].get("status", "pending")
-    return "pending"
+        return _review_state[trace_id].get("status", "inbox")
+    return "inbox"
 
 
 def _get_redacted_steps(trace_id: str) -> set[int]:
@@ -354,21 +354,6 @@ def _get_redacted_steps(trace_id: str) -> set[int]:
     if trace_id in _review_state:
         return set(_review_state[trace_id].get("redacted_steps", []))
     return set()
-
-
-def _stage_from_status(status: TraceStatus) -> str:
-    """Map TraceStatus to a stage bucket for the React visualizer."""
-    mapping = {
-        TraceStatus.DISCOVERED: "unstaged",
-        TraceStatus.PARSED: "unstaged",
-        TraceStatus.STAGED: "staged",
-        TraceStatus.REVIEWING: "staged",
-        TraceStatus.COMMITTED: "committed",
-        TraceStatus.APPROVED: "committed",  # backward compat
-        TraceStatus.UPLOADED: "pushed",
-        TraceStatus.REJECTED: "rejected",
-    }
-    return mapping.get(status, "unstaged")
 
 
 def _is_sample_data(traces: list[dict[str, Any]], staging_path: Path) -> bool:
@@ -407,9 +392,34 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
 
     staging_path = Path(staging_dir) if staging_dir else STAGING_DIR
     viewer_dist_path = Path(viewer_dist) if viewer_dist else None
+    project_dir = staging_path.parent.parent if staging_path.parent.name == ".opentraces" else Path.cwd()
 
     def _traces() -> list[dict[str, Any]]:
         return _load_traces(staging_path)
+
+    _context_cache: dict[str, Any] = {}
+    _context_cache_time: list[float] = [0.0]
+
+    def _context() -> dict[str, Any]:
+        now = time.time()
+        if _context_cache and now - _context_cache_time[0] < 60:
+            return _context_cache
+        project_cfg = load_project_config(project_dir)
+        cfg = load_config()
+        identity = auth_identity(cfg.hf_token)
+        result = {
+            "project_name": project_dir.name,
+            "remote": project_cfg.get("remote"),
+            "review_policy": project_cfg.get("review_policy", DEFAULT_REVIEW_POLICY),
+            "push_policy": project_cfg.get("push_policy", DEFAULT_PUSH_POLICY),
+            "agents": project_cfg.get("agents") or [DEFAULT_AGENT],
+            "authenticated": identity is not None,
+            "username": identity.get("name") if identity else None,
+        }
+        _context_cache.clear()
+        _context_cache.update(result)
+        _context_cache_time[0] = now
+        return result
 
     # --- Page routes ---
 
@@ -541,11 +551,15 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
                 ),
                 "timestamp": t.get("timestamp_start"),
                 "status": _get_review_status(trace_id),
-                "_stage": _stage_from_status(status_enum),
+                "_stage": resolve_visible_stage(status_enum),
                 "security_flags": len(t.get("_security_flags", [])),
                 "project": t.get("metadata", {}).get("project", "unknown"),
             })
         return jsonify(sessions)
+
+    @app.route("/api/context")
+    def api_context():
+        return jsonify(_context())
 
     @app.route("/api/stats")
     def api_stats():
@@ -560,8 +574,8 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
         state.set_trace_status(trace_id, TraceStatus.APPROVED, session_id=trace_id)
         if trace_id not in _review_state:
             _review_state[trace_id] = {}
-        _review_state[trace_id]["status"] = "approved"
-        return jsonify({"status": "approved", "trace_id": trace_id})
+        _review_state[trace_id]["status"] = "ready"
+        return jsonify({"status": "ready", "trace_id": trace_id})
 
     @app.route("/api/session/<trace_id>/reject", methods=["POST"])
     def api_reject(trace_id: str):
@@ -667,7 +681,7 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
                 status_enum = TraceStatus.PARSED
 
         result = dict(trace)
-        result["_stage"] = _stage_from_status(status_enum)
+        result["_stage"] = resolve_visible_stage(status_enum)
         return jsonify(result)
 
     @app.route("/api/session/<trace_id>/stage", methods=["POST"])
@@ -675,14 +689,14 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
         """Transition a session to STAGED status."""
         state = _get_state()
         state.set_trace_status(trace_id, TraceStatus.STAGED, session_id=trace_id)
-        return jsonify({"status": "staged"})
+        return jsonify({"status": "inbox"})
 
     @app.route("/api/session/<trace_id>/unstage", methods=["POST"])
     def api_unstage(trace_id: str):
         """Revert a session to PARSED status."""
         state = _get_state()
         state.set_trace_status(trace_id, TraceStatus.PARSED, session_id=trace_id)
-        return jsonify({"status": "unstaged"})
+        return jsonify({"status": "inbox"})
 
     @app.route("/api/commit", methods=["POST"])
     def api_commit():
@@ -695,7 +709,7 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
         if not ids:
             return jsonify({"error": "No trace_ids provided"}), 400
 
-        # Validate all sessions exist and are in STAGED/REVIEWING status
+        # Validate all sessions exist and are commitable.
         traces = _traces()
         all_trace_ids = {t["trace_id"] for t in traces}
         state = _get_state()
@@ -711,8 +725,8 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
                         status_val = TraceStatus(status_val)
                     except ValueError:
                         pass
-                if status_val not in (TraceStatus.STAGED, TraceStatus.REVIEWING):
-                    return jsonify({"error": f"Session {sid} is not staged (status: {status_val})"}), 400
+                if status_val not in (TraceStatus.STAGED, TraceStatus.REVIEWING, TraceStatus.APPROVED):
+                    return jsonify({"error": f"Session {sid} is not ready to commit (status: {status_val})"}), 400
 
         # Create the commit group
         commit_id = state.create_commit_group(trace_ids=ids, message=message)
@@ -796,28 +810,35 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
 
     @app.route("/api/push", methods=["POST"])
     def api_push():
-        """Push all approved sessions to HF Hub."""
+        """Push committed sessions to HF Hub."""
         traces = _traces()
 
         # Guard against pushing sample data
         if _is_sample_data(traces, staging_path):
             return jsonify({"error": "Cannot push sample data. Parse real sessions first."}), 400
 
-        # Accept optional commit_message from request body
         req_data = request.get_json(silent=True) or {}
-        commit_message = req_data.get("commit_message")
+        requested_commit_id = req_data.get("commit_id")
+        state = _get_state()
 
-        approved = [
-            t for t in traces
-            if _get_review_status(t["trace_id"]) == "approved"
-        ]
-        if not approved:
-            return jsonify({"error": "No approved sessions to push"}), 400
+        committed_entries = state.get_committed_traces()
+        if requested_commit_id:
+            group = state.get_commit_group(requested_commit_id)
+            if group is None:
+                return jsonify({"error": f"Unknown commit {requested_commit_id}"}), 404
+            committed_ids = set(group.trace_ids)
+        else:
+            committed_ids = set(committed_entries.keys())
+
+        committed = [t for t in traces if t["trace_id"] in committed_ids]
+        if not committed and not requested_commit_id:
+            committed = [t for t in traces if _get_review_status(t["trace_id"]) == "ready"]
+        if not committed:
+            return jsonify({"error": "No committed sessions to push"}), 400
 
         # Try the real upload pipeline
         try:
             import os
-            from ...config import load_config
             from ...upload.hf_hub import HFUploader
             from ...upload.dataset_card import generate_dataset_card
             from opentraces_schema import TraceRecord
@@ -826,32 +847,30 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
             if not cfg.hf_token:
                 return jsonify({
                     "status": "pushed",
-                    "count": len(approved),
-                    "trace_ids": [t["trace_id"] for t in approved],
-                    "message": f"{len(approved)} session(s) approved. Set HF_TOKEN to push to Hub.",
+                    "count": len(committed),
+                    "trace_ids": [t["trace_id"] for t in committed],
+                    "message": f"{len(committed)} committed session(s) queued. Set HF_TOKEN to push to Hub.",
                     "needs_token": True,
                 })
 
-            records = [TraceRecord.model_validate(t) for t in approved]
-            from huggingface_hub import HfApi
-            api = HfApi(token=cfg.hf_token)
-            username = api.whoami().get("name", "unknown")
-            repo_id = f"{username}/opentraces"
+            records = [TraceRecord.model_validate(t) for t in committed]
+            ctx = _context()
+            username = ctx.get("username") or "unknown"
+            repo_id = ctx.get("remote") or f"{username}/opentraces"
 
             uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
             uploader.ensure_repo_exists()
             result = uploader.upload_traces(records)
 
             if result.success:
-                state = _get_state()
-                for t in approved:
+                for t in committed:
                     state.set_trace_status(t["trace_id"], TraceStatus.UPLOADED)
                 return jsonify({
                     "status": "pushed",
                     "count": result.trace_count,
                     "shard": result.shard_name,
                     "repo_url": result.repo_url,
-                    "message": f"Pushed {result.trace_count} session(s) to {repo_id}",
+                    "message": f"Pushed {result.trace_count} committed session(s) to {repo_id}",
                 })
             else:
                 return jsonify({"error": f"Upload failed: {result.error}"}), 500
@@ -859,9 +878,9 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
         except ImportError:
             return jsonify({
                 "status": "pushed",
-                "count": len(approved),
-                "trace_ids": [t["trace_id"] for t in approved],
-                "message": f"{len(approved)} session(s) approved (upload module not available)",
+                "count": len(committed),
+                "trace_ids": [t["trace_id"] for t in committed],
+                "message": f"{len(committed)} committed session(s) queued (upload module not available)",
             })
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -869,7 +888,7 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
     def _compute_stats(traces: list[dict[str, Any]]) -> dict[str, Any]:
         """Compute dashboard statistics."""
         total = len(traces)
-        approved = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "approved")
+        approved = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "ready")
         rejected = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "rejected")
         pending = total - approved - rejected
 
