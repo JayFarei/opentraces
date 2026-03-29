@@ -56,6 +56,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build viewer
+        run: |
+          cd web/viewer
+          npm ci
+          npm run build
       - name: Build
         run: |
           pip install --upgrade build
