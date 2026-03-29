@@ -528,7 +528,12 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
             sessions.append({
                 "trace_id": trace_id,
                 "task": (t.get("task", {}).get("description") or "")[:100],
-                "model": t.get("agent", {}).get("model", "unknown"),
+                "model": t.get("agent", {}).get("model") or ", ".join(
+                    sorted(set(
+                        s.get("model") for s in t.get("steps", [])
+                        if s.get("model")
+                    ))
+                ) or "unknown",
                 "agent": t.get("agent", {}).get("name", "unknown"),
                 "steps": t.get("metrics", {}).get("total_steps", len(t.get("steps", []))),
                 "tool_calls": sum(
@@ -683,19 +688,20 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
     def api_commit():
         """Create a commit group from staged sessions."""
         data = request.get_json(silent=True) or {}
-        session_ids = data.get("session_ids", [])
+        # Accept both "trace_ids" (preferred) and "session_ids" (legacy)
+        ids = data.get("trace_ids") or data.get("session_ids", [])
         message = data.get("message", "")
 
-        if not session_ids:
-            return jsonify({"error": "No session_ids provided"}), 400
+        if not ids:
+            return jsonify({"error": "No trace_ids provided"}), 400
 
         # Validate all sessions exist and are in STAGED/REVIEWING status
         traces = _traces()
-        trace_ids = {t["trace_id"] for t in traces}
+        all_trace_ids = {t["trace_id"] for t in traces}
         state = _get_state()
 
-        for sid in session_ids:
-            if sid not in trace_ids:
+        for sid in ids:
+            if sid not in all_trace_ids:
                 return jsonify({"error": f"Session {sid} not found"}), 404
             entry = state.get_trace(sid)
             if entry:
@@ -709,16 +715,16 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
                     return jsonify({"error": f"Session {sid} is not staged (status: {status_val})"}), 400
 
         # Create the commit group
-        commit_id = state.create_commit_group(session_ids, message)
+        commit_id = state.create_commit_group(trace_ids=ids, message=message)
         group = state.get_commit_group(commit_id)
 
         # Transition each session to COMMITTED
-        for sid in session_ids:
+        for sid in ids:
             state.set_trace_status(sid, TraceStatus.COMMITTED, session_id=sid)
 
         return jsonify({
             "commit_id": commit_id,
-            "session_count": len(session_ids),
+            "session_count": len(ids),
             "created_at": group.created_at if group else "",
         })
 
@@ -811,7 +817,7 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
         # Try the real upload pipeline
         try:
             import os
-            from ...config import load_config, get_dataset_name
+            from ...config import load_config
             from ...upload.hf_hub import HFUploader
             from ...upload.dataset_card import generate_dataset_card
             from opentraces_schema import TraceRecord
@@ -830,7 +836,7 @@ def create_app(staging_dir: str = None, state_path: str = None, viewer_dist: str
             from huggingface_hub import HfApi
             api = HfApi(token=cfg.hf_token)
             username = api.whoami().get("name", "unknown")
-            repo_id = get_dataset_name(cfg, username)
+            repo_id = f"{username}/opentraces"
 
             uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
             uploader.ensure_repo_exists()

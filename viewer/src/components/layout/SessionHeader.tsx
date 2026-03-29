@@ -44,12 +44,18 @@ export function SessionHeader() {
     ? formatDuration(trace.metrics.total_duration_s * 1000)
     : null;
 
-  // Model: extract short name from "anthropic/claude-sonnet-4-20250514" -> "sonnet-4"
-  const rawModel = trace.agent.model ?? trace.agent.name ?? "";
-  const model = rawModel
-    .replace(/^anthropic\//, "")
-    .replace(/^claude-/, "")
-    .replace(/-\d{8}$/, "") || trace.agent.name;
+  // Model: extract from agent.model or from step models
+  let rawModel = trace.agent.model;
+  if (!rawModel) {
+    const stepModels = [...new Set(
+      trace.steps.map((s) => s.model).filter((m): m is string => m !== null && m !== undefined)
+    )];
+    rawModel = stepModels.join(", ");
+  }
+  const model = (rawModel || trace.agent.name || "")
+    .split(", ")
+    .map((m) => m.replace(/^anthropic\//, "").replace(/^claude-/, "").replace(/-\d{8}$/, ""))
+    .join(", ") || trace.agent.name;
 
   // Tokens
   const inputTokens = formatTokens(trace.metrics.total_input_tokens);

@@ -6,12 +6,21 @@ interface SessionRowProps {
   session: SessionListItem;
 }
 
+/** Shorten model name: "claude-sonnet-4-6" -> "sonnet-4-6" */
+function shortModel(model: string): string {
+  return model
+    .split(", ")
+    .map((m) => m.replace(/^claude-/, "").replace(/^anthropic\/claude-/, ""))
+    .join(", ");
+}
+
 export function SessionRow({ session }: SessionRowProps) {
   const { selectedSessionId, setSelectedSessionId } = useSelection();
   const isSelected = selectedSessionId === session.trace_id;
 
-  const hasFlagsAndStaged = session.stage === "staged" && session.flag_count > 0;
-  const isAutoClean = session.stage === "staged" && session.flag_count === 0;
+  const shortId = session.trace_id.slice(0, 8);
+  const taskName = cleanSessionName(session.task_description, session.timestamp);
+  const model = shortModel(session.model);
 
   return (
     <button
@@ -22,35 +31,19 @@ export function SessionRow({ session }: SessionRowProps) {
           : "border-l-transparent hover:bg-[var(--surface-hover)]"
       }`}
     >
-      <div className="text-[11px] font-[family-name:var(--font-mono)] text-[var(--text)] truncate leading-tight">
-        {cleanSessionName(session.task_description, session.timestamp)}
-      </div>
-      <div className="flex items-center gap-2 mt-0.5">
-        <span className="text-[9px] font-[family-name:var(--font-mono)] text-[var(--text-muted)]">
-          {session.agent_name}
-        </span>
-        <span className="text-[9px] font-[family-name:var(--font-mono)] text-[var(--text-dim)]">
-          {session.model}
-        </span>
-        <span className="text-[9px] font-[family-name:var(--font-mono)] text-[var(--text-dim)]">
-          {session.step_count} steps
-        </span>
+      {/* Line 1: short ID + model + step count */}
+      <div className="flex items-center gap-2 text-[9px] font-[family-name:var(--font-mono)]">
+        <span className="text-[var(--text-muted)] font-mono">{shortId}</span>
+        <span className="text-[var(--cyan)]">{model}</span>
+        <span className="text-[var(--text-dim)]">{session.step_count}s</span>
         {session.flag_count > 0 && (
-          <span className="text-[9px] font-[family-name:var(--font-mono)] text-[var(--red)]">
-            {session.flag_count}f
-          </span>
+          <span className="text-[var(--red)]">{session.flag_count}f</span>
         )}
       </div>
-      {hasFlagsAndStaged && (
-        <span className="inline-block mt-0.5 text-[8px] font-[family-name:var(--font-mono)] text-[var(--yellow)] border border-[var(--yellow)] px-1">
-          review
-        </span>
-      )}
-      {isAutoClean && (
-        <span className="inline-block mt-0.5 text-[8px] font-[family-name:var(--font-mono)] text-[var(--green)] border border-[var(--green)] px-1">
-          auto-clear
-        </span>
-      )}
+      {/* Line 2: task keywords */}
+      <div className="text-[10px] font-[family-name:var(--font-mono)] text-[var(--text)] truncate leading-tight mt-0.5">
+        {taskName}
+      </div>
     </button>
   );
 }
