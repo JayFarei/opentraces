@@ -59,6 +59,7 @@ export default function RootLayout({
             __html: "var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'}document.documentElement.classList.add(t==='dark'?'theme-dark':'theme-light');document.documentElement.style.colorScheme=t",
           }}
         />
+        <script id="analytics" data-site-id="opentraces.ai" src="https://analytics-agent.fareiunastrage.workers.dev/tracker.js" defer />
       </head>
       <body>{children}</body>
     </html>
