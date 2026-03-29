@@ -5,7 +5,7 @@ From local inbox to published dataset.
 ## 1. Install
 
 ```bash
-pip install opentraces
+pipx install opentraces
 ```
 
 ## 2. Authenticate

@@ -1,15 +1,15 @@
 # Installation
 
-## pip
+## pipx
 
 ```bash
-pip install opentraces
+pipx install opentraces
 ```
 
 ## brew
 
 ```bash
-brew install opentraces
+brew install JayFarei/opentraces/opentraces
 ```
 
 ## Copy to your agent

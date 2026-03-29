@@ -4,16 +4,16 @@ Open protocol + CLI for repo-local agent trace capture, review, and upload to Hu
 
 ## Get Started
 
-### pip
+### pipx
 
 ```bash
-pip install opentraces
+pipx install opentraces
 ```
 
 ### brew
 
 ```bash
-brew install opentraces
+brew install JayFarei/opentraces/opentraces
 ```
 
 ### Copy to your agent
@@ -24,7 +24,7 @@ Paste this into your coding agent (Claude Code, Cursor, Codex, etc.):
 Set up opentraces in this project for trace collection.
 
 Step 1 - Install:
-pip install opentraces
+pipx install opentraces
 
 Step 2 - Authenticate:
 Run `opentraces auth status` to check if already logged in.

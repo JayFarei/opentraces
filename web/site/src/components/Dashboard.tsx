@@ -421,7 +421,7 @@ export default function Dashboard() {
             ? `No opentraces datasets found for "${username}".`
             : "No opentraces datasets found yet. Be the first!"}
           <br />
-          <code style={{ color: "var(--accent)", marginTop: 8, display: "inline-block" }}>pip install opentraces && opentraces init</code>
+          <code style={{ color: "var(--accent)", marginTop: 8, display: "inline-block" }}>pipx install opentraces && opentraces init</code>
         </div>
       )}
     </section>

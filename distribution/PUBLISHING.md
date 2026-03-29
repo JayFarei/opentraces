@@ -72,7 +72,7 @@ Then create a **GitHub Release** for the tag `vX.Y.Z`. This automatically trigge
 ```bash
 python -m venv /tmp/ot-verify
 source /tmp/ot-verify/bin/activate
-pip install opentraces==X.Y.Z
+pipx install opentraces==X.Y.Z
 opentraces --help
 ```
 

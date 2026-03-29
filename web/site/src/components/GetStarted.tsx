@@ -20,7 +20,7 @@ function CopyBox({ cmd, desc }: { cmd: string; desc: string }) {
 }
 
 const terminalSteps = [
-  { cmd: "pip install opentraces", desc: "install the CLI" },
+  { cmd: "pipx install opentraces", desc: "install the CLI" },
   { cmd: "opentraces init", desc: "set review policy, create a private HF dataset, install agent hook" },
   { cmd: "opentraces tui", desc: "open the inbox to review, commit, redact, or reject traces" },
   { cmd: "opentraces push", desc: "sync committed traces to your HuggingFace dataset" },

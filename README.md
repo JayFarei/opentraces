@@ -21,7 +21,7 @@ Paste this into your coding agent:
 I want you to set up opentraces in this project for trace collection.
 
 Step 1 - Install:
-pip install opentraces
+pipx install opentraces
 
 Step 2 - Authenticate:
 Run `opentraces auth status` to check if already logged in.

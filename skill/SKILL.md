@@ -372,5 +372,5 @@ To reinitialize: `opentraces init`.
 ## Prerequisites
 
 - Python 3.10+
-- `pip install opentraces`
+- `pipx install opentraces`
 - HuggingFace account with write-scope token
