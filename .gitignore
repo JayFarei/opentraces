@@ -19,3 +19,6 @@ web/coming-soon/.vercel/
 kb/
 .opentraces/staging/
 .opentraces/config.json
+.agents/skills/opentraces
+.claude
+.opentraces
