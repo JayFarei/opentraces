@@ -6,7 +6,14 @@ dist/
 build/
 .pytest_cache/
 *.egg-link
-site/node_modules/
-site/.next/
+web/site/node_modules/
+web/site/.next/
+web/viewer/node_modules/
+web/coming-soon/.vercel/
 .gstack/
 .opentraces/staging/
+
+.desloppify/
+
+# Private research (not shipped in OSS release)
+kb/

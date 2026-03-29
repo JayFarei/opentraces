@@ -9,9 +9,9 @@ Open protocol + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses Cl
 - **Language**: Python 3.10+
 - **Schema**: `opentraces-schema` (standalone Pydantic v2 package in `packages/`)
 - **CLI**: Click-based (`src/opentraces/cli.py`)
-- **Web review**: Flask (`src/opentraces/review/web/`)
-- **Marketing site**: Next.js (`mktg/site/`)
-- **Coming soon page**: Static HTML (`mktg/coming-soon/`)
+- **Web review**: Flask (`src/opentraces/clients/web/`) + React SPA (`web/viewer/`)
+- **Marketing site**: Next.js (`web/site/`)
+- **Coming soon page**: Static HTML (`web/coming-soon/`)
 
 ## Development
 
@@ -26,21 +26,24 @@ pytest tests/ -v
 
 ## Structure
 
+- `skill/` - Claude Code skill definition (skills.sh convention)
 - `packages/opentraces-schema/` - Standalone schema package (Pydantic models)
+- `packages/opentraces-ui/` - Design system (tokens, base, components, React wrappers, logo assets, DESIGN.md)
 - `src/opentraces/` - Main CLI package
   - `parsers/` - Agent session parsers (claude_code.py, dataclaw_import.py)
   - `security/` - Secret scanning, anonymization, classification
   - `enrichment/` - Git signals, attribution, dependencies, metrics
+  - `quality/` - Trace quality assessment, persona rubrics, upload gates
+  - `exporters/` - ATIF export
   - `upload/` - HF Hub sharded upload, dataset card generation
-  - `review/` - CLI and web review interfaces
-- `mktg/` - Marketing
+  - `inbox.py` - Shared data access for all review clients
+  - `clients/` - Presentation layers (CLI, TUI, web backend)
+- `web/` - Web frontends
+  - `viewer/` - React SPA trace review UI
   - `site/` - Next.js marketing site
-  - `coming-soon/` - Teaser landing page (Vercel)
-  - `strategy/` - Positioning, design system, domain research
-  - `assets/` - Logos
+  - `coming-soon/` - Static coming-soon page (Vercel)
 - `tests/` - Test suite
-- `resources/` - Design docs (intent.md, outcome.md)
-- `kb/` - Research and discussion logs
+- `kb/` - Research and discussion logs (gitignored in OSS)
 
 ## Key Decisions
 

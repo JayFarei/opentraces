@@ -25,10 +25,13 @@ dev = ["pytest>=8.0", "pytest-cov", "ruff"]
 [project.scripts]
 opentraces = "opentraces.cli:main"
 ot = "opentraces.cli:main"
-lazytraces = "opentraces.review.tui_review:main"
+lazytraces = "opentraces.clients.tui:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/opentraces"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"skill/SKILL.md" = "opentraces/skill/SKILL.md"
 
 [tool.ruff]
 target-version = "py310"

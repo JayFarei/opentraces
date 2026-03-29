@@ -1,0 +1,116 @@
+/* opentraces.ai shared components
+ * Reusable across viewer and site.
+ * Defined with @apply using Tailwind theme utilities from tokens.css.
+ *
+ * Usage:
+ *   Tailwind-first: <button className="bg-accent text-black ...">
+ *   Class-based:    <button className="btn btn-accent">
+ *   Both work, pick what fits the context. */
+
+@layer components {
+
+  /* ── Box (labelled border container) ── */
+  .ot-box {
+    @apply border border-border bg-surface relative;
+  }
+  .ot-box::before {
+    content: attr(data-label);
+    @apply absolute -top-px left-3 -translate-y-1/2 bg-bg px-2 font-mono text-[10px] tracking-wider uppercase text-text-muted;
+  }
+
+  /* ── Buttons ── */
+  .ot-btn {
+    @apply inline-flex items-center gap-1.5 font-mono text-xs px-[18px] py-2.5 min-h-11 border border-solid cursor-pointer transition-all no-underline leading-snug;
+  }
+  .ot-btn-primary {
+    @apply bg-text text-bg border-text;
+  }
+  .ot-btn-primary:hover { @apply opacity-85; }
+  .ot-btn-outline {
+    @apply bg-transparent text-text-secondary border-border-strong;
+  }
+  .ot-btn-outline:hover { @apply border-text-muted text-text; }
+  .ot-btn-accent {
+    @apply bg-accent text-black border-accent font-medium;
+  }
+  .ot-btn-accent:hover { @apply opacity-90; }
+  .ot-btn-ghost {
+    @apply bg-transparent text-text-muted border-transparent;
+  }
+  .ot-btn-ghost:hover { @apply text-text; }
+  .ot-btn-sm { @apply text-[11px] px-3 py-[5px]; }
+
+  /* ── Terminal ── */
+  .ot-terminal {
+    @apply border border-border bg-bg-alt font-mono text-xs;
+  }
+  .ot-terminal-bar {
+    @apply flex items-center justify-between px-3 py-1.5 border-b border-border bg-surface text-[11px] text-text-dim;
+  }
+  .ot-terminal-bar-left { @apply flex gap-3; }
+  .ot-terminal-tab {
+    @apply text-text-dim cursor-pointer py-0.5 border-b border-transparent transition-all;
+  }
+  .ot-terminal-tab:hover { @apply text-text-muted; }
+  .ot-terminal-tab.active {
+    @apply text-text-secondary border-b-accent;
+  }
+  .ot-terminal-body {
+    @apply p-4 leading-[1.9] text-text-muted;
+  }
+  .ot-terminal-body .p { @apply text-text-dim; }
+  .ot-terminal-body .c { @apply text-text-secondary; }
+  .ot-terminal-body .f { @apply text-accent; }
+  .ot-terminal-body .s { @apply text-green; }
+  .ot-terminal-body .n { @apply text-cyan; }
+  .ot-terminal-body .w { @apply text-yellow; }
+  .ot-terminal-body .ok { @apply text-green; }
+  .ot-terminal-body .er { @apply text-red; }
+  .ot-terminal-body .di { @apply text-text-dim; }
+
+  /* ── Data Table ── */
+  .ot-tbl-wrap {
+    @apply border border-border;
+  }
+  .ot-tbl-head {
+    @apply flex justify-between items-center px-4 py-2.5 border-b border-border bg-surface;
+  }
+  .ot-tbl-title {
+    @apply font-mono text-xs font-medium;
+  }
+
+  /* ── Badges ── */
+  .ot-badge {
+    @apply inline-block font-mono text-[10px] px-2 py-0.5 border border-solid;
+  }
+  .ot-badge-ok { @apply border-green-dim text-green bg-green-bg; }
+  .ot-badge-er { @apply border-red text-red bg-red-bg; }
+  .ot-badge-wa { @apply border-yellow text-yellow bg-yellow-bg; }
+  .ot-badge-ac { @apply border-accent-dim text-accent bg-accent-bg; }
+  .ot-badge-bl { @apply border-blue text-blue bg-blue-bg; }
+
+  /* ── Code blocks ── */
+  .ot-code-wrap {
+    @apply relative mb-5;
+  }
+  .ot-code-wrap pre {
+    @apply border border-border bg-bg-alt p-4 overflow-x-auto font-mono text-xs leading-relaxed text-text-muted m-0;
+  }
+  .ot-code-wrap pre code {
+    @apply bg-transparent border-none p-0 text-xs;
+  }
+  .ot-code-copy {
+    @apply absolute top-1.5 right-1.5 font-mono text-[10px] px-2 py-[3px] bg-surface border border-border text-text-dim cursor-pointer transition-all z-10;
+  }
+  .ot-code-copy:hover { @apply text-text border-border-strong; }
+  .ot-code-copy:active { @apply text-accent; }
+
+  /* ── Schema syntax highlighting ── */
+  .ot-schema {
+    @apply border border-border bg-bg-alt font-mono text-xs p-5 leading-[1.8] text-text-muted overflow-x-auto;
+  }
+  .ot-schema-key { @apply text-accent; }
+  .ot-schema-type { @apply text-cyan; }
+  .ot-schema-str { @apply text-green; }
+  .ot-schema-comment { @apply text-text-dim italic; }
+}

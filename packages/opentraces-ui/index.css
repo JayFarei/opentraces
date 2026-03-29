@@ -1,0 +1,6 @@
+/* @opentraces/ui - design system entry point
+ * Import this single file to get tokens + base + shared components. */
+
+@import "./tokens.css";
+@import "./base.css";
+@import "./components.css";
