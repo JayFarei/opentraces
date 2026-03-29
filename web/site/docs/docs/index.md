@@ -65,7 +65,27 @@ opentraces push
 
 `login` authenticates with HuggingFace. `init` creates a private dataset, installs the session hook, and starts capturing traces automatically. `push` uploads committed traces to your dataset.
 
-Review traces before pushing with `opentraces web` (browser) or `opentraces tui` (terminal), then `opentraces commit` and `opentraces push` when ready.
+Open the inbox to review traces before pushing:
+
+### Web inbox
+
+```bash
+opentraces web
+```
+
+![Web inbox - timeline view](/docs/assets/web-timeline.png)
+
+![Web inbox - review view](/docs/assets/web-review.png)
+
+### Terminal inbox
+
+```bash
+opentraces tui
+```
+
+![Terminal inbox](assets/tui.png)
+
+Then `opentraces commit` and `opentraces push` when ready.
 
 ## Why
 

@@ -49,7 +49,7 @@ nav:
       - Versioning: schema/versioning.md
   - Workflow:
       - Parsing: workflow/parsing.md
-      - Review: workflow/review.md
+      - Inbox: workflow/review.md
       - Pushing: workflow/pushing.md
       - Export: workflow/export.md
   - Integration:

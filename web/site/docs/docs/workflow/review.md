@@ -1,15 +1,19 @@
-# Review
+# Inbox
 
-The review surface is the inbox. Use the browser UI, the TUI, or the `session` subcommands to inspect and edit staged traces.
+The inbox is where you inspect and edit staged traces before committing. Use the web inbox, the terminal inbox, or the `session` CLI subcommands.
 
-## Browser Inbox
+## Web Inbox
 
 ```bash
 opentraces web
 opentraces web --port 8080
 ```
 
-This serves the React viewer from `web/viewer/` through the local Flask inbox app.
+This serves the React viewer from `web/viewer/` through the local Flask app. The timeline view shows each step with tool calls and token counts. The review view groups context items by source (user input, filesystem, external, LLM output).
+
+![Web inbox - timeline view](/docs/assets/web-timeline.png)
+
+![Web inbox - review view](/docs/assets/web-review.png)
 
 ## Terminal Inbox
 
@@ -18,7 +22,11 @@ opentraces tui
 opentraces tui --fullscreen
 ```
 
-## CLI Review
+Three-panel layout: sessions list, summary, and detail. Keyboard shortcuts for navigation, commit, reject, and discard.
+
+![Terminal inbox](/docs/assets/tui.png)
+
+## CLI
 
 ```bash
 opentraces session list
@@ -49,7 +57,7 @@ opentraces session discard <trace-id> --yes
 - Traces that are too short or too trivial
 - Tool outputs that should be redacted before sharing
 
-## Review Flow
+## Inbox Flow
 
 ```bash
 opentraces session commit <trace-id>

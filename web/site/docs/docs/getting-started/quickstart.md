@@ -28,17 +28,29 @@ If Claude Code already has session logs for this repo, pass `--import-existing` 
 
 ## 4. Open the Inbox
 
+### Web inbox
+
 ```bash
 opentraces web
 ```
 
-or
+The browser inbox shows a timeline of each session's steps, tool calls, and reasoning. Switch to the review view to see context items grouped by source.
+
+![Web inbox - timeline view](/docs/assets/web-timeline.png)
+
+![Web inbox - review view](/docs/assets/web-review.png)
+
+### Terminal inbox
 
 ```bash
 opentraces tui
 ```
 
-The browser inbox is the default path for review. Use `session list`, `session commit`, `session reject`, and `session redact` if you prefer CLI control.
+The TUI shows sessions, summary, and detail in a three-panel layout. Use keyboard shortcuts to navigate, commit, reject, or discard traces.
+
+![Terminal inbox](/docs/assets/tui.png)
+
+Use `session list`, `session commit`, `session reject`, and `session redact` if you prefer direct CLI control.
 
 ## 5. Commit and Push
 
