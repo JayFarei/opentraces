@@ -1,0 +1,6 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&family=Space+Grotesk:wght@300..700&family=IBM+Plex+Mono:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap");
+@import "tailwindcss";
+@import "@opentraces/ui/tokens.css";
+
+/* Include shared component source in Tailwind class scanning */
+@source "../../../packages/opentraces-ui/src";
