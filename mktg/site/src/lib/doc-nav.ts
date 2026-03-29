@@ -18,7 +18,7 @@ export const DOC_NAV: DocEntry[] = [
   { slug: "cli/troubleshooting", title: "Troubleshooting", group: "CLI" },
 
   // Security
-  { slug: "security/tiers", title: "Security Tiers", group: "Security" },
+  { slug: "security/tiers", title: "Security Modes", group: "Security" },
   { slug: "security/scanning", title: "Scanning & Redaction", group: "Security" },
   { slug: "security/configuration", title: "Configuration", group: "Security" },
 
