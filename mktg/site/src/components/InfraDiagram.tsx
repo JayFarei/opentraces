@@ -2,10 +2,9 @@ import SectionRule from "./SectionRule";
 
 const agents = ["Claude Code", "Codex CLI", "Cursor", "Gemini CLI", "OpenCode", "Cline"];
 const steps = ["init", "capture", "stage", "review", "push"];
-const tiers = [
-  { name: "open", label: "tier 1" },
-  { name: "guarded", label: "tier 2" },
-  { name: "strict", label: "tier 3" },
+const modes = [
+  { name: "auto", label: "scan + redact + push" },
+  { name: "review", label: "review before push (default)" },
 ];
 
 const useCases = [
@@ -65,10 +64,10 @@ export default function InfraDiagram() {
           </div>
 
           <div className="arch-tiers">
-            {tiers.map((t) => (
-              <div key={t.name} className="arch-tier-box">
-                <div className="arch-tier-name">{t.name}</div>
-                <div className="arch-tier-label">{t.label}</div>
+            {modes.map((m) => (
+              <div key={m.name} className="arch-tier-box">
+                <div className="arch-tier-name">{m.name}</div>
+                <div className="arch-tier-label">{m.label}</div>
               </div>
             ))}
           </div>

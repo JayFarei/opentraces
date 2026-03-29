@@ -1,6 +1,6 @@
 # Review
 
-The review interface lets you inspect, approve, redact, or reject traces before they're uploaded. Required for guarded (flagged traces) and strict (all traces) tiers.
+The review interface lets you inspect, approve, redact, or reject traces before they're uploaded. Required for review mode, optional for auto mode.
 
 ## CLI Review
 

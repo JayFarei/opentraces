@@ -1,67 +1,38 @@
-# Security Tiers
+# Security Modes
 
-opentraces offers three modes for controlling what gets uploaded. Configure per-project via `opentraces init --tier` or `opentraces config set --tier`, because a personal side-project has different sensitivity than a client codebase.
+opentraces offers two modes for controlling what gets uploaded. Configure per-project via `opentraces init --mode` or `opentraces config set --mode`, because a personal side-project has different sensitivity than a client codebase.
 
 ## Overview
 
-| Tier | Gate | Review | For |
-|------|------|--------|-----|
-| **Open** | Regex scan only | None | Open-source, benchmarks |
-| **Guarded** | Classifier + escalation | Flagged traces only | Most projects (default) |
-| **Strict** | Full buffer | Every trace | Sensitive codebases |
+| Mode | Pipeline | Review | For |
+|------|----------|--------|-----|
+| **Auto** | Scan + redact + push | None | Open-source, benchmarks, personal projects |
+| **Review** (default) | Buffer locally | Every trace | Client work, sensitive codebases |
 
-## Open (Minimal Gate)
+## Auto
 
-Traces are uploaded with minimal friction, but not blindly. A baseline security check runs before any upload: regex-based scanning for high-confidence secrets (API keys, tokens, passwords) and obvious PII (emails, IP addresses). Anything flagged is auto-redacted, not escalated.
+Traces are scanned, redacted, and pushed automatically after each session. A security pipeline runs before any upload: regex-based scanning for high-confidence secrets (API keys, tokens, passwords) and PII (emails, IP addresses, filesystem paths). Anything flagged is auto-redacted.
 
-**For:** Open-source projects where the codebase is already public, benchmark runs (SWE-bench, Aider-bench), researchers who want maximum throughput.
+**For:** Open-source projects where the codebase is already public, benchmark runs, researchers who want maximum throughput, personal projects where you trust the content.
 
 ```
   Trace captured
        |
        v
-  Baseline scan (regex)
+  Scan (regex + entropy)
   secrets + PII auto-redact
        |
        v
-  Upload to HF Hub
+  Push to HF Hub
 ```
 
-**Principle:** Even the lowest-friction tier guarantees no raw secrets or credentials leak into the public dataset.
+**Principle:** Automated scanning catches known secret patterns. No human bottleneck.
 
-## Guarded (Default)
+## Review (Default)
 
-Traces pass through a classifier pipeline before upload:
+Nothing is uploaded automatically. All traces are buffered locally in `.opentraces/staging/`. You review every trace before pushing, using the TUI (`opentraces review`) or local web UI (`opentraces review --web`).
 
-1. **PII detection** - Emails, API keys, tokens, credentials, internal hostnames, IP addresses, filesystem paths. Regex + lightweight classifier.
-2. **Sensitive content classification** - Flags traces referencing proprietary codebases, internal tools, customer data.
-3. **De-anonymization risk scoring** - Estimates how identifiable the contributor is from trace content. Stylometric and contextual signals beyond explicit PII.
-4. **Escalation** - Anything flagged surfaces in the [review interface](/docs/workflow/review) before upload.
-
-```
-  Trace captured
-       |
-       v
-  Baseline scan (regex)
-       |
-       v
-  Classifier (content + de-anon)
-       |
-  +----+----+
-  v         v
-clean     flagged
-  |         |
-  |    Review (approve/redact/reject)
-  |         |
-  v         v
-Upload    Discard
-```
-
-**Principle:** Machine classifiers handle the bulk. Humans only see edge cases the classifier is uncertain about.
-
-## Strict (Human-in-the-Loop)
-
-Nothing is uploaded during the session. All traces are buffered locally. After the session ends, the user manually reviews every trace.
+Scanning and redaction still run during review, the same regex and entropy checks as auto mode. The difference is that you approve each trace before it leaves your machine.
 
 ```
   Trace captured
@@ -69,27 +40,27 @@ Nothing is uploaded during the session. All traces are buffered locally. After t
        v
   Buffer locally (.opentraces/staging/)
        |
-  Session ends
+  opentraces review
        |
        v
-  Human review (opentraces review)
+  Scan + redact + human review
   per-trace approve/redact/reject
        |
   +----+----+
   v         v
-Upload    Discard
+Push     Discard
 ```
 
 **Principle:** Full human-in-the-loop. Nothing leaves the machine without explicit approval.
 
-## Changing Tiers
+## Changing Modes
 
 ```bash
 # Per-project
-opentraces config set --tier strict
+opentraces config set --mode review
 
 # During init
-opentraces init --tier open
+opentraces init --mode auto
 ```
 
-See [Security Configuration](/docs/security/configuration) for advanced options like custom redaction strings and classifier sensitivity.
+See [Security Configuration](/docs/security/configuration) for advanced options like custom redaction patterns and classifier sensitivity.

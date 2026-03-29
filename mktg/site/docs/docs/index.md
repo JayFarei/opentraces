@@ -20,7 +20,7 @@ opentraces push
 
 - **[Getting Started](/docs/getting-started/installation)** - Install, authenticate, and push your first traces in under a minute.
 - **[CLI Reference](/docs/cli/commands)** - Complete reference for every opentraces command.
-- **[Security](/docs/security/tiers)** - Three tiers: open, guarded, strict. Control what gets uploaded.
+- **[Security](/docs/security/tiers)** - Two modes: auto or review. Control what gets uploaded.
 - **[Schema](/docs/schema/overview)** - Training-first JSONL format. TraceRecord, Steps, Attribution.
 - **[Workflow](/docs/workflow/parsing)** - Parse, review, push. The full trace lifecycle.
 - **[Integration](/docs/integration/ci-cd)** - GitHub Actions, headless environments, agent hooks.

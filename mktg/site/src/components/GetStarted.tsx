@@ -12,7 +12,7 @@ export default function GetStarted() {
       <div className="get-started-steps">
         <div className="get-started-step">
           <code>opentraces init</code>
-          <span>opt in your project, pick a security tier</span>
+          <span>opt in your project, pick auto or review mode</span>
         </div>
         <div className="get-started-step">
           <code>opentraces review</code>

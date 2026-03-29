@@ -33,7 +33,7 @@ const spaceMono = Space_Mono({
 export const metadata: Metadata = {
   title: "open traces - The Commons for Agent Traces",
   description:
-    "Open-source CLI for crowdsourcing AI coding agent session traces as structured JSONL datasets on Hugging Face Hub. Three security tiers. Training-first schema.",
+    "Open-source CLI for crowdsourcing AI coding agent session traces as structured JSONL datasets on Hugging Face Hub. Auto or review mode. Training-first schema.",
   keywords: ["agent traces", "training data", "hugging face", "open source", "SFT", "RLHF", "Claude Code", "Codex"],
   openGraph: {
     title: "open traces",

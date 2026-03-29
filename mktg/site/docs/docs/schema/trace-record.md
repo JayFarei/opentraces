@@ -121,7 +121,7 @@ Package names referenced during the session. Extracted from `package.json`, `Gem
 ```json
 {
   "security": {
-    "tier": "guarded",
+    "tier": 2,
     "flags_reviewed": 3,
     "redactions_applied": 1
   }

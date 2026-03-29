@@ -4,30 +4,23 @@ import { useState } from "react";
 
 const tiers = [
   {
-    id: "open",
-    name: "tier 1: open",
-    nameStyle: { color: "var(--red)" },
-    desc: "Regex scan only. For open-source and benchmarks.",
+    id: "auto",
+    name: "auto",
+    nameStyle: { color: "var(--accent)" },
+    desc: "Scan, redact, and push automatically. For open-source and personal projects.",
     tag: null,
   },
   {
-    id: "guarded",
-    name: "tier 2: guarded",
+    id: "review",
+    name: "review",
     nameStyle: {},
-    desc: "Classifier + escalation. Flagged traces need review.",
+    desc: "Review and approve every trace before pushing. Nothing leaves without approval.",
     tag: "default",
-  },
-  {
-    id: "strict",
-    name: "tier 3: strict",
-    nameStyle: {},
-    desc: "Full human-in-the-loop. Nothing leaves without approval.",
-    tag: null,
   },
 ];
 
 export default function SecurityTiers() {
-  const [selected, setSelected] = useState("guarded");
+  const [selected, setSelected] = useState("review");
 
   return (
     <div>

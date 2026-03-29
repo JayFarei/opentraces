@@ -1,6 +1,6 @@
 # Security Configuration
 
-All security settings live in `.opentraces/config.yml`, created by `opentraces init`.
+All security settings live in `.opentraces/config.json`, created by `opentraces init`.
 
 ## View Current Config
 
@@ -16,25 +16,24 @@ Each project gets its own configuration:
 
 ```bash
 cd ~/project-a
-opentraces init --tier open
+opentraces init --mode auto
 
 cd ~/project-b
-opentraces init --tier strict
+opentraces init --mode review
 ```
 
 ## Configuration Options
 
-### Security Tier
+### Security Mode
 
 ```bash
-opentraces config set --tier guarded
+opentraces config set --mode review
 ```
 
 | Value | Description |
 |-------|-------------|
-| `open` | Regex scan only, auto-upload |
-| `guarded` | Classifier + escalation (default) |
-| `strict` | Full human review |
+| `auto` | Scan, redact, and push automatically |
+| `review` | Review every trace before pushing (default) |
 
 ### Excluded Projects
 
@@ -56,16 +55,6 @@ opentraces config set --redact "ACME_INTERNAL_TOKEN"
 opentraces config set --redact "corp-api-prefix-"
 ```
 
-### Classifier Sensitivity
-
-For guarded tier, control how aggressively the classifier flags content:
-
-```bash
-opentraces config set --classifier-sensitivity high    # more flags, fewer misses
-opentraces config set --classifier-sensitivity medium   # balanced (default)
-opentraces config set --classifier-sensitivity low      # fewer flags, more throughput
-```
-
 ### Custom Pricing
 
 Override the default token pricing table for cost estimation:
@@ -76,21 +65,22 @@ opentraces config set --pricing-file /path/to/pricing.json
 
 ## Config File Format
 
-The `.opentraces/config.yml` file:
+The `.opentraces/config.json` file:
 
-```yaml
-tier: guarded
-exclude_paths:
-  - /path/to/sensitive-project
-redact_strings:
-  - ACME_INTERNAL_TOKEN
-classifier_sensitivity: medium
+```json
+{
+  "mode": "review",
+  "visibility": "private",
+  "remote": "username/opentraces",
+  "exclude_paths": ["/path/to/sensitive-project"],
+  "redact_strings": ["ACME_INTERNAL_TOKEN"]
+}
 ```
 
 ## Per-Session Override
 
-Override the tier for a single parse:
+Override the mode for a single parse:
 
 ```bash
-opentraces parse --auto   # treat as open tier for this run
+opentraces parse --auto   # auto mode for this run
 ```

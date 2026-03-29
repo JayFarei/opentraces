@@ -3,17 +3,17 @@
 import { useState } from "react";
 import SectionRule from "./SectionRule";
 
-const tiers = [
+const modes = [
   {
-    id: "open",
-    name: "Open",
-    label: "tier 1",
-    color: "var(--red)",
-    desc: "Regex auto-redact, no human review. For open-source and benchmarks.",
+    id: "auto",
+    name: "Auto",
+    label: "auto",
+    color: "var(--accent)",
+    desc: "Scan, redact, and push automatically after each session. Best for open-source and personal projects.",
     terminal: [
-      { p: "~$", c: "opentraces init", f: "--tier", s: "1" },
+      { p: "~$", c: "opentraces init", f: "--mode", s: "auto" },
       { gap: true },
-      { ok: "\u2713", di: " tier 1 (open), sessions auto-stage" },
+      { ok: "\u2713", di: " mode: auto, sessions auto-stage" },
       { ok: "\u2713", di: " installed Claude Code hook" },
       { gap: true },
       { p: "~$", c: "opentraces push" },
@@ -22,33 +22,15 @@ const tiers = [
     ],
   },
   {
-    id: "guarded",
-    name: "Guarded",
-    label: "tier 2 (default)",
-    color: "var(--accent)",
-    desc: "Heuristic classifier flags internal hostnames, proprietary patterns, de-anonymization risks. Flagged traces need your approval.",
+    id: "review",
+    name: "Review",
+    label: "review (default)",
+    color: "var(--text)",
+    desc: "Review and approve every trace before pushing. Inspect in the TUI or local web UI. Nothing leaves your machine without explicit approval.",
     terminal: [
       { p: "~$", c: "opentraces init" },
       { gap: true },
-      { ok: "\u2713", di: " tier 2 (guarded), default" },
-      { ok: "\u2713", di: " installed Claude Code hook" },
-      { gap: true },
-      { p: "~$", c: "opentraces push" },
-      { di: "auto-redacted ", n: "3", diEnd: " secrets" },
-      { w: "\u26A0", di: " flagged ", w2: "2", diEnd: " sessions, review required" },
-      { ok: "\u2713", di: " pushed ", n: "21", diEnd: " clean sessions" },
-    ],
-  },
-  {
-    id: "strict",
-    name: "Strict",
-    label: "tier 3",
-    color: "var(--text)",
-    desc: "Nothing leaves your machine without explicit approval. Full human-in-the-loop review via TUI or local web UI.",
-    terminal: [
-      { p: "~$", c: "opentraces init", f: "--tier", s: "3" },
-      { gap: true },
-      { ok: "\u2713", di: " tier 3 (strict), review everything" },
+      { ok: "\u2713", di: " mode: review (default)" },
       { ok: "\u2713", di: " installed Claude Code hook" },
       { gap: true },
       { p: "~$", c: "opentraces review" },
@@ -56,6 +38,7 @@ const tiers = [
       { di: "  approve (a) / redact (r) / skip (s) / reject (x)? ", s: "a" },
       { gap: true },
       { p: "~$", c: "opentraces push" },
+      { di: "auto-redacted ", n: "3", diEnd: " secrets" },
       { ok: "\u2713", di: " pushed 6 approved sessions" },
     ],
   },
@@ -103,8 +86,8 @@ function TerminalLine({ line }: { line: TermLine }) {
 }
 
 export default function PrivacyTrust() {
-  const [activeTier, setActiveTier] = useState("guarded");
-  const active = tiers.find((t) => t.id === activeTier)!;
+  const [activeTier, setActiveTier] = useState("review");
+  const active = modes.find((t) => t.id === activeTier)!;
 
   return (
     <section>
@@ -139,17 +122,17 @@ export default function PrivacyTrust() {
         {/* Tier selector as companion, not hero */}
         <div>
           <div style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.7, marginBottom: 16 }}>
-            Three security tiers, configured per-project. The sensitivity of a side project differs from a client codebase.
+            Two security modes, configured per-project. Auto for open-source, review for sensitive code.
           </div>
           <div style={{ display: "flex", gap: 0, marginBottom: 16, border: "1px solid var(--border)" }}>
-            {tiers.map((t) => (
+            {modes.map((t) => (
               <button
                 key={t.id}
                 onClick={() => setActiveTier(t.id)}
                 style={{
                   flex: 1,
                   padding: "10px 12px",
-                  borderRight: t.id !== "strict" ? "1px solid var(--border)" : "none",
+                  borderRight: t.id !== "review" ? "1px solid var(--border)" : "none",
                   border: "none",
                   borderBottom: activeTier === t.id ? `2px solid ${t.color}` : "2px solid transparent",
                   background: activeTier === t.id ? "var(--surface)" : "transparent",

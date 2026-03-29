@@ -20,13 +20,12 @@ opentraces login
 opentraces init
 ```
 
-Creates `.opentraces/` in your project directory. You'll be prompted to choose a security tier (default: guarded).
+Creates `.opentraces/` in your project directory. You'll be prompted to choose a security mode (default: review).
 
 ```bash
-# Or specify the tier directly
-opentraces init --tier open      # For open-source projects
-opentraces init --tier guarded   # Classifier + escalation (default)
-opentraces init --tier strict    # Full human review
+# Or specify the mode directly
+opentraces init --mode auto     # Scan, redact, push automatically
+opentraces init --mode review   # Review every trace before pushing (default)
 ```
 
 ## 4. Parse Agent Sessions

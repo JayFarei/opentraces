@@ -26,10 +26,9 @@ function InitContent() {
       <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Authenticated as </span><span className="s">alice-dev</span></span>
       <span className="terminal-line"><span className="di">  Token saved to ~/.opentraces/credentials</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Security tier?</span></span>
-      <span className="terminal-line"><span className="di">  [1] open</span>      <span className="di">auto-share, regex redaction</span></span>
-      <span className="terminal-line"><span className="di">  [2] guarded</span>   <span className="di">scan + flag, review flagged (default)</span>  <span className="s">{"\u2190"}</span></span>
-      <span className="terminal-line"><span className="di">  [3] strict</span>    <span className="di">review every session</span></span>
+      <span className="terminal-line"><span className="di">  Mode?</span></span>
+      <span className="terminal-line"><span className="di">  [1] auto</span>     <span className="di">scan, redact, push automatically</span></span>
+      <span className="terminal-line"><span className="di">  [2] review</span>   <span className="di">review and approve before pushing (default)</span>  <span className="s">{"\u2190"}</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Created .opentraces/config.yml</span></span>
       <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Installed Claude Code session hook</span></span>
@@ -42,7 +41,7 @@ function StatusContent() {
     <>
       <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces status</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  my-project (tier 2, guarded)</span></span>
+      <span className="terminal-line"><span className="di">  my-project (mode: review)</span></span>
       <span className="terminal-line"><span className="di">  remote: </span><span className="s">jayfarei/opentraces</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  </span><span className="n">3</span> <span className="di">sessions staged</span></span>
@@ -62,7 +61,7 @@ function ReviewContent() {
 │  ● "refactor auth"    47 steps  │  refactor auth middleware         │
 │  ○ "fix billing"      23 steps  │  claude-code · opus-4-6           │
 │  ○ "add settings"     65 steps  │  233s · 42,891 tokens · $3.21    │
-│                                 │  tier 2 · 2 redacted · 0 flags   │
+│                                 │  review · 2 redacted · 0 flags   │
 │                                 │                                   │
 │                                 │  ── steps ──────────────────────  │
 │                                 │  [0] user  "refactor the auth.."  │

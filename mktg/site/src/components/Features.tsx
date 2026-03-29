@@ -10,8 +10,8 @@ const features = [
     desc: "Traces push to private HF datasets by default. Publish when ready, like open-sourcing a repo.",
   },
   {
-    title: "three security tiers",
-    desc: "Open mode for OSS. Guarded screening for most. Strict review for sensitive code.",
+    title: "two security modes",
+    desc: "Auto mode scans, redacts, and pushes. Review mode lets you inspect every trace first.",
   },
   {
     title: "training-first schema",

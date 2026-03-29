@@ -42,7 +42,7 @@ No browser login needed when `HF_TOKEN` is set.
   env:
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
   run: |
-    opentraces init --tier guarded
+    opentraces init --mode auto
     opentraces parse --auto
     opentraces push --repo my-org/agent-traces --private
 ```

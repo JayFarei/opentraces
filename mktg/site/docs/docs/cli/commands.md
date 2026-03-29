@@ -55,14 +55,13 @@ Initialize opentraces in the current project directory. Creates `.opentraces/con
 
 ```bash
 opentraces init
-opentraces init --tier open      # minimal gate
-opentraces init --tier guarded   # classifier + escalation (default)
-opentraces init --tier strict    # full human review
+opentraces init --mode auto     # scan, redact, push automatically
+opentraces init --mode review   # review every trace before pushing (default)
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--tier` | interactive prompt | Security tier: `open`, `guarded`, or `strict` |
+| `--mode` | interactive prompt | Security mode: `auto` or `review` |
 
 ### `opentraces config show`
 
@@ -77,14 +76,14 @@ opentraces config show
 Update configuration settings. `--exclude` and `--redact` are append-only.
 
 ```bash
-opentraces config set --tier guarded
+opentraces config set --mode review
 opentraces config set --exclude /path/to/sensitive/project
 opentraces config set --redact "INTERNAL_API_KEY"
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--tier` | Security tier (`open`, `guarded`, `strict`) |
+| `--mode` | Security mode (`auto`, `review`) |
 | `--project` | Project path for per-project config |
 | `--exclude` | Project path to exclude (appends) |
 | `--redact` | Custom redaction string (appends) |
@@ -122,7 +121,7 @@ opentraces parse --limit 5   # parse at most 5 sessions
 
 ### `opentraces review`
 
-Interactive review interface for staged traces. Required for guarded (flagged traces) and strict (all traces) tiers.
+Interactive review interface for staged traces. Required for review mode, optional for auto mode.
 
 ```bash
 opentraces review

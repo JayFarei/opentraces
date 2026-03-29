@@ -65,7 +65,7 @@ const v010: SchemaVersion = {
     "Attribution: embedded Agent Trace-compatible block (experimental)",
     "Sub-agent hierarchy via parent_step, agent_role, call_type",
     "System prompt deduplication by hash",
-    "SecurityMetadata: 3-tier classification (open/guarded/strict)",
+    "SecurityMetadata: auto/review mode classification",
     "Content hashing (SHA-256) for cross-upload deduplication",
     "TokenUsage with prefix reuse and cache breakdown fields",
   ],
@@ -213,9 +213,9 @@ const v010: SchemaVersion = {
     },
     {
       id: "security", title: "SecurityMetadata",
-      desc: "Security tier and redaction record.",
+      desc: "Security mode and redaction record.",
       fields: [
-        { name: "tier", type: "int", required: false, description: "1 (open), 2 (guarded), 3 (strict)" },
+        { name: "tier", type: "int", required: false, description: "1 (auto), 2 (review), 3 (review, legacy)" },
         { name: "flags_reviewed", type: "int", required: false, description: "Flags reviewed" },
         { name: "redactions_applied", type: "int", required: false, description: "Redactions applied" },
         { name: "classifier_version", type: "string", required: false, description: "Classifier version" },
