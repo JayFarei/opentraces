@@ -7,7 +7,7 @@ name = "opentraces"
 version = "0.1.0"
 description = "Crowdsource agent traces to HuggingFace Hub"
 readme = "README.md"
-license = "Apache-2.0"
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "opentraces-schema>=0.1.0",

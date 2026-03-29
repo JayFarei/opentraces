@@ -11,7 +11,7 @@ web/site/.next/
 web/viewer/node_modules/
 web/coming-soon/.vercel/
 .gstack/
-.opentraces/staging/
+.opentraces/
 
 .desloppify/
 
