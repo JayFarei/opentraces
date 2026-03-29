@@ -56,23 +56,35 @@ function StatusContent() {
 
 function ReviewContent() {
   return (
-    <pre className="terminal-tui-mockup">{`┌─ SESSIONS (3 staged) ──────────┬─ DETAIL ─────────────────────────┐
-│                                 │                                   │
-│  ● "refactor auth"    47 steps  │  refactor auth middleware         │
-│  ○ "fix billing"      23 steps  │  claude-code · opus-4-6           │
-│  ○ "add settings"     65 steps  │  233s · 42,891 tokens · $3.21    │
-│                                 │  review · 2 redacted · 0 flags   │
-│                                 │                                   │
-│                                 │  ── steps ──────────────────────  │
-│                                 │  [0] user  "refactor the auth.."  │
-│                                 │  [1] agent Read auth.py           │
-│                                 │  [2] agent Edit auth.py L42-67   │
-│                                 │  [3] user  "looks good, also.."   │
-│                                 │  [4] agent Write tests/auth.py   │
-│                                 │                                   │
-├─ approved: 0 · pushed: 0 ──────┴───────────────────────────────────┤
-│ j/k navigate · a approve · r reject · p push · q quit             │
-└─────────────────────────────────────────────────────────────────────┘`}</pre>
+    <div className="terminal-tui-mockup">
+      <div className="tui-row tui-header">
+        <span className="tui-left">SESSIONS (3 staged)</span>
+        <span className="tui-right">DETAIL</span>
+      </div>
+      <div className="tui-body">
+        <div className="tui-left">
+          <div className="tui-session tui-active"><span className="tui-dot ok">●</span> &quot;refactor auth&quot; <span className="n">47</span> steps</div>
+          <div className="tui-session"><span className="tui-dot">○</span> &quot;fix billing&quot; <span className="n">23</span> steps</div>
+          <div className="tui-session"><span className="tui-dot">○</span> &quot;add settings&quot; <span className="n">65</span> steps</div>
+        </div>
+        <div className="tui-right">
+          <div className="tui-detail-title">refactor auth middleware</div>
+          <div className="tui-detail-meta">claude-code · opus-4-6</div>
+          <div className="tui-detail-meta">233s · 42,891 tokens · $3.21</div>
+          <div className="tui-detail-meta">review · 2 redacted · 0 flags</div>
+          <div className="tui-detail-sep">steps</div>
+          <div className="tui-step"><span className="di">[0]</span> <span className="s">user</span>  &quot;refactor the auth..&quot;</div>
+          <div className="tui-step"><span className="di">[1]</span> <span className="f">agent</span> Read auth.py</div>
+          <div className="tui-step"><span className="di">[2]</span> <span className="f">agent</span> Edit auth.py L42-67</div>
+          <div className="tui-step"><span className="di">[3]</span> <span className="s">user</span>  &quot;looks good, also..&quot;</div>
+          <div className="tui-step"><span className="di">[4]</span> <span className="f">agent</span> Write tests/auth.py</div>
+        </div>
+      </div>
+      <div className="tui-row tui-footer">
+        <span>approved: 0 · pushed: 0</span>
+        <span>j/k navigate · a approve · r reject · p push · q quit</span>
+      </div>
+    </div>
   );
 }
 
