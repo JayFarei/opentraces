@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 function resolveTheme(): "dark" | "light" {
-  if (typeof window === "undefined") return "light";
   const stored = localStorage.getItem("theme") as "dark" | "light" | null;
   if (stored) return stored;
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -19,24 +18,25 @@ function applyTheme(t: "dark" | "light") {
 }
 
 export default function Nav() {
-  const [theme, setTheme] = useState<"dark" | "light">(() => resolveTheme());
+  const [theme, setTheme] = useState<"dark" | "light" | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
+    const resolved = resolveTheme();
+    setTheme(resolved);
+    applyTheme(resolved);
+
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     function onSystemChange(e: MediaQueryListEvent) {
       if (!localStorage.getItem("theme")) {
         const next = e.matches ? "dark" : "light";
         setTheme(next);
+        applyTheme(next);
       }
     }
     mq.addEventListener("change", onSystemChange);
     return () => mq.removeEventListener("change", onSystemChange);
   }, []);
-
-  useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
 
   function toggle() {
     document.body.style.transition = "background 0.15s, color 0.15s";
@@ -67,7 +67,7 @@ export default function Nav() {
         <a href="https://github.com/jayfarei/opentraces" className="nav-link" target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)}>github</a>
         <span className="nav-divider" style={{ color: "var(--border)" }}>|</span>
         <button className="nav-theme-btn" onClick={toggle} aria-label="Toggle theme">
-          {theme === "dark" ? "light" : "dark"}
+          {theme === null ? "" : theme === "dark" ? "light" : "dark"}
         </button>
       </div>
     </nav>

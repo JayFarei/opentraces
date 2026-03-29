@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { Space_Grotesk, IBM_Plex_Mono, JetBrains_Mono, Space_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -54,12 +55,14 @@ export default function RootLayout({
       className={`${spaceGrotesk.variable} ${ibmPlexMono.variable} ${jetbrainsMono.variable} ${spaceMono.variable}`}
     >
       <head>
-        <script
+        <Script
+          id="theme-init"
+          strategy="beforeInteractive"
           dangerouslySetInnerHTML={{
-            __html: "var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'}document.documentElement.classList.add(t==='dark'?'theme-dark':'theme-light');document.documentElement.style.colorScheme=t",
+            __html: "var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'}document.documentElement.setAttribute('data-theme',t);document.documentElement.classList.add(t==='dark'?'theme-dark':'theme-light');document.documentElement.style.colorScheme=t",
           }}
         />
-        <script id="analytics" data-site-id="opentraces.ai" src="https://analytics-agent.fareiunastrage.workers.dev/tracker.js" defer />
+        <Script id="analytics" data-site-id="opentraces.ai" src="https://analytics-agent.fareiunastrage.workers.dev/tracker.js" strategy="lazyOnload" />
       </head>
       <body>{children}</body>
     </html>
