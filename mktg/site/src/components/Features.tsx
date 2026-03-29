@@ -10,8 +10,8 @@ const features = [
     desc: "Traces push to private HF datasets by default. Publish when ready, like open-sourcing a repo.",
   },
   {
-    title: "two security modes",
-    desc: "Auto mode scans, redacts, and pushes. Review mode lets you inspect every trace first.",
+    title: "auto or review",
+    desc: "Push traces automatically to a private dataset, or review each session before committing to the remote.",
   },
   {
     title: "training-first schema",

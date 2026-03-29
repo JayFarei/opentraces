@@ -9,16 +9,16 @@ const modes = [
     name: "Auto",
     label: "auto",
     color: "var(--accent)",
-    desc: "Scan, redact, and push automatically after each session. Best for open-source and personal projects.",
+    desc: "Traces are sanitised and pushed to your private (or public) HF dataset after every session. No manual step.",
     terminal: [
       { p: "~$", c: "opentraces init", f: "--mode", s: "auto" },
       { gap: true },
-      { ok: "\u2713", di: " mode: auto, sessions auto-stage" },
+      { ok: "\u2713", di: " mode: auto, sessions push on capture" },
       { ok: "\u2713", di: " installed Claude Code hook" },
       { gap: true },
       { p: "~$", c: "opentraces push" },
       { di: "auto-redacted ", n: "4", diEnd: " secrets (JWT, API key, email, DB URL)" },
-      { ok: "\u2713", di: " pushed 12 sessions \u2192 ", s: "jayfarei/opentraces-my-project" },
+      { ok: "\u2713", di: " pushed 12 sessions \u2192 ", s: "jayfarei/opentraces" },
     ],
   },
   {
@@ -26,7 +26,7 @@ const modes = [
     name: "Review",
     label: "review (default)",
     color: "var(--text)",
-    desc: "Review and approve every trace before pushing. Inspect in the TUI or local web UI. Nothing leaves your machine without explicit approval.",
+    desc: "Sessions are staged locally. You review in the TUI, approve or reject each one, then push the approved set to your remote dataset.",
     terminal: [
       { p: "~$", c: "opentraces init" },
       { gap: true },
@@ -122,7 +122,7 @@ export default function PrivacyTrust() {
         {/* Tier selector as companion, not hero */}
         <div>
           <div style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.7, marginBottom: 16 }}>
-            Two security modes, configured per-project. Auto for open-source, review for sensitive code.
+            Two ways to push traces to a dataset, configured per-project.
           </div>
           <div style={{ display: "flex", gap: 0, marginBottom: 16, border: "1px solid var(--border)" }}>
             {modes.map((t) => (
