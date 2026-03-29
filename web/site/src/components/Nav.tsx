@@ -20,6 +20,7 @@ function applyTheme(t: "dark" | "light") {
 
 export default function Nav() {
   const [theme, setTheme] = useState<"dark" | "light">(() => resolveTheme());
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -50,13 +51,21 @@ export default function Nav() {
       <Link href="/" className="nav-logo">
         <span className="brand-open">open</span><span className="brand-traces">traces</span>
       </Link>
-      <div className="nav-links">
-        <Link href="/schema" className="nav-link">schema</Link>
-        <Link href="/explorer" className="nav-link">explorer</Link>
-        <Link href="/docs" className="nav-link">docs</Link>
-        <a href="/llms.txt" className="nav-link">/llms.txt</a>
-        <a href="https://github.com/jayfarei/opentraces" className="nav-link" target="_blank" rel="noopener noreferrer">github</a>
-        <span style={{ color: "var(--border)" }}>|</span>
+      <button
+        className="nav-hamburger"
+        onClick={() => setMenuOpen(!menuOpen)}
+        aria-label="Toggle menu"
+        aria-expanded={menuOpen}
+      >
+        {menuOpen ? "✕" : "≡"}
+      </button>
+      <div className={`nav-links${menuOpen ? " nav-links-open" : ""}`}>
+        <Link href="/schema" className="nav-link" onClick={() => setMenuOpen(false)}>schema</Link>
+        <Link href="/explorer" className="nav-link" onClick={() => setMenuOpen(false)}>explorer</Link>
+        <Link href="/docs" className="nav-link" onClick={() => setMenuOpen(false)}>docs</Link>
+        <a href="/llms.txt" className="nav-link" onClick={() => setMenuOpen(false)}>/llms.txt</a>
+        <a href="https://github.com/jayfarei/opentraces" className="nav-link" target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)}>github</a>
+        <span className="nav-divider" style={{ color: "var(--border)" }}>|</span>
         <button className="nav-theme-btn" onClick={toggle} aria-label="Toggle theme">
           {theme === "dark" ? "light" : "dark"}
         </button>

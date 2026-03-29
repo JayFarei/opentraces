@@ -11,7 +11,7 @@ import { versions, findVersion, latestVersion, type Field } from "@/lib/schema-v
 function FieldTable({ fields }: { fields: Field[] }) {
   return (
     <table className="field-table">
-      <colgroup>
+      <colgroup className="field-table-colgroup">
         <col style={{ width: "22%" }} />
         <col style={{ width: "16%" }} />
         <col style={{ width: "5%" }} />
@@ -128,7 +128,7 @@ export default function SchemaVersionPage({ params }: { params: Promise<{ versio
         </p>
       </section>
 
-      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 40, paddingBottom: 64 }}>
+      <div className="schema-layout">
         {/* Sidebar */}
         <div className="schema-sidebar">
           <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-dim)", marginBottom: 12 }}>
@@ -149,7 +149,7 @@ export default function SchemaVersionPage({ params }: { params: Promise<{ versio
             <div key={m.id} id={m.id} style={{ marginBottom: 40 }}>
               <div className="section-title" style={{ fontSize: 20, marginBottom: 4 }}>{m.title}</div>
               <p style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 12 }}>{m.desc}</p>
-              <div style={{ border: "1px solid var(--border)", overflow: "hidden" }}>
+              <div style={{ border: "1px solid var(--border)", overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
                 <FieldTable fields={m.fields} />
               </div>
             </div>

@@ -223,7 +223,7 @@ export default function Dashboard() {
   return (
     <section style={{ padding: "48px 0" }}>
       {/* Search bar */}
-      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 32 }}>
+      <div className="explorer-search">
         <div className="section-title" style={{ margin: 0 }}>Explorer</div>
         <div style={{ flex: 1 }} />
         <form onSubmit={handleUserSearch} style={{ display: "flex", gap: 0 }}>
@@ -232,12 +232,7 @@ export default function Dashboard() {
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder="HF username..."
-            style={{
-              fontFamily: "var(--font-mono)", fontSize: 12, padding: "8px 14px",
-              border: "1px solid var(--border)", borderRight: "none",
-              background: "var(--bg-alt)", color: "var(--text)",
-              width: 200,
-            }}
+            className="explorer-search-input"
           />
           <button type="submit" style={{
             fontFamily: "var(--font-mono)", fontSize: 11, padding: "8px 16px",
@@ -296,7 +291,7 @@ export default function Dashboard() {
             insights (sampled from {sampleRows.length} traces)
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, marginBottom: 32 }}>
+          <div className="insights-grid">
             {/* Efficiency */}
             <div style={{ border: "1px solid var(--border)", padding: 20, background: "var(--surface)" }}>
               <div className="stat-label" style={{ marginBottom: 16 }}>efficiency</div>

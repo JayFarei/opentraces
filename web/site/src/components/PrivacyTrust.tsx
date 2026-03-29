@@ -98,7 +98,7 @@ export default function PrivacyTrust() {
       <div className="section-title">Every trace scrubbed before it leaves your machine.</div>
 
       {/* Redaction demo as the hero visual */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 32, marginBottom: 48, alignItems: "stretch" }}>
+      <div className="privacy-grid">
         <div>
           <p className="section-sub" style={{ marginBottom: 20 }}>
             19 regex patterns, Shannon entropy analysis, context-aware scanning. API keys, emails, database credentials, filesystem paths, all auto-redacted.
