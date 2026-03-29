@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from opentraces_schema.models import TraceRecord
+from opentraces_schema import TraceRecord
 
 from .raw_reader import RawSessionSummary
 

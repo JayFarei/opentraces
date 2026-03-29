@@ -27,7 +27,7 @@ from .types import (
 # Schema conformance checks
 # ---------------------------------------------------------------------------
 
-def check_schema_version(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c1_schema_version(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """S1: schema_version present and correct."""
     passed = record.schema_version == SCHEMA_VERSION
     return CheckResult(
@@ -37,7 +37,7 @@ def check_schema_version(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_trace_id_format(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c2_trace_id_format(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """S2: trace_id is a valid UUID-like string."""
     passed = len(record.trace_id) >= 32 and "-" in record.trace_id
     return CheckResult(
@@ -47,7 +47,7 @@ def check_trace_id_format(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_content_hash(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c3_content_hash(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """S3: content_hash computed and is 64-char hex."""
     has_hash = record.content_hash is not None and len(record.content_hash) == 64
     return CheckResult(
@@ -57,7 +57,7 @@ def check_content_hash(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_agent_name(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c4_agent_name(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """S4: agent.name is 'claude-code'."""
     passed = record.agent.name == "claude-code"
     return CheckResult(
@@ -67,7 +67,7 @@ def check_agent_name(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_timestamps(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c5_timestamps(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """S5: timestamps present."""
     has_start = record.timestamp_start is not None
     has_end = record.timestamp_end is not None
@@ -82,7 +82,7 @@ def check_timestamps(record: TraceRecord, raw_data: dict) -> CheckResult:
 # Parser: step structure checks
 # ---------------------------------------------------------------------------
 
-def check_step_count(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c6_step_count(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """P1: has at least 2 steps."""
     step_count = len(record.steps)
     return CheckResult(
@@ -92,7 +92,7 @@ def check_step_count(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_step_roles(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c7_step_roles(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """P2: steps use correct role values (user/agent, not human/assistant)."""
     roles = {s.role for s in record.steps}
     bad_roles = roles - {"user", "agent", "system"}
@@ -103,7 +103,7 @@ def check_step_roles(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_step_index_monotonic(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c8_step_index_monotonic(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """P3: step_index values are unique and monotonically increasing."""
     indices = [s.step_index for s in record.steps]
     unique_indices = len(set(indices)) == len(indices)
@@ -115,7 +115,7 @@ def check_step_index_monotonic(record: TraceRecord, raw_data: dict) -> CheckResu
     )
 
 
-def check_tool_call_ids(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c9_tool_call_ids(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """P4: tool_calls have tool_call_id."""
     tool_calls = [tc for s in record.steps for tc in s.tool_calls]
     tc_with_id = sum(1 for tc in tool_calls if tc.tool_call_id)
@@ -127,7 +127,7 @@ def check_tool_call_ids(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_observations_linked(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c10_observations_linked(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """P5: observations linked to tool_calls via source_call_id."""
     observations = [o for s in record.steps for o in s.observations]
     obs_linked = sum(1 for o in observations if o.source_call_id)
@@ -139,7 +139,7 @@ def check_observations_linked(record: TraceRecord, raw_data: dict) -> CheckResul
     )
 
 
-def check_call_type(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c11_call_type(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """P6: call_type assigned to agent steps."""
     agent_steps = [s for s in record.steps if s.role == "agent"]
     typed = sum(1 for s in agent_steps if s.call_type in ("main", "subagent", "warmup"))
@@ -151,7 +151,7 @@ def check_call_type(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_subagent_parent_step(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c12_subagent_parent_step(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """P7: sub-agent steps have parent_step links."""
     subagent_steps = [s for s in record.steps if s.call_type == "subagent"]
     sub_linked = sum(1 for s in subagent_steps if s.parent_step is not None)
@@ -163,7 +163,7 @@ def check_subagent_parent_step(record: TraceRecord, raw_data: dict) -> CheckResu
     )
 
 
-def check_token_usage(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c13_token_usage(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """P8: token_usage populated on agent steps."""
     agent_steps = [s for s in record.steps if s.role == "agent"]
     agent_with_tokens = sum(
@@ -179,7 +179,7 @@ def check_token_usage(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_snippets(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c14_snippets(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """P9: snippets extracted (at least some)."""
     total_snippets = sum(len(s.snippets) for s in record.steps)
     return CheckResult(
@@ -189,7 +189,7 @@ def check_snippets(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_task_description(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c15_task_description(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """P10: task.description populated from first user message."""
     return CheckResult(
         passed=bool(record.task.description),
@@ -198,7 +198,7 @@ def check_task_description(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_reasoning_content(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c16_reasoning_content(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """P11: reasoning_content captured from thinking blocks."""
     reasoning_steps = sum(1 for s in record.steps if s.reasoning_content)
     return CheckResult(
@@ -212,7 +212,7 @@ def check_reasoning_content(record: TraceRecord, raw_data: dict) -> CheckResult:
 # Enrichment checks
 # ---------------------------------------------------------------------------
 
-def check_vcs_type(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c17_vcs_type(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """E1: environment.vcs populated."""
     has_vcs = record.environment.vcs.type in ("git", "none")
     return CheckResult(
@@ -222,7 +222,7 @@ def check_vcs_type(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_metrics_total_steps(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c18_metrics_total_steps(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """E2: metrics computed."""
     has_metrics = record.metrics.total_steps > 0
     return CheckResult(
@@ -232,7 +232,7 @@ def check_metrics_total_steps(record: TraceRecord, raw_data: dict) -> CheckResul
     )
 
 
-def check_cache_hit_rate(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c19_cache_hit_rate(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """E3: cache_hit_rate computed."""
     has_cache = record.metrics.cache_hit_rate is not None
     return CheckResult(
@@ -242,7 +242,7 @@ def check_cache_hit_rate(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_estimated_cost(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c20_estimated_cost(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """E4: estimated_cost_usd computed."""
     has_cost = record.metrics.estimated_cost_usd is not None and record.metrics.estimated_cost_usd > 0
     return CheckResult(
@@ -252,7 +252,7 @@ def check_estimated_cost(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_duration(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c21_duration(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """E5: total_duration_s computed."""
     has_duration = record.metrics.total_duration_s is not None and record.metrics.total_duration_s > 0
     return CheckResult(
@@ -262,7 +262,7 @@ def check_duration(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_outcome_signal(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c22_outcome_signal(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """E6: outcome signals present."""
     passed = record.outcome.signal_confidence in ("derived", "inferred", "annotated")
     return CheckResult(
@@ -276,7 +276,7 @@ def check_outcome_signal(record: TraceRecord, raw_data: dict) -> CheckResult:
 # Security checks
 # ---------------------------------------------------------------------------
 
-def check_security_tier(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c23_security_tier(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """SEC1: security metadata present."""
     passed = record.security.tier in (1, 2, 3)
     return CheckResult(
@@ -286,7 +286,7 @@ def check_security_tier(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_no_secrets(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c24_no_secrets(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """SEC2: no raw secrets in output (spot check common patterns)."""
     serialized = json.dumps(raw_data)
     actual_secrets = []
@@ -306,7 +306,7 @@ def check_no_secrets(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_paths_anonymized(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c25_paths_anonymized(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """SEC3: paths anonymized (no raw /Users/<username>/)."""
     serialized = json.dumps(raw_data)
     username = os.environ.get("USER", "")
@@ -323,7 +323,7 @@ def check_paths_anonymized(record: TraceRecord, raw_data: dict) -> CheckResult:
 # Structure checks
 # ---------------------------------------------------------------------------
 
-def check_jsonl_valid(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c26_jsonl_valid(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """ST1: JSONL serialization is valid single-line JSON."""
     jsonl_line = record.to_jsonl_line()
     is_single_line = "\n" not in jsonl_line
@@ -339,7 +339,7 @@ def check_jsonl_valid(record: TraceRecord, raw_data: dict) -> CheckResult:
     )
 
 
-def check_hash_deterministic(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c27_hash_deterministic(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """ST2: content_hash is deterministic (same content = same hash)."""
     hash1 = record.compute_content_hash()
     hash2 = record.compute_content_hash()
@@ -350,7 +350,7 @@ def check_hash_deterministic(record: TraceRecord, raw_data: dict) -> CheckResult
     )
 
 
-def check_system_prompts_deduped(record: TraceRecord, raw_data: dict) -> CheckResult:
+def _c28_system_prompts_deduped(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """ST3: system_prompts deduplicated and references valid."""
     sp_keys = set(record.system_prompts.keys())
 
@@ -387,43 +387,43 @@ CONFORMANCE_PERSONA = PersonaDef(
     description="Structural conformance checks derived from the opentraces schema spec.",
     checks=[
         # Schema
-        CheckDef("schema_version present", "schema", 1.0, check_schema_version),
-        CheckDef("trace_id is UUID format", "schema", 1.0, check_trace_id_format),
-        CheckDef("content_hash is SHA-256", "schema", 1.0, check_content_hash),
-        CheckDef("agent.name = claude-code", "schema", 1.0, check_agent_name),
-        CheckDef("timestamps present", "schema", 0.8, check_timestamps),
+        CheckDef("schema_version present", "schema", 1.0, _c1_schema_version),
+        CheckDef("trace_id is UUID format", "schema", 1.0, _c2_trace_id_format),
+        CheckDef("content_hash is SHA-256", "schema", 1.0, _c3_content_hash),
+        CheckDef("agent.name = claude-code", "schema", 1.0, _c4_agent_name),
+        CheckDef("timestamps present", "schema", 0.8, _c5_timestamps),
         # Parser
-        CheckDef("step count >= 2", "parser", 1.0, check_step_count),
-        CheckDef("step roles are user/agent (not human/assistant)", "parser", 1.0, check_step_roles),
-        CheckDef("step_index unique and monotonic", "parser", 1.0, check_step_index_monotonic),
-        CheckDef("tool_calls have tool_call_id", "parser", 0.9, check_tool_call_ids),
-        CheckDef("observations linked via source_call_id", "parser", 0.9, check_observations_linked),
-        CheckDef("agent steps have call_type", "parser", 0.8, check_call_type),
-        CheckDef("subagent steps have parent_step", "parser", 0.8, check_subagent_parent_step),
-        CheckDef("agent steps have token_usage", "parser", 0.9, check_token_usage),
-        CheckDef("snippets extracted from tool results", "parser", 0.6, check_snippets),
-        CheckDef("task.description from first user message", "parser", 0.7, check_task_description),
-        CheckDef("reasoning_content from thinking blocks", "parser", 0.6, check_reasoning_content),
+        CheckDef("step count >= 2", "parser", 1.0, _c6_step_count),
+        CheckDef("step roles are user/agent (not human/assistant)", "parser", 1.0, _c7_step_roles),
+        CheckDef("step_index unique and monotonic", "parser", 1.0, _c8_step_index_monotonic),
+        CheckDef("tool_calls have tool_call_id", "parser", 0.9, _c9_tool_call_ids),
+        CheckDef("observations linked via source_call_id", "parser", 0.9, _c10_observations_linked),
+        CheckDef("agent steps have call_type", "parser", 0.8, _c11_call_type),
+        CheckDef("subagent steps have parent_step", "parser", 0.8, _c12_subagent_parent_step),
+        CheckDef("agent steps have token_usage", "parser", 0.9, _c13_token_usage),
+        CheckDef("snippets extracted from tool results", "parser", 0.6, _c14_snippets),
+        CheckDef("task.description from first user message", "parser", 0.7, _c15_task_description),
+        CheckDef("reasoning_content from thinking blocks", "parser", 0.6, _c16_reasoning_content),
         # Enrichment
-        CheckDef("environment.vcs type discriminator set", "enrichment", 0.8, check_vcs_type),
-        CheckDef("metrics.total_steps > 0", "enrichment", 0.9, check_metrics_total_steps),
-        CheckDef("metrics.cache_hit_rate computed", "enrichment", 0.7, check_cache_hit_rate),
-        CheckDef("metrics.estimated_cost_usd > 0", "enrichment", 0.7, check_estimated_cost),
-        CheckDef("metrics.total_duration_s > 0", "enrichment", 0.6, check_duration),
-        CheckDef("outcome.signal_confidence set", "enrichment", 0.7, check_outcome_signal),
+        CheckDef("environment.vcs type discriminator set", "enrichment", 0.8, _c17_vcs_type),
+        CheckDef("metrics.total_steps > 0", "enrichment", 0.9, _c18_metrics_total_steps),
+        CheckDef("metrics.cache_hit_rate computed", "enrichment", 0.7, _c19_cache_hit_rate),
+        CheckDef("metrics.estimated_cost_usd > 0", "enrichment", 0.7, _c20_estimated_cost),
+        CheckDef("metrics.total_duration_s > 0", "enrichment", 0.6, _c21_duration),
+        CheckDef("outcome.signal_confidence set", "enrichment", 0.7, _c22_outcome_signal),
         # Security
-        CheckDef("security.tier set", "security", 0.8, check_security_tier),
-        CheckDef("no real secrets in serialized output", "security", 1.0, check_no_secrets),
-        CheckDef("paths anonymized (no raw /Users/<name>/)", "security", 0.8, check_paths_anonymized),
+        CheckDef("security.tier set", "security", 0.8, _c23_security_tier),
+        CheckDef("no real secrets in serialized output", "security", 1.0, _c24_no_secrets),
+        CheckDef("paths anonymized (no raw /Users/<name>/)", "security", 0.8, _c25_paths_anonymized),
         # Structure
-        CheckDef("JSONL output is valid single-line JSON", "structure", 1.0, check_jsonl_valid),
-        CheckDef("content_hash is deterministic", "structure", 0.8, check_hash_deterministic),
-        CheckDef("system_prompts deduplicated to top-level map", "structure", 0.5, check_system_prompts_deduped),
+        CheckDef("JSONL output is valid single-line JSON", "structure", 1.0, _c26_jsonl_valid),
+        CheckDef("content_hash is deterministic", "structure", 0.8, _c27_hash_deterministic),
+        CheckDef("system_prompts deduplicated to top-level map", "structure", 0.5, _c28_system_prompts_deduped),
     ],
 )
 
 
-def score_trace(record: TraceRecord, raw_data: dict) -> RubricReport:
+def score_trace(record: TraceRecord, raw_data: dict | None) -> RubricReport:
     """Score a parsed trace against the full conformance rubric.
 
     Backward-compatible convenience wrapper that runs the conformance persona

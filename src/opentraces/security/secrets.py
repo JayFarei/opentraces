@@ -59,26 +59,6 @@ _ALLOWLIST_DUMMY_TOKENS = re.compile(
 )
 
 
-def _is_allowlisted_email(text: str) -> bool:
-    return bool(_ALLOWLIST_EMAILS.search(text))
-
-
-def _is_allowlisted_decorator(text: str) -> bool:
-    return bool(_ALLOWLIST_DECORATORS.match(text.strip()))
-
-
-def _is_private_ip(text: str) -> bool:
-    return bool(_PRIVATE_IP_V4.search(text))
-
-
-def _is_allowlisted_url(text: str) -> bool:
-    return bool(_ALLOWLIST_URLS.search(text))
-
-
-def _is_dummy_token(text: str) -> bool:
-    return bool(_ALLOWLIST_DUMMY_TOKENS.search(text))
-
-
 # ---------------------------------------------------------------------------
 # Pattern definitions
 # ---------------------------------------------------------------------------
@@ -315,20 +295,20 @@ def _luhn_check(number_str: str) -> bool:
 def _is_allowlisted(pattern_name: str, matched_text: str, full_text: str, start: int) -> bool:
     """Check if a match is a known false positive."""
     if pattern_name == "email_address":
-        return _is_allowlisted_email(matched_text)
+        return bool(_ALLOWLIST_EMAILS.search(matched_text))
 
     if pattern_name == "ipv4_address":
         # Check surrounding context for private IPs
         ctx_start = max(0, start - 1)
         ctx_end = min(len(full_text), start + len(matched_text) + 1)
         ctx = full_text[ctx_start:ctx_end]
-        return _is_private_ip(ctx)
+        return bool(_PRIVATE_IP_V4.search(ctx))
 
     if pattern_name in ("bearer_token", "openai_api_key", "anthropic_api_key"):
-        return _is_dummy_token(matched_text)
+        return bool(_ALLOWLIST_DUMMY_TOKENS.search(matched_text))
 
     if pattern_name == "database_url":
-        return _is_allowlisted_url(matched_text)
+        return bool(_ALLOWLIST_URLS.search(matched_text))
 
     if pattern_name == "credit_card":
         digits_only = re.sub(r"[ -]", "", matched_text)
@@ -378,7 +358,7 @@ def scan_text(
 
     # Check if the text starts with a decorator (quick escape for Python code)
     stripped = text.strip()
-    if _is_allowlisted_decorator(stripped):
+    if _ALLOWLIST_DECORATORS.match(stripped):
         return []
 
     matches: list[SecretMatch] = []

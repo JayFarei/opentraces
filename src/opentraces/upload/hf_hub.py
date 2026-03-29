@@ -7,13 +7,15 @@ Filename pattern: traces_{timestamp}_{uuid_short}.jsonl
 from __future__ import annotations
 
 import io
+import logging
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from huggingface_hub import HfApi
-from huggingface_hub.utils import HfHubHTTPError
+
+logger = logging.getLogger(__name__)
 
 from opentraces_schema.models import TraceRecord
 
@@ -56,9 +58,9 @@ class HFUploader:
                 repo_type="dataset",
                 tags=["opentraces", "agent-traces"],
             )
-        except Exception:
+        except Exception as e:
             # Tagging is best-effort, not all API versions support update_repo_settings
-            pass
+            logger.debug("Could not tag repo %s: %s", self.repo_id, e)
         return str(repo_url)
 
     def _generate_shard_name(self) -> str:
@@ -109,15 +111,14 @@ class HFUploader:
                     repo_url=repo_url,
                     success=True,
                 )
-            except HfHubHTTPError as e:
-                last_error = str(e)
-                if attempt < self.MAX_RETRIES - 1:
-                    delay = self.BASE_DELAY * (2**attempt)
-                    time.sleep(delay)
             except Exception as e:
                 last_error = str(e)
                 if attempt < self.MAX_RETRIES - 1:
                     delay = self.BASE_DELAY * (2**attempt)
+                    logger.warning(
+                        "Upload attempt %d/%d failed: %s (retrying in %.1fs)",
+                        attempt + 1, self.MAX_RETRIES, last_error, delay,
+                    )
                     time.sleep(delay)
 
         return UploadResult(
@@ -128,18 +129,18 @@ class HFUploader:
             error=f"Upload failed after {self.MAX_RETRIES} retries: {last_error}",
         )
 
-    def publish_dataset(self, repo_id: str) -> None:
+    def publish_dataset(self) -> None:
         """Change a private dataset to public."""
         self.api.update_repo_settings(
-            repo_id=repo_id,
+            repo_id=self.repo_id,
             repo_type="dataset",
             private=False,
         )
 
-    def set_gated(self, repo_id: str, gated: str = "auto") -> None:
+    def set_gated(self, gated: str = "auto") -> None:
         """Enable gated access on a dataset."""
         self.api.update_repo_settings(
-            repo_id=repo_id,
+            repo_id=self.repo_id,
             repo_type="dataset",
             gated=gated,
         )
@@ -169,7 +170,8 @@ class HFUploader:
                     "last_modified": str(ds.last_modified) if ds.last_modified else None,
                 })
             return results
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to list opentraces datasets: %s", e)
             return []
 
     def get_existing_shards(self) -> list[str]:
@@ -183,5 +185,6 @@ class HFUploader:
                 f for f in files
                 if f.startswith("data/traces_") and f.endswith(".jsonl")
             ]
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to list shards for %s: %s", self.repo_id, e)
             return []

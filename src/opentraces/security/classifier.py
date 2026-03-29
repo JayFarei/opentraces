@@ -7,7 +7,6 @@ internal URLs, identifier density, and file path depth analysis.
 from __future__ import annotations
 
 import re
-import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 

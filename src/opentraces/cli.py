@@ -7,14 +7,19 @@ Designed to be driven by Claude Code via bundled SKILL.md.
 from __future__ import annotations
 
 import json
+import logging
+import os
+import shutil
 import sys
 
 import click
 
+logger = logging.getLogger(__name__)
+
 from pathlib import Path
 
 from . import __version__
-from .config import auth_identity, load_config, load_project_config, save_config, Config
+from .config import auth_identity, load_config, load_project_config, save_config
 from .workflow import (
     DEFAULT_AGENT,
     DEFAULT_PUSH_POLICY,
@@ -47,7 +52,7 @@ def human_echo(message: str = "", **kwargs) -> None:
         click.echo(message, **kwargs)
 
 
-def error_response(code: str, kind: str, message: str, hint: str | None = None, retryable: bool = False) -> dict:
+def error_response(code: str, kind: str, message: str, hint: str | None = None, retryable: bool = False) -> dict[str, object]:
     return {
         "status": "error",
         "error": {
@@ -74,22 +79,22 @@ def _default_repo(identity: dict | None) -> str:
     return DEFAULT_REMOTE_NAME
 
 
-def _launch_tui_ui() -> None:
+def _launch_tui_ui(fullscreen: bool = False) -> None:
     from .config import get_project_staging_dir
-    from .review.tui_review import OpenTracesApp
+    from .clients.tui import OpenTracesApp
 
     project_staging = get_project_staging_dir(Path.cwd())
-    app = OpenTracesApp(staging_dir=project_staging)
+    app = OpenTracesApp(staging_dir=project_staging, fullscreen=fullscreen)
     app.run()
 
 
 def _launch_web_ui(port: int = 5050, open_browser: bool = False) -> None:
     from .config import get_project_staging_dir, get_project_state_path
-    from .review.web.app import create_app
+    from .clients.web_server import create_app
 
     project_staging = get_project_staging_dir(Path.cwd())
     project_state = get_project_state_path(Path.cwd())
-    viewer_dist = Path(__file__).parent.parent.parent / "viewer" / "dist"
+    viewer_dist = Path(__file__).parent.parent.parent / "web" / "viewer" / "dist"
     if not viewer_dist.exists():
         viewer_dist = None
 
@@ -138,8 +143,8 @@ def _schedule_browser_open(url: str) -> None:
         timer = threading.Timer(0.6, lambda: webbrowser.open(url))
         timer.daemon = True
         timer.start()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Could not schedule browser open: %s", e)
 
 
 @click.group(invoke_without_command=True)
@@ -285,8 +290,8 @@ def _login_with_device_code(save_credentials, credentials_path) -> None:
     try:
         import webbrowser
         webbrowser.open(verification_uri)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Could not open browser: %s", e)
 
     # Step 3: Poll for authorization
     click.echo("  Waiting for authorization...", nl=False)
@@ -733,6 +738,9 @@ def init(
     if not no_hook:
         hook_installed = _install_capture_hook(project_dir, selected_agents)
 
+    # Step 6: Skill installation
+    skill_installed = _install_skill(project_dir, selected_agents)
+
     # Summary
     click.echo(f"\nInitialized opentraces ({review_policy} policy) in {ot_dir}")
     if remote:
@@ -743,6 +751,8 @@ def init(
     click.echo(f"  Staging: {staging_dir}")
     if hook_installed:
         click.echo(f"  Hook:    .claude/settings.json (SessionEnd)")
+    if skill_installed:
+        click.echo(f"  Skill:   .agents/skills/opentraces/SKILL.md")
     click.echo(f"  Agents:  {', '.join(selected_agents)}")
     click.echo(f"  Policy:  {review_policy}")
     click.echo(f"  Push:    {push_policy}")
@@ -757,6 +767,7 @@ def init(
         "remote": remote,
         "agents": selected_agents,
         "hook_installed": hook_installed,
+        "skill_installed": skill_installed,
         "config_path": str(config_json),
         "staging_path": str(staging_dir),
         "next_steps": [
@@ -909,6 +920,58 @@ def _remove_capture_hook(project_dir: Path) -> bool:
     return True
 
 
+# Agent directory mapping: agent name -> skill directory relative to project root
+AGENT_SKILL_DIRS = {
+    "claude-code": ".claude/skills",
+}
+
+
+def _resolve_skill_source() -> Path | None:
+    """Find SKILL.md from installed package or source tree."""
+    # Installed package (wheel with force-include)
+    pkg_path = Path(__file__).parent / "skill" / "SKILL.md"
+    if pkg_path.exists():
+        return pkg_path
+    # Editable install / source tree: skill/ at repo root
+    repo_path = Path(__file__).parent.parent.parent / "skill" / "SKILL.md"
+    if repo_path.exists():
+        return repo_path
+    return None
+
+
+def _install_skill(project_dir: Path, agents: list[str]) -> bool:
+    """Install the opentraces skill into .agents/ and symlink per selected agent."""
+    skill_source = _resolve_skill_source()
+    if not skill_source:
+        return False
+
+    try:
+        # 1. Copy into .agents/skills/opentraces/
+        agents_skill_dir = project_dir / ".agents" / "skills" / "opentraces"
+        agents_skill_dir.mkdir(parents=True, exist_ok=True)
+        target = agents_skill_dir / "SKILL.md"
+        shutil.copy2(str(skill_source), str(target))
+
+        # 2. Symlink into each selected agent's skill directory
+        for agent in agents:
+            agent_skills_path = AGENT_SKILL_DIRS.get(agent)
+            if not agent_skills_path:
+                continue
+            agent_skill_dir = project_dir / agent_skills_path / "opentraces"
+            agent_skill_dir.mkdir(parents=True, exist_ok=True)
+            symlink = agent_skill_dir / "SKILL.md"
+            if symlink.exists() or symlink.is_symlink():
+                symlink.unlink()
+            symlink.symlink_to(os.path.relpath(str(target), str(symlink.parent)))
+            click.echo(f"  Linked skill: {agent_skills_path}/opentraces/SKILL.md")
+
+        click.echo(f"  Installed skill: .agents/skills/opentraces/SKILL.md")
+        return True
+    except Exception as e:
+        click.echo(f"  Could not install skill: {e}")
+        return False
+
+
 @main.command("_capture", hidden=True)
 @click.option("--session-dir", required=True, type=click.Path(exists=True), help="Path to Claude Code session dir")
 @click.option("--project-dir", required=True, type=click.Path(exists=True), help="Path to project root")
@@ -916,13 +979,7 @@ def capture(session_dir: str, project_dir: str) -> None:
     """Capture a Claude Code session (hidden, for automation)."""
     from .config import load_project_config, get_project_staging_dir, get_project_state_path
     from .parsers.claude_code import ClaudeCodeParser
-    from .security.scanner import two_pass_scan, apply_redactions
-    from .security.anonymizer import anonymize_paths
-    from .security.classifier import classify_trace_record
-    from .enrichment.git_signals import extract_git_signals, detect_vcs, check_committed
-    from .enrichment.attribution import build_attribution
-    from .enrichment.dependencies import extract_dependencies
-    from .enrichment.metrics import compute_metrics
+    from .pipeline import process_trace
     from .state import StateManager, TraceStatus, ProcessedFile
 
     session_path = Path(session_dir)
@@ -965,82 +1022,17 @@ def capture(session_dir: str, project_dir: str) -> None:
             if record is None:
                 continue
 
-            # Enrich: git signals
-            vcs = detect_vcs(proj_path)
-            record.environment.vcs = vcs
-            if vcs.type == "git" and record.timestamp_start:
-                ts_end = record.timestamp_end or record.timestamp_start
-                outcome = check_committed(proj_path, record.timestamp_start, ts_end)
-                if outcome.committed:
-                    record.outcome = outcome
-
-            # Enrich: attribution
-            patch = record.outcome.patch if record.outcome else None
-            attribution = build_attribution(record.steps, patch)
-            record.attribution = attribution
-
-            # Enrich: dependencies
-            record.dependencies = extract_dependencies(str(proj_path))
-
-            # Enrich: metrics
-            record.metrics = compute_metrics(record.steps)
-
-            # Security: scan and redact based on tier
-            needs_review = False
-            if tier in (1, 2):
-                pass1, pass2 = two_pass_scan(record)
-                total_redactions = apply_redactions(record)
-                record.security.tier = tier
-                record.security.redactions_applied = total_redactions
-                needs_review = bool(pass1.matches or pass2.matches or total_redactions)
-
-            if tier == 2:
-                classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
-                record.security.flags_reviewed = len(classifier_result.flags)
-                record.security.classifier_version = "0.1.0"
-                needs_review = needs_review or bool(classifier_result.flags)
-
-            # Anonymize paths (always runs, auto-detects usernames even if USER env unset)
-            import os as _os
-            username = _os.environ.get("USER") or _os.environ.get("USERNAME") or None
-            extra_usernames = cfg.custom_redact_strings or None
-
-            def _anon(text: str | None) -> str | None:
-                if not text:
-                    return text
-                return anonymize_paths(text, username=username, extra_usernames=extra_usernames)
-
-            if record.task.description:
-                record.task.description = _anon(record.task.description)
-            for step in record.steps:
-                step.content = _anon(step.content)
-                if step.reasoning_content:
-                    step.reasoning_content = _anon(step.reasoning_content)
-                for tc in step.tool_calls:
-                    for k, v in list(tc.input.items()):
-                        if isinstance(v, str):
-                            tc.input[k] = _anon(v)
-                for obs in step.observations:
-                    obs.content = _anon(obs.content)
-                    obs.output_summary = _anon(obs.output_summary)
-                for snip in step.snippets:
-                    snip.file_path = _anon(snip.file_path) or snip.file_path
-                    snip.text = _anon(snip.text)
-            if record.outcome and record.outcome.patch:
-                record.outcome.patch = _anon(record.outcome.patch)
-            if record.attribution:
-                for attr_file in record.attribution.files:
-                    attr_file.path = _anon(attr_file.path) or attr_file.path
+            result = process_trace(record, proj_path, tier, cfg)
 
             # Stage to project-local staging
-            jsonl_line = record.to_jsonl_line()
-            staging_file = staging / f"{record.trace_id}.jsonl"
+            jsonl_line = result.record.to_jsonl_line()
+            staging_file = staging / f"{result.record.trace_id}.jsonl"
             staging_file.write_text(jsonl_line + "\n")
 
             state.set_trace_status(
-                record.trace_id,
-                TraceStatus.APPROVED if review_policy == "auto-ready" and not needs_review else TraceStatus.STAGED,
-                session_id=record.session_id,
+                result.record.trace_id,
+                TraceStatus.APPROVED if review_policy == "auto-ready" and not result.needs_review else TraceStatus.STAGED,
+                session_id=result.record.session_id,
                 file_path=str(staging_file),
             )
 
@@ -1115,7 +1107,6 @@ def status() -> None:
                 counts[visible_stage] += 1
                 # Relative timestamp
                 if record.timestamp_end:
-                    from datetime import datetime
                     ts = record.timestamp_end.timestamp()
                     diff_seconds = now - ts
                     if diff_seconds < 3600:
@@ -1252,8 +1243,8 @@ def session_list(stage: str | None, model: str | None, agent: str | None, limit:
                         rel_time = f"{int(diff_seconds / 3600)}h ago"
                     else:
                         rel_time = f"{int(diff_seconds / 86400)}d ago"
-                except Exception:
-                    pass
+                except (ValueError, TypeError, AttributeError) as e:
+                    logger.debug("Could not compute relative time: %s", e)
 
             sessions.append({
                 "trace_id": record.trace_id,
@@ -1432,11 +1423,8 @@ def session_redact(trace_id: str, step_index: int) -> None:
         emit_json(error_response("OUT_OF_RANGE", "session", f"Step {step_index} out of range"))
         sys.exit(2)
 
-    steps[step_index]["content"] = "[REDACTED]"
-    steps[step_index]["reasoning_content"] = None
-    steps[step_index]["tool_calls"] = []
-    steps[step_index]["observations"] = []
-    steps[step_index]["snippets"] = []
+    from .inbox import redact_step
+    redact_step(steps[step_index])
 
     # Atomic write
     new_line = json.dumps(trace_data, ensure_ascii=False)
@@ -1640,7 +1628,6 @@ def remote_remove() -> None:
 @main.command()
 def stats() -> None:
     """Show aggregate statistics for the current project inbox."""
-    import time as _time
     from .config import get_project_staging_dir, get_project_state_path
     from .state import StateManager
     from opentraces_schema import TraceRecord
@@ -1683,11 +1670,9 @@ def stats() -> None:
                 total_cost += record.metrics.estimated_cost_usd or 0.0
 
             if record.timestamp_start:
-                ts = str(record.timestamp_start)
-                timestamps.append(ts if isinstance(record.timestamp_start, str) else record.timestamp_start.isoformat())
+                timestamps.append(str(record.timestamp_start) if isinstance(record.timestamp_start, str) else record.timestamp_start.isoformat())
             if record.timestamp_end:
-                ts = str(record.timestamp_end)
-                timestamps.append(ts if isinstance(record.timestamp_end, str) else record.timestamp_end.isoformat())
+                timestamps.append(str(record.timestamp_end) if isinstance(record.timestamp_end, str) else record.timestamp_end.isoformat())
         except Exception:
             continue
 
@@ -1893,20 +1878,13 @@ def parse(auto: bool, limit: int) -> None:
     """Parse agent sessions into enriched JSONL traces."""
     from .config import get_projects_path, get_tier_for_project
     from .parsers.claude_code import ClaudeCodeParser
-    from .security.scanner import scan_trace_record, two_pass_scan, apply_redactions
-    from .security.anonymizer import anonymize_paths
-    from .security.classifier import classify_trace_record
-    from .enrichment.git_signals import extract_git_signals
-    from .enrichment.attribution import build_attribution
-    from .enrichment.dependencies import extract_dependencies
-    from .enrichment.metrics import compute_metrics
+    from .pipeline import process_trace
     from .state import StateManager, TraceStatus, ProcessedFile, STAGING_DIR
 
     cfg = load_config()
     projects_path = get_projects_path(cfg)
     parser = ClaudeCodeParser()
     state = StateManager()
-    tier = cfg.default_tier
 
     STAGING_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1932,87 +1910,24 @@ def parse(auto: bool, limit: int) -> None:
                 skipped_count += 1
                 continue
 
-            # Enrich: git signals (use session timestamps, not defaults)
+            # Resolve per-project tier
             project_dir = session_path.parent
-            from .enrichment.git_signals import detect_vcs, check_committed
-            vcs = detect_vcs(project_dir)
-            record.environment.vcs = vcs
-            if vcs.type == "git" and record.timestamp_start:
-                ts_end = record.timestamp_end or record.timestamp_start
-                outcome = check_committed(project_dir, record.timestamp_start, ts_end)
-                if outcome.committed:
-                    record.outcome = outcome
-
-            # Enrich: attribution
-            patch = record.outcome.patch if record.outcome else None
-            attribution = build_attribution(record.steps, patch)
-            record.attribution = attribution
-
-            # Enrich: dependencies
-            record.dependencies = extract_dependencies(str(project_dir))
-
-            # Enrich: metrics (recompute with full data)
-            record.metrics = compute_metrics(record.steps)
-
-            # Security: scan and redact based on tier
-            project_path_str = str(session_path.parent)
-            tier = get_tier_for_project(cfg, project_path_str)
+            tier = get_tier_for_project(cfg, str(project_dir))
             if tier == -1:
                 skipped_count += 1
                 continue  # Excluded project
 
-            if tier in (1, 2):
-                pass1, pass2 = two_pass_scan(record)
-                total_redactions = apply_redactions(record)
-                record.security.tier = tier
-                record.security.redactions_applied = total_redactions
-
-            if tier == 2:
-                classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
-                record.security.flags_reviewed = len(classifier_result.flags)
-                record.security.classifier_version = "0.1.0"
-
-            # Anonymize paths (always runs, auto-detects usernames even if USER env unset)
-            import os as _os
-            username = _os.environ.get("USER") or _os.environ.get("USERNAME") or None
-            extra_usernames = cfg.custom_redact_strings or None
-
-            def _anon(text: str | None) -> str | None:
-                if not text:
-                    return text
-                return anonymize_paths(text, username=username, extra_usernames=extra_usernames)
-
-            if record.task.description:
-                record.task.description = _anon(record.task.description)
-            for step in record.steps:
-                step.content = _anon(step.content)
-                if step.reasoning_content:
-                    step.reasoning_content = _anon(step.reasoning_content)
-                for tc in step.tool_calls:
-                    for k, v in list(tc.input.items()):
-                        if isinstance(v, str):
-                            tc.input[k] = _anon(v)
-                for obs in step.observations:
-                    obs.content = _anon(obs.content)
-                    obs.output_summary = _anon(obs.output_summary)
-                for snip in step.snippets:
-                    snip.file_path = _anon(snip.file_path) or snip.file_path
-                    snip.text = _anon(snip.text)
-            if record.outcome and record.outcome.patch:
-                record.outcome.patch = _anon(record.outcome.patch)
-            if record.attribution:
-                for attr_file in record.attribution.files:
-                    attr_file.path = _anon(attr_file.path) or attr_file.path
+            result = process_trace(record, project_dir, tier, cfg)
 
             # Stage the trace
-            jsonl_line = record.to_jsonl_line()
-            staging_file = STAGING_DIR / f"{record.trace_id}.jsonl"
+            jsonl_line = result.record.to_jsonl_line()
+            staging_file = STAGING_DIR / f"{result.record.trace_id}.jsonl"
             staging_file.write_text(jsonl_line + "\n")
 
             state.set_trace_status(
-                record.trace_id,
+                result.record.trace_id,
                 TraceStatus.APPROVED if auto else TraceStatus.STAGED,
-                session_id=record.session_id,
+                session_id=result.record.session_id,
                 file_path=str(staging_file),
             )
 
@@ -2026,7 +1941,7 @@ def parse(auto: bool, limit: int) -> None:
             ))
 
             parsed_count += 1
-            click.echo(f"  Parsed: {session_path.name} ({len(record.steps)} steps, {sum(len(s.tool_calls) for s in record.steps)} tool calls)")
+            click.echo(f"  Parsed: {session_path.name} ({len(result.record.steps)} steps, {sum(len(s.tool_calls) for s in result.record.steps)} tool calls)")
 
         except Exception as e:
             error_count += 1
@@ -2058,10 +1973,11 @@ def web(port: int, no_open: bool) -> None:
 
 
 @main.command()
-def tui() -> None:
+@click.option("--fullscreen", is_flag=True, help="Open directly into fullscreen inspect mode")
+def tui(fullscreen: bool) -> None:
     """Open the terminal inbox UI."""
     try:
-        _launch_tui_ui()
+        _launch_tui_ui(fullscreen=fullscreen)
     except ImportError:
         click.echo("Textual not installed. Run: pip install opentraces[tui]")
         sys.exit(2)
@@ -2187,8 +2103,8 @@ def commit_traces(message: str | None, commit_all: bool) -> None:
                     data = Path(entry.file_path).read_text().strip()
                     record = TraceRecord.model_validate_json(data)
                     desc = (record.task.description or "untitled")[:50]
-                except Exception:
-                    pass
+                except (OSError, ValueError) as e:
+                    logger.debug("Could not load trace %s: %s", entry.trace_id, e)
             click.echo(f"  {i+1}. {entry.trace_id[:8]}  {desc}")
 
         click.echo()
@@ -2201,8 +2117,6 @@ def commit_traces(message: str | None, commit_all: bool) -> None:
     # Auto-generate message if not provided
     if message is None:
         descriptions = []
-        from .config import get_project_staging_dir
-        staging_dir = get_project_staging_dir(project_dir)
         for entry in approved:
             if entry.file_path:
                 try:
@@ -2210,8 +2124,8 @@ def commit_traces(message: str | None, commit_all: bool) -> None:
                     record = TraceRecord.model_validate_json(data)
                     if record.task.description:
                         descriptions.append(record.task.description[:60])
-                except Exception:
-                    pass
+                except (OSError, ValueError) as e:
+                    logger.debug("Could not read trace for message: %s", e)
         if descriptions:
             message = "; ".join(descriptions[:3])
             if len(descriptions) > 3:
@@ -2263,11 +2177,8 @@ def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
 @click.option("--repo", default=None, help="HF dataset repo (default: username/opentraces)")
 def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None) -> None:
     """Upload committed traces to HuggingFace Hub."""
-    from .config import (
-        get_project_staging_dir,
-        load_project_config, save_project_config,
-    )
-    from .state import StateManager, TraceStatus, StagingLock, STAGING_DIR
+    from .config import load_project_config, save_project_config
+    from .state import StateManager, TraceStatus, StagingLock
     from .upload.hf_hub import HFUploader
     from .upload.dataset_card import generate_dataset_card
     from opentraces_schema import TraceRecord
@@ -2312,10 +2223,10 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                     choice_num = click.prompt("Choose", type=int, default=len(existing)+1)
                     if choice_num <= len(existing):
                         repo_id = existing[choice_num - 1]["id"]
-                except Exception:
-                    pass
-        except Exception:
-            pass
+                except (ValueError, EOFError) as e:
+                    logger.debug("Remote selection cancelled: %s", e)
+        except Exception as e:
+            logger.debug("Could not list existing datasets: %s", e)
 
         # Save the chosen remote for next time
         proj_config["remote"] = repo_id
@@ -2326,7 +2237,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     if publish:
         try:
             uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
-            uploader.publish_dataset(repo_id)
+            uploader.publish_dataset()
 
             # Save visibility to project config
             try:
@@ -2336,8 +2247,8 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                 ot_dir = Path.cwd() / ".opentraces"
                 if ot_dir.exists():
                     save_project_config(Path.cwd(), proj_config)
-            except Exception:
-                pass
+            except OSError as e:
+                logger.debug("Could not save visibility config: %s", e)
 
             click.echo(f"Dataset is now public: https://huggingface.co/datasets/{repo_id}")
             emit_json({
@@ -2350,16 +2261,11 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
             sys.exit(4)
         return
 
-    # Handle --gated (can be combined with upload or standalone)
-    if gated and private is False and public is False:
-        # Standalone --gated usage (no upload flags)
-        pass  # will apply gated after upload below, or standalone if no traces
-
     # Use project-local state if available, fall back to global
     from .config import get_project_state_path
     proj_state_path = get_project_state_path(Path.cwd())
     state = StateManager(
-        state_path=proj_state_path if proj_state_path.exists() else None
+        state_path=proj_state_path if proj_state_path.parent.exists() else None
     )
     # Check project mode for push behavior
     proj_config = load_project_config(Path.cwd())
@@ -2386,7 +2292,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
         if gated:
             try:
                 uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
-                uploader.set_gated(repo_id)
+                uploader.set_gated()
                 click.echo(f"Gated access enabled on {repo_id}")
             except Exception as e:
                 click.echo(f"Failed to set gated access: {e}")
@@ -2398,8 +2304,6 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
         return
 
     # Load trace records from staging files, track which ones loaded successfully
-    # Check project-local staging first, fall back to global
-    project_staging = get_project_staging_dir(Path.cwd())
     records = []
     loaded_trace_ids = set()
     for entry in traces_to_upload:
@@ -2444,8 +2348,8 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                         _api = _HfApi(token=cfg.hf_token)
                         existing_card = _api.hf_hub_download(repo_id, "README.md", repo_type="dataset")
                         existing_card = Path(existing_card).read_text()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Could not fetch existing dataset card: %s", e)
                     card = generate_dataset_card(repo_id, records, existing_card)
                     import io as _io
                     uploader.api.upload_file(
@@ -2461,7 +2365,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                 # Apply gated access if requested
                 if gated:
                     try:
-                        uploader.set_gated(repo_id)
+                        uploader.set_gated()
                     except Exception as e:
                         click.echo(f"  Warning: failed to set gated access: {e}", err=True)
 
@@ -2485,8 +2389,8 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                     ot_dir = Path.cwd() / ".opentraces"
                     if ot_dir.exists():
                         save_project_config(Path.cwd(), proj_config)
-                except Exception:
-                    pass
+                except OSError as e:
+                    logger.debug("Could not save post-upload config: %s", e)
 
                 emit_json({
                     "status": "ok",

@@ -18,6 +18,8 @@ from pathlib import Path
 
 from opentraces_schema.models import Outcome, Step, VCS
 
+MAX_VCS_DIFF_CHARS = 250_000
+
 
 def _run_git(args: list[str], cwd: Path) -> tuple[bool, str]:
     """Run a git command and return (success, stdout)."""
@@ -32,6 +34,16 @@ def _run_git(args: list[str], cwd: Path) -> tuple[bool, str]:
         return result.returncode == 0, result.stdout.strip()
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False, ""
+
+
+def _truncate_diff(diff: str) -> str:
+    """Bound serialized VCS diffs so trace processing stays tractable."""
+    if len(diff) <= MAX_VCS_DIFF_CHARS:
+        return diff
+    omitted = len(diff) - MAX_VCS_DIFF_CHARS
+    suffix = f"\n\n[TRUNCATED opentraces.vcs.diff omitted_chars={omitted}]"
+    keep = max(0, MAX_VCS_DIFF_CHARS - len(suffix))
+    return diff[:keep] + suffix
 
 
 def detect_vcs(project_path: Path) -> VCS:
@@ -49,6 +61,7 @@ def detect_vcs(project_path: Path) -> VCS:
     _, commit = _run_git(["rev-parse", "HEAD"], project_path)
     _, branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], project_path)
     _, diff = _run_git(["diff", "HEAD"], project_path)
+    diff = _truncate_diff(diff) if diff else diff
 
     return VCS(
         type="git",
@@ -60,15 +73,20 @@ def detect_vcs(project_path: Path) -> VCS:
 
 def check_committed(
     project_path: Path,
-    session_start: str,
-    session_end: str,
+    session_start: str | datetime,
+    session_end: str | datetime,
 ) -> Outcome:
     """Check if the session produced a commit between session_start and session_end.
 
-    Timestamps should be ISO 8601 format strings.
+    Timestamps can be ISO 8601 format strings or datetime objects.
     Returns an Outcome with committed=True/False and commit details if found.
     """
     project_path = Path(project_path)
+
+    if isinstance(session_start, datetime):
+        session_start = session_start.isoformat()
+    if isinstance(session_end, datetime):
+        session_end = session_end.isoformat()
 
     ok, _ = _run_git(["rev-parse", "--is-inside-work-tree"], project_path)
     if not ok:
@@ -138,7 +156,7 @@ def detect_commits_from_steps(steps: list[Step]) -> Outcome:
     commit_messages: list[str] = []
 
     for step in steps:
-        for i, tc in enumerate(step.tool_calls):
+        for tc in step.tool_calls:
             if tc.tool_name != "Bash":
                 continue
 

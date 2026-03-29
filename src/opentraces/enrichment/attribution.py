@@ -18,7 +18,7 @@ from .snippets import extract_edited_lines
 
 def _content_hash(text: str) -> str:
     """Compute a short content hash (md5 truncated to 8 hex chars, murmur3 stand-in)."""
-    return hashlib.md5(text.encode()).hexdigest()[:8]
+    return hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()[:8]
 
 
 def _parse_diff_files(patch: str) -> dict[str, list[tuple[int, int]]]:
@@ -29,7 +29,6 @@ def _parse_diff_files(patch: str) -> dict[str, list[tuple[int, int]]]:
     """
     files: dict[str, list[tuple[int, int]]] = {}
     current_file = None
-    current_line = 0
 
     for line in patch.split("\n"):
         if line.startswith("+++ b/"):
@@ -44,7 +43,6 @@ def _parse_diff_files(patch: str) -> dict[str, list[tuple[int, int]]]:
                     try:
                         start = int(part.split(",")[0][1:])
                         count = int(part.split(",")[1])
-                        current_line = start
                         if current_file and count > 0:
                             files[current_file].append((start, start + count - 1))
                     except (ValueError, IndexError):
@@ -53,7 +51,6 @@ def _parse_diff_files(patch: str) -> dict[str, list[tuple[int, int]]]:
                 elif part.startswith("+") and part[1:].isdigit():
                     try:
                         start = int(part[1:])
-                        current_line = start
                         if current_file:
                             files[current_file].append((start, start))
                     except ValueError:

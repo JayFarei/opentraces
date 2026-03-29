@@ -7,9 +7,10 @@ instead of hardcoding them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-
-# Import BatchAssessment lazily to avoid circular imports if needed
+if TYPE_CHECKING:
+    from .engine import BatchAssessment
 
 
 @dataclass
@@ -40,7 +41,7 @@ class GateResult:
     failures: list[str] = field(default_factory=list)
 
 
-def check_gate(batch, thresholds=None, preservation_threshold=None) -> GateResult:
+def check_gate(batch: BatchAssessment, thresholds: list[PersonaThreshold] | None = None, preservation_threshold: float | None = None) -> GateResult:
     """Check a BatchAssessment against quality gates.
 
     Args:

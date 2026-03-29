@@ -17,7 +17,7 @@ from typing import Any
 
 import yaml
 
-from opentraces_schema.models import TraceRecord
+from opentraces_schema import TraceRecord
 
 logger = logging.getLogger(__name__)
 

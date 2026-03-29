@@ -8,7 +8,7 @@ and data cleanliness for supervised fine-tuning pipelines.
 
 from __future__ import annotations
 
-from opentraces_schema.models import TraceRecord
+from opentraces_schema import TraceRecord
 
 from ..types import CheckDef, CheckResult, PersonaDef
 

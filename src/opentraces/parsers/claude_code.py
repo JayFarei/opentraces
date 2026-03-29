@@ -16,7 +16,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import uuid
 from pathlib import Path
 from typing import Any, Iterator
@@ -232,8 +231,8 @@ class ClaudeCodeParser:
                                 ]
                             if "system" in inner:
                                 metadata["system_prompt_raw"] = inner["system"]
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.debug("Could not parse metadata from init message: %s", e)
 
             # Extract first user message
             if (
@@ -538,7 +537,8 @@ class ClaudeCodeParser:
                             jsonl_file, parent_step_index, parent_steps,
                             system_prompts, depth, subagent_type, visited_sessions,
                         )
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, OSError) as e:
+                logger.debug("Skipping subagent state file: %s", e)
                 continue
 
         # Fallback: try first available subagent file
@@ -749,8 +749,8 @@ class ClaudeCodeParser:
                 first = datetime.fromisoformat(timestamped_steps[0].timestamp.replace("Z", "+00:00"))
                 last = datetime.fromisoformat(timestamped_steps[-1].timestamp.replace("Z", "+00:00"))
                 duration = (last - first).total_seconds()
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                logger.debug("Could not compute duration from timestamps: %s", e)
 
         return Metrics(
             total_steps=len(steps),

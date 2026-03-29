@@ -7,7 +7,6 @@ Two-pass design: first per-field, then on final serialized bytes.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any

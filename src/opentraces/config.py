@@ -7,10 +7,12 @@ Supports config version migration between releases.
 from __future__ import annotations
 
 import json
+import logging
 import os
-import stat
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
@@ -37,12 +39,16 @@ def auth_identity(token: str | None) -> dict | None:
         return None
 
 
+from .paths import (
+    CONFIG_PATH,
+    CREDENTIALS_PATH,
+    OPENTRACES_DIR,
+    STAGING_DIR,
+    STATE_PATH,
+    UPLOADED_DIR,
+)
+
 CONFIG_VERSION = "0.1.0"
-OPENTRACES_DIR = Path.home() / ".opentraces"
-CONFIG_PATH = OPENTRACES_DIR / "config.json"
-STATE_PATH = OPENTRACES_DIR / "state.json"
-STAGING_DIR = OPENTRACES_DIR / "staging"
-UPLOADED_DIR = OPENTRACES_DIR / "uploaded"
 
 
 class ProjectConfig(BaseModel):
@@ -105,7 +111,14 @@ def load_config() -> Config:
         save_config(config)
         return config
 
-    raw = json.loads(CONFIG_PATH.read_text())
+    try:
+        raw = json.loads(CONFIG_PATH.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Could not read config %s: %s; using defaults", CONFIG_PATH, e)
+        config = Config()
+        save_config(config)
+        return config
+
     stored_version = raw.get("config_version", "0.0.0")
 
     if stored_version != CONFIG_VERSION:
@@ -119,8 +132,6 @@ def load_config() -> Config:
 
     return config
 
-
-CREDENTIALS_PATH = OPENTRACES_DIR / "credentials"
 
 
 def _resolve_hf_token() -> str | None:
@@ -136,8 +147,8 @@ def _resolve_hf_token() -> str | None:
             text = CREDENTIALS_PATH.read_text().strip()
             if text.startswith("hf_"):
                 return text
-        except OSError:
-            pass
+        except OSError as e:
+            logger.debug("Could not read credentials file: %s", e)
 
     # 3. huggingface-cli login token (fallback)
     hf_cache_token = Path.home() / ".cache" / "huggingface" / "token"
@@ -146,8 +157,8 @@ def _resolve_hf_token() -> str | None:
             text = hf_cache_token.read_text().strip()
             if text.startswith("hf_"):
                 return text
-        except OSError:
-            pass
+        except OSError as e:
+            logger.debug("Could not read HF cache token: %s", e)
 
     return None
 
@@ -190,7 +201,13 @@ def get_projects_path(config: Config) -> Path:
 
 
 def get_tier_for_project(config: Config, project_path: str) -> int:
-    """Get the security tier for a specific project."""
+    """Get the security tier for a specific project.
+
+    Returns the configured tier (1-3) for the project, or the default tier
+    if no project-specific config exists. Returns -1 if the project is
+    excluded from trace collection (via excluded_projects list or
+    per-project excluded=True flag).
+    """
     if project_path in config.excluded_projects:
         return -1  # Excluded
 
@@ -277,7 +294,8 @@ def load_project_config(project_dir: Path) -> dict:
     if json_file.exists():
         try:
             data = json.loads(json_file.read_text())
-        except Exception:
+        except (json.JSONDecodeError, OSError) as e:
+            logger.debug("Could not read project config %s: %s", json_file, e)
             data = None
 
     # Fall back to YAML, migrate if found
@@ -291,8 +309,8 @@ def load_project_config(project_dir: Path) -> dict:
             tmp_path.write_text(json.dumps(data, indent=2))
             os.replace(str(tmp_path), str(json_file))
             os.replace(str(yml_file), str(yml_file) + ".bak")
-        except Exception:
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            logger.debug("YAML migration failed for %s: %s", yml_file, e)
 
     if data is None:
         return {
@@ -312,8 +330,8 @@ def load_project_config(project_dir: Path) -> dict:
             tmp_path = json_file.with_suffix(".tmp")
             tmp_path.write_text(json.dumps(data, indent=2))
             os.replace(str(tmp_path), str(json_file))
-        except Exception:
-            pass
+        except OSError as e:
+            logger.debug("Could not save normalized config %s: %s", json_file, e)
 
     return data
 
