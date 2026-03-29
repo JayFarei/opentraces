@@ -156,7 +156,15 @@ body {
   color: #000;
 }
 
-.container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 24px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.container > footer { margin-top: auto; }
 
 /* ═══ ZERO RADIUS EVERYWHERE ═══ */
 *, *::before, *::after { border-radius: 0 !important; }
