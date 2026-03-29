@@ -10,7 +10,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from rich.markup import escape
+def escape(text: str) -> str:
+    """Escape ALL square brackets for Rich markup, not just tag-like ones."""
+    return text.replace("[", "\\[")
 from textual import on
 from textual.app import App, ComposeResult
 from textual.binding import Binding

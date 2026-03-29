@@ -133,7 +133,7 @@ class TestStatus:
         result = runner.invoke(main, ["status"])
 
         assert result.exit_code == 0
-        assert "review policy:" in result.output
+        assert "mode:" in result.output
         assert "sessions in inbox" in result.output or "session files tracked" in result.output
 
     def test_status_shows_remote(self, runner, initialized_project):
@@ -300,7 +300,7 @@ class TestDatasetNameResolution:
         proj.mkdir()
         ot_dir = proj / ".opentraces"
         ot_dir.mkdir()
-        (ot_dir / "config.yml").write_text("tier: 2\n")
+        (ot_dir / "config.yml").write_text("review_policy: review\n")
 
         os.chdir(str(proj))
         result = _resolve_repo_id("alice")
@@ -314,7 +314,7 @@ class TestDatasetNameResolution:
         proj.mkdir()
         ot_dir = proj / ".opentraces"
         ot_dir.mkdir()
-        (ot_dir / "config.yml").write_text("tier: 2\nremote: alice/custom-traces\n")
+        (ot_dir / "config.yml").write_text("review_policy: review\nremote: alice/custom-traces\n")
 
         os.chdir(str(proj))
         result = _resolve_repo_id("alice")
@@ -328,7 +328,7 @@ class TestDatasetNameResolution:
         proj.mkdir()
         ot_dir = proj / ".opentraces"
         ot_dir.mkdir()
-        (ot_dir / "config.yml").write_text("tier: 2\nremote: alice/custom-traces\n")
+        (ot_dir / "config.yml").write_text("review_policy: review\nremote: alice/custom-traces\n")
 
         os.chdir(str(proj))
         result = _resolve_repo_id("alice", repo_flag="alice/override-repo")

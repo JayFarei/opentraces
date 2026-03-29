@@ -1,7 +1,7 @@
 # opentraces
 
 Open protocol + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses
-coding agent sessions, applies configurable security tiers, enriches with git
+coding agent sessions, applies security scanning and redaction, enriches with git
 signals, and publishes as structured JSONL datasets.
 
 ## Install
@@ -25,8 +25,9 @@ pip install opentraces
 
 Step 2 - Authenticate:
 Run `opentraces auth status` to check if already logged in.
-If not authenticated, ask me to run `opentraces login` myself,
-I need to authorize in the browser.
+If not authenticated, ask me to run `opentraces login --token` myself,
+I need to paste a HuggingFace access token with write scope
+(from https://huggingface.co/settings/tokens).
 
 Step 3 - Choose agent:
 Ask me which coding agent I'm using. Supported agents can be
@@ -35,7 +36,7 @@ If I'm using you (the agent running this prompt), detect which
 agent you are and suggest that. I can pick multiple.
 
 Step 4 - Initialize and install skill:
-opentraces init --agent <chosen-agent> --review-policy review --push-policy manual --start-fresh
+opentraces init --agent <chosen-agent> --review-policy review --start-fresh
 
 This sets up automatic trace collection with manual review before
 anything is shared, and installs the opentraces agent skill into
@@ -46,16 +47,16 @@ that backlog into the inbox immediately, or `--start-fresh` to begin from now on
 
 After setup, the workflow is:
 - `opentraces web` to inspect traces before sharing
-- `opentraces commit --all` to bundle ready traces
+- `opentraces commit --all` to commit inbox traces
 - `opentraces push` to publish committed traces to HuggingFace
 ~~~
 
 ## Quick Start
 
 ```bash
-# Authenticate and initialize this repo inbox
-opentraces login
-opentraces init --review-policy review --push-policy manual
+# Authenticate with a write-access token and initialize this repo inbox
+opentraces login --token
+opentraces init --review-policy review
 
 # Review traces in the browser inbox
 opentraces web

@@ -1,43 +1,40 @@
 # Security Modes
 
-opentraces separates review policy, push policy, and trace security tier.
+opentraces applies the same security pipeline to every trace: scan, redact, and classify. The review policy controls whether traces require manual approval before publishing.
 
-## Project Policies
+## Review Policy
 
-`opentraces init` and `opentraces config set` work with two project-level policies:
+`opentraces init` sets a project-level review policy:
 
 | Policy | Values | What it controls |
 |--------|--------|------------------|
-| `review_policy` | `review`, `auto-ready` | Whether a parsed trace lands in `Inbox` or `Ready` |
-| `push_policy` | `manual`, `auto-push` | Metadata for downstream automation; the built-in CLI still uses explicit `commit` and `push` |
+| `review_policy` | `review`, `auto` | Whether traces require manual review or are committed automatically |
 
 ```bash
-opentraces init --review-policy review --push-policy manual
-opentraces init --review-policy auto-ready --push-policy manual
+opentraces init --review-policy review
+opentraces init --review-policy auto
 ```
 
-`review_policy` is the current user-facing replacement for the older `--mode` flag. `--mode` remains as a legacy alias only.
+In `review` mode, all traces land in the inbox for manual commit and push. In `auto` mode, clean traces are committed automatically, while traces with scan hits still land in the inbox for review.
 
-## Security Tier
+## Security Pipeline
 
-The trace-level `security.tier` field records which security pass was used while processing a trace.
+Every trace goes through the full security pipeline:
 
-| Tier | Pipeline | Typical use |
-|------|----------|-------------|
-| `1` | Scan + redact | Open or lower-risk work where automatic redaction is acceptable |
-| `2` | Scan + redact + classifier | Guarded work that wants automatic redaction plus heuristic flagging |
-| `3` | Human review first | Strict review flow; rely on the inbox before upload |
+1. **Scan** - Two-pass secret detection (field-level + serialized)
+2. **Redact** - Automatic replacement of detected secrets
+3. **Classify** - Heuristic flagging of internal hostnames, AWS ARNs, database URIs, deep file paths
+4. **Anonymize** - Path anonymization to remove usernames
 
-The pipeline is tiered, but the review surface is always the same: browser inbox, TUI inbox, or `session` subcommands.
+The `security.scanned` field on each trace confirms the pipeline ran. `security.redactions_applied` and `security.flags_reviewed` record what was found.
 
 ## Review Flow
 
 ```text
 Trace captured
-  -> parsed and staged locally
-  -> Inbox or Ready depending on review_policy and tier
-  -> session approve / reject / redact
-  -> commit
+  -> parsed, scanned, redacted, classified
+  -> Inbox (review mode) or auto-committed (auto mode)
+  -> session commit / reject / redact
   -> push
 ```
 
@@ -45,7 +42,7 @@ Trace captured
 opentraces web
 opentraces tui
 opentraces session list --stage inbox
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces commit --all
 opentraces push
 ```
@@ -53,8 +50,6 @@ opentraces push
 ## Changing Settings
 
 ```bash
-opentraces config set --tier 2
-opentraces config set --tier 3
 opentraces config set --redact "ACME_INTERNAL_TOKEN"
 opentraces config set --classifier-sensitivity high
 ```

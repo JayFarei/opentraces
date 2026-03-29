@@ -17,3 +17,5 @@ web/coming-soon/.vercel/
 
 # Private research (not shipped in OSS release)
 kb/
+.opentraces/staging/
+.opentraces/config.json

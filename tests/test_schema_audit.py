@@ -132,7 +132,7 @@ def _make_full_trace() -> TraceRecord:
             estimated_cost_usd=0.05,
         ),
         security=SecurityMetadata(
-            tier=2,
+            scanned=True,
             flags_reviewed=3,
             redactions_applied=1,
             classifier_version="0.1.0",

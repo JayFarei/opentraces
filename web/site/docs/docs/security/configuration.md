@@ -6,7 +6,6 @@ Security settings are split between the user config in `~/.opentraces/config.jso
 
 The user config stores defaults shared across projects:
 
-- `default_tier`
 - `excluded_projects`
 - `custom_redact_strings`
 - `classifier_sensitivity`
@@ -25,41 +24,21 @@ Each project keeps its inbox settings in `.opentraces/config.json`:
 ```json
 {
   "review_policy": "review",
-  "push_policy": "manual",
-  "mode": "review",
   "agents": ["claude-code"],
   "remote": "your-name/opentraces",
   "visibility": "private"
 }
 ```
 
-`mode` is a legacy alias retained for compatibility. `review_policy` and `push_policy` are the canonical keys.
-
 ## Per-Project Setup
 
 ```bash
 cd ~/project-a
-opentraces init --review-policy review --push-policy manual
+opentraces init --review-policy review
 
 cd ~/project-b
-opentraces init --review-policy auto-ready --push-policy manual
+opentraces init --review-policy auto
 ```
-
-## Security Tier
-
-Set the default security tier for the current user config:
-
-```bash
-opentraces config set --tier 1
-opentraces config set --tier 2
-opentraces config set --tier 3
-```
-
-| Tier | Behavior |
-|------|----------|
-| `1` | Automatic scan + redact |
-| `2` | Automatic scan + redact + classifier flags |
-| `3` | Strict review-first flow |
 
 ## Exclusions
 
@@ -70,7 +49,7 @@ opentraces config set --exclude /path/to/client-project
 opentraces config set --exclude /path/to/another-sensitive-project
 ```
 
-Excluded projects are skipped by `opentraces discover` and `opentraces parse` when you run the internal batch commands.
+Excluded projects are skipped during capture and batch parsing.
 
 ## Custom Redaction Strings
 
@@ -89,4 +68,4 @@ opentraces config set --classifier-sensitivity medium
 opentraces config set --classifier-sensitivity high
 ```
 
-The classifier is used only at tier 2. Higher sensitivity adds more heuristic flags.
+Higher sensitivity adds more heuristic flags (internal hostnames, deep file paths, identifier density).

@@ -30,10 +30,10 @@ The current pipeline does:
 
 | Policy | Result |
 |--------|--------|
-| `review` | Trace lands in `Inbox` |
-| `auto-ready` | Clean traces can land in `Ready` automatically |
+| `review` | Trace lands in `Inbox` for manual review |
+| `auto` | Clean traces are committed and pushed automatically |
 
-The review surface still exists either way. `auto-ready` just reduces the amount of manual triage needed before `commit`.
+The review surface still exists either way. `auto` just reduces the amount of manual triage needed, and traces with scan hits still land in the inbox.
 
 ## Internal Batch Commands
 

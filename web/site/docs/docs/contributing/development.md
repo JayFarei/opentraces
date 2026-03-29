@@ -60,5 +60,5 @@ web/site/                     Next.js docs and marketing site
 ## Notes
 
 - The current shipped parser is Claude Code
-- The inbox workflow is `web/tui/session -> approve/reject/redact -> commit -> push`
+- The inbox workflow is `web/tui/session -> commit/reject/redact -> push`
 - Hidden commands still exist for compatibility and automation, but the public docs should use `web`, `tui`, `session`, `commit`, and `push`

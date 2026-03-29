@@ -102,6 +102,16 @@ def anonymize_record(record: TraceRecord, cfg: Config) -> None:
             return text
         return anonymize_paths(text, username=username, extra_usernames=extra_usernames)
 
+    # -- metadata (e.g. hyphen-encoded project path from Claude Code) --
+    for k, v in list(record.metadata.items()):
+        if isinstance(v, str):
+            record.metadata[k] = _anon(v) or v
+
+    # -- system_prompts (often contain cwd / absolute paths) --
+    for k, v in list(record.system_prompts.items()):
+        if isinstance(v, str):
+            record.system_prompts[k] = _anon(v) or v
+
     if record.task.description:
         record.task.description = _anon(record.task.description)
 
@@ -116,6 +126,7 @@ def anonymize_record(record: TraceRecord, cfg: Config) -> None:
         for obs in step.observations:
             obs.content = _anon(obs.content)
             obs.output_summary = _anon(obs.output_summary)
+            obs.error = _anon(obs.error)
         for snip in step.snippets:
             snip.file_path = _anon(snip.file_path) or snip.file_path
             snip.text = _anon(snip.text)

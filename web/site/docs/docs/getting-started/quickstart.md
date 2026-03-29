@@ -11,15 +11,15 @@ pip install opentraces
 ## 2. Authenticate
 
 ```bash
-opentraces login
+opentraces login --token
 ```
 
-Use `HF_TOKEN` instead if you are running headless.
+Paste a HuggingFace access token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Use `HF_TOKEN` instead if you are running headless.
 
 ## 3. Initialize the Project
 
 ```bash
-opentraces init --review-policy review --push-policy manual --start-fresh
+opentraces init --review-policy review --start-fresh
 ```
 
 This creates `.opentraces/config.json`, `.opentraces/staging/`, and the session hook for Claude Code. If you omit the flags, `opentraces init` will prompt for the same choices interactively.
@@ -38,7 +38,7 @@ or
 opentraces tui
 ```
 
-The browser inbox is the default path for review. Use `session list`, `session approve`, `session reject`, and `session redact` if you prefer CLI control.
+The browser inbox is the default path for review. Use `session list`, `session commit`, `session reject`, and `session redact` if you prefer CLI control.
 
 ## 5. Commit and Push
 
@@ -47,7 +47,7 @@ opentraces commit --all
 opentraces push
 ```
 
-`commit` groups ready traces for upload. `push` uploads committed traces to `{username}/opentraces` on Hugging Face Hub as sharded JSONL and updates the dataset card.
+`commit` moves inbox traces to the committed stage. `push` uploads committed traces to `{username}/opentraces` on Hugging Face Hub as sharded JSONL and updates the dataset card.
 
 ## What Happens Next
 
@@ -61,6 +61,6 @@ ds = load_dataset("your-name/opentraces")
 
 ## Next Steps
 
-- [Security Modes](/docs/security/tiers) - Review policy, push policy, and security tiers
+- [Security Modes](/docs/security/tiers) - Review policy and security pipeline
 - [CLI Reference](/docs/cli/commands) - Full command reference
 - [Schema Overview](/docs/schema/overview) - What is stored in a trace record

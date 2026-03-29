@@ -23,21 +23,20 @@ opentraces tui --fullscreen
 ```bash
 opentraces session list
 opentraces session show <trace-id>
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces session reject <trace-id>
 opentraces session reset <trace-id>
 opentraces session redact <trace-id> --step 3
 opentraces session discard <trace-id> --yes
 ```
 
-`approve` moves a trace to `Ready`, `reject` keeps it local only, `reset` sends it back to `Inbox`, and `redact` rewrites the staged JSONL in place.
+`commit` moves a trace directly to `Committed`, `reject` keeps it local only, `reset` sends it back to `Inbox`, and `redact` rewrites the staged JSONL in place.
 
 ## Stage Vocabulary
 
 | Stage | Meaning |
 |-------|---------|
 | `inbox` | Needs review |
-| `ready` | Ready to commit |
 | `committed` | Bundled for upload |
 | `pushed` | Published upstream |
 | `rejected` | Kept local only |
@@ -53,7 +52,7 @@ opentraces session discard <trace-id> --yes
 ## Review Flow
 
 ```bash
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces commit --all
 opentraces push
 ```

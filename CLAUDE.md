@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Open protocol + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses Claude Code sessions, applies configurable security tiers, enriches with attribution/git signals, and publishes as structured JSONL datasets.
+Open protocol + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses Claude Code sessions, applies security scanning and redaction, enriches with attribution/git signals, and publishes as structured JSONL datasets.
 
 ## Stack
 
@@ -52,7 +52,7 @@ pytest tests/ -v
 - Sharded JSONL upload (one file per push, never append to existing)
 - Attribution derived from Edit tool calls, not unified diff
 - Context-aware security scanning (different rules per field type)
-- Per-project security tier configuration with per-session override
+- Per-project review policy (auto/review) controlling whether traces need manual approval
 - Zero required annotation, all enrichment is deterministic
 
 ## Testing

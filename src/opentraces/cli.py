@@ -111,6 +111,42 @@ def _is_interactive_terminal() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def _masked_input(prompt: str = "Token: ") -> str:
+    """Read input showing * for each character typed."""
+    import tty
+    import termios
+
+    if not sys.stdin.isatty():
+        return input(prompt)
+
+    sys.stderr.write(prompt)
+    sys.stderr.flush()
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    chars = []
+    try:
+        tty.setraw(fd)
+        while True:
+            ch = sys.stdin.read(1)
+            if ch in ("\r", "\n"):
+                break
+            if ch in ("\x7f", "\x08"):  # backspace
+                if chars:
+                    chars.pop()
+                    sys.stderr.write("\b \b")
+                    sys.stderr.flush()
+            elif ch == "\x03":  # ctrl-c
+                raise KeyboardInterrupt
+            else:
+                chars.append(ch)
+                sys.stderr.write("*")
+                sys.stderr.flush()
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    sys.stderr.write("\n")
+    return "".join(chars)
+
+
 
 _auth_identity = auth_identity
 
@@ -233,14 +269,16 @@ def _login_impl(token: bool) -> None:
     from .config import save_credentials, clear_credentials, CREDENTIALS_PATH
 
     config = load_config()
-    if config.hf_token:
-        # Already authenticated, verify and show status
+
+    # If user explicitly wants to re-auth (--token), skip the "already logged in" check
+    if config.hf_token and not token:
         try:
             from huggingface_hub import HfApi
             api = HfApi(token=config.hf_token)
             user_info = api.whoami()
             username = user_info.get("name", "unknown")
             click.echo(f"Already authenticated as {username}.")
+            click.echo("Run 'opentraces login --token' to re-authenticate with a different token.")
             emit_json({
                 "status": "ok",
                 "authenticated": True,
@@ -254,10 +292,10 @@ def _login_impl(token: bool) -> None:
             clear_credentials()
 
     if token:
-        # Fallback: manual token paste (for CI, Docker, headless)
+        if config.hf_token:
+            clear_credentials()
         _login_with_token(save_credentials, CREDENTIALS_PATH)
     else:
-        # Primary: OAuth device code flow (like gh auth login)
         _login_with_device_code(save_credentials, CREDENTIALS_PATH)
 
 
@@ -287,7 +325,7 @@ def _auth_status_impl() -> None:
 
 
 @main.command()
-@click.option("--token", is_flag=True, help="Use token paste instead of browser login")
+@click.option("--token", is_flag=True, help="Paste a personal access token (required for pushing traces)")
 def login(token: bool) -> None:
     """Log in to HuggingFace Hub."""
     _login_impl(token)
@@ -395,7 +433,7 @@ def _login_with_token(save_credentials, credentials_path) -> None:
     """Manual token paste flow for CI/headless environments."""
     click.echo("Log in with a HuggingFace access token.")
     click.echo("Get your token at: https://huggingface.co/settings/tokens\n")
-    token_input = click.prompt("Token", hide_input=True)
+    token_input = _masked_input("Token: ")
 
     if not token_input.startswith("hf_"):
         click.echo("Invalid token format (should start with hf_).")
@@ -432,18 +470,29 @@ def _validate_and_save(token_value: str, save_credentials, credentials_path) -> 
     })
 
 
-def _choose_remote_interactively(default_repo: str) -> str | None:
+def _choose_remote_interactively(default_repo: str) -> tuple[str | None, str | None]:
     import asyncio
 
     return asyncio.run(_choose_remote_interactively_async(default_repo))
 
 
-async def _choose_remote_interactively_async(default_repo: str) -> str | None:
-    """Select an existing dataset remote or create a new one."""
+def _resolve_username_prefix(name: str, username: str) -> str:
+    """If name has no '/', prefix with authenticated username."""
+    if "/" not in name:
+        return f"{username}/{name}"
+    return name
+
+
+async def _choose_remote_interactively_async(default_repo: str) -> tuple[str | None, str | None]:
+    """Select an existing dataset remote or create a new one.
+
+    Returns (repo_id, visibility) where visibility is "private" or "public".
+    Returns (None, None) if the user skips.
+    """
     cfg = load_config()
     identity = _auth_identity(cfg.hf_token)
     if identity is None:
-        return default_repo
+        return default_repo, "private"
 
     username = identity.get("name", "unknown")
 
@@ -457,34 +506,73 @@ async def _choose_remote_interactively_async(default_repo: str) -> str | None:
 
     if _is_interactive_terminal():
         try:
-            from pyclack.prompts import select
+            from pyclack.prompts import select, text
             from pyclack.core import Option
 
-            options = [Option(value=ds["id"], label=ds["id"]) for ds in existing]
-            options.append(Option(value="__new__", label=f"Create new ({default_repo})"))
+            # Step 1: show existing repos + create new + skip
+            options = []
+            for ds in existing:
+                vis = "public \u26A0" if not ds.get("private", True) else "private"
+                options.append(Option(value=ds["id"], label=f"{ds['id']} ({vis})"))
+            options.append(Option(value="__new__", label=f"Create new dataset"))
             options.append(Option(value="__later__", label="Skip for now"))
 
-            choice = await select("Choose a remote dataset", options)
-            if choice == "__new__":
-                return click.prompt("Dataset remote", default=default_repo)
+            choice = await select("Choose a dataset remote", options)
+
             if choice == "__later__":
-                return None
-            return choice or default_repo
+                return None, None
+
+            if choice == "__new__":
+                # Step 2a: visibility (only for new repos)
+                visibility = await select(
+                    "Visibility",
+                    [
+                        Option(value="private", label="Private", hint="only you can see this dataset"),
+                        Option(value="public", label="Public", hint="visible to everyone"),
+                    ],
+                    initial_value="private",
+                )
+
+                # Step 2b: name (just the repo part, username is auto-prefixed)
+                default_name = default_repo.split("/")[-1] if "/" in default_repo else default_repo
+                repo_name = await text(
+                    f"Dataset name ({username}/...)",
+                    placeholder=default_name,
+                    default_value=default_name,
+                )
+                repo_id = _resolve_username_prefix(repo_name, username)
+                return repo_id, visibility
+
+            # Existing repo selected: inherit visibility
+            selected_ds = next((ds for ds in existing if ds["id"] == choice), None)
+            vis = "public" if selected_ds and not selected_ds.get("private", True) else "private"
+            return choice, vis
+
         except ImportError:
             pass
 
+    # Fallback: plain click prompts
     if existing:
         click.echo("Existing opentraces datasets:")
         for i, ds in enumerate(existing, start=1):
-            click.echo(f"  {i}. {ds['id']}")
-        click.echo(f"  {len(existing) + 1}. Create new ({default_repo})")
+            vis = "public \u26A0" if not ds.get("private", True) else "private"
+            click.echo(f"  {i}. {ds['id']} ({vis})")
+        click.echo(f"  {len(existing) + 1}. Create new")
         click.echo(f"  {len(existing) + 2}. Skip for now")
         choice_num = click.prompt("Choose", type=int, default=len(existing) + 1)
         if choice_num <= len(existing):
-            return existing[choice_num - 1]["id"]
+            selected_ds = existing[choice_num - 1]
+            vis = "public" if not selected_ds.get("private", True) else "private"
+            return selected_ds["id"], vis
         if choice_num == len(existing) + 2:
-            return None
-    return click.prompt("Dataset remote", default=default_repo)
+            return None, None
+
+    # New repo flow
+    visibility = click.prompt("Visibility", type=click.Choice(["private", "public"]), default="private")
+    default_name = default_repo.split("/")[-1] if "/" in default_repo else default_repo
+    repo_name = click.prompt(f"Dataset name ({username}/...)", default=default_name)
+    repo_id = _resolve_username_prefix(repo_name, username)
+    return repo_id, visibility
 
 
 def _current_project_session_dir(project_dir: Path, cfg=None) -> Path | None:
@@ -590,7 +678,7 @@ def auth(ctx: click.Context) -> None:
 
 
 @auth.command("login")
-@click.option("--token", is_flag=True, help="Use token paste instead of browser login")
+@click.option("--token", is_flag=True, help="Paste a personal access token (required for pushing traces)")
 def auth_login(token: bool) -> None:
     _login_impl(token)
 
@@ -685,7 +773,7 @@ def config_set(
 @main.command()
 @click.option("--agent", "agents", multiple=True, type=click.Choice(list(SUPPORTED_AGENTS)), help="Agent runtime to connect")
 @click.option("--review-policy", type=click.Choice(["review", "auto"]), default=None, help="Whether safe sessions require review")
-@click.option("--push-policy", type=click.Choice(["manual", "auto-push"]), default=None, help="Whether committed traces push automatically")
+@click.option("--push-policy", type=click.Choice(["manual", "auto-push"]), default=None, hidden=True, help="Legacy: derived from review policy")
 @click.option(
     "--import-existing/--start-fresh",
     "import_existing",
@@ -694,6 +782,7 @@ def config_set(
 )
 @click.option("--mode", type=click.Choice(["auto", "review"]), default=None, hidden=True, help="Legacy alias for --review-policy")
 @click.option("--remote", type=str, default=None, help="HF dataset repo (owner/name)")
+@click.option("--private/--public", "is_private", default=None, help="Dataset visibility (default: private)")
 @click.option("--no-hook", is_flag=True, help="Skip Claude Code hook installation")
 def init(
     agents: tuple[str, ...],
@@ -702,6 +791,7 @@ def init(
     import_existing: bool | None,
     mode: str | None,
     remote: str | None,
+    is_private: bool | None,
     no_hook: bool,
 ) -> None:
     """Initialize opentraces in the current project directory.
@@ -722,7 +812,7 @@ def init(
         current_remote = proj_config.get("remote", "not set")
         click.echo(
             "Already initialized "
-            f"(policy: {proj_config['review_policy']}, push: {proj_config['push_policy']}, remote: {current_remote})"
+            f"(mode: {proj_config.get('review_policy', 'review')}, remote: {current_remote})"
         )
         click.echo("Run 'opentraces status' to inspect this inbox.")
         emit_json(
@@ -740,16 +830,27 @@ def init(
     if review_policy is None and mode is not None:
         review_policy = "auto" if mode == "auto" else "review"
     review_policy = normalize_review_policy(review_policy)
+    # Push policy is derived from review policy: auto → auto-push, review → manual
+    if push_policy is None:
+        push_policy = "auto-push" if review_policy == "auto" else "manual"
     push_policy = normalize_push_policy(push_policy)
     selected_agents = normalize_agents(list(agents))
 
-    if _is_interactive_terminal() and (not agents or review_policy == DEFAULT_REVIEW_POLICY and push_policy == DEFAULT_PUSH_POLICY and remote is None):
+    # Resolve visibility from --private/--public flags
+    if is_private is True:
+        visibility = "private"
+    elif is_private is False:
+        visibility = "public"
+    else:
+        visibility = "private"  # default, may be overridden by interactive selector
+
+    if _is_interactive_terminal() and (not agents or review_policy == DEFAULT_REVIEW_POLICY and remote is None):
         try:
             from pyclack.prompts import confirm, select, text
             from pyclack.core import Option
             import asyncio
 
-            async def _interactive_setup() -> tuple[list[str], str, str, str | None]:
+            async def _interactive_setup() -> tuple[list[str], str, str | None, str]:
                 if len(SUPPORTED_AGENTS) == 1:
                     chosen_agents = list(SUPPORTED_AGENTS)
                     click.echo(f"Supported agent detected: {chosen_agents[0]}")
@@ -778,41 +879,30 @@ def init(
                     ],
                     initial_value=review_policy,
                 )
-                chosen_push = await select(
-                    "How should pushing work?",
-                    [
-                        Option(value="manual", label="Push manually", hint="Commit first, then push explicitly"),
-                        Option(value="auto-push", label="Auto-push committed batches", hint="Push after commit without a second step"),
-                    ],
-                    initial_value=push_policy,
-                )
 
                 chosen_remote = remote
-                should_choose_remote = await confirm(
-                    "Configure a HuggingFace remote now?",
-                    initial_value=remote is not None,
-                    active="Yes",
-                    inactive="Later",
-                )
-                if should_choose_remote:
-                    cfg = load_config()
-                    if not cfg.hf_token:
-                        should_login = await confirm(
-                            "Log into HuggingFace now?",
-                            initial_value=True,
-                            active="Login",
-                            inactive="Skip",
-                        )
-                        if should_login:
-                            from .config import save_credentials, CREDENTIALS_PATH
+                chosen_visibility = "private"
+                # Remote setup: login if needed, then select
+                cfg = load_config()
+                if not cfg.hf_token:
+                    should_login = await confirm(
+                        "Log into HuggingFace now?",
+                        initial_value=True,
+                        active="Login",
+                        inactive="Skip",
+                    )
+                    if should_login:
+                        from .config import save_credentials, CREDENTIALS_PATH
 
-                            _login_with_device_code(save_credentials, CREDENTIALS_PATH)
-                    identity = _auth_identity(load_config().hf_token)
-                    chosen_remote = await _choose_remote_interactively_async(_default_repo(identity))
-                return normalize_agents(chosen_agents), normalize_review_policy(chosen_review), normalize_push_policy(chosen_push), chosen_remote
+                        _login_with_device_code(save_credentials, CREDENTIALS_PATH)
+                identity = _auth_identity(load_config().hf_token)
+                if identity:
+                    chosen_remote, chosen_visibility = await _choose_remote_interactively_async(_default_repo(identity))
+                return normalize_agents(chosen_agents), normalize_review_policy(chosen_review), chosen_remote, chosen_visibility or "private"
 
-            selected_agents, review_policy, push_policy, remote = asyncio.run(_interactive_setup())
+            selected_agents, review_policy, remote, visibility = asyncio.run(_interactive_setup())
         except ImportError:
+            visibility = "private"
             if not agents:
                 selected_agents = list(SUPPORTED_AGENTS) if len(SUPPORTED_AGENTS) == 1 else _prompt_agents_with_click()
             if review_policy == DEFAULT_REVIEW_POLICY:
@@ -821,25 +911,25 @@ def init(
                     type=click.Choice(["review", "auto"]),
                     default=DEFAULT_REVIEW_POLICY,
                 )
-            if push_policy == DEFAULT_PUSH_POLICY:
-                push_policy = click.prompt(
-                    "Push policy",
-                    type=click.Choice(["manual", "auto-push"]),
-                    default=DEFAULT_PUSH_POLICY,
-                )
-            if remote is None and click.confirm("Configure a remote now?", default=False):
+            if remote is None:
                 identity = _auth_identity(load_config().hf_token)
-                remote = _choose_remote_interactively(_default_repo(identity))
+                if identity:
+                    remote, visibility = _choose_remote_interactively(_default_repo(identity))
+                    visibility = visibility or "private"
 
     ot_dir.mkdir(parents=True, exist_ok=True)
     staging_dir.mkdir(parents=True, exist_ok=True)
+
+    # visibility may be set by interactive selector or --private/--public flags
+    if not isinstance(visibility, str) or visibility not in ("private", "public"):
+        visibility = "private"
 
     proj_config: dict = {
         "mode": "auto" if review_policy == "auto" else "review",
         "review_policy": review_policy,
         "push_policy": push_policy,
         "agents": selected_agents,
-        "visibility": "private",
+        "visibility": visibility,
     }
     if remote:
         proj_config["remote"] = remote
@@ -1183,13 +1273,13 @@ def status() -> None:
     project_name = project_dir.name
 
     click.echo(f"{project_name} inbox")
-    click.echo(f"review policy: {proj_config['review_policy']}")
-    click.echo(f"push policy:   {proj_config['push_policy']}")
-    click.echo(f"agents:        {', '.join(proj_config['agents'])}")
+    click.echo(f"mode:    {proj_config.get('review_policy', 'review')}")
+    click.echo(f"agents:  {', '.join(proj_config['agents'])}")
+    visibility = proj_config.get("visibility", "private")
     if remote:
-        click.echo(f"remote: {remote}")
+        click.echo(f"remote:  {remote} ({visibility})")
     else:
-        click.echo("remote: not set")
+        click.echo("remote:  not set")
     click.echo()
 
     staging_dir = get_project_staging_dir(project_dir)
@@ -1641,100 +1731,67 @@ def remote(ctx) -> None:
         project_dir = Path.cwd()
         proj_config = load_project_config(project_dir)
         remote_name = proj_config.get("remote")
+        visibility = proj_config.get("visibility", "private")
         if not remote_name:
-            click.echo("No remote configured.")
+            click.echo("No remote configured. Run 'opentraces remote set' to configure.")
             emit_json({"status": "ok", "remote": None})
             return
-        click.echo(remote_name)
-        emit_json({"status": "ok", "remote": remote_name})
+        click.echo(f"{remote_name} ({visibility})")
+        emit_json({"status": "ok", "remote": remote_name, "visibility": visibility})
 
 
-@remote.command("current")
-def remote_current() -> None:
-    """Show the active dataset remote."""
+@remote.command("set")
+@click.argument("name", required=False, default=None)
+@click.option("--private/--public", "is_private", default=None, help="Dataset visibility")
+def remote_set(name: str | None, is_private: bool | None) -> None:
+    """Set the dataset remote. Interactive if no arguments given."""
+    from .config import load_project_config, save_project_config
+
     project_dir = Path.cwd()
     proj_config = load_project_config(project_dir)
-    remote_name = proj_config.get("remote")
-    if not remote_name:
-        click.echo("No remote configured.")
-        emit_json({"status": "ok", "remote": None})
+
+    if name is not None:
+        # Non-interactive: resolve owner prefix if needed
+        cfg = load_config()
+        identity = _auth_identity(cfg.hf_token)
+        username = identity.get("name", "unknown") if identity else "unknown"
+        repo_id = _resolve_username_prefix(name, username)
+
+        proj_config["remote"] = repo_id
+        if is_private is not None:
+            proj_config["visibility"] = "private" if is_private else "public"
+        save_project_config(project_dir, proj_config)
+
+        vis = proj_config.get("visibility", "private")
+        click.echo(f"Remote set to {repo_id} ({vis})")
+        emit_json({"status": "ok", "remote": repo_id, "visibility": vis})
         return
 
-    click.echo(remote_name)
-    emit_json({"status": "ok", "remote": remote_name})
-
-
-@remote.command("list")
-def remote_list() -> None:
-    """List available OpenTraces dataset remotes for the current identity."""
+    # Interactive: use shared selector
     cfg = load_config()
     identity = _auth_identity(cfg.hf_token)
     if identity is None:
         click.echo("Not authenticated. Run 'opentraces login' first.")
         sys.exit(3)
 
-    username = identity.get("name", "unknown")
-    try:
-        from .upload.hf_hub import HFUploader
-
-        uploader = HFUploader(token=cfg.hf_token, repo_id="placeholder")
-        existing = uploader.list_opentraces_datasets(username)
-    except Exception as exc:
-        click.echo(f"Could not list remotes: {exc}")
-        sys.exit(4)
-
-    current = load_project_config(Path.cwd()).get("remote")
-    if not existing:
-        click.echo("No OpenTraces datasets found.")
-        emit_json({"status": "ok", "remotes": [], "current": current})
-        return
-
-    for ds in existing:
-        marker = "*" if ds["id"] == current else " "
-        click.echo(f"{marker} {ds['id']}")
-    emit_json({"status": "ok", "remotes": existing, "current": current})
-
-
-@remote.command("use")
-@click.argument("repo", required=False, default=None)
-def remote_use(repo: str | None) -> None:
-    """Switch the active dataset remote. Interactive if no argument is given."""
-    from .config import load_project_config, save_project_config
-
-    project_dir = Path.cwd()
-
-    if repo is not None:
-        # Direct set: validate format
-        if "/" not in repo or repo.count("/") != 1:
-            click.echo("Invalid format. Use: owner/dataset")
-            sys.exit(2)
-        proj_config = load_project_config(project_dir)
-        proj_config["remote"] = repo
-        save_project_config(project_dir, proj_config)
-        click.echo(f"Remote active: {repo}")
-        emit_json({"status": "ok", "remote": repo})
-        return
-
-    cfg = load_config()
-    identity = _auth_identity(cfg.hf_token)
-    repo = _choose_remote_interactively(_default_repo(identity))
-    if repo is None:
+    repo_id, visibility = _choose_remote_interactively(_default_repo(identity))
+    if repo_id is None:
         click.echo("Remote unchanged.")
         return
 
-    proj_config = load_project_config(project_dir)
-    proj_config["remote"] = repo
+    proj_config["remote"] = repo_id
+    proj_config["visibility"] = visibility or "private"
     save_project_config(project_dir, proj_config)
-    click.echo(f"Remote active: {repo}")
-    emit_json({"status": "ok", "remote": repo})
+    click.echo(f"Remote set to {repo_id} ({visibility})")
+    emit_json({"status": "ok", "remote": repo_id, "visibility": visibility})
 
 
-@remote.command("set", hidden=True)
+@remote.command("use", hidden=True)
 @click.argument("repo", required=False, default=None)
 @click.pass_context
-def remote_set(ctx: click.Context, repo: str | None) -> None:
-    """Backward-compatible alias for remote use."""
-    ctx.invoke(remote_use, repo=repo)
+def remote_use(ctx: click.Context, repo: str | None) -> None:
+    """Backward-compatible alias for remote set."""
+    ctx.invoke(remote_set, name=repo)
 
 
 @remote.command("remove")
@@ -2336,32 +2393,21 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     # Resolve repo_id: --repo flag > config remote > interactive selector > default
     repo_id = _resolve_repo_id(username, repo)
 
-    # If no remote was configured, offer interactive selection (like gh on first push)
+    # If no remote was configured, run the shared interactive selector
     proj_config = load_project_config(Path.cwd())
     if not repo and not proj_config.get("remote"):
-        click.echo(f"No remote configured. Using default: {repo_id}")
-        try:
-            from .upload.hf_hub import HFUploader as _HFUp
-            _up = _HFUp(token=cfg.hf_token, repo_id="placeholder")
-            existing = _up.list_opentraces_datasets(username)
-            if existing:
-                click.echo("\nExisting opentraces datasets:")
-                for i, ds in enumerate(existing):
-                    click.echo(f"  {i+1}. {ds['id']}")
-                click.echo(f"  {len(existing)+1}. Create new: {repo_id}")
-                try:
-                    choice_num = click.prompt("Choose", type=int, default=len(existing)+1)
-                    if choice_num <= len(existing):
-                        repo_id = existing[choice_num - 1]["id"]
-                except (ValueError, EOFError) as e:
-                    logger.debug("Remote selection cancelled: %s", e)
-        except Exception as e:
-            logger.debug("Could not list existing datasets: %s", e)
-
-        # Save the chosen remote for next time
-        proj_config["remote"] = repo_id
-        save_project_config(Path.cwd(), proj_config)
-        click.echo(f"Remote set to: {repo_id}\n")
+        click.echo("No remote configured.")
+        identity = {"name": username}
+        selected_repo, selected_vis = _choose_remote_interactively(f"{username}/{DEFAULT_REMOTE_NAME}")
+        if selected_repo:
+            repo_id = selected_repo
+            proj_config["remote"] = repo_id
+            proj_config["visibility"] = selected_vis or "private"
+            save_project_config(Path.cwd(), proj_config)
+            click.echo(f"Remote set to: {repo_id} ({proj_config['visibility']})\n")
+        else:
+            click.echo("No remote selected. Cannot push.")
+            sys.exit(3)
 
     # Handle --publish: just change visibility, no upload
     if publish:
@@ -2435,20 +2481,35 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
         click.echo("No valid traces to upload.")
         return
 
-    # Determine visibility: --public/--private flags override config
+    # Determine visibility: --public/--private flags > project config > global config
     if public:
         is_private = False
     elif private:
         is_private = True
     else:
-        is_private = cfg.dataset_visibility == "private"
+        proj_vis = proj_config.get("visibility")
+        is_private = (proj_vis or cfg.dataset_visibility) == "private"
 
     visibility_label = "private" if is_private else "public"
 
     try:
         with StagingLock():
             uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
-            uploader.ensure_repo_exists(private=is_private)
+            try:
+                uploader.ensure_repo_exists(private=is_private)
+            except Exception as e:
+                msg = str(e)
+                if "403" in msg or "Forbidden" in msg:
+                    click.echo(
+                        "Permission denied. Your token does not have write access.\n"
+                        "OAuth device tokens have limited permissions on HuggingFace.\n"
+                        "Re-authenticate with a personal access token:\n"
+                        "  opentraces login --token\n"
+                        "Get a token with 'write' scope at https://huggingface.co/settings/tokens"
+                    )
+                    emit_json(error_response("PERMISSION_DENIED", "auth", "Token lacks write permissions", "Run: opentraces login --token"))
+                    sys.exit(3)
+                raise
 
             # Dedup: skip traces whose content_hash already exists on the remote
             remote_hashes = uploader.fetch_remote_content_hashes()
@@ -2619,7 +2680,7 @@ def introspect() -> None:
         "schema_version": SCHEMA_VERSION,
         "trace_record_schema": TraceRecord.model_json_schema(),
         "commands": {
-            "init": {"description": "One-stop setup for the repo inbox", "options": ["--agent", "--review-policy", "--push-policy", "--remote", "--no-hook"]},
+            "init": {"description": "One-stop setup for the repo inbox", "options": ["--agent", "--review-policy", "--remote", "--private", "--public", "--no-hook"]},
             "login": {"description": "Authenticate with HuggingFace Hub"},
             "auth": {"description": "Manage HuggingFace authentication", "subcommands": ["login", "logout", "status"]},
             "whoami": {"description": "Show the active HuggingFace identity"},

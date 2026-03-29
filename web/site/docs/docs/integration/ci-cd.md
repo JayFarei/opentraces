@@ -21,14 +21,14 @@ opentraces login --token
 If you are running opentraces in automation, keep the steps explicit:
 
 ```bash
-opentraces init --review-policy review --push-policy manual --remote my-org/opentraces --no-hook
+opentraces init --review-policy review --remote my-org/opentraces --no-hook
 opentraces session list
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces commit --all
 opentraces push --private
 ```
 
-`push_policy` is metadata today. The core CLI does not auto-push on its own, so your CI script should call `commit` and `push` directly.
+Your CI script should call `commit` and `push` directly.
 
 ## GitHub Actions
 

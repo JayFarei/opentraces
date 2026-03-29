@@ -1078,32 +1078,32 @@ tr:hover td { background: var(--surface-hover); }
 }
 .gs-row:last-child { border-bottom: none; }
 .gs-cmd-box {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  position: relative;
   border: 1px solid var(--border);
-  background: var(--surface);
-  padding: 6px 10px;
+  background: var(--bg-alt);
+  padding: 10px 14px;
   margin-bottom: 4px;
 }
 .gs-cmd-text {
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--text);
+  color: var(--text-muted);
 }
 .gs-cmd-cp {
+  position: absolute;
+  top: 6px;
+  right: 6px;
   font-family: var(--font-mono);
-  font-size: 9px;
-  color: var(--text-dim);
-  background: none;
+  font-size: 10px;
+  padding: 3px 8px;
+  background: var(--surface);
   border: 1px solid var(--border);
-  padding: 2px 6px;
+  color: var(--text-dim);
   cursor: pointer;
   transition: all 0.1s;
-  opacity: 0;
 }
-.gs-cmd-box:hover .gs-cmd-cp { opacity: 1; }
 .gs-cmd-cp:hover { color: var(--text); border-color: var(--border-strong); }
+.gs-cmd-cp:active { color: var(--accent); }
 .gs-desc {
   font-family: var(--font-mono);
   font-size: 11px;

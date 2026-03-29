@@ -994,30 +994,23 @@ class TestAutoDetectAnonymization:
         result = anonymize_paths(text, username="jayfarei")
         assert "/Users/Shared/" in result  # unchanged
 
-    def test_rate_limit_fallback(self):
-        """More than 10 auto-detected usernames triggers fallback to explicit only."""
+    def test_many_auto_detected_usernames(self):
+        """Many auto-detected usernames should all be anonymized."""
         names = [f"user{i:03d}" for i in range(15)]
         paths = " ".join(f"/Users/{n}/file.py" for n in names)
         text = f"/Users/jayfarei/a.py {paths}"
-        import warnings
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            result = anonymize_paths(text, username="jayfarei")
-            # Explicit username should still be anonymized
-            assert "jayfarei" not in result
-            # Auto-detected names should NOT be anonymized (rate limit kicked in)
-            for name in names:
-                assert f"/Users/{name}/" in result, f"Expected {name} to remain (fallback)"
-            # Should have emitted a warning
-            assert any("auto-detected" in str(warning.message).lower() for warning in w)
+        result = anonymize_paths(text, username="jayfarei")
+        assert "jayfarei" not in result
+        for name in names:
+            assert f"/Users/{name}/" not in result, f"Expected {name} to be anonymized"
 
 
-class TestTierDispatchLogic:
-    """Test that the tier dispatch in cli.py calls the right functions per tier."""
+class TestSecurityPipelineDispatch:
+    """Test that the security pipeline runs scan, redact, and classify."""
 
     def _make_trace(self) -> TraceRecord:
         return TraceRecord(
-            trace_id="tier-dispatch-test",
+            trace_id="pipeline-dispatch-test",
             session_id="test-session",
             agent=Agent(name="claude-code", version="2.0"),
             steps=[
@@ -1048,8 +1041,8 @@ class TestTierDispatchLogic:
             outcome=Outcome(),
         )
 
-    def test_tier1_runs_scan_and_redact(self):
-        """Tier 1 should run two_pass_scan + apply_redactions."""
+    def test_scan_and_redact(self):
+        """Pipeline should run two_pass_scan + apply_redactions."""
         from opentraces.security.scanner import two_pass_scan, apply_redactions
         record = self._make_trace()
         pass1, pass2 = two_pass_scan(record)
@@ -1057,25 +1050,24 @@ class TestTierDispatchLogic:
         assert record.security is not None
         assert record.security.redactions_applied >= 0
 
-    def test_tier2_runs_classifier(self):
-        """Tier 2 should run the classifier in addition to scanning."""
+    def test_classifier(self):
+        """Pipeline should run the classifier."""
         from opentraces.security.classifier import classify_trace_record, ClassifierResult
         record = self._make_trace()
         result = classify_trace_record(record, "medium")
         assert isinstance(result, ClassifierResult)
         assert isinstance(result.flags, list)
 
-    def test_tier3_skips_scanning(self):
-        """Tier 3 should not modify the record's security fields."""
+    def test_fresh_record_has_defaults(self):
+        """A fresh record before pipeline should have default security fields."""
         record = self._make_trace()
-        # Tier 3: no scanning, no redaction, no classifier
-        # Security fields should remain at defaults
+        assert record.security.scanned is False
         assert record.security.redactions_applied == 0
         assert record.security.classifier_version is None
         assert record.security.flags_reviewed == 0
 
 
-class TestAdversarialTraceTiers:
+class TestAdversarialSecurityPipeline:
     """Test security pipeline with synthetic traces containing known secrets."""
 
     def _make_hostile_trace(self) -> TraceRecord:
@@ -1125,8 +1117,8 @@ Internal URL: https://jira.internal.corp/browse/SEC-123
             outcome=Outcome(),
         )
 
-    def test_tier1_redacts_secrets(self):
-        """Tier 1: all secrets should be auto-redacted."""
+    def test_redacts_secrets(self):
+        """All secrets should be auto-redacted by the pipeline."""
         from opentraces.security.scanner import two_pass_scan, apply_redactions
         record = self._make_hostile_trace()
         pass1, pass2 = two_pass_scan(record)
@@ -1138,8 +1130,8 @@ Internal URL: https://jira.internal.corp/browse/SEC-123
         assert "BEGIN RSA PRIVATE KEY" not in serialized
         assert "supersecret" not in serialized
 
-    def test_tier2_flags_internal_urls(self):
-        """Tier 2: classifier should flag internal hostnames/URLs."""
+    def test_flags_internal_urls(self):
+        """Classifier should flag internal hostnames/URLs."""
         from opentraces.security.scanner import two_pass_scan, apply_redactions
         from opentraces.security.classifier import classify_trace_record
         record = self._make_hostile_trace()
@@ -1149,12 +1141,10 @@ Internal URL: https://jira.internal.corp/browse/SEC-123
         # Should flag internal.corp hostname or jira URL
         assert len(result.flags) > 0, "Expected classifier flags for internal URLs"
 
-    def test_tier3_no_redaction(self):
-        """Tier 3: no scanning or redaction should occur."""
+    def test_unprocessed_record_retains_secrets(self):
+        """A record that hasn't been through the pipeline retains raw content."""
         record = self._make_hostile_trace()
-        # Tier 3 means we DON'T call scan or redact
         serialized = record.to_jsonl_line()
-        # Original secrets should still be present
         assert "sk-ant-api03" in serialized
         assert "AKIAIOSFODNN7EXAMPLE" in serialized
 

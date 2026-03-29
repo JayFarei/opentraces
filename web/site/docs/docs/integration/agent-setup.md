@@ -12,7 +12,7 @@ Most commands emit structured JSON with `next_steps` and `next_command`, so an a
 
 ```bash
 opentraces login
-opentraces init --agent claude-code --review-policy review --push-policy manual --start-fresh
+opentraces init --agent claude-code --review-policy review --start-fresh
 ```
 
 If the repo already has Claude Code session logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.

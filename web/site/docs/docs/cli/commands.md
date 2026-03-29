@@ -15,7 +15,7 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces status` | Show inbox status and counts |
 | `opentraces remote` | Manage the configured dataset remote |
 | `opentraces session` | Inspect and edit staged traces |
-| `opentraces commit` | Bundle ready traces for upload |
+| `opentraces commit` | Commit inbox traces for upload |
 | `opentraces push` | Upload committed traces to Hugging Face Hub |
 | `opentraces web` | Open the browser inbox UI |
 | `opentraces tui` | Open the terminal inbox UI |
@@ -28,16 +28,18 @@ Complete reference for the current opentraces CLI surface.
 
 ### `opentraces login`
 
-Authenticate with Hugging Face Hub using OAuth device code flow.
+Authenticate with Hugging Face Hub.
 
 ```bash
-opentraces login
 opentraces login --token
+opentraces login
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--token` | off | Use token paste instead of browser login |
+| `--token` | off | Paste a personal access token (required for pushing) |
+
+> **Recommended:** Use `opentraces login --token` with a write-access PAT from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). The browser OAuth flow (`opentraces login` without `--token`) authenticates your identity but cannot create or push to dataset repos.
 
 ### `opentraces logout`
 
@@ -62,21 +64,20 @@ If Claude Code already has session files for this repo, the interactive flow can
 
 ```bash
 opentraces init
-opentraces init --review-policy review --push-policy manual --start-fresh
-opentraces init --review-policy auto-ready --push-policy manual --import-existing
-opentraces init --review-policy review --push-policy manual --remote your-name/opentraces --start-fresh
+opentraces init --review-policy review --start-fresh
+opentraces init --review-policy auto --import-existing
+opentraces init --review-policy review --remote your-name/opentraces --start-fresh
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--agent` | detected interactively | Agent runtime to connect |
-| `--review-policy` | prompt | `review` or `auto-ready` |
-| `--push-policy` | prompt | `manual` or `auto-push` metadata |
+| `--review-policy` | prompt | `review` or `auto` |
 | `--import-existing / --start-fresh` | prompt when backlog exists | Whether to import existing Claude Code sessions for this repo during init |
 | `--remote` | unset | HF dataset repo (`owner/name`) |
 | `--no-hook` | off | Skip Claude Code hook installation |
 
-`--mode` and `--tier` are legacy aliases kept for compatibility.
+`--mode` is a legacy alias kept for compatibility.
 
 ### `opentraces remove`
 
@@ -91,15 +92,12 @@ Display the current user config with secrets masked.
 Update configuration values.
 
 ```bash
-opentraces config set --tier 2
 opentraces config set --exclude /path/to/client-project
 opentraces config set --redact "INTERNAL_API_KEY"
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--project` | Project path for per-project tier overrides |
-| `--tier` | Default security tier (1, 2, or 3) |
 | `--exclude` | Append a project path to the exclusion list |
 | `--redact` | Append a literal custom redaction string |
 | `--pricing-file` | Override token pricing table |
@@ -138,20 +136,20 @@ Fine-grained review commands for staged traces.
 ```bash
 opentraces session list
 opentraces session show <trace-id>
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces session reject <trace-id>
 opentraces session reset <trace-id>
 opentraces session redact <trace-id> --step 3
 opentraces session discard <trace-id> --yes
 ```
 
-`session list` accepts `--stage inbox|ready|committed|pushed|rejected`, `--model`, `--agent`, and `--limit`.
+`session list` accepts `--stage inbox|committed|pushed|rejected`, `--model`, `--agent`, and `--limit`.
 
 ## Upload
 
 ### `opentraces commit`
 
-Bundle ready traces into a commit group before upload.
+Commit inbox traces into a commit group for upload.
 
 ```bash
 opentraces commit --all
@@ -179,7 +177,7 @@ opentraces push --repo user/custom-dataset
 | `--gated` | off | Enable gated access on the dataset |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
 
-`--approved-only` is not part of the current CLI. The public path is `approve -> commit -> push`.
+`--approved-only` is not part of the current CLI. The public path is `commit -> push`.
 
 ### `opentraces remote`
 
@@ -187,15 +185,15 @@ Manage the configured dataset remote.
 
 ```bash
 opentraces remote
-opentraces remote current
-opentraces remote list
-opentraces remote use owner/dataset
+opentraces remote set owner/dataset
+opentraces remote set owner/dataset --private
+opentraces remote set owner/dataset --public
 opentraces remote remove
 ```
 
 ### `opentraces status`
 
-Show the current project inbox, counts, review policy, push policy, agents, and remote.
+Show the current project inbox, counts, review policy, agents, and remote.
 
 ### `opentraces log`
 

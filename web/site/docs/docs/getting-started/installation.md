@@ -1,12 +1,26 @@
 # Installation
 
-Install the opentraces CLI via pip.
-
 ## pip
 
 ```bash
 pip install opentraces
 ```
+
+## brew
+
+```bash
+brew install opentraces
+```
+
+## Copy to your agent
+
+Paste this into your coding agent (Claude Code, Cursor, Codex, etc.):
+
+```
+set up opentraces for this project
+```
+
+The agent will install the CLI, authenticate, create a private HF dataset, and install the session hook. No manual setup required.
 
 ## From Source
 

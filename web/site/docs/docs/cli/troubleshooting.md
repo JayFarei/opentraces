@@ -6,7 +6,7 @@
 opentraces status
 ```
 
-`status` shows the inbox summary, review policy, push policy, agents, remote, and stage counts.
+`status` shows the inbox summary, review policy, agents, remote, and stage counts.
 
 ## Common Issues
 
@@ -15,10 +15,10 @@ opentraces status
 Run:
 
 ```bash
-opentraces login
+opentraces login --token
 ```
 
-or export `HF_TOKEN` in your shell:
+Paste a write-access token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Or export `HF_TOKEN` in your shell:
 
 ```bash
 export HF_TOKEN=hf_...
@@ -46,7 +46,13 @@ opentraces session redact <trace-id> --step 3
 
 ### Push Fails With 403
 
-Your Hugging Face token probably lacks write permissions. Create a token with `write` access at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+Your token does not have write access. OAuth device tokens (from `opentraces login`) cannot create or write to dataset repos. Re-authenticate with a personal access token:
+
+```bash
+opentraces login --token
+```
+
+Paste a token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
 
 ### Resetting Local State
 

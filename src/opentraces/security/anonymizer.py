@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import warnings
 
 # Usernames that commonly appear in paths but are not real people.
 SYSTEM_USERNAMES: set[str] = {
@@ -176,10 +175,12 @@ def anonymize_paths(
     username: str | None = None,
     extra_usernames: list[str] | None = None,
 ) -> str:
-    """Anonymize user paths in text.
+    """Anonymize user paths and bare usernames in text.
 
     Detects and replaces home directory paths containing the system username
-    (or provided usernames) with hashed equivalents.
+    (or provided usernames) with hashed equivalents.  Also replaces bare
+    occurrences of explicit (known) usernames as a final catch-all for
+    non-path contexts like ``ls -la`` file ownership output.
 
     Args:
         text: The text to anonymize.
@@ -187,7 +188,7 @@ def anonymize_paths(
         extra_usernames: Additional usernames to anonymize (e.g., GitHub handles).
 
     Returns:
-        Text with user paths anonymized.
+        Text with user paths and bare usernames anonymized.
     """
     if not text:
         return text
@@ -217,15 +218,6 @@ def anonymize_paths(
     # Remove any that were already provided explicitly
     auto_only = auto_detected - set(unique_explicit)
 
-    if len(auto_only) > 10:
-        warnings.warn(
-            f"Auto-detected {len(auto_only)} usernames from paths, which "
-            "exceeds the safety limit of 10. Skipping auto-detected names "
-            "and falling back to explicit usernames only.",
-            stacklevel=2,
-        )
-        auto_only = set()
-
     if not unique_explicit and not auto_only:
         return text
 
@@ -239,5 +231,12 @@ def anonymize_paths(
     result = text
     for pattern, replacement in patterns:
         result = pattern.sub(replacement, result)
+
+    # Layer 2: Bare username replacement for explicit usernames only.
+    # Catches non-path contexts (e.g. "jayfarei  staff" in ls -la output).
+    # Uses word-boundary matching to avoid replacing substrings of longer words.
+    for uname in unique_explicit:
+        hashed = hash_username(uname)
+        result = re.sub(re.escape(uname), hashed, result)
 
     return result

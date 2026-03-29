@@ -31,7 +31,7 @@ brew install opentraces
 
 ```bash
 opentraces login
-opentraces init --review-policy review --push-policy manual
+opentraces init --review-policy review
 opentraces web
 ```
 
@@ -45,7 +45,7 @@ That gives you the browser inbox backed by the React viewer in `web/viewer/`. Re
 | **[Authentication](/docs/getting-started/authentication)** | Hugging Face login and credentials |
 | **[Quick Start](/docs/getting-started/quickstart)** | Init, inbox, commit, push |
 | **[Commands](/docs/cli/commands)** | Public and hidden CLI surface |
-| **[Security Modes](/docs/security/tiers)** | Review policy, push policy, security tiers |
+| **[Security Modes](/docs/security/tiers)** | Review policy, security pipeline |
 | **[Schema](/docs/schema/overview)** | TraceRecord, steps, outcome, attribution |
 | **[Workflow](/docs/workflow/parsing)** | Parse, review, commit, push lifecycle |
 | **[CI/CD](/docs/integration/ci-cd)** | Headless automation and token auth |
@@ -120,7 +120,15 @@ rm -rf ~/.opentraces
 
 opentraces publishes to HuggingFace Hub. You need an HF account.
 
-## Browser Login (Recommended)
+## Token Login (Recommended)
+
+```bash
+opentraces login --token
+```
+
+Prompts for a HuggingFace access token. Generate one at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) with **write** scope. This is required for creating datasets and pushing traces.
+
+## Browser Login
 
 ```bash
 opentraces login
@@ -128,15 +136,7 @@ opentraces login
 
 Opens a browser-based OAuth device code flow, similar to `gh auth login`. You'll see a short code to enter at huggingface.co.
 
-## Token Paste
-
-For headless or CI environments:
-
-```bash
-opentraces login --token
-```
-
-Prompts for a HuggingFace token. Generate one at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) with `write` scope.
+> **Note:** OAuth tokens authenticate your identity but cannot create or write to dataset repos. If you need to push traces, use `opentraces login --token` with a write-access personal access token instead.
 
 ## Environment Variable
 
@@ -182,15 +182,15 @@ pip install opentraces
 ## 2. Authenticate
 
 ```bash
-opentraces login
+opentraces login --token
 ```
 
-Use `HF_TOKEN` instead if you are running headless.
+Paste a HuggingFace access token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Use `HF_TOKEN` instead if you are running headless.
 
 ## 3. Initialize the Project
 
 ```bash
-opentraces init --review-policy review --push-policy manual --start-fresh
+opentraces init --review-policy review --start-fresh
 ```
 
 This creates `.opentraces/config.json`, `.opentraces/staging/`, and the session hook for Claude Code. If you omit the flags, `opentraces init` will prompt for the same choices interactively.
@@ -209,7 +209,7 @@ or
 opentraces tui
 ```
 
-The browser inbox is the default path for review. Use `session list`, `session approve`, `session reject`, and `session redact` if you prefer CLI control.
+The browser inbox is the default path for review. Use `session list`, `session commit`, `session reject`, and `session redact` if you prefer CLI control.
 
 ## 5. Commit and Push
 
@@ -218,7 +218,7 @@ opentraces commit --all
 opentraces push
 ```
 
-`commit` groups ready traces for upload. `push` uploads committed traces to `{username}/opentraces` on Hugging Face Hub as sharded JSONL and updates the dataset card.
+`commit` moves inbox traces to the committed stage. `push` uploads committed traces to `{username}/opentraces` on Hugging Face Hub as sharded JSONL and updates the dataset card.
 
 ## What Happens Next
 
@@ -232,7 +232,7 @@ ds = load_dataset("your-name/opentraces")
 
 ## Next Steps
 
-- [Security Modes](/docs/security/tiers) - Review policy, push policy, and security tiers
+- [Security Modes](/docs/security/tiers) - Review policy and security pipeline
 - [CLI Reference](/docs/cli/commands) - Full command reference
 - [Schema Overview](/docs/schema/overview) - What is stored in a trace record
 
@@ -255,7 +255,7 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces status` | Show inbox status and counts |
 | `opentraces remote` | Manage the configured dataset remote |
 | `opentraces session` | Inspect and edit staged traces |
-| `opentraces commit` | Bundle ready traces for upload |
+| `opentraces commit` | Commit inbox traces for upload |
 | `opentraces push` | Upload committed traces to Hugging Face Hub |
 | `opentraces web` | Open the browser inbox UI |
 | `opentraces tui` | Open the terminal inbox UI |
@@ -268,16 +268,18 @@ Complete reference for the current opentraces CLI surface.
 
 ### `opentraces login`
 
-Authenticate with Hugging Face Hub using OAuth device code flow.
+Authenticate with Hugging Face Hub.
 
 ```bash
-opentraces login
 opentraces login --token
+opentraces login
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--token` | off | Use token paste instead of browser login |
+| `--token` | off | Paste a personal access token (required for pushing) |
+
+> **Recommended:** Use `opentraces login --token` with a write-access PAT from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). The browser OAuth flow (`opentraces login` without `--token`) authenticates your identity but cannot create or push to dataset repos.
 
 ### `opentraces logout`
 
@@ -302,21 +304,20 @@ If Claude Code already has session files for this repo, the interactive flow can
 
 ```bash
 opentraces init
-opentraces init --review-policy review --push-policy manual --start-fresh
-opentraces init --review-policy auto-ready --push-policy manual --import-existing
-opentraces init --review-policy review --push-policy manual --remote your-name/opentraces --start-fresh
+opentraces init --review-policy review --start-fresh
+opentraces init --review-policy auto --import-existing
+opentraces init --review-policy review --remote your-name/opentraces --start-fresh
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--agent` | detected interactively | Agent runtime to connect |
-| `--review-policy` | prompt | `review` or `auto-ready` |
-| `--push-policy` | prompt | `manual` or `auto-push` metadata |
+| `--review-policy` | prompt | `review` or `auto` |
 | `--import-existing / --start-fresh` | prompt when backlog exists | Whether to import existing Claude Code sessions for this repo during init |
 | `--remote` | unset | HF dataset repo (`owner/name`) |
 | `--no-hook` | off | Skip Claude Code hook installation |
 
-`--mode` and `--tier` are legacy aliases kept for compatibility.
+`--mode` is a legacy alias kept for compatibility.
 
 ### `opentraces remove`
 
@@ -331,15 +332,12 @@ Display the current user config with secrets masked.
 Update configuration values.
 
 ```bash
-opentraces config set --tier 2
 opentraces config set --exclude /path/to/client-project
 opentraces config set --redact "INTERNAL_API_KEY"
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--project` | Project path for per-project tier overrides |
-| `--tier` | Default security tier (1, 2, or 3) |
 | `--exclude` | Append a project path to the exclusion list |
 | `--redact` | Append a literal custom redaction string |
 | `--pricing-file` | Override token pricing table |
@@ -378,20 +376,20 @@ Fine-grained review commands for staged traces.
 ```bash
 opentraces session list
 opentraces session show <trace-id>
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces session reject <trace-id>
 opentraces session reset <trace-id>
 opentraces session redact <trace-id> --step 3
 opentraces session discard <trace-id> --yes
 ```
 
-`session list` accepts `--stage inbox|ready|committed|pushed|rejected`, `--model`, `--agent`, and `--limit`.
+`session list` accepts `--stage inbox|committed|pushed|rejected`, `--model`, `--agent`, and `--limit`.
 
 ## Upload
 
 ### `opentraces commit`
 
-Bundle ready traces into a commit group before upload.
+Commit inbox traces into a commit group for upload.
 
 ```bash
 opentraces commit --all
@@ -419,7 +417,7 @@ opentraces push --repo user/custom-dataset
 | `--gated` | off | Enable gated access on the dataset |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
 
-`--approved-only` is not part of the current CLI. The public path is `approve -> commit -> push`.
+`--approved-only` is not part of the current CLI. The public path is `commit -> push`.
 
 ### `opentraces remote`
 
@@ -427,15 +425,15 @@ Manage the configured dataset remote.
 
 ```bash
 opentraces remote
-opentraces remote current
-opentraces remote list
-opentraces remote use owner/dataset
+opentraces remote set owner/dataset
+opentraces remote set owner/dataset --private
+opentraces remote set owner/dataset --public
 opentraces remote remove
 ```
 
 ### `opentraces status`
 
-Show the current project inbox, counts, review policy, push policy, agents, and remote.
+Show the current project inbox, counts, review policy, agents, and remote.
 
 ### `opentraces log`
 
@@ -537,7 +535,7 @@ That keeps the parser surface small and lets new agents plug in without changing
 opentraces status
 ```
 
-`status` shows the inbox summary, review policy, push policy, agents, remote, and stage counts.
+`status` shows the inbox summary, review policy, agents, remote, and stage counts.
 
 ## Common Issues
 
@@ -546,10 +544,10 @@ opentraces status
 Run:
 
 ```bash
-opentraces login
+opentraces login --token
 ```
 
-or export `HF_TOKEN` in your shell:
+Paste a write-access token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Or export `HF_TOKEN` in your shell:
 
 ```bash
 export HF_TOKEN=hf_...
@@ -577,7 +575,13 @@ opentraces session redact <trace-id> --step 3
 
 ### Push Fails With 403
 
-Your Hugging Face token probably lacks write permissions. Create a token with `write` access at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+Your token does not have write access. OAuth device tokens (from `opentraces login`) cannot create or write to dataset repos. Re-authenticate with a personal access token:
+
+```bash
+opentraces login --token
+```
+
+Paste a token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
 
 ### Resetting Local State
 
@@ -626,10 +630,10 @@ The current pipeline does:
 
 | Policy | Result |
 |--------|--------|
-| `review` | Trace lands in `Inbox` |
-| `auto-ready` | Clean traces can land in `Ready` automatically |
+| `review` | Trace lands in `Inbox` for manual review |
+| `auto` | Clean traces are committed and pushed automatically |
 
-The review surface still exists either way. `auto-ready` just reduces the amount of manual triage needed before `commit`.
+The review surface still exists either way. `auto` just reduces the amount of manual triage needed, and traces with scan hits still land in the inbox.
 
 ## Internal Batch Commands
 
@@ -676,21 +680,20 @@ opentraces tui --fullscreen
 ```bash
 opentraces session list
 opentraces session show <trace-id>
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces session reject <trace-id>
 opentraces session reset <trace-id>
 opentraces session redact <trace-id> --step 3
 opentraces session discard <trace-id> --yes
 ```
 
-`approve` moves a trace to `Ready`, `reject` keeps it local only, `reset` sends it back to `Inbox`, and `redact` rewrites the staged JSONL in place.
+`commit` moves a trace directly to `Committed`, `reject` keeps it local only, `reset` sends it back to `Inbox`, and `redact` rewrites the staged JSONL in place.
 
 ## Stage Vocabulary
 
 | Stage | Meaning |
 |-------|---------|
 | `inbox` | Needs review |
-| `ready` | Ready to commit |
 | `committed` | Bundled for upload |
 | `pushed` | Published upstream |
 | `rejected` | Kept local only |
@@ -706,7 +709,7 @@ opentraces session discard <trace-id> --yes
 ## Review Flow
 
 ```bash
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces commit --all
 opentraces push
 ```
@@ -722,12 +725,12 @@ If you need the old compatibility entry point, `opentraces review` still exists 
 ## Current Flow
 
 ```bash
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces commit --all
 opentraces push
 ```
 
-`push` only uploads committed traces. If you have ready traces but have not committed them yet, run `opentraces commit` first.
+`push` only uploads committed traces. If you have inbox traces that have not been committed yet, run `opentraces commit` first.
 
 ## Options
 
@@ -747,7 +750,7 @@ opentraces push --repo user/custom-dataset
 | `--gated` | off | Enable gated access on the dataset |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
 
-`--approved-only` is not part of the current CLI. The supported path is `approve -> commit -> push`.
+`--approved-only` is not part of the current CLI. The supported path is `commit -> push`.
 
 ## How Upload Works
 
@@ -782,9 +785,9 @@ That means:
 | Public | Anyone | Open-source contributions |
 | Gated | Anyone who requests access | Controlled sharing |
 
-## Push Policy
+## Push Behavior by Mode
 
-`push_policy` is recorded in project config for downstream automation, but the core CLI still uses explicit `commit` and `push` commands.
+In `review` mode, you commit and push manually. In `auto` mode, clean traces are committed and pushed automatically after capture.
 
 ---
 
@@ -994,7 +997,7 @@ Package names referenced during the session. Extracted from manifest files or to
 ```json
 {
   "security": {
-    "tier": 2,
+    "scanned": true,
     "flags_reviewed": 3,
     "redactions_applied": 1,
     "classifier_version": "0.1.0"
@@ -1010,7 +1013,7 @@ Open-ended object for future extensions.
 
 - `content_hash` is filled in when the record is serialized with `to_jsonl_line()`
 - `task`, `environment`, `steps`, and the nested blocks all have defaults in the Python model
-- `security.tier` records the per-trace processing tier used during enrichment
+- `security.scanned` confirms the security pipeline (scan, redact, classify) was applied
 
 ---
 
@@ -1343,44 +1346,41 @@ The repository keeps downstream mapping tables in `packages/opentraces-schema/FI
 
 # Security Modes
 
-opentraces separates review policy, push policy, and trace security tier.
+opentraces applies the same security pipeline to every trace: scan, redact, and classify. The review policy controls whether traces require manual approval before publishing.
 
-## Project Policies
+## Review Policy
 
-`opentraces init` and `opentraces config set` work with two project-level policies:
+`opentraces init` sets a project-level review policy:
 
 | Policy | Values | What it controls |
 |--------|--------|------------------|
-| `review_policy` | `review`, `auto-ready` | Whether a parsed trace lands in `Inbox` or `Ready` |
-| `push_policy` | `manual`, `auto-push` | Metadata for downstream automation; the built-in CLI still uses explicit `commit` and `push` |
+| `review_policy` | `review`, `auto` | Whether traces require manual review or are committed automatically |
 
 ```bash
-opentraces init --review-policy review --push-policy manual
-opentraces init --review-policy auto-ready --push-policy manual
+opentraces init --review-policy review
+opentraces init --review-policy auto
 ```
 
-`review_policy` is the current user-facing replacement for the older `--mode` flag. `--mode` remains as a legacy alias only.
+In `review` mode, all traces land in the inbox for manual commit and push. In `auto` mode, clean traces are committed automatically, while traces with scan hits still land in the inbox for review.
 
-## Security Tier
+## Security Pipeline
 
-The trace-level `security.tier` field records which security pass was used while processing a trace.
+Every trace goes through the full security pipeline:
 
-| Tier | Pipeline | Typical use |
-|------|----------|-------------|
-| `1` | Scan + redact | Open or lower-risk work where automatic redaction is acceptable |
-| `2` | Scan + redact + classifier | Guarded work that wants automatic redaction plus heuristic flagging |
-| `3` | Human review first | Strict review flow; rely on the inbox before upload |
+1. **Scan** - Two-pass secret detection (field-level + serialized)
+2. **Redact** - Automatic replacement of detected secrets
+3. **Classify** - Heuristic flagging of internal hostnames, AWS ARNs, database URIs, deep file paths
+4. **Anonymize** - Path anonymization to remove usernames
 
-The pipeline is tiered, but the review surface is always the same: browser inbox, TUI inbox, or `session` subcommands.
+The `security.scanned` field on each trace confirms the pipeline ran. `security.redactions_applied` and `security.flags_reviewed` record what was found.
 
 ## Review Flow
 
 ```text
 Trace captured
-  -> parsed and staged locally
-  -> Inbox or Ready depending on review_policy and tier
-  -> session approve / reject / redact
-  -> commit
+  -> parsed, scanned, redacted, classified
+  -> Inbox (review mode) or auto-committed (auto mode)
+  -> session commit / reject / redact
   -> push
 ```
 
@@ -1388,7 +1388,7 @@ Trace captured
 opentraces web
 opentraces tui
 opentraces session list --stage inbox
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces commit --all
 opentraces push
 ```
@@ -1396,8 +1396,6 @@ opentraces push
 ## Changing Settings
 
 ```bash
-opentraces config set --tier 2
-opentraces config set --tier 3
 opentraces config set --redact "ACME_INTERNAL_TOKEN"
 opentraces config set --classifier-sensitivity high
 ```
@@ -1414,7 +1412,6 @@ Security settings are split between the user config in `~/.opentraces/config.jso
 
 The user config stores defaults shared across projects:
 
-- `default_tier`
 - `excluded_projects`
 - `custom_redact_strings`
 - `classifier_sensitivity`
@@ -1433,41 +1430,21 @@ Each project keeps its inbox settings in `.opentraces/config.json`:
 ```json
 {
   "review_policy": "review",
-  "push_policy": "manual",
-  "mode": "review",
   "agents": ["claude-code"],
   "remote": "your-name/opentraces",
   "visibility": "private"
 }
 ```
 
-`mode` is a legacy alias retained for compatibility. `review_policy` and `push_policy` are the canonical keys.
-
 ## Per-Project Setup
 
 ```bash
 cd ~/project-a
-opentraces init --review-policy review --push-policy manual
+opentraces init --review-policy review
 
 cd ~/project-b
-opentraces init --review-policy auto-ready --push-policy manual
+opentraces init --review-policy auto
 ```
-
-## Security Tier
-
-Set the default security tier for the current user config:
-
-```bash
-opentraces config set --tier 1
-opentraces config set --tier 2
-opentraces config set --tier 3
-```
-
-| Tier | Behavior |
-|------|----------|
-| `1` | Automatic scan + redact |
-| `2` | Automatic scan + redact + classifier flags |
-| `3` | Strict review-first flow |
 
 ## Exclusions
 
@@ -1478,7 +1455,7 @@ opentraces config set --exclude /path/to/client-project
 opentraces config set --exclude /path/to/another-sensitive-project
 ```
 
-Excluded projects are skipped by `opentraces discover` and `opentraces parse` when you run the internal batch commands.
+Excluded projects are skipped during capture and batch parsing.
 
 ## Custom Redaction Strings
 
@@ -1497,7 +1474,7 @@ opentraces config set --classifier-sensitivity medium
 opentraces config set --classifier-sensitivity high
 ```
 
-The classifier is used only at tier 2. Higher sensitivity adds more heuristic flags.
+Higher sensitivity adds more heuristic flags (internal hostnames, deep file paths, identifier density).
 
 ---
 
@@ -1578,7 +1555,7 @@ Most commands emit structured JSON with `next_steps` and `next_command`, so an a
 
 ```bash
 opentraces login
-opentraces init --agent claude-code --review-policy review --push-policy manual --start-fresh
+opentraces init --agent claude-code --review-policy review --start-fresh
 ```
 
 If the repo already has Claude Code session logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.
@@ -1637,14 +1614,14 @@ opentraces login --token
 If you are running opentraces in automation, keep the steps explicit:
 
 ```bash
-opentraces init --review-policy review --push-policy manual --remote my-org/opentraces --no-hook
+opentraces init --review-policy review --remote my-org/opentraces --no-hook
 opentraces session list
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces commit --all
 opentraces push --private
 ```
 
-`push_policy` is metadata today. The core CLI does not auto-push on its own, so your CI script should call `commit` and `push` directly.
+Your CI script should call `commit` and `push` directly.
 
 ## GitHub Actions
 
@@ -1735,7 +1712,7 @@ web/site/                     Next.js docs and marketing site
 ## Notes
 
 - The current shipped parser is Claude Code
-- The inbox workflow is `web/tui/session -> approve/reject/redact -> commit -> push`
+- The inbox workflow is `web/tui/session -> commit/reject/redact -> push`
 - Hidden commands still exist for compatibility and automation, but the public docs should use `web`, `tui`, `session`, `commit`, and `push`
 
 ---

@@ -57,10 +57,14 @@ def test_choose_remote_interactively_async_inside_event_loop(monkeypatch):
     prompts_module = ModuleType("pyclack.prompts")
     core_module = ModuleType("pyclack.core")
 
-    async def fake_select(_prompt, _options):
+    async def fake_select(_prompt, _options, **kwargs):
         return "alice/existing-traces"
 
+    async def fake_text(_prompt, **kwargs):
+        return "alice/opentraces"
+
     prompts_module.select = fake_select
+    prompts_module.text = fake_text
     core_module.Option = _FakeOption
 
     monkeypatch.setitem(sys.modules, "pyclack.prompts", prompts_module)
@@ -76,14 +80,14 @@ def test_choose_remote_interactively_async_inside_event_loop(monkeypatch):
 
         def list_opentraces_datasets(self, username: str):
             assert username == "alice"
-            return [{"id": "alice/existing-traces"}]
+            return [{"id": "alice/existing-traces", "private": True}]
 
     monkeypatch.setattr("opentraces.upload.hf_hub.HFUploader", FakeUploader)
 
     async def run_test():
         return await _choose_remote_interactively_async("alice/opentraces")
 
-    assert asyncio.run(run_test()) == "alice/existing-traces"
+    assert asyncio.run(run_test()) == ("alice/existing-traces", "private")
 
 
 def test_init_import_existing_flag_imports_backlog(tmp_path, monkeypatch):

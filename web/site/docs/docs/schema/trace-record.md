@@ -109,7 +109,7 @@ Package names referenced during the session. Extracted from manifest files or to
 ```json
 {
   "security": {
-    "tier": 2,
+    "scanned": true,
     "flags_reviewed": 3,
     "redactions_applied": 1,
     "classifier_version": "0.1.0"
@@ -125,4 +125,4 @@ Open-ended object for future extensions.
 
 - `content_hash` is filled in when the record is serialized with `to_jsonl_line()`
 - `task`, `environment`, `steps`, and the nested blocks all have defaults in the Python model
-- `security.tier` records the per-trace processing tier used during enrichment
+- `security.scanned` confirms the security pipeline (scan, redact, classify) was applied

@@ -203,7 +203,7 @@ class TestDogfoodSecurity:
                 print(f"  Trace {t.trace_id[:8]}: {len(high_severity)} critical matches")
 
     def test_classifier_on_real_traces(self, parsed_traces):
-        """Tier 2 classifier should produce reasonable risk scores."""
+        """Classifier should produce reasonable risk scores."""
         for t in parsed_traces[:3]:
             result = classify_trace_record(t, sensitivity="medium")
             assert 0.0 <= result.risk_score <= 1.0

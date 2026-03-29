@@ -137,7 +137,7 @@ class TestTraceRecordRoundTrip:
                 cache_hit_rate=0.9,
                 estimated_cost_usd=0.05,
             ),
-            security=SecurityMetadata(tier=1, redactions_applied=2),
+            security=SecurityMetadata(scanned=True, redactions_applied=2),
             attribution=Attribution(
                 files=[
                     AttributionFile(

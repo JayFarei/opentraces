@@ -5,12 +5,12 @@
 ## Current Flow
 
 ```bash
-opentraces session approve <trace-id>
+opentraces session commit <trace-id>
 opentraces commit --all
 opentraces push
 ```
 
-`push` only uploads committed traces. If you have ready traces but have not committed them yet, run `opentraces commit` first.
+`push` only uploads committed traces. If you have inbox traces that have not been committed yet, run `opentraces commit` first.
 
 ## Options
 
@@ -30,7 +30,7 @@ opentraces push --repo user/custom-dataset
 | `--gated` | off | Enable gated access on the dataset |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
 
-`--approved-only` is not part of the current CLI. The supported path is `approve -> commit -> push`.
+`--approved-only` is not part of the current CLI. The supported path is `commit -> push`.
 
 ## How Upload Works
 
@@ -65,6 +65,6 @@ That means:
 | Public | Anyone | Open-source contributions |
 | Gated | Anyone who requests access | Controlled sharing |
 
-## Push Policy
+## Push Behavior by Mode
 
-`push_policy` is recorded in project config for downstream automation, but the core CLI still uses explicit `commit` and `push` commands.
+In `review` mode, you commit and push manually. In `auto` mode, clean traces are committed and pushed automatically after capture.
