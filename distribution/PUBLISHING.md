@@ -1,61 +1,73 @@
 # Publishing Guide
 
-This repository uses GitHub Actions + trusted publishing for releases.
+Two packages are published from this monorepo: `opentraces-schema` (dependency) and `opentraces` (CLI).
+Authentication uses GitHub Actions trusted publishing (OIDC), no API tokens needed.
 
-Two packages are published: `opentraces-schema` (dependency) and `opentraces` (CLI).
+## Setup (already done)
 
-## First-time setup (one-time)
+Trusted publishers registered on PyPI and TestPyPI:
 
-1. Create accounts on [TestPyPI](https://test.pypi.org) and [PyPI](https://pypi.org).
-2. In **each** registry, add a **Trusted Publisher** for **each package**:
+| Package | PyPI environment | TestPyPI environment |
+|---------|-----------------|---------------------|
+| `opentraces-schema` | `pypi-schema` | `testpypi-schema` |
+| `opentraces` | `pypi-cli` | `testpypi-cli` |
 
-   **opentraces-schema** (4 entries: 2 registries x 1 package):
-   - Owner: `JayFarei`
-   - Repository: `opentraces`
-   - Workflow: `publish.yml`
-   - Environment: `pypi-schema` (on PyPI) / `testpypi-schema` (on TestPyPI)
+Matching GitHub environments created in repo Settings > Environments.
 
-   **opentraces** (4 entries: 2 registries x 1 package):
-   - Owner: `JayFarei`
-   - Repository: `opentraces`
-   - Workflow: `publish.yml`
-   - Environment: `pypi-cli` (on PyPI) / `testpypi-cli` (on TestPyPI)
+## Version files
 
-3. In GitHub repo **Settings > Environments**, create four environments: `pypi-schema`, `pypi-cli`, `testpypi-schema`, `testpypi-cli`.
-4. Ensure Actions are enabled for this repository.
+| Package | File | Field |
+|---------|------|-------|
+| `opentraces-schema` | `packages/opentraces-schema/src/opentraces_schema/version.py` | `SCHEMA_VERSION` |
+| `opentraces` | `src/opentraces/__init__.py` | `__version__` |
 
-## Release workflow (recommended)
+## Publishing a release
 
-1. Bump versions:
-   - Schema: `packages/opentraces-schema/src/opentraces_schema/version.py`
-   - CLI: `src/opentraces/__init__.py`
-2. Run checks locally:
+### 1. Bump versions
+
+Edit the version files above. If only the CLI changed, you can skip bumping the schema version.
+
+### 2. Verify locally
+
+```bash
+source .venv/bin/activate
+python -m pip install --upgrade build twine
+python -m pytest -q
+
+# Build and check both packages
+cd packages/opentraces-schema && rm -rf dist && python -m build && python -m twine check dist/* && cd ../..
+rm -rf dist && python -m build && python -m twine check dist/*
+```
+
+### 3. Test on TestPyPI (first time or when unsure)
+
+Push your changes to `main`, then:
+
+1. Go to **Actions** > **Publish** > **Run workflow**
+2. Select `testpypi` and `both`
+3. Wait for both jobs to pass
+4. Verify:
    ```bash
-   python -m pip install --upgrade build twine
-   python -m pytest -q
-   cd packages/opentraces-schema && python -m build && python -m twine check dist/* && cd ../..
-   python -m build && python -m twine check dist/*
+   python -m venv /tmp/ot-test
+   source /tmp/ot-test/bin/activate
+   pip install --index-url https://test.pypi.org/simple/ --no-deps opentraces-schema==X.Y.Z
+   pip install --index-url https://test.pypi.org/simple/ --no-deps opentraces==X.Y.Z
+   pip install --index-url https://pypi.org/simple/ 'click>=8.0' 'huggingface_hub>=0.20.0' 'pydantic>=2.0' 'pyclack-cli>=0.4.0' 'requests>=2.31.0'
+   opentraces --help
    ```
-3. Commit, tag, and push:
-   ```bash
-   git add .
-   git commit -m "release: opentraces vX.Y.Z"
-   git tag -a vX.Y.Z -m "opentraces vX.Y.Z"
-   git push origin main --tags
-   ```
-4. Create a GitHub Release for `vX.Y.Z`.
-5. Confirm success in Actions:
-   - Workflow: `Publish`
-   - Jobs: `Publish opentraces-schema`, then `Publish opentraces`
 
-## Manual publish runs
+### 4. Release to PyPI
 
-- TestPyPI: run workflow `Publish` with `repository=testpypi` and choose which package.
-- PyPI: run workflow `Publish` with `repository=pypi` and choose which package.
+```bash
+git add .
+git commit -m "release: opentraces vX.Y.Z"
+git tag -a vX.Y.Z -m "opentraces vX.Y.Z"
+git push origin main --tags
+```
 
-## Verify install
+Then create a **GitHub Release** for the tag `vX.Y.Z`. This automatically triggers the Publish workflow, which builds and publishes both packages to PyPI (schema first, then CLI).
 
-From PyPI:
+### 5. Verify
 
 ```bash
 python -m venv /tmp/ot-verify
@@ -64,13 +76,27 @@ pip install opentraces==X.Y.Z
 opentraces --help
 ```
 
-From TestPyPI:
+## Manual publish (without a release)
 
-```bash
-python -m venv /tmp/ot-test
-source /tmp/ot-test/bin/activate
-pip install --index-url https://test.pypi.org/simple/ --no-deps opentraces-schema==X.Y.Z
-pip install --index-url https://test.pypi.org/simple/ --no-deps opentraces==X.Y.Z
-pip install --index-url https://pypi.org/simple/ 'click>=8.0' 'huggingface_hub>=0.20.0' 'pydantic>=2.0' 'pyclack-cli>=0.4.0' 'requests>=2.31.0'
-opentraces --help
-```
+Go to **Actions** > **Publish** > **Run workflow**, then pick:
+- **repository**: `testpypi` or `pypi`
+- **package**: `opentraces-schema`, `opentraces`, or `both`
+
+## How it works
+
+The workflow (`.github/workflows/publish.yml`) has 4 jobs:
+
+1. **Build opentraces-schema** - builds the schema wheel
+2. **Build opentraces** - builds the CLI wheel
+3. **Publish opentraces-schema** - uploads schema (runs first)
+4. **Publish opentraces** - uploads CLI (waits for schema to succeed)
+
+On a GitHub Release, both packages publish to PyPI. On manual dispatch, you choose the target registry and which package(s).
+
+## Publishing only the schema
+
+If you made a breaking schema change and need to publish it before the CLI is ready:
+
+1. Bump `SCHEMA_VERSION` in `packages/opentraces-schema/src/opentraces_schema/version.py`
+2. Run workflow manually with `package=opentraces-schema`
+3. Update `opentraces` dependency in `pyproject.toml` to match
