@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "opentraces"
+dynamic = ["version"]
+description = "Crowdsource agent traces to HuggingFace Hub"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "opentraces-schema>=0.1.0",
+    "click>=8.0",
+    "huggingface_hub>=0.20.0",
+    "pyclack-cli>=0.4.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+web = ["flask>=3.0"]
+tui = ["textual>=0.50.0"]
+dev = ["pytest>=8.0", "pytest-cov", "ruff"]
+release = ["build", "twine"]
+
+[project.scripts]
+opentraces = "opentraces.cli:main"
+ot = "opentraces.cli:main"
+lazytraces = "opentraces.clients.tui:main"
+
+[project.urls]
+Homepage = "https://opentraces.ai"
+Repository = "https://github.com/JayFarei/opentraces"
+
+[tool.hatch.version]
+path = "src/opentraces/__init__.py"
+pattern = "__version__ = \"(?P<version>[^\"]+)\""
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/opentraces"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"skill/SKILL.md" = "opentraces/skill/SKILL.md"
+"web/viewer/dist" = "opentraces/static/viewer"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

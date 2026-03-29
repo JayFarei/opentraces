@@ -1,0 +1,127 @@
+/* opentraces.ai design tokens
+ * Canonical source of truth for all apps.
+ *
+ * CSS custom properties handle theme switching (light/dark).
+ * @theme registers them as Tailwind v4 utilities so you can write
+ * bg-bg, text-accent, font-mono instead of bg-[var(--bg)]. */
+
+/* ── Light Mode (default, safe for SSR) ── */
+:root {
+  --bg: #E4E2DF;
+  --bg-alt: #D8D6D2;
+  --surface: #EEEDEB;
+  --surface-hover: #E4E2DF;
+  --surface-elevated: #F2F1EF;
+  --text: #0A0A0A;
+  --text-secondary: #2A2A2A;
+  --text-muted: #6B6B6B;
+  --text-dim: #A0A0A0;
+  --accent: #C2410C;
+  --accent-dim: #EA580C;
+  --accent-bg: rgba(194, 65, 12, 0.07);
+  --green: #15803D;
+  --green-dim: #16A34A;
+  --green-bg: rgba(21, 128, 61, 0.06);
+  --red: #B91C1C;
+  --red-bg: rgba(185, 28, 28, 0.06);
+  --yellow: #92400E;
+  --yellow-bg: rgba(146, 64, 14, 0.06);
+  --blue: #1D4ED8;
+  --blue-bg: rgba(29, 78, 216, 0.06);
+  --cyan: #0E7490;
+  --border: #C5C3BF;
+  --border-strong: #9A9895;
+}
+
+/* ── Dark Mode ── */
+[data-theme="dark"], .theme-dark {
+  --bg: #111111;
+  --bg-alt: #0A0A0A;
+  --surface: #191919;
+  --surface-hover: #222222;
+  --surface-elevated: #1E1E1E;
+  --text: #E0E0E0;
+  --text-secondary: #B0B0B0;
+  --text-muted: #666666;
+  --text-dim: #444444;
+  --accent: #F97316;
+  --accent-dim: #9A3412;
+  --accent-bg: rgba(249, 115, 22, 0.08);
+  --green: #22C55E;
+  --green-dim: #166534;
+  --green-bg: rgba(34, 197, 94, 0.08);
+  --red: #EF4444;
+  --red-bg: rgba(239, 68, 68, 0.08);
+  --yellow: #EAB308;
+  --yellow-bg: rgba(234, 179, 8, 0.08);
+  --blue: #3B82F6;
+  --blue-bg: rgba(59, 130, 246, 0.08);
+  --cyan: #22D3EE;
+  --border: #2A2A2A;
+  --border-strong: #3A3A3A;
+}
+
+/* ── Explicit Light Mode (backward compat) ── */
+[data-theme="light"], .theme-light {
+  --bg: #E4E2DF;
+  --bg-alt: #D8D6D2;
+  --surface: #EEEDEB;
+  --surface-hover: #E4E2DF;
+  --surface-elevated: #F2F1EF;
+  --text: #0A0A0A;
+  --text-secondary: #2A2A2A;
+  --text-muted: #6B6B6B;
+  --text-dim: #A0A0A0;
+  --accent: #C2410C;
+  --accent-dim: #EA580C;
+  --accent-bg: rgba(194, 65, 12, 0.07);
+  --green: #15803D;
+  --green-dim: #16A34A;
+  --green-bg: rgba(21, 128, 61, 0.06);
+  --red: #B91C1C;
+  --red-bg: rgba(185, 28, 28, 0.06);
+  --yellow: #92400E;
+  --yellow-bg: rgba(146, 64, 14, 0.06);
+  --blue: #1D4ED8;
+  --blue-bg: rgba(29, 78, 216, 0.06);
+  --cyan: #0E7490;
+  --border: #C5C3BF;
+  --border-strong: #9A9895;
+}
+
+/* ── Tailwind v4 Theme Registration ──
+ * Maps CSS variables to Tailwind utilities:
+ *   bg-bg, bg-surface, text-accent, border-border, font-mono, etc. */
+@theme {
+  /* Colors */
+  --color-bg: var(--bg);
+  --color-bg-alt: var(--bg-alt);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-text: var(--text);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-dim: var(--text-dim);
+  --color-accent: var(--accent);
+  --color-accent-dim: var(--accent-dim);
+  --color-accent-bg: var(--accent-bg);
+  --color-green: var(--green);
+  --color-green-dim: var(--green-dim);
+  --color-green-bg: var(--green-bg);
+  --color-red: var(--red);
+  --color-red-bg: var(--red-bg);
+  --color-yellow: var(--yellow);
+  --color-yellow-bg: var(--yellow-bg);
+  --color-blue: var(--blue);
+  --color-blue-bg: var(--blue-bg);
+  --color-cyan: var(--cyan);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  /* Typography */
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-display: 'Space Grotesk', system-ui, sans-serif;
+  --font-body: 'IBM Plex Mono', 'JetBrains Mono', monospace;
+  --font-label: 'Space Mono', 'JetBrains Mono', monospace;
+}

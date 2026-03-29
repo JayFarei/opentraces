@@ -1,0 +1,31 @@
+{
+  "name": "@opentraces/ui",
+  "version": "0.3.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./theme.css": "./index.css",
+    "./tokens.css": "./tokens.css",
+    "./base.css": "./base.css",
+    "./components.css": "./components.css"
+  },
+  "files": [
+    "src",
+    "assets",
+    "index.css",
+    "tokens.css",
+    "base.css",
+    "components.css"
+  ],
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.3.0"
+  }
+}

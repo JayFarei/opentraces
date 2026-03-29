@@ -1,0 +1,65 @@
+name: Update Homebrew Formula
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-formula:
+    name: Update Homebrew tap
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get release tarball SHA256
+        id: sha
+        run: |
+          URL="https://github.com/${{ github.repository }}/archive/refs/tags/${{ github.event.release.tag_name }}.tar.gz"
+          SHA=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: JayFarei/homebrew-opentraces
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        run: |
+          cat > Formula/opentraces.rb << 'FORMULA'
+          class Opentraces < Formula
+            include Language::Python::Virtualenv
+
+            desc "Crowdsource agent traces to HuggingFace Hub"
+            homepage "https://opentraces.ai"
+            url "${{ steps.sha.outputs.url }}"
+            sha256 "${{ steps.sha.outputs.sha256 }}"
+            license "MIT"
+            head "https://github.com/JayFarei/opentraces.git", branch: "main"
+
+            depends_on "python@3.12"
+
+            def install
+              venv = virtualenv_create(libexec, "python3.12")
+              venv.pip_install buildpath/"packages/opentraces-schema"
+              venv.pip_install_and_link buildpath
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/opentraces --version")
+              assert_match version.to_s, shell_output("#{bin}/ot --version")
+            end
+          end
+          FORMULA
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' Formula/opentraces.rb
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/opentraces.rb
+          git commit -m "Update opentraces to ${{ steps.sha.outputs.version }}"
+          git push

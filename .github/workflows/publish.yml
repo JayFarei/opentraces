@@ -1,0 +1,132 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Target repository"
+        required: true
+        type: choice
+        options:
+          - testpypi
+          - pypi
+      package:
+        description: "Package to publish"
+        required: true
+        type: choice
+        options:
+          - opentraces
+          - opentraces-schema
+          - both
+
+jobs:
+  build-schema:
+    name: Build opentraces-schema
+    if: >-
+      github.event_name == 'release' ||
+      inputs.package == 'opentraces-schema' ||
+      inputs.package == 'both'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: |
+          pip install --upgrade build
+          cd packages/opentraces-schema
+          python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-schema
+          path: packages/opentraces-schema/dist/
+
+  build-cli:
+    name: Build opentraces
+    if: >-
+      github.event_name == 'release' ||
+      inputs.package == 'opentraces' ||
+      inputs.package == 'both'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build viewer
+        run: |
+          cd web/viewer
+          npm ci
+          npm run build
+      - name: Build
+        run: |
+          pip install --upgrade build
+          python -m build --wheel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-cli
+          path: dist/
+
+  publish-schema:
+    name: Publish opentraces-schema
+    needs: build-schema
+    if: >-
+      github.event_name == 'release' ||
+      inputs.package == 'opentraces-schema' ||
+      inputs.package == 'both'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'release' && 'pypi-schema' || format('{0}-schema', inputs.repository) }}
+      url: ${{ github.event_name == 'release' && 'https://pypi.org/project/opentraces-schema/' || 'https://test.pypi.org/project/opentraces-schema/' }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-schema
+          path: dist/
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.repository == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+      - name: Publish to PyPI
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.repository == 'pypi')
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-cli:
+    name: Publish opentraces
+    needs:
+      - build-cli
+      - publish-schema
+    if: >-
+      !failure() && !cancelled() && (
+        github.event_name == 'release' ||
+        inputs.package == 'opentraces' ||
+        inputs.package == 'both'
+      )
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.event_name == 'release' && 'pypi-cli' || format('{0}-cli', inputs.repository) }}
+      url: ${{ github.event_name == 'release' && 'https://pypi.org/project/opentraces/' || 'https://test.pypi.org/project/opentraces/' }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-cli
+          path: dist/
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.repository == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+      - name: Publish to PyPI
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.repository == 'pypi')
+        uses: pypa/gh-action-pypi-publish@release/v1

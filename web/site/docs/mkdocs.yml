@@ -1,0 +1,70 @@
+site_name: open traces docs
+site_description: Open protocol + CLI for crowdsourcing agent traces to Hugging Face Hub
+use_directory_urls: false
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep orange
+      accent: deep orange
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: IBM Plex Mono
+    code: JetBrains Mono
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+    - toc.integrate
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Authentication: getting-started/authentication.md
+      - Quick Start: getting-started/quickstart.md
+  - CLI:
+      - Commands: cli/commands.md
+      - Supported Agents: cli/supported-agents.md
+      - Troubleshooting: cli/troubleshooting.md
+  - Security:
+      - Security Modes: security/tiers.md
+      - Scanning & Redaction: security/scanning.md
+      - Configuration: security/configuration.md
+  - Schema:
+      - Overview: schema/overview.md
+      - TraceRecord: schema/trace-record.md
+      - Steps: schema/steps.md
+      - Outcome & Attribution: schema/outcome-attribution.md
+      - Standards Alignment: schema/standards.md
+      - Versioning: schema/versioning.md
+  - Workflow:
+      - Parsing: workflow/parsing.md
+      - Inbox: workflow/review.md
+      - Pushing: workflow/pushing.md
+      - Export: workflow/export.md
+  - Integration:
+      - CI/CD & Automation: integration/ci-cd.md
+      - Agent Setup: integration/agent-setup.md
+  - Contributing:
+      - Development: contributing/development.md
+      - Schema Changes: contributing/schema-changes.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - toc:
+      permalink: true
+  - tables

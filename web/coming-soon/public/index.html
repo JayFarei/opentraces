@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>opentraces - Coming Soon</title>
+  <meta name="description" content="Your agent traces are training data. Open protocol for crowdsourcing AI agent session traces.">
+  <meta property="og:title" content="opentraces - Coming Soon">
+  <meta property="og:description" content="Your agent traces are training data. Open protocol for crowdsourcing AI agent session traces.">
+  <meta property="og:type" content="website">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #0a0a0a;
+      --surface: #141414;
+      --border: #1e1e1e;
+      --text: #e0e0e0;
+      --text-dim: #666;
+      --accent: #4ade80;
+      --accent-dim: rgba(74, 222, 128, 0.08);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .page {
+      width: 100%;
+      max-width: 720px;
+      padding: 2rem;
+    }
+
+    .badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--accent);
+      border: 1px solid rgba(74, 222, 128, 0.25);
+      padding: 0.35rem 0.85rem;
+      border-radius: 999px;
+      margin-bottom: 2.5rem;
+      background: var(--accent-dim);
+    }
+
+    h1 {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: clamp(2.2rem, 5vw, 3.4rem);
+      font-weight: 300;
+      line-height: 1.15;
+      margin-bottom: 1.5rem;
+      letter-spacing: -0.02em;
+    }
+
+    h1 span {
+      color: var(--text-dim);
+    }
+
+    .terminal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 2rem 0;
+      overflow: hidden;
+    }
+
+    .terminal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .dots span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #333;
+    }
+
+    .dots span:nth-child(1) { background: #ff5f57; }
+    .dots span:nth-child(2) { background: #febc2e; }
+    .dots span:nth-child(3) { background: #28c840; }
+
+    .terminal-label {
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .terminal-body {
+      padding: 1.25rem 1.25rem;
+      font-size: 0.82rem;
+      line-height: 1.7;
+      color: #999;
+    }
+
+    .terminal-body .cmd {
+      color: var(--text);
+    }
+
+    .terminal-body .flag {
+      color: var(--accent);
+    }
+
+    .terminal-body .comment {
+      color: #444;
+    }
+
+    .terminal-body .output {
+      color: #666;
+      margin-left: 0;
+    }
+
+    .prompt::before {
+      content: '$ ';
+      color: var(--accent);
+    }
+
+    .tagline {
+      font-size: 0.95rem;
+      color: var(--text-dim);
+      line-height: 1.6;
+      max-width: 520px;
+      margin-bottom: 2.5rem;
+    }
+
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
+
+    .footer a {
+      color: var(--text);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer a:hover {
+      color: var(--accent);
+    }
+
+    .links {
+      display: flex;
+      gap: 1.5rem;
+    }
+
+    .links a {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .cursor {
+      display: inline-block;
+      width: 8px;
+      height: 1.1em;
+      background: var(--accent);
+      margin-left: 2px;
+      vertical-align: text-bottom;
+      animation: blink 1s step-end infinite;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    .countdown {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .countdown-unit {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-width: 3.5rem;
+    }
+
+    .countdown-value {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: clamp(1.8rem, 4vw, 2.4rem);
+      font-weight: 600;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .countdown-label {
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      margin-top: 0.15rem;
+    }
+
+    .countdown-sep {
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 1.6rem;
+      color: var(--text-dim);
+      margin-top: -1rem;
+    }
+
+    @media (max-width: 640px) {
+      .page { padding: 1.5rem; }
+      .terminal-body { font-size: 0.72rem; }
+      .footer { flex-direction: column; gap: 1rem; align-items: flex-start; }
+      .countdown-unit { min-width: 2.8rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="badge">Coming Soon</div>
+
+    <h1>your agent traces<br><span>are training data</span></h1>
+
+    <div class="countdown" id="countdown">
+      <div class="countdown-unit">
+        <span class="countdown-value" id="cd-days">--</span>
+        <span class="countdown-label">days</span>
+      </div>
+      <div class="countdown-sep">:</div>
+      <div class="countdown-unit">
+        <span class="countdown-value" id="cd-hours">--</span>
+        <span class="countdown-label">hours</span>
+      </div>
+      <div class="countdown-sep">:</div>
+      <div class="countdown-unit">
+        <span class="countdown-value" id="cd-mins">--</span>
+        <span class="countdown-label">min</span>
+      </div>
+      <div class="countdown-sep">:</div>
+      <div class="countdown-unit">
+        <span class="countdown-value" id="cd-secs">--</span>
+        <span class="countdown-label">sec</span>
+      </div>
+    </div>
+
+    <p class="tagline">
+      Open protocol for crowdsourcing AI agent session traces as structured datasets. Parse, sanitize, publish.
+    </p>
+
+    <div class="terminal">
+      <div class="terminal-header">
+        <div class="dots">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="terminal-label">Coming Soon</span>
+      </div>
+      <div class="terminal-body">
+        <div class="prompt cmd">opentraces push <span class="flag">--tier community</span></div>
+        <br>
+        <div class="output">scanning session traces...</div>
+        <div class="output">found 847 turns across 12 sessions</div>
+        <div class="output">applying security tier: <span class="flag">community</span></div>
+        <div class="output">&nbsp;&nbsp;secrets: 3 redacted</div>
+        <div class="output">&nbsp;&nbsp;paths: anonymized</div>
+        <div class="output">&nbsp;&nbsp;PII: 0 found</div>
+        <div class="output">enriching with git signals...</div>
+        <div class="output">publishing to HuggingFace Hub...</div>
+        <br>
+        <div class="output"><span class="flag">done</span> 12 sessions pushed to hf.co/datasets/you/traces</div>
+        <div class="prompt cmd"><span class="cursor"></span></div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span>opentraces</span>
+      <div class="links">
+        <a href="https://x.com/jayfarei" target="_blank" rel="noopener">X</a>
+      </div>
+    </div>
+  </div>
+  <script>
+    // Sunday March 29 2026, 22:00 BST (UTC+1) = 21:00 UTC
+    const target = new Date('2026-03-29T21:00:00Z').getTime();
+
+    function update() {
+      const now = Date.now();
+      const diff = Math.max(0, target - now);
+
+      const d = Math.floor(diff / 86400000);
+      const h = Math.floor((diff % 86400000) / 3600000);
+      const m = Math.floor((diff % 3600000) / 60000);
+      const s = Math.floor((diff % 60000) / 1000);
+
+      document.getElementById('cd-days').textContent = String(d).padStart(2, '0');
+      document.getElementById('cd-hours').textContent = String(h).padStart(2, '0');
+      document.getElementById('cd-mins').textContent = String(m).padStart(2, '0');
+      document.getElementById('cd-secs').textContent = String(s).padStart(2, '0');
+
+      if (diff === 0) {
+        document.getElementById('countdown').innerHTML = '<span class="countdown-value" style="color:var(--accent)">Live now</span>';
+      }
+    }
+
+    update();
+    setInterval(update, 1000);
+  </script>
+</body>
+</html>

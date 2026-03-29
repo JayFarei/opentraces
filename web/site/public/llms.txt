@@ -1,0 +1,1913 @@
+# open traces
+
+> Open-source CLI for repo-local agent trace capture, review, and upload to Hugging Face Hub. React inbox, terminal inbox, and structured JSONL schema.
+
+## Links
+
+- Documentation: https://opentraces.ai/docs
+- GitHub: https://github.com/jayfarei/opentraces
+- Explorer: https://opentraces.ai/explorer
+- Schema: https://opentraces.ai/schema
+
+## Full Documentation
+
+---
+
+# opentraces
+
+Open protocol + CLI for repo-local agent trace capture, review, and upload to Hugging Face Hub.
+
+## Get Started
+
+### pipx
+
+```bash
+pipx install opentraces
+```
+
+### brew
+
+```bash
+brew install JayFarei/opentraces/opentraces
+```
+
+### Copy to your agent
+
+Paste this into your coding agent (Claude Code, Cursor, Codex, etc.):
+
+```
+Set up opentraces in this project for trace collection.
+
+Step 1 - Install:
+pipx install opentraces
+
+Step 2 - Authenticate:
+Run `opentraces auth status` to check if already logged in.
+If not authenticated, ask me to run `opentraces login` myself,
+I need to authorize in the browser.
+
+Step 3 - Initialize:
+Detect which agent you are (Claude Code, Cursor, etc.) and run:
+`opentraces init --agent <agent> --review-policy auto --import-existing`
+
+This will:
+- set the review policy to auto (traces are captured, sanitized, committed, and pushed automatically)
+- create a private dataset on HuggingFace
+- install the agent hook so traces are captured at the end of every session
+- import any existing sessions from this project
+
+If I want manual review instead, use `--review-policy review`.
+
+Step 4 - Review (if review policy):
+Open the inbox to review, commit, redact, or reject traces:
+`opentraces tui` or `opentraces web`
+
+Step 5 - Push:
+Sync committed traces to the remote dataset:
+`opentraces push`
+
+With auto review policy, the hook handles this automatically
+at the end of each session, no manual push needed.
+```
+
+## Quick Start
+
+```bash
+opentraces login
+opentraces init
+opentraces push
+```
+
+`login` authenticates with HuggingFace. `init` creates a private dataset, installs the session hook, and starts capturing traces automatically. `push` uploads committed traces to your dataset.
+
+Open the inbox to review traces before pushing:
+
+### Web inbox
+
+```bash
+opentraces web
+```
+
+![Web inbox - timeline view](/docs/assets/web-timeline.png)
+
+![Web inbox - review view](/docs/assets/web-review.png)
+
+### Terminal inbox
+
+```bash
+opentraces tui
+```
+
+![Terminal inbox](/docs/assets/tui.png)
+
+Then `opentraces commit` and `opentraces push` when ready.
+
+## Why
+
+### Contribute to the commons
+
+Your agent traces are the most valuable dataset nobody is collecting. Every coding session produces action trajectories, tool-use sequences, and reasoning chains. When shared as open data, these traces let the tools you use every day improve based on real-world telemetry. Traces are searchable by dependency, so framework maintainers, tool authors, and researchers can find sessions relevant to their stack and build better models.
+
+### Private team analytics
+
+If you have several agents or several team members, commit traces automatically to a shared private dataset during your enterprise hacking sessions. Run downstream analytics, fine-tuning, or evaluation jobs on top of it. One dataset, many consumers, no vendor lock-in, all on HuggingFace.
+
+```python
+from datasets import load_dataset
+
+ds = load_dataset("your-org/agent-traces")
+```
+
+## Docs
+
+| Section | What's inside |
+|---------|---------------|
+| **[Installation](/docs/getting-started/installation)** | Install, verify, upgrade |
+| **[Authentication](/docs/getting-started/authentication)** | Hugging Face login and credentials |
+| **[Quick Start](/docs/getting-started/quickstart)** | Init, inbox, commit, push |
+| **[Commands](/docs/cli/commands)** | Public and hidden CLI surface |
+| **[Security Modes](/docs/security/tiers)** | Review policy, security pipeline |
+| **[Schema](/docs/schema/overview)** | TraceRecord, steps, outcome, attribution |
+| **[Workflow](/docs/workflow/parsing)** | Parse, review, commit, push lifecycle |
+| **[CI/CD](/docs/integration/ci-cd)** | Headless automation and token auth |
+| **[Contributing](/docs/contributing/development)** | Local dev and schema changes |
+
+## Links
+
+- [GitHub](https://github.com/jayfarei/opentraces)
+- [Schema Rationale](/docs/schema/overview)
+- [opentraces.ai](https://opentraces.ai)
+
+
+---
+
+# Installation
+
+## pipx
+
+```bash
+pipx install opentraces
+```
+
+## brew
+
+```bash
+brew install JayFarei/opentraces/opentraces
+```
+
+## Copy to your agent
+
+Paste this into your coding agent (Claude Code, Cursor, Codex, etc.):
+
+```
+set up opentraces for this project
+```
+
+The agent will install the CLI, authenticate, create a private HF dataset, and install the session hook. No manual setup required.
+
+## From Source
+
+```bash
+git clone https://github.com/jayfarei/opentraces
+cd opentraces
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e packages/opentraces-schema
+pip install -e ".[dev]"
+```
+
+## Verify Installation
+
+```bash
+opentraces --version
+```
+
+## System Requirements
+
+| Platform | Status |
+|----------|--------|
+| macOS (ARM64, x86_64) | Supported |
+| Linux (x86_64, ARM64) | Supported |
+| Windows (WSL) | Supported via Linux binary |
+
+Python 3.10 or later is required.
+
+## Upgrading
+
+```bash
+pip install --upgrade opentraces
+```
+
+## Uninstalling
+
+```bash
+pip uninstall opentraces
+```
+
+To also remove local data and credentials:
+
+```bash
+rm -rf ~/.opentraces
+```
+
+---
+
+# Authentication
+
+opentraces publishes to HuggingFace Hub. You need an HF account.
+
+## Token Login (Recommended)
+
+```bash
+opentraces login --token
+```
+
+Prompts for a HuggingFace access token. Generate one at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) with **write** scope. This is required for creating datasets and pushing traces.
+
+## Browser Login
+
+```bash
+opentraces login
+```
+
+Opens a browser-based OAuth device code flow, similar to `gh auth login`. You'll see a short code to enter at huggingface.co.
+
+> **Note:** OAuth tokens authenticate your identity but cannot create or write to dataset repos. If you need to push traces, use `opentraces login --token` with a write-access personal access token instead.
+
+## Environment Variable
+
+```bash
+export HF_TOKEN=hf_...
+```
+
+The CLI checks for `HF_TOKEN` automatically. Useful in CI pipelines where interactive login isn't available.
+
+## Auth Precedence
+
+1. `HF_TOKEN` environment variable
+2. Stored credentials from `opentraces login`
+
+## Verify
+
+```bash
+opentraces status
+```
+
+Shows your authenticated username and active configuration.
+
+## Logout
+
+```bash
+opentraces logout
+```
+
+Clears stored credentials from `~/.opentraces/credentials.json`.
+
+---
+
+# Quick Start
+
+From local inbox to published dataset.
+
+## 1. Install
+
+```bash
+pipx install opentraces
+```
+
+## 2. Authenticate
+
+```bash
+opentraces login --token
+```
+
+Paste a HuggingFace access token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Use `HF_TOKEN` instead if you are running headless.
+
+## 3. Initialize the Project
+
+```bash
+opentraces init --review-policy review --start-fresh
+```
+
+This creates `.opentraces/config.json`, `.opentraces/staging/`, and the session hook for Claude Code. If you omit the flags, `opentraces init` will prompt for the same choices interactively.
+
+If Claude Code already has session logs for this repo, pass `--import-existing` to pull that backlog into the inbox now. Use `--start-fresh` if you only want capture from your next connected session onward.
+
+## 4. Open the Inbox
+
+### Web inbox
+
+```bash
+opentraces web
+```
+
+The browser inbox shows a timeline of each session's steps, tool calls, and reasoning. Switch to the review view to see context items grouped by source.
+
+![Web inbox - timeline view](/docs/assets/web-timeline.png)
+
+![Web inbox - review view](/docs/assets/web-review.png)
+
+### Terminal inbox
+
+```bash
+opentraces tui
+```
+
+The TUI shows sessions, summary, and detail in a three-panel layout. Use keyboard shortcuts to navigate, commit, reject, or discard traces.
+
+![Terminal inbox](/docs/assets/tui.png)
+
+Use `session list`, `session commit`, `session reject`, and `session redact` if you prefer direct CLI control.
+
+## 5. Commit and Push
+
+```bash
+opentraces commit --all
+opentraces push
+```
+
+`commit` moves inbox traces to the committed stage. `push` uploads committed traces to `{username}/opentraces` on Hugging Face Hub as sharded JSONL and updates the dataset card.
+
+## What Happens Next
+
+Your traces are available as a Hugging Face dataset:
+
+```python
+from datasets import load_dataset
+
+ds = load_dataset("your-name/opentraces")
+```
+
+## Next Steps
+
+- [Security Modes](/docs/security/tiers) - Review policy and security pipeline
+- [CLI Reference](/docs/cli/commands) - Full command reference
+- [Schema Overview](/docs/schema/overview) - What is stored in a trace record
+
+---
+
+# Commands
+
+Complete reference for the current opentraces CLI surface.
+
+## Public Commands
+
+| Command | Description |
+|---------|-------------|
+| `opentraces login` | Authenticate with Hugging Face Hub |
+| `opentraces logout` | Clear stored credentials |
+| `opentraces whoami` | Print the active Hugging Face identity |
+| `opentraces auth` | Authentication subcommands (`login`, `logout`, `status`) |
+| `opentraces init` | Initialize the current project inbox |
+| `opentraces remove` | Remove the local inbox from the current project |
+| `opentraces status` | Show inbox status and counts |
+| `opentraces remote` | Manage the configured dataset remote |
+| `opentraces session` | Inspect and edit staged traces |
+| `opentraces commit` | Commit inbox traces for upload |
+| `opentraces push` | Upload committed traces to Hugging Face Hub |
+| `opentraces web` | Open the browser inbox UI |
+| `opentraces tui` | Open the terminal inbox UI |
+| `opentraces stats` | Show aggregate inbox statistics |
+| `opentraces context` | Return machine-readable project context |
+| `opentraces config show` | Display current config |
+| `opentraces config set` | Update config values |
+
+## Authentication
+
+### `opentraces login`
+
+Authenticate with Hugging Face Hub.
+
+```bash
+opentraces login --token
+opentraces login
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--token` | off | Paste a personal access token (required for pushing) |
+
+> **Recommended:** Use `opentraces login --token` with a write-access PAT from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). The browser OAuth flow (`opentraces login` without `--token`) authenticates your identity but cannot create or push to dataset repos.
+
+### `opentraces logout`
+
+Clear stored Hugging Face credentials.
+
+### `opentraces auth`
+
+Authentication subcommands:
+
+```bash
+opentraces auth status
+opentraces auth login
+opentraces auth logout
+```
+
+## Project Setup
+
+### `opentraces init`
+
+Initialize opentraces in the current project directory. Creates `.opentraces/config.json`, `.opentraces/staging/`, and the Claude Code hook.
+If Claude Code already has session files for this repo, the interactive flow can import that backlog into the inbox immediately.
+
+```bash
+opentraces init
+opentraces init --review-policy review --start-fresh
+opentraces init --review-policy auto --import-existing
+opentraces init --review-policy review --remote your-name/opentraces --start-fresh
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--agent` | detected interactively | Agent runtime to connect |
+| `--review-policy` | prompt | `review` or `auto` |
+| `--import-existing / --start-fresh` | prompt when backlog exists | Whether to import existing Claude Code sessions for this repo during init |
+| `--remote` | unset | HF dataset repo (`owner/name`) |
+| `--no-hook` | off | Skip Claude Code hook installation |
+
+`--mode` is a legacy alias kept for compatibility.
+
+### `opentraces remove`
+
+Remove the local `.opentraces/` inbox and Claude Code hook from the current project.
+
+### `opentraces config show`
+
+Display the current user config with secrets masked.
+
+### `opentraces config set`
+
+Update configuration values.
+
+```bash
+opentraces config set --exclude /path/to/client-project
+opentraces config set --redact "INTERNAL_API_KEY"
+```
+
+| Flag | Description |
+|------|-------------|
+| `--exclude` | Append a project path to the exclusion list |
+| `--redact` | Append a literal custom redaction string |
+| `--pricing-file` | Override token pricing table |
+| `--classifier-sensitivity` | `low`, `medium`, or `high` |
+
+## Inbox and Review
+
+### `opentraces web`
+
+Open the browser inbox UI. This serves the React viewer from `web/viewer/` through the local Flask app.
+
+```bash
+opentraces web
+opentraces web --port 8080
+opentraces web --no-open
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | `5050` | Local port |
+| `--no-open` | off | Do not auto-open the browser |
+
+### `opentraces tui`
+
+Open the terminal inbox UI.
+
+```bash
+opentraces tui
+opentraces tui --fullscreen
+```
+
+### `opentraces session`
+
+Fine-grained review commands for staged traces.
+
+```bash
+opentraces session list
+opentraces session show <trace-id>
+opentraces session commit <trace-id>
+opentraces session reject <trace-id>
+opentraces session reset <trace-id>
+opentraces session redact <trace-id> --step 3
+opentraces session discard <trace-id> --yes
+```
+
+`session list` accepts `--stage inbox|committed|pushed|rejected`, `--model`, `--agent`, and `--limit`.
+
+## Upload
+
+### `opentraces commit`
+
+Commit inbox traces into a commit group for upload.
+
+```bash
+opentraces commit --all
+opentraces commit -m "Fix parser and update schema"
+```
+
+### `opentraces push`
+
+Upload committed traces to Hugging Face Hub as sharded JSONL files.
+
+```bash
+opentraces push
+opentraces push --private
+opentraces push --public
+opentraces push --publish
+opentraces push --gated
+opentraces push --repo user/custom-dataset
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--private` | off | Force private visibility |
+| `--public` | off | Force public visibility |
+| `--publish` | off | Publish an existing private dataset |
+| `--gated` | off | Enable gated access on the dataset |
+| `--repo` | `{username}/opentraces` | Target HF dataset repo |
+
+`--approved-only` is not part of the current CLI. The public path is `commit -> push`.
+
+### `opentraces remote`
+
+Manage the configured dataset remote.
+
+```bash
+opentraces remote
+opentraces remote set owner/dataset
+opentraces remote set owner/dataset --private
+opentraces remote set owner/dataset --public
+opentraces remote remove
+```
+
+### `opentraces status`
+
+Show the current project inbox, counts, review policy, agents, and remote.
+
+### `opentraces log`
+
+List uploaded traces grouped by date.
+
+### `opentraces stats`
+
+Show aggregate counts, token totals, cost, model distribution, and stage counts for the current inbox.
+
+### `opentraces context`
+
+Emit a machine-readable project summary, including suggested next action.
+
+## Hidden and Internal Commands
+
+These commands exist for automation, compatibility, or diagnostics and are hidden from normal help output:
+
+- `opentraces discover`
+- `opentraces parse`
+- `opentraces review`
+- `opentraces export`
+- `opentraces migrate`
+- `opentraces capabilities`
+- `opentraces introspect`
+- `opentraces assess`
+- `opentraces _capture`
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `2` | Usage or validation error |
+| `3` | Missing config, auth, or not found |
+| `4` | Network or upload error |
+| `5` | Data corruption / invalid state |
+| `7` | Lock contention / busy state |
+
+---
+
+# Supported Agents
+
+opentraces currently ships with one live parser: Claude Code.
+
+## Current Support
+
+| Agent | Identifier | Status |
+|-------|-----------|--------|
+| Claude Code | `claude-code` | Supported |
+| Cursor | `cursor` | Planned |
+| Codex | `codex` | Planned |
+| Gemini CLI | `gemini-cli` | Planned |
+| Cline | `cline` | Planned |
+| OpenCode | `opencode` | Planned |
+
+## How Detection Works
+
+The parser registry is discovered at runtime from `src/opentraces/parsers/`.
+
+```python
+from opentraces.parsers import get_parsers
+
+supported = list(get_parsers().keys())
+```
+
+Today that registry contains `claude-code`. `opentraces init --agent ...` uses the same registry to validate agent selection.
+
+## What The Parser Extracts
+
+Claude Code traces are normalized into the opentraces schema with:
+
+- user / agent / system steps
+- tool calls and observations
+- system prompt deduplication
+- snippets from edit/write activity
+- per-step token usage
+- sub-agent hierarchy when present
+
+## Adapter Contract
+
+New parsers implement the `SessionParser` protocol:
+
+```python
+class SessionParser(Protocol):
+    agent_name: str
+    def discover_sessions(self, projects_path: Path) -> Iterator[Path]: ...
+    def parse_session(self, session_path: Path, byte_offset: int = 0) -> TraceRecord | None: ...
+```
+
+That keeps the parser surface small and lets new agents plug in without changing the review or upload workflow.
+
+---
+
+# Troubleshooting
+
+## First Check
+
+```bash
+opentraces status
+```
+
+`status` shows the inbox summary, review policy, agents, remote, and stage counts.
+
+## Common Issues
+
+### "No HF token found"
+
+Run:
+
+```bash
+opentraces login --token
+```
+
+Paste a write-access token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Or export `HF_TOKEN` in your shell:
+
+```bash
+export HF_TOKEN=hf_...
+```
+
+### "Not initialized"
+
+Run `opentraces init` in the project directory. That creates `.opentraces/config.json` and `.opentraces/staging/`.
+
+### "No sessions found"
+
+Claude Code session files live under `~/.claude/projects/`. If there are no session files, start a Claude Code conversation first.
+
+`opentraces discover` is a hidden diagnostic command if you need to inspect the raw session directories.
+
+### Parse Errors
+
+If a specific trace looks wrong:
+
+```bash
+opentraces session list
+opentraces session show <trace-id>
+opentraces session redact <trace-id> --step 3
+```
+
+### Push Fails With 403
+
+Your token does not have write access. OAuth device tokens (from `opentraces login`) cannot create or write to dataset repos. Re-authenticate with a personal access token:
+
+```bash
+opentraces login --token
+```
+
+Paste a token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+
+### Resetting Local State
+
+```bash
+rm -rf .opentraces/
+opentraces init
+```
+
+To clear credentials as well:
+
+```bash
+opentraces logout
+```
+
+---
+
+# Parsing
+
+Parsing is the ingestion step that turns raw Claude Code session logs into staged `TraceRecord` JSONL files.
+
+## What Runs Automatically
+
+When `opentraces init` installs the Claude Code hook, the hidden `_capture` command runs after each session ends. That capture path:
+
+1. Finds new session files under `~/.claude/projects/`
+2. Parses the raw session into a `TraceRecord`
+3. Filters out trivial sessions with fewer than 2 steps or no tool calls
+4. Runs the enrichment and security pipeline
+5. Writes the result to `.opentraces/staging/<trace-id>.jsonl`
+
+## Enrichment Pipeline
+
+The current pipeline does:
+
+1. Git detection and commit signal extraction
+2. Attribution from Edit and Write tool calls
+3. Dependency extraction from manifests and install commands
+4. Metrics aggregation
+5. Tiered security scanning and redaction
+6. Tier 2 heuristic classification
+7. Path anonymization
+
+## Review Policy Interaction
+
+`review_policy` controls where a parsed trace lands:
+
+| Policy | Result |
+|--------|--------|
+| `review` | Trace lands in `Inbox` for manual review |
+| `auto` | Clean traces are committed and pushed automatically |
+
+The review surface still exists either way. `auto` just reduces the amount of manual triage needed, and traces with scan hits still land in the inbox.
+
+## Internal Batch Commands
+
+`discover` and `parse` are hidden internal commands used for diagnostics and batch processing. The user-facing path is the hook plus inbox workflow.
+
+## What Gets Filtered
+
+- Sessions with fewer than 2 steps
+- Sessions with zero tool calls
+- Duplicate sessions by `content_hash`
+
+## Next Step
+
+```bash
+opentraces web
+```
+
+Use the browser inbox or `opentraces tui` to review the staged traces before committing them.
+
+---
+
+# Inbox
+
+The inbox is where you inspect and edit staged traces before committing. Use the web inbox, the terminal inbox, or the `session` CLI subcommands.
+
+## Web Inbox
+
+```bash
+opentraces web
+opentraces web --port 8080
+```
+
+This serves the React viewer from `web/viewer/` through the local Flask app. The timeline view shows each step with tool calls and token counts. The review view groups context items by source (user input, filesystem, external, LLM output).
+
+![Web inbox - timeline view](/docs/assets/web-timeline.png)
+
+![Web inbox - review view](/docs/assets/web-review.png)
+
+## Terminal Inbox
+
+```bash
+opentraces tui
+opentraces tui --fullscreen
+```
+
+Three-panel layout: sessions list, summary, and detail. Keyboard shortcuts for navigation, commit, reject, and discard.
+
+![Terminal inbox](/docs/assets/tui.png)
+
+## CLI
+
+```bash
+opentraces session list
+opentraces session show <trace-id>
+opentraces session commit <trace-id>
+opentraces session reject <trace-id>
+opentraces session reset <trace-id>
+opentraces session redact <trace-id> --step 3
+opentraces session discard <trace-id> --yes
+```
+
+`commit` moves a trace directly to `Committed`, `reject` keeps it local only, `reset` sends it back to `Inbox`, and `redact` rewrites the staged JSONL in place.
+
+## Stage Vocabulary
+
+| Stage | Meaning |
+|-------|---------|
+| `inbox` | Needs review |
+| `committed` | Bundled for upload |
+| `pushed` | Published upstream |
+| `rejected` | Kept local only |
+
+## What To Look For
+
+- Secrets that escaped redaction
+- Internal hostnames and collaboration URLs
+- Customer names, paths, or identifiers
+- Traces that are too short or too trivial
+- Tool outputs that should be redacted before sharing
+
+## Inbox Flow
+
+```bash
+opentraces session commit <trace-id>
+opentraces commit --all
+opentraces push
+```
+
+If you need the old compatibility entry point, `opentraces review` still exists as a hidden alias, but `web`, `tui`, and `session` are the current surfaces.
+
+---
+
+# Pushing
+
+`opentraces push` uploads committed traces to Hugging Face Hub as sharded JSONL files.
+
+## Current Flow
+
+```bash
+opentraces session commit <trace-id>
+opentraces commit --all
+opentraces push
+```
+
+`push` only uploads committed traces. If you have inbox traces that have not been committed yet, run `opentraces commit` first.
+
+## Options
+
+```bash
+opentraces push --private
+opentraces push --public
+opentraces push --publish
+opentraces push --gated
+opentraces push --repo user/custom-dataset
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--private` | off | Force private visibility |
+| `--public` | off | Force public visibility |
+| `--publish` | off | Change an existing private dataset to public |
+| `--gated` | off | Enable gated access on the dataset |
+| `--repo` | `{username}/opentraces` | Target HF dataset repo |
+
+`--approved-only` is not part of the current CLI. The supported path is `commit -> push`.
+
+## How Upload Works
+
+Each push creates a new JSONL shard. Existing data is never overwritten or appended to.
+
+```text
+data/
+  traces-0001.jsonl
+  traces-0002.jsonl   <- new shard from this push
+```
+
+That means:
+
+- Each push is atomic
+- No merge conflicts between contributors
+- Dataset history grows by shard
+
+## Dataset Card
+
+`push` generates or updates a `README.md` dataset card on the first successful upload. It records:
+
+- schema version
+- trace counts
+- model and agent distribution
+- date range
+
+## Visibility
+
+| Setting | Who Can See | Use Case |
+|---------|-------------|----------|
+| Private | Only you | Sensitive code or private experiments |
+| Public | Anyone | Open-source contributions |
+| Gated | Anyone who requests access | Controlled sharing |
+
+## Push Behavior by Mode
+
+In `review` mode, you commit and push manually. In `auto` mode, clean traces are committed and pushed automatically after capture.
+
+---
+
+# Export
+
+Export support is not part of the public workflow yet.
+
+The current repository keeps field-mapping references in `packages/opentraces-schema/FIELD-MAPPINGS.md`, and the CLI exposes a hidden `opentraces export --format atif` stub for future automation.
+
+## What Is Ready Today
+
+- The schema package documents ATIF, ADP, and OTel mappings
+- The CLI can already serialize traces to the opentraces JSONL schema
+- The downstream converter tables are the source of truth for third-party exporters
+
+## What Is Not Ready Yet
+
+- A public `opentraces export` workflow
+- A public `opentraces import` workflow
+- A round-trip converter between opentraces and ATIF
+
+If you need to write a converter now, start with the schema package field mappings and the `TraceRecord` / `Step` model definitions.
+
+---
+
+# Schema Overview
+
+opentraces uses a training-first JSONL schema where each line is one complete agent session. The schema is a superset of ATIF v1.6, informed by ADP and field patterns from existing HF datasets.
+
+## Design Principles
+
+1. **Training / SFT** - Clean message sequences with role labels, tool-use as tool_call/tool_result pairs, outcome signals.
+2. **RL / RLHF** - Trajectory-level reward signals, step-level annotations, decision point identification.
+3. **Telemetry** - Token counts, latency, model identifiers, cache hit rates, cost estimates.
+4. **Cross-agent** - Represents traces from Claude Code, Cursor, Cline, Codex, and future agents without agent-specific fields.
+
+## Top-Level Structure
+
+```json
+{
+  "schema_version": "0.1.0",
+  "trace_id": "uuid",
+  "session_id": "uuid",
+  "content_hash": "sha256-hex",
+  "timestamp_start": "ISO8601",
+  "timestamp_end": "ISO8601",
+  "task": { },
+  "agent": { },
+  "environment": { },
+  "system_prompts": { },
+  "tool_definitions": [ ],
+  "steps": [ ],
+  "outcome": { },
+  "dependencies": [ ],
+  "metrics": { },
+  "security": { },
+  "attribution": { },
+  "metadata": { }
+}
+```
+
+## Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| `steps` not `turns` | Each step is an LLM API call, not a conversational turn. Aligns with ATIF's TAO loop. |
+| `role: "agent"` not `"assistant"` | Follows ATIF convention (`system`, `user`, `agent`). |
+| Tool calls separated from observations | Preserves call/result separation training pipelines depend on. |
+| System prompt dedup | Hash-based lookup table. A 20K-token prompt repeated across steps would be wasteful. |
+| `parent_step` per step | Precise parent-child tree for sub-agents, not a flat session-level array. |
+| `content_hash` | SHA-256 for dedup at upload time. |
+| `reasoning_content` | Explicit chain-of-thought field. Improved SWE-Bench by ~3 pts (Cognition data). |
+| `outcome.committed` | Did the session's changes get committed? Cheap, deterministic quality signal. |
+| `attribution` | Embedded Agent Trace block. Bridges trajectory (process) with code attribution (output). |
+
+## Schema Package
+
+The schema is a standalone Python package:
+
+```bash
+pip install opentraces-schema
+```
+
+```python
+from opentraces_schema import TraceRecord, SCHEMA_VERSION
+
+record = TraceRecord(
+    trace_id="abc-123",
+    session_id="sess-456",
+    agent={"name": "claude-code", "version": "1.0.32"},
+)
+line = record.to_jsonl_line()
+```
+
+See [TraceRecord](/docs/schema/trace-record), [Steps](/docs/schema/steps), and [Outcome & Attribution](/docs/schema/outcome-attribution) for field-level detail.
+
+---
+
+# TraceRecord
+
+The top-level record. One per JSONL line, one per agent session.
+
+## Identification
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `schema_version` | string | yes | Schema version, e.g. `"0.1.0"` |
+| `trace_id` | string (UUID) | yes | Unique identifier for this trace |
+| `session_id` | string | yes | Agent session reference |
+| `content_hash` | string | no | SHA-256 of the serialized record, populated when written |
+
+## Timestamps
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `timestamp_start` | string (ISO8601) | no | Session start time |
+| `timestamp_end` | string (ISO8601) | no | Session end time |
+
+## Task
+
+```json
+{
+  "task": {
+    "description": "Fix the failing test in src/parser.ts",
+    "source": "user_prompt",
+    "repository": "owner/repo",
+    "base_commit": "abc123def456..."
+  }
+}
+```
+
+## Agent
+
+```json
+{
+  "agent": {
+    "name": "claude-code",
+    "version": "1.0.83",
+    "model": "anthropic/claude-sonnet-4-20250514"
+  }
+}
+```
+
+Model identifiers follow the `provider/model-name` convention.
+
+## Environment
+
+```json
+{
+  "environment": {
+    "os": "darwin",
+    "shell": "zsh",
+    "vcs": {
+      "type": "git",
+      "base_commit": "abc123...",
+      "branch": "main",
+      "diff": "unified diff string or null"
+    },
+    "language_ecosystem": ["typescript", "python"]
+  }
+}
+```
+
+## System Prompts
+
+Deduplicated into a top-level lookup table. Steps reference prompts by hash.
+
+```json
+{
+  "system_prompts": {
+    "sp_a1b2c3": "You are Claude Code..."
+  }
+}
+```
+
+## Tool Definitions
+
+The session-level tool schema list.
+
+## Dependencies
+
+Package names referenced during the session. Extracted from manifest files or tool calls.
+
+```json
+{
+  "dependencies": ["stripe", "prisma", "next"]
+}
+```
+
+## Metrics
+
+```json
+{
+  "metrics": {
+    "total_steps": 42,
+    "total_input_tokens": 1800000,
+    "total_output_tokens": 34000,
+    "total_duration_s": 780,
+    "cache_hit_rate": 0.92,
+    "estimated_cost_usd": 2.4
+  }
+}
+```
+
+## Security
+
+```json
+{
+  "security": {
+    "scanned": true,
+    "flags_reviewed": 3,
+    "redactions_applied": 1,
+    "classifier_version": "0.1.0"
+  }
+}
+```
+
+## Metadata
+
+Open-ended object for future extensions.
+
+## Notes
+
+- `content_hash` is filled in when the record is serialized with `to_jsonl_line()`
+- `task`, `environment`, `steps`, and the nested blocks all have defaults in the Python model
+- `security.scanned` confirms the security pipeline (scan, redact, classify) was applied
+
+---
+
+# Steps
+
+The `steps` array contains the conversation as a sequence of LLM API calls. Each step follows the TAO (Thought-Action-Observation) pattern from ATIF.
+
+## Step Structure
+
+```json
+{
+  "step_index": 2,
+  "role": "agent",
+  "content": "I'll investigate the failing test...",
+  "reasoning_content": "The user wants me to...",
+  "model": "anthropic/claude-sonnet-4-20250514",
+  "system_prompt_hash": "sp_a1b2c3",
+  "agent_role": "main",
+  "parent_step": null,
+  "call_type": "main",
+  "tools_available": ["bash", "read", "edit", "glob", "grep", "write", "agent"],
+  "tool_calls": [],
+  "observations": [],
+  "snippets": [],
+  "token_usage": {},
+  "timestamp": "ISO8601"
+}
+```
+
+## Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `step_index` | integer | yes | Sequential step number |
+| `role` | string | yes | `"system"`, `"user"`, or `"agent"` |
+| `content` | string | no | Message content; may be empty for pure tool or warmup steps |
+| `reasoning_content` | string | no | Thinking content |
+| `model` | string | no | Model used (`provider/model-name`) |
+| `system_prompt_hash` | string | no | Reference to `system_prompts` lookup table |
+| `agent_role` | string | no | `"main"`, `"explore"`, `"plan"`, etc. |
+| `parent_step` | integer | no | Step index of parent (for sub-agents) |
+| `call_type` | string | no | `"main"`, `"subagent"`, or `"warmup"` |
+| `tools_available` | string[] | no | Tools available at this step |
+| `tool_calls` | ToolCall[] | no | Tool invocations made in the step |
+| `observations` | Observation[] | no | Tool results linked back by `source_call_id` |
+| `snippets` | Snippet[] | no | Extracted code blocks |
+| `token_usage` | TokenUsage | no | Per-step token usage breakdown |
+| `timestamp` | string | no | ISO8601 timestamp |
+
+### `call_type` Values
+
+| Value | Description |
+|-------|-------------|
+| `main` | Primary agent step |
+| `subagent` | Sub-agent invocation |
+| `warmup` | Cache priming call with no useful output |
+
+## Tool Calls
+
+```json
+{
+  "tool_calls": [
+    {
+      "tool_call_id": "tc_001",
+      "tool_name": "bash",
+      "input": {
+        "command": "npm test -- --grep parser"
+      },
+      "duration_ms": 3400
+    }
+  ]
+}
+```
+
+Tool calls carry a `tool_call_id`. Observations link back via `source_call_id`.
+
+## Observations
+
+```json
+{
+  "observations": [
+    {
+      "source_call_id": "tc_001",
+      "content": "FAIL src/parser.test.ts...",
+      "output_summary": "1 test failed: parser.test.ts line 42 assertion error",
+      "error": null
+    }
+  ]
+}
+```
+
+`output_summary` is a lightweight preview so consumers can assess relevance without downloading full multi-KB outputs.
+
+## Snippets
+
+Code blocks extracted from tool results and agent responses:
+
+```json
+{
+  "snippets": [
+    {
+      "file_path": "src/parser.ts",
+      "start_line": 42,
+      "end_line": 55,
+      "language": "typescript",
+      "text": "function parseToken(input: string)..."
+    }
+  ]
+}
+```
+
+## Token Usage
+
+Per-step token breakdown:
+
+```json
+{
+  "token_usage": {
+    "input_tokens": 12400,
+    "output_tokens": 890,
+    "cache_read_tokens": 11200,
+    "cache_write_tokens": 1200,
+    "prefix_reuse_tokens": 11200
+  }
+}
+```
+
+## Sub-Agent Hierarchy
+
+Sub-agent steps use `parent_step` to link back to the invoking step:
+
+```json
+{
+  "step_index": 5,
+  "role": "agent",
+  "agent_role": "explore",
+  "parent_step": 3,
+  "call_type": "subagent",
+  "content": "Searching for related parser implementations..."
+}
+```
+
+Sub-agent transcripts are linked by `session_id` reference to separate trajectory records, not embedded.
+
+---
+
+# Outcome & Attribution
+
+## Outcome
+
+The `outcome` object captures the session-level result and the confidence of the signal that set it:
+
+```json
+{
+  "outcome": {
+    "success": true,
+    "signal_source": "deterministic",
+    "signal_confidence": "derived",
+    "description": "Test passes after fix",
+    "patch": "unified diff string",
+    "committed": true,
+    "commit_sha": "def789abc..."
+  }
+}
+```
+
+### Fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `success` | boolean | no | Did the task succeed? |
+| `signal_source` | string | no | Current implementation uses `deterministic` |
+| `signal_confidence` | string | no | `derived`, `inferred`, or `annotated` |
+| `description` | string | no | Human-readable outcome description |
+| `patch` | string | no | Unified diff produced by the session |
+| `committed` | boolean | no | Whether changes were committed to git |
+| `commit_sha` | string | no | The specific commit, if committed |
+
+### Committed as a Quality Signal
+
+A session that results in a commit is higher-signal than one abandoned or reverted. The commit hash gives a deterministic anchor for replaying the patch and comparing later revisions.
+
+## Attribution
+
+The `attribution` block records which files and line ranges were produced by the agent session.
+
+```json
+{
+  "attribution": {
+    "version": "0.1.0",
+    "files": [
+      {
+        "path": "src/parser.ts",
+        "conversations": [
+          {
+            "contributor": {
+              "type": "ai",
+              "model_id": "anthropic/claude-sonnet-4-20250514"
+            },
+            "url": "opentraces://trace/step_2",
+            "ranges": [
+              {
+                "start_line": 42,
+                "end_line": 55,
+                "content_hash": "9f2e8a1b"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### How Attribution Is Constructed
+
+Attribution is built deterministically from trace data:
+
+1. Edit and Write tool calls provide file paths and line ranges
+2. `outcome.patch` provides the unified diff for cross-checking
+3. Snippets provide extracted code blocks with file positions
+
+These are synthesized into Agent Trace-compatible `attribution` records.
+
+### The Bridge
+
+This field bridges trajectory (process) and attribution (output):
+
+- `conversation.url` links each attributed range back to the step that produced it
+- `content_hash` is a short stable hash for tracking attribution across refactors
+- Sessions that produce no code changes have `attribution: null`
+
+### Why Embed, Not Link
+
+Embedding keeps the record self-contained. An opentraces record can say "here is the full conversation that produced these lines, including the reasoning, tool calls, and final diff."
+
+## Reserved RL Fields
+
+The schema leaves room for:
+
+- token ID sequences for RL training
+- token log probabilities
+- step-level reward annotations
+
+---
+
+# Standards Alignment
+
+opentraces sits at the intersection of four public standards. It adopts what works from each, and bridges the gap between trajectory (process) and attribution (output).
+
+## ATIF / Harbor (v1.6)
+
+A training trajectory serialization format. Defines the step-based TAO (Thought-Action-Observation) loop.
+
+**Relationship:** opentraces is a superset of ATIF. We adopt the step-based model, role conventions (`system | user | agent`), and field patterns. We add attribution blocks, per-step token breakdowns, environment metadata, dependency tracking, and security metadata. The downstream field mappings live in `packages/opentraces-schema/FIELD-MAPPINGS.md`; the public export workflow is still experimental.
+
+## ADP (Agent Data Protocol)
+
+An interlingua for normalizing diverse agent trace formats into a common structure for training. Core argument: O(D+A) adapters instead of O(D*A).
+
+**Relationship:** opentraces' adapter-based normalization follows the same pattern. Per-agent parsers are ADP-style adapters outputting the enriched schema.
+
+## Agent Trace (Cursor/community, v0.1.0 RFC)
+
+Solves the adjacent problem of attributing which lines of code came from which agent conversation, at file/line granularity. Backed by 10+ sponsors (Cloudflare, Vercel, Google Jules, Cognition).
+
+**Relationship:** opentraces embeds Agent Trace attribution blocks directly in the trace record. Agent Trace focuses on _output_ (code attribution), opentraces bridges that with _process_ (trajectory).
+
+## OTel GenAI Semantic Conventions
+
+OpenTelemetry's GenAI semantic conventions define span attributes for LLM calls in observability pipelines.
+
+**Relationship:** opentraces' per-step token usage and model fields align with OTel GenAI conventions, enabling cross-referencing between observability spans and training trajectories.
+
+## The Core Insight
+
+Agent Trace preserves _which_ lines came from AI. ATIF/ADP preserve _how_ the agent reasoned. Neither alone tells the complete story. opentraces connects the full conversation trajectory to the specific code output at line granularity.
+
+## Message Taxonomy
+
+opentraces adopts a training-oriented message taxonomy:
+
+| Role | Description |
+|------|-------------|
+| `system` | System prompt (deduplicated by hash) |
+| `user` | User message / prompt |
+| `agent` | Agent response, tool calls, or thinking |
+
+Agent steps are further classified by `call_type` (`main`, `subagent`, `warmup`) and `agent_role` (`main`, `explore`, `plan`).
+
+---
+
+# Schema Versioning
+
+The opentraces schema follows semantic versioning. The version lives in `packages/opentraces-schema/src/opentraces_schema/version.py` as the single source of truth.
+
+## Version Policy
+
+| Change Type | Version Bump | Example |
+|-------------|--------------|---------|
+| New optional field | Minor | Adding `metrics.p95_latency_ms` |
+| New optional model | Minor | Adding a `debugging` block |
+| Field rename | Major | Renaming `steps` to `turns` |
+| Field removal | Major | Removing `metadata` |
+| Type change | Major | Changing `success` from boolean to string |
+| Bug fix / docs | Patch | Fixing a validation regex |
+
+## Current Version
+
+```text
+0.1.0
+```
+
+The `0.x` series means breaking changes may still land between minor versions until `1.0.0`.
+
+## Version Checks
+
+There is no public migration workflow today. Version checks happen when configs are normalized and when `TraceRecord` JSONL is loaded. A hidden `opentraces migrate` command still exists for diagnostics, but it only reports the current config and schema versions.
+
+## Rationale Documents
+
+Each schema version ships with a rationale document and a changelog entry in the schema package.
+
+## Field Mappings
+
+The repository keeps downstream mapping tables in `packages/opentraces-schema/FIELD-MAPPINGS.md`.
+
+---
+
+# Security Modes
+
+opentraces applies the same security pipeline to every trace: scan, redact, and classify. The review policy controls whether traces require manual approval before publishing.
+
+## Review Policy
+
+`opentraces init` sets a project-level review policy:
+
+| Policy | Values | What it controls |
+|--------|--------|------------------|
+| `review_policy` | `review`, `auto` | Whether traces require manual review or are committed automatically |
+
+```bash
+opentraces init --review-policy review
+opentraces init --review-policy auto
+```
+
+In `review` mode, all traces land in the inbox for manual commit and push. In `auto` mode, clean traces are committed automatically, while traces with scan hits still land in the inbox for review.
+
+## Security Pipeline
+
+Every trace goes through the full security pipeline:
+
+1. **Scan** - Two-pass secret detection (field-level + serialized)
+2. **Redact** - Automatic replacement of detected secrets
+3. **Classify** - Heuristic flagging of internal hostnames, AWS ARNs, database URIs, deep file paths
+4. **Anonymize** - Path anonymization to remove usernames
+
+The `security.scanned` field on each trace confirms the pipeline ran. `security.redactions_applied` and `security.flags_reviewed` record what was found.
+
+## Review Flow
+
+```text
+Trace captured
+  -> parsed, scanned, redacted, classified
+  -> Inbox (review mode) or auto-committed (auto mode)
+  -> session commit / reject / redact
+  -> push
+```
+
+```bash
+opentraces web
+opentraces tui
+opentraces session list --stage inbox
+opentraces session commit <trace-id>
+opentraces commit --all
+opentraces push
+```
+
+## Changing Settings
+
+```bash
+opentraces config set --redact "ACME_INTERNAL_TOKEN"
+opentraces config set --classifier-sensitivity high
+```
+
+See [Security Configuration](/docs/security/configuration) for the config file shape and [Scanning & Redaction](/docs/security/scanning) for the field-by-field security pipeline.
+
+---
+
+# Security Configuration
+
+Security settings are split between the user config in `~/.opentraces/config.json` and the per-project inbox config in `.opentraces/config.json`.
+
+## User Config
+
+The user config stores defaults shared across projects:
+
+- `excluded_projects`
+- `custom_redact_strings`
+- `classifier_sensitivity`
+- `dataset_visibility`
+
+View it with:
+
+```bash
+opentraces config show
+```
+
+## Project Config
+
+Each project keeps its inbox settings in `.opentraces/config.json`:
+
+```json
+{
+  "review_policy": "review",
+  "agents": ["claude-code"],
+  "remote": "your-name/opentraces",
+  "visibility": "private"
+}
+```
+
+## Per-Project Setup
+
+```bash
+cd ~/project-a
+opentraces init --review-policy review
+
+cd ~/project-b
+opentraces init --review-policy auto
+```
+
+## Exclusions
+
+Exclude whole projects from trace collection:
+
+```bash
+opentraces config set --exclude /path/to/client-project
+opentraces config set --exclude /path/to/another-sensitive-project
+```
+
+Excluded projects are skipped during capture and batch parsing.
+
+## Custom Redaction Strings
+
+Add literal strings that should always be redacted:
+
+```bash
+opentraces config set --redact "ACME_INTERNAL_TOKEN"
+opentraces config set --redact "corp-api-prefix-"
+```
+
+## Classifier Sensitivity
+
+```bash
+opentraces config set --classifier-sensitivity low
+opentraces config set --classifier-sensitivity medium
+opentraces config set --classifier-sensitivity high
+```
+
+Higher sensitivity adds more heuristic flags (internal hostnames, deep file paths, identifier density).
+
+---
+
+# Scanning & Redaction
+
+The security pipeline is context-aware and runs in two passes:
+
+1. Scan the trace record field-by-field using the field type to decide whether entropy analysis is enabled.
+2. Scan the final serialized JSONL bytes to catch anything introduced during enrichment or serialization.
+
+## What Gets Scanned
+
+| Field | Context | Notes |
+|-------|---------|-------|
+| `system_prompts` | General | Full scan |
+| `task.description` | General | Full scan |
+| `steps[].content` | General | Full scan |
+| `steps[].reasoning_content` | Reasoning | Regex only, no entropy |
+| `steps[].tool_calls[].input` | Tool input | Full scan for input-like tools, regex-only for result-like tools |
+| `steps[].observations[].content` | Tool result | Regex only, no entropy |
+| `steps[].observations[].output_summary` | Tool result | Regex only, no entropy |
+| `steps[].observations[].error` | Tool result | Regex only, no entropy |
+| `steps[].snippets[].text` | General | Full scan |
+| `outcome.patch` | General | Full scan |
+| `environment.vcs.diff` | General | Full scan, truncated before storage when the repo diff is very large |
+
+The scanner also applies a second pass over the serialized JSONL output so redaction does not depend on field shape alone.
+
+## What Gets Redacted
+
+Detected secrets and path fragments are replaced with `[REDACTED]` or hashed path segments, depending on the detector:
+
+```text
+Before: export OPENAI_API_KEY=sk-abc123...
+After:  export OPENAI_API_KEY=[REDACTED]
+```
+
+```text
+Before: /Users/jay/src/project/...
+After:  /Users/[REDACTED]/src/project/...
+```
+
+The staged JSONL is rewritten in place. Raw session files on disk are not modified.
+
+## Tier 2 Classifier
+
+Tier 2 adds a heuristic classifier on top of scanning and redaction. It flags:
+
+- internal hostnames
+- AWS account IDs in ARNs
+- database connection strings
+- internal collaboration URLs
+- dense UUID / hash sequences
+- deep file paths that may reveal internal structure
+
+## Custom Redaction
+
+```bash
+opentraces config set --redact "INTERNAL_API_KEY"
+opentraces config set --redact "corp-secret-prefix-"
+```
+
+Custom redaction strings are treated as literal matches wherever they appear in trace content.
+
+---
+
+# Agent Setup
+
+opentraces is designed to be driven by agents as well as by humans.
+
+## What The CLI Emits
+
+Most commands emit structured JSON with `next_steps` and `next_command`, so an agent can chain the workflow without parsing free-form text.
+
+## Claude Code Setup
+
+`opentraces init` installs the Claude Code hook and the bundled skill. A typical agent-led setup looks like:
+
+```bash
+opentraces login
+opentraces init --agent claude-code --review-policy review --start-fresh
+```
+
+If the repo already has Claude Code session logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.
+
+After setup, the current surfaces are:
+
+- `opentraces web` for the browser inbox
+- `opentraces tui` for the terminal inbox
+- `opentraces session list` for machine-readable review
+- `opentraces status` for the current inbox summary
+- `opentraces context` for a compact project snapshot
+
+## Hidden Capture Command
+
+The hook calls the hidden `_capture` command with a specific session directory:
+
+```bash
+opentraces _capture --session-dir /path/to/session --project-dir /path/to/project
+```
+
+That is the internal batch entry point for agent automation and tests.
+
+## Machine Discovery
+
+Hidden commands are still available for automation:
+
+```bash
+opentraces capabilities --json
+opentraces introspect
+```
+
+They expose versioning, feature discovery, and the current `TraceRecord` schema.
+
+---
+
+# CI/CD & Automation
+
+Headless environments can use the same inbox and upload model, but the commands should be run explicitly.
+
+## Authentication
+
+```bash
+export HF_TOKEN=hf_...
+```
+
+or:
+
+```bash
+opentraces login --token
+```
+
+`HF_TOKEN` is the preferred path in CI.
+
+## Recommended Pattern
+
+If you are running opentraces in automation, keep the steps explicit:
+
+```bash
+opentraces init --review-policy review --remote my-org/opentraces --no-hook
+opentraces session list
+opentraces session commit <trace-id>
+opentraces commit --all
+opentraces push --private
+```
+
+Your CI script should call `commit` and `push` directly.
+
+## GitHub Actions
+
+```yaml
+- name: Install opentraces
+  run: pip install opentraces
+
+- name: Authenticate with Hugging Face
+  env:
+    HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  run: opentraces login --token
+
+- name: Commit and push traces
+  env:
+    HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  run: |
+    opentraces commit --all
+    opentraces push --private
+```
+
+## Notes
+
+- Use `--private` for proprietary codebases
+- Use `--repo owner/dataset` if you want a shared team dataset
+- If you need to capture a specific session directory yourself, wire the hidden `_capture` command into your own hook or runner
+
+---
+
+# Development
+
+## Setup
+
+```bash
+git clone https://github.com/jayfarei/opentraces
+cd opentraces
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e packages/opentraces-schema
+pip install -e ".[dev]"
+```
+
+## Optional Dependencies
+
+```bash
+pip install -e ".[web,tui]"       # Web and TUI inbox clients
+pip install -e ".[release]"       # Build and publish tools (build, twine)
+```
+
+## Running Tests
+
+```bash
+make test                         # or: ./.venv/bin/pytest -q
+make lint                         # ruff check
+```
+
+Some tests require real Claude Code session data and are skipped by default. To run them, set the env var pointing to your project's sessions directory:
+
+```bash
+export OPENTRACES_TEST_PROJECT_DIR=~/.claude/projects/<your-project-slug>
+make test
+```
+
+The repository also has frontend test suites under `web/viewer/` and buildable docs under `web/site/`.
+
+## Building and Releasing
+
+The `Makefile` orchestrates the full build and release pipeline:
+
+```bash
+make build            # Build viewer, schema, and CLI packages
+make version-check    # Show current versions
+make release          # Full pipeline: test, lint, build, publish to PyPI, tag
+```
+
+The CLI version lives in `src/opentraces/__init__.py` (single source of truth). The schema version lives in `packages/opentraces-schema/src/opentraces_schema/version.py`.
+
+## Project Structure
+
+```
+packages/opentraces-schema/   Schema package (Pydantic v2 models)
+src/opentraces/               CLI package
+  cli.py                      Click-based CLI entry point
+  clients/                    TUI and Flask inbox clients
+  parsers/                    Agent session parsers
+  security/                   Secret scanning and anonymization
+  enrichment/                 Git signals, attribution, metrics
+  quality/                    Trace quality assessment and rubrics
+  upload/                     Hugging Face upload helpers
+tests/                        Python test suite
+web/viewer/                   React inbox viewer (bundled in pip package)
+web/site/                     Next.js docs and marketing site
+Makefile                      Build, test, and release orchestration
+Formula/                      Homebrew formula template
+```
+
+## Key Files
+
+- `src/opentraces/cli.py` - CLI commands and hidden automation hooks
+- `src/opentraces/clients/web_server.py` - Flask inbox server that serves the React viewer
+- `src/opentraces/clients/tui.py` - Textual inbox client
+- `src/opentraces/pipeline.py` - Enrichment and security pipeline
+- `packages/opentraces-schema/src/opentraces_schema/models.py` - Pydantic schema models
+
+## Adding A Parser
+
+1. Create `src/opentraces/parsers/your_agent.py`
+2. Implement the `SessionParser` protocol in `src/opentraces/parsers/base.py`
+3. Register it in `src/opentraces/parsers/__init__.py`
+4. Add tests under `tests/`
+
+## Notes
+
+- The current shipped parser is Claude Code
+- The inbox workflow is `web/tui/session -> commit/reject/redact -> push`
+- Hidden commands still exist for compatibility and automation, but the public docs should use `web`, `tui`, `session`, `commit`, and `push`
+- The React viewer (`web/viewer/dist`) is bundled into the pip package via `force-include` in `pyproject.toml`
+
+---
+
+# Schema Changes
+
+The opentraces schema is open source. Feedback, questions, and proposals are welcome via [GitHub Issues](https://github.com/jayfarei/opentraces/issues).
+
+## How to Propose a Change
+
+When suggesting a schema change, include:
+
+1. **What** field or model you would add, change, or remove
+2. **Why** it matters for your use case (training, analytics, attribution, etc.)
+3. **How** it relates to existing standards (ATIF, Agent Trace, ADP, OTel) if applicable
+
+## What Counts as Breaking
+
+| Change | Version Bump |
+|--------|-------------|
+| New optional field | Minor |
+| New optional model | Minor |
+| Field rename | Major |
+| Field removal | Major |
+| Type change | Major |
+
+See [Versioning](/docs/schema/versioning) for full policy.
+
+## Adapter Contributions
+
+To add support for a new agent (e.g., Cursor, Codex), implement the `BaseParser` interface:
+
+```python
+from opentraces.parsers.base import BaseParser
+
+class CursorParser(BaseParser):
+    agent_name = "cursor"
+
+    def can_parse(self, path: Path) -> bool:
+        # Return True if this path contains Cursor sessions
+        ...
+
+    def parse_session(self, path: Path) -> TraceRecord:
+        # Parse a single session into a TraceRecord
+        ...
+
+    def discover_sessions(self) -> list[SessionInfo]:
+        # Find all Cursor sessions on the system
+        ...
+```
+
+Register the parser in `src/opentraces/parsers/__init__.py`. See `claude_code.py` for the reference implementation.
+
+## Review Process
+
+- Schema changes are reviewed by the maintainers
+- Breaking changes require a new rationale document
+- All changes are documented in the [CHANGELOG](https://github.com/jayfarei/opentraces/blob/main/packages/opentraces-schema/CHANGELOG.md)

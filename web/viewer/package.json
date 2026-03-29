@@ -1,0 +1,40 @@
+{
+  "name": "viewer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@opentraces/ui": "file:../../packages/opentraces-ui",
+    "@tanstack/react-query": "^5.95.2",
+    "@tanstack/react-virtual": "^3.13.23",
+    "d3-scale": "^4.0.2",
+    "motion": "^12.38.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-resizable-panels": "^4.8.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/d3-scale": "^4.0.9",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "jsdom": "^29.0.1",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.3",
+    "vitest": "^4.1.2"
+  }
+}
