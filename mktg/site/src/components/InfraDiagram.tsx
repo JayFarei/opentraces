@@ -1,10 +1,10 @@
 import SectionRule from "./SectionRule";
 
 const agents = ["Claude Code", "Codex CLI", "Cursor", "Gemini CLI", "OpenCode", "Cline"];
-const steps = ["init", "capture", "stage", "review", "push"];
-const modes = [
-  { name: "auto", label: "scan + redact + push" },
-  { name: "review", label: "review before push (default)" },
+const pipelineSteps = ["init", "capture", "parse", "sanitise"];
+const pushModes = [
+  { name: "auto", label: "push automatically" },
+  { name: "review", label: "review then push (default)" },
 ];
 
 const useCases = [
@@ -55,7 +55,7 @@ export default function InfraDiagram() {
           </div>
 
           <div className="arch-pipeline">
-            {steps.map((step, i) => (
+            {pipelineSteps.map((step, i) => (
               <span key={step}>
                 {i > 0 && <span className="arch-arrow">{"\u2192"}</span>}
                 <span className="arch-step">{step}</span>
@@ -63,8 +63,11 @@ export default function InfraDiagram() {
             ))}
           </div>
 
+          <div className="arch-line" style={{ margin: "12px 0 4px" }} />
+          <div className="arch-label">push mode</div>
+
           <div className="arch-tiers">
-            {modes.map((m) => (
+            {pushModes.map((m) => (
               <div key={m.name} className="arch-tier-box">
                 <div className="arch-tier-name">{m.name}</div>
                 <div className="arch-tier-label">{m.label}</div>
