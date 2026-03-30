@@ -31,6 +31,7 @@ const spaceMono = Space_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://opentraces.ai"),
   title: "open traces - The Commons for Agent Traces",
   description:
     "Open-source CLI for crowdsourcing AI coding agent session traces as structured JSONL datasets on Hugging Face Hub. Auto or review mode. Training-first schema.",
@@ -39,6 +40,7 @@ export const metadata: Metadata = {
     title: "open traces",
     description: "Your agent traces are training data. Open protocol for crowdsourcing AI agent session traces.",
     type: "website",
+    url: "https://opentraces.ai",
     images: [{ url: "/og.png", width: 1200, height: 630 }],
   },
   twitter: {

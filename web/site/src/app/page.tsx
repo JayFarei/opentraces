@@ -6,7 +6,6 @@ import InfraDiagram from "@/components/InfraDiagram";
 import SchemaExplorer from "@/components/SchemaExplorer";
 import GetStarted from "@/components/GetStarted";
 import Footer from "@/components/Footer";
-
 export default function Home() {
   return (
     <>

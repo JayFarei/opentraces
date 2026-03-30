@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import Terminal from "./Terminal";
 import { AGENT_PROMPT } from "@/lib/agent-prompt";
+import pkg from "@/lib/version.json";
 
 const tabLabels = ["init", "status", "review", "push"];
 const AGENT_LINES = AGENT_PROMPT.split("\n").length;
@@ -11,6 +12,7 @@ const AGENT_LINES = AGENT_PROMPT.split("\n").length;
 const installMethods = [
   { label: "pipx", cmd: "pipx install opentraces", copyText: "pipx install opentraces" },
   { label: "brew", cmd: "brew install [..] opentraces", copyText: "brew install JayFarei/opentraces/opentraces" },
+  { label: "skill", cmd: "npx skills add jayfarei/opentraces", copyText: "npx skills add jayfarei/opentraces" },
   { label: "agent", cmd: `agent setup prompt +${AGENT_LINES} lines`, copyText: AGENT_PROMPT, prefix: ">" },
 ];
 
@@ -121,7 +123,7 @@ export default function Hero() {
     <section className="hero">
       <div className="hero-grid">
         <div>
-          <div className="hero-pill">open traces &nbsp; v0.1.0</div>
+          <div className="hero-pill">open traces &nbsp; v{pkg.version}</div>
           <div style={{ height: 16 }} />
           <h1>Open data is the new open source.</h1>
           <p className="hero-sub">

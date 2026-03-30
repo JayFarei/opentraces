@@ -126,6 +126,11 @@ export default function SchemaVersionPage({ params }: { params: Promise<{ versio
         <p style={{ fontSize: 13, color: "var(--text-muted)", maxWidth: 560, margin: "12px 0 0" }}>
           {schema.summary}
         </p>
+        <p style={{ fontSize: 12, color: "var(--text-dim)", maxWidth: 560, margin: "8px 0 0" }}>
+          Read the full <a href="/docs/schema/overview" style={{ color: "var(--accent)" }}>schema documentation</a> for
+          design rationale and usage guides, or see <a href="/docs/contributing/schema-changes" style={{ color: "var(--accent)" }}>contributing to the schema</a> to
+          propose changes.
+        </p>
       </section>
 
       <div className="schema-layout">

@@ -27,7 +27,7 @@ There is no public migration workflow today. Version checks happen when configs 
 
 ## Rationale Documents
 
-Each schema version ships with a rationale document and a changelog entry in the schema package.
+Each schema version ships with a rationale document and a changelog entry in the schema package. See [`VERSION-POLICY.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/VERSION-POLICY.md) for the full versioning policy and [`CHANGELOG.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/CHANGELOG.md) for the release history.
 
 ## Field Mappings
 
