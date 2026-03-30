@@ -21,7 +21,8 @@ kb/
 .opentraces/staging/
 .opentraces/config.json
 .agents/skills/opentraces
-.claude
+.claude/*
+!.claude/skills/
 .opentraces
 skills-lock.json
 .coverage
