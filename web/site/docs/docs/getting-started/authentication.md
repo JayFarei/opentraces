@@ -18,7 +18,7 @@ opentraces login
 
 Opens a browser-based OAuth device code flow, similar to `gh auth login`. You'll see a short code to enter at huggingface.co.
 
-> **Note:** OAuth tokens authenticate your identity but cannot create or write to dataset repos. If you need to push traces, use `opentraces login --token` with a write-access personal access token instead.
+> **Note:** OAuth tokens can write to existing dataset repos but cannot create new ones. If your dataset repo doesn't exist yet, use `opentraces login --token` with a write-access personal access token to create it.
 
 ## Environment Variable
 

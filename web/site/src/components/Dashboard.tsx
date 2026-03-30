@@ -353,7 +353,7 @@ export default function Dashboard() {
       <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 24, fontFamily: "var(--font-body)" }}>
         {mode === "user"
           ? `Showing datasets for ${username}.`
-          : "All opentraces datasets on Hugging Face Hub."}
+          : "All public opentraces datasets on Hugging Face Hub."}
         {(isLoading || refreshing || phase === "enriching") && (
           <span style={{ marginLeft: 8 }}>
             <svg width="14" height="14" viewBox="0 0 14 14" style={{ verticalAlign: "middle", animation: "spin 1s linear infinite" }}>
