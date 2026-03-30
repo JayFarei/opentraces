@@ -7,7 +7,7 @@ const features = [
   },
   {
     title: "private first",
-    desc: "Traces push to private HF datasets by default. Publish when ready, like open-sourcing a repo.",
+    desc: "Every trace is scanned for secrets, API keys, and PII before it leaves your machine. Push to private HF datasets by default. Share only what you choose.",
   },
   {
     title: "auto or review",
