@@ -12,11 +12,16 @@ interface Props {
   skillContent: string;
 }
 
+// Fade-in duration must match overlay-in keyframe in globals.css
+const FADE_IN_MS = 460;
+// Fade-out duration must match overlay-out keyframe in globals.css
+const FADE_OUT_MS = 600;
+
 export default function DocsViewer({ content, skillContent }: Props) {
   const [audience, setAudience] = useState<Audience>("human");
   const [mounted, setMounted] = useState(false);
   const [overlay, setOverlay] = useState(false);
-  const [overlayOpaque, setOverlayOpaque] = useState(false);
+  const [overlayOut, setOverlayOut] = useState(false);
 
   useEffect(() => {
     // URL param takes priority over localStorage
@@ -35,11 +40,11 @@ export default function DocsViewer({ content, skillContent }: Props) {
   const handleChange = useCallback((next: Audience) => {
     if (next === audience) return;
 
-    // Mount overlay transparent, then make it opaque
+    // Mount overlay — CSS keyframe starts fade-in immediately (no rAF needed)
     setOverlay(true);
-    requestAnimationFrame(() => requestAnimationFrame(() => setOverlayOpaque(true)));
+    setOverlayOut(false);
 
-    // Once overlay is opaque: scroll to top, swap content, begin fade-out
+    // After fade-in completes: scroll to top, swap content, begin fade-out
     setTimeout(() => {
       window.scrollTo(0, 0);
       setAudience(next);
@@ -51,9 +56,9 @@ export default function DocsViewer({ content, skillContent }: Props) {
         document.documentElement.removeAttribute("data-audience");
         history.replaceState({}, "", window.location.pathname);
       }
-      setOverlayOpaque(false);
-      setTimeout(() => setOverlay(false), 400);
-    }, 380);
+      setOverlayOut(true);
+      setTimeout(() => setOverlay(false), FADE_OUT_MS + 50);
+    }, FADE_IN_MS + 20);
   }, [audience]);
 
   useEffect(() => {
@@ -66,7 +71,7 @@ export default function DocsViewer({ content, skillContent }: Props) {
     <>
       {overlay && (
         <div
-          className={`machine-overlay${overlayOpaque ? " opaque" : ""}`}
+          className={`machine-overlay${overlayOut ? " fade-out" : ""}`}
           aria-hidden="true"
         />
       )}
