@@ -149,12 +149,18 @@ def process_imported_trace(
     redaction_count = apply_redactions(record)
     record.security.scanned = True
     record.security.redactions_applied = redaction_count
-    needs_review = bool(pass1.matches or pass2.matches or redaction_count)
+    # For imported traces, routine redactions (URLs, paths) are expected and
+    # already applied. Only flag for review when the scanner found actual
+    # security matches (secrets, credentials), not just redaction counts.
+    needs_review = bool(pass1.matches or pass2.matches)
 
     # 4. Classifier (FIX-10: set flags_reviewed)
     classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
     record.security.flags_reviewed = len(classifier_result.flags)
     record.security.classifier_version = SECURITY_VERSION
+    # Classifier flags also require review
+    if classifier_result.flags:
+        needs_review = True
 
     # 5. Path anonymization
     anonymize_record(record, cfg)
