@@ -182,8 +182,29 @@ const v010: SchemaVersion = {
   ],
 };
 
+const v011: SchemaVersion = {
+  version: "0.1.1",
+  date: "2026-03-29",
+  summary: "Patch release. Validation fixes, field documentation improvements, HuggingFace launch.",
+  highlights: [
+    "Security scanning and redaction pipeline hardened",
+    "Schema field documentation improvements",
+    "HuggingFace Hub launch partnership",
+  ],
+  models: v010.models.map((m) => ({
+    ...m,
+    fields: m.fields.map((f) =>
+      f.name === "schema_version"
+        ? { ...f, description: 'e.g. "0.1.1"' }
+        : f.name === "experimental" && m.id === "attribution"
+          ? { ...f, description: "Always true in v0.1.x" }
+          : f
+    ),
+  })),
+};
+
 /* All versions, newest first. Add new versions here. */
-export const versions: SchemaVersion[] = [v010];
+export const versions: SchemaVersion[] = [v011, v010];
 
 export const latestVersion = versions[0].version;
 

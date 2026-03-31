@@ -76,8 +76,11 @@ opentraces init --review-policy review --remote your-name/opentraces --start-fre
 | `--import-existing / --start-fresh` | prompt when backlog exists | Whether to import existing Claude Code sessions for this repo during init |
 | `--remote` | unset | HF dataset repo (`owner/name`) |
 | `--no-hook` | off | Skip Claude Code hook installation |
+| `--private / --public` | private | Dataset visibility when creating the remote repo |
 
 `--mode` is a legacy alias kept for compatibility.
+
+`init` also installs the opentraces skill into `.agents/skills/opentraces/` and symlinks it into the selected agent's skill directory (e.g., `.claude/commands/opentraces/` for Claude Code).
 
 ### `opentraces remove`
 
@@ -197,29 +200,64 @@ Show the current project inbox, counts, review policy, agents, and remote.
 
 ### `opentraces log`
 
-List uploaded traces grouped by date.
+List uploaded traces grouped by date. Shows trace IDs, timestamps, models used, and step counts for traces that have been pushed to the remote.
+
+```bash
+opentraces log
+```
 
 ### `opentraces stats`
 
-Show aggregate counts, token totals, cost, model distribution, and stage counts for the current inbox.
+Show aggregate counts, token totals, estimated cost, model distribution, and stage counts for the current inbox. Useful for understanding your contribution volume and cost breakdown.
+
+```bash
+opentraces stats
+```
 
 ### `opentraces context`
 
-Emit a machine-readable project summary, including suggested next action.
+The agent's "what should I do next?" command. Returns project config, auth status, counts per stage, and a `suggested_next` command. Start here when resuming work or when uncertain about state.
+
+```bash
+opentraces context
+opentraces --json context
+```
+
+## Machine-Readable Output
+
+Add `--json` to any command to suppress human-readable text and get structured JSON only:
+
+```bash
+opentraces --json context
+opentraces --json session list --stage inbox
+opentraces --json push
+```
+
+JSON is emitted after the sentinel line `---OPENTRACES_JSON---`. When parsing programmatically, split on this sentinel and parse the text that follows.
+
+Every JSON response includes:
+
+| Field | Description |
+|-------|-------------|
+| `status` | `"ok"`, `"error"`, or `"needs_action"` |
+| `next_steps` | Array of suggested next actions (human-readable) |
+| `next_command` | The single most likely next command to run |
 
 ## Hidden and Internal Commands
 
 These commands exist for automation, compatibility, or diagnostics and are hidden from normal help output:
 
-- `opentraces discover`
-- `opentraces parse`
-- `opentraces review`
-- `opentraces export`
-- `opentraces migrate`
-- `opentraces capabilities`
-- `opentraces introspect`
-- `opentraces assess`
-- `opentraces _capture`
+| Command | Purpose |
+|---------|---------|
+| `opentraces discover` | List available agent sessions across all projects |
+| `opentraces parse` | Parse agent sessions into enriched JSONL traces (global mode) |
+| `opentraces review` | Legacy alias for `web`/`tui`/`session` |
+| `opentraces export` | Export traces to other formats (e.g., `--format atif`) |
+| `opentraces migrate` | Check schema version and run migrations |
+| `opentraces capabilities --json` | Machine-discoverable feature list, supported agents, versions |
+| `opentraces introspect` | Full API schema and TraceRecord JSON schema for automation |
+| `opentraces assess` | Run quality assessment on staged traces |
+| `opentraces _capture` | Invoked by the Claude Code SessionEnd hook to auto-capture sessions |
 
 ## Exit Codes
 

@@ -165,7 +165,7 @@ export default function SchemaVersionPage({ params }: { params: Promise<{ versio
             <div className="section-title" style={{ fontSize: 20, marginBottom: 12 }}>Example</div>
             <div className="schema-block">
               <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{`{
-  "schema_version": "0.1.0",
+  "schema_version": "${schema.version}",
   "trace_id": "a4f2b8c1-e2d3-4f5a-b6c7-d8e9f0a1b2c3",
   "session_id": "sess_0x8f2a1b3c",
   "content_hash": "e3b0c44298fc1c14...",

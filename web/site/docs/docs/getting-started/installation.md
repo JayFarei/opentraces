@@ -12,6 +12,14 @@ pipx install opentraces
 brew install JayFarei/opentraces/opentraces
 ```
 
+## Claude Code Skill
+
+```bash
+npx skills add jayfarei/opentraces
+```
+
+This installs the opentraces skill so Claude Code can drive the full workflow (init, review, push) conversationally. Alternatively, `opentraces init` auto-installs the skill into `.agents/skills/opentraces/` when you initialize a project.
+
 ## Copy to your agent
 
 Paste this into your coding agent (Claude Code, Cursor, Codex, etc.):

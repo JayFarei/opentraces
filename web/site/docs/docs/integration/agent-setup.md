@@ -8,7 +8,7 @@ Most commands emit structured JSON with `next_steps` and `next_command`, so an a
 
 ## Claude Code Setup
 
-`opentraces init` installs the Claude Code hook and the bundled skill. A typical agent-led setup looks like:
+`opentraces init` installs the Claude Code hook and copies the bundled skill into `.agents/skills/opentraces/` (symlinked into the agent's skill directory). A typical agent-led setup looks like:
 
 ```bash
 opentraces login

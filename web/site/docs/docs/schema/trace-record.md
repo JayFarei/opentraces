@@ -6,7 +6,7 @@ The top-level record. One per JSONL line, one per agent session.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `schema_version` | string | yes | Schema version, e.g. `"0.1.0"` |
+| `schema_version` | string | yes | Schema version, e.g. `"0.1.1"` |
 | `trace_id` | string (UUID) | yes | Unique identifier for this trace |
 | `session_id` | string | yes | Agent session reference |
 | `content_hash` | string | no | SHA-256 of the serialized record, populated when written |
