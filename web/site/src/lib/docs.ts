@@ -32,3 +32,11 @@ export function getDocTitle(slug: string): string {
   const entry = DOC_NAV.find((d) => d.slug === slug);
   return entry?.title || "Documentation";
 }
+
+export function getSkillContent(): string {
+  const skillPath = path.join(process.cwd(), "../../skill/SKILL.md");
+  if (fs.existsSync(skillPath)) {
+    return fs.readFileSync(skillPath, "utf-8");
+  }
+  return "";
+}
