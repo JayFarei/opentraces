@@ -13,6 +13,8 @@ from opentraces_schema.version import SCHEMA_VERSION
 
 AUTO_START = "<!-- opentraces:auto-stats-start -->"
 AUTO_END = "<!-- opentraces:auto-stats-end -->"
+STATS_SENTINEL_START = "<!-- opentraces:stats"
+STATS_SENTINEL_END = "-->"
 
 
 def _size_category(count: int) -> str:
@@ -33,7 +35,10 @@ def _compute_stats(traces: list[TraceRecord]) -> dict:
     total_tokens = 0
     model_counts: Counter[str] = Counter()
     agent_counts: Counter[str] = Counter()
+    dep_counts: Counter[str] = Counter()
     timestamps: list[str] = []
+    costs: list[float] = []
+    success_signals: list[bool] = []
 
     for t in traces:
         total_steps += t.metrics.total_steps or len(t.steps)
@@ -48,15 +53,36 @@ def _compute_stats(traces: list[TraceRecord]) -> dict:
         if t.timestamp_end:
             timestamps.append(t.timestamp_end)
 
+        if t.metrics.estimated_cost_usd is not None:
+            costs.append(t.metrics.estimated_cost_usd)
+
+        if t.outcome.success is not None:
+            success_signals.append(t.outcome.success)
+
+        for dep in (t.dependencies or []):
+            dep_counts[dep] += 1
+
     date_range = "N/A"
     if timestamps:
         sorted_ts = sorted(timestamps)
         date_range = f"{sorted_ts[0][:10]} to {sorted_ts[-1][:10]}"
 
+    n = len(traces)
+    avg_steps = round(total_steps / n) if n else 0
+    avg_cost = round(sum(costs) / len(costs), 2) if costs else None
+    total_cost = round(sum(costs), 2) if costs else None
+    success_rate = round(100 * sum(success_signals) / len(success_signals), 1) if success_signals else None
+    top_deps = [[name, count] for name, count in dep_counts.most_common(10)]
+
     return {
-        "total_traces": len(traces),
+        "total_traces": n,
         "total_steps": total_steps,
         "total_tokens": total_tokens,
+        "avg_steps_per_session": avg_steps,
+        "avg_cost_usd": avg_cost,
+        "total_cost_usd": total_cost,
+        "success_rate": success_rate,
+        "top_dependencies": top_deps,
         "model_counts": dict(model_counts),
         "agent_counts": dict(agent_counts),
         "date_range": date_range,
@@ -89,9 +115,32 @@ def _render_quality_table(quality_summary: dict) -> str:
     return "\n".join(lines)
 
 
+def _render_machine_json(stats: dict) -> str:
+    """Render the single-line machine-readable JSON sentinel block.
+
+    Placed just before AUTO_START so the existing marker replacement logic
+    is unaffected. Parseable with a simple regex in browser JS:
+        /<!-- opentraces:stats\\s*(\\{.*?\\})\\s*-->/s
+    """
+    import json
+    payload = {
+        "total_traces": stats["total_traces"],
+        "avg_steps_per_session": stats["avg_steps_per_session"],
+        "avg_cost_usd": stats["avg_cost_usd"],
+        "total_cost_usd": stats["total_cost_usd"],
+        "success_rate": stats["success_rate"],
+        "top_dependencies": stats["top_dependencies"],
+        "agent_counts": stats["agent_counts"],
+        "model_counts": stats["model_counts"],
+        "date_range": stats["date_range"],
+    }
+    return f"{STATS_SENTINEL_START}\n{json.dumps(payload, separators=(',', ':'))}\n{STATS_SENTINEL_END}"
+
+
 def _render_stats_section(stats: dict, quality_summary: dict | None = None) -> str:
     """Render the machine-managed statistics section."""
     lines = [
+        _render_machine_json(stats),
         AUTO_START,
         "## Dataset Statistics",
         "",
@@ -240,14 +289,21 @@ def generate_dataset_card(
 
     if existing_card and AUTO_START in existing_card and AUTO_END in existing_card:
         # Replace only the machine-managed section
-        before = existing_card[: existing_card.index(AUTO_START)]
-        after = existing_card[existing_card.index(AUTO_END) + len(AUTO_END) :]
+        # Also strip any existing sentinel block that sits just before AUTO_START
+        card_body = existing_card
+        if STATS_SENTINEL_START in card_body and STATS_SENTINEL_END in card_body:
+            s_start = card_body.index(STATS_SENTINEL_START)
+            s_end = card_body.index(STATS_SENTINEL_END, s_start) + len(STATS_SENTINEL_END)
+            card_body = card_body[:s_start] + card_body[s_end:]
+
+        before = card_body[: card_body.index(AUTO_START)]
+        after = card_body[card_body.index(AUTO_END) + len(AUTO_END) :]
 
         # Also update frontmatter if present
-        if existing_card.startswith("---"):
-            end_idx = existing_card.index("---", 3) + 3
+        if card_body.startswith("---"):
+            end_idx = card_body.index("---", 3) + 3
             frontmatter = _render_frontmatter(repo_id, traces, quality_summary=quality_summary)
-            before = frontmatter + existing_card[end_idx : existing_card.index(AUTO_START)]
+            before = frontmatter + card_body[end_idx : card_body.index(AUTO_START)]
 
         return before + stats_section + after
 

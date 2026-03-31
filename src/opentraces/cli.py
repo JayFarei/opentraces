@@ -3011,7 +3011,8 @@ def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
 @click.option("--publish", is_flag=True, help="Change an existing private dataset to public (no upload)")
 @click.option("--gated", is_flag=True, help="Enable gated access (auto-approve) on the dataset")
 @click.option("--repo", default=None, help="HF dataset repo (default: username/opentraces)")
-def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None) -> None:
+@click.option("--assess", "run_assess", is_flag=True, help="Run quality assessment after upload and include scores in dataset card")
+def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None, run_assess: bool) -> None:
     """Upload committed traces to HuggingFace Hub."""
     from .config import load_project_config, save_project_config
     from .state import StateManager, TraceStatus, StagingLock
@@ -3206,7 +3207,24 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                     # so the card reflects the full dataset after each push.
                     all_remote_traces = uploader.fetch_all_remote_traces()
                     card_traces = all_remote_traces if all_remote_traces else records
-                    card = generate_dataset_card(repo_id, card_traces, existing_card)
+
+                    quality_summary = None
+                    if run_assess:
+                        try:
+                            from .quality.engine import assess_batch
+                            from .quality.gates import check_gate
+                            from .quality.summary import build_summary
+                            click.echo(f"  Assessing {len(card_traces)} traces...")
+                            batch = assess_batch(card_traces)
+                            gate = check_gate(batch)
+                            summary = build_summary(batch, gate, mode="deterministic")
+                            quality_summary = summary.to_dict()
+                            uploader.upload_quality_json(quality_summary)
+                            click.echo(f"  Overall utility: {summary.overall_utility:.1f}% | Gate: {'PASS' if summary.gate_passed else 'FAIL'}")
+                        except Exception as e:
+                            click.echo(f"  Warning: quality assessment failed: {e}", err=True)
+
+                    card = generate_dataset_card(repo_id, card_traces, existing_card, quality_summary=quality_summary)
                     import io as _io
                     uploader.api.upload_file(
                         path_or_fileobj=_io.BytesIO(card.encode("utf-8")),
