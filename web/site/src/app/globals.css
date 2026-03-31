@@ -1542,28 +1542,37 @@ footer {
 
 /* ═══ Audience Toggle ═══ */
 
-/* Background + sidebar transition for machine mode */
-html, body, .container {
-  transition: background-color 0.35s ease;
+/* Full-page overlay — fades to black on mode switch */
+.machine-overlay {
+  position: fixed;
+  inset: 0;
+  background: #000000;
+  z-index: 200;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
 }
+.machine-overlay.opaque {
+  opacity: 1;
+}
+
+/* Machine mode: page goes black — instantaneous (overlay handles the animation) */
 html[data-audience="machine"],
 html[data-audience="machine"] body,
 html[data-audience="machine"] .container {
   background-color: #000000;
 }
 
-/* Sidebar collapses in machine mode */
-.docs-sidebar {
-  transition: opacity 0.25s ease, width 0.3s ease, padding 0.3s ease, min-width 0.3s ease;
+/* Nav + footer fully hidden in machine mode — all viewports, fully immersive */
+html[data-audience="machine"] .nav,
+html[data-audience="machine"] footer {
+  display: none;
 }
-html[data-audience="machine"] .docs-sidebar {
-  opacity: 0;
-  width: 0;
-  min-width: 0;
-  padding: 0;
-  overflow: hidden;
-  pointer-events: none;
-  border-right: none;
+
+/* Sidebar, mobile sidebar toggle + breadcrumb hide in machine mode */
+html[data-audience="machine"] .docs-sidebar,
+html[data-audience="machine"] .docs-sidebar-toggle {
+  display: none;
 }
 html[data-audience="machine"] .docs-layout {
   grid-template-columns: 1fr;
@@ -1571,34 +1580,24 @@ html[data-audience="machine"] .docs-layout {
 html[data-audience="machine"] .docs-breadcrumb {
   display: none;
 }
-
-/* Content fade during mode switch */
-.docs-audience-viewer {
-  transition: opacity 0.18s ease;
-}
-.docs-audience-viewer.fading {
-  opacity: 0;
+html[data-audience="machine"] .docs-main {
+  padding-left: 0;
 }
 
-/* Toggle pill — anchored to docs content column left edge */
+/* Toggle pill — centered, adapts to light/dark theme */
 .audience-toggle {
   position: fixed;
   bottom: 24px;
-  /* align with docs-main: sidebar 200px + main left-padding 32px */
-  left: calc(200px + 32px);
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
-  background: #1a1a1a;
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
   padding: 5px 6px;
   gap: 2px;
   z-index: 50;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
-  transition: left 0.3s ease;
-}
-/* In machine mode sidebar is gone, content starts at page left + main padding */
-html[data-audience="machine"] .audience-toggle {
-  left: 32px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 .audience-toggle-option {
   display: flex;
@@ -1609,7 +1608,7 @@ html[data-audience="machine"] .audience-toggle {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.1em;
-  color: rgba(255, 255, 255, 0.45);
+  color: var(--text-muted);
   background: transparent;
   border: none;
   cursor: pointer;
@@ -1618,15 +1617,61 @@ html[data-audience="machine"] .audience-toggle {
   line-height: 1;
 }
 .audience-toggle-option:hover {
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--text-secondary);
 }
 .audience-toggle-option.active {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  background: var(--surface-hover);
 }
 .audience-dot {
   font-size: 9px;
   line-height: 1;
+}
+
+/* Toggle adapts to machine mode (always-black page) */
+html[data-audience="machine"] .audience-toggle {
+  background: #111111;
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.6);
+}
+html[data-audience="machine"] .audience-toggle-option {
+  color: #888888;
+}
+html[data-audience="machine"] .audience-toggle-option:hover {
+  color: #bbbbbb;
+}
+html[data-audience="machine"] .audience-toggle-option.active {
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.07);
+}
+/* Active dot: green accent in machine mode */
+html[data-audience="machine"] .audience-toggle-option.active .audience-dot {
+  color: #4ade80;
+}
+/* Active dot: site accent in light/dark mode */
+.audience-toggle-option.active .audience-dot {
+  color: var(--accent);
+}
+
+/* Machine mode exit button — top right corner */
+.machine-exit-btn {
+  position: fixed;
+  top: 16px;
+  right: 20px;
+  z-index: 60;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  line-height: 1;
+  color: #aaaaaa;
+  background: transparent;
+  border: 1px solid #333333;
+  cursor: pointer;
+  padding: 2px 9px 4px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.machine-exit-btn:hover {
+  color: #eeeeee;
+  border-color: #777777;
 }
 
 /* ═══ Machine View ═══ */
@@ -1637,7 +1682,13 @@ html[data-audience="machine"] .audience-toggle {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.7;
-  padding: 0;
+  /* centered column with vertical border lines */
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 32px 48px 100px;
+  border-left: 1px solid #131313;
+  border-right: 1px solid #131313;
+  min-height: calc(100vh - 80px);
 }
 
 /* Front matter header */
@@ -1648,7 +1699,7 @@ html[data-audience="machine"] .audience-toggle {
 }
 .machine-fm-fence {
   font-size: 12px;
-  color: #2a2a2a;
+  color: #444444;
   letter-spacing: 0.04em;
   padding: 4px 0;
 }
@@ -1660,20 +1711,20 @@ html[data-audience="machine"] .audience-toggle {
   line-height: 1.5;
 }
 .machine-fm-key {
-  color: #3d3d3d;
+  color: #555555;
   min-width: 100px;
   letter-spacing: 0.03em;
 }
 .machine-fm-sep {
-  color: #2a2a2a;
+  color: #333333;
   margin-right: 10px;
 }
 .machine-fm-val {
-  color: #6a6a6a;
+  color: #b8b8b8;
   flex: 1;
 }
 .machine-fm-type {
-  color: #3a6a3a;
+  color: #4a8a4a;
   letter-spacing: 0.05em;
 }
 .machine-fm-desc-row {
@@ -1681,78 +1732,33 @@ html[data-audience="machine"] .audience-toggle {
   margin-top: 4px;
 }
 .machine-fm-desc {
-  color: #505050;
+  color: #aaaaaa;
   line-height: 1.7;
 }
 .machine-fm-actions {
   margin-top: 16px;
+  display: flex;
+  gap: 8px;
 }
 .machine-copy-btn {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: #333333;
+  color: #aaaaaa;
   background: transparent;
-  border: 1px solid #1e1e1e;
+  border: 1px solid #333333;
   padding: 3px 10px;
   cursor: pointer;
   transition: color 0.1s, border-color 0.1s;
   letter-spacing: 0.04em;
 }
 .machine-copy-btn:hover {
-  color: #888888;
-  border-color: #333333;
+  color: #eeeeee;
+  border-color: #777777;
 }
 
-/* Two-column body */
-.machine-body {
-  display: grid;
-  grid-template-columns: 200px 1fr;
-  gap: 0;
-  align-items: start;
-}
-
-/* Sticky TOC column */
-.machine-toc {
-  position: sticky;
-  top: 0;
-  max-height: 100vh;
-  overflow-y: auto;
-  padding: 0 24px 40px 0;
-  border-right: 1px solid #0d0d0d;
-}
-.machine-toc-label {
-  font-size: 9px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: #2a2a2a;
-  margin-bottom: 12px;
-  padding-top: 4px;
-}
-.machine-toc-link {
-  display: block;
-  color: #3a3a3a;
-  text-decoration: none;
-  font-size: 11px;
-  padding: 3px 0;
-  transition: color 0.1s;
-  line-height: 1.5;
-  word-break: break-word;
-}
-.machine-toc-link:hover {
-  color: #666666;
-}
-.machine-toc-link-sub {
-  padding-left: 12px;
-  font-size: 10.5px;
-  color: #2a2a2a;
-}
-.machine-toc-link-sub:hover {
-  color: #555555;
-}
-
-/* Scrollable content column */
+/* Skill content */
 .machine-content {
-  padding: 0 0 80px 28px;
+  padding: 0 0 80px 0;
   min-width: 0;
 }
 
@@ -1761,7 +1767,7 @@ html[data-audience="machine"] .audience-toggle {
   font-family: var(--font-mono);
   font-size: 16px;
   font-weight: 600;
-  color: #aaaaaa;
+  color: #f0f0f0;
   margin-bottom: 16px;
   margin-top: 0;
 }
@@ -1769,49 +1775,49 @@ html[data-audience="machine"] .audience-toggle {
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 600;
-  color: #666666;
+  color: #cccccc;
   margin-top: 36px;
   margin-bottom: 10px;
   padding-bottom: 6px;
-  border-bottom: 1px solid #0d0d0d;
+  border-bottom: 1px solid #1a1a1a;
 }
 .machine-h3 {
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 500;
-  color: #4a4a4a;
+  color: #aaaaaa;
   margin-top: 20px;
   margin-bottom: 6px;
 }
 .machine-p {
-  color: #6a6a6a;
+  color: #c0c0c0;
   margin-bottom: 12px;
   font-size: 12.5px;
 }
 .machine-link {
-  color: #2d6a2d;
+  color: #3d8a3d;
   text-decoration: none;
 }
 .machine-link:hover {
-  color: #3a8a3a;
+  color: #50aa50;
   text-decoration: underline;
 }
 .machine-code-inline {
   background: #080808;
-  border: 1px solid #151515;
+  border: 1px solid #1a1a1a;
   padding: 1px 5px;
   font-family: var(--font-mono);
   font-size: 11.5px;
-  color: #5a8a5a;
+  color: #6aaa6a;
 }
 .machine-code-block {
-  background: #050505;
-  border: 1px solid #111111;
-  border-left: 2px solid #1a2e1a;
+  background: #060606;
+  border: 1px solid #181818;
+  border-left: 2px solid #1e3a1e;
   padding: 12px 16px;
   font-family: var(--font-mono);
   font-size: 11.5px;
-  color: #5a7a5a;
+  color: #7aaa7a;
   overflow-x: auto;
   margin: 10px 0 16px;
   line-height: 1.6;
@@ -1832,34 +1838,51 @@ html[data-audience="machine"] .audience-toggle {
 .machine-table td {
   text-align: left;
   padding: 5px 10px;
-  border: 1px solid #111111;
-  color: #555555;
+  border: 1px solid #1e1e1e;
+  color: #aaaaaa;
 }
 .machine-table th {
-  color: #3a3a3a;
-  background: #050505;
+  color: #777777;
+  background: #060606;
 }
 
-/* Mobile: collapse to single column */
+/* ═══ Machine View — Mobile ═══ */
 @media (max-width: 768px) {
-  .audience-toggle {
-    left: 16px;
-  }
-  html[data-audience="machine"] .audience-toggle {
-    left: 16px;
-  }
-  .machine-body {
-    grid-template-columns: 1fr;
-  }
-  .machine-toc {
-    position: static;
-    max-height: none;
+  .machine-view {
+    padding: 20px 20px 100px;
+    border-left: none;
     border-right: none;
-    border-bottom: 1px solid #0d0d0d;
-    padding: 0 0 20px;
-    margin-bottom: 24px;
+    max-width: 100%;
   }
-  .machine-content {
-    padding-left: 0;
+  .machine-fm-row {
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+  .machine-fm-key {
+    min-width: 90px;
+  }
+  .machine-fm-actions {
+    flex-wrap: wrap;
+  }
+  .machine-code-block {
+    font-size: 11px;
+    padding: 10px 12px;
+    /* Horizontal scroll for long command lines */
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    /* Don't wrap — preserve command structure */
+    white-space: pre;
+    word-break: normal;
+  }
+  .machine-table {
+    font-size: 11px;
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Toggle pill full-width-ish on mobile */
+  .audience-toggle {
+    bottom: 16px;
   }
 }
+

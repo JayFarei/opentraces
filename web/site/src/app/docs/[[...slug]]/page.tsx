@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
-import { getDocContent, DOC_NAV } from "@/lib/docs";
-import Markdown from "@/components/Markdown";
+import { getDocContent, getSkillContent, DOC_NAV } from "@/lib/docs";
+import DocsViewer from "@/components/DocsViewer";
 
 interface Props {
   params: Promise<{ slug?: string[] }>;
@@ -19,12 +19,14 @@ export default async function DocPage({ params }: Props) {
 
   if (!content) notFound();
 
+  const skillContent = getSkillContent();
+
   return (
     <>
       <div className="docs-breadcrumb">
         docs {slugStr && `/ ${slugStr.replace(/\//g, " / ")}`}
       </div>
-      <Markdown content={content} />
+      <DocsViewer content={content} skillContent={skillContent} />
     </>
   );
 }
