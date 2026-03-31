@@ -251,7 +251,7 @@ class TestSessionCommands:
     def test_session_show_not_found(self, initialized_project):
         project_dir, runner = initialized_project
         result = runner.invoke(main, ["session", "show", "nonexistent-trace-id"])
-        assert result.exit_code == 3
+        assert result.exit_code == 6
 
     def test_session_commit(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
@@ -283,7 +283,7 @@ class TestSessionCommands:
     def test_session_discard_not_found(self, initialized_project):
         project_dir, runner = initialized_project
         result = runner.invoke(main, ["session", "discard", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "--yes"])
-        assert result.exit_code == 3
+        assert result.exit_code == 6
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +331,160 @@ class TestJsonMode:
         result = runner.invoke(main, ["--json", "session", "list"])
         assert result.exit_code == 0
         assert "---OPENTRACES_JSON---" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Machine mode (OPENTRACES_NO_TUI, piped stdout)
+# ---------------------------------------------------------------------------
+
+class TestMachineMode:
+    """OPENTRACES_NO_TUI env var and non-TTY bare invocation."""
+
+    def test_no_tui_env_var_prints_help(self, monkeypatch):
+        """OPENTRACES_NO_TUI=1 should print help, not launch TUI."""
+        monkeypatch.setenv("OPENTRACES_NO_TUI", "1")
+        monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: True)
+        launched = []
+        monkeypatch.setattr("opentraces.cli._launch_tui_ui", lambda *a, **kw: launched.append(1))
+        runner = CliRunner()
+        result = runner.invoke(main, [])
+        assert result.exit_code == 0
+        assert len(launched) == 0, "TUI should not launch when OPENTRACES_NO_TUI is set"
+        assert "opentraces" in result.output.lower()
+
+    def test_non_tty_stdout_prints_help(self, monkeypatch):
+        """Bare invocation on non-TTY stdout should print help, not launch TUI."""
+        monkeypatch.delenv("OPENTRACES_NO_TUI", raising=False)
+        monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: False)
+        launched = []
+        monkeypatch.setattr("opentraces.cli._launch_tui_ui", lambda *a, **kw: launched.append(1))
+        runner = CliRunner()
+        result = runner.invoke(main, [])
+        assert result.exit_code == 0
+        assert len(launched) == 0, "TUI should not launch on non-TTY stdout"
+
+    def test_no_tui_env_var_empty_string_still_suppresses(self, monkeypatch):
+        """Any non-empty value for OPENTRACES_NO_TUI suppresses TUI."""
+        monkeypatch.setenv("OPENTRACES_NO_TUI", "true")
+        monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: True)
+        launched = []
+        monkeypatch.setattr("opentraces.cli._launch_tui_ui", lambda *a, **kw: launched.append(1))
+        runner = CliRunner()
+        result = runner.invoke(main, [])
+        assert len(launched) == 0
+
+
+# ---------------------------------------------------------------------------
+# session show truncation
+# ---------------------------------------------------------------------------
+
+class TestSessionShowTruncation:
+    """session show truncates human output by default; --verbose disables it."""
+
+    def test_session_show_truncates_long_content(self, project_with_traces, monkeypatch):
+        """Human output should truncate step content > 500 chars."""
+        project_dir, runner, trace_id = project_with_traces
+        # Inject a long step content into the staging file
+        from opentraces.config import get_project_staging_dir
+        staging_dir = get_project_staging_dir(project_dir)
+        staging_file = next(staging_dir.glob("*.jsonl"))
+        import json as _json
+        data = _json.loads(staging_file.read_text().strip().splitlines()[0])
+        long_content = "x" * 2000
+        if data.get("steps"):
+            data["steps"][0]["content"] = long_content
+        staging_file.write_text(_json.dumps(data) + "\n")
+
+        result = runner.invoke(main, ["session", "show", trace_id])
+        assert result.exit_code == 0
+        # Only check the human output portion (before the JSON sentinel)
+        human_output = result.output.split("---OPENTRACES_JSON---")[0]
+        assert "truncated" in human_output
+        assert long_content not in human_output
+
+    def test_session_show_verbose_shows_full_content(self, project_with_traces):
+        """--verbose should show full step content without truncation."""
+        project_dir, runner, trace_id = project_with_traces
+        from opentraces.config import get_project_staging_dir
+        staging_dir = get_project_staging_dir(project_dir)
+        staging_file = next(staging_dir.glob("*.jsonl"))
+        import json as _json
+        data = _json.loads(staging_file.read_text().strip().splitlines()[0])
+        long_content = "y" * 2000
+        if data.get("steps"):
+            data["steps"][0]["content"] = long_content
+        staging_file.write_text(_json.dumps(data) + "\n")
+
+        result = runner.invoke(main, ["session", "show", trace_id, "--verbose"])
+        assert result.exit_code == 0
+        assert "truncated" not in result.output
+        assert long_content in result.output
+
+    def test_session_show_json_never_truncated(self, project_with_traces):
+        """--json mode must return the full record regardless of content length."""
+        project_dir, runner, trace_id = project_with_traces
+        from opentraces.config import get_project_staging_dir
+        staging_dir = get_project_staging_dir(project_dir)
+        staging_file = next(staging_dir.glob("*.jsonl"))
+        import json as _json
+        data = _json.loads(staging_file.read_text().strip().splitlines()[0])
+        long_content = "z" * 2000
+        if data.get("steps"):
+            data["steps"][0]["content"] = long_content
+        staging_file.write_text(_json.dumps(data) + "\n")
+
+        result = runner.invoke(main, ["--json", "session", "show", trace_id])
+        assert result.exit_code == 0
+        sentinel = "---OPENTRACES_JSON---"
+        assert sentinel in result.output
+        payload = _json.loads(result.output.split(sentinel)[1].strip())
+        steps = payload["trace"].get("steps", [])
+        if steps:
+            assert steps[0]["content"] == long_content
+
+
+# ---------------------------------------------------------------------------
+# Hint lines in human output
+# ---------------------------------------------------------------------------
+
+class TestHintLines:
+    """error_response hints should appear in human-readable output."""
+
+    def test_not_initialized_shows_hint(self, tmp_path, monkeypatch):
+        """status on an uninitialized dir should show a Hint: line."""
+        monkeypatch.chdir(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(main, ["status"])
+        assert "Hint:" in result.output or result.exit_code == 3
+
+
+# ---------------------------------------------------------------------------
+# Exit code contract tests
+# ---------------------------------------------------------------------------
+
+class TestExitCodes:
+    """Regression guards for the exit code scheme introduced in the agent-aware CLI work."""
+
+    def test_conflicting_push_flags_exits_2(self, initialized_project):
+        """--private and --public together is a usage error (exit 2), not a config error (exit 3)."""
+        project_dir, runner = initialized_project
+        result = runner.invoke(main, ["push", "--private", "--public"])
+        assert result.exit_code == 2
+
+    def test_session_commit_not_found_exits_6(self, initialized_project):
+        project_dir, runner = initialized_project
+        result = runner.invoke(main, ["session", "commit", "nonexistent-trace-id"])
+        assert result.exit_code == 6
+
+    def test_session_reject_not_found_exits_6(self, initialized_project):
+        project_dir, runner = initialized_project
+        result = runner.invoke(main, ["session", "reject", "nonexistent-trace-id"])
+        assert result.exit_code == 6
+
+    def test_session_reset_not_found_exits_6(self, initialized_project):
+        project_dir, runner = initialized_project
+        result = runner.invoke(main, ["session", "reset", "nonexistent-trace-id"])
+        assert result.exit_code == 6
 
 
 # ---------------------------------------------------------------------------

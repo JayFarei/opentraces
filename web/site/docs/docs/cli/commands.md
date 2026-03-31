@@ -155,6 +155,7 @@ Fine-grained review commands for staged traces.
 ```bash
 opentraces session list
 opentraces session show <trace-id>
+opentraces session show <trace-id> --verbose
 opentraces session commit <trace-id>
 opentraces session reject <trace-id>
 opentraces session reset <trace-id>
@@ -163,6 +164,8 @@ opentraces session discard <trace-id> --yes
 ```
 
 `session list` accepts `--stage inbox|committed|pushed|rejected`, `--model`, `--agent`, and `--limit`.
+
+`session show` truncates step content to 500 chars in human output by default to protect context windows. Pass `--verbose` to see full content, or use `opentraces --json session show <id>` to get the complete record as JSON (never truncated).
 
 ## Upload
 
@@ -259,6 +262,16 @@ Every JSON response includes:
 | `next_steps` | Array of suggested next actions (human-readable) |
 | `next_command` | The single most likely next command to run |
 
+### CI / headless / agent mode
+
+When `stdout` is not a TTY, bare `opentraces` prints help text instead of launching the TUI. You can also force this explicitly:
+
+```bash
+OPENTRACES_NO_TUI=1 opentraces    # always prints help, never opens TUI
+```
+
+`HF_TOKEN` is also respected as the highest-priority credential source, so CI pipelines can authenticate without running `opentraces login`.
+
 ## Hidden and Internal Commands
 
 These commands exist for automation, compatibility, or diagnostics and are hidden from normal help output:
@@ -280,8 +293,9 @@ These commands exist for automation, compatibility, or diagnostics and are hidde
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
-| `2` | Usage or validation error |
-| `3` | Missing config, auth, or not found |
+| `2` | Usage error (bad flags, conflicting options) |
+| `3` | Auth/config error (not authenticated, not initialized) |
 | `4` | Network or upload error |
 | `5` | Data corruption / invalid state |
+| `6` | Not found (trace ID, project, or resource) |
 | `7` | Lock contention / busy state |

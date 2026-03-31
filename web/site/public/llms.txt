@@ -234,13 +234,19 @@ Opens a browser-based OAuth device code flow, similar to `gh auth login`. You'll
 
 > **Note:** OAuth tokens authenticate your identity but cannot create or write to dataset repos. If you need to push traces, use `opentraces login --token` with a write-access personal access token instead.
 
-## Environment Variable
+## Environment Variables
 
 ```bash
 export HF_TOKEN=hf_...
 ```
 
 The CLI checks for `HF_TOKEN` automatically. Useful in CI pipelines where interactive login isn't available.
+
+```bash
+export OPENTRACES_NO_TUI=1
+```
+
+When set, bare `opentraces` (no subcommand) prints help instead of launching the TUI. Useful in scripts and CI environments where terminal interactivity is unavailable.
 
 ## Auth Precedence
 
@@ -483,7 +489,8 @@ Fine-grained review commands for staged traces.
 
 ```bash
 opentraces session list
-opentraces session show <trace-id>
+opentraces session show <trace-id>           # truncated by default
+opentraces session show <trace-id> --verbose # full step content
 opentraces session commit <trace-id>
 opentraces session reject <trace-id>
 opentraces session reset <trace-id>
@@ -575,9 +582,10 @@ These commands exist for automation, compatibility, or diagnostics and are hidde
 |------|---------|
 | `0` | Success |
 | `2` | Usage or validation error |
-| `3` | Missing config, auth, or not found |
+| `3` | Auth/config error (not authenticated, not initialized) |
 | `4` | Network or upload error |
 | `5` | Data corruption / invalid state |
+| `6` | Not found (trace ID, project, or resource) |
 | `7` | Lock contention / busy state |
 
 ---

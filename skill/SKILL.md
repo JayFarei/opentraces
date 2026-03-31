@@ -168,11 +168,14 @@ Valid stages: `inbox`, `committed`, `pushed`, `rejected`.
 ### Inspecting a trace
 
 ```bash
-opentraces session show <TRACE_ID>
+opentraces session show <TRACE_ID>           # summary + truncated step content
+opentraces session show <TRACE_ID> --verbose # full step content (can be large)
+opentraces --json session show <TRACE_ID>    # full record as JSON (never truncated)
 ```
 
-Returns the full trace record including steps, tool calls, observations,
-metrics, security metadata, and attribution.
+Human output truncates step content to 500 chars by default to protect context
+windows. Use `--verbose` for the full human view, or `--json` if you need to
+parse the complete record programmatically.
 
 ### Actions
 
@@ -305,15 +308,27 @@ opentraces capabilities --json    # feature flags, supported agents, versions
 opentraces introspect             # full API schema + TraceRecord JSON schema
 ```
 
+### Machine/CI mode
+
+Set `OPENTRACES_NO_TUI=1` to suppress TUI launch on bare `opentraces` invocation.
+Bare `opentraces` on a non-TTY stdout already falls back to help text automatically.
+
+```bash
+OPENTRACES_NO_TUI=1 opentraces         # prints help, never opens TUI
+opentraces --json context              # machine-readable project state
+opentraces capabilities --json         # feature flags + supported env vars
+```
+
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 2 | Usage or validation error |
-| 3 | Precondition not met (not authenticated, not initialized, not found) |
+| 2 | Usage error (bad flags, conflicting options) |
+| 3 | Auth/config error (not authenticated, not initialized) |
 | 4 | Network or upload error |
 | 5 | Data corruption or invalid state |
+| 6 | Not found (trace ID, project, or resource) |
 | 7 | Lock contention (another process is pushing) |
 
 ## Configuration

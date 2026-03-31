@@ -94,6 +94,12 @@ def human_echo(message: str = "", **kwargs) -> None:
         click.echo(message, **kwargs)
 
 
+def human_hint(hint: str | None) -> None:
+    """Echo a Hint: line to human output when a hint is available."""
+    if hint and not _json_mode:
+        click.echo(f"Hint: {hint}")
+
+
 def error_response(code: str, kind: str, message: str, hint: str | None = None, retryable: bool = False) -> dict[str, object]:
     return {
         "status": "error",
@@ -245,7 +251,7 @@ def main(ctx: click.Context, json_mode: bool) -> None:
     if ctx.invoked_subcommand is not None:
         return
 
-    if not _is_interactive_terminal():
+    if os.environ.get("OPENTRACES_NO_TUI") or not _is_interactive_terminal():
         click.echo(ctx.get_help())
         return
 
@@ -1601,7 +1607,8 @@ def session_list(stage: str | None, model: str | None, agent: str | None, limit:
 
 @session.command("show")
 @click.argument("trace_id")
-def session_show(trace_id: str) -> None:
+@click.option("--verbose", is_flag=True, default=False, help="Show full step content (default: truncated to 500 chars)")
+def session_show(trace_id: str, verbose: bool) -> None:
     """Show full detail for a trace session."""
     state, staging_dir = _load_project_state()
     record, staging_file = _load_trace_record(staging_dir, trace_id)
@@ -1609,12 +1616,12 @@ def session_show(trace_id: str) -> None:
     if record is None:
         click.echo(f"Trace not found: {trace_id}")
         emit_json(error_response("NOT_FOUND", "session", f"No staging file for {trace_id}"))
-        sys.exit(3)
+        sys.exit(6)
 
     entry = state.get_trace(trace_id)
     visible_stage = resolve_visible_stage(entry.status if entry else None)
 
-    # Emit the full record as JSON
+    # Emit the full record as JSON (never truncated)
     record_dict = json.loads(record.model_dump_json())
     record_dict["_stage"] = visible_stage
 
@@ -1625,6 +1632,14 @@ def session_show(trace_id: str) -> None:
     human_echo(f"Steps: {len(record.steps)}")
     if record.metrics:
         human_echo(f"Cost:  ${record.metrics.estimated_cost_usd:.4f}" if record.metrics.estimated_cost_usd else "")
+
+    _STEP_TRUNCATE = 500
+    for i, step in enumerate(record.steps):
+        content = step.content or ""
+        if not verbose and len(content) > _STEP_TRUNCATE:
+            content = content[:_STEP_TRUNCATE] + f"\n[... {len(step.content) - _STEP_TRUNCATE} chars truncated, use --verbose to see full content]"
+        human_echo(f"\n--- Step {i} ---")
+        human_echo(content)
 
     emit_json({
         "status": "ok",
@@ -1641,7 +1656,7 @@ def _session_commit_impl(trace_id: str) -> None:
     if entry is None:
         click.echo(f"Trace not found: {trace_id}")
         emit_json(error_response("NOT_FOUND", "session", f"No trace entry for {trace_id}"))
-        sys.exit(3)
+        sys.exit(6)
 
     # Build a commit message from the trace task description
     message = trace_id[:12]
@@ -1693,7 +1708,7 @@ def session_reject(trace_id: str) -> None:
     if entry is None:
         click.echo(f"Trace not found: {trace_id}")
         emit_json(error_response("NOT_FOUND", "session", f"No trace entry for {trace_id}"))
-        sys.exit(3)
+        sys.exit(6)
 
     state.set_trace_status(trace_id, TraceStatus.REJECTED)
     human_echo(f"Rejected: {trace_id[:8]}")
@@ -1716,7 +1731,7 @@ def session_reset(trace_id: str) -> None:
     if entry is None:
         click.echo(f"Trace not found: {trace_id}")
         emit_json(error_response("NOT_FOUND", "session", f"No trace entry for {trace_id}"))
-        sys.exit(3)
+        sys.exit(6)
 
     # Only allow reset from APPROVED, REJECTED, or COMMITTED (not UPLOADED)
     resettable = {TraceStatus.APPROVED, TraceStatus.REJECTED, TraceStatus.COMMITTED, TraceStatus.STAGED}
@@ -1754,7 +1769,7 @@ def session_redact(trace_id: str, step_index: int) -> None:
     if not staging_file.exists():
         click.echo(f"Staging file not found for {trace_id}")
         emit_json(error_response("NOT_FOUND", "session", f"No staging file for {trace_id}"))
-        sys.exit(3)
+        sys.exit(6)
 
     text = staging_file.read_text().strip()
     if not text:
@@ -1817,7 +1832,7 @@ def session_discard(trace_id: str, confirmed: bool) -> None:
     if not staging_file.exists() and state.get_trace(trace_id) is None:
         click.echo(f"Trace not found: {trace_id}")
         emit_json(error_response("NOT_FOUND", "session", f"No trace for {trace_id}"))
-        sys.exit(3)
+        sys.exit(6)
 
     if not confirmed and _is_interactive_terminal():
         if not click.confirm(f"Permanently delete {trace_id[:8]}?"):
@@ -2028,7 +2043,8 @@ def context() -> None:
     project_dir = Path.cwd()
     ot_dir = project_dir / ".opentraces"
     if not ot_dir.exists():
-        click.echo("Not an opentraces project. Run 'opentraces init' first.")
+        click.echo("Not an opentraces project.")
+        human_hint("Run: opentraces init")
         emit_json(error_response("NOT_INITIALIZED", "project", "No .opentraces directory", "Run: opentraces init"))
         sys.exit(3)
 
@@ -2137,13 +2153,14 @@ def discover() -> None:
 
     if not projects_path.exists():
         click.echo(f"No sessions found. Directory does not exist: {projects_path}")
+        human_hint("Run Claude Code at least once to generate session logs, or use 'opentraces config set --projects-path' to specify a custom location")
         emit_json(error_response(
             code="NO_SESSIONS_FOUND",
             kind="not_found",
             message=f"{projects_path} not found",
             hint="Run Claude Code at least once to generate session logs, or use 'opentraces config set --projects-path' to specify a custom location",
         ))
-        sys.exit(3)
+        sys.exit(6)
 
     sessions = []
     for project_dir in sorted(projects_path.iterdir()):
@@ -2159,13 +2176,14 @@ def discover() -> None:
 
     if not sessions:
         click.echo("No session files found.")
+        human_hint("Run Claude Code to generate session logs")
         emit_json(error_response(
             code="NO_SESSIONS_FOUND",
             kind="not_found",
             message="No .jsonl session files found",
             hint="Run Claude Code to generate session logs",
         ))
-        sys.exit(3)
+        sys.exit(6)
 
     click.echo(f"Found {len(sessions)} projects with sessions:\n")
     for s in sessions:
@@ -2492,13 +2510,14 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     from opentraces_schema import TraceRecord
 
     cfg = load_config()
-    if not cfg.hf_token:
-        click.echo("Not authenticated. Run 'opentraces login' first.")
-        emit_json(error_response("NOT_AUTHENTICATED", "auth", "No HF token", "Run: opentraces login"))
-        sys.exit(3)
-
     if private and public:
         click.echo("Cannot use both --private and --public.")
+        sys.exit(2)
+
+    if not cfg.hf_token:
+        click.echo("Not authenticated.")
+        human_hint("Run: opentraces login")
+        emit_json(error_response("NOT_AUTHENTICATED", "auth", "No HF token", "Run: opentraces login"))
         sys.exit(3)
 
     # Get username from HF (needed for all paths)
@@ -2628,6 +2647,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                         "  opentraces login --token\n"
                         "Get a token with 'write' scope at https://huggingface.co/settings/tokens"
                     )
+                    human_hint("Run: opentraces login --token")
                     emit_json(error_response("PERMISSION_DENIED", "auth", "Token lacks write permissions", "Run: opentraces login --token"))
                     sys.exit(3)
                 raise
@@ -2786,6 +2806,10 @@ def capabilities(as_json: bool) -> None:
             "sharded_upload",
             "commit_groups",
         ],
+        "env_vars": {
+            "HF_TOKEN": "HuggingFace access token (highest priority over saved credentials)",
+            "OPENTRACES_NO_TUI": "Set to any value to suppress TUI launch on bare invocation",
+        },
     }
     click.echo(json.dumps(caps, indent=2))
 
@@ -2819,11 +2843,12 @@ def introspect() -> None:
         },
         "exit_codes": {
             "0": "OK",
-            "2": "Usage error",
-            "3": "Missing config",
+            "2": "Usage error (bad flags or conflicting options)",
+            "3": "Auth/config error (not authenticated, not initialized)",
             "4": "Network error",
             "5": "Data corrupt",
-            "7": "Lock/busy",
+            "6": "Not found (trace, project, or resource)",
+            "7": "Lock/busy (another process is pushing)",
         },
     }
     click.echo(json.dumps(schema, indent=2))
