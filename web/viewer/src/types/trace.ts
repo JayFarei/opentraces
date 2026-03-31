@@ -121,7 +121,7 @@ export interface Metrics {
 }
 
 export interface SecurityMetadata {
-  tier: 1 | 2 | 3;
+  tier: 1 | 2;
   flags_reviewed: number;
   redactions_applied: number;
   classifier_version: string | null;

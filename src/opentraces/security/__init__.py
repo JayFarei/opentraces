@@ -1,5 +1,6 @@
 """Security pipeline: regex scanning, anonymization, classification."""
 
+from .version import SECURITY_VERSION
 from .anonymizer import anonymize_paths, hash_username
 from .classifier import (
     ClassifierFlag,
@@ -25,6 +26,8 @@ from .secrets import (
 )
 
 __all__ = [
+    # version
+    "SECURITY_VERSION",
     # secrets
     "SecretMatch",
     "scan_text",

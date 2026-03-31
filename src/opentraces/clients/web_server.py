@@ -1,6 +1,6 @@
 """Flask application for the opentraces web review interface.
 
-Serves a local web UI for Tier 3 strict review: browse sessions,
+Serves a local web UI for trace review: browse sessions,
 approve/reject/redact traces, then push to HF Hub.
 """
 
@@ -20,6 +20,7 @@ from typing import Any
 from flask import Flask, jsonify, request, send_from_directory
 
 from ..config import STAGING_DIR, auth_identity, load_config, load_project_config, save_project_config
+from ..security import SECURITY_VERSION
 from ..inbox import get_stage, load_traces, redact_step
 from ..state import StateManager, TraceStatus
 from ..workflow import (
@@ -232,7 +233,7 @@ def _generate_sample_traces() -> list[dict[str, Any]]:
                 "scanned": True,
                 "flags_reviewed": 0,
                 "redactions_applied": 0,
-                "classifier_version": "0.1.0",
+                "classifier_version": SECURITY_VERSION,
             },
             "attribution": None,
             "metadata": {

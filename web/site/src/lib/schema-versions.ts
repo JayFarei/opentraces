@@ -172,7 +172,7 @@ const v010: SchemaVersion = {
       id: "security", title: "SecurityMetadata",
       desc: "Security mode and redaction record.",
       fields: [
-        { name: "tier", type: "int", required: false, description: "1 (auto), 2 (review), 3 (review, legacy)" },
+        { name: "tier", type: "int", required: false, description: "1 (auto), 2 (review)" },
         { name: "flags_reviewed", type: "int", required: false, description: "Flags reviewed" },
         { name: "redactions_applied", type: "int", required: false, description: "Redactions applied" },
         { name: "classifier_version", type: "string", required: false, description: "Classifier version" },

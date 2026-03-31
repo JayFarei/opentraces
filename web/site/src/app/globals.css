@@ -964,10 +964,27 @@ tr:hover td { background: var(--surface-hover); }
   align-items: center;
   justify-content: center;
 }
-.arch-agents {
+.arch-categories {
   display: flex;
-  flex-wrap: wrap;
   justify-content: center;
+  gap: 24px;
+}
+.arch-category {
+  border: 1px solid var(--border);
+  padding: 12px 14px 14px;
+  background: var(--bg);
+}
+.arch-category-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+  text-align: center;
+}
+.arch-category-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0;
 }
 .arch-agent-box {
@@ -976,6 +993,12 @@ tr:hover td { background: var(--surface-hover); }
   background: var(--surface);
   color: var(--text-secondary);
   font-size: 11px;
+  text-align: center;
+  min-width: 90px;
+}
+.arch-agent-soon {
+  opacity: 0.35;
+  cursor: default;
 }
 .arch-dest {
   font-size: 13px;
@@ -999,8 +1022,8 @@ tr:hover td { background: var(--surface-hover); }
   .arch-step { padding: 4px 8px; font-size: 10px; }
   .arch-arrow { font-size: 10px; }
   .arch-tiers { flex-wrap: wrap; gap: 6px; }
-  .arch-agents { gap: 0; }
-  .arch-agent-box { padding: 6px 10px; font-size: 10px; }
+  .arch-categories { flex-direction: column; align-items: center; gap: 12px; }
+  .arch-agent-box { padding: 6px 10px; font-size: 10px; min-width: 70px; }
   .arch-fork-branch { min-width: 0; }
   .arch-tier-box { padding: 8px 10px; }
   .arch-tier-name { font-size: 11px; }

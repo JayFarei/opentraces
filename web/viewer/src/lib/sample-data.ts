@@ -209,7 +209,7 @@ export function buildSampleTrace(session: SessionListItem): TraceRecord {
       estimated_cost_usd: Math.round((totalInput * 0.000003 + totalOutput * 0.000015) * 10000) / 10000,
     },
     security: {
-      tier: 3,
+      tier: 1,
       flags_reviewed: 0,
       redactions_applied: 0,
       classifier_version: "0.1.0",
