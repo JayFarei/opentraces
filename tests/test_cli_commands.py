@@ -363,3 +363,283 @@ class TestInitFlags:
         assert result.exit_code == 0
         config = json.loads((tmp_path / ".opentraces" / "config.json").read_text())
         assert config.get("visibility") == "public"
+
+
+# ---------------------------------------------------------------------------
+# Upgrade command
+# ---------------------------------------------------------------------------
+
+class TestUpgrade:
+    """Test the upgrade command."""
+
+    def test_upgrade_skill_only(self, initialized_project):
+        project_dir, runner = initialized_project
+        result = runner.invoke(main, ["upgrade", "--skill-only"])
+        assert result.exit_code == 0
+
+    def test_upgrade_skill_only_refreshes_skill_file(self, initialized_project):
+        """--skill-only should write a fresh skill file even if one exists."""
+        project_dir, runner = initialized_project
+        skill_path = project_dir / ".agents" / "skills" / "opentraces" / "SKILL.md"
+        # Corrupt the skill file
+        if skill_path.exists():
+            skill_path.write_text("old content")
+        result = runner.invoke(main, ["upgrade", "--skill-only"])
+        assert result.exit_code == 0
+        if skill_path.exists():
+            assert skill_path.read_text() != "old content"
+
+    def test_upgrade_skill_only_not_initialized(self, runner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(main, ["upgrade", "--skill-only"])
+        assert result.exit_code == 3
+
+    def test_upgrade_help(self, runner):
+        result = runner.invoke(main, ["upgrade", "--help"])
+        assert result.exit_code == 0
+        assert "skill-only" in result.output
+
+    def test_upgrade_no_project_skips_skill_refresh(self, runner, tmp_path, monkeypatch):
+        """Full upgrade without a project should succeed but skip skill refresh."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "source")
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 0
+        assert "Skill refresh skipped" in result.output or "No project" in result.output
+
+    def test_upgrade_source_skips_cli(self, initialized_project, monkeypatch):
+        """Source installs should skip CLI upgrade and only refresh skill."""
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "source")
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 0
+        assert "Source install" in result.output
+
+    def test_upgrade_pipx_success(self, initialized_project, monkeypatch):
+        """Successful pipx upgrade should exit 0."""
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "pipx")
+
+        mock_result = type("R", (), {"returncode": 0, "stdout": "upgraded opentraces", "stderr": ""})()
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 0
+
+    def test_upgrade_pipx_failure(self, initialized_project, monkeypatch):
+        """Failed pipx upgrade should exit 4."""
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "pipx")
+
+        mock_result = type("R", (), {"returncode": 1, "stdout": "", "stderr": "No such package"})()
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 4
+
+    def test_upgrade_pipx_already_latest(self, initialized_project, monkeypatch):
+        """pipx 'already at latest version' should not be an error."""
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "pipx")
+
+        mock_result = type("R", (), {
+            "returncode": 1, "stdout": "opentraces is already at latest version", "stderr": ""
+        })()
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 0
+        assert "latest version" in result.output.lower()
+
+    def test_upgrade_brew_success(self, initialized_project, monkeypatch):
+        """Successful brew upgrade should exit 0."""
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "brew")
+
+        mock_result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 0
+
+    def test_upgrade_brew_already_latest(self, initialized_project, monkeypatch):
+        """Brew returning 'already installed' should not be an error."""
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "brew")
+
+        mock_result = type("R", (), {"returncode": 1, "stdout": "", "stderr": "already installed"})()
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 0
+        assert "latest version" in result.output.lower()
+
+    def test_upgrade_brew_failure(self, initialized_project, monkeypatch):
+        """Actual brew failure should exit 4."""
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "brew")
+
+        mock_result = type("R", (), {"returncode": 1, "stdout": "", "stderr": "Error: no formula"})()
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 4
+
+    def test_upgrade_pip_success(self, initialized_project, monkeypatch):
+        """Fallback pip upgrade should exit 0."""
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "pip")
+
+        mock_result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 0
+
+    def test_upgrade_pip_failure(self, initialized_project, monkeypatch):
+        """Failed pip upgrade should exit 4."""
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "pip")
+
+        mock_result = type("R", (), {"returncode": 1, "stdout": "", "stderr": "Permission denied"})()
+        monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
+
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 4
+
+    def test_upgrade_binary_not_found(self, initialized_project, monkeypatch):
+        """Binary disappearing between detection and execution should exit 4."""
+        import subprocess
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "brew")
+
+        def raise_fnf(*a, **kw):
+            raise FileNotFoundError("brew not found")
+        monkeypatch.setattr("subprocess.run", raise_fnf)
+
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 4
+        assert "not found" in result.output.lower()
+
+    def test_upgrade_subprocess_timeout(self, initialized_project, monkeypatch):
+        """Hung subprocess should exit 4 after timeout."""
+        import subprocess
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "pipx")
+
+        def raise_timeout(*a, **kw):
+            raise subprocess.TimeoutExpired(cmd="pipx", timeout=120)
+        monkeypatch.setattr("subprocess.run", raise_timeout)
+
+        result = runner.invoke(main, ["upgrade"])
+        assert result.exit_code == 4
+        assert "timed out" in result.output.lower()
+
+    def test_upgrade_corrupted_config_no_agents(self, tmp_path, monkeypatch):
+        """Config missing 'agents' key should fall back to claude-code."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: False)
+        runner = CliRunner()
+        # Init normally
+        runner.invoke(main, [
+            "init", "--review-policy", "review",
+            "--remote", "test/opentraces", "--no-hook", "--start-fresh",
+        ])
+        # Corrupt config: remove agents key
+        config_path = tmp_path / ".opentraces" / "config.json"
+        cfg = json.loads(config_path.read_text())
+        cfg.pop("agents", None)
+        config_path.write_text(json.dumps(cfg))
+
+        result = runner.invoke(main, ["upgrade", "--skill-only"])
+        assert result.exit_code == 0
+
+    def test_upgrade_skill_source_missing(self, initialized_project, monkeypatch):
+        """Missing skill source should warn but not crash."""
+        project_dir, runner = initialized_project
+        monkeypatch.setattr("opentraces.cli._resolve_skill_source", lambda: None)
+
+        result = runner.invoke(main, ["upgrade", "--skill-only"])
+        assert result.exit_code == 0
+        assert "could not find" in result.output.lower() or "unchanged" in result.output.lower()
+
+
+class TestDetectInstallMethod:
+    """Test _detect_install_method with mocked paths."""
+
+    def test_source_install(self, monkeypatch):
+        """Package not in site-packages = source install."""
+        import opentraces.cli as cli_mod
+        original_file = cli_mod.__file__
+        monkeypatch.setattr(cli_mod, "__file__", "/home/user/opentraces/src/opentraces/cli.py")
+        result = cli_mod._detect_install_method()
+        monkeypatch.setattr(cli_mod, "__file__", original_file)
+        assert result == "source"
+
+    def test_brew_cellar_path(self, monkeypatch):
+        """Cellar in path = brew install."""
+        import opentraces.cli as cli_mod
+        original_file = cli_mod.__file__
+        monkeypatch.setattr(cli_mod, "__file__", "/opt/homebrew/Cellar/opentraces/0.1.1/lib/python3.12/site-packages/opentraces/cli.py")
+        result = cli_mod._detect_install_method()
+        monkeypatch.setattr(cli_mod, "__file__", original_file)
+        assert result == "brew"
+
+    def test_pipx_path(self, monkeypatch):
+        """pipx home in path = pipx install."""
+        import opentraces.cli as cli_mod
+        import shutil
+        original_file = cli_mod.__file__
+        home = str(Path.home())
+        fake_path = f"{home}/.local/pipx/venvs/opentraces/lib/python3.12/site-packages/opentraces/cli.py"
+        monkeypatch.setattr(cli_mod, "__file__", fake_path)
+        monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/pipx" if x == "pipx" else None)
+        result = cli_mod._detect_install_method()
+        monkeypatch.setattr(cli_mod, "__file__", original_file)
+        assert result == "pipx"
+
+    def test_linuxbrew_path(self, monkeypatch):
+        """linuxbrew in path = brew install on Linux."""
+        import opentraces.cli as cli_mod
+        original_file = cli_mod.__file__
+        monkeypatch.setattr(cli_mod, "__file__", "/home/linuxbrew/.linuxbrew/lib/python3.12/site-packages/opentraces/cli.py")
+        result = cli_mod._detect_install_method()
+        monkeypatch.setattr(cli_mod, "__file__", original_file)
+        assert result == "brew"
+
+    def test_pipx_custom_home(self, monkeypatch):
+        """Custom PIPX_HOME env var should be respected."""
+        import opentraces.cli as cli_mod
+        import shutil
+        original_file = cli_mod.__file__
+        fake_path = "/opt/custom-pipx/venvs/opentraces/lib/python3.12/site-packages/opentraces/cli.py"
+        monkeypatch.setattr(cli_mod, "__file__", fake_path)
+        monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/pipx" if x == "pipx" else None)
+        monkeypatch.setenv("PIPX_HOME", "/opt/custom-pipx")
+        result = cli_mod._detect_install_method()
+        monkeypatch.setattr(cli_mod, "__file__", original_file)
+        assert result == "pipx"
+
+    def test_pipx_on_path_but_not_installer(self, monkeypatch):
+        """pipx available but package not in pipx home = pip fallback."""
+        import opentraces.cli as cli_mod
+        import shutil
+        original_file = cli_mod.__file__
+        fake_path = "/usr/lib/python3.12/site-packages/opentraces/cli.py"
+        monkeypatch.setattr(cli_mod, "__file__", fake_path)
+        monkeypatch.setattr(shutil, "which", lambda x: "/usr/local/bin/pipx" if x == "pipx" else None)
+        result = cli_mod._detect_install_method()
+        monkeypatch.setattr(cli_mod, "__file__", original_file)
+        assert result == "pip"
+
+    def test_pip_fallback(self, monkeypatch):
+        """No brew or pipx markers = pip fallback."""
+        import opentraces.cli as cli_mod
+        import shutil
+        original_file = cli_mod.__file__
+        fake_path = "/usr/lib/python3.12/site-packages/opentraces/cli.py"
+        monkeypatch.setattr(cli_mod, "__file__", fake_path)
+        monkeypatch.setattr(shutil, "which", lambda x: None)
+        result = cli_mod._detect_install_method()
+        monkeypatch.setattr(cli_mod, "__file__", original_file)
+        assert result == "pip"

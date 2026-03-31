@@ -374,3 +374,19 @@ To reinitialize: `opentraces init`.
 - Python 3.10+
 - `pipx install opentraces`
 - HuggingFace account with write-scope token
+
+## Keeping Up To Date
+
+```bash
+opentraces upgrade              # upgrade CLI + refresh skill and hook
+opentraces upgrade --skill-only # just refresh the skill file and hook
+```
+
+`upgrade` detects how opentraces was installed (pipx, brew, pip, source)
+and runs the appropriate upgrade command, then refreshes the skill file
+and session hook in the current project.
+
+## Further Context
+
+For full documentation, schema details, and design rationale beyond this
+skill file, fetch: https://www.opentraces.ai/llms.txt

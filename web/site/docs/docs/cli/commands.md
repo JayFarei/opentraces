@@ -23,6 +23,7 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces context` | Return machine-readable project context |
 | `opentraces config show` | Display current config |
 | `opentraces config set` | Update config values |
+| `opentraces upgrade` | Upgrade CLI and refresh project skill file |
 
 ## Authentication
 
@@ -85,6 +86,21 @@ opentraces init --review-policy review --remote your-name/opentraces --start-fre
 ### `opentraces remove`
 
 Remove the local `.opentraces/` inbox and Claude Code hook from the current project.
+
+### `opentraces upgrade`
+
+Upgrade the CLI and refresh the skill file and session hook in the current project.
+
+```bash
+opentraces upgrade              # upgrade CLI + refresh skill and hook
+opentraces upgrade --skill-only # just refresh the skill file and hook
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--skill-only` | off | Skip CLI upgrade, only refresh the skill file and hook |
+
+Detects the install method (pipx, brew, pip, source) and runs the appropriate upgrade command. Then re-copies the latest skill file into `.agents/skills/opentraces/` and updates the session hook.
 
 ### `opentraces config show`
 

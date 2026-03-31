@@ -45,7 +45,7 @@ COMMAND_SECTIONS = [
     ("Getting Started", ["login", "init", "status"]),
     ("Review & Publish", ["session", "commit", "push", "log"]),
     ("Inspect", ["stats", "web", "tui"]),
-    ("Settings", ["auth", "config", "remote", "whoami", "logout", "remove"]),
+    ("Settings", ["auth", "config", "remote", "whoami", "logout", "remove", "upgrade"]),
 ]
 
 
@@ -1074,6 +1074,127 @@ def remove() -> None:
     })
 
 
+def _detect_install_method() -> str:
+    """Detect how opentraces was installed: pipx, brew, editable, or pip."""
+    import shutil
+
+    pkg_path = Path(__file__).resolve()
+    pkg_str = str(pkg_path)
+
+    # Editable / source install: not in site-packages
+    if "site-packages" not in pkg_str:
+        return "source"
+
+    # Check if installed via brew (macOS Cellar, homebrew, or Linux linuxbrew)
+    if "/Cellar/" in pkg_str or "/homebrew/" in pkg_str.lower() or "/linuxbrew/" in pkg_str.lower():
+        return "brew"
+
+    # Check if pipx manages this package
+    if shutil.which("pipx"):
+        pipx_home = os.environ.get("PIPX_HOME", str(Path.home() / ".local" / "pipx"))
+        if pipx_home in pkg_str:
+            return "pipx"
+
+    # Default: regular pip
+    return "pip"
+
+
+def _run_upgrade_subprocess(cmd: list[str], method: str, timeout: int = 120) -> bool:
+    """Run an upgrade subprocess with error handling. Returns True on success."""
+    import subprocess
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        human_echo(f"{method} binary not found on PATH.")
+        emit_json(error_response("UPGRADE_FAILED", "upgrade", f"{method} not found"))
+        sys.exit(4)
+    except subprocess.TimeoutExpired:
+        human_echo(f"{method} upgrade timed out after {timeout}s.")
+        emit_json(error_response("UPGRADE_FAILED", "upgrade", f"{method} timed out"))
+        sys.exit(4)
+
+    if result.returncode == 0:
+        output = result.stdout.strip()
+        human_echo(output if output else "CLI upgraded.")
+        return True
+
+    combined = (result.stderr + result.stdout).lower()
+    # "already at latest" is not an error
+    if "already" in combined and ("latest" in combined or "installed" in combined or "up-to-date" in combined):
+        human_echo("Already on the latest version.")
+        return True
+
+    human_echo(f"{method} upgrade failed: {result.stderr.strip()}")
+    emit_json(error_response("UPGRADE_FAILED", "upgrade", result.stderr.strip()))
+    sys.exit(4)
+
+
+@main.command()
+@click.option("--skill-only", is_flag=True, default=False, help="Only update the skill file and hook, skip CLI upgrade")
+def upgrade(skill_only: bool) -> None:
+    """Upgrade opentraces CLI and refresh the project skill file."""
+    current_version = __version__
+
+    if not skill_only:
+        method = _detect_install_method()
+        human_echo(f"Current version: {current_version}")
+        human_echo(f"Install method:  {method}")
+
+        if method == "source":
+            human_echo("Source install detected. Pull the latest and run: pip install -e .")
+            human_echo("Skipping CLI upgrade, updating skill and hook only.")
+        elif method == "brew":
+            human_echo("Upgrading via brew...")
+            _run_upgrade_subprocess(["brew", "upgrade", "opentraces"], "brew")
+        elif method == "pipx":
+            human_echo("Upgrading via pipx...")
+            _run_upgrade_subprocess(["pipx", "upgrade", "opentraces"], "pipx")
+        else:
+            human_echo("Upgrading via pip...")
+            _run_upgrade_subprocess(
+                [sys.executable, "-m", "pip", "install", "--upgrade", "opentraces"], "pip"
+            )
+
+    # Refresh skill and hook in current project
+    project_dir = Path.cwd()
+    ot_dir = project_dir / ".opentraces"
+
+    if not ot_dir.exists():
+        if skill_only:
+            human_echo("Not an opentraces project. Run 'opentraces init' first.")
+            sys.exit(3)
+        human_echo("No project found in current directory. Skill refresh skipped.")
+        emit_json({
+            "status": "ok",
+            "cli_upgraded": not skill_only,
+            "skill_refreshed": False,
+            "next_steps": ["Run 'opentraces init' in your project to set up"],
+            "next_command": "opentraces init",
+        })
+        return
+
+    proj_config = load_project_config(project_dir)
+    agents = proj_config.get("agents") or ["claude-code"]
+
+    skill_refreshed = _install_skill(project_dir, agents)
+    if not skill_refreshed:
+        human_echo("Warning: could not find skill source to install.")
+
+    hook_refreshed = _install_capture_hook(project_dir, agents) if not proj_config.get("no_hook") else False
+
+    human_echo("Project updated." if (skill_refreshed or hook_refreshed) else "Project skill and hook unchanged.")
+
+    emit_json({
+        "status": "ok",
+        "cli_upgraded": not skill_only,
+        "skill_refreshed": skill_refreshed,
+        "hook_refreshed": hook_refreshed,
+        "next_steps": ["Run 'opentraces context' to check project state"],
+        "next_command": "opentraces context",
+    })
+
+
 def _install_capture_hook(project_dir: Path, agents: list[str]) -> bool:
     """Install supported agent hooks for auto-parsing."""
     if "claude-code" not in agents:
@@ -1105,16 +1226,16 @@ def _install_capture_hook(project_dir: Path, agents: list[str]) -> bool:
         for group in session_end:
             for h in group.get("hooks", []):
                 if "opentraces" in h.get("command", ""):
-                    click.echo("  Hook already installed")
+                    human_echo("  Hook already installed")
                     return True
 
         # Add the hook
         session_end.append({"hooks": [hook_entry]})
         settings_path.write_text(json.dumps(settings, indent=2) + "\n")
-        click.echo("  Installed Claude Code SessionEnd hook")
+        human_echo("  Installed Claude Code SessionEnd hook")
         return True
     except Exception as e:
-        click.echo(f"  Could not install hook: {e}")
+        human_echo(f"  Could not install hook: {e}")
         click.echo(f"  Add manually to .claude/settings.json")
         return False
 
@@ -1227,12 +1348,12 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
             if symlink.exists() or symlink.is_symlink():
                 symlink.unlink()
             symlink.symlink_to(os.path.relpath(str(target), str(symlink.parent)))
-            click.echo(f"  Linked skill: {agent_skills_path}/opentraces/SKILL.md")
+            human_echo(f"  Linked skill: {agent_skills_path}/opentraces/SKILL.md")
 
-        click.echo(f"  Installed skill: .agents/skills/opentraces/SKILL.md")
+        human_echo(f"  Installed skill: .agents/skills/opentraces/SKILL.md")
         return True
     except Exception as e:
-        click.echo(f"  Could not install skill: {e}")
+        human_echo(f"  Could not install skill: {e}")
         return False
 
 
