@@ -43,9 +43,11 @@ _json_mode = False
 
 COMMAND_SECTIONS = [
     ("Getting Started", ["login", "init", "status"]),
+    ("Import", ["import-hf"]),
     ("Review & Publish", ["session", "commit", "push", "log"]),
     ("Inspect", ["stats", "web", "tui"]),
     ("Settings", ["auth", "config", "remote", "whoami", "logout", "remove", "upgrade"]),
+    ("Integrations", ["hooks"]),
 ]
 
 
@@ -2286,6 +2288,244 @@ def parse(auto: bool, limit: int) -> None:
     })
 
 
+@main.command("import-hf")
+@click.argument("dataset_id")
+@click.option("--parser", "parser_name", required=True, help="Format parser name (e.g. hermes)")
+@click.option("--subset", default=None, help="Dataset subset/config name")
+@click.option("--split", default="train", help="Dataset split")
+@click.option("--limit", type=int, default=0, help="Max rows to import (0=all)")
+@click.option("--auto", is_flag=True, help="Auto-commit imported traces (skip review)")
+@click.option("--dry-run", is_flag=True, help="Parse and report without writing to staging")
+def import_hf(
+    dataset_id: str,
+    parser_name: str,
+    subset: str | None,
+    split: str,
+    limit: int,
+    auto: bool,
+    dry_run: bool,
+) -> None:
+    """Import traces from a HuggingFace dataset."""
+    from .config import get_project_staging_dir, get_project_state_path
+    from .parsers import get_importers
+    from .pipeline import process_imported_trace
+    from .state import StateManager, TraceStatus
+
+    # 1. Project guard
+    project_dir = Path.cwd()
+    ot_dir = project_dir / ".opentraces"
+    if not ot_dir.exists():
+        human_echo("Not an opentraces project. Run 'opentraces init' first.")
+        emit_json(error_response(
+            "NOT_INITIALIZED", "setup", "Not an opentraces project",
+            hint="Run 'opentraces init' first",
+        ))
+        sys.exit(3)
+
+    # 2. Resolve parser
+    importers = get_importers()
+    if parser_name not in importers:
+        available = ", ".join(sorted(importers.keys())) or "(none)"
+        human_echo(f"Unknown parser: {parser_name}. Available: {available}")
+        emit_json(error_response(
+            "UNKNOWN_PARSER", "config",
+            f"Unknown parser: {parser_name}",
+            hint=f"Available parsers: {available}",
+        ))
+        sys.exit(2)
+    parser = importers[parser_name]()
+
+    # 3. Import datasets library
+    try:
+        import datasets as ds_lib
+        from huggingface_hub import HfApi
+    except ImportError:
+        human_echo("Missing dependencies. Run: pip install 'opentraces[import]'")
+        emit_json(error_response(
+            "MISSING_DEPS", "setup",
+            "datasets library not installed",
+            hint="pip install 'opentraces[import]'",
+        ))
+        sys.exit(2)
+
+    cfg = load_config()
+
+    # 4. Fetch dataset revision SHA for provenance
+    human_echo(f"Fetching dataset info for {dataset_id}...")
+    try:
+        api = HfApi()
+        info = api.dataset_info(dataset_id)
+        revision = info.sha or "unknown"
+    except Exception as e:
+        human_echo(f"Failed to fetch dataset info: {e}")
+        emit_json(error_response(
+            "HF_API_ERROR", "network",
+            f"Failed to fetch dataset info: {e}",
+            hint="Check the dataset ID and your network connection",
+            retryable=True,
+        ))
+        sys.exit(1)
+
+    # 5. Load dataset (try datasets library first, fall back to raw JSONL download)
+    dataset = None
+    human_echo(f"Loading dataset {dataset_id} (subset={subset}, split={split})...")
+    try:
+        dataset = ds_lib.load_dataset(dataset_id, subset, split=split)
+    except Exception as ds_err:
+        human_echo(f"  datasets library failed ({type(ds_err).__name__}), trying raw JSONL download...")
+        # Fall back to direct file download for datasets with heterogeneous schemas
+        try:
+            from huggingface_hub import hf_hub_download
+            # Guess the file path from subset name
+            file_candidates = [
+                f"data/{subset}.jsonl" if subset else "data/train.jsonl",
+                f"{subset}.jsonl" if subset else "train.jsonl",
+                f"data/{split}.jsonl",
+            ]
+            jsonl_path = None
+            for candidate in file_candidates:
+                try:
+                    jsonl_path = hf_hub_download(dataset_id, candidate, repo_type="dataset")
+                    break
+                except Exception:
+                    continue
+            if jsonl_path is None:
+                raise RuntimeError(f"Could not find JSONL file for subset={subset}")
+            # Load as list of dicts
+            rows = []
+            with open(jsonl_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        rows.append(json.loads(line))
+            dataset = rows
+            human_echo(f"  Loaded {len(rows)} rows from raw JSONL")
+        except Exception as fallback_err:
+            human_echo(f"Failed to load dataset: {ds_err} (fallback: {fallback_err})")
+            emit_json(error_response(
+                "DATASET_LOAD_ERROR", "network",
+                f"Failed to load dataset: {ds_err}",
+                hint="Check dataset ID, subset, and split names",
+                retryable=True,
+            ))
+            sys.exit(1)
+
+    # 6. Build source_info for provenance
+    source_info = {
+        "dataset_id": dataset_id,
+        "revision": revision,
+        "subset": subset or "default",
+        "split": split,
+    }
+
+    # 7. Setup staging
+    staging_dir = get_project_staging_dir(project_dir)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    state_path = get_project_state_path(project_dir)
+    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
+
+    # 8. Process rows
+    parsed_count = 0
+    skipped_count = 0
+    error_count = 0
+    total_redactions = 0
+    total_rows = len(dataset)
+    rows_to_process = min(total_rows, limit) if limit > 0 else total_rows
+
+    human_echo(f"Processing {rows_to_process} of {total_rows} rows...")
+
+    for i, row in enumerate(dataset):
+        if limit > 0 and parsed_count >= limit:
+            break
+
+        # Parse row
+        try:
+            record = parser.map_record(row, i, source_info)
+        except Exception as e:
+            error_count += 1
+            logger.warning("Parse error at row %d: %s", i, e)
+            continue
+
+        if record is None:
+            skipped_count += 1
+            continue
+
+        # Abort if failure rate > 10% (after 10+ rows processed)
+        total_attempted = parsed_count + skipped_count + error_count
+        if total_attempted >= 10 and error_count / total_attempted > 0.10:
+            human_echo(
+                f"Aborting: error rate {error_count}/{total_attempted} "
+                f"({error_count / total_attempted:.0%}) exceeds 10% threshold"
+            )
+            emit_json(error_response(
+                "HIGH_ERROR_RATE", "data",
+                f"Error rate {error_count}/{total_attempted} exceeds 10%",
+                hint="Check that the dataset matches the parser format",
+            ))
+            sys.exit(1)
+
+        # Enrich + security scan
+        try:
+            result = process_imported_trace(record, cfg)
+        except Exception as e:
+            error_count += 1
+            logger.warning("Pipeline error at row %d: %s", i, e)
+            continue
+
+        total_redactions += result.redaction_count
+
+        if not dry_run:
+            # Write staging file
+            staging_file = staging_dir / f"{result.record.trace_id}.jsonl"
+            staging_file.write_text(result.record.to_jsonl_line() + "\n")
+
+            # FIX-6: --auto uses COMMITTED (matching _capture_sessions_into_project)
+            if auto and not result.needs_review:
+                state.set_trace_status(
+                    result.record.trace_id,
+                    TraceStatus.COMMITTED,
+                    session_id=result.record.session_id,
+                    file_path=str(staging_file),
+                )
+                task_desc = record.task.description or record.session_id
+                state.create_commit_group(
+                    [result.record.trace_id],
+                    task_desc[:80] if task_desc else result.record.trace_id[:12],
+                )
+            else:
+                state.set_trace_status(
+                    result.record.trace_id,
+                    TraceStatus.STAGED,
+                    session_id=result.record.session_id,
+                    file_path=str(staging_file),
+                )
+
+        parsed_count += 1
+
+    # 9. Summary
+    mode = "dry-run" if dry_run else ("auto-committed" if auto else "staged")
+    human_echo(
+        f"\nDone: {parsed_count} {mode}, {skipped_count} skipped, "
+        f"{error_count} errors, {total_redactions} redactions"
+    )
+    emit_json({
+        "status": "ok",
+        "dataset": dataset_id,
+        "parsed": parsed_count,
+        "skipped": skipped_count,
+        "errors": error_count,
+        "redactions": total_redactions,
+        "dry_run": dry_run,
+        "next_steps": (
+            ["Review with 'opentraces status'"]
+            if not auto else ["Push with 'opentraces push'"]
+        ) if not dry_run else ["Re-run without --dry-run to stage traces"],
+        "next_command": (
+            "opentraces status" if not auto else "opentraces push"
+        ) if not dry_run else f"opentraces import-hf {dataset_id} --parser {parser_name}",
+    })
+
+
 @main.command()
 @click.option("--port", type=int, default=5050, help="Port for the local web inbox")
 @click.option("--no-open", is_flag=True, help="Do not open a browser automatically")
@@ -2852,3 +3092,137 @@ def introspect() -> None:
         },
     }
     click.echo(json.dumps(schema, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# hooks command group
+# ---------------------------------------------------------------------------
+
+@main.group()
+def hooks() -> None:
+    """Manage Claude Code hooks for richer session capture."""
+
+
+@hooks.command("install")
+@click.option(
+    "--hooks-dir",
+    default=None,
+    help="Target directory for hook scripts (default: ~/.claude/hooks/)",
+)
+@click.option(
+    "--settings-file",
+    default=None,
+    help="Claude Code settings file to update (default: ~/.claude/settings.json)",
+)
+@click.option("--dry-run", is_flag=True, help="Print what would be done without making changes.")
+def hooks_install(hooks_dir: str | None, settings_file: str | None, dry_run: bool) -> None:
+    """Install opentraces hooks into ~/.claude/hooks/ and register them in settings.json.
+
+    The Stop hook appends a git-state snapshot to each session transcript.
+    The PostCompact hook records explicit compaction events.
+    Both are picked up automatically by the opentraces parser.
+    """
+    import shlex
+    import stat
+
+    # Resolve paths
+    claude_dir = Path.home() / ".claude"
+    target_hooks_dir = Path(hooks_dir) if hooks_dir else claude_dir / "hooks"
+    target_settings = Path(settings_file) if settings_file else claude_dir / "settings.json"
+
+    # Source hook scripts are shipped with the package
+    src_hooks_dir = Path(__file__).parent / "hooks"
+    hook_scripts = {
+        "Stop": src_hooks_dir / "on_stop.py",
+        "PostCompact": src_hooks_dir / "on_compact.py",
+    }
+
+    # Validate source scripts exist before touching anything
+    for event, script_path in hook_scripts.items():
+        if not script_path.exists():
+            emit_json(error_response("MISSING_HOOK_SCRIPT", "install",
+                                     f"Hook script not found: {script_path}"))
+            sys.exit(5)
+
+    if dry_run:
+        plan = []
+        for event, script_path in hook_scripts.items():
+            dest = target_hooks_dir / f"opentraces_{script_path.name}"
+            plan.append({"event": event, "source": str(script_path), "dest": str(dest)})
+        human_echo("[dry-run] Would install hooks:")
+        for p in plan:
+            human_echo(f"  {p['event']}: {p['source']} -> {p['dest']}")
+        human_echo(f"[dry-run] Would update: {target_settings}")
+        emit_json({
+            "status": "ok",
+            "dry_run": True,
+            "plan": plan,
+            "settings_file": str(target_settings),
+        })
+        return
+
+    # Refuse to clobber an existing settings.json that we cannot parse -
+    # silently replacing it with {} would destroy unrelated Claude config.
+    settings: dict = {}
+    if target_settings.exists():
+        try:
+            raw = target_settings.read_text()
+            settings = json.loads(raw)
+            if not isinstance(settings, dict):
+                raise ValueError("settings.json root is not a JSON object")
+        except (json.JSONDecodeError, ValueError) as e:
+            emit_json(error_response(
+                "CORRUPT_SETTINGS", "install",
+                f"Cannot parse {target_settings}: {e}. "
+                "Fix or remove the file before running hooks install.",
+            ))
+            sys.exit(5)
+        except OSError as e:
+            emit_json(error_response("SETTINGS_READ_ERROR", "install",
+                                     f"Cannot read {target_settings}: {e}"))
+            sys.exit(5)
+
+    # Create hooks directory
+    target_hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    installed: dict[str, str] = {}
+    for event, script_path in hook_scripts.items():
+        dest = target_hooks_dir / f"opentraces_{script_path.name}"
+        dest.write_text(script_path.read_text())
+        current_mode = dest.stat().st_mode
+        dest.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        installed[event] = str(dest)
+        human_echo(f"Installed: {dest}")
+
+    # Merge hook registrations - path-safe quoting, append only if not already present
+    hooks_cfg = settings.setdefault("hooks", {})
+    added: list[str] = []
+    for event, dest_path in installed.items():
+        command = f"python3 {shlex.quote(dest_path)}"
+        event_hooks = hooks_cfg.setdefault(event, [])
+        already_registered = any(
+            h.get("command") == command
+            for h in event_hooks
+            if isinstance(h, dict)
+        )
+        if not already_registered:
+            event_hooks.append({"type": "command", "command": command})
+            added.append(event)
+
+    target_settings.write_text(json.dumps(settings, indent=2))
+
+    if added:
+        human_echo(f"Registered hooks in {target_settings}: {', '.join(added)}")
+    else:
+        human_echo(f"Hooks already registered in {target_settings}, no changes needed.")
+
+    emit_json({
+        "status": "ok",
+        "installed": installed,
+        "settings_file": str(target_settings),
+        "hooks_added": added,
+        "next_steps": [
+            "Hooks are now active for all future Claude Code sessions.",
+            "Re-run 'opentraces push' after sessions to include enriched data.",
+        ],
+    })

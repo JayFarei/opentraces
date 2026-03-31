@@ -122,6 +122,28 @@ class ClaudeCodeParser:
             if step.parent_step is not None and step.parent_step in old_to_new:
                 step.parent_step = old_to_new[step.parent_step]
 
+        # Compute metrics then override estimated_cost_usd with actual when available
+        metrics = self._compute_metrics(steps)
+        if metadata.get("actual_cost_usd") is not None:
+            metrics.estimated_cost_usd = metadata["actual_cost_usd"]
+        if metadata.get("duration_ms") is not None and metrics.total_duration_s is None:
+            metrics.total_duration_s = metadata["duration_ms"] / 1000.0
+
+        # Build outcome from result message stop_reason when available
+        outcome = self._build_outcome(metadata)
+
+        # Carry session-level signals forward in the metadata catch-all dict
+        trace_metadata: dict[str, Any] = {"project": project_name}
+        for key in (
+            "slug", "stop_reason", "is_compacted", "num_turns",
+            "permission_denials", "model_usage", "permission_mode",
+            "mcp_servers", "hook_git_final", "compaction_events",
+            "post_turn_summaries", "session_errors",
+        ):
+            val = metadata.get(key)
+            if val is not None:
+                trace_metadata[key] = val
+
         # Build trace record
         record = TraceRecord(
             trace_id=str(uuid.uuid4()),
@@ -146,10 +168,10 @@ class ClaudeCodeParser:
             system_prompts=system_prompts,
             tool_definitions=metadata.get("tool_definitions", []),
             steps=steps,
-            outcome=Outcome(),  # Enriched later with git signals
-            metrics=self._compute_metrics(steps),
+            outcome=outcome,
+            metrics=metrics,
             security=SecurityMetadata(),
-            metadata={"project": project_name},
+            metadata=trace_metadata,
         )
 
         if not meets_quality_threshold(record):
@@ -205,17 +227,109 @@ class ClaudeCodeParser:
 
             line_type = line.get("type")
 
+            # Slug: human-readable session identifier on every TranscriptMessage
+            if "slug" in line and not metadata.get("slug"):
+                metadata["slug"] = line["slug"]
+
             # Extract version from any line that has it
             if "version" in line and not metadata.get("version"):
                 metadata["version"] = line["version"]
 
-            # Extract model from assistant message lines (most reliable source)
+            # ----------------------------------------------------------------
+            # type: 'system' subtypes (init, compact_boundary, post_turn_summary)
+            # ----------------------------------------------------------------
+            if line_type == "system":
+                subtype = line.get("subtype", "")
+
+                if subtype == "init":
+                    # Authoritative source for model, tools, and environment
+                    if not metadata.get("model") and line.get("model"):
+                        metadata["model"] = line["model"]
+                    if not metadata.get("version") and line.get("claude_code_version"):
+                        metadata["version"] = line["claude_code_version"]
+                    if not metadata.get("cwd") and line.get("cwd"):
+                        metadata["cwd"] = line["cwd"]
+                    if "mcp_servers" in line:
+                        servers = line["mcp_servers"] or []
+                        metadata["mcp_servers"] = [
+                            s.get("name", str(s)) if isinstance(s, dict) else str(s)
+                            for s in servers
+                        ]
+                    if not metadata.get("tool_definitions") and "tools" in line:
+                        metadata["tool_definitions"] = [
+                            {"name": t.get("name"), "description": t.get("description", "")}
+                            for t in (line["tools"] or [])
+                            if isinstance(t, dict)
+                        ]
+                    if "permissionMode" in line:
+                        metadata["permission_mode"] = line["permissionMode"]
+
+                elif subtype == "compact_boundary":
+                    metadata["is_compacted"] = True
+                    compact_meta = line.get("compact_metadata") or {}
+                    metadata.setdefault("compaction_events", []).append({
+                        "trigger": compact_meta.get("trigger") if isinstance(compact_meta, dict) else None,
+                        "pre_tokens": line.get("pre_tokens"),
+                    })
+
+                elif subtype == "post_turn_summary":
+                    metadata.setdefault("post_turn_summaries", []).append({
+                        "status_category": line.get("status_category"),
+                        "is_noteworthy": line.get("is_noteworthy"),
+                        "title": line.get("title"),
+                    })
+
+            # ----------------------------------------------------------------
+            # type: 'result' (SDKResultMessage) - actual session outcome
+            # ----------------------------------------------------------------
+            if line_type == "result":
+                subtype = line.get("subtype", "")
+                if subtype == "success":
+                    if "total_cost_usd" in line:
+                        metadata["actual_cost_usd"] = line["total_cost_usd"]
+                    if "stop_reason" in line:
+                        metadata["stop_reason"] = line["stop_reason"]
+                    if "num_turns" in line:
+                        metadata["num_turns"] = line["num_turns"]
+                    if "duration_ms" in line and not metadata.get("duration_ms"):
+                        metadata["duration_ms"] = line["duration_ms"]
+                    if "model_usage" in line:
+                        metadata["model_usage"] = line["model_usage"]
+                    if "permission_denials" in line:
+                        metadata["permission_denials"] = line["permission_denials"]
+                elif subtype.startswith("error"):
+                    # error_during_execution, error_max_turns, error_max_budget_usd
+                    metadata["stop_reason"] = subtype
+                    if "errors" in line:
+                        metadata["session_errors"] = line["errors"]
+
+            # ----------------------------------------------------------------
+            # type: 'opentraces_hook' - written by our own hook scripts
+            # ----------------------------------------------------------------
+            if line_type == "opentraces_hook":
+                event = line.get("event")
+                data = line.get("data") or {}
+                if event == "Stop":
+                    git = data.get("git") or {}
+                    if git:
+                        metadata["hook_git_final"] = git
+                    if not metadata.get("permission_mode") and data.get("permission_mode"):
+                        metadata["permission_mode"] = data["permission_mode"]
+                elif event == "PostCompact":
+                    metadata["is_compacted"] = True
+                    metadata.setdefault("compaction_events", []).append({
+                        "trigger": "hook",
+                        "messages_removed": data.get("messages_removed"),
+                        "messages_kept": data.get("messages_kept"),
+                    })
+
+            # Extract model from assistant message lines (fallback if init missing)
             if line_type == "assistant" and not metadata.get("model"):
                 msg = line.get("message", {})
                 if isinstance(msg, dict) and msg.get("model"):
                     metadata["model"] = msg["model"]
 
-            # Extract model and tools from queue-operation content (fallback)
+            # Extract model and tools from queue-operation content (last-resort fallback)
             if line_type == "queue-operation" and "content" in line:
                 content = line["content"]
                 if isinstance(content, str):
@@ -224,7 +338,7 @@ class ClaudeCodeParser:
                         if isinstance(inner, dict):
                             if "model" in inner and not metadata.get("model"):
                                 metadata["model"] = inner["model"]
-                            if "tools" in inner:
+                            if "tools" in inner and not metadata.get("tool_definitions"):
                                 metadata["tool_definitions"] = [
                                     {"name": t.get("name"), "description": t.get("description", "")}
                                     for t in inner["tools"]
@@ -377,23 +491,13 @@ class ClaudeCodeParser:
                     if result:
                         obs_content = result.get("content", "")
                         is_error = result.get("is_error", False)
-                        obs = Observation(
-                            source_call_id=tool_call_id,
-                            content=str(obs_content)[:10000] if obs_content else None,
-                            output_summary=self._summarize_output(obs_content),
-                            error="tool_error" if is_error else None,
-                        )
-                        observations.append(obs)
 
-                        # Extract snippets from tool results
-                        extracted = self._extract_snippets(
-                            tool_name, tool_input, result, step_index + 1
-                        )
-                        snippets.extend(extracted)
-
-                        # Compute duration from toolUseResult
+                        # Determine observation error - prefer is_error flag,
+                        # then check Bash exit code and interrupt signal
+                        obs_error: str | None = "tool_error" if is_error else None
                         tur = result.get("tool_use_result")
                         if isinstance(tur, dict):
+                            # Duration
                             if "durationMs" in tur:
                                 val = tur["durationMs"]
                                 tc.duration_ms = int(val) if isinstance(val, (int, float)) else None
@@ -403,6 +507,28 @@ class ClaudeCodeParser:
                             elif "duration" in tur:
                                 val = tur["duration"]
                                 tc.duration_ms = int(val * 1000) if isinstance(val, (int, float)) else None
+
+                            # Bash exit code and interrupt signal
+                            if not is_error:
+                                exit_code = tur.get("exitCode")
+                                if exit_code is not None and exit_code != 0:
+                                    obs_error = f"exit_code:{exit_code}"
+                                elif tur.get("interrupted"):
+                                    obs_error = "interrupted"
+
+                        obs = Observation(
+                            source_call_id=tool_call_id,
+                            content=str(obs_content)[:10000] if obs_content else None,
+                            output_summary=self._summarize_output(obs_content),
+                            error=obs_error,
+                        )
+                        observations.append(obs)
+
+                        # Extract snippets from tool results
+                        extracted = self._extract_snippets(
+                            tool_name, tool_input, result, step_index + 1
+                        )
+                        snippets.extend(extracted)
                     else:
                         observations.append(Observation(
                             source_call_id=tool_call_id,
@@ -433,7 +559,9 @@ class ClaudeCodeParser:
 
             # Determine call_type
             call_type = "subagent" if depth > 0 else "main"
-            is_warmup = (
+            # isMeta is the authoritative warmup flag from Claude Code;
+            # fall back to the heuristic when it's absent (older sessions)
+            is_warmup = line.get("isMeta") is True or (
                 token_usage.output_tokens <= 10
                 and not step_content.strip()
                 and not tool_calls
@@ -691,11 +819,19 @@ class ClaudeCodeParser:
     def _infer_vcs(metadata: dict[str, Any]) -> VCS:
         """Infer VCS info from session metadata."""
         git_branch = metadata.get("git_branch")
+        # Prefer the SHA captured by the Stop hook at session end - it is the
+        # authoritative HEAD state. VCS.base_commit already exists in the schema.
+        hook_git = metadata.get("hook_git_final") or {}
+        commit_sha: str | None = hook_git.get("sha") or None
+
         if git_branch and git_branch != "HEAD":
-            return VCS(type="git", branch=git_branch)
+            return VCS(type="git", branch=git_branch, base_commit=commit_sha)
         if git_branch == "HEAD":
-            # HEAD means detached head or git is present but branch unknown
-            return VCS(type="git")
+            # Detached head or git is present but branch unknown
+            return VCS(type="git", base_commit=commit_sha)
+        if commit_sha:
+            # Stop hook captured git state even without a branch in transcript
+            return VCS(type="git", base_commit=commit_sha)
         return VCS(type="none")
 
     def _detect_language(self, file_path: str) -> str | None:
@@ -721,6 +857,48 @@ class ClaudeCodeParser:
         if len(text) <= max_len:
             return text
         return text[:max_len] + "..."
+
+    def _build_outcome(self, metadata: dict[str, Any]) -> Outcome:
+        """Build Outcome from session metadata, using result message when available.
+
+        stop_reason is a *generation* stop condition, not a task-success signal.
+        end_turn means the model finished generating naturally - it says nothing
+        about whether the task was completed correctly. All mappings here are
+        therefore inferred, not derived. Derived confidence requires an external
+        signal (e.g. git commit, CI pass) applied by the enrichment pipeline.
+        """
+        stop_reason = metadata.get("stop_reason")
+        if stop_reason is None:
+            return Outcome()
+
+        # Model finished naturally - task outcome still unknown, but not a hard failure
+        if stop_reason == "end_turn":
+            return Outcome(
+                signal_source="result_message",
+                signal_confidence="inferred",
+                description=stop_reason,
+            )
+
+        # Hard failures: the session did not complete its work
+        if stop_reason in (
+            "error_during_execution",
+            "error_max_turns",
+            "error_max_budget_usd",
+            "error_max_structured_output_retries",
+        ):
+            return Outcome(
+                success=False,
+                signal_source="result_message",
+                signal_confidence="derived",
+                description=stop_reason,
+            )
+
+        # Other stop reasons (max_tokens, tool_use, etc.) - ambiguous
+        return Outcome(
+            signal_source="result_message",
+            signal_confidence="inferred",
+            description=stop_reason,
+        )
 
     def _compute_metrics(self, steps: list[Step]) -> Metrics:
         """Aggregate token usage across all steps."""

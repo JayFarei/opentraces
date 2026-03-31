@@ -797,3 +797,193 @@ class TestDetectInstallMethod:
         result = cli_mod._detect_install_method()
         monkeypatch.setattr(cli_mod, "__file__", original_file)
         assert result == "pip"
+
+
+# ---------------------------------------------------------------------------
+# hooks command group
+# ---------------------------------------------------------------------------
+
+class TestHooksCommands:
+    """Tests for opentraces hooks install."""
+
+    def test_hooks_help(self, runner):
+        result = runner.invoke(main, ["hooks", "--help"])
+        assert result.exit_code == 0
+        assert "install" in result.output
+
+    def test_hooks_install_help(self, runner):
+        result = runner.invoke(main, ["hooks", "install", "--help"])
+        assert result.exit_code == 0
+        assert "--dry-run" in result.output
+        assert "--hooks-dir" in result.output
+        assert "--settings-file" in result.output
+
+    def test_hooks_install_dry_run_writes_nothing(self, tmp_path, runner):
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        result = runner.invoke(main, [
+            "hooks", "install", "--dry-run",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        assert result.exit_code == 0
+        assert "dry-run" in result.output
+        assert not hooks_dir.exists()
+        assert not settings_file.exists()
+
+    def test_hooks_install_copies_scripts(self, tmp_path, runner):
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        result = runner.invoke(main, [
+            "hooks", "install",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        assert result.exit_code == 0
+        assert (hooks_dir / "opentraces_on_stop.py").exists()
+        assert (hooks_dir / "opentraces_on_compact.py").exists()
+
+    def test_hooks_install_creates_settings_with_hooks(self, tmp_path, runner):
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        result = runner.invoke(main, [
+            "hooks", "install",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        assert result.exit_code == 0
+        settings = json.loads(settings_file.read_text())
+        assert "Stop" in settings["hooks"]
+        assert "PostCompact" in settings["hooks"]
+        # Each event should have exactly one hook entry
+        assert len(settings["hooks"]["Stop"]) == 1
+        assert len(settings["hooks"]["PostCompact"]) == 1
+
+    def test_hooks_install_idempotent_no_duplicates(self, tmp_path, runner):
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        args = [
+            "hooks", "install",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ]
+        runner.invoke(main, args)
+        runner.invoke(main, args)  # second run
+
+        settings = json.loads(settings_file.read_text())
+        assert len(settings["hooks"]["Stop"]) == 1
+        assert len(settings["hooks"]["PostCompact"]) == 1
+
+    def test_hooks_install_merges_with_existing_hooks(self, tmp_path, runner):
+        """Existing hooks in settings.json are preserved."""
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        # Pre-populate settings with an unrelated hook
+        settings_file.write_text(json.dumps({
+            "hooks": {
+                "Stop": [{"type": "command", "command": "echo existing"}],
+            }
+        }))
+        result = runner.invoke(main, [
+            "hooks", "install",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        assert result.exit_code == 0
+        settings = json.loads(settings_file.read_text())
+        # Existing hook preserved
+        assert any(h["command"] == "echo existing" for h in settings["hooks"]["Stop"])
+        # Our hook also added
+        assert any("opentraces_on_stop" in h["command"] for h in settings["hooks"]["Stop"])
+
+    def test_hooks_install_scripts_are_executable(self, tmp_path, runner):
+        import stat as stat_mod
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        runner.invoke(main, [
+            "hooks", "install",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        stop_script = hooks_dir / "opentraces_on_stop.py"
+        mode = stop_script.stat().st_mode
+        assert mode & stat_mod.S_IXUSR, "Script should be user-executable"
+
+    def test_hooks_install_emits_json(self, tmp_path, runner):
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        result = runner.invoke(main, [
+            "--json", "hooks", "install",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        assert result.exit_code == 0
+        # Extract JSON after sentinel
+        from opentraces.cli import SENTINEL
+        if SENTINEL in result.output:
+            json_part = result.output.split(SENTINEL, 1)[1].strip()
+            data = json.loads(json_part)
+            assert data["status"] == "ok"
+            assert "installed" in data
+
+    def test_hooks_install_refuses_corrupt_settings(self, tmp_path, runner):
+        """Malformed settings.json must abort, not silently overwrite."""
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text("not valid json {{{")
+        result = runner.invoke(main, [
+            "hooks", "install",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        assert result.exit_code == 5
+        # Original file must be untouched
+        assert settings_file.read_text() == "not valid json {{{"
+
+    def test_hooks_install_refuses_non_object_settings(self, tmp_path, runner):
+        """settings.json root must be a JSON object, not an array or scalar."""
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text("[1, 2, 3]")
+        result = runner.invoke(main, [
+            "hooks", "install",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        assert result.exit_code == 5
+        assert settings_file.read_text() == "[1, 2, 3]"
+
+    def test_hooks_install_path_quoting_in_command(self, tmp_path, runner):
+        """Hook command registered in settings.json must shell-quote the path."""
+        import shlex
+        hooks_dir = tmp_path / "hooks with spaces"
+        settings_file = tmp_path / "settings.json"
+        runner.invoke(main, [
+            "hooks", "install",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        settings = json.loads(settings_file.read_text())
+        for entry in settings["hooks"]["Stop"]:
+            command = entry["command"]
+            # shlex.split must parse it back to exactly 2 tokens (python3 + path)
+            tokens = shlex.split(command)
+            assert len(tokens) == 2, f"Expected 2 tokens, got: {tokens}"
+
+    def test_hooks_install_dry_run_emits_json(self, tmp_path, runner):
+        """--dry-run should still emit machine-readable JSON."""
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        result = runner.invoke(main, [
+            "--json", "hooks", "install", "--dry-run",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        assert result.exit_code == 0
+        from opentraces.cli import SENTINEL
+        assert SENTINEL in result.output
+        json_part = result.output.split(SENTINEL, 1)[1].strip()
+        data = json.loads(json_part)
+        assert data["status"] == "ok"
+        assert data["dry_run"] is True
+        assert "plan" in data
