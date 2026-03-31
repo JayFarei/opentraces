@@ -2,7 +2,7 @@
 
 Open schema + CLI for agent trace capture, review, and upload to Hugging Face Hub.
 
-Every coding session with an AI agent produces action trajectories, tool-use sequences, and reasoning chains. These are the most valuable dataset nobody is collecting. opentraces captures them automatically, scans for secrets, and publishes structured JSONL datasets to HuggingFace Hub. Private by default. You control what leaves your machine.
+Every coding session with an AI agent produces action trajectories, tool-use sequences, and reasoning chains. These are the most valuable dataset nobody is collecting in the open. opentraces captures them automatically, scans for secrets, and publishes structured JSONL datasets to HuggingFace Hub. Private by default. You control what leaves your machine.
 
 ## What you get
 
