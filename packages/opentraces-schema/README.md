@@ -23,7 +23,7 @@ line = record.to_jsonl_line()
 
 ## Version
 
-The schema version (`0.1.0`) lives in `src/opentraces_schema/version.py` as the
+The schema version (`0.1.1`) lives in `src/opentraces_schema/version.py` as the
 single source of truth. See [VERSION-POLICY.md](VERSION-POLICY.md) for semver
 semantics and the bump checklist.
 
@@ -39,7 +39,7 @@ will have its own rationale file linked from the [CHANGELOG](CHANGELOG.md).
 ## Contributing
 
 Schema feedback, questions, and proposals are welcome via
-[GitHub Issues](https://github.com/opentraces/opentraces/issues). When suggesting
+[GitHub Issues](https://github.com/JayFarei/opentraces/issues). When suggesting
 a schema change, please include:
 
 - **What** field or model you would add, change, or remove

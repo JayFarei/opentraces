@@ -152,7 +152,6 @@ const v010: SchemaVersion = {
       id: "attribution", title: "Attribution",
       desc: "Code attribution (experimental).",
       fields: [
-        { name: "version", type: "string", required: false, description: "Tracks schema_version" },
         { name: "experimental", type: "boolean", required: false, description: "Always true in v0.1.0" },
         { name: "files", type: "AttributionFile[]", required: false, description: "Per-file line ranges" },
       ],

@@ -41,7 +41,6 @@ The `attribution` block records which files and line ranges were produced by the
 ```json
 {
   "attribution": {
-    "version": "0.1.0",
     "files": [
       {
         "path": "src/parser.ts",

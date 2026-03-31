@@ -72,11 +72,11 @@ Also: `mkdocs.yml` (nav structure must match file existence).
 
 | File | Key stale risks |
 |------|-----------------|
-| `README.md` | Dev install, "Tell Your Agent" prompt (all commands), quick start, project structure tree, **GitHub URL uses `opentraces/opentraces`** |
+| `README.md` | Dev install, "Tell Your Agent" prompt (all commands), quick start, project structure tree |
 | `CLAUDE.md` | Stack summary, dev setup, directory structure, key decisions |
 | `skill/SKILL.md` | **Critical for agents** — every command, flag, exit code, JSON shape, troubleshooting errors |
 | `web/site/public/llms.txt` | Full project reference for AI visitors — install methods, setup prompt, inline docs |
-| `packages/opentraces-schema/README.md` | Schema install, Python usage, **GitHub URL uses `opentraces/opentraces`** |
+| `packages/opentraces-schema/README.md` | Schema install, Python usage |
 | `packages/opentraces-schema/CHANGELOG.md` | Release history entries |
 | `packages/opentraces-schema/VERSION-POLICY.md` | Bump checklist, source of truth path |
 | `packages/opentraces-schema/FIELD-MAPPINGS.md` | ATIF/ADP/OTel mapping tables |
@@ -99,7 +99,7 @@ Also: `mkdocs.yml` (nav structure must match file existence).
 These should be flagged every time the skill runs until they're fixed:
 
 1. **ShareFrom.tsx** references `opentraces install-skill claude` and `opentraces auth --install-hook` — neither command exists
-2. **GitHub URL inconsistency** — README.md and schema README use `opentraces/opentraces`, everything else uses `JayFarei/opentraces`
+2. ~~**GitHub URL inconsistency**~~ **Fixed** — README.md and schema README now use `JayFarei/opentraces`
 3. **Parser interface inconsistency** — `supported-agents.md` shows `SessionParser`, `schema-changes.md` shows `BaseParser`
-4. **Schema version 0.1.0 hardcoded** in SchemaExplorer.tsx and several docs pages even after version bumps
+4. ~~**Schema version 0.1.0 hardcoded**~~ **Fixed** — SchemaExplorer.tsx uses dynamic `latestVersion` import, docs updated to 0.1.1, `Attribution.version` field removed from schema
 5. **ci-cd.md** uses `pip install opentraces` instead of `pipx install opentraces`
