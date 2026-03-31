@@ -58,8 +58,9 @@ def _c3_content_hash(record: TraceRecord, raw_data: dict | None) -> CheckResult:
 
 
 def _c4_agent_name(record: TraceRecord, raw_data: dict | None) -> CheckResult:
-    """S4: agent.name is 'claude-code'."""
-    passed = record.agent.name == "claude-code"
+    """S4: agent.name is a recognized agent identifier."""
+    name = record.agent.name or ""
+    passed = bool(name and name.strip())
     return CheckResult(
         passed=passed,
         score=1.0 if passed else 0.0,
@@ -140,7 +141,19 @@ def _c10_observations_linked(record: TraceRecord, raw_data: dict | None) -> Chec
 
 
 def _c11_call_type(record: TraceRecord, raw_data: dict | None) -> CheckResult:
-    """P6: call_type assigned to agent steps."""
+    """P6: call_type assigned to agent steps.
+
+    Q2: Skip for conversation-turn agents that don't have the
+    main/subagent/warmup taxonomy.
+    """
+    fidelity = record.metadata.get("step_fidelity")
+    if fidelity == "conversation_turn":
+        return CheckResult(
+            passed=False,
+            score=0.0,
+            evidence="N/A: conversation_turn fidelity has no call_type taxonomy",
+            skipped=True,
+        )
     agent_steps = [s for s in record.steps if s.role == "agent"]
     typed = sum(1 for s in agent_steps if s.call_type in ("main", "subagent", "warmup"))
     type_score = typed / max(len(agent_steps), 1)
@@ -180,7 +193,24 @@ def _c13_token_usage(record: TraceRecord, raw_data: dict | None) -> CheckResult:
 
 
 def _c14_snippets(record: TraceRecord, raw_data: dict | None) -> CheckResult:
-    """P9: snippets extracted (at least some)."""
+    """P9: snippets extracted (at least some).
+
+    Skip for runtime traces with no code-writing tool calls — browser/API
+    trajectories structurally produce no code snippets.
+    """
+    _write_tools = {"Write", "Edit", "write", "edit", "write_file", "patch"}
+    has_code_writing = any(
+        tc.tool_name in _write_tools
+        for step in record.steps
+        for tc in step.tool_calls
+    )
+    if record.execution_context == "runtime" and not has_code_writing:
+        return CheckResult(
+            passed=False,
+            score=0.0,
+            evidence="N/A: runtime trace with no code-writing tools",
+            skipped=True,
+        )
     total_snippets = sum(len(s.snippets) for s in record.steps)
     return CheckResult(
         passed=total_snippets > 0,
@@ -233,7 +263,17 @@ def _c18_metrics_total_steps(record: TraceRecord, raw_data: dict | None) -> Chec
 
 
 def _c19_cache_hit_rate(record: TraceRecord, raw_data: dict | None) -> CheckResult:
-    """E3: cache_hit_rate computed."""
+    """E3: cache_hit_rate computed.
+
+    Skip for runtime traces — per-step token data required to compute this
+    is not available from conversation-turn format sources.
+    """
+    if record.execution_context == "runtime":
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="N/A: runtime traces lack per-step token data for cache rate computation",
+            skipped=True,
+        )
     has_cache = record.metrics.cache_hit_rate is not None
     return CheckResult(
         passed=has_cache,
@@ -253,7 +293,16 @@ def _c20_estimated_cost(record: TraceRecord, raw_data: dict | None) -> CheckResu
 
 
 def _c21_duration(record: TraceRecord, raw_data: dict | None) -> CheckResult:
-    """E5: total_duration_s computed."""
+    """E5: total_duration_s computed.
+
+    Skip for runtime traces — no per-step timestamps to derive duration from.
+    """
+    if record.execution_context == "runtime":
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="N/A: runtime traces have no per-step timestamps for duration computation",
+            skipped=True,
+        )
     has_duration = record.metrics.total_duration_s is not None and record.metrics.total_duration_s > 0
     return CheckResult(
         passed=has_duration,
@@ -390,7 +439,7 @@ CONFORMANCE_PERSONA = PersonaDef(
         CheckDef("schema_version present", "schema", 1.0, _c1_schema_version),
         CheckDef("trace_id is UUID format", "schema", 1.0, _c2_trace_id_format),
         CheckDef("content_hash is SHA-256", "schema", 1.0, _c3_content_hash),
-        CheckDef("agent.name = claude-code", "schema", 1.0, _c4_agent_name),
+        CheckDef("agent.name present", "schema", 1.0, _c4_agent_name),
         CheckDef("timestamps present", "schema", 0.8, _c5_timestamps),
         # Parser
         CheckDef("step count >= 2", "parser", 1.0, _c6_step_count),

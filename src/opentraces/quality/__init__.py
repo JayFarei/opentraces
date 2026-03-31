@@ -38,6 +38,11 @@ from .gates import (
     PersonaThreshold,
     check_gate,
 )
+from .summary import (
+    PersonaScoreSummary,
+    QualitySummary,
+    build_summary,
+)
 
 __all__ = [
     "BatchAssessment",
@@ -50,12 +55,15 @@ __all__ = [
     "PRESERVATION_THRESHOLD",
     "PersonaDef",
     "PersonaScore",
+    "PersonaScoreSummary",
     "PersonaThreshold",
     "ProjectInfo",
     "RubricItem",
     "RubricReport",
+    "QualitySummary",
     "TraceAssessment",
     "assess_batch",
+    "build_summary",
     "assess_multi_project",
     "assess_trace",
     "audit_schema_completeness",

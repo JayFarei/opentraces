@@ -466,12 +466,12 @@ class TestRLPersona:
     def test_rl1_committed(self):
         record = _make_rich_trace()
         results = _run_persona(RL_PERSONA, record)
-        assert results["RL1: Committed explicitly set"].passed
+        assert results["RL1: Grounded outcome signal"].passed
 
     def test_rl1_not_committed(self):
         record = _make_no_commit_trace()
         results = _run_persona(RL_PERSONA, record)
-        assert not results["RL1: Committed explicitly set"].passed
+        assert not results["RL1: Grounded outcome signal"].passed
 
     def test_rl3_patch_when_committed(self):
         record = _make_rich_trace()

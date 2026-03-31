@@ -86,6 +86,7 @@ def _run_persona(
                 score=result.score,
                 evidence=result.evidence,
                 note=result.note,
+                skipped=result.skipped,
             ))
         except Exception as e:
             logger.warning(
@@ -102,21 +103,22 @@ def _run_persona(
                 note="Check raised an exception",
             ))
 
-    # Compute scores
-    total_weight = sum(i.weight for i in items)
+    # Compute scores — skipped items are excluded from the weighted average
+    active = [i for i in items if not i.skipped]
+    total_weight = sum(i.weight for i in active)
     if total_weight == 0:
         total_score = 0.0
     else:
         total_score = round(
-            sum(i.score * i.weight for i in items) / total_weight * 100, 1
+            sum(i.score * i.weight for i in active) / total_weight * 100, 1
         )
 
-    pass_count = sum(1 for i in items if i.passed)
-    pass_rate = round(pass_count / max(len(items), 1) * 100, 1)
+    pass_count = sum(1 for i in active if i.passed)
+    pass_rate = round(pass_count / max(len(active), 1) * 100, 1)
 
-    # Category scores
+    # Category scores (skipped excluded)
     categories: dict[str, list[RubricItem]] = {}
-    for item in items:
+    for item in active:
         categories.setdefault(item.category, []).append(item)
     category_scores = {
         cat: round(

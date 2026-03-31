@@ -17,7 +17,15 @@ def _a1_cache_hit_rate(record: TraceRecord, raw_data: dict | None) -> CheckResul
     """A1: cache_hit_rate computed and in [0.0, 1.0] (weight 1.0).
 
     'Architectural fingerprint' per Kobe Chen's research.
+    Skip for runtime traces: per-step token data required to compute this
+    is not available from conversation-turn format sources.
     """
+    if record.execution_context == "runtime":
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="N/A: runtime traces lack per-step token data for cache hit rate",
+            skipped=True,
+        )
     rate = record.metrics.cache_hit_rate
     if rate is not None and 0.0 <= rate <= 1.0:
         return CheckResult(
@@ -41,7 +49,16 @@ def _a2_estimated_cost(record: TraceRecord, raw_data: dict | None) -> CheckResul
 
 
 def _a3_total_duration(record: TraceRecord, raw_data: dict | None) -> CheckResult:
-    """A3: total_duration_s > 0 (weight 0.8)."""
+    """A3: total_duration_s > 0 (weight 0.8).
+
+    Skip for runtime traces: no per-step timestamps to derive duration from.
+    """
+    if record.execution_context == "runtime":
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="N/A: runtime traces have no per-step timestamps for duration",
+            skipped=True,
+        )
     dur = record.metrics.total_duration_s
     if dur is not None and dur > 0:
         return CheckResult(passed=True, score=1.0, evidence=f"total_duration_s={dur:.1f}")
@@ -52,7 +69,15 @@ def _a4_step_timestamps(record: TraceRecord, raw_data: dict | None) -> CheckResu
     """A4: Timestamps on >80% of steps (weight 0.7).
 
     Per-step timeline, traces.com only has trace-level timestamps.
+    Skip for conversation-turn traces: source provides a single session timestamp,
+    not per-API-call timestamps.
     """
+    if record.metadata.get("step_fidelity") == "conversation_turn":
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="N/A: conversation_turn source provides one session timestamp, not per-step",
+            skipped=True,
+        )
     if not record.steps:
         return CheckResult(passed=True, score=1.0, evidence="No steps")
 
@@ -70,7 +95,14 @@ def _a5_token_breakdown(record: TraceRecord, raw_data: dict | None) -> CheckResu
     """A5: Token breakdown per step populated on agent steps (weight 0.8).
 
     input + output populated on agent steps (cache_read may legitimately be 0).
+    Skip for conversation-turn traces: source provides session-level totals only.
     """
+    if record.metadata.get("step_fidelity") == "conversation_turn":
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="N/A: conversation_turn source provides session-level token totals only",
+            skipped=True,
+        )
     agent_steps = [s for s in record.steps if s.role == "agent"]
     if not agent_steps:
         return CheckResult(passed=True, score=1.0, evidence="No agent steps")
@@ -130,7 +162,14 @@ def _a8_warmup_distinction(record: TraceRecord, raw_data: dict | None) -> CheckR
     """A8: Warmup vs real step distinction via call_type (weight 0.4).
 
     Accurate step count analytics require distinguishing warmup from real steps.
+    Skip for conversation-turn traces: no warmup/subagent call_type taxonomy available.
     """
+    if record.metadata.get("step_fidelity") == "conversation_turn":
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="N/A: conversation_turn fidelity has no call_type warmup taxonomy",
+            skipped=True,
+        )
     if not record.steps:
         return CheckResult(passed=True, score=1.0, evidence="No steps")
 
