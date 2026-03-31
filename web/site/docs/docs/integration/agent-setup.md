@@ -6,16 +6,25 @@ opentraces is designed to be driven by agents as well as by humans.
 
 Most commands emit structured JSON with `next_steps` and `next_command`, so an agent can chain the workflow without parsing free-form text.
 
-## Claude Code Setup
+## Setup by Agent
 
-`opentraces init` installs the Claude Code hook and copies the bundled skill into `.agents/skills/opentraces/` (symlinked into the agent's skill directory). A typical agent-led setup looks like:
+`opentraces init` installs the session hook for your agent and copies the bundled skill into `.agents/skills/opentraces/`. Pass `--agent` to specify which harness to connect.
+
+### Claude Code
 
 ```bash
 opentraces login
 opentraces init --agent claude-code --review-policy review --start-fresh
 ```
 
-If the repo already has Claude Code session logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.
+If the repo already has existing session logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.
+
+### Hermes
+
+```bash
+opentraces login
+opentraces init --agent hermes --review-policy review --start-fresh
+```
 
 After setup, the current surfaces are:
 

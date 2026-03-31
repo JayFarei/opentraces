@@ -1,10 +1,10 @@
 # Parsing
 
-Parsing is the ingestion step that turns raw Claude Code session logs into staged `TraceRecord` JSONL files.
+Parsing is the ingestion step that turns raw agent session logs into staged `TraceRecord` JSONL files.
 
 ## What Runs Automatically
 
-When `opentraces init` installs the Claude Code hook, the hidden `_capture` command runs after each session ends. That capture path:
+When `opentraces init` installs the agent session hook, the hidden `_capture` command runs after each session ends. That capture path:
 
 1. Finds new session files under `~/.claude/projects/`
 2. Parses the raw session into a `TraceRecord`
@@ -14,15 +14,17 @@ When `opentraces init` installs the Claude Code hook, the hidden `_capture` comm
 
 ## Enrichment Pipeline
 
-The current pipeline does:
+Every parsed trace is enriched before staging:
 
-1. Git detection and commit signal extraction
-2. Attribution from Edit and Write tool calls
-3. Dependency extraction from manifests and install commands
-4. Metrics aggregation
-5. Tiered security scanning and redaction
-6. Tier 2 heuristic classification
-7. Path anonymization
+| Step | What it does | Example output |
+|------|-------------|----------------|
+| Git signals | Detects repo state, extracts commit info | `committed: true`, `commit_sha: "a3f9..."`, `branch: "main"` |
+| Attribution | Maps Edit and Write tool calls to file/line ranges | `auth.py L42-67` attributed to step 4 |
+| Dependencies | Extracts from manifests and install commands | `["flask", "pydantic"]` from `pyproject.toml` |
+| Metrics | Aggregates token counts, cost, cache rates | `cache_hit_rate: 0.91`, `estimated_cost_usd: 3.21` |
+| Security scan | Regex + entropy scan, tiered redaction | API key in Bash output replaced with `[REDACTED]` |
+| Classification | Tier 2 heuristic flagging for review | Internal hostname `*.corp` flagged for manual review |
+| Anonymization | Strips usernames and home paths | `/Users/alice/project/` becomes `/~/project/` |
 
 ## Review Policy Interaction
 

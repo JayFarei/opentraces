@@ -30,8 +30,10 @@ def _register_defaults() -> None:
     at package import time.
     """
     from .claude_code import ClaudeCodeParser
+    from .hermes import HermesParser
 
     PARSERS["claude-code"] = ClaudeCodeParser
+    IMPORTERS["hermes"] = HermesParser
 
 
 _registered = False

@@ -58,8 +58,8 @@ export default function ShareFrom() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {[
-                { name: "Claude Code Skill", cmd: "npx skills add jayfarei/opentraces" },
-                { name: "Session capture hook", cmd: "opentraces init --agent claude-code" },
+                { name: "Agent skill", cmd: "npx skills add jayfarei/opentraces" },
+                { name: "Session capture hook", cmd: "opentraces init" },
               ].map((item) => (
                 <div key={item.name} style={{ border: "1px solid var(--border)", padding: "10px 12px", background: "var(--surface)" }}>
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 4 }}>{item.name}</div>

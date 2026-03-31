@@ -38,7 +38,7 @@ function InitContent() {
       <span className="terminal-line"><span className="di">  [2] auto</span>    <span className="di">capture, sanitize, commit, and push automatically</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Created .opentraces/config.json</span></span>
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Installed Claude Code session hook</span></span>
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Installed agent session hook</span></span>
     </>
   );
 }

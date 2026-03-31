@@ -63,7 +63,33 @@ def _compute_stats(traces: list[TraceRecord]) -> dict:
     }
 
 
-def _render_stats_section(stats: dict) -> str:
+def _render_quality_table(quality_summary: dict) -> str:
+    """Render the quality scores table for the stats section."""
+    lines = [
+        "### Quality Scores",
+        "",
+        f"Assessed: {quality_summary.get('assessed_at', 'N/A')} | "
+        f"Mode: {quality_summary.get('scoring_mode', 'deterministic')} | "
+        f"Scorer: v{quality_summary.get('scorer_version', 'unknown')}",
+        "",
+        "| Persona | Average | Min | Max |",
+        "|---------|---------|-----|-----|",
+    ]
+    for name, ps in quality_summary.get("persona_scores", {}).items():
+        avg = ps.get("average", 0.0)
+        mn = ps.get("min", 0.0)
+        mx = ps.get("max", 0.0)
+        lines.append(f"| {name} | {avg:.1f}% | {mn:.1f}% | {mx:.1f}% |")
+
+    overall = quality_summary.get("overall_utility", 0.0)
+    gate = quality_summary.get("gate_status", "unknown")
+    lines.append("")
+    lines.append(f"**Overall utility: {overall:.1f}%** | Gate: {gate.upper()}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_stats_section(stats: dict, quality_summary: dict | None = None) -> str:
     """Render the machine-managed statistics section."""
     lines = [
         AUTO_START,
@@ -78,6 +104,9 @@ def _render_stats_section(stats: dict) -> str:
         f"| Schema version | {SCHEMA_VERSION} |",
         "",
     ]
+
+    if quality_summary:
+        lines.append(_render_quality_table(quality_summary))
 
     if stats["model_counts"]:
         lines.append("### Model Distribution")
@@ -101,21 +130,42 @@ def _render_stats_section(stats: dict) -> str:
     return "\n".join(lines)
 
 
-def _render_frontmatter(repo_id: str, traces: list[TraceRecord]) -> str:
-    """Render YAML frontmatter."""
+def _render_frontmatter(
+    repo_id: str,
+    traces: list[TraceRecord],
+    quality_summary: dict | None = None,
+) -> str:
+    """Render YAML frontmatter.
+
+    If quality_summary is provided, adds flat score keys (HF-searchable)
+    and a nested opentraces_quality block.
+    """
     size_cat = _size_category(len(traces))
-    return f"""---
-license: cc-by-4.0
-tags:
-  - opentraces
-  - agent-traces
-task_categories:
-  - text-generation
-language:
-  - en
-size_categories:
-  - {size_cat}
----"""
+    lines = [
+        "---",
+        "license: cc-by-4.0",
+        "tags:",
+        "  - opentraces",
+        "  - agent-traces",
+        "task_categories:",
+        "  - text-generation",
+        "language:",
+        "  - en",
+        "size_categories:",
+        f"  - {size_cat}",
+    ]
+
+    if quality_summary:
+        # Flat top-level keys for HF search
+        persona_scores = quality_summary.get("persona_scores", {})
+        for name, ps in persona_scores.items():
+            avg = ps.get("average", 0.0)
+            lines.append(f"{name}_score: {avg}")
+        overall = quality_summary.get("overall_utility", 0.0)
+        lines.append(f"overall_quality: {overall}")
+
+    lines.append("---")
+    return "\n".join(lines)
 
 
 def _render_default_body(repo_id: str) -> str:
@@ -164,14 +214,21 @@ def generate_dataset_card(
     repo_id: str,
     traces: list[TraceRecord],
     existing_card: str | None = None,
+    quality_summary: dict | None = None,
 ) -> str:
     """Generate or update a dataset card README.md.
 
     If existing_card is provided, only the machine-managed stats section
     (between auto-stats markers) is replaced. All other content is preserved.
+
+    Args:
+        repo_id: HF dataset repo ID (e.g. "user/my-traces")
+        traces: list of TraceRecord objects
+        existing_card: existing README content to update, or None for fresh card
+        quality_summary: dict from QualitySummary.to_dict(), or None to omit quality section
     """
     stats = _compute_stats(traces)
-    stats_section = _render_stats_section(stats)
+    stats_section = _render_stats_section(stats, quality_summary=quality_summary)
 
     if existing_card and AUTO_START in existing_card and AUTO_END in existing_card:
         # Replace only the machine-managed section
@@ -181,13 +238,13 @@ def generate_dataset_card(
         # Also update frontmatter if present
         if existing_card.startswith("---"):
             end_idx = existing_card.index("---", 3) + 3
-            frontmatter = _render_frontmatter(repo_id, traces)
+            frontmatter = _render_frontmatter(repo_id, traces, quality_summary=quality_summary)
             before = frontmatter + existing_card[end_idx : existing_card.index(AUTO_START)]
 
         return before + stats_section + after
 
     # Generate fresh card
-    frontmatter = _render_frontmatter(repo_id, traces)
+    frontmatter = _render_frontmatter(repo_id, traces, quality_summary=quality_summary)
     body = _render_default_body(repo_id)
 
     return f"{frontmatter}\n{body}\n{stats_section}\n"

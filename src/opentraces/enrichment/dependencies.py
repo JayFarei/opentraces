@@ -310,6 +310,11 @@ def extract_dependencies_from_imports(
     """
     raw_names: set[str] = set()
 
+    # Scan source code content from two locations:
+    # 1. Observation content (tool execution output that may contain source)
+    # 2. Write/Edit tool call inputs (source code being written to files)
+    _write_tool_names = {"write", "edit"}
+
     for step in steps:
         for obs in step.observations:
             if not obs.content:
@@ -317,7 +322,15 @@ def extract_dependencies_from_imports(
             for line in obs.content.splitlines():
                 # Strip line numbers: "  42\u2192code" -> "code"
                 line = re.sub(r"^\s*\d+\u2192", "", line)
+                _extract_from_line(line, raw_names)
 
+        for tc in step.tool_calls:
+            if tc.tool_name.lower() not in _write_tool_names:
+                continue
+            content = tc.input.get("content", "")
+            if not content or not isinstance(content, str):
+                continue
+            for line in content.splitlines():
                 _extract_from_line(line, raw_names)
 
     # Three-stage filtering

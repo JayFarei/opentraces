@@ -191,6 +191,41 @@ class HFUploader:
             logger.warning("Failed to list shards for %s: %s", self.repo_id, e)
             return []
 
+    def upload_quality_json(self, summary_dict: dict) -> bool:
+        """Upload quality.json sidecar to the dataset repo.
+
+        Returns True on success, False on failure.
+        """
+        try:
+            data = json.dumps(summary_dict, indent=2).encode("utf-8")
+            self.api.upload_file(
+                path_or_fileobj=io.BytesIO(data),
+                path_in_repo="quality.json",
+                repo_id=self.repo_id,
+                repo_type="dataset",
+                commit_message="chore: update quality scores",
+            )
+            return True
+        except Exception as e:
+            logger.warning("Failed to upload quality.json: %s", e)
+            return False
+
+    def fetch_quality_json(self) -> dict | None:
+        """Fetch quality.json sidecar from the dataset repo.
+
+        Returns parsed dict on success, None if not found or on error.
+        """
+        try:
+            local_path = self.api.hf_hub_download(
+                repo_id=self.repo_id,
+                filename="quality.json",
+                repo_type="dataset",
+            )
+            return json.loads(Path(local_path).read_text())
+        except Exception as e:
+            logger.debug("Could not fetch quality.json from %s: %s", self.repo_id, e)
+            return None
+
     def fetch_remote_content_hashes(self) -> set[str]:
         """Fetch content_hash values from all existing remote shards.
 

@@ -8,13 +8,13 @@ interface Agent {
 
 const devTimeAgents: Agent[] = [
   { name: "Claude Code", ready: true },
-  { name: "Codex CLI", ready: false },
+  { name: "Codex", ready: false },
   { name: "Cursor", ready: false },
   { name: "OpenCode", ready: false },
 ];
 
 const runTimeAgents: Agent[] = [
-  { name: "Claude Code", ready: false },
+  { name: "Claude Code", ready: true },
   { name: "Hermes", ready: true },
   { name: "OpenClaw", ready: false },
   { name: "NemoClaw", ready: false },

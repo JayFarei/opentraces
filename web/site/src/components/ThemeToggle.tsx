@@ -3,26 +3,28 @@
 import { useEffect, useState } from "react";
 
 function getSystemTheme(): "dark" | "light" {
-  if (typeof window === "undefined") return "light";
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-export default function ThemeToggle() {
-  const [theme, setTheme] = useState<"dark" | "light">(() => {
-    if (typeof window === "undefined") return "light";
-    const stored = localStorage.getItem("theme") as "dark" | "light" | null;
-    return stored || getSystemTheme();
-  });
+function applyTheme(t: "dark" | "light") {
+  const el = document.documentElement;
+  el.setAttribute("data-theme", t);
+  el.classList.remove("theme-dark", "theme-light");
+  el.classList.add(t === "dark" ? "theme-dark" : "theme-light");
+}
 
-  function applyTheme(t: "dark" | "light") {
-    const el = document.documentElement;
-    el.setAttribute("data-theme", t);
-    el.classList.remove("theme-dark", "theme-light");
-    el.classList.add(t === "dark" ? "theme-dark" : "theme-light");
-  }
+function resolveTheme(): "dark" | "light" {
+  const stored = localStorage.getItem("theme") as "dark" | "light" | null;
+  return stored || getSystemTheme();
+}
+
+export default function ThemeToggle() {
+  const [theme, setTheme] = useState<"dark" | "light" | null>(null);
 
   useEffect(() => {
-    applyTheme(theme);
+    const resolved = resolveTheme();
+    setTheme(resolved);
+    applyTheme(resolved);
 
     // Listen for system preference changes (only if user hasn't manually set)
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -35,7 +37,7 @@ export default function ThemeToggle() {
     }
     mq.addEventListener("change", onSystemChange);
     return () => mq.removeEventListener("change", onSystemChange);
-  }, [theme]);
+  }, []);
 
   function toggle() {
     const next = theme === "dark" ? "light" : "dark";
@@ -44,9 +46,11 @@ export default function ThemeToggle() {
     localStorage.setItem("theme", next);
   }
 
+  if (!theme) return <button className="theme-toggle" aria-label="Toggle theme">&nbsp;</button>;
+
   return (
     <button className="theme-toggle" onClick={toggle} aria-label="Toggle theme">
-      [{theme === "dark" ? "light" : "dark"}]
+      {theme === "dark" ? "light" : "dark"}
     </button>
   );
 }

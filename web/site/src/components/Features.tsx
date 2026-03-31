@@ -27,7 +27,7 @@ const features = [
   },
   {
     title: "automatic collection",
-    desc: "Claude Code hook captures sessions after every conversation. No manual parsing.",
+    desc: "Agent hook captures sessions after every conversation. No manual parsing.",
   },
   {
     title: "automatic dedup",
