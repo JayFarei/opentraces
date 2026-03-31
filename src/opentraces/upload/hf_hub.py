@@ -226,6 +226,38 @@ class HFUploader:
             logger.debug("Could not fetch quality.json from %s: %s", self.repo_id, e)
             return None
 
+    def fetch_all_remote_traces(self) -> list[TraceRecord]:
+        """Download and parse every trace record from all existing remote shards.
+
+        Used after a push to build an accurate aggregate dataset card.
+        Shards are cached locally by huggingface_hub after the first download,
+        so this is fast when called soon after fetch_remote_content_hashes().
+        Returns an empty list if the repo has no shards or on total failure.
+        """
+        shards = self.get_existing_shards()
+        if not shards:
+            return []
+
+        records: list[TraceRecord] = []
+        for shard_path in shards:
+            try:
+                local_path = self.api.hf_hub_download(
+                    repo_id=self.repo_id,
+                    filename=shard_path,
+                    repo_type="dataset",
+                )
+                for line in Path(local_path).read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        records.append(TraceRecord.model_validate_json(line))
+                    except Exception:
+                        continue
+            except Exception as e:
+                logger.warning("Could not fetch shard %s: %s", shard_path, e)
+        return records
+
     def fetch_remote_content_hashes(self) -> set[str]:
         """Fetch content_hash values from all existing remote shards.
 

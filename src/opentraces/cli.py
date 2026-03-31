@@ -3191,7 +3191,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
             click.echo(f"Uploading {len(records)} traces to {repo_id}...")
             result = uploader.upload_traces(records)
 
-            # Generate and upload dataset card
+            # Generate and upload dataset card from the full remote dataset
             if result.success:
                 try:
                     existing_card = None
@@ -3202,7 +3202,11 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                         existing_card = Path(existing_card).read_text()
                     except Exception as e:
                         logger.debug("Could not fetch existing dataset card: %s", e)
-                    card = generate_dataset_card(repo_id, records, existing_card)
+                    # Aggregate stats from ALL remote shards (not just this batch)
+                    # so the card reflects the full dataset after each push.
+                    all_remote_traces = uploader.fetch_all_remote_traces()
+                    card_traces = all_remote_traces if all_remote_traces else records
+                    card = generate_dataset_card(repo_id, card_traces, existing_card)
                     import io as _io
                     uploader.api.upload_file(
                         path_or_fileobj=_io.BytesIO(card.encode("utf-8")),
