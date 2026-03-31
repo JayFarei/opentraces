@@ -137,8 +137,9 @@ def _render_frontmatter(
 ) -> str:
     """Render YAML frontmatter.
 
-    If quality_summary is provided, adds flat score keys (HF-searchable)
-    and a nested opentraces_quality block.
+    Includes a configs block with a glob pattern so HF datasets-server
+    discovers all current and future shards without per-file gitattributes
+    entries. If quality_summary is provided, adds flat score keys (HF-searchable).
     """
     size_cat = _size_category(len(traces))
     lines = [
@@ -153,6 +154,13 @@ def _render_frontmatter(
         "  - en",
         "size_categories:",
         f"  - {size_cat}",
+        # configs glob: tells HF datasets-server where to find all shards.
+        # New pushes add shards matching data/traces_*.jsonl automatically.
+        "configs:",
+        "- config_name: default",
+        "  data_files:",
+        "  - split: train",
+        "    path: data/traces_*.jsonl",
     ]
 
     if quality_summary:

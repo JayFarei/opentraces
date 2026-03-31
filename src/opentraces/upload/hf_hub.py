@@ -63,7 +63,32 @@ class HFUploader:
         except Exception as e:
             # Tagging is best-effort, not all API versions support update_repo_settings
             logger.debug("Could not tag repo %s: %s", self.repo_id, e)
+
+        # Upload dataset_infos.json so HF datasets-server never has to infer
+        # the schema from raw shards. Without this, schema evolution across
+        # pushes causes config-info failures (null field in shard-1 conflicts
+        # with string field in shard-2).
+        self._upload_dataset_infos()
+
         return str(repo_url)
+
+    def _upload_dataset_infos(self) -> None:
+        """Upload dataset_infos.json to declare the full schema to HF."""
+        try:
+            from .hf_schema import build_dataset_infos
+            repo_name = self.repo_id.split("/")[-1]
+            infos = build_dataset_infos(repo_name)
+            data = json.dumps(infos, indent=2).encode("utf-8")
+            self.api.upload_file(
+                path_or_fileobj=io.BytesIO(data),
+                path_in_repo="dataset_infos.json",
+                repo_id=self.repo_id,
+                repo_type="dataset",
+                commit_message=f"chore: declare schema for HF datasets-server (opentraces-schema)",
+            )
+            logger.debug("Uploaded dataset_infos.json to %s", self.repo_id)
+        except Exception as e:
+            logger.warning("Could not upload dataset_infos.json to %s: %s", self.repo_id, e)
 
     def _generate_shard_name(self) -> str:
         """Generate a unique shard filename."""
