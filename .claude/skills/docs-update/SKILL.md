@@ -190,7 +190,11 @@ Report any rubric failures before applying changes.
 ## Phase 4: Apply and report
 
 1. Apply all approved edits
-2. Regenerate `llms.txt` if any docs content changed — read the current llms.txt structure and rebuild it from the updated docs pages
+2. Regenerate `llms.txt` by running the generation script — **never hand-edit `llms.txt` directly**, it is derived from the docs source:
+   ```bash
+   bash web/site/scripts/generate-llms-txt.sh
+   ```
+   Run this whenever any docs markdown file changed. If new workflow/doc pages were added, first add them to the ordered list in `generate-llms-txt.sh`.
 3. Present a summary grouped by zone:
 
 ```

@@ -27,11 +27,6 @@ Every coding session with an AI agent produces action trajectories, tool-use seq
 
 **As a team lead.** Commit traces automatically to a shared private dataset. Run downstream analytics, fine-tuning, or evaluation jobs on top of it. All on HuggingFace, all standard tooling.
 
-```python
-from datasets import load_dataset
-ds = load_dataset("your-org/agent-traces")
-```
-
 ## Schema designed for downstream use
 
 The [schema](/docs/schema/overview) is built for the people who consume traces, not just the tools that produce them. It is a superset of ATIF, informed by ADP and Agent Trace, and works across Claude Code, Cursor, Cline, Codex, and future agents without agent-specific fields.
@@ -51,15 +46,10 @@ The [schema](/docs/schema/overview) is built for the people who consume traces, 
 | **[Commands](/docs/cli/commands)** | Public and hidden CLI surface |
 | **[Security Modes](/docs/security/tiers)** | Review policy, security pipeline |
 | **[Schema](/docs/schema/overview)** | TraceRecord, steps, outcome, attribution |
-| **[Workflow](/docs/workflow/parsing)** | Parse, review, commit, push lifecycle |
+| **[Workflow](/docs/workflow/parsing)** | Parse, review, assess, push, consume |
 | **[CI/CD](/docs/integration/ci-cd)** | Headless automation and token auth |
 | **[Contributing](/docs/contributing/development)** | Local dev and schema changes |
 
-## Links
-
-- [GitHub](https://github.com/jayfarei/opentraces)
-- [Schema Rationale](/docs/schema/overview)
-- [opentraces.ai](https://opentraces.ai)
 
 
 ---
@@ -125,13 +115,15 @@ Python 3.10 or later is required.
 
 ## Upgrading
 
-The preferred in-project upgrade command auto-detects whether opentraces was installed via pipx, brew, or pip:
+The preferred in-project upgrade path is:
 
 ```bash
 opentraces upgrade
 ```
 
-If you need to upgrade the package directly:
+Auto-detects whether you installed via pipx, brew, or pip and upgrades accordingly. Also refreshes the skill file and session hook in the current project.
+
+If you are outside a project context, use the direct package manager command instead:
 
 ```bash
 pip install --upgrade opentraces
@@ -189,10 +181,10 @@ The CLI checks for `HF_TOKEN` automatically. Useful in CI pipelines where intera
 ## Verify
 
 ```bash
-opentraces status
+opentraces whoami
 ```
 
-Shows your authenticated username and active configuration.
+Shows your authenticated HuggingFace username.
 
 ## Logout
 
@@ -228,9 +220,9 @@ Paste a HuggingFace access token with **write** scope from [huggingface.co/setti
 opentraces init --review-policy review --start-fresh
 ```
 
-This creates `.opentraces/config.json`, `.opentraces/staging/`, the session hook for Claude Code, and installs the opentraces skill into `.agents/skills/opentraces/`. If you omit the flags, `opentraces init` will prompt for the same choices interactively.
+This creates `.opentraces/config.json`, `.opentraces/staging/`, the agent session hook, and installs the opentraces skill into `.agents/skills/opentraces/`. If you omit the flags, `opentraces init` will prompt for the same choices interactively.
 
-If Claude Code already has session logs for this repo, pass `--import-existing` to pull that backlog into the inbox now. Use `--start-fresh` if you only want capture from your next connected session onward.
+If your agent already has session logs for this repo, pass `--import-existing` to pull that backlog into the inbox now. Use `--start-fresh` if you only want capture from your next connected session onward.
 
 ## 4. Open the Inbox
 
@@ -304,15 +296,16 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces session` | Inspect and edit staged traces |
 | `opentraces commit` | Commit inbox traces for upload |
 | `opentraces push` | Upload committed traces to Hugging Face Hub |
-| `opentraces assess` | Score committed traces and write quality.json sidecar |
+| `opentraces assess` | Run quality assessment on committed traces or a remote dataset |
 | `opentraces web` | Open the browser inbox UI |
 | `opentraces tui` | Open the terminal inbox UI |
 | `opentraces stats` | Show aggregate inbox statistics |
 | `opentraces context` | Return machine-readable project context |
 | `opentraces config show` | Display current config |
 | `opentraces config set` | Update config values |
-| `opentraces import-hf DATASET_ID` | Import traces from a HuggingFace dataset |
+| `opentraces import-hf` | Import traces from a HuggingFace dataset |
 | `opentraces hooks install` | Install Claude Code session capture hooks |
+| `opentraces log` | List uploaded traces grouped by date |
 | `opentraces upgrade` | Upgrade CLI and refresh project skill file |
 
 ## Authentication
@@ -478,6 +471,7 @@ opentraces push --private
 opentraces push --public
 opentraces push --publish
 opentraces push --gated
+opentraces push --assess
 opentraces push --repo user/custom-dataset
 ```
 
@@ -487,34 +481,67 @@ opentraces push --repo user/custom-dataset
 | `--public` | off | Force public visibility |
 | `--publish` | off | Publish an existing private dataset |
 | `--gated` | off | Enable gated access on the dataset |
+| `--assess` | off | Run quality assessment after upload and embed scores in dataset card |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
-| `--assess` | off | Run quality assessment after upload; includes scores in dataset card |
 
 `--approved-only` is not part of the current CLI. The public path is `commit -> push`.
 
 ### `opentraces assess`
 
-Score committed traces against quality rubrics and write a `quality.json` sidecar. Use `--dataset` to refresh quality on an already-published HF dataset without a new push.
+Run quality assessment on committed traces or a full remote dataset.
 
 ```bash
 opentraces assess
+opentraces assess --judge
 opentraces assess --judge --judge-model sonnet
-opentraces assess --limit 20
-opentraces assess --compare-remote
+opentraces assess --limit 50
 opentraces assess --all-staged
-opentraces assess --dataset owner/dataset-name
+opentraces assess --compare-remote
+opentraces assess --dataset user/my-traces
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--judge / --no-judge` | off | Enable LLM-based rubric scoring |
+| `--judge / --no-judge` | off | Enable LLM judge for qualitative scoring |
 | `--judge-model` | `haiku` | Model for LLM judge: `haiku`, `sonnet`, or `opus` |
-| `--limit` | none | Cap the number of traces assessed in this run |
-| `--compare-remote` | off | Fetch remote quality.json and display delta |
-| `--all-staged` | off | Include inbox traces; default is committed only |
-| `--dataset` | unset | Assess a remote HF dataset, updating its README and quality.json without a new push |
+| `--limit` | `0` (all) | Maximum number of traces to assess |
+| `--compare-remote` | off | Fetch the remote dataset's `quality.json` and show score deltas |
+| `--all-staged` | off | Assess all staged traces instead of COMMITTED-only |
+| `--dataset TEXT` | unset | Assess a full remote HF dataset (e.g. `user/my-traces`). Downloads all shards, runs assessment, and updates `README.md` and `quality.json` on the dataset repo. Does not require hf-mount. |
 
-After `assess --dataset` or `push --assess`, `quality.json` is uploaded as a sidecar to the HF dataset repo and dataset cards include shields.io quality scorecard badges.
+By default, `assess` targets only **committed** traces, matching the population that `push` would upload. Use `--all-staged` to include traces that are staged but not yet committed.
+
+`--dataset` is independent of the local inbox. It downloads shards from the specified HF dataset repo and updates that repo's dataset card and `quality.json` sidecar in place, without requiring a new push.
+
+### opentraces import-hf
+
+Import traces from a HuggingFace dataset into your local inbox.
+
+```bash
+opentraces import-hf DATASET_ID [OPTIONS]
+```
+
+| Flag | Description |
+|------|-------------|
+| `DATASET_ID` | HuggingFace dataset ID (e.g. `user/my-traces`) |
+| `--parser` | Parser to use: `hermes` or `generic` (default: `hermes`) |
+| `--subset` | Dataset subset/config name |
+| `--split` | Dataset split (default: `train`) |
+| `--limit` | Maximum number of traces to import |
+| `--auto` | Commit imported traces immediately, skip inbox |
+| `--dry-run` | Preview import without writing any files |
+
+Exit codes: `0` success, `1` partial failure (some traces rejected by quality gate).
+
+### opentraces hooks install
+
+Install Claude Code session capture hooks into the current project. Hooks run automatically at session end (`on_stop`) and after context compaction (`on_compact`) to enrich traces with session metadata.
+
+```bash
+opentraces hooks install
+```
+
+Run this once per project after `opentraces init`.
 
 ### `opentraces remote`
 
@@ -601,6 +628,7 @@ These commands exist for automation, compatibility, or diagnostics and are hidde
 | `opentraces capabilities --json` | Machine-discoverable feature list, supported agents, versions |
 | `opentraces introspect` | Full API schema and TraceRecord JSON schema for automation |
 | `opentraces _capture` | Invoked by the Claude Code SessionEnd hook to auto-capture sessions |
+| `opentraces _assess-remote` | Force quality assessment on a remote dataset via hf-mount (automation only) |
 
 ## Exit Codes
 
@@ -618,19 +646,19 @@ These commands exist for automation, compatibility, or diagnostics and are hidde
 
 # Supported Agents
 
-opentraces currently ships with two live parsers: Claude Code (devtime) and Hermes (runtime).
+opentraces currently ships with two live parsers: Claude Code and Hermes.
 
 ## Current Support
 
-| Agent | Identifier | Status |
-|-------|-----------|--------|
-| Claude Code | `claude-code` | Supported |
-| Hermes | `hermes` | Supported |
-| Cursor | `cursor` | Planned |
-| Codex | `codex` | Planned |
-| Gemini CLI | `gemini-cli` | Planned |
-| Cline | `cline` | Planned |
-| OpenCode | `opencode` | Planned |
+| Agent | Identifier | Category | Status |
+|-------|-----------|----------|--------|
+| Claude Code | `claude-code` | dev-time | Supported |
+| Hermes | `hermes` | run-time | Supported |
+| Cursor | `cursor` | dev-time | Planned |
+| Codex | `codex` | dev-time | Planned |
+| OpenCode | `opencode` | dev-time | Planned |
+| OpenClaw | `openclaw` | run-time | Planned |
+| NemoClaw | `nemoclaw` | run-time | Planned |
 
 ## How Detection Works
 
@@ -642,11 +670,11 @@ from opentraces.parsers import get_parsers
 supported = list(get_parsers().keys())
 ```
 
-Today that registry contains `claude-code` and `hermes`. `opentraces init --agent ...` uses the same registry to validate agent selection. The `hermes` parser handles runtime agent logs imported via `opentraces import-hf`.
+`opentraces init --agent ...` uses the same registry to validate agent selection.
 
-## What The Parser Extracts
+## What Parsers Extract
 
-Claude Code traces are normalized into the opentraces schema with:
+All parsers normalize agent sessions into the opentraces schema with:
 
 - user / agent / system steps
 - tool calls and observations
@@ -743,11 +771,11 @@ opentraces logout
 
 # Parsing
 
-Parsing is the ingestion step that turns raw Claude Code session logs into staged `TraceRecord` JSONL files.
+Parsing is the ingestion step that turns raw agent session logs into staged `TraceRecord` JSONL files.
 
 ## What Runs Automatically
 
-When `opentraces init` installs the Claude Code hook, the hidden `_capture` command runs after each session ends. That capture path:
+When `opentraces init` installs the agent session hook, the hidden `_capture` command runs after each session ends. That capture path:
 
 1. Finds new session files under `~/.claude/projects/`
 2. Parses the raw session into a `TraceRecord`
@@ -757,15 +785,17 @@ When `opentraces init` installs the Claude Code hook, the hidden `_capture` comm
 
 ## Enrichment Pipeline
 
-The current pipeline does:
+Every parsed trace is enriched before staging:
 
-1. Git detection and commit signal extraction
-2. Attribution from Edit and Write tool calls
-3. Dependency extraction from manifests and install commands
-4. Metrics aggregation
-5. Tiered security scanning and redaction
-6. Tier 2 heuristic classification
-7. Path anonymization
+| Step | What it does | Example output |
+|------|-------------|----------------|
+| Git signals | Detects repo state, extracts commit info | `committed: true`, `commit_sha: "a3f9..."`, `branch: "main"` |
+| Attribution | Maps Edit and Write tool calls to file/line ranges | `auth.py L42-67` attributed to step 4 |
+| Dependencies | Extracts from manifests and install commands | `["flask", "pydantic"]` from `pyproject.toml` |
+| Metrics | Aggregates token counts, cost, cache rates | `cache_hit_rate: 0.91`, `estimated_cost_usd: 3.21` |
+| Security scan | Regex + entropy scan, tiered redaction | API key in Bash output replaced with `[REDACTED]` |
+| Classification | Tier 2 heuristic flagging for review | Internal hostname `*.corp` flagged for manual review |
+| Anonymization | Strips usernames and home paths | `/Users/alice/project/` becomes `/~/project/` |
 
 ## Review Policy Interaction
 
@@ -778,9 +808,28 @@ The current pipeline does:
 
 The review surface still exists either way. `auto` just reduces the amount of manual triage needed, and traces with scan hits still land in the inbox.
 
-## Internal Batch Commands
+## Parsing Existing Sessions
 
-`discover` and `parse` are hidden internal commands used for diagnostics and batch processing. The user-facing path is the hook plus inbox workflow.
+To import sessions that were recorded before you ran `opentraces init`, pass `--import-existing` at init time:
+
+```bash
+opentraces init --import-existing
+```
+
+This runs a one-off batch parse of all existing Claude Code sessions for the current project directory, applying the same enrichment and security pipeline as the hook.
+
+### Internal Batch Commands
+
+`discover` and `parse` are hidden commands available for diagnostics and manual batch processing:
+
+```bash
+opentraces discover          # list all Claude Code projects with session files
+opentraces parse             # parse all unparsed sessions into staging
+opentraces parse --auto      # parse and auto-approve (skip review)
+opentraces parse --limit 10  # parse at most 10 sessions
+```
+
+These bypass the hook path and write directly to `.opentraces/staging/`. The user-facing path for ongoing collection is the hook plus inbox workflow.
 
 ## What Gets Filtered
 
@@ -870,19 +919,9 @@ If you need the old compatibility entry point, `opentraces review` still exists 
 
 ---
 
-# Pushing
+# Push
 
-`opentraces push` uploads committed traces to Hugging Face Hub as sharded JSONL files.
-
-## Current Flow
-
-```bash
-opentraces session commit <trace-id>
-opentraces commit --all
-opentraces push
-```
-
-`push` only uploads committed traces. If you have inbox traces that have not been committed yet, run `opentraces commit` first.
+`opentraces push` uploads committed traces to Hugging Face Hub as sharded JSONL files. Only committed traces are uploaded — run `opentraces commit` first if needed.
 
 ## Options
 
@@ -891,6 +930,7 @@ opentraces push --private
 opentraces push --public
 opentraces push --publish
 opentraces push --gated
+opentraces push --assess
 opentraces push --repo user/custom-dataset
 ```
 
@@ -900,6 +940,7 @@ opentraces push --repo user/custom-dataset
 | `--public` | off | Force public visibility |
 | `--publish` | off | Change an existing private dataset to public |
 | `--gated` | off | Enable gated access on the dataset |
+| `--assess` | off | Run quality assessment after upload and embed scores in dataset card |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
 
 `--approved-only` is not part of the current CLI. The supported path is `commit -> push`.
@@ -910,8 +951,8 @@ Each push creates a new JSONL shard. Existing data is never overwritten or appen
 
 ```text
 data/
-  traces-0001.jsonl
-  traces-0002.jsonl   <- new shard from this push
+  traces_20260329T142300Z_a1b2c3d4.jsonl
+  traces_20260401T091500Z_e5f6a7b8.jsonl   <- new shard from this push
 ```
 
 That means:
@@ -922,12 +963,31 @@ That means:
 
 ## Dataset Card
 
-`push` generates or updates a `README.md` dataset card on the first successful upload. It records:
+`push` generates or updates a `README.md` dataset card on every successful upload. The card aggregates statistics across **all** shards in the repo, not just the current batch, so counts are always accurate.
+
+The card records:
 
 - schema version
-- trace counts
+- trace counts, steps, and tokens
 - model and agent distribution
 - date range
+- average cost and success rate (when available)
+
+A machine-readable JSON block is embedded for programmatic consumers:
+
+```html
+<!-- opentraces:stats
+{"total_traces":1639,"avg_steps_per_session":42,...}
+-->
+```
+
+### Quality scorecard (`--assess`)
+
+`opentraces push --assess` runs quality scoring after upload and embeds the results in the dataset card. Here's what it looks like on a live dataset:
+
+[![Overall Quality 78.1%](https://img.shields.io/badge/Overall_Quality-78.1%25-ffc107)](https://opentraces.ai) [![Gate FAILING](https://img.shields.io/badge/Gate-FAILING-dc3545)](https://opentraces.ai) ![Conformance 88.4%](https://img.shields.io/badge/Conformance-88.4%25-28a745) ![Training 89.0%](https://img.shields.io/badge/Training-89.0%25-28a745) ![RL 73.4%](https://img.shields.io/badge/RL-73.4%25-ffc107) ![Analytics 55.7%](https://img.shields.io/badge/Analytics-55.7%25-fd7e14) ![Domain 84.1%](https://img.shields.io/badge/Domain-84.1%25-28a745)
+
+The scorecard embeds per-persona scores as shields.io badges, a breakdown table with PASS / WARN / FAIL per rubric, and a `quality.json` sidecar for machine consumers. See [Assess](/docs/workflow/quality) for scoring details.
 
 ## Visibility
 
@@ -941,27 +1001,208 @@ That means:
 
 In `review` mode, you commit and push manually. In `auto` mode, clean traces are committed and pushed automatically after capture.
 
+## Export
+
+Export to other formats is not part of the public workflow yet. The CLI exposes a hidden stub for future automation:
+
+```bash
+opentraces export --format atif  # not yet public
+```
+
+The schema package documents ATIF, ADP, and OTel field mappings in `packages/opentraces-schema/FIELD-MAPPINGS.md`. If you need to write a converter now, start from the `TraceRecord` / `Step` model definitions there.
+
 ---
 
-# Export
+# Assess
 
-Export support is not part of the public workflow yet.
+`opentraces assess` scores committed traces against five consumer-facing rubrics. Run it after committing, before you push:
 
-The current repository keeps field-mapping references in `packages/opentraces-schema/FIELD-MAPPINGS.md`, and the CLI exposes a hidden `opentraces export --format atif` stub for future automation.
+```bash
+opentraces assess
+```
 
-## What Is Ready Today
+Scores are printed to the terminal. Low-scoring traces show which checks failed so you can decide whether to fix or push anyway. Assessment only runs against committed traces — run `opentraces commit` first if your inbox isn't empty.
 
-- The schema package documents ATIF, ADP, and OTel mappings
-- The CLI can already serialize traces to the opentraces JSONL schema
-- The downstream converter tables are the source of truth for third-party exporters
+You can also score and push in one step with `opentraces push --assess`, which uploads and embeds the scorecard in the HuggingFace dataset card. See [Push](/docs/workflow/pushing) for details.
 
-## What Is Not Ready Yet
+## How scoring works
 
-- A public `opentraces export` workflow
-- A public `opentraces import` workflow
-- A round-trip converter between opentraces and ATIF
+Assessment is **deterministic by default**: every check is a Python function over
+the `TraceRecord` fields. No LLM calls, no external requests, no randomness.
+The same trace always produces the same score.
 
-If you need to write a converter now, start with the schema package field mappings and the `TraceRecord` / `Step` model definitions.
+Each trace is scored against all five personas. Per-persona score is a weighted
+average of its individual checks (0-100%). Batch score is the average across traces.
+
+### The five personas
+
+| Persona | What it checks | Who uses it |
+|---------|----------------|-------------|
+| **Conformance** | Schema validity: trace IDs, content hash, timestamps, steps present, security scanned | Anyone ingesting opentraces data |
+| **Training** | SFT readiness: alternating roles, tool_call/observation pairing, reasoning coverage | Model fine-tuners |
+| **RL** | Outcome signals: committed flag or terminal_state, signal confidence, cost, model ID | RLHF / reward modeling |
+| **Analytics** | Observability: cache hit rate, cost, duration, per-step timestamps | Infra / cost dashboards |
+| **Domain** | Discoverability: language ecosystem, dependencies, task description, VCS info | Dataset search and filtering |
+
+### Conformance
+
+Structural checks that apply to every trace regardless of agent type:
+
+| Check | Description |
+|-------|-------------|
+| C1: schema_version | Matches current schema version |
+| C2: trace_id format | Valid UUID-like string (≥32 chars with dashes) |
+| C3: content_hash | 64-character hex, present |
+| C4: agent name | Non-empty agent identifier |
+| C5: timestamps | Both timestamp_start and timestamp_end present |
+| C6: steps present | At least one step recorded |
+| C7: security scanned | `security.scanned = True` |
+
+### Training
+
+Grounded in ADP (Agent Data Protocol) empirical requirements for SFT pipelines:
+
+| Check | Description |
+|-------|-------------|
+| T1: alternating roles | user/agent steps alternate ≥90% of transitions (≥50% for conversation-turn sources) |
+| T2: tool_call pairing | Every tool_call_id has a matching observation |
+| T3: reasoning coverage | `reasoning_content` present on agent steps |
+| T4: data cleanliness | No redaction markers in step content |
+
+### RL
+
+Checks the reward proxy signal appropriate to the agent's execution context:
+
+| Check | Description |
+|-------|-------------|
+| RL1: outcome signal | `committed=True` for devtime agents; `terminal_state` or `reward` for runtime agents |
+| RL2: signal confidence | `signal_confidence` is `derived` or `annotated` (not default) |
+| RL3: cost signal | `estimated_cost_usd > 0` (differentiates traces for cost-aware RL) |
+| RL4: model identified | `agent.model` populated (needed for per-model policy training) |
+
+### Analytics
+
+Observability checks that differentiate opentraces from trace-level-only sources.
+Checks that require per-step data are automatically skipped for `conversation_turn`
+fidelity sources (e.g. Hermes imports), which only have session-level timestamps:
+
+| Check | Description |
+|-------|-------------|
+| A1: cache_hit_rate | Computed and in [0.0, 1.0] (skipped for runtime) |
+| A2: estimated_cost | `estimated_cost_usd > 0` |
+| A3: total_duration | `total_duration_s > 0` (skipped for runtime) |
+| A4: step timestamps | Timestamps on >80% of steps (skipped for conversation_turn) |
+| A5: token breakdown | Per-step `input_tokens` and `output_tokens` present |
+| A6: token consistency | Step-sum ≈ session total (within 10%) |
+
+### Domain
+
+Checks that enable HuggingFace dataset discovery and filtering:
+
+| Check | Description |
+|-------|-------------|
+| D1: language_ecosystem | Populated (skipped for runtime with no code-writing tool calls) |
+| D2: dependencies | At least one dependency when language detected |
+| D3: task description | Meaningful task description (>10 chars) |
+| D4: VCS info | `environment.vcs.base_commit` present (skipped for runtime) |
+| D5: code snippets | At least one snippet captured (skipped for runtime) |
+| D6: attribution | Attribution data present |
+| D7: agent identity | Agent name + version OR name alone for runtime sources |
+
+## Fidelity-aware scoring
+
+Some sources (like Hermes imports) provide conversation turns rather than individual
+API calls. Checks that require call-level data are automatically marked `skipped`
+for these sources and excluded from the weighted average. This prevents penalizing
+community datasets for structural limitations of the source format.
+
+The `step_fidelity` field on each trace records this: `"individual_api_call"` (devtime)
+vs `"conversation_turn"` (Hermes, other community imports).
+
+## Gate thresholds
+
+The gate blocks push when any persona falls below its threshold:
+
+| Persona | Min (any trace) | Min (batch average) |
+|---------|-----------------|---------------------|
+| Conformance | 70% | 80% |
+| Training | 40% | 45% |
+| RL | — | 40% |
+| Analytics | 60% | 70% |
+| Domain | 45% | 55% |
+
+Gate `FAILING` does not block `push` by default. It's a signal, not a hard
+stop — you can push a failing batch and the gate status will be visible in
+the dataset card. Use `--gate` to enforce hard blocking (coming soon).
+
+## Dataset card integration
+
+When you push with `--assess`, scores are embedded in the HuggingFace dataset card as badges and a scorecard table, and written to YAML frontmatter as searchable keys. See [Push](/docs/workflow/pushing) for details.
+
+---
+
+# Consume
+
+Once traces are pushed to Hugging Face Hub, how you load them depends on what you're building.
+
+## For developers and ML teams
+
+Use the [HuggingFace `datasets` library](https://huggingface.co/docs/datasets/en/loading) when you want structured access, pandas integration, or a PyTorch DataLoader.
+
+=== "pandas"
+
+    ```python
+    from datasets import load_dataset
+
+    ds = load_dataset("your-org/agent-traces")
+    df = ds["train"].to_pandas()
+    ```
+
+=== "PyTorch"
+
+    ```python
+    from datasets import load_dataset
+
+    ds = load_dataset("your-org/agent-traces")
+    ds["train"].with_format("torch")
+    ```
+
+=== "Streaming"
+
+    ```python
+    from datasets import load_dataset
+
+    # Stream without downloading the full dataset
+    ds = load_dataset("your-org/agent-traces", streaming=True)
+    for trace in ds["train"]:
+        print(trace["session_id"])
+    ```
+
+## For agents
+
+Use [hf-mount](https://github.com/huggingface/hf-mount) to expose the dataset as a virtual filesystem. The dataset becomes a directory of JSONL files — no Python library required, no full download, readable with any file tool call.
+
+```bash
+hf-mount your-org/agent-traces /mnt/traces
+```
+
+```python
+import json
+import pathlib
+
+traces = [
+    json.loads(line)
+    for p in pathlib.Path("/mnt/traces").glob("*.jsonl")
+    for line in p.read_text().splitlines()
+    if line.strip()
+]
+```
+
+The mount approach suits agents because it avoids library overhead and works with standard file reads — the same way the agent reads any local path.
+
+## Schema reference
+
+Each JSONL line is a `TraceRecord`. See the [schema overview](/docs/schema/overview) for field definitions, and [outcome & attribution](/docs/schema/outcome-attribution) for the reward signals used in RL workflows.
 
 ---
 
@@ -1051,6 +1292,7 @@ The top-level record. One per JSONL line, one per agent session.
 | `trace_id` | string (UUID) | yes | Unique identifier for this trace |
 | `session_id` | string | yes | Agent session reference |
 | `content_hash` | string | no | SHA-256 of the serialized record, populated when written |
+| `execution_context` | string | no | `"devtime"` (code-editing agent) or `"runtime"` (action-trajectory / RL agent). Null for pre-0.2 traces. |
 
 ## Timestamps
 
@@ -1319,6 +1561,11 @@ Sub-agent transcripts are linked by `session_id` reference to separate trajector
 
 The `outcome` object captures the session-level result and the confidence of the signal that set it:
 
+Outcome fields are split by `execution_context`. Devtime agents (code-editing) use `committed`
+as the primary reward proxy. Runtime agents (action-trajectory / RL) use `terminal_state` and `reward`.
+
+**Devtime example:**
+
 ```json
 {
   "outcome": {
@@ -1328,10 +1575,20 @@ The `outcome` object captures the session-level result and the confidence of the
     "description": "Test passes after fix",
     "patch": "unified diff string",
     "committed": true,
-    "commit_sha": "def789abc...",
+    "commit_sha": "def789abc..."
+  }
+}
+```
+
+**Runtime example:**
+
+```json
+{
+  "outcome": {
     "terminal_state": "goal_reached",
-    "reward": null,
-    "reward_source": null
+    "reward": 1.0,
+    "reward_source": "rl_environment",
+    "signal_confidence": "derived"
   }
 }
 ```
@@ -1345,15 +1602,17 @@ The `outcome` object captures the session-level result and the confidence of the
 | `signal_confidence` | string | no | `derived`, `inferred`, or `annotated` |
 | `description` | string | no | Human-readable outcome description |
 | `patch` | string | no | Unified diff produced by the session |
-| `committed` | boolean | no | Whether changes were committed to git |
-| `commit_sha` | string | no | The specific commit, if committed |
-| `terminal_state` | string | no | Terminal state label, e.g. `"goal_reached"`, `"abandoned"`, `"error"` |
-| `reward` | number | no | Scalar reward signal for RL training (null if not set) |
-| `reward_source` | string | no | Source of the reward signal, e.g. `"human"`, `"verifier"`, `"heuristic"` |
+| `committed` | boolean | no | Whether changes were committed to git (devtime) |
+| `commit_sha` | string | no | The specific commit, if committed (devtime) |
+| `terminal_state` | string | no | `goal_reached`, `interrupted`, `error`, or `abandoned` (runtime, added 0.2.0) |
+| `reward` | float | no | Numeric reward signal from an RL environment or evaluator (runtime, added 0.2.0) |
+| `reward_source` | string | no | Canonical: `rl_environment`, `judge`, `human_annotation`, `orchestrator` (added 0.2.0) |
 
 ### Committed as a Quality Signal
 
-A session that results in a commit is higher-signal than one abandoned or reverted. The commit hash gives a deterministic anchor for replaying the patch and comparing later revisions.
+For devtime agents, a session that results in a commit is higher-signal than one abandoned or reverted. The commit hash gives a deterministic anchor for replaying the patch and comparing later revisions.
+
+For runtime agents, `terminal_state` and `reward` serve the equivalent role — ground truth from the environment.
 
 ## Attribution
 
@@ -1425,25 +1684,33 @@ opentraces sits at the intersection of four public standards. It adopts what wor
 
 ## ATIF / Harbor (v1.6)
 
-A training trajectory serialization format. Defines the step-based TAO (Thought-Action-Observation) loop.
+[github.com/laude-institute/harbor](https://github.com/laude-institute/harbor/blob/main/docs/rfcs/0001-trajectory-format.md)
+
+A training trajectory serialization format for agent research. Defines the step-based TAO (Thought-Action-Observation) loop, with fields for token IDs, logprobs, and reward signals designed for RL and SFT pipelines.
 
 **Relationship:** opentraces is a superset of ATIF. We adopt the step-based model, role conventions (`system | user | agent`), and field patterns. We add attribution blocks, per-step token breakdowns, environment metadata, dependency tracking, and security metadata. The downstream field mappings live in `packages/opentraces-schema/FIELD-MAPPINGS.md`; the public export workflow is still experimental.
 
 ## ADP (Agent Data Protocol)
 
-An interlingua for normalizing diverse agent trace formats into a common structure for training. Core argument: O(D+A) adapters instead of O(D*A).
+[arxiv.org/abs/2410.10762](https://arxiv.org/abs/2410.10762)
+
+An interlingua for normalizing diverse agent trace formats into a common structure for training. Proposes a universal adapter layer so each dataset and each agent only needs one converter, O(D+A), instead of pairwise mappings, O(D*A).
 
 **Relationship:** opentraces' adapter-based normalization follows the same pattern. Per-agent parsers are ADP-style adapters outputting the enriched schema.
 
 ## Agent Trace (Cursor/community, v0.1.0 RFC)
 
-Solves the adjacent problem of attributing which lines of code came from which agent conversation, at file/line granularity. Backed by 10+ sponsors (Cloudflare, Vercel, Google Jules, Cognition).
+[github.com/cursor/agent-trace](https://github.com/cursor/agent-trace)
+
+A code attribution spec (CC BY 4.0) that records which lines of code came from which agent conversation, at file/line granularity. Backed by 10+ sponsors (Cloudflare, Vercel, Google Jules, Cognition).
 
 **Relationship:** opentraces embeds Agent Trace attribution blocks directly in the trace record. Agent Trace focuses on _output_ (code attribution), opentraces bridges that with _process_ (trajectory).
 
 ## OTel GenAI Semantic Conventions
 
-OpenTelemetry's GenAI semantic conventions define span attributes for LLM calls in observability pipelines.
+[opentelemetry.io/docs/specs/semconv/gen-ai](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
+
+OpenTelemetry's GenAI semantic conventions define standardized span attributes for LLM calls in observability pipelines, covering model names, token counts, and request metadata.
 
 **Relationship:** opentraces' per-step token usage and model fields align with OTel GenAI conventions, enabling cross-referencing between observability spans and training trajectories.
 
@@ -1707,16 +1974,39 @@ opentraces is designed to be driven by agents as well as by humans.
 
 Most commands emit structured JSON with `next_steps` and `next_command`, so an agent can chain the workflow without parsing free-form text.
 
-## Claude Code Setup
+## Setup by Agent
 
-`opentraces init` installs the Claude Code hook and copies the bundled skill into `.agents/skills/opentraces/` (symlinked into the agent's skill directory). A typical agent-led setup looks like:
+`opentraces init` installs the session hook for your agent and copies the bundled skill into `.agents/skills/opentraces/`. Pass `--agent` to specify which harness to connect.
+
+### Claude Code
 
 ```bash
 opentraces login
 opentraces init --agent claude-code --review-policy review --start-fresh
 ```
 
-If the repo already has Claude Code session logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.
+If the repo already has existing session logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.
+
+### Hook Enrichment
+
+For richer trace metadata, install the Claude Code session hooks:
+
+```bash
+opentraces hooks install
+```
+
+This registers two hooks in `.claude/settings.json`:
+- **`on_stop`** — runs at session end, captures context window state, token usage, and project metadata
+- **`on_compact`** (PostCompact event) — captures context compaction events for long sessions
+
+Hooks fire automatically on every session — no further action needed after `hooks install`.
+
+### Hermes
+
+```bash
+opentraces login
+opentraces init --agent hermes --review-policy review --start-fresh
+```
 
 After setup, the current surfaces are:
 

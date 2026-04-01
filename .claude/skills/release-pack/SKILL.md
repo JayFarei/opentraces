@@ -166,11 +166,12 @@ Release pack plan:
     - web/site/src/lib/version.json  (0.1.2 → 0.1.3)
 
   Sequence:
-    1. Docs check
-    2. Release CLI → GitHub Release → PyPI + Homebrew  (v0.1.3)
-    3. Deploy site → Vercel
-    4. Wait ~120s for PyPI propagation
-    5. Verify: pipx  pip  brew
+    1. Docs update (skill/SKILL.md is bundled in the wheel — must be correct before build)
+    2. Regenerate llms.txt
+    3. Release CLI → GitHub Release → PyPI + Homebrew  (v0.1.3)
+    4. Deploy site → Vercel
+    5. Wait ~120s for PyPI propagation
+    6. Verify: pipx  pip  brew
 
 Proceed? [Y/n]
 ```
@@ -179,9 +180,22 @@ Proceed? [Y/n]
 
 ---
 
-## Step 4: Docs check
+## Step 4: Docs update
 
-Quickly verify the most critical doc surfaces are not stale before cutting a release. This is a fast check, not a full `/docs-update` run.
+**`skill/SKILL.md` is bundled inside the wheel** (`pyproject.toml` force-includes it). Any stale command references or missing flags ship to end users and agents. Run `/docs-update` now — before building — so the wheel contains correct docs.
+
+After docs-update completes:
+
+```bash
+# Regenerate llms.txt from updated docs source (never hand-edit it)
+bash web/site/scripts/generate-llms-txt.sh
+```
+
+Commit any docs changes before proceeding to the build step.
+
+### Quick spot-check (if skipping full docs-update)
+
+Only skip the full docs-update if the release is a patch with no new commands, flags, or schema fields. In that case, do a minimal check:
 
 ```bash
 # Version references
@@ -395,7 +409,29 @@ rm -rf /tmp/schema-verify
 
 ---
 
-## Step 10: Final status report
+## Step 10: Post-release docs update
+
+After verifications pass, run a docs-update pass to propagate the release changes across all documentation surfaces.
+
+```bash
+# Regenerate llms.txt from updated docs (always do this — do not hand-edit llms.txt)
+bash web/site/scripts/generate-llms-txt.sh
+```
+
+Then invoke the `/docs-update` skill to audit and fix any stale references introduced by the release (new commands, flags, version numbers, schema fields). This step catches drift that the pre-release docs check (Step 4) doesn't cover because it runs *before* the code is tagged.
+
+Key things that commonly go stale after a release:
+- `llms.txt` — regenerate from source, never hand-edit
+- `web/viewer/src/types/trace.ts` — TypeScript types must track schema model changes
+- `web/viewer/src/lib/sample-data.ts` — `schema_version` hardcoded string
+- `packages/opentraces-schema/CHANGELOG.md` — verify no version entry gaps
+- `CLAUDE.md` — parsers list, new directories in structure section
+
+Commit the docs-update changes before the final status report.
+
+---
+
+## Step 11: Final status report
 
 After all verifications pass, print a concise summary:
 
