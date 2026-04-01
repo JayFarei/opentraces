@@ -12,46 +12,6 @@ Every coding session with an AI agent produces action trajectories, tool-use seq
 
 **As a team lead.** Commit traces automatically to a shared private dataset. Run downstream analytics, fine-tuning, or evaluation jobs on top of it. All on HuggingFace, all standard tooling.
 
-Push traces and inspect what was collected:
-
-```bash
-opentraces push
-opentraces assess your-org/agent-traces
-```
-
-**Loading in a notebook or training script.** Use the [HuggingFace `datasets` library](https://huggingface.co/docs/datasets/en/loading) when you want structured access, pandas integration, or a PyTorch DataLoader:
-
-```python
-from datasets import load_dataset
-
-ds = load_dataset("your-org/agent-traces")
-
-# pandas
-df = ds["train"].to_pandas()
-
-# PyTorch
-ds["train"].with_format("torch")
-```
-
-**Loading inside an agent.** Use [hf-mount](https://github.com/huggingface/hf-mount) to expose the dataset as a virtual filesystem. No full download, no library dependency — the agent reads files directly, the same way it reads any local path:
-
-```bash
-hf-mount your-org/agent-traces /mnt/traces
-```
-
-```python
-import json, pathlib
-
-traces = [
-    json.loads(line)
-    for p in pathlib.Path("/mnt/traces").glob("*.jsonl")
-    for line in p.read_text().splitlines()
-    if line.strip()
-]
-```
-
-The mount approach suits agents because it avoids Python library overhead and works with any file-reading tool call, not just code that imports `datasets`.
-
 ## Schema designed for downstream use
 
 The [schema](/docs/schema/overview) is built for the people who consume traces, not just the tools that produce them. It is a superset of ATIF, informed by ADP and Agent Trace, and works across Claude Code, Cursor, Cline, Codex, and future agents without agent-specific fields.
@@ -71,7 +31,7 @@ The [schema](/docs/schema/overview) is built for the people who consume traces, 
 | **[Commands](/docs/cli/commands)** | Public and hidden CLI surface |
 | **[Security Modes](/docs/security/tiers)** | Review policy, security pipeline |
 | **[Schema](/docs/schema/overview)** | TraceRecord, steps, outcome, attribution |
-| **[Workflow](/docs/workflow/parsing)** | Parse, review, commit, push lifecycle |
+| **[Workflow](/docs/workflow/parsing)** | Parse, review, assess, push, consume |
 | **[CI/CD](/docs/integration/ci-cd)** | Headless automation and token auth |
 | **[Contributing](/docs/contributing/development)** | Local dev and schema changes |
 

@@ -1,4 +1,4 @@
-# Pushing
+# Push
 
 `opentraces push` uploads committed traces to Hugging Face Hub as sharded JSONL files.
 
@@ -101,3 +101,13 @@ This downloads all shards from the HF dataset repo, runs a fresh assessment, and
 ## Push Behavior by Mode
 
 In `review` mode, you commit and push manually. In `auto` mode, clean traces are committed and pushed automatically after capture.
+
+## Export
+
+Export to other formats is not part of the public workflow yet. The CLI exposes a hidden stub for future automation:
+
+```bash
+opentraces export --format atif  # not yet public
+```
+
+The schema package documents ATIF, ADP, and OTel field mappings in `packages/opentraces-schema/FIELD-MAPPINGS.md`. If you need to write a converter now, start from the `TraceRecord` / `Step` model definitions there.
