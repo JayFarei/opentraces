@@ -15,16 +15,20 @@ from datetime import datetime, timezone
 
 def _git_info(cwd: str) -> dict:
     """Return git state dict, empty on any failure."""
+    if not cwd:
+        return {}
     try:
         sha = subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
             cwd=cwd, text=True,
             stderr=subprocess.DEVNULL,
+            timeout=5,
         ).strip()
         status_out = subprocess.check_output(
             ["git", "status", "--porcelain"],
             cwd=cwd, text=True,
             stderr=subprocess.DEVNULL,
+            timeout=5,
         )
         changed_files = [l[:2].strip() for l in status_out.splitlines() if l.strip()]
         return {
@@ -46,7 +50,7 @@ def main() -> None:
     if not transcript_path:
         sys.exit(0)
 
-    cwd = payload.get("cwd") or ""
+    cwd = payload.get("cwd") or ""  # empty string handled by _git_info guard
     line = json.dumps({
         "type": "opentraces_hook",
         "event": "Stop",

@@ -292,13 +292,13 @@ class HermesParser:
         """
         if len(text) > _MAX_CONTENT_LEN:
             text = text[:_MAX_CONTENT_LEN]
-        match = _THINK_RE.search(text)
-        if not match:
+        matches = _THINK_RE.findall(text)
+        if not matches:
             return text, None
-        thinking = match.group(1).strip()
+        # Join all think blocks; empty blocks (Hermes injects them) are dropped
+        thinking = " ".join(m.strip() for m in matches if m.strip()) or None
         cleaned = _THINK_RE.sub("", text).strip()
-        # Empty think blocks mean no reasoning (Hermes always injects them)
-        return cleaned, thinking if thinking else None
+        return cleaned, thinking
 
     @staticmethod
     def parse_tool_calls(text: str, step_index: int) -> tuple[str, list[ToolCall]]:

@@ -11,6 +11,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,14 @@ from huggingface_hub import HfApi
 logger = logging.getLogger(__name__)
 
 from opentraces_schema.models import TraceRecord
+
+
+class RemoteShardError(RuntimeError):
+    """Raised when a remote shard is unavailable during dedup or stats fetch.
+
+    Extends RuntimeError so the push command's existing error handler
+    (``except RuntimeError``) aborts the push cleanly without a traceback.
+    """
 
 
 @dataclass
@@ -251,20 +260,19 @@ class HFUploader:
             logger.debug("Could not fetch quality.json from %s: %s", self.repo_id, e)
             return None
 
-    def fetch_all_remote_traces(self) -> list[TraceRecord]:
-        """Download and parse every trace record from all existing remote shards.
+    def iter_remote_traces(self) -> Iterator[TraceRecord]:
+        """Stream every trace record from all existing remote shards one at a time.
 
-        Used after a push to build an accurate aggregate dataset card.
-        Shards are cached locally by huggingface_hub after the first download,
-        so this is fast when called soon after fetch_remote_content_hashes().
-        Returns an empty list if the repo has no shards or on total failure.
+        Yields one TraceRecord per line, processing one shard before downloading
+        the next so only one shard lives in memory at a time.
+        Shards are cached locally by huggingface_hub after the first download.
+        Raises RemoteShardError on any shard failure: partial data would produce
+        incorrect stats and quality scores, so fail-closed is safer.
         """
         shards = self.get_existing_shards()
         if not shards:
-            return []
+            return
 
-        records: list[TraceRecord] = []
-        failed_shards: list[str] = []
         for shard_path in shards:
             try:
                 local_path = self.api.hf_hub_download(
@@ -277,26 +285,34 @@ class HFUploader:
                     if not line:
                         continue
                     try:
-                        records.append(TraceRecord.model_validate_json(line))
+                        yield TraceRecord.model_validate_json(line)
                     except Exception:
                         continue
+            except RemoteShardError:
+                raise
             except Exception as e:
-                logger.warning("Could not fetch shard %s: %s", shard_path, e)
-                failed_shards.append(shard_path)
+                raise RemoteShardError(
+                    f"Shard {shard_path} unavailable: {e}. "
+                    "Retry when the shard is accessible."
+                ) from e
 
-        if failed_shards:
-            logger.warning(
-                "fetch_all_remote_traces: %d/%d shards failed to download for %s "
-                "-- quality scores and card stats are based on partial data.",
-                len(failed_shards), len(shards), self.repo_id,
-            )
-        return records
+    def fetch_all_remote_traces(self) -> list[TraceRecord]:
+        """Download and parse every trace record from all existing remote shards.
+
+        Convenience wrapper around iter_remote_traces() that returns a list.
+        Used after a push to build an accurate aggregate dataset card.
+        Shards are cached locally by huggingface_hub after the first download,
+        so this is fast when called soon after fetch_remote_content_hashes().
+        Returns an empty list if the repo has no shards or on total failure.
+        """
+        return list(self.iter_remote_traces())
 
     def fetch_remote_content_hashes(self) -> set[str]:
         """Fetch content_hash values from all existing remote shards.
 
-        Best-effort: individual shard failures are logged and skipped.
-        Returns an empty set if the repo has no shards or on total failure.
+        Raises RemoteShardError if any shard is unavailable. Proceeding with
+        a partial hash set would silently allow duplicate traces to be uploaded,
+        so fail-closed is the only safe behavior here.
         """
         shards = self.get_existing_shards()
         if not shards:
@@ -321,6 +337,11 @@ class HFUploader:
                             hashes.add(ch)
                     except json.JSONDecodeError:
                         continue
+            except RemoteShardError:
+                raise
             except Exception as e:
-                logger.warning("Could not fetch shard %s: %s", shard_path, e)
+                raise RemoteShardError(
+                    f"Cannot safely dedup: shard {shard_path} unavailable: {e}. "
+                    "Retry when the shard is accessible."
+                ) from e
         return hashes

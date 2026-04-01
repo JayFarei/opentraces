@@ -477,7 +477,8 @@ class ClaudeCodeParser:
                 elif block_type == "tool_use":
                     tool_call_id = block.get("id", str(uuid.uuid4()))
                     tool_name = block.get("name", "unknown")
-                    tool_input = block.get("input", {})
+                    raw_input = block.get("input", {})
+                    tool_input = raw_input if isinstance(raw_input, dict) else {}
 
                     tc = ToolCall(
                         tool_call_id=tool_call_id,
@@ -746,14 +747,28 @@ class ClaudeCodeParser:
 
         if tool_name == "Read":
             file_path = tool_input.get("file_path")
+            file_path = file_path if isinstance(file_path, str) else None
             if file_path and content:
-                offset = tool_input.get("offset", 1)
-                line_count = content.count("\n") + 1 if content else 0
+                raw_offset = tool_input.get("offset")
+                if raw_offset is None:
+                    # offset absent — default to line 1
+                    start_line: int | None = 1
+                elif isinstance(raw_offset, bool):
+                    # bool passes int() — reject it explicitly
+                    start_line = None
+                else:
+                    try:
+                        coerced = int(raw_offset)
+                        start_line = coerced if coerced > 0 else None
+                    except (TypeError, ValueError):
+                        start_line = None
+                line_count = content.count("\n") + 1 if isinstance(content, str) else 0
+                end_line = (start_line + line_count - 1) if start_line is not None else None
                 lang = self._detect_language(file_path)
                 snippets.append(Snippet(
                     file_path=file_path,
-                    start_line=offset,
-                    end_line=offset + line_count - 1,
+                    start_line=start_line,
+                    end_line=end_line,
                     language=lang,
                     text=content[:5000] if len(content) > 5000 else content,
                     source_step=source_step,
@@ -761,7 +776,9 @@ class ClaudeCodeParser:
 
         elif tool_name == "Edit":
             file_path = tool_input.get("file_path")
+            file_path = file_path if isinstance(file_path, str) else None
             new_string = tool_input.get("new_string")
+            new_string = new_string if isinstance(new_string, str) else None
             if file_path and new_string:
                 lang = self._detect_language(file_path)
                 snippets.append(Snippet(
@@ -773,7 +790,9 @@ class ClaudeCodeParser:
 
         elif tool_name == "Write":
             file_path = tool_input.get("file_path")
+            file_path = file_path if isinstance(file_path, str) else None
             file_content = tool_input.get("content")
+            file_content = file_content if isinstance(file_content, str) else None
             if file_path and file_content:
                 lang = self._detect_language(file_path)
                 snippets.append(Snippet(
@@ -793,6 +812,7 @@ class ClaudeCodeParser:
                     for match in matches[:10]:
                         if isinstance(match, dict):
                             fp = match.get("file_path") or match.get("path")
+                            fp = fp if isinstance(fp, str) else None
                             if fp:
                                 snippets.append(Snippet(
                                     file_path=fp,
@@ -889,7 +909,7 @@ class ClaudeCodeParser:
             return Outcome(
                 success=False,
                 signal_source="result_message",
-                signal_confidence="derived",
+                signal_confidence="inferred",  # stop reason is not task-success signal
                 description=stop_reason,
             )
 

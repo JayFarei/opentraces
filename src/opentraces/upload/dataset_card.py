@@ -6,6 +6,7 @@ Preserves user-edited sections on update.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 
 from opentraces_schema.models import TraceRecord
@@ -16,7 +17,7 @@ AUTO_END = "<!-- opentraces:auto-stats-end -->"
 BADGE_START = "<!-- opentraces:auto-badges-start -->"
 BADGE_END = "<!-- opentraces:auto-badges-end -->"
 STATS_SENTINEL_START = "<!-- opentraces:stats"
-STATS_SENTINEL_END = "-->"
+STATS_SENTINEL_END = "<!-- opentraces:stats-end -->"
 
 
 def _size_category(count: int) -> str:
@@ -177,7 +178,6 @@ def _render_machine_json(stats: dict) -> str:
     is unaffected. Parseable with a simple regex in browser JS:
         /<!-- opentraces:stats\\s*(\\{.*?\\})\\s*-->/s
     """
-    import json
     payload = {
         "total_traces": stats["total_traces"],
         "total_tokens": stats["total_tokens"],
@@ -190,7 +190,7 @@ def _render_machine_json(stats: dict) -> str:
         "model_counts": stats["model_counts"],
         "date_range": stats["date_range"],
     }
-    return f"{STATS_SENTINEL_START}\n{json.dumps(payload, separators=(',', ':'))}\n{STATS_SENTINEL_END}"
+    return f"{STATS_SENTINEL_START}\n{json.dumps(payload, separators=(',', ':'))}\n{STATS_SENTINEL_END}\n"
 
 
 def _render_stats_section(stats: dict, quality_summary: dict | None = None) -> str:

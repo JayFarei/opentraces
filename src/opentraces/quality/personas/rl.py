@@ -22,7 +22,7 @@ def _rl1_grounded_outcome_signal(record: TraceRecord, raw_data: dict | None) -> 
     """
     ctx = record.execution_context
 
-    if ctx == "runtime" or ctx is None and record.outcome.terminal_state is not None:
+    if ctx == "runtime" or (ctx is None and record.outcome.terminal_state is not None):
         # Runtime path: check for terminal_state or numeric reward
         if record.outcome.reward is not None:
             return CheckResult(

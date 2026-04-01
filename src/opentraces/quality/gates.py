@@ -60,19 +60,23 @@ def check_gate(batch: BatchAssessment, thresholds: list[PersonaThreshold] | None
     failures = []
 
     for threshold in thresholds:
+        # Skip gate check if no traces had active (non-skipped) checks for this persona
+        if threshold.persona not in batch.persona_averages:
+            continue
+
         # Check average
-        avg = batch.persona_averages.get(threshold.persona, 0)
+        avg = batch.persona_averages[threshold.persona]
         if avg < threshold.min_average:
             failures.append(
                 f"{threshold.persona} average {avg:.1f}% below"
                 f" {threshold.min_average}% minimum"
             )
 
-        # Check individual minimums
+        # Check individual minimums (skipped traces excluded)
         if threshold.min_individual is not None:
             for assessment in batch.assessments:
                 ps = assessment.persona_scores.get(threshold.persona)
-                if ps and ps.total_score < threshold.min_individual:
+                if ps and not ps.skipped and ps.total_score < threshold.min_individual:
                     failures.append(
                         f"Trace {assessment.trace_id[:8]} {threshold.persona} "
                         f"{ps.total_score:.1f}% below"

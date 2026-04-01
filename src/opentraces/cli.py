@@ -6,6 +6,7 @@ Designed to be driven by Claude Code via bundled SKILL.md.
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -1052,8 +1053,6 @@ def init(
 @main.command()
 def remove() -> None:
     """Remove opentraces from the current project."""
-    import shutil
-
     project_dir = Path.cwd()
     ot_dir = project_dir / ".opentraces"
 
@@ -1084,8 +1083,6 @@ def remove() -> None:
 
 def _detect_install_method() -> str:
     """Detect how opentraces was installed: pipx, brew, editable, or pip."""
-    import shutil
-
     pkg_path = Path(__file__).resolve()
     pkg_str = str(pkg_path)
 
@@ -1128,8 +1125,8 @@ def _run_upgrade_subprocess(cmd: list[str], method: str, timeout: int = 120) -> 
         return True
 
     combined = (result.stderr + result.stdout).lower()
-    # "already at latest" is not an error
-    if "already" in combined and ("latest" in combined or "installed" in combined or "up-to-date" in combined):
+    # "already at latest" is not an error — match specific phrases to avoid false positives
+    if any(phrase in combined for phrase in ("already up to date", "already up-to-date", "already at latest", "already installed opentraces", "already installed")):
         human_echo("Already on the latest version.")
         return True
 
@@ -1306,10 +1303,9 @@ def _remove_capture_hook(project_dir: Path) -> bool:
     if not hooks:
         settings.pop("hooks", None)
 
-    import os as _os
     tmp_path = settings_path.with_suffix(".json.tmp")
     tmp_path.write_text(json.dumps(settings, indent=2) + "\n")
-    _os.replace(str(tmp_path), str(settings_path))
+    os.replace(str(tmp_path), str(settings_path))
     return True
 
 
@@ -1400,8 +1396,6 @@ def assess_remote(repo: str, judge: bool, judge_model: str, limit: int, rewrite_
     Requires hf-mount: curl -fsSL https://raw.githubusercontent.com/huggingface/hf-mount/main/install.sh | sh
     """
     import glob
-    import io
-    import shutil
     import subprocess
     from datetime import datetime
 
@@ -1536,7 +1530,10 @@ def assess_remote(repo: str, judge: bool, judge_model: str, limit: int, rewrite_
 
     finally:
         click.echo(f"Unmounting {mount_path}...")
-        subprocess.run(["hf-mount", "stop", mount_path], capture_output=True, timeout=30)
+        try:
+            subprocess.run(["hf-mount", "stop", mount_path], capture_output=True, timeout=30)
+        except Exception as _e:
+            logger.warning("hf-mount stop failed: %s", _e)
 
 
 @main.command()
@@ -2729,13 +2726,12 @@ def _assess_dataset(repo_id: str, judge: bool = False, judge_model: str = "haiku
     Downloads all shards via huggingface_hub (cached locally after first fetch).
     Does not require hf-mount.
     """
-    import io
     from datetime import datetime
 
     from .quality.engine import assess_batch, generate_report
     from .quality.gates import check_gate
     from .quality.summary import build_summary
-    from .upload.hf_hub import HFUploader
+    from .upload.hf_hub import HFUploader, RemoteShardError
     from .upload.dataset_card import generate_dataset_card
     from .config import load_config
 
@@ -2745,7 +2741,12 @@ def _assess_dataset(repo_id: str, judge: bool = False, judge_model: str = "haiku
     uploader = HFUploader(token=token or "", repo_id=repo_id)
 
     click.echo(f"Fetching traces from {repo_id}...")
-    traces = uploader.fetch_all_remote_traces()
+    try:
+        traces = uploader.fetch_all_remote_traces()
+    except RemoteShardError as e:
+        click.echo(f"Error: {e}", err=True)
+        emit_json(error_response("SHARD_UNAVAILABLE", "network", str(e), retryable=True))
+        sys.exit(4)
 
     if not traces:
         click.echo("No valid traces found in dataset.")
@@ -3333,9 +3334,8 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                             click.echo(f"  Warning: quality assessment failed: {e}", err=True)
 
                     card = generate_dataset_card(repo_id, card_traces, existing_card, quality_summary=quality_summary)
-                    import io as _io
                     uploader.api.upload_file(
-                        path_or_fileobj=_io.BytesIO(card.encode("utf-8")),
+                        path_or_fileobj=io.BytesIO(card.encode("utf-8")),
                         path_in_repo="README.md",
                         repo_id=repo_id,
                         repo_type="dataset",
@@ -3609,10 +3609,9 @@ def hooks_install(hooks_dir: str | None, settings_file: str | None, dry_run: boo
             event_hooks.append({"type": "command", "command": command})
             added.append(event)
 
-    import os as _os_hooks
     _tmp = target_settings.with_suffix(".json.tmp")
     _tmp.write_text(json.dumps(settings, indent=2))
-    _os_hooks.replace(str(_tmp), str(target_settings))
+    os.replace(str(_tmp), str(target_settings))
 
     if added:
         human_echo(f"Registered hooks in {target_settings}: {', '.join(added)}")

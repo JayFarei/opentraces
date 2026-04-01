@@ -169,7 +169,7 @@ def _d6_attribution_when_edits(record: TraceRecord, raw_data: dict | None) -> Ch
 
     Agent Trace spec bridge. Experimental in v0.1.
     """
-    edit_tool_names = {"Edit", "Write", "edit", "write", "file_edit", "file_write"}
+    edit_tool_names = {"Edit", "Write", "edit", "write", "patch", "write_file"}
     has_edits = any(
         tc.tool_name in edit_tool_names
         for step in record.steps

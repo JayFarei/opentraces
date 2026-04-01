@@ -37,6 +37,7 @@ class PersonaScore:
     pass_rate: float  # 0-100
     items: list[RubricItem] = field(default_factory=list)
     category_scores: dict[str, float] = field(default_factory=dict)
+    skipped: bool = False  # True when all checks were N/A for this trace
     # LLM judge fields (populated when enable_judge=True)
     deterministic_score: float | None = None  # original deterministic score before blending
     judge_score: float | None = None  # 0-100, from LLM judge
@@ -107,11 +108,20 @@ def _run_persona(
     active = [i for i in items if not i.skipped]
     total_weight = sum(i.weight for i in active)
     if total_weight == 0:
-        total_score = 0.0
-    else:
-        total_score = round(
-            sum(i.score * i.weight for i in active) / total_weight * 100, 1
+        # All checks were N/A for this trace — mark persona as skipped so
+        # the upload gate does not treat 0.0 as a failing score.
+        return PersonaScore(
+            persona_name=persona.name,
+            total_score=0.0,
+            pass_rate=0.0,
+            items=items,
+            category_scores={},
+            skipped=True,
         )
+
+    total_score = round(
+        sum(i.score * i.weight for i in active) / total_weight * 100, 1
+    )
 
     pass_count = sum(1 for i in active if i.passed)
     pass_rate = round(pass_count / max(len(active), 1) * 100, 1)
@@ -224,10 +234,11 @@ def assess_trace(
         except Exception as e:
             logger.warning("Preservation comparison failed: %s", e)
 
-    # Overall utility: weighted average of persona scores
+    # Overall utility: weighted average of non-skipped persona scores
     if assessment.persona_scores:
-        scores = [ps.total_score for ps in assessment.persona_scores.values()]
-        assessment.overall_utility = round(sum(scores) / len(scores), 1)
+        active_scores = [ps.total_score for ps in assessment.persona_scores.values() if not ps.skipped]
+        if active_scores:
+            assessment.overall_utility = round(sum(active_scores) / len(active_scores), 1)
 
     return assessment
 
@@ -281,11 +292,13 @@ def assess_batch(
 
     # Compute averages
     if batch.assessments:
-        # Per-persona averages
+        # Per-persona averages — exclude skipped scores so N/A traces
+        # don't drag a persona's average to 0 in the upload gate.
         persona_totals: dict[str, list[float]] = {}
         for a in batch.assessments:
             for name, ps in a.persona_scores.items():
-                persona_totals.setdefault(name, []).append(ps.total_score)
+                if not ps.skipped:
+                    persona_totals.setdefault(name, []).append(ps.total_score)
         batch.persona_averages = {
             name: round(sum(scores) / len(scores), 1)
             for name, scores in persona_totals.items()

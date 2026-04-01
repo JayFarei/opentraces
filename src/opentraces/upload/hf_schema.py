@@ -61,7 +61,7 @@ HF_FEATURES: dict = {
         "language_ecosystem": [_V("string")],
     },
     "system_prompts": _JSON,
-    "tool_definitions": [_V("string")],
+    "tool_definitions": [_JSON],
     "steps": [
         {
             "step_index": _V("int64"),
