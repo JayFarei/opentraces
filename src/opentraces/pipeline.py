@@ -63,7 +63,16 @@ def _enrich_from_steps(
     if not record.outcome.committed:
         step_outcome = detect_commits_from_steps(record.steps)
         if step_outcome.committed:
-            record.outcome = step_outcome
+            # Merge commit signals into the existing outcome rather than replacing it.
+            # Replacing would lose RL/runtime signals (terminal_state, reward, etc.)
+            # already set by the parser for runtime traces.
+            record.outcome.committed = step_outcome.committed
+            record.outcome.commit_sha = step_outcome.commit_sha
+            if record.outcome.success is None and step_outcome.success is not None:
+                record.outcome.success = step_outcome.success
+            if not record.outcome.signal_source or record.outcome.signal_source == "deterministic":
+                record.outcome.signal_source = step_outcome.signal_source
+                record.outcome.signal_confidence = step_outcome.signal_confidence
 
 
 def process_trace(

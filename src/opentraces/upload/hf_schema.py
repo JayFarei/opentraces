@@ -140,7 +140,6 @@ HF_FEATURES: dict = {
         "classifier_version": _V("string"),
     },
     "attribution": {
-        "version": _V("string"),
         "experimental": _V("bool"),
         "files": [
             {

@@ -264,6 +264,7 @@ class HFUploader:
             return []
 
         records: list[TraceRecord] = []
+        failed_shards: list[str] = []
         for shard_path in shards:
             try:
                 local_path = self.api.hf_hub_download(
@@ -281,6 +282,14 @@ class HFUploader:
                         continue
             except Exception as e:
                 logger.warning("Could not fetch shard %s: %s", shard_path, e)
+                failed_shards.append(shard_path)
+
+        if failed_shards:
+            logger.warning(
+                "fetch_all_remote_traces: %d/%d shards failed to download for %s "
+                "-- quality scores and card stats are based on partial data.",
+                len(failed_shards), len(shards), self.repo_id,
+            )
         return records
 
     def fetch_remote_content_hashes(self) -> set[str]:

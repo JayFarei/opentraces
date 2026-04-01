@@ -193,24 +193,44 @@ class HermesParser:
         partial = row.get("partial")
 
         # Scan observations for RL environment reward signal (strongest runtime signal).
+        # Match by tool_call_id: collect IDs for rl_get_results tool calls first,
+        # then look for observations linked to those calls.
+        rl_tool_call_ids: set[str] = {
+            tc.tool_call_id
+            for step in steps
+            for tc in step.tool_calls
+            if tc.tool_name == "rl_get_results"
+        }
         rl_reward: float | None = None
-        for step in steps:
-            for obs in step.observations:
-                if obs.content and "rl_get_results" in (obs.source_call_id or ""):
-                    try:
-                        data = json.loads(obs.content)
-                        if isinstance(data, dict) and "reward" in data:
-                            rl_reward = float(data["reward"])
-                    except (json.JSONDecodeError, ValueError, TypeError):
-                        pass
+        if rl_tool_call_ids:
+            for step in steps:
+                for obs in step.observations:
+                    if obs.content and obs.source_call_id in rl_tool_call_ids:
+                        try:
+                            data = json.loads(obs.content)
+                            if isinstance(data, dict) and "reward" in data:
+                                rl_reward = float(data["reward"])
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            pass
 
         if rl_reward is not None:
             # Ground truth from RL environment: use "derived" confidence.
+            # reward > 0: success; reward == 0: task not completed (abandoned);
+            # reward < 0: explicit failure signal from environment.
+            if rl_reward > 0:
+                terminal_state = "goal_reached"
+                success = True
+            elif rl_reward < 0:
+                terminal_state = "error"
+                success = False
+            else:
+                terminal_state = "abandoned"
+                success = False
             outcome = Outcome(
-                success=rl_reward > 0,
+                success=success,
                 signal_source="rl_environment",
                 signal_confidence="derived",
-                terminal_state="goal_reached" if rl_reward > 0 else "error",
+                terminal_state=terminal_state,
                 reward=rl_reward,
                 reward_source="rl_environment",
                 description=f"RL environment reward: {rl_reward}",
@@ -424,7 +444,7 @@ class HermesParser:
                 # Normalize tool calls
                 normalized_calls = []
                 for tc in tool_calls:
-                    canonical, mapped_args, original = self._normalize_tool_call(
+                    canonical, mapped_args, _ = self._normalize_tool_call(
                         tc.tool_name, tc.input,
                     )
                     normalized_calls.append(ToolCall(
@@ -467,8 +487,9 @@ class HermesParser:
                             last_agent = s
                             break
                     if last_agent:
-                        # Count how many observations are already folded
-                        existing_obs = len(last_agent.observations)
+                        # Count observations already folded OR still pending from
+                        # previous tool messages for this same agent step.
+                        existing_obs = len(last_agent.observations) + len(pending_observations)
                         for obs_idx, obs in enumerate(observations):
                             tc_idx = existing_obs + obs_idx
                             if (

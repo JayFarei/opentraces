@@ -1244,7 +1244,7 @@ def _install_capture_hook(project_dir: Path, agents: list[str]) -> bool:
         return True
     except Exception as e:
         human_echo(f"  Could not install hook: {e}")
-        click.echo(f"  Add manually to .claude/settings.json")
+        human_echo("  Add manually to .claude/settings.json")
         return False
 
 
@@ -1426,10 +1426,14 @@ def assess_remote(repo: str, judge: bool, judge_model: str, limit: int, rewrite_
     Path(mount_path).mkdir(parents=True, exist_ok=True)
 
     click.echo(f"Mounting {repo} at {mount_path}...")
-    result = subprocess.run(
-        ["hf-mount", "start", "repo", f"datasets/{repo}", mount_path],
-        capture_output=True, text=True, timeout=60,
-    )
+    try:
+        result = subprocess.run(
+            ["hf-mount", "start", "repo", f"datasets/{repo}", mount_path],
+            capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        click.echo("Error: hf-mount timed out after 60s.", err=True)
+        raise SystemExit(1)
     if result.returncode != 0:
         click.echo(f"Error: hf-mount failed: {result.stderr.strip()}", err=True)
         raise SystemExit(1)
@@ -2602,8 +2606,10 @@ def import_hf(
             skipped_count += 1
             continue
 
-        # Abort if failure rate > 10% (after 10+ rows processed)
-        total_attempted = parsed_count + skipped_count + error_count
+        # Abort if failure rate > 10% (after 10+ rows the parser actually attempted).
+        # Skipped rows (e.g. no 'conversations' key) are excluded from the denominator
+        # since they represent valid parser decisions, not parser failures.
+        total_attempted = parsed_count + error_count
         if total_attempted >= 10 and error_count / total_attempted > 0.10:
             human_echo(
                 f"Aborting: error rate {error_count}/{total_attempted} "
@@ -2967,7 +2973,6 @@ def assess(judge: bool, judge_model: str, limit: int, compare_remote: bool, all_
                 api = HfApi()
                 try:
                     content = api.hf_hub_download(repo_id=repo_id, filename="quality.json", repo_type="dataset")
-                    import json
                     with open(content) as f:
                         remote_data = json.load(f)
                     remote_summary = QualitySummary.from_dict(remote_data)
@@ -3263,9 +3268,13 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
             remote_hashes = uploader.fetch_remote_content_hashes()
             if remote_hashes:
                 before_count = len(records)
+                # Only pair records with the entries that actually loaded successfully.
+                # traces_to_upload may include entries whose files failed to read above,
+                # so zip(records, traces_to_upload) would silently misalign the pairs.
+                loaded_entries = [e for e in traces_to_upload if e.trace_id in loaded_trace_ids]
                 duplicate_trace_ids: set[str] = set()
                 new_records = []
-                for record, entry in zip(records, traces_to_upload):
+                for record, entry in zip(records, loaded_entries):
                     if record.compute_content_hash() in remote_hashes:
                         duplicate_trace_ids.add(entry.trace_id)
                     else:
@@ -3315,8 +3324,11 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                             gate = check_gate(batch)
                             summary = build_summary(batch, gate, mode="deterministic")
                             quality_summary = summary.to_dict()
-                            uploader.upload_quality_json(quality_summary)
-                            click.echo(f"  Overall utility: {summary.overall_utility:.1f}% | Gate: {'PASS' if summary.gate_passed else 'FAIL'}")
+                            if uploader.upload_quality_json(quality_summary):
+                                click.echo(f"  Overall utility: {summary.overall_utility:.1f}% | Gate: {'PASS' if summary.gate_passed else 'FAIL'}")
+                            else:
+                                click.echo("  Warning: quality.json upload failed -- quality scores excluded from README", err=True)
+                                quality_summary = None
                         except Exception as e:
                             click.echo(f"  Warning: quality assessment failed: {e}", err=True)
 
@@ -3597,7 +3609,10 @@ def hooks_install(hooks_dir: str | None, settings_file: str | None, dry_run: boo
             event_hooks.append({"type": "command", "command": command})
             added.append(event)
 
-    target_settings.write_text(json.dumps(settings, indent=2))
+    import os as _os_hooks
+    _tmp = target_settings.with_suffix(".json.tmp")
+    _tmp.write_text(json.dumps(settings, indent=2))
+    _os_hooks.replace(str(_tmp), str(target_settings))
 
     if added:
         human_echo(f"Registered hooks in {target_settings}: {', '.join(added)}")
