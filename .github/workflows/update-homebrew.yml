@@ -69,5 +69,6 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/JayFarei/homebrew-opentraces.git
           git add Formula/opentraces.rb
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "Update opentraces to ${{ steps.sha.outputs.version }}"
           git push
