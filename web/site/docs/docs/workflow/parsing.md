@@ -37,9 +37,28 @@ Every parsed trace is enriched before staging:
 
 The review surface still exists either way. `auto` just reduces the amount of manual triage needed, and traces with scan hits still land in the inbox.
 
-## Internal Batch Commands
+## Parsing Existing Sessions
 
-`discover` and `parse` are hidden internal commands used for diagnostics and batch processing. The user-facing path is the hook plus inbox workflow.
+To import sessions that were recorded before you ran `opentraces init`, pass `--import-existing` at init time:
+
+```bash
+opentraces init --import-existing
+```
+
+This runs a one-off batch parse of all existing Claude Code sessions for the current project directory, applying the same enrichment and security pipeline as the hook.
+
+### Internal Batch Commands
+
+`discover` and `parse` are hidden commands available for diagnostics and manual batch processing:
+
+```bash
+opentraces discover          # list all Claude Code projects with session files
+opentraces parse             # parse all unparsed sessions into staging
+opentraces parse --auto      # parse and auto-approve (skip review)
+opentraces parse --limit 10  # parse at most 10 sessions
+```
+
+These bypass the hook path and write directly to `.opentraces/staging/`. The user-facing path for ongoing collection is the hook plus inbox workflow.
 
 ## What Gets Filtered
 

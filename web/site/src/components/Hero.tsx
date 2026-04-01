@@ -127,7 +127,7 @@ export default function Hero() {
           <div style={{ height: 16 }} />
           <h1>Open data is the new open source.</h1>
           <p className="hero-sub">
-            Traces are how agents improve. opentraces makes that loop open — commit sessions to HuggingFace Hub, private or public, and let the community build on real workflows instead of synthetic benchmarks.
+            When LLMs drive the logic, traces become the real source: the record of decisions, tool calls, and reasoning behind the outcome. opentraces lets you commit those sessions to HuggingFace Hub so others can build on real workflows, not synthetic benchmarks.
           </p>
           <div className="hero-install-tabs">
             {installMethods.map((m, i) => (

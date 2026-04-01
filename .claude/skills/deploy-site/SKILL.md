@@ -3,7 +3,9 @@ name: deploy-site
 description: >
   Deploy the opentraces.ai marketing site to Vercel production.
   Use when the user says "deploy site", "deploy to vercel", "push site",
-  "ship the site", or "deploy-site".
+  "ship the site", or "deploy-site". For a full coordinated release that
+  includes a version bump and package publish alongside the site deploy,
+  use /release-pack instead.
 ---
 
 # Deploy Site

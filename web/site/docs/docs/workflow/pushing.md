@@ -1,16 +1,6 @@
 # Push
 
-`opentraces push` uploads committed traces to Hugging Face Hub as sharded JSONL files.
-
-## Current Flow
-
-```bash
-opentraces session commit <trace-id>
-opentraces commit --all
-opentraces push
-```
-
-`push` only uploads committed traces. If you have inbox traces that have not been committed yet, run `opentraces commit` first.
+`opentraces push` uploads committed traces to Hugging Face Hub as sharded JSONL files. Only committed traces are uploaded — run `opentraces commit` first if needed.
 
 ## Options
 
@@ -72,23 +62,11 @@ A machine-readable JSON block is embedded for programmatic consumers:
 
 ### Quality scorecard (`--assess`)
 
-`opentraces push --assess` runs quality scoring after upload and embeds the results in the dataset card:
+`opentraces push --assess` runs quality scoring after upload and embeds the results in the dataset card. Here's what it looks like on a live dataset:
 
-- Shields.io badges immediately after the dataset title: overall utility score, gate status (PASSING/FAILING), and one badge per persona
-- A per-persona breakdown table with PASS / WARN / FAIL status per rubric
-- A `quality.json` sidecar file uploaded alongside the shards for machine consumers
+[![Overall Quality 78.1%](https://img.shields.io/badge/Overall_Quality-78.1%25-ffc107)](https://opentraces.ai) [![Gate FAILING](https://img.shields.io/badge/Gate-FAILING-dc3545)](https://opentraces.ai) ![Conformance 88.4%](https://img.shields.io/badge/Conformance-88.4%25-28a745) ![Training 89.0%](https://img.shields.io/badge/Training-89.0%25-28a745) ![RL 73.4%](https://img.shields.io/badge/RL-73.4%25-ffc107) ![Analytics 55.7%](https://img.shields.io/badge/Analytics-55.7%25-fd7e14) ![Domain 84.1%](https://img.shields.io/badge/Domain-84.1%25-28a745)
 
-The gate is `PASSING` when overall utility is above the configured threshold (default 60%).
-
-**Re-running assessment without a new push**
-
-If you want to refresh the scorecard after adding more traces, or after changing assessment configuration, you can run assessment directly against the remote dataset without uploading again:
-
-```bash
-opentraces assess --dataset user/my-traces
-```
-
-This downloads all shards from the HF dataset repo, runs a fresh assessment, and updates both the `README.md` dataset card and `quality.json` in place. It does not require hf-mount and does not modify your local inbox.
+The scorecard embeds per-persona scores as shields.io badges, a breakdown table with PASS / WARN / FAIL per rubric, and a `quality.json` sidecar for machine consumers. See [Assess](/docs/workflow/quality) for scoring details.
 
 ## Visibility
 

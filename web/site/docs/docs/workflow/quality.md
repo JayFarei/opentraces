@@ -1,22 +1,14 @@
 # Assess
 
-`opentraces assess` scores traces against five consumer-facing rubrics before you push.
-It's optional but recommended: low-quality batches affect downstream training and analytics
-pipelines, and the score shows up as badges on your HuggingFace dataset card.
-
-## The recommended workflow
+`opentraces assess` scores committed traces against five consumer-facing rubrics. Run it after committing, before you push:
 
 ```bash
-opentraces commit --all     # move captured traces from inbox to committed
-opentraces assess           # score the committed batch, see failures before push
-opentraces push             # upload only when you're happy
+opentraces assess
 ```
 
-Or do it all at once:
+Scores are printed to the terminal. Low-scoring traces show which checks failed so you can decide whether to fix or push anyway. Assessment only runs against committed traces — run `opentraces commit` first if your inbox isn't empty.
 
-```bash
-opentraces push --assess    # upload + score + embed in dataset card in one step
-```
+You can also score and push in one step with `opentraces push --assess`, which uploads and embeds the scorecard in the HuggingFace dataset card. See [Push](/docs/workflow/pushing) for details.
 
 ## How scoring works
 
@@ -130,17 +122,4 @@ the dataset card. Use `--gate` to enforce hard blocking (coming soon).
 
 ## Dataset card integration
 
-When you run `opentraces push --assess`, quality scores are embedded in the
-HuggingFace dataset README as shields.io badges and a scorecard table.
-
-Here's what a dataset card looks like after `push --assess` — live preview
-using the actual scores from `OpenTraces/opentraces-runtime`:
-
-[![Overall Quality 78.1%](https://img.shields.io/badge/Overall_Quality-78.1%25-ffc107)](https://opentraces.ai) [![Gate FAILING](https://img.shields.io/badge/Gate-FAILING-dc3545)](https://opentraces.ai) ![Conformance 88.4%](https://img.shields.io/badge/Conformance-88.4%25-28a745) ![Training 89.0%](https://img.shields.io/badge/Training-89.0%25-28a745) ![RL 73.4%](https://img.shields.io/badge/RL-73.4%25-ffc107) ![Analytics 55.7%](https://img.shields.io/badge/Analytics-55.7%25-fd7e14) ![Domain 84.1%](https://img.shields.io/badge/Domain-84.1%25-28a745)
-
-The scorecard table shows per-persona min/max/average with PASS / WARN / FAIL
-status per rubric, and the scores are also written to YAML frontmatter as
-HuggingFace-searchable keys (`conformance_score`, `training_score`, etc.).
-
-A `quality.json` sidecar is uploaded alongside the data shards for machine consumers.
-
+When you push with `--assess`, scores are embedded in the HuggingFace dataset card as badges and a scorecard table, and written to YAML frontmatter as searchable keys. See [Push](/docs/workflow/pushing) for details.

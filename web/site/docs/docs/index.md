@@ -35,9 +35,4 @@ The [schema](/docs/schema/overview) is built for the people who consume traces, 
 | **[CI/CD](/docs/integration/ci-cd)** | Headless automation and token auth |
 | **[Contributing](/docs/contributing/development)** | Local dev and schema changes |
 
-## Links
-
-- [GitHub](https://github.com/jayfarei/opentraces)
-- [Schema Rationale](/docs/schema/overview)
-- [opentraces.ai](https://opentraces.ai)
 

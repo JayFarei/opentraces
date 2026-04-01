@@ -14,8 +14,8 @@ const features = [
     desc: "Push traces automatically to a private dataset, or review each session before committing to the remote.",
   },
   {
-    title: "training-first schema",
-    desc: "Outcome signals, sub-agent hierarchy, per-step tokens. Designed for SFT and RL.",
+    title: "traces as source",
+    desc: "In LLM-driven systems the trace isn't a log — it's where the logic lives. Outcome signals, tool call sequences, reasoning paths. Designed for SFT, RL, and eval.",
   },
   {
     title: "huggingface native",
