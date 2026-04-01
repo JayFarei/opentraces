@@ -339,7 +339,7 @@ class TestDatasetCardQuality:
         assert "overall_quality: 68.4" in card
 
         # Stats section has quality table
-        assert "Quality Scores" in card
+        assert "opentraces Scorecard" in card
         assert "training" in card
         assert "68.4%" in card
         assert "PASSING" in card
@@ -350,7 +350,7 @@ class TestDatasetCardQuality:
         card = generate_dataset_card("user/test", traces)
 
         assert "training_score" not in card
-        assert "Quality Scores" not in card
+        assert "opentraces Scorecard" not in card
         assert "opentraces" in card  # basic tags still present
 
     def test_update_card_preserves_user_content(self):
@@ -384,7 +384,7 @@ class TestDatasetCardQuality:
 
         assert "My Custom Section" in updated
         assert "This should be preserved." in updated
-        assert "Quality Scores" in updated
+        assert "opentraces Scorecard" in updated
         assert "conformance_score: 90.0" in updated
 
     def test_card_failing_gate(self):
@@ -505,13 +505,13 @@ class TestAssessCLI:
             # Should handle missing staging gracefully
             assert result.exit_code == 0
 
-    def test_assess_dataset_no_hfmount(self):
-        """assess --dataset fails gracefully when hf-mount not installed."""
+    def test_assess_remote_no_hfmount(self):
+        """_assess-remote fails gracefully when hf-mount not installed."""
         from opentraces.cli import main
         from click.testing import CliRunner
 
         runner = CliRunner()
         with runner.isolated_filesystem():
             with patch("shutil.which", return_value=None):
-                result = runner.invoke(main, ["assess", "--dataset", "user/test"])
+                result = runner.invoke(main, ["_assess-remote", "--repo", "user/test"])
                 assert "hf-mount" in result.output

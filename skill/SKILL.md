@@ -38,6 +38,9 @@ opentraces session redact <ID> --step N  # scrub a specific step
 opentraces session discard <ID> --yes  # permanently delete a trace
 opentraces commit --all                # bulk commit all inbox traces
 opentraces push                        # upload committed traces to HF Hub
+opentraces push --assess               # upload + run quality assessment after push
+opentraces assess                      # score committed traces (local quality.json)
+opentraces assess --dataset owner/name # refresh quality.json on remote HF dataset
 ```
 
 ### Inspect
@@ -234,6 +237,27 @@ Remote resolution: `--repo` flag > project config remote > interactive selector 
 - Atomic: if upload fails, no partial data is left on the remote
 - Retry: 3 attempts with exponential backoff on network failure
 - File lock prevents concurrent pushes (exit code 7 if contention)
+
+## Quality Assessment
+
+`opentraces assess` scores committed (local) traces against quality rubrics and
+writes a `quality.json` sidecar with per-trace scores and an aggregate summary.
+
+```bash
+opentraces assess                        # score committed traces
+opentraces assess --judge                # use LLM judge for rubric scoring
+opentraces assess --judge-model sonnet   # judge model: haiku, sonnet, or opus
+opentraces assess --limit 20             # cap traces assessed in this run
+opentraces assess --compare-remote       # fetch remote quality.json and show delta
+opentraces assess --all-staged           # include inbox traces, not just committed
+opentraces assess --dataset owner/name   # assess remote HF dataset, update its
+                                         # README + quality.json without a new push
+```
+
+`push --assess` runs quality automatically after upload and includes scores in
+the dataset card. `quality.json` is uploaded as a sidecar to the HF dataset repo
+after `assess --dataset` or `push --assess`. Dataset cards include shields.io
+quality scorecard badges when a `quality.json` is present.
 
 ## Security
 

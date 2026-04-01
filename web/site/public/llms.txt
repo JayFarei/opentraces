@@ -296,6 +296,7 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces session` | Inspect and edit staged traces |
 | `opentraces commit` | Commit inbox traces for upload |
 | `opentraces push` | Upload committed traces to Hugging Face Hub |
+| `opentraces assess` | Score committed traces and write quality.json sidecar |
 | `opentraces web` | Open the browser inbox UI |
 | `opentraces tui` | Open the terminal inbox UI |
 | `opentraces stats` | Show aggregate inbox statistics |
@@ -477,8 +478,33 @@ opentraces push --repo user/custom-dataset
 | `--publish` | off | Publish an existing private dataset |
 | `--gated` | off | Enable gated access on the dataset |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
+| `--assess` | off | Run quality assessment after upload; includes scores in dataset card |
 
 `--approved-only` is not part of the current CLI. The public path is `commit -> push`.
+
+### `opentraces assess`
+
+Score committed traces against quality rubrics and write a `quality.json` sidecar. Use `--dataset` to refresh quality on an already-published HF dataset without a new push.
+
+```bash
+opentraces assess
+opentraces assess --judge --judge-model sonnet
+opentraces assess --limit 20
+opentraces assess --compare-remote
+opentraces assess --all-staged
+opentraces assess --dataset owner/dataset-name
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--judge / --no-judge` | off | Enable LLM-based rubric scoring |
+| `--judge-model` | `haiku` | Model for LLM judge: `haiku`, `sonnet`, or `opus` |
+| `--limit` | none | Cap the number of traces assessed in this run |
+| `--compare-remote` | off | Fetch remote quality.json and display delta |
+| `--all-staged` | off | Include inbox traces; default is committed only |
+| `--dataset` | unset | Assess a remote HF dataset, updating its README and quality.json without a new push |
+
+After `assess --dataset` or `push --assess`, `quality.json` is uploaded as a sidecar to the HF dataset repo and dataset cards include shields.io quality scorecard badges.
 
 ### `opentraces remote`
 
@@ -564,7 +590,6 @@ These commands exist for automation, compatibility, or diagnostics and are hidde
 | `opentraces migrate` | Check schema version and run migrations |
 | `opentraces capabilities --json` | Machine-discoverable feature list, supported agents, versions |
 | `opentraces introspect` | Full API schema and TraceRecord JSON schema for automation |
-| `opentraces assess` | Run quality assessment on staged traces |
 | `opentraces _capture` | Invoked by the Claude Code SessionEnd hook to auto-capture sessions |
 
 ## Exit Codes
