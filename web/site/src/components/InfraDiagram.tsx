@@ -17,7 +17,7 @@ const runTimeAgents: Agent[] = [
   { name: "Claude Code", ready: true },
   { name: "Hermes", ready: true },
   { name: "OpenClaw", ready: false },
-  { name: "NemoClaw", ready: false },
+  { name: "DeepAgents", ready: false },
 ];
 
 const pipelineSteps = ["init", "capture", "parse", "enrich", "sanitise"];
@@ -74,10 +74,13 @@ export default function InfraDiagram() {
       <SectionRule label="how it works" />
 
       <div className="arch">
-        {/* Source agents: two category boxes */}
-        <div className="arch-categories">
-          <AgentGrid label="dev-time agents" agents={devTimeAgents} />
-          <AgentGrid label="run-time agents" agents={runTimeAgents} />
+        {/* Source agents: two category boxes inside agent harness bracket */}
+        <div className="arch-harness">
+          <div className="arch-harness-label">agent harness</div>
+          <div className="arch-categories">
+            <AgentGrid label="dev-time agents" agents={devTimeAgents} />
+            <AgentGrid label="run-time agents" agents={runTimeAgents} />
+          </div>
         </div>
 
         <div className="arch-line" />

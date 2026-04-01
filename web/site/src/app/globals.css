@@ -287,6 +287,10 @@ html { color-scheme: light; }
   min-height: 32px;
 }
 .nav-theme-btn:hover { color: var(--text); border-color: var(--text-muted); background: var(--surface-hover); }
+/* Pre-hydration label: data-theme is set by inline script before React loads.
+   :empty matches when React renders null (no text node). Disappears once React hydrates. */
+[data-theme="dark"] .nav-theme-btn:empty::after { content: "light"; }
+[data-theme="light"] .nav-theme-btn:empty::after { content: "dark"; }
 .nav-hamburger {
   display: none;
   background: none;
@@ -964,6 +968,27 @@ tr:hover td { background: var(--surface-hover); }
   align-items: center;
   justify-content: center;
 }
+.arch-harness {
+  position: relative;
+  border: 1px solid var(--border);
+  padding: 28px 20px 18px;
+  width: 100%;
+  max-width: 640px;
+  box-sizing: border-box;
+}
+.arch-harness-label {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg);
+  padding: 0 10px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
 .arch-categories {
   display: flex;
   justify-content: center;
@@ -1022,6 +1047,7 @@ tr:hover td { background: var(--surface-hover); }
   .arch-step { padding: 4px 8px; font-size: 10px; }
   .arch-arrow { font-size: 10px; }
   .arch-tiers { flex-wrap: wrap; gap: 6px; }
+  .arch-harness { padding: 28px 12px 14px; }
   .arch-categories { flex-direction: column; align-items: center; gap: 12px; }
   .arch-agent-box { padding: 6px 10px; font-size: 10px; min-width: 70px; }
   .arch-fork-branch { min-width: 0; }
@@ -1648,6 +1674,7 @@ html[data-audience="machine"] .docs-main {
   transition: color 0.15s ease, background 0.15s ease;
   white-space: nowrap;
   line-height: 1;
+  text-decoration: none;
 }
 .audience-toggle-option:hover {
   color: var(--text-secondary);

@@ -26,7 +26,6 @@ export default function ThemeToggle() {
     setTheme(resolved);
     applyTheme(resolved);
 
-    // Listen for system preference changes (only if user hasn't manually set)
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     function onSystemChange(e: MediaQueryListEvent) {
       if (!localStorage.getItem("theme")) {

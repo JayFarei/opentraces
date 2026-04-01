@@ -67,7 +67,7 @@ export default function Nav() {
         <a href="https://github.com/jayfarei/opentraces" className="nav-link" target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)}>github</a>
         <span className="nav-divider" style={{ color: "var(--border)" }}>|</span>
         <button className="nav-theme-btn" onClick={toggle} aria-label="Toggle theme">
-          {theme === null ? "" : theme === "dark" ? "light" : "dark"}
+          {theme === null ? null : theme === "dark" ? "light" : "dark"}
         </button>
       </div>
     </nav>
