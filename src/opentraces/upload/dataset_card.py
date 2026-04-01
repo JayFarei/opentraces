@@ -13,6 +13,8 @@ from opentraces_schema.version import SCHEMA_VERSION
 
 AUTO_START = "<!-- opentraces:auto-stats-start -->"
 AUTO_END = "<!-- opentraces:auto-stats-end -->"
+BADGE_START = "<!-- opentraces:auto-badges-start -->"
+BADGE_END = "<!-- opentraces:auto-badges-end -->"
 STATS_SENTINEL_START = "<!-- opentraces:stats"
 STATS_SENTINEL_END = "-->"
 
@@ -89,26 +91,79 @@ def _compute_stats(traces: list[TraceRecord]) -> dict:
     }
 
 
+def _render_badge_row(quality_summary: dict | None) -> str:
+    """Render the auto-managed badge row that sits just below the H1 title.
+
+    Returns an empty sentinel block when quality_summary is None so the
+    markers are present for future updates even if there are no scores yet.
+    """
+    if not quality_summary:
+        return f"{BADGE_START}\n{BADGE_END}"
+
+    overall = quality_summary.get("overall_utility", 0.0)
+    gate = quality_summary.get("gate_status", "unknown")
+    gate_color = "28a745" if gate.lower() == "passing" else "dc3545"
+
+    badges = [
+        f"[![Overall Quality]({_badge_url('Overall_Quality', overall)})](https://opentraces.ai)",
+        f"[![Gate: {gate.upper()}](https://img.shields.io/badge/Gate-{gate.upper()}-{gate_color})](https://opentraces.ai)",
+    ]
+    for name, ps in quality_summary.get("persona_scores", {}).items():
+        avg = ps.get("average", 0.0)
+        label = name.replace("_", " ").title()
+        badges.append(f"![{label}]({_badge_url(label, avg)})")
+
+    inner = " ".join(badges)
+    return f"{BADGE_START}\n{inner}\n{BADGE_END}"
+
+
+def _score_color(score: float) -> str:
+    """Map a 0-100 score to a shields.io hex color."""
+    if score >= 80:
+        return "28a745"
+    elif score >= 60:
+        return "ffc107"
+    elif score >= 40:
+        return "fd7e14"
+    else:
+        return "dc3545"
+
+
+def _badge_url(label: str, score: float) -> str:
+    """Build a shields.io static badge URL for a score."""
+    label_enc = label.replace(" ", "_").replace("-", "--")
+    score_enc = f"{score:.1f}%25"  # %25 is URL-encoded %
+    color = _score_color(score)
+    return f"https://img.shields.io/badge/{label_enc}-{score_enc}-{color}"
+
+
 def _render_quality_table(quality_summary: dict) -> str:
-    """Render the quality scores table for the stats section."""
+    """Render the quality scorecard detail table for the stats block.
+
+    The badge row itself lives at the top of the card (BADGE_START/BADGE_END).
+    This section shows the per-persona breakdown table.
+    """
+    persona_scores = quality_summary.get("persona_scores", {})
+    overall = quality_summary.get("overall_utility", 0.0)
+    gate = quality_summary.get("gate_status", "unknown")
+
     lines = [
-        "### Quality Scores",
+        "### opentraces Scorecard",
         "",
         f"Assessed: {quality_summary.get('assessed_at', 'N/A')} | "
         f"Mode: {quality_summary.get('scoring_mode', 'deterministic')} | "
         f"Scorer: v{quality_summary.get('scorer_version', 'unknown')}",
         "",
-        "| Persona | Average | Min | Max |",
-        "|---------|---------|-----|-----|",
+        "| Persona | Score | Min | Max | Status |",
+        "|---------|-------|-----|-----|--------|",
     ]
-    for name, ps in quality_summary.get("persona_scores", {}).items():
+    for name, ps in persona_scores.items():
         avg = ps.get("average", 0.0)
         mn = ps.get("min", 0.0)
         mx = ps.get("max", 0.0)
-        lines.append(f"| {name} | {avg:.1f}% | {mn:.1f}% | {mx:.1f}% |")
+        status = "PASS" if avg >= 80 else ("WARN" if avg >= 60 else "FAIL")
+        lines.append(f"| {name} | {avg:.1f}% | {mn:.1f}% | {mx:.1f}% | {status} |")
 
-    overall = quality_summary.get("overall_utility", 0.0)
-    gate = quality_summary.get("gate_status", "unknown")
     lines.append("")
     lines.append(f"**Overall utility: {overall:.1f}%** | Gate: {gate.upper()}")
     lines.append("")
@@ -125,6 +180,7 @@ def _render_machine_json(stats: dict) -> str:
     import json
     payload = {
         "total_traces": stats["total_traces"],
+        "total_tokens": stats["total_tokens"],
         "avg_steps_per_session": stats["avg_steps_per_session"],
         "avg_cost_usd": stats["avg_cost_usd"],
         "total_cost_usd": stats["total_cost_usd"],
@@ -287,6 +343,8 @@ def generate_dataset_card(
     stats = _compute_stats(traces)
     stats_section = _render_stats_section(stats, quality_summary=quality_summary)
 
+    badge_row = _render_badge_row(quality_summary)
+
     if existing_card and AUTO_START in existing_card and AUTO_END in existing_card:
         # Replace only the machine-managed section
         # Also strip any existing sentinel block that sits just before AUTO_START
@@ -305,10 +363,30 @@ def generate_dataset_card(
             frontmatter = _render_frontmatter(repo_id, traces, quality_summary=quality_summary)
             before = frontmatter + card_body[end_idx : card_body.index(AUTO_START)]
 
+        # Update or inject badge row right after the first H1 heading
+        if BADGE_START in before and BADGE_END in before:
+            b_start = before.index(BADGE_START)
+            b_end = before.index(BADGE_END, b_start) + len(BADGE_END)
+            before = before[:b_start] + badge_row + before[b_end:]
+        else:
+            # Legacy card without badge sentinel: inject after first H1
+            h1_idx = before.find("\n# ")
+            if h1_idx != -1:
+                eol = before.find("\n", h1_idx + 1)
+                if eol != -1:
+                    before = before[: eol + 1] + "\n" + badge_row + "\n" + before[eol + 1 :]
+
         return before + stats_section + after
 
-    # Generate fresh card
+    # Generate fresh card: badge row goes right after the H1 title line
     frontmatter = _render_frontmatter(repo_id, traces, quality_summary=quality_summary)
     body = _render_default_body(repo_id)
+
+    # Insert badge row after the first H1 in body
+    h1_idx = body.find("\n# ")
+    if h1_idx != -1:
+        eol = body.find("\n", h1_idx + 1)
+        if eol != -1:
+            body = body[: eol + 1] + "\n" + badge_row + "\n" + body[eol + 1 :]
 
     return f"{frontmatter}\n{body}\n{stats_section}\n"
