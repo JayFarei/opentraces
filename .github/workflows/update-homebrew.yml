@@ -57,9 +57,12 @@ jobs:
           sed -i 's/^          //' Formula/opentraces.rb
 
       - name: Commit and push
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/JayFarei/homebrew-opentraces.git
           git add Formula/opentraces.rb
           git commit -m "Update opentraces to ${{ steps.sha.outputs.version }}"
           git push
