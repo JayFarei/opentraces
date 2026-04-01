@@ -202,8 +202,39 @@ const v011: SchemaVersion = {
   })),
 };
 
+const v020: SchemaVersion = {
+  version: "0.2.0",
+  date: "2026-03-31",
+  summary: "Runtime agent support. Adds execution_context discriminator and runtime outcome signals for action-trajectory agents.",
+  highlights: [
+    "execution_context: devtime vs runtime session discriminator",
+    "Outcome.terminal_state: goal_reached / interrupted / error / abandoned",
+    "Outcome.reward: numeric reward signal from RL environments",
+    "Outcome.reward_source: identifies the reward provider",
+    "Quality engine: 5-persona rubrics with fidelity-aware scoring",
+    "Hermes parser: import community traces from HuggingFace Hub",
+  ],
+  models: v011.models.map((m) => ({
+    ...m,
+    fields: m.fields.map((f) => {
+      if (f.name === "schema_version") return { ...f, description: 'e.g. "0.2.0"' };
+      return f;
+    }).concat(
+      m.id === "trace-record"
+        ? [{ name: "execution_context", type: "string | null", required: false, description: '"devtime" (code-editing agent) or "runtime" (action-trajectory / RL agent). Null for pre-0.2 traces.' }]
+        : m.id === "outcome"
+          ? [
+              { name: "terminal_state", type: "string | null", required: false, description: '"goal_reached", "interrupted", "error", or "abandoned". Meaningful for runtime agents.' },
+              { name: "reward", type: "float | null", required: false, description: "Numeric reward signal from an RL environment or evaluator." },
+              { name: "reward_source", type: "string | null", required: false, description: 'Canonical values: "rl_environment", "judge", "human_annotation", "orchestrator".' },
+            ]
+          : []
+    ),
+  })),
+};
+
 /* All versions, newest first. Add new versions here. */
-export const versions: SchemaVersion[] = [v011, v010];
+export const versions: SchemaVersion[] = [v020, v011, v010];
 
 export const latestVersion = versions[0].version;
 

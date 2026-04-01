@@ -17,6 +17,7 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces session` | Inspect and edit staged traces |
 | `opentraces commit` | Commit inbox traces for upload |
 | `opentraces push` | Upload committed traces to Hugging Face Hub |
+| `opentraces assess` | Run quality assessment on committed traces or a remote dataset |
 | `opentraces web` | Open the browser inbox UI |
 | `opentraces tui` | Open the terminal inbox UI |
 | `opentraces stats` | Show aggregate inbox statistics |
@@ -188,6 +189,7 @@ opentraces push --private
 opentraces push --public
 opentraces push --publish
 opentraces push --gated
+opentraces push --assess
 opentraces push --repo user/custom-dataset
 ```
 
@@ -197,9 +199,37 @@ opentraces push --repo user/custom-dataset
 | `--public` | off | Force public visibility |
 | `--publish` | off | Publish an existing private dataset |
 | `--gated` | off | Enable gated access on the dataset |
+| `--assess` | off | Run quality assessment after upload and embed scores in dataset card |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
 
 `--approved-only` is not part of the current CLI. The public path is `commit -> push`.
+
+### `opentraces assess`
+
+Run quality assessment on committed traces or a full remote dataset.
+
+```bash
+opentraces assess
+opentraces assess --judge
+opentraces assess --judge --judge-model sonnet
+opentraces assess --limit 50
+opentraces assess --all-staged
+opentraces assess --compare-remote
+opentraces assess --dataset user/my-traces
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--judge / --no-judge` | off | Enable LLM judge for qualitative scoring |
+| `--judge-model` | `haiku` | Model for LLM judge: `haiku`, `sonnet`, or `opus` |
+| `--limit` | `0` (all) | Maximum number of traces to assess |
+| `--compare-remote` | off | Fetch the remote dataset's `quality.json` and show score deltas |
+| `--all-staged` | off | Assess all staged traces instead of COMMITTED-only |
+| `--dataset TEXT` | unset | Assess a full remote HF dataset (e.g. `user/my-traces`). Downloads all shards, runs assessment, and updates `README.md` and `quality.json` on the dataset repo. Does not require hf-mount. |
+
+By default, `assess` targets only **committed** traces, matching the population that `push` would upload. Use `--all-staged` to include traces that are staged but not yet committed.
+
+`--dataset` is independent of the local inbox. It downloads shards from the specified HF dataset repo and updates that repo's dataset card and `quality.json` sidecar in place, without requiring a new push.
 
 ### `opentraces remote`
 
@@ -285,8 +315,8 @@ These commands exist for automation, compatibility, or diagnostics and are hidde
 | `opentraces migrate` | Check schema version and run migrations |
 | `opentraces capabilities --json` | Machine-discoverable feature list, supported agents, versions |
 | `opentraces introspect` | Full API schema and TraceRecord JSON schema for automation |
-| `opentraces assess` | Run quality assessment on staged traces |
 | `opentraces _capture` | Invoked by the Claude Code SessionEnd hook to auto-capture sessions |
+| `opentraces _assess-remote` | Force quality assessment on a remote dataset via hf-mount (automation only) |
 
 ## Exit Codes
 

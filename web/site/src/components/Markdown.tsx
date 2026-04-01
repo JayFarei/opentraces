@@ -27,6 +27,17 @@ export default function Markdown({ content }: { content: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
+          // Render images inline so badge rows flow horizontally
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          img({ src, alt }: any) {
+            return (
+              <img
+                src={src}
+                alt={alt}
+                style={{ display: "inline", verticalAlign: "middle", marginRight: "4px" }}
+              />
+            );
+          },
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           code({ children, className, ...rest }: any) {
             const text = String(children);

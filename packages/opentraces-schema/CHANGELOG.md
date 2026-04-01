@@ -25,9 +25,6 @@ schema-specific semantics described in VERSION-POLICY.md.
   how `execution_context` should guide consumers choosing which fields to read.
 - `SCHEMA_VERSION` bumped from `0.1.1` to `0.2.0`.
 
-### Unreleased
-- `Attribution.version` field removal (carried forward from previous unreleased section).
-
 ## [0.1.0] - 2026-03-27
 
 ### Added
