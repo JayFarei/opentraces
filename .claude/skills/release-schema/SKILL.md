@@ -5,7 +5,8 @@ description: >
   Use when the user says "release schema", "bump schema", "schema release",
   "publish schema", "release-schema", or when schema models have changed
   and need publishing independently of the CLI. This handles the schema
-  package only, not the CLI.
+  package only, not the CLI. For a full coordinated release of schema + CLI +
+  site together, use /release-pack instead.
 ---
 
 # Release Schema
@@ -59,34 +60,67 @@ dependencies = [
 
 ## Steps
 
-### 1. Read current version and compute new version
+### 1. Determine the true released schema version from remote sources
+
+Local version files may have been bumped during development without a corresponding publish. Always query the live remote sources first.
+
+```bash
+# PyPI
+curl -s https://pypi.org/pypi/opentraces-schema/json | python3 -c "import sys,json; print(json.load(sys.stdin)['info']['version'])"
+
+# Git tags
+git tag -l 'schema-v*' --sort=-v:refname | head -3
+```
+
+The **published version** is the most recent version appearing on both PyPI and as a `schema-v*` git tag. Use this as the base for the bump, not the local file.
+
+Then check what changed since that tag:
+
+```bash
+LAST_TAG=$(git tag -l 'schema-v*' --sort=-v:refname | head -1)
+git log --oneline ${LAST_TAG}..HEAD -- packages/opentraces-schema/src/
+git diff --name-only ${LAST_TAG}..HEAD -- packages/opentraces-schema/src/opentraces_schema/models.py
+```
+
+Infer the bump type from the diff unless the user specified one explicitly:
+
+| Signal | Bump |
+|---|---|
+| Field removal, rename, or type change in models.py | major (minor during pre-1.0) |
+| New optional field, new model, new enum value | minor |
+| Docstring fixes, validation constraint tweaks | patch |
+
+Finally compare local file with the remote version:
 
 ```bash
 grep 'SCHEMA_VERSION' packages/opentraces-schema/src/opentraces_schema/version.py
 ```
 
-Parse the semver and apply the bump.
+If local is ahead of remote, note the unreleased bump and use the remote version as the base.
 
 ### 2. Show the user what will happen
 
 ```
 Schema release plan:
-  Current version: 0.1.1
-  New version:     0.2.0
-  Bump type:       minor
+  Remote (published):  v0.1.1  (PyPI + schema-v0.1.1 tag)
+  Local file:          0.1.2   (unreleased bump — ignored as base)
+  New target:          v0.2.0  (minor — new optional fields added)
+
+  Changes since schema-v0.1.1:
+    abc1234  feat(schema): add quality_summary field to TraceRecord
 
   Files to update:
     - packages/opentraces-schema/src/opentraces_schema/version.py
     - packages/opentraces-schema/CHANGELOG.md
     - packages/opentraces-schema/RATIONALE-0.2.0.md (new)
-    - packages/opentraces-schema/FIELD-MAPPINGS.md (if fields changed)
+    - packages/opentraces-schema/FIELD-MAPPINGS.md (fields changed)
     - web/site/src/lib/schema-versions.ts
     - pyproject.toml (if constraint needs widening)
 
   After commit: tag schema-v0.2.0, push, publish via workflow dispatch
 ```
 
-Ask the user to confirm before proceeding.
+**STOP HERE.** Do not edit any files, run any commands, or take any action until the user explicitly confirms. Accept "y", "yes", "go", "ship it", "looks good", or equivalent. If the user wants to adjust the version, bump type, or anything else, update the plan and re-present it. Only proceed once you have an unambiguous green light.
 
 ### 3. Update version file
 

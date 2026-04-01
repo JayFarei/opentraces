@@ -7,10 +7,10 @@ export default function About() {
       <div className="section-title">Why</div>
       <div style={{ maxWidth: 560 }}>
         <p style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.7, marginBottom: 16 }}>
-          Every commit discards the reasoning that produced the code. Capture tools exist, but none publish to open datasets. Sharing tools exist, but lock data in walled gardens.
+          The code is the artifact. The trace is the source. When logic runs through an LLM, the output file isn&apos;t what you learn from — the sequence of decisions, tool calls, and reasoning paths that got there is.
         </p>
         <p style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.7 }}>
-          open traces connects the full conversation trajectory to the specific code output at line granularity. Process + output, unified. One schema for training, attribution, and research.
+          open traces captures that record at line granularity, ties it to outcomes, and publishes it as open data. One schema for training, attribution, and research. No walled gardens.
         </p>
       </div>
     </section>

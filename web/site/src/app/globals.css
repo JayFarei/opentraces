@@ -287,6 +287,10 @@ html { color-scheme: light; }
   min-height: 32px;
 }
 .nav-theme-btn:hover { color: var(--text); border-color: var(--text-muted); background: var(--surface-hover); }
+/* Pre-hydration label: data-theme is set by inline script before React loads.
+   :empty matches when React renders null (no text node). Disappears once React hydrates. */
+[data-theme="dark"] .nav-theme-btn:empty::after { content: "light"; }
+[data-theme="light"] .nav-theme-btn:empty::after { content: "dark"; }
 .nav-hamburger {
   display: none;
   background: none;
@@ -522,7 +526,7 @@ html { color-scheme: light; }
   display: grid;
   grid-template-columns: 1fr 1.2fr;
   gap: 32px;
-  align-items: center;
+  align-items: end;
 }
 
 /* ═══ Terminal ═══ */
@@ -754,7 +758,7 @@ section {
 /* ═══ Stats ═══ */
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   border: 1px solid var(--border);
 }
 .stat-cell {
@@ -964,10 +968,48 @@ tr:hover td { background: var(--surface-hover); }
   align-items: center;
   justify-content: center;
 }
-.arch-agents {
+.arch-harness {
+  position: relative;
+  border: 1px solid var(--border);
+  padding: 28px 20px 18px;
+  width: 100%;
+  max-width: 640px;
+  box-sizing: border-box;
+}
+.arch-harness-label {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg);
+  padding: 0 10px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.arch-categories {
   display: flex;
-  flex-wrap: wrap;
   justify-content: center;
+  gap: 24px;
+}
+.arch-category {
+  border: 1px solid var(--border);
+  padding: 12px 14px 14px;
+  background: var(--bg);
+}
+.arch-category-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+  text-align: center;
+}
+.arch-category-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 0;
 }
 .arch-agent-box {
@@ -976,6 +1018,12 @@ tr:hover td { background: var(--surface-hover); }
   background: var(--surface);
   color: var(--text-secondary);
   font-size: 11px;
+  text-align: center;
+  min-width: 90px;
+}
+.arch-agent-soon {
+  opacity: 0.35;
+  cursor: default;
 }
 .arch-dest {
   font-size: 13px;
@@ -999,8 +1047,9 @@ tr:hover td { background: var(--surface-hover); }
   .arch-step { padding: 4px 8px; font-size: 10px; }
   .arch-arrow { font-size: 10px; }
   .arch-tiers { flex-wrap: wrap; gap: 6px; }
-  .arch-agents { gap: 0; }
-  .arch-agent-box { padding: 6px 10px; font-size: 10px; }
+  .arch-harness { padding: 28px 12px 14px; }
+  .arch-categories { flex-direction: column; align-items: center; gap: 12px; }
+  .arch-agent-box { padding: 6px 10px; font-size: 10px; min-width: 70px; }
   .arch-fork-branch { min-width: 0; }
   .arch-tier-box { padding: 8px 10px; }
   .arch-tier-name { font-size: 11px; }
@@ -1173,7 +1222,7 @@ tr:hover td { background: var(--surface-hover); }
 /* ═══ Explorer Responsive ═══ */
 .insights-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 16px;
   margin-bottom: 32px;
 }
@@ -1293,9 +1342,9 @@ footer {
   .hero-grid { grid-template-columns: 1fr; }
   .feature-grid, .use-grid { grid-template-columns: repeat(2, 1fr); }
   .feature-cell:nth-child(2n) { border-right: none; }
-  .stats-row { grid-template-columns: repeat(2, 1fr); }
-  .stat-cell:nth-child(2n) { border-right: none; }
-  .stat-cell:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+  .stats-row { grid-template-columns: repeat(3, 1fr); }
+  .stat-cell:nth-child(3n) { border-right: none; }
+  .stat-cell:not(:nth-last-child(-n+2)) { border-bottom: 1px solid var(--border); }
 }
 @media (max-width: 600px) {
   .feature-grid, .use-grid { grid-template-columns: 1fr; }
@@ -1419,7 +1468,6 @@ footer {
   line-height: 1.75;
   color: var(--text-muted);
   margin-bottom: 16px;
-  max-width: 680px;
 }
 .docs-content ul, .docs-content ol {
   font-size: 13px;
@@ -1540,3 +1588,361 @@ footer {
 [data-theme="light"] .docs-content h3 {
   color: #000000;
 }
+
+/* ═══ Audience Toggle ═══ */
+
+/* Full-page overlay — fades to black on mode switch */
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes overlay-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+.machine-overlay {
+  position: fixed;
+  inset: 0;
+  background: #000000;
+  z-index: 200;
+  pointer-events: none;
+  will-change: opacity;
+  /* ease-in with steep curve: lingers transparent, then snaps to black */
+  animation: overlay-in 460ms cubic-bezier(0.7, 0, 1, 1) forwards;
+}
+.machine-overlay.fade-out {
+  /* ease-out with steep curve: snaps open fast, settles gently */
+  animation: overlay-out 600ms cubic-bezier(0, 0, 0.15, 1) forwards;
+}
+
+/* Machine mode: page goes black — instantaneous (overlay handles the animation) */
+html[data-audience="machine"],
+html[data-audience="machine"] body,
+html[data-audience="machine"] .container {
+  background-color: #000000;
+}
+
+/* Nav + footer fully hidden in machine mode — all viewports, fully immersive */
+html[data-audience="machine"] .nav,
+html[data-audience="machine"] footer {
+  display: none;
+}
+
+/* Sidebar, mobile sidebar toggle + breadcrumb hide in machine mode */
+html[data-audience="machine"] .docs-sidebar,
+html[data-audience="machine"] .docs-sidebar-toggle {
+  display: none;
+}
+html[data-audience="machine"] .docs-layout {
+  grid-template-columns: 1fr;
+}
+html[data-audience="machine"] .docs-breadcrumb {
+  display: none;
+}
+html[data-audience="machine"] .docs-main {
+  padding-left: 0;
+}
+
+/* Toggle pill — centered, adapts to light/dark theme */
+.audience-toggle {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  padding: 5px 6px;
+  gap: 2px;
+  z-index: 50;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+.audience-toggle-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font-family: var(--font-label);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
+  line-height: 1;
+  text-decoration: none;
+}
+.audience-toggle-option:hover {
+  color: var(--text-secondary);
+}
+.audience-toggle-option.active {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.audience-dot {
+  font-size: 9px;
+  line-height: 1;
+}
+
+/* Toggle adapts to machine mode (always-black page) */
+html[data-audience="machine"] .audience-toggle {
+  background: #111111;
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.6);
+}
+html[data-audience="machine"] .audience-toggle-option {
+  color: #888888;
+}
+html[data-audience="machine"] .audience-toggle-option:hover {
+  color: #bbbbbb;
+}
+html[data-audience="machine"] .audience-toggle-option.active {
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.07);
+}
+/* Active dot: green accent in machine mode */
+html[data-audience="machine"] .audience-toggle-option.active .audience-dot {
+  color: #4ade80;
+}
+/* Active dot: site accent in light/dark mode */
+.audience-toggle-option.active .audience-dot {
+  color: var(--accent);
+}
+
+/* Machine mode exit button — top right corner */
+.machine-exit-btn {
+  position: fixed;
+  top: 16px;
+  right: 20px;
+  z-index: 60;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  line-height: 1;
+  color: #aaaaaa;
+  background: transparent;
+  border: 1px solid #333333;
+  cursor: pointer;
+  padding: 2px 9px 4px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.machine-exit-btn:hover {
+  color: #eeeeee;
+  border-color: #777777;
+}
+
+/* ═══ Machine View ═══ */
+
+.machine-view {
+  background: #000000;
+  color: #a0a0a0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.7;
+  /* centered column with vertical border lines */
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 32px 48px 100px;
+  border-left: 1px solid #131313;
+  border-right: 1px solid #131313;
+  min-height: calc(100vh - 80px);
+}
+
+/* Front matter header */
+.machine-frontmatter {
+  margin-bottom: 40px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid #111;
+}
+.machine-fm-fence {
+  font-size: 12px;
+  color: #444444;
+  letter-spacing: 0.04em;
+  padding: 4px 0;
+}
+.machine-fm-row {
+  display: flex;
+  gap: 0;
+  padding: 2px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.machine-fm-key {
+  color: #555555;
+  min-width: 100px;
+  letter-spacing: 0.03em;
+}
+.machine-fm-sep {
+  color: #333333;
+  margin-right: 10px;
+}
+.machine-fm-val {
+  color: #b8b8b8;
+  flex: 1;
+}
+.machine-fm-type {
+  color: #4a8a4a;
+  letter-spacing: 0.05em;
+}
+.machine-fm-desc-row {
+  align-items: flex-start;
+  margin-top: 4px;
+}
+.machine-fm-desc {
+  color: #aaaaaa;
+  line-height: 1.7;
+}
+.machine-fm-actions {
+  margin-top: 16px;
+  display: flex;
+  gap: 8px;
+}
+.machine-copy-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #aaaaaa;
+  background: transparent;
+  border: 1px solid #333333;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: color 0.1s, border-color 0.1s;
+  letter-spacing: 0.04em;
+}
+.machine-copy-btn:hover {
+  color: #eeeeee;
+  border-color: #777777;
+}
+
+/* Skill content */
+.machine-content {
+  padding: 0 0 80px 0;
+  min-width: 0;
+}
+
+/* Machine content typography */
+.machine-h1 {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: #f0f0f0;
+  margin-bottom: 16px;
+  margin-top: 0;
+}
+.machine-h2 {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: #cccccc;
+  margin-top: 36px;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #1a1a1a;
+}
+.machine-h3 {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: #aaaaaa;
+  margin-top: 20px;
+  margin-bottom: 6px;
+}
+.machine-p {
+  color: #c0c0c0;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+}
+.machine-link {
+  color: #3d8a3d;
+  text-decoration: none;
+}
+.machine-link:hover {
+  color: #50aa50;
+  text-decoration: underline;
+}
+.machine-code-inline {
+  background: #080808;
+  border: 1px solid #1a1a1a;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: #6aaa6a;
+}
+.machine-code-block {
+  background: #060606;
+  border: 1px solid #181818;
+  border-left: 2px solid #1e3a1e;
+  padding: 12px 16px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: #7aaa7a;
+  overflow-x: auto;
+  margin: 10px 0 16px;
+  line-height: 1.6;
+}
+.machine-code-block code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+}
+.machine-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  margin: 10px 0 16px;
+}
+.machine-table th,
+.machine-table td {
+  text-align: left;
+  padding: 5px 10px;
+  border: 1px solid #1e1e1e;
+  color: #aaaaaa;
+}
+.machine-table th {
+  color: #777777;
+  background: #060606;
+}
+
+/* ═══ Machine View — Mobile ═══ */
+@media (max-width: 768px) {
+  .machine-view {
+    padding: 20px 20px 100px;
+    border-left: none;
+    border-right: none;
+    max-width: 100%;
+  }
+  .machine-fm-row {
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+  .machine-fm-key {
+    min-width: 90px;
+  }
+  .machine-fm-actions {
+    flex-wrap: wrap;
+  }
+  .machine-code-block {
+    font-size: 11px;
+    padding: 10px 12px;
+    /* Horizontal scroll for long command lines */
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    /* Don't wrap — preserve command structure */
+    white-space: pre;
+    word-break: normal;
+  }
+  .machine-table {
+    font-size: 11px;
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Toggle pill full-width-ish on mobile */
+  .audience-toggle {
+    bottom: 16px;
+  }
+}
+

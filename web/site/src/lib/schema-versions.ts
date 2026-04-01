@@ -152,7 +152,6 @@ const v010: SchemaVersion = {
       id: "attribution", title: "Attribution",
       desc: "Code attribution (experimental).",
       fields: [
-        { name: "version", type: "string", required: false, description: "Tracks schema_version" },
         { name: "experimental", type: "boolean", required: false, description: "Always true in v0.1.0" },
         { name: "files", type: "AttributionFile[]", required: false, description: "Per-file line ranges" },
       ],
@@ -173,7 +172,7 @@ const v010: SchemaVersion = {
       id: "security", title: "SecurityMetadata",
       desc: "Security mode and redaction record.",
       fields: [
-        { name: "tier", type: "int", required: false, description: "1 (auto), 2 (review), 3 (review, legacy)" },
+        { name: "tier", type: "int", required: false, description: "1 (auto), 2 (review)" },
         { name: "flags_reviewed", type: "int", required: false, description: "Flags reviewed" },
         { name: "redactions_applied", type: "int", required: false, description: "Redactions applied" },
         { name: "classifier_version", type: "string", required: false, description: "Classifier version" },
@@ -182,8 +181,60 @@ const v010: SchemaVersion = {
   ],
 };
 
+const v011: SchemaVersion = {
+  version: "0.1.1",
+  date: "2026-03-29",
+  summary: "Patch release. Validation fixes, field documentation improvements, HuggingFace launch.",
+  highlights: [
+    "Security scanning and redaction pipeline hardened",
+    "Schema field documentation improvements",
+    "HuggingFace Hub launch partnership",
+  ],
+  models: v010.models.map((m) => ({
+    ...m,
+    fields: m.fields.map((f) =>
+      f.name === "schema_version"
+        ? { ...f, description: 'e.g. "0.1.1"' }
+        : f.name === "experimental" && m.id === "attribution"
+          ? { ...f, description: "Always true in v0.1.x" }
+          : f
+    ),
+  })),
+};
+
+const v020: SchemaVersion = {
+  version: "0.2.0",
+  date: "2026-03-31",
+  summary: "Runtime agent support. Adds execution_context discriminator and runtime outcome signals for action-trajectory agents.",
+  highlights: [
+    "execution_context: devtime vs runtime session discriminator",
+    "Outcome.terminal_state: goal_reached / interrupted / error / abandoned",
+    "Outcome.reward: numeric reward signal from RL environments",
+    "Outcome.reward_source: identifies the reward provider",
+    "Quality engine: 5-persona rubrics with fidelity-aware scoring",
+    "Hermes parser: import community traces from HuggingFace Hub",
+  ],
+  models: v011.models.map((m) => ({
+    ...m,
+    fields: m.fields.map((f) => {
+      if (f.name === "schema_version") return { ...f, description: 'e.g. "0.2.0"' };
+      return f;
+    }).concat(
+      m.id === "trace-record"
+        ? [{ name: "execution_context", type: "string | null", required: false, description: '"devtime" (code-editing agent) or "runtime" (action-trajectory / RL agent). Null for pre-0.2 traces.' }]
+        : m.id === "outcome"
+          ? [
+              { name: "terminal_state", type: "string | null", required: false, description: '"goal_reached", "interrupted", "error", or "abandoned". Meaningful for runtime agents.' },
+              { name: "reward", type: "float | null", required: false, description: "Numeric reward signal from an RL environment or evaluator." },
+              { name: "reward_source", type: "string | null", required: false, description: 'Canonical values: "rl_environment", "judge", "human_annotation", "orchestrator".' },
+            ]
+          : []
+    ),
+  })),
+};
+
 /* All versions, newest first. Add new versions here. */
-export const versions: SchemaVersion[] = [v010];
+export const versions: SchemaVersion[] = [v020, v011, v010];
 
 export const latestVersion = versions[0].version;
 

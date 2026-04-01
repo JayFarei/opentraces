@@ -530,3 +530,437 @@ class TestParserOnRealSessions:
                 break
 
         assert parsed > 0, "Could not parse any sessions"
+
+
+# ---------------------------------------------------------------------------
+# New line type enrichment tests
+# ---------------------------------------------------------------------------
+
+class TestSessionEnrichmentLines:
+    """Parser correctly handles type:'result', type:'system', type:'opentraces_hook'."""
+
+    # -- type: 'result' -------------------------------------------------------
+
+    def test_result_success_overrides_estimated_cost(self, tmp_path):
+        lines = _make_minimal_session() + [{
+            "type": "result", "subtype": "success",
+            "sessionId": "test-sess", "timestamp": "2026-03-27T10:01:00Z",
+            "total_cost_usd": 0.042, "stop_reason": "end_turn",
+            "num_turns": 3, "duration_ms": 5000,
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.metrics.estimated_cost_usd == pytest.approx(0.042)
+
+    def test_result_success_populates_metadata(self, tmp_path):
+        lines = _make_minimal_session() + [{
+            "type": "result", "subtype": "success",
+            "sessionId": "test-sess", "timestamp": "2026-03-27T10:01:00Z",
+            "total_cost_usd": 0.01, "stop_reason": "end_turn",
+            "num_turns": 2, "permission_denials": 1,
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.metadata["stop_reason"] == "end_turn"
+        assert record.metadata["num_turns"] == 2
+        assert record.metadata["permission_denials"] == 1
+
+    def test_result_success_end_turn_is_inferred_not_derived(self, tmp_path):
+        """end_turn is a generation stop condition, not a task-success signal.
+        success stays None - enrichment pipeline (git commit, CI) sets it later."""
+        lines = _make_minimal_session() + [{
+            "type": "result", "subtype": "success",
+            "sessionId": "test-sess", "timestamp": "2026-03-27T10:01:00Z",
+            "total_cost_usd": 0.01, "stop_reason": "end_turn",
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.outcome.success is None  # not known from stop reason alone
+        assert record.outcome.signal_source == "result_message"
+        assert record.outcome.signal_confidence == "inferred"
+
+    def test_result_error_subtype_sets_outcome_failure(self, tmp_path):
+        lines = _make_minimal_session() + [{
+            "type": "result", "subtype": "error_max_turns",
+            "sessionId": "test-sess", "timestamp": "2026-03-27T10:01:00Z",
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.outcome.success is False
+        assert record.outcome.signal_source == "result_message"
+        assert record.outcome.description == "error_max_turns"
+        assert record.metadata["stop_reason"] == "error_max_turns"
+
+    def test_result_error_budget_exceeded(self, tmp_path):
+        lines = _make_minimal_session() + [{
+            "type": "result", "subtype": "error_max_budget_usd",
+            "sessionId": "test-sess", "timestamp": "2026-03-27T10:01:00Z",
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.outcome.success is False
+        assert record.metadata["stop_reason"] == "error_max_budget_usd"
+
+    def test_no_result_line_outcome_is_empty(self, tmp_path):
+        record = ClaudeCodeParser().parse_session(
+            _write_session(tmp_path, _make_minimal_session())
+        )
+        assert record is not None
+        assert record.outcome.success is None
+
+    def test_result_duration_fallback_when_no_step_timestamps(self, tmp_path):
+        """duration_ms from result message populates total_duration_s when steps lack timestamps."""
+        lines = [
+            {
+                "type": "user", "sessionId": "s",
+                "message": {"role": "user", "content": "Fix bug"},
+            },
+            {
+                "type": "assistant", "sessionId": "s",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "t1", "name": "Read",
+                                 "input": {"file_path": "x.py"}}],
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                },
+            },
+            {
+                "type": "user", "sessionId": "s",
+                "message": {"role": "user",
+                            "content": [{"type": "tool_result", "tool_use_id": "t1",
+                                         "content": "ok"}]},
+            },
+            {
+                "type": "assistant", "sessionId": "s",
+                "message": {"role": "assistant",
+                            "content": [{"type": "text", "text": "Done"}],
+                            "usage": {"input_tokens": 120, "output_tokens": 30}},
+            },
+            {
+                "type": "result", "subtype": "success", "sessionId": "s",
+                "total_cost_usd": 0.005, "stop_reason": "end_turn",
+                "duration_ms": 8000,
+            },
+        ]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.metrics.total_duration_s == pytest.approx(8.0)
+
+    # -- type: 'system' -------------------------------------------------------
+
+    def test_system_init_extracts_model(self, tmp_path):
+        lines = [{
+            "type": "system", "subtype": "init",
+            "sessionId": "s", "timestamp": "2026-03-27T10:00:00Z",
+            "model": "claude-opus-4-5", "claude_code_version": "2.0.0",
+            "cwd": "/home/user/project", "permissionMode": "default",
+            "tools": [], "mcp_servers": [],
+        }] + _make_minimal_session()
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.agent.model == "claude-opus-4-5"
+        assert record.agent.version == "2.0.0"
+
+    def test_system_init_extracts_mcp_servers(self, tmp_path):
+        lines = [{
+            "type": "system", "subtype": "init",
+            "sessionId": "s", "timestamp": "2026-03-27T10:00:00Z",
+            "model": "claude-sonnet-4-6",
+            "mcp_servers": [{"name": "filesystem"}, {"name": "slack"}],
+            "tools": [], "permissionMode": "default",
+        }] + _make_minimal_session()
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.metadata.get("mcp_servers") == ["filesystem", "slack"]
+
+    def test_system_init_priority_over_queue_operation(self, tmp_path):
+        """system/init model takes priority over queue-operation fallback."""
+        lines = [{
+            "type": "system", "subtype": "init",
+            "sessionId": "s", "timestamp": "2026-03-27T10:00:00Z",
+            "model": "claude-opus-4-5", "mcp_servers": [], "tools": [],
+        }] + [{
+            "type": "queue-operation", "sessionId": "s",
+            "content": '{"model": "claude-haiku-fallback"}',
+        }] + _make_minimal_session()
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.agent.model == "claude-opus-4-5"
+
+    def test_system_init_extracts_permission_mode(self, tmp_path):
+        lines = [{
+            "type": "system", "subtype": "init",
+            "sessionId": "s", "permissionMode": "bypassPermissions",
+            "model": "claude-sonnet-4-6", "mcp_servers": [], "tools": [],
+        }] + _make_minimal_session()
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.metadata.get("permission_mode") == "bypassPermissions"
+
+    def test_system_compact_boundary_sets_is_compacted(self, tmp_path):
+        lines = _make_minimal_session() + [{
+            "type": "system", "subtype": "compact_boundary",
+            "sessionId": "s", "timestamp": "2026-03-27T10:01:00Z",
+            "pre_tokens": 50000,
+            "compact_metadata": {"trigger": "manual"},
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.metadata.get("is_compacted") is True
+        events = record.metadata.get("compaction_events", [])
+        assert len(events) == 1
+        assert events[0]["pre_tokens"] == 50000
+        assert events[0]["trigger"] == "manual"
+
+    def test_system_compact_boundary_multiple_events(self, tmp_path):
+        lines = _make_minimal_session() + [
+            {
+                "type": "system", "subtype": "compact_boundary",
+                "sessionId": "s", "timestamp": "2026-03-27T10:01:00Z",
+                "pre_tokens": 40000,
+            },
+            {
+                "type": "system", "subtype": "compact_boundary",
+                "sessionId": "s", "timestamp": "2026-03-27T10:02:00Z",
+                "pre_tokens": 55000,
+            },
+        ]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert len(record.metadata.get("compaction_events", [])) == 2
+
+    def test_system_post_turn_summary_collected(self, tmp_path):
+        lines = _make_minimal_session() + [{
+            "type": "system", "subtype": "post_turn_summary",
+            "sessionId": "s", "timestamp": "2026-03-27T10:01:00Z",
+            "status_category": "completed",
+            "is_noteworthy": True,
+            "title": "Fixed the parser bug",
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        summaries = record.metadata.get("post_turn_summaries", [])
+        assert len(summaries) == 1
+        assert summaries[0]["status_category"] == "completed"
+        assert summaries[0]["is_noteworthy"] is True
+        assert summaries[0]["title"] == "Fixed the parser bug"
+
+    # -- type: 'opentraces_hook' ----------------------------------------------
+
+    def test_opentraces_hook_stop_captures_git_state(self, tmp_path):
+        lines = _make_minimal_session() + [{
+            "type": "opentraces_hook", "event": "Stop",
+            "timestamp": "2026-03-27T10:01:00Z",
+            "data": {
+                "git": {"sha": "abc123", "dirty": False, "files_changed": 0},
+                "permission_mode": "default",
+            },
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        git = record.metadata.get("hook_git_final", {})
+        assert git.get("sha") == "abc123"
+        assert git.get("dirty") is False
+
+    def test_opentraces_hook_postcompact_sets_is_compacted(self, tmp_path):
+        lines = _make_minimal_session() + [{
+            "type": "opentraces_hook", "event": "PostCompact",
+            "timestamp": "2026-03-27T10:01:00Z",
+            "data": {"messages_removed": 30, "messages_kept": 8},
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.metadata.get("is_compacted") is True
+        events = record.metadata.get("compaction_events", [])
+        assert len(events) == 1
+        assert events[0]["messages_removed"] == 30
+        assert events[0]["messages_kept"] == 8
+
+    def test_hook_stop_permission_mode_fallback(self, tmp_path):
+        """Hook Stop sets permission_mode when system/init is absent."""
+        lines = _make_minimal_session() + [{
+            "type": "opentraces_hook", "event": "Stop",
+            "timestamp": "2026-03-27T10:01:00Z",
+            "data": {"permission_mode": "acceptEdits", "git": {}},
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.metadata.get("permission_mode") == "acceptEdits"
+
+    # -- slug -----------------------------------------------------------------
+
+    def test_slug_extracted_from_transcript_message(self, tmp_path):
+        lines = _make_minimal_session()
+        # Add slug to the first line
+        lines[0] = {**lines[0], "slug": "fix-the-parser-bug"}
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.metadata.get("slug") == "fix-the-parser-bug"
+
+    def test_slug_takes_first_occurrence(self, tmp_path):
+        """Only the first slug seen is kept."""
+        lines = _make_minimal_session()
+        lines[0] = {**lines[0], "slug": "first-slug"}
+        lines[1] = {**lines[1], "slug": "second-slug"}
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.metadata.get("slug") == "first-slug"
+
+
+class TestParseStepsEnrichment:
+    """Tests for isMeta warmup flag and Bash exitCode handling."""
+
+    def _make_session_with_bash(
+        self, exit_code: int | None = 0, interrupted: bool = False
+    ) -> list[dict]:
+        """Session with a Bash tool call and configurable toolUseResult."""
+        tur: dict = {"stdout": "output", "stderr": ""}
+        if exit_code is not None:
+            tur["exitCode"] = exit_code
+        if interrupted:
+            tur["interrupted"] = True
+        return [
+            {
+                "type": "user", "sessionId": "s",
+                "timestamp": "2026-03-27T10:00:00Z",
+                "message": {"role": "user", "content": "run tests"},
+            },
+            {
+                "type": "assistant", "sessionId": "s",
+                "timestamp": "2026-03-27T10:00:01Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use", "id": "bash_001", "name": "Bash",
+                        "input": {"command": "pytest"},
+                    }],
+                    "usage": {"input_tokens": 100, "output_tokens": 20},
+                },
+            },
+            {
+                "type": "user", "sessionId": "s",
+                "timestamp": "2026-03-27T10:00:03Z",
+                "toolUseResult": tur,
+                "message": {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result", "tool_use_id": "bash_001",
+                        "content": "output",
+                    }],
+                },
+            },
+            {
+                "type": "assistant", "sessionId": "s",
+                "timestamp": "2026-03-27T10:00:05Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Tests done."}],
+                    "usage": {"input_tokens": 150, "output_tokens": 30},
+                },
+            },
+        ]
+
+    def test_imeta_flag_marks_warmup_regardless_of_tokens(self, tmp_path):
+        """isMeta=True on a high-token step still produces call_type='warmup'."""
+        lines = _make_minimal_session()
+        # Replace first assistant step with a high-token isMeta step
+        lines.insert(1, {
+            "type": "assistant", "sessionId": "test-sess",
+            "timestamp": "2026-03-27T09:59:59Z",
+            "isMeta": True,
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "This is a warmup with lots of text"}],
+                "usage": {"input_tokens": 5000, "output_tokens": 800},
+            },
+        })
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        warmup_steps = [s for s in record.steps if s.call_type == "warmup"]
+        assert len(warmup_steps) >= 1
+        warmup_contents = [s.content for s in warmup_steps]
+        assert any("warmup" in (c or "") for c in warmup_contents)
+
+    def test_bash_nonzero_exit_code_sets_obs_error(self, tmp_path):
+        lines = self._make_session_with_bash(exit_code=1)
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        bash_step = next(s for s in record.steps if s.tool_calls)
+        obs = next(o for o in bash_step.observations if o.source_call_id == "bash_001")
+        assert obs.error == "exit_code:1"
+
+    def test_bash_zero_exit_code_no_error(self, tmp_path):
+        lines = self._make_session_with_bash(exit_code=0)
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        bash_step = next(s for s in record.steps if s.tool_calls)
+        obs = next(o for o in bash_step.observations if o.source_call_id == "bash_001")
+        assert obs.error is None
+
+    def test_bash_interrupted_sets_obs_error(self, tmp_path):
+        lines = self._make_session_with_bash(exit_code=0, interrupted=True)
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        bash_step = next(s for s in record.steps if s.tool_calls)
+        obs = next(o for o in bash_step.observations if o.source_call_id == "bash_001")
+        assert obs.error == "interrupted"
+
+    def test_is_error_flag_takes_precedence_over_exit_code(self, tmp_path):
+        """When is_error=True in tool_result, that wins over non-zero exitCode."""
+        tur = {"exitCode": 1, "stdout": "", "stderr": "crash"}
+        lines = [
+            {
+                "type": "user", "sessionId": "s",
+                "timestamp": "2026-03-27T10:00:00Z",
+                "message": {"role": "user", "content": "run"},
+            },
+            {
+                "type": "assistant", "sessionId": "s",
+                "timestamp": "2026-03-27T10:00:01Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+                                 "input": {"command": "bad"}}],
+                    "usage": {"input_tokens": 50, "output_tokens": 10},
+                },
+            },
+            {
+                "type": "user", "sessionId": "s",
+                "timestamp": "2026-03-27T10:00:02Z",
+                "toolUseResult": tur,
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": "t1",
+                                 "content": "crash", "is_error": True}],
+                },
+            },
+            {
+                "type": "assistant", "sessionId": "s",
+                "timestamp": "2026-03-27T10:00:03Z",
+                "message": {"role": "assistant",
+                            "content": [{"type": "text", "text": "Error handled."}],
+                            "usage": {"input_tokens": 80, "output_tokens": 20}},
+            },
+        ]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        bash_step = next(s for s in record.steps if s.tool_calls)
+        obs = next(o for o in bash_step.observations if o.source_call_id == "t1")
+        assert obs.error == "tool_error"
+
+    def test_hook_git_sha_populates_vcs_base_commit(self, tmp_path):
+        """Stop hook git SHA is promoted to Environment.vcs.base_commit."""
+        lines = _make_minimal_session() + [{
+            "type": "opentraces_hook", "event": "Stop",
+            "timestamp": "2026-03-27T10:01:00Z",
+            "data": {
+                "git": {"sha": "deadbeef1234", "dirty": False, "files_changed": 2},
+            },
+        }]
+        # Add a gitBranch to the first line so vcs type is git
+        lines[0] = {**lines[0], "gitBranch": "feat/my-feature"}
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.environment.vcs.type == "git"
+        assert record.environment.vcs.base_commit == "deadbeef1234"
+        assert record.environment.vcs.branch == "feat/my-feature"

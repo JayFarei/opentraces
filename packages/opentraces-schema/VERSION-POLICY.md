@@ -14,7 +14,7 @@ opentraces-schema follows Semantic Versioning (semver) with schema-specific sema
 ## Pre-1.0 stability
 
 During 0.x development, MINOR bumps may include breaking changes. The schema is
-not yet stable. Pin to exact versions (`opentraces-schema==0.1.0`) rather than
+not yet stable. Pin to exact versions (`opentraces-schema==0.2.0`) rather than
 ranges until 1.0.
 
 ## Where the version lives
@@ -24,11 +24,6 @@ constant is used by:
 
 - `pyproject.toml` via hatch dynamic versioning
 - `TraceRecord.schema_version` default
-- `Attribution.version` default
-
-Note: `TraceRecord.schema_version` and `Attribution.version` are currently coupled
-to the same `SCHEMA_VERSION`. If the attribution spec needs to version independently
-in the future, this coupling can be broken by introducing a separate constant.
 
 ## Bump checklist
 

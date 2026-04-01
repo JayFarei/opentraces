@@ -31,6 +31,7 @@ Three-panel layout: sessions list, summary, and detail. Keyboard shortcuts for n
 ```bash
 opentraces session list
 opentraces session show <trace-id>
+opentraces session show <trace-id> --verbose
 opentraces session commit <trace-id>
 opentraces session reject <trace-id>
 opentraces session reset <trace-id>
@@ -38,7 +39,7 @@ opentraces session redact <trace-id> --step 3
 opentraces session discard <trace-id> --yes
 ```
 
-`commit` moves a trace directly to `Committed`, `reject` keeps it local only, `reset` sends it back to `Inbox`, and `redact` rewrites the staged JSONL in place.
+`commit` moves a trace directly to `Committed`, `reject` keeps it local only, `reset` sends it back to `Inbox`, and `redact` rewrites the staged JSONL in place. `session show --verbose` prints the full step-level detail including raw tool inputs and outputs.
 
 ## Stage Vocabulary
 

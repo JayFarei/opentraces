@@ -157,7 +157,7 @@ def detect_commits_from_steps(steps: list[Step]) -> Outcome:
 
     for step in steps:
         for tc in step.tool_calls:
-            if tc.tool_name != "Bash":
+            if tc.tool_name.lower() != "bash":
                 continue
 
             command = tc.input.get("command", "")

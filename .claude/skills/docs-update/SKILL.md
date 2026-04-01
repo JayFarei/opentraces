@@ -110,7 +110,16 @@ Instructions: For each doc page, verify every CLI command, flag, code example, a
 
 Owns: `README.md`, `CLAUDE.md`, `skill/SKILL.md`, `web/site/public/llms.txt`, `packages/opentraces-schema/README.md`, `packages/opentraces-schema/CHANGELOG.md`
 
-Instructions: These files are the highest-impact surfaces. `skill/SKILL.md` is what agents use to operate the CLI, so every command and flag reference is critical. `llms.txt` is what AI assistants see when visiting the site. Cross-reference every command, flag, and example against `cli.py`. Verify:
+Instructions: These files are the highest-impact surfaces. `skill/SKILL.md` is what agents use to operate the CLI, so every command and flag reference is critical. `llms.txt` is what AI assistants see when visiting the site.
+
+**`README.md` (project root) requires explicit attention.** It is the first thing developers see on GitHub and is often the most-outdated surface. Check:
+- Install command block — must match current `pipx install opentraces` and brew tap
+- Quick-start commands — verify each one exists and uses current flags
+- Feature bullets — must reflect shipped features, not planned/removed ones
+- Schema version badge or reference — must match `version.py`
+- Any links to docs pages — verify slugs still exist
+
+Cross-reference every command, flag, and example against `cli.py`. Verify:
 - All commands in skill/SKILL.md quick reference exist in cli.py
 - All exit codes match
 - The JSON sentinel and response shapes match

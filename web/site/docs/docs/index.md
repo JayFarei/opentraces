@@ -1,107 +1,25 @@
 # opentraces
 
-Open protocol + CLI for repo-local agent trace capture, review, and upload to Hugging Face Hub.
+Open schema + CLI for agent trace capture, review, and upload to Hugging Face Hub.
 
-## Get Started
+Every coding session with an AI agent produces action trajectories, tool-use sequences, and reasoning chains. These are the most valuable dataset nobody is collecting in the open. opentraces captures them automatically, scans for secrets, and publishes structured JSONL datasets to HuggingFace Hub. Private by default. You control what leaves your machine.
 
-### pipx
+## What you get
 
-```bash
-pipx install opentraces
-```
+**As a developer.** Share traces, get analytics back. Cost per session, cache hit rates, tool usage patterns, success rates. Your Spotify Wrapped for coding agents. Traces are searchable by dependency, so framework maintainers and researchers can find sessions relevant to their stack.
 
-### brew
+**As an ML team.** Real workflows, not synthetic benchmarks. Outcome signals for RL. Tool sequences for SFT. Sub-agent hierarchy for orchestration research. One dataset, many consumers, no vendor lock-in.
 
-```bash
-brew install JayFarei/opentraces/opentraces
-```
+**As a team lead.** Commit traces automatically to a shared private dataset. Run downstream analytics, fine-tuning, or evaluation jobs on top of it. All on HuggingFace, all standard tooling.
 
-### Copy to your agent
+## Schema designed for downstream use
 
-Paste this into your coding agent (Claude Code, Cursor, Codex, etc.):
+The [schema](/docs/schema/overview) is built for the people who consume traces, not just the tools that produce them. It is a superset of ATIF, informed by ADP and Agent Trace, and works across Claude Code, Cursor, Cline, Codex, and future agents without agent-specific fields.
 
-```
-Set up opentraces in this project for trace collection.
-
-Step 1 - Install:
-pipx install opentraces
-
-Step 2 - Authenticate:
-Run `opentraces auth status` to check if already logged in.
-If not authenticated, ask me to run `opentraces login` myself,
-I need to authorize in the browser.
-
-Step 3 - Initialize:
-Detect which agent you are (Claude Code, Cursor, etc.) and run:
-`opentraces init --agent <agent> --review-policy auto --import-existing`
-
-This will:
-- set the review policy to auto (traces are captured, sanitized, committed, and pushed automatically)
-- create a private dataset on HuggingFace
-- install the agent hook so traces are captured at the end of every session
-- import any existing sessions from this project
-
-If I want manual review instead, use `--review-policy review`.
-
-Step 4 - Review (if review policy):
-Open the inbox to review, commit, redact, or reject traces:
-`opentraces tui` or `opentraces web`
-
-Step 5 - Push:
-Sync committed traces to the remote dataset:
-`opentraces push`
-
-With auto review policy, the hook handles this automatically
-at the end of each session, no manual push needed.
-```
-
-## Quick Start
-
-```bash
-opentraces login
-opentraces init
-opentraces push
-```
-
-`login` authenticates with HuggingFace. `init` creates a private dataset, installs the session hook, and starts capturing traces automatically. `push` uploads committed traces to your dataset.
-
-Open the inbox to review traces before pushing:
-
-### Web inbox
-
-```bash
-opentraces web
-```
-
-![Web inbox - timeline view](/docs/assets/web-timeline.png)
-
-![Web inbox - review view](/docs/assets/web-review.png)
-
-### Terminal inbox
-
-```bash
-opentraces tui
-```
-
-![Terminal inbox](/docs/assets/tui.png)
-
-Then `opentraces commit` and `opentraces push` when ready.
-
-## Why
-
-### Contribute to the commons
-
-Your agent traces are the most valuable dataset nobody is collecting. Every coding session produces action trajectories, tool-use sequences, and reasoning chains. When shared as open data, these traces let the tools you use every day improve based on real-world telemetry. Traces are searchable by dependency, so framework maintainers, tool authors, and researchers can find sessions relevant to their stack and build better models.
-
-### Private team analytics
-
-If you have several agents or several team members, commit traces automatically to a shared private dataset during your enterprise hacking sessions. Run downstream analytics, fine-tuning, or evaluation jobs on top of it. One dataset, many consumers, no vendor lock-in, all on HuggingFace.
-
-```python
-from datasets import load_dataset
-
-ds = load_dataset("your-org/agent-traces")
-```
+- **Training / SFT** — Clean message sequences with role labels, tool-use as tool_call/tool_result pairs, outcome signals.
+- **RL / RLHF** — Trajectory-level reward signals, step-level annotations, decision point identification via sub-agent hierarchy.
+- **Telemetry** — Token counts, latency, model identifiers, cache hit rates, cost estimates per step.
+- **Code attribution** *(experimental)* — File and line-level attribution linking each edit back to the agent step that produced it. Confidence varies by session complexity.
 
 ## Docs
 
@@ -113,13 +31,8 @@ ds = load_dataset("your-org/agent-traces")
 | **[Commands](/docs/cli/commands)** | Public and hidden CLI surface |
 | **[Security Modes](/docs/security/tiers)** | Review policy, security pipeline |
 | **[Schema](/docs/schema/overview)** | TraceRecord, steps, outcome, attribution |
-| **[Workflow](/docs/workflow/parsing)** | Parse, review, commit, push lifecycle |
+| **[Workflow](/docs/workflow/parsing)** | Parse, review, assess, push, consume |
 | **[CI/CD](/docs/integration/ci-cd)** | Headless automation and token auth |
 | **[Contributing](/docs/contributing/development)** | Local dev and schema changes |
 
-## Links
-
-- [GitHub](https://github.com/jayfarei/opentraces)
-- [Schema Rationale](/docs/schema/overview)
-- [opentraces.ai](https://opentraces.ai)
 

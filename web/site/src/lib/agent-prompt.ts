@@ -1,37 +1,24 @@
 export const AGENT_PROMPT = `Set up opentraces in this project for trace collection.
 
-Step 1 - Install:
-pipx install opentraces
+Step 1 - Install or update:
+Check if \`opentraces --version\` works.
+If not installed, run: pipx install opentraces
+If already installed, run: opentraces upgrade
 
 Step 2 - Authenticate:
 Run \`opentraces auth status\` to check if already logged in.
-If not authenticated, ask me to run \`opentraces login\` myself,
-I need to authorize in the browser.
+If not authenticated, ask the user to run \`opentraces login\` themselves
+to authorize in the browser (this pushes to existing datasets).
+If they want to create new datasets directly from opentraces,
+they need a write-scope token: \`opentraces login --token\` with a
+token from https://huggingface.co/settings/tokens.
 
 Step 3 - Initialize:
-Detect which agent you are (Claude Code, Cursor, etc.) and run:
-\`opentraces init --agent <agent> --review-policy auto --import-existing\`
+Detect which agent you are (claude-code, cursor, etc.) and run:
+\`opentraces init --agent <agent> --review-policy review --import-existing\`
 
-This will:
-- set the review policy to auto (traces are captured, sanitized, committed, and pushed automatically)
-- create a private dataset on HuggingFace
-- install the agent hook so traces are captured at the end of every session
-- import any existing sessions from this project
+This creates a private HuggingFace dataset, installs the session capture
+hook, and installs the opentraces skill into this project.
 
-If I want manual review instead, use \`--review-policy review\`.
-
-Step 4 - Review (if review policy):
-Open the inbox to review, commit, redact, or reject traces:
-\`opentraces tui\` or \`opentraces web\`
-
-Step 5 - Push:
-Sync committed traces to the remote dataset:
-\`opentraces push\`
-
-With auto review policy, the hook handles this automatically
-at the end of each session, no manual push needed.
-
-After setup, the agent can also:
-- \`opentraces tui\` to open the inbox and review pending traces
-- verify that no information about a specific client or topic leaks
-- \`opentraces push\` to sync committed traces to HuggingFace`;
+Once initialized, read the skill at .agents/skills/opentraces/SKILL.md
+for the full command reference and workflows.`;

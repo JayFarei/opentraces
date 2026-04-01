@@ -21,7 +21,7 @@ from opentraces_schema.version import SCHEMA_VERSION
 from opentraces.cli import main
 from opentraces.config import Config, get_project_state_path, save_project_config
 from opentraces.state import StateManager, TraceStatus
-from opentraces.upload.hf_hub import HFUploader, UploadResult
+from opentraces.upload.hf_hub import HFUploader, RemoteShardError, UploadResult
 from opentraces.upload.dataset_card import (
     AUTO_END,
     AUTO_START,
@@ -281,11 +281,8 @@ class TestFetchRemoteContentHashes:
 
         assert hashes == {"aaa111"}
 
-    def test_graceful_on_shard_download_failure(self, tmp_path):
-        """If one shard fails to download, others still contribute hashes."""
-        good_shard = tmp_path / "good.jsonl"
-        good_shard.write_text(json.dumps({"content_hash": "ccc333"}) + "\n")
-
+    def test_raises_on_shard_download_failure(self, tmp_path):
+        """A shard download failure raises RemoteShardError (fail-closed for dedup safety)."""
         with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
             mock_api = MockApi.return_value
             mock_api.list_repo_files = MagicMock(
@@ -297,16 +294,14 @@ class TestFetchRemoteContentHashes:
             mock_api.hf_hub_download = MagicMock(
                 side_effect=[
                     ConnectionError("download failed"),
-                    str(good_shard),
                 ]
             )
 
             uploader = HFUploader(token="fake-token", repo_id="user/dataset")
             uploader.api = mock_api
 
-            hashes = uploader.fetch_remote_content_hashes()
-
-        assert hashes == {"ccc333"}
+            with pytest.raises(RemoteShardError, match="Cannot safely dedup"):
+                uploader.fetch_remote_content_hashes()
 
 
 class TestGetExistingShards:

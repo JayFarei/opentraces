@@ -4,6 +4,11 @@
 
 The `outcome` object captures the session-level result and the confidence of the signal that set it:
 
+Outcome fields are split by `execution_context`. Devtime agents (code-editing) use `committed`
+as the primary reward proxy. Runtime agents (action-trajectory / RL) use `terminal_state` and `reward`.
+
+**Devtime example:**
+
 ```json
 {
   "outcome": {
@@ -18,6 +23,19 @@ The `outcome` object captures the session-level result and the confidence of the
 }
 ```
 
+**Runtime example:**
+
+```json
+{
+  "outcome": {
+    "terminal_state": "goal_reached",
+    "reward": 1.0,
+    "reward_source": "rl_environment",
+    "signal_confidence": "derived"
+  }
+}
+```
+
 ### Fields
 
 | Field | Type | Required | Description |
@@ -27,12 +45,17 @@ The `outcome` object captures the session-level result and the confidence of the
 | `signal_confidence` | string | no | `derived`, `inferred`, or `annotated` |
 | `description` | string | no | Human-readable outcome description |
 | `patch` | string | no | Unified diff produced by the session |
-| `committed` | boolean | no | Whether changes were committed to git |
-| `commit_sha` | string | no | The specific commit, if committed |
+| `committed` | boolean | no | Whether changes were committed to git (devtime) |
+| `commit_sha` | string | no | The specific commit, if committed (devtime) |
+| `terminal_state` | string | no | `goal_reached`, `interrupted`, `error`, or `abandoned` (runtime, added 0.2.0) |
+| `reward` | float | no | Numeric reward signal from an RL environment or evaluator (runtime, added 0.2.0) |
+| `reward_source` | string | no | Canonical: `rl_environment`, `judge`, `human_annotation`, `orchestrator` (added 0.2.0) |
 
 ### Committed as a Quality Signal
 
-A session that results in a commit is higher-signal than one abandoned or reverted. The commit hash gives a deterministic anchor for replaying the patch and comparing later revisions.
+For devtime agents, a session that results in a commit is higher-signal than one abandoned or reverted. The commit hash gives a deterministic anchor for replaying the patch and comparing later revisions.
+
+For runtime agents, `terminal_state` and `reward` serve the equivalent role — ground truth from the environment.
 
 ## Attribution
 
@@ -41,7 +64,6 @@ The `attribution` block records which files and line ranges were produced by the
 ```json
 {
   "attribution": {
-    "version": "0.1.0",
     "files": [
       {
         "path": "src/parser.ts",

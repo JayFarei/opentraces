@@ -1,5 +1,6 @@
 import Link from "next/link";
 import SectionRule from "./SectionRule";
+import { latestVersion } from "@/lib/schema-versions";
 
 export default function SchemaExplorer() {
   return (
@@ -12,7 +13,7 @@ export default function SchemaExplorer() {
 
       <div className="schema-block">
         <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{`{`}
-{"\n"}  <span className="schema-key">&quot;schema_version&quot;</span>: <span className="schema-str">&quot;0.1.0&quot;</span>,
+{"\n"}  <span className="schema-key">&quot;schema_version&quot;</span>: <span className="schema-str">&quot;{latestVersion}&quot;</span>,
 {"\n"}  <span className="schema-key">&quot;trace_id&quot;</span>: <span className="schema-str">&quot;uuid&quot;</span>,
 {"\n"}  <span className="schema-key">&quot;task&quot;</span>: {"{"} <span className="schema-key">&quot;description&quot;</span>: <span className="schema-str">&quot;Fix the failing test...&quot;</span>, <span className="schema-key">&quot;repository&quot;</span>: <span className="schema-str">&quot;owner/repo&quot;</span> {"}"},
 {"\n"}  <span className="schema-key">&quot;agent&quot;</span>: {"{"} <span className="schema-key">&quot;name&quot;</span>: <span className="schema-str">&quot;claude-code&quot;</span>, <span className="schema-key">&quot;model&quot;</span>: <span className="schema-str">&quot;anthropic/claude-sonnet-4&quot;</span> {"}"},

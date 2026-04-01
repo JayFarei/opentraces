@@ -48,10 +48,11 @@ nav:
       - Standards Alignment: schema/standards.md
       - Versioning: schema/versioning.md
   - Workflow:
-      - Parsing: workflow/parsing.md
-      - Inbox: workflow/review.md
-      - Pushing: workflow/pushing.md
-      - Export: workflow/export.md
+      - Parse: workflow/parsing.md
+      - Review: workflow/review.md
+      - Assess: workflow/quality.md
+      - Push: workflow/pushing.md
+      - Consume: workflow/consume.md
   - Integration:
       - CI/CD & Automation: integration/ci-cd.md
       - Agent Setup: integration/agent-setup.md
@@ -61,6 +62,8 @@ nav:
 
 markdown_extensions:
   - admonition
+  - attr_list
+  - md_in_html
   - pymdownx.highlight
   - pymdownx.superfences
   - pymdownx.tabbed:

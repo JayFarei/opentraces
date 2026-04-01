@@ -12,15 +12,23 @@ pipx install opentraces
 brew install JayFarei/opentraces/opentraces
 ```
 
+## skills.sh
+
+```bash
+npx skills add jayfarei/opentraces
+```
+
+Installs the opentraces skill via [skills.sh](https://skills.sh) so your coding agent can drive the full workflow (init, review, push) conversationally. Works with Claude Code, Cursor, Codex, and any agent that supports skills. `opentraces init` also auto-installs the skill when you initialize a project.
+
 ## Copy to your agent
 
 Paste this into your coding agent (Claude Code, Cursor, Codex, etc.):
 
 ```
-set up opentraces for this project
+{{AGENT_PROMPT}}
 ```
 
-The agent will install the CLI, authenticate, create a private HF dataset, and install the session hook. No manual setup required.
+The agent installs the CLI, authenticates, and initializes. `init` handles the skill installation automatically. After that the agent uses the skill file for everything else.
 
 ## From Source
 

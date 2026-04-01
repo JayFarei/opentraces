@@ -27,14 +27,29 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
 
 
 def _detect_model_tier(model_name: str | None) -> str:
-    """Detect pricing tier from model name string."""
+    """Detect pricing tier from model name string.
+
+    Supports Anthropic model names (opus/haiku/sonnet) and provides
+    approximate tier mappings for other providers. Falls back to "sonnet"
+    tier pricing when the model is unrecognized.
+    """
     if not model_name:
         return "sonnet"  # Default fallback
 
     lower = model_name.lower()
+    # Anthropic models
     if "opus" in lower:
         return "opus"
-    elif "haiku" in lower:
+    if "haiku" in lower:
+        return "haiku"
+    if "sonnet" in lower:
+        return "sonnet"
+    # Non-Anthropic models: approximate tier by cost class
+    # High-end models (opus-tier pricing)
+    if any(k in lower for k in ("gpt-4o", "gpt-4-turbo", "gemini-1.5-pro", "deepseek-r1")):
+        return "opus"
+    # Mid-range models (sonnet-tier pricing)
+    if any(k in lower for k in ("gpt-4o-mini", "gemini-1.5-flash", "glm")):
         return "haiku"
     return "sonnet"
 
@@ -54,6 +69,7 @@ def _parse_timestamp(ts: str) -> datetime | None:
 def compute_metrics(
     steps: list[Step],
     pricing: dict | None = None,
+    model_fallback: str | None = None,
 ) -> Metrics:
     """Compute aggregated session-level metrics from steps.
 
@@ -64,6 +80,8 @@ def compute_metrics(
         steps: List of Step objects from the trace.
         pricing: Optional custom pricing dict overriding DEFAULT_PRICING.
             Format: {"sonnet": {"input": 3.0, "output": 15.0, "cache_read": 0.30}}
+        model_fallback: Session-level model name used when step.model is empty.
+            Prevents silent fallback to "sonnet" pricing for non-Anthropic agents.
     """
     total_input = 0
     total_output = 0
@@ -83,8 +101,8 @@ def compute_metrics(
         total_cache_read += usage.cache_read_tokens
         total_cache_write += usage.cache_write_tokens
 
-        # Track per-tier usage
-        tier = _detect_model_tier(step.model)
+        # Track per-tier usage (E1: use session model fallback when step.model is empty)
+        tier = _detect_model_tier(step.model or model_fallback)
         if tier not in tier_tokens:
             tier_tokens[tier] = {"input": 0, "output": 0, "cache_read": 0}
         tier_tokens[tier]["input"] += usage.input_tokens

@@ -215,7 +215,6 @@ def build_attribution(
                 unaccounted_hunks.append(pf)
 
     return Attribution(
-        version="0.1.0",
         experimental=True,
         files=attribution_files,
     )

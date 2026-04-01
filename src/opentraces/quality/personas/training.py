@@ -18,6 +18,11 @@ def _t1_alternating_roles(record: TraceRecord, raw_data: dict | None) -> CheckRe
 
     ADP requires alternating action/observation sequences. System steps
     are allowed anywhere but user and agent should alternate.
+
+    Q3: For conversation-turn agents (step_fidelity=conversation_turn),
+    consecutive same-role steps are structural (e.g. user prompt followed
+    by user-provided tool context). Use a relaxed 50% threshold instead
+    of 90%.
     """
     steps = record.steps
     if len(steps) < 2:
@@ -27,8 +32,13 @@ def _t1_alternating_roles(record: TraceRecord, raw_data: dict | None) -> CheckRe
         )
 
     # Filter out system steps AND subagent steps (they're nested execution,
-    # not top-level conversational turns, and break alternation at boundaries)
-    non_system = [s for s in steps if s.role != "system" and s.call_type != "subagent"]
+    # not top-level conversational turns, and break alternation at boundaries).
+    # For agents without call_type taxonomy, skip the subagent filter.
+    fidelity = record.metadata.get("step_fidelity")
+    if fidelity == "conversation_turn":
+        non_system = [s for s in steps if s.role != "system"]
+    else:
+        non_system = [s for s in steps if s.role != "system" and s.call_type != "subagent"]
     if len(non_system) < 2:
         return CheckResult(
             passed=True, score=1.0,
@@ -45,7 +55,9 @@ def _t1_alternating_roles(record: TraceRecord, raw_data: dict | None) -> CheckRe
         return CheckResult(passed=True, score=1.0, evidence="Single non-system step")
 
     ratio = 1.0 - (violations / total_transitions)
-    passed = ratio >= 0.9
+    # Conversation-turn agents naturally have consecutive same-role steps
+    threshold = 0.5 if fidelity == "conversation_turn" else 0.9
+    passed = ratio >= threshold
     return CheckResult(
         passed=passed,
         score=round(ratio, 3),
@@ -223,20 +235,24 @@ def _t8_task_description_present(record: TraceRecord, raw_data: dict | None) -> 
 def _t9_outcome_signals_present(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """T9: Outcome signals present (weight 0.7).
 
-    outcome.committed is True or outcome.success is not None.
+    Devtime: outcome.committed=True or outcome.success is not None.
+    Runtime: also accepts terminal_state or reward as valid outcome signals.
     """
-    has_committed = record.outcome.committed is True
-    has_success = record.outcome.success is not None
-    if has_committed or has_success:
-        parts = []
-        if has_committed:
-            parts.append("committed=True")
-        if has_success:
-            parts.append(f"success={record.outcome.success}")
+    parts = []
+    if record.outcome.committed is True:
+        parts.append("committed=True")
+    if record.outcome.success is not None:
+        parts.append(f"success={record.outcome.success}")
+    if record.outcome.terminal_state is not None:
+        parts.append(f"terminal_state={record.outcome.terminal_state}")
+    if record.outcome.reward is not None:
+        parts.append(f"reward={record.outcome.reward}")
+
+    if parts:
         return CheckResult(passed=True, score=1.0, evidence=f"Outcome signals: {', '.join(parts)}")
     return CheckResult(
         passed=False, score=0.0,
-        evidence="No outcome signals (committed=False, success=None)",
+        evidence="No outcome signals (committed=False, success=None, terminal_state=None, reward=None)",
     )
 
 
@@ -245,9 +261,19 @@ def _t10_warmup_steps_labeled(record: TraceRecord, raw_data: dict | None) -> Che
 
     Steps that are warmup should have call_type='warmup'. If no warmup steps
     exist, this passes (nothing to label).
+
+    Q2: Skip for conversation-turn agents (no warmup/subagent taxonomy).
     """
     if not record.steps:
         return CheckResult(passed=True, score=1.0, evidence="No steps")
+
+    fidelity = record.metadata.get("step_fidelity")
+    if fidelity == "conversation_turn":
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="N/A: conversation_turn fidelity has no warmup taxonomy",
+            skipped=True,
+        )
 
     steps_with_call_type = [s for s in record.steps if s.call_type is not None]
     warmup_steps = [s for s in record.steps if s.call_type == "warmup"]

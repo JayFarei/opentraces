@@ -4,8 +4,8 @@ Why this schema is what it is. Each section connects a design decision to the
 standards, empirical observations, and constraints that motivated it.
 
 Standards referenced:
-- [Agent Trace spec](https://github.com/nichochar/agent-trace) (Cursor RFC, CC BY 4.0)
-- [ATIF v1.6](https://github.com/harbor-ai/agent-trajectory-interchange-format) (Agent Trajectory Interchange Format)
+- [Agent Trace spec](https://github.com/cursor/agent-trace) (Cursor RFC, CC BY 4.0)
+- [ATIF v1.6](https://github.com/laude-institute/harbor/blob/main/docs/rfcs/0001-trajectory-format.md) (Agent Trajectory Interchange Format)
 - [ADP](https://arxiv.org/abs/2410.10762) (Agent Data Protocol)
 - [OTel GenAI Semantic Conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)
 

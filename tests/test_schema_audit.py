@@ -8,6 +8,7 @@ from opentraces_schema.models import (
     Snippet, TokenUsage, Outcome, Metrics, SecurityMetadata, Attribution,
     AttributionFile, AttributionConversation, AttributionRange,
 )
+from opentraces.security import SECURITY_VERSION
 from opentraces.quality.schema_audit import (
     FIELD_SPECS,
     audit_schema_completeness,
@@ -135,7 +136,7 @@ def _make_full_trace() -> TraceRecord:
             scanned=True,
             flags_reviewed=3,
             redactions_applied=1,
-            classifier_version="0.1.0",
+            classifier_version=SECURITY_VERSION,
         ),
         attribution=Attribution(
             files=[

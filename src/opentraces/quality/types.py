@@ -16,6 +16,7 @@ class RubricItem:
     score: float = 0.0  # 0.0-1.0
     evidence: str = ""
     note: str = ""
+    skipped: bool = False  # True = N/A for this trace type; excluded from weighted average
 
 
 @dataclass
@@ -28,23 +29,26 @@ class RubricReport:
 
     @property
     def total_score(self) -> float:
-        total_weight = sum(i.weight for i in self.items)
+        active = [i for i in self.items if not i.skipped]
+        total_weight = sum(i.weight for i in active)
         if total_weight == 0:
             return 0.0
-        weighted = sum(i.score * i.weight for i in self.items)
+        weighted = sum(i.score * i.weight for i in active)
         return round(weighted / total_weight * 100, 1)
 
     @property
     def pass_rate(self) -> float:
-        if not self.items:
+        active = [i for i in self.items if not i.skipped]
+        if not active:
             return 0.0
-        return round(sum(1 for i in self.items if i.passed) / len(self.items) * 100, 1)
+        return round(sum(1 for i in active if i.passed) / len(active) * 100, 1)
 
     @property
     def category_scores(self) -> dict[str, float]:
         categories: dict[str, list[RubricItem]] = {}
         for item in self.items:
-            categories.setdefault(item.category, []).append(item)
+            if not item.skipped:
+                categories.setdefault(item.category, []).append(item)
         return {
             cat: round(
                 sum(i.score * i.weight for i in items) /
@@ -61,6 +65,7 @@ class CheckResult:
     score: float
     evidence: str
     note: str = ""
+    skipped: bool = False  # True = check does not apply to this trace type
 
 
 @dataclass

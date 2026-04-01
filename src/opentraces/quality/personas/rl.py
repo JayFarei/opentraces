@@ -13,37 +13,57 @@ from opentraces_schema import TraceRecord
 from ..types import CheckDef, CheckResult, PersonaDef
 
 
-def _rl1_committed_explicitly_set(record: TraceRecord, raw_data: dict | None) -> CheckResult:
-    """RL1: outcome.committed explicitly set (weight 1.0).
+def _rl1_grounded_outcome_signal(record: TraceRecord, raw_data: dict | None) -> CheckResult:
+    """RL1: grounded outcome signal present, appropriate to execution context (weight 1.0).
 
-    The primary reward proxy. Check if enrichment actually ran and set this
-    field, rather than relying on the default False.
+    Devtime agents: committed=True is the ground truth reward proxy (code reached git).
+    Runtime agents: terminal_state or reward from environment is the ground truth.
+    Checks for the right signal type based on execution_context.
     """
-    # If committed is True, it was definitely set explicitly
+    ctx = record.execution_context
+
+    if ctx == "runtime" or (ctx is None and record.outcome.terminal_state is not None):
+        # Runtime path: check for terminal_state or numeric reward
+        if record.outcome.reward is not None:
+            return CheckResult(
+                passed=True, score=1.0,
+                evidence=f"reward={record.outcome.reward} from {record.outcome.reward_source!r} (ground truth)",
+            )
+        if record.outcome.terminal_state == "goal_reached":
+            return CheckResult(
+                passed=True, score=0.8,
+                evidence=f"terminal_state=goal_reached (inferred from source metadata)",
+            )
+        if record.outcome.terminal_state in ("interrupted", "abandoned", "error"):
+            return CheckResult(
+                passed=True, score=0.6,
+                evidence=f"terminal_state={record.outcome.terminal_state!r} (negative outcome, still grounded)",
+            )
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="runtime trace with no terminal_state or reward signal",
+        )
+
+    # Devtime path (ctx == "devtime" or unset with no terminal_state)
     if record.outcome.committed is True:
         return CheckResult(
             passed=True, score=1.0,
-            evidence="outcome.committed=True (explicitly set)",
+            evidence="outcome.committed=True (git commit ground truth)",
         )
-
-    # If committed is False but we have a commit_sha or patch, something is wrong
     if record.outcome.commit_sha or record.outcome.patch:
         return CheckResult(
             passed=False, score=0.3,
             evidence="outcome.committed=False but commit_sha/patch present (inconsistent)",
         )
-
-    # Check if the raw data shows enrichment set the outcome
-    if raw_data and raw_data.get("outcome", {}).get("signal_source") != "deterministic":
+    # Explicit failure signal (success=False) is grounded, same as runtime failures
+    if record.outcome.success is False:
         return CheckResult(
-            passed=True, score=0.8,
-            evidence="outcome.committed=False with non-default signal_source (enrichment ran)",
+            passed=True, score=0.6,
+            evidence="outcome.success=False (explicit failure signal, grounded)",
         )
-
-    # Default False could be genuine (no commit) or uninitialised
     return CheckResult(
         passed=False, score=0.0,
-        evidence="outcome.committed=False (may be default, enrichment may not have run)",
+        evidence="outcome.committed=False (no git commit signal)",
     )
 
 
@@ -72,6 +92,27 @@ def _rl2_signal_confidence_set(record: TraceRecord, raw_data: dict | None) -> Ch
         return CheckResult(
             passed=True, score=0.8,
             evidence=f"signal_confidence={conf!r} with success={record.outcome.success} (enrichment likely ran)",
+        )
+
+    # Runtime: reward from RL environment is ground truth, counts as derived
+    if record.outcome.reward is not None and record.outcome.reward_source:
+        return CheckResult(
+            passed=True, score=0.9,
+            evidence=f"reward={record.outcome.reward} from {record.outcome.reward_source!r} (environment ground truth)",
+        )
+
+    # Runtime: terminal_state with inferred confidence (source metadata)
+    if conf == "inferred" and record.outcome.terminal_state is not None:
+        return CheckResult(
+            passed=True, score=0.6,
+            evidence=f"signal_confidence={conf!r} with terminal_state={record.outcome.terminal_state!r} (source metadata)",
+        )
+
+    # Generic inferred with success signal
+    if conf == "inferred" and record.outcome.success is not None:
+        return CheckResult(
+            passed=True, score=0.5,
+            evidence=f"signal_confidence={conf!r} with success={record.outcome.success} (source metadata, not enrichment-derived)",
         )
 
     return CheckResult(
@@ -108,7 +149,15 @@ def _rl4_per_step_token_usage(record: TraceRecord, raw_data: dict | None) -> Che
     """RL4: Per-step token_usage on >80% of agent steps (weight 0.8).
 
     Enables cost-penalized reward functions.
+    Skip for conversation-turn traces: source only provides session-level usage,
+    not per-API-call breakdowns.
     """
+    if record.metadata.get("step_fidelity") == "conversation_turn":
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="N/A: conversation_turn source provides session-level tokens only",
+            skipped=True,
+        )
     agent_steps = [s for s in record.steps if s.role == "agent"]
     if not agent_steps:
         return CheckResult(passed=True, score=1.0, evidence="No agent steps")
@@ -164,18 +213,29 @@ def _rl6_subagent_hierarchy(record: TraceRecord, raw_data: dict | None) -> Check
 
 
 def _rl7_outcome_success(record: TraceRecord, raw_data: dict | None) -> CheckResult:
-    """RL7: outcome.success explicitly set (weight 0.4).
+    """RL7: outcome signal explicitly set (weight 0.4).
 
-    Bonus signal, not required per zero-required-annotation principle.
+    Bonus signal. Accepts success (any context), terminal_state, or reward
+    as valid explicitly-set outcome signals.
     """
     if record.outcome.success is not None:
         return CheckResult(
             passed=True, score=1.0,
             evidence=f"outcome.success={record.outcome.success}",
         )
+    if record.outcome.terminal_state is not None:
+        return CheckResult(
+            passed=True, score=0.8,
+            evidence=f"outcome.terminal_state={record.outcome.terminal_state!r}",
+        )
+    if record.outcome.reward is not None:
+        return CheckResult(
+            passed=True, score=1.0,
+            evidence=f"outcome.reward={record.outcome.reward}",
+        )
     return CheckResult(
         passed=False, score=0.0,
-        evidence="outcome.success=None (not set)",
+        evidence="No outcome signal set (success=None, terminal_state=None, reward=None)",
     )
 
 
@@ -202,7 +262,7 @@ RL_PERSONA = PersonaDef(
     name="rl",
     description="RL/RLHF consumer: evaluates trace utility for reinforcement learning from human feedback",
     checks=[
-        CheckDef(name="RL1: Committed explicitly set", category="rl", weight=1.0, check=_rl1_committed_explicitly_set),
+        CheckDef(name="RL1: Grounded outcome signal", category="rl", weight=1.0, check=_rl1_grounded_outcome_signal),
         CheckDef(name="RL2: Signal confidence set", category="rl", weight=1.0, check=_rl2_signal_confidence_set),
         CheckDef(name="RL3: Patch when committed", category="rl", weight=0.9, check=_rl3_patch_when_committed),
         CheckDef(name="RL4: Per-step token usage", category="rl", weight=0.8, check=_rl4_per_step_token_usage),

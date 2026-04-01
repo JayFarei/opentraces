@@ -31,10 +31,11 @@ export const DOC_NAV: DocEntry[] = [
   { slug: "schema/versioning", title: "Versioning", group: "Schema" },
 
   // Workflow
-  { slug: "workflow/parsing", title: "Parsing", group: "Workflow" },
+  { slug: "workflow/parsing", title: "Parse", group: "Workflow" },
   { slug: "workflow/review", title: "Review", group: "Workflow" },
-  { slug: "workflow/pushing", title: "Pushing", group: "Workflow" },
-  { slug: "workflow/export", title: "Export", group: "Workflow" },
+  { slug: "workflow/quality", title: "Assess", group: "Workflow" },
+  { slug: "workflow/pushing", title: "Push", group: "Workflow" },
+  { slug: "workflow/consume", title: "Consume", group: "Workflow" },
 
   // Integration
   { slug: "integration/ci-cd", title: "CI/CD & Automation", group: "Integration" },

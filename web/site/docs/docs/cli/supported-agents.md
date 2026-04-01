@@ -1,17 +1,18 @@
 # Supported Agents
 
-opentraces currently ships with one live parser: Claude Code.
+opentraces currently ships with two live parsers: Claude Code and Hermes.
 
 ## Current Support
 
-| Agent | Identifier | Status |
-|-------|-----------|--------|
-| Claude Code | `claude-code` | Supported |
-| Cursor | `cursor` | Planned |
-| Codex | `codex` | Planned |
-| Gemini CLI | `gemini-cli` | Planned |
-| Cline | `cline` | Planned |
-| OpenCode | `opencode` | Planned |
+| Agent | Identifier | Category | Status |
+|-------|-----------|----------|--------|
+| Claude Code | `claude-code` | dev-time | Supported |
+| Hermes | `hermes` | run-time | Supported |
+| Cursor | `cursor` | dev-time | Planned |
+| Codex | `codex` | dev-time | Planned |
+| OpenCode | `opencode` | dev-time | Planned |
+| OpenClaw | `openclaw` | run-time | Planned |
+| NemoClaw | `nemoclaw` | run-time | Planned |
 
 ## How Detection Works
 
@@ -23,11 +24,11 @@ from opentraces.parsers import get_parsers
 supported = list(get_parsers().keys())
 ```
 
-Today that registry contains `claude-code`. `opentraces init --agent ...` uses the same registry to validate agent selection.
+`opentraces init --agent ...` uses the same registry to validate agent selection.
 
-## What The Parser Extracts
+## What Parsers Extract
 
-Claude Code traces are normalized into the opentraces schema with:
+All parsers normalize agent sessions into the opentraces schema with:
 
 - user / agent / system steps
 - tool calls and observations

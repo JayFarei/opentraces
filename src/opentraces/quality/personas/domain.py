@@ -17,7 +17,22 @@ def _d1_language_ecosystem(record: TraceRecord, raw_data: dict | None) -> CheckR
     """D1: language_ecosystem populated (weight 1.0).
 
     HF dataset filtering: 'all Python traces'.
+    Skip for runtime traces with no code-writing tool calls: language ecosystem
+    is inferred from file edits and imports, which are not present in action-trajectory agents.
     """
+    if record.execution_context == "runtime":
+        edit_tool_names = {"Edit", "Write", "edit", "write", "patch", "write_file"}
+        has_code_writing = any(
+            tc.tool_name in edit_tool_names
+            for step in record.steps
+            for tc in step.tool_calls
+        )
+        if not has_code_writing:
+            return CheckResult(
+                passed=False, score=0.0,
+                evidence="N/A: runtime trace with no code-writing tool calls, language ecosystem not inferrable",
+                skipped=True,
+            )
     langs = record.environment.language_ecosystem
     if langs and len(langs) > 0:
         return CheckResult(
@@ -84,7 +99,15 @@ def _d4_vcs_info(record: TraceRecord, raw_data: dict | None) -> CheckResult:
     """D4: VCS info populated (weight 0.7).
 
     vcs.type and vcs.branch should be set.
+    Skip for runtime traces: VCS enrichment requires a local project directory,
+    which is not available for imported action-trajectory traces.
     """
+    if record.execution_context == "runtime":
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="N/A: runtime traces have no VCS enrichment path",
+            skipped=True,
+        )
     vcs = record.environment.vcs
     has_type = vcs.type and vcs.type != "none"
     has_branch = vcs.branch and vcs.branch.strip()
@@ -126,9 +149,9 @@ def _d5_snippets_with_language(record: TraceRecord, raw_data: dict | None) -> Ch
 
     if not all_snippets:
         return CheckResult(
-            passed=True, score=1.0,
+            passed=False, score=0.0,
             evidence="No snippets in trace",
-            note="N/A when no code snippets extracted",
+            skipped=True,
         )
 
     with_lang = sum(1 for s in all_snippets if s.language and s.language.strip())
@@ -146,7 +169,7 @@ def _d6_attribution_when_edits(record: TraceRecord, raw_data: dict | None) -> Ch
 
     Agent Trace spec bridge. Experimental in v0.1.
     """
-    edit_tool_names = {"Edit", "Write", "edit", "write", "file_edit", "file_write"}
+    edit_tool_names = {"Edit", "Write", "edit", "write", "patch", "write_file"}
     has_edits = any(
         tc.tool_name in edit_tool_names
         for step in record.steps
@@ -182,6 +205,8 @@ def _d7_agent_name_version(record: TraceRecord, raw_data: dict | None) -> CheckR
     """D7: Agent name + version (weight 0.5).
 
     Both populated for queries like 'all Claude Code v1.x traces'.
+    For runtime traces: version is often unavailable from source metadata,
+    so name-only passes (score=0.7) rather than failing for missing version.
     """
     has_name = bool(record.agent.name and record.agent.name.strip())
     has_version = bool(record.agent.version and record.agent.version.strip())
@@ -190,6 +215,17 @@ def _d7_agent_name_version(record: TraceRecord, raw_data: dict | None) -> CheckR
         return CheckResult(
             passed=True, score=1.0,
             evidence=f"agent={record.agent.name!r} v{record.agent.version!r}",
+        )
+
+    if record.execution_context == "runtime":
+        if has_name:
+            return CheckResult(
+                passed=True, score=0.7,
+                evidence=f"agent name={record.agent.name!r} (version not available from runtime source metadata)",
+            )
+        return CheckResult(
+            passed=False, score=0.0,
+            evidence="No agent name (required even for runtime traces)",
         )
 
     score = 0.0

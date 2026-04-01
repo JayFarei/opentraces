@@ -330,6 +330,16 @@ def _is_allowlisted(pattern_name: str, matched_text: str, full_text: str, start:
             return True
         return False
 
+    if pattern_name == "high_entropy_string" and "/" in matched_text:
+        # Filesystem paths score artificially high because mixing uppercase, lowercase,
+        # digits, slashes, and underscores across multiple path segments inflates entropy.
+        # Check whether any individual path component is high-entropy on its own.
+        # If none are, the match is driven by path structure, not a secret.
+        threshold = DEFAULT_ENTROPY_THRESHOLD
+        components = [c for c in matched_text.split("/") if len(c) >= 8]
+        if not any(shannon_entropy(c) >= threshold for c in components):
+            return True
+
     return False
 
 
@@ -387,6 +397,8 @@ def scan_text(
 
     if include_entropy:
         for em in _find_high_entropy(text, threshold=entropy_threshold):
+            if _is_allowlisted("high_entropy_string", em.matched_text, text, em.start):
+                continue
             span = (em.start, em.end)
             # Avoid duplicates with regex matches
             overlaps = any(

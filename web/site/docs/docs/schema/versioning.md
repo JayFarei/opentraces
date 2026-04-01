@@ -16,7 +16,7 @@ The opentraces schema follows semantic versioning. The version lives in `package
 ## Current Version
 
 ```text
-0.1.0
+0.2.0
 ```
 
 The `0.x` series means breaking changes may still land between minor versions until `1.0.0`.

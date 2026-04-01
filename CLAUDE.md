@@ -31,7 +31,7 @@ pytest tests/ -v
 - `packages/opentraces-ui/` - Design system (tokens, base, components, React wrappers, logo assets, DESIGN.md)
 - `src/opentraces/` - Main CLI package
   - `parsers/` - Agent session parsers (claude_code.py, dataclaw_import.py)
-  - `security/` - Secret scanning, anonymization, classification
+  - `security/` - Secret scanning, anonymization, classification (independently versioned via `SECURITY_VERSION`)
   - `enrichment/` - Git signals, attribution, dependencies, metrics
   - `quality/` - Trace quality assessment, persona rubrics, upload gates
   - `exporters/` - ATIF export
@@ -54,6 +54,7 @@ pytest tests/ -v
 - Context-aware security scanning (different rules per field type)
 - Per-project review policy (auto/review) controlling whether traces need manual approval
 - Zero required annotation, all enrichment is deterministic
+- Security pipeline has its own `SECURITY_VERSION` in `security/version.py`, bump it when changing detection logic (regex patterns, entropy thresholds, classifier heuristics, anonymization rules)
 
 ## Testing
 

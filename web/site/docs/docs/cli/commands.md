@@ -17,12 +17,14 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces session` | Inspect and edit staged traces |
 | `opentraces commit` | Commit inbox traces for upload |
 | `opentraces push` | Upload committed traces to Hugging Face Hub |
+| `opentraces assess` | Run quality assessment on committed traces or a remote dataset |
 | `opentraces web` | Open the browser inbox UI |
 | `opentraces tui` | Open the terminal inbox UI |
 | `opentraces stats` | Show aggregate inbox statistics |
 | `opentraces context` | Return machine-readable project context |
 | `opentraces config show` | Display current config |
 | `opentraces config set` | Update config values |
+| `opentraces upgrade` | Upgrade CLI and refresh project skill file |
 
 ## Authentication
 
@@ -76,12 +78,30 @@ opentraces init --review-policy review --remote your-name/opentraces --start-fre
 | `--import-existing / --start-fresh` | prompt when backlog exists | Whether to import existing Claude Code sessions for this repo during init |
 | `--remote` | unset | HF dataset repo (`owner/name`) |
 | `--no-hook` | off | Skip Claude Code hook installation |
+| `--private / --public` | private | Dataset visibility when creating the remote repo |
 
 `--mode` is a legacy alias kept for compatibility.
+
+`init` also installs the opentraces skill into `.agents/skills/opentraces/` and symlinks it into the selected agent's skill directory (e.g., `.claude/commands/opentraces/` for Claude Code).
 
 ### `opentraces remove`
 
 Remove the local `.opentraces/` inbox and Claude Code hook from the current project.
+
+### `opentraces upgrade`
+
+Upgrade the CLI and refresh the skill file and session hook in the current project.
+
+```bash
+opentraces upgrade              # upgrade CLI + refresh skill and hook
+opentraces upgrade --skill-only # just refresh the skill file and hook
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--skill-only` | off | Skip CLI upgrade, only refresh the skill file and hook |
+
+Detects the install method (pipx, brew, pip, source) and runs the appropriate upgrade command. Then re-copies the latest skill file into `.agents/skills/opentraces/` and updates the session hook.
 
 ### `opentraces config show`
 
@@ -136,6 +156,7 @@ Fine-grained review commands for staged traces.
 ```bash
 opentraces session list
 opentraces session show <trace-id>
+opentraces session show <trace-id> --verbose
 opentraces session commit <trace-id>
 opentraces session reject <trace-id>
 opentraces session reset <trace-id>
@@ -144,6 +165,8 @@ opentraces session discard <trace-id> --yes
 ```
 
 `session list` accepts `--stage inbox|committed|pushed|rejected`, `--model`, `--agent`, and `--limit`.
+
+`session show` truncates step content to 500 chars in human output by default to protect context windows. Pass `--verbose` to see full content, or use `opentraces --json session show <id>` to get the complete record as JSON (never truncated).
 
 ## Upload
 
@@ -166,6 +189,7 @@ opentraces push --private
 opentraces push --public
 opentraces push --publish
 opentraces push --gated
+opentraces push --assess
 opentraces push --repo user/custom-dataset
 ```
 
@@ -175,9 +199,37 @@ opentraces push --repo user/custom-dataset
 | `--public` | off | Force public visibility |
 | `--publish` | off | Publish an existing private dataset |
 | `--gated` | off | Enable gated access on the dataset |
+| `--assess` | off | Run quality assessment after upload and embed scores in dataset card |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
 
 `--approved-only` is not part of the current CLI. The public path is `commit -> push`.
+
+### `opentraces assess`
+
+Run quality assessment on committed traces or a full remote dataset.
+
+```bash
+opentraces assess
+opentraces assess --judge
+opentraces assess --judge --judge-model sonnet
+opentraces assess --limit 50
+opentraces assess --all-staged
+opentraces assess --compare-remote
+opentraces assess --dataset user/my-traces
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--judge / --no-judge` | off | Enable LLM judge for qualitative scoring |
+| `--judge-model` | `haiku` | Model for LLM judge: `haiku`, `sonnet`, or `opus` |
+| `--limit` | `0` (all) | Maximum number of traces to assess |
+| `--compare-remote` | off | Fetch the remote dataset's `quality.json` and show score deltas |
+| `--all-staged` | off | Assess all staged traces instead of COMMITTED-only |
+| `--dataset TEXT` | unset | Assess a full remote HF dataset (e.g. `user/my-traces`). Downloads all shards, runs assessment, and updates `README.md` and `quality.json` on the dataset repo. Does not require hf-mount. |
+
+By default, `assess` targets only **committed** traces, matching the population that `push` would upload. Use `--all-staged` to include traces that are staged but not yet committed.
+
+`--dataset` is independent of the local inbox. It downloads shards from the specified HF dataset repo and updates that repo's dataset card and `quality.json` sidecar in place, without requiring a new push.
 
 ### `opentraces remote`
 
@@ -197,37 +249,83 @@ Show the current project inbox, counts, review policy, agents, and remote.
 
 ### `opentraces log`
 
-List uploaded traces grouped by date.
+List uploaded traces grouped by date. Shows trace IDs, timestamps, models used, and step counts for traces that have been pushed to the remote.
+
+```bash
+opentraces log
+```
 
 ### `opentraces stats`
 
-Show aggregate counts, token totals, cost, model distribution, and stage counts for the current inbox.
+Show aggregate counts, token totals, estimated cost, model distribution, and stage counts for the current inbox. Useful for understanding your contribution volume and cost breakdown.
+
+```bash
+opentraces stats
+```
 
 ### `opentraces context`
 
-Emit a machine-readable project summary, including suggested next action.
+The agent's "what should I do next?" command. Returns project config, auth status, counts per stage, and a `suggested_next` command. Start here when resuming work or when uncertain about state.
+
+```bash
+opentraces context
+opentraces --json context
+```
+
+## Machine-Readable Output
+
+Add `--json` to any command to suppress human-readable text and get structured JSON only:
+
+```bash
+opentraces --json context
+opentraces --json session list --stage inbox
+opentraces --json push
+```
+
+JSON is emitted after the sentinel line `---OPENTRACES_JSON---`. When parsing programmatically, split on this sentinel and parse the text that follows.
+
+Every JSON response includes:
+
+| Field | Description |
+|-------|-------------|
+| `status` | `"ok"`, `"error"`, or `"needs_action"` |
+| `next_steps` | Array of suggested next actions (human-readable) |
+| `next_command` | The single most likely next command to run |
+
+### CI / headless / agent mode
+
+When `stdout` is not a TTY, bare `opentraces` prints help text instead of launching the TUI. You can also force this explicitly:
+
+```bash
+OPENTRACES_NO_TUI=1 opentraces    # always prints help, never opens TUI
+```
+
+`HF_TOKEN` is also respected as the highest-priority credential source, so CI pipelines can authenticate without running `opentraces login`.
 
 ## Hidden and Internal Commands
 
 These commands exist for automation, compatibility, or diagnostics and are hidden from normal help output:
 
-- `opentraces discover`
-- `opentraces parse`
-- `opentraces review`
-- `opentraces export`
-- `opentraces migrate`
-- `opentraces capabilities`
-- `opentraces introspect`
-- `opentraces assess`
-- `opentraces _capture`
+| Command | Purpose |
+|---------|---------|
+| `opentraces discover` | List available agent sessions across all projects |
+| `opentraces parse` | Parse agent sessions into enriched JSONL traces (global mode) |
+| `opentraces review` | Legacy alias for `web`/`tui`/`session` |
+| `opentraces export` | Export traces to other formats (e.g., `--format atif`) |
+| `opentraces migrate` | Check schema version and run migrations |
+| `opentraces capabilities --json` | Machine-discoverable feature list, supported agents, versions |
+| `opentraces introspect` | Full API schema and TraceRecord JSON schema for automation |
+| `opentraces _capture` | Invoked by the Claude Code SessionEnd hook to auto-capture sessions |
+| `opentraces _assess-remote` | Force quality assessment on a remote dataset via hf-mount (automation only) |
 
 ## Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
-| `2` | Usage or validation error |
-| `3` | Missing config, auth, or not found |
+| `2` | Usage error (bad flags, conflicting options) |
+| `3` | Auth/config error (not authenticated, not initialized) |
 | `4` | Network or upload error |
 | `5` | Data corruption / invalid state |
+| `6` | Not found (trace ID, project, or resource) |
 | `7` | Lock contention / busy state |

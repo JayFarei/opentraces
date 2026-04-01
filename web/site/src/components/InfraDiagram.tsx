@@ -1,7 +1,25 @@
 import Image from "next/image";
 import SectionRule from "./SectionRule";
 
-const agents = ["Claude Code", "Codex CLI", "Cursor", "Gemini CLI", "OpenCode", "Cline"];
+interface Agent {
+  name: string;
+  ready: boolean;
+}
+
+const devTimeAgents: Agent[] = [
+  { name: "Claude Code", ready: true },
+  { name: "Codex", ready: false },
+  { name: "Cursor", ready: false },
+  { name: "OpenCode", ready: false },
+];
+
+const runTimeAgents: Agent[] = [
+  { name: "Claude Code", ready: true },
+  { name: "Hermes", ready: true },
+  { name: "OpenClaw", ready: false },
+  { name: "DeepAgents", ready: false },
+];
+
 const pipelineSteps = ["init", "capture", "parse", "enrich", "sanitise"];
 const pushModes = [
   { name: "auto", label: "capture, commit, push automatically" },
@@ -20,9 +38,9 @@ const useCases = [
     desc: "Committed patches as reward proxies, per-step token costs for cost-penalized reward, sub-agent hierarchy for credit assignment.",
   },
   {
-    tag: "analytics",
-    title: "Cost and session observability",
-    desc: "Cache hit rates, per-step token breakdowns, duration timelines, model distribution. Step-level granularity, not trace-level aggregates.",
+    tag: "analytics / eval",
+    title: "Observability and ground truth",
+    desc: "Cache hit rates, per-step token breakdowns, duration timelines, model distribution. Real production inputs with outcome signals become reproducible eval datasets for quality gating — no annotation queue required.",
   },
   {
     tag: "domain sourcing",
@@ -31,21 +49,42 @@ const useCases = [
   },
 ];
 
+function AgentGrid({ label, agents }: { label: string; agents: Agent[] }) {
+  return (
+    <div className="arch-category">
+      <div className="arch-category-label">{label}</div>
+      <div className="arch-category-grid">
+        {agents.map((a) => (
+          <div
+            key={a.name}
+            className={`arch-agent-box${a.ready ? "" : " arch-agent-soon"}`}
+            {...(!a.ready && { title: "Coming soon" })}
+          >
+            {a.name}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function InfraDiagram() {
   return (
     <section>
       <SectionRule label="how it works" />
 
       <div className="arch">
-        {/* Source agents row */}
-        <div className="arch-agents">
-          {agents.map((name) => (
-            <div key={name} className="arch-agent-box">{name}</div>
-          ))}
+        {/* Source agents: two category boxes inside agent harness bracket */}
+        <div className="arch-harness">
+          <div className="arch-harness-label">agent harness</div>
+          <div className="arch-categories">
+            <AgentGrid label="dev-time agents" agents={devTimeAgents} />
+            <AgentGrid label="run-time agents" agents={runTimeAgents} />
+          </div>
         </div>
 
         <div className="arch-line" />
-        <div className="arch-label">Session Hook</div>
+        <div className="arch-label">Local traces / Session Hook</div>
         <div className="arch-line" />
 
         {/* Core pipeline */}

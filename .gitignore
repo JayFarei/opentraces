@@ -26,3 +26,4 @@ kb/
 .opentraces
 skills-lock.json
 .coverage
+.context/

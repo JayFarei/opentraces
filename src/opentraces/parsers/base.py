@@ -42,8 +42,8 @@ class SessionParser(Protocol):
 class FormatImporter(Protocol):
     """Protocol for file-based trace importers.
 
-    For importing traces from external file formats (e.g. ADP trajectories)
-    into TraceRecord format.
+    For importing traces from external file formats (e.g. ADP trajectories,
+    HuggingFace datasets) into TraceRecord format.
     """
 
     format_name: str
@@ -58,5 +58,21 @@ class FormatImporter(Protocol):
 
         Returns:
             List of TraceRecords. May be empty if file has no valid records.
+        """
+        ...
+
+    def map_record(self, row: dict, index: int, source_info: dict | None = None) -> TraceRecord | None:
+        """Convert one dataset row to a TraceRecord.
+
+        Used by CLI commands that stream rows from external sources
+        (e.g. HuggingFace datasets) and need per-row conversion.
+
+        Args:
+            row: Raw dataset row as a dict.
+            index: Row index in the source dataset.
+            source_info: Provenance metadata (dataset_id, revision, etc.).
+
+        Returns:
+            TraceRecord if row is valid, None to skip invalid rows.
         """
         ...

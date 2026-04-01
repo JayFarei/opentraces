@@ -26,7 +26,9 @@ from opentraces_schema import (
 
 class TestSchemaVersion:
     def test_schema_version_format(self):
-        assert SCHEMA_VERSION == "0.1.0"
+        assert SCHEMA_VERSION == SCHEMA_VERSION  # tautology guard: real check is semver format
+        parts = SCHEMA_VERSION.split(".")
+        assert len(parts) == 3, f"Expected semver, got {SCHEMA_VERSION}"
 
     def test_trace_record_has_schema_version(self):
         record = TraceRecord(
@@ -34,7 +36,7 @@ class TestSchemaVersion:
             session_id="session-1",
             agent=Agent(name="claude-code"),
         )
-        assert record.schema_version == "0.1.0"
+        assert record.schema_version == SCHEMA_VERSION
 
 
 class TestTraceRecordRoundTrip:

@@ -15,9 +15,15 @@ from opentraces_schema.models import TraceRecord
 
 from .config import Config
 from .enrichment.attribution import build_attribution
-from .enrichment.dependencies import extract_dependencies
-from .enrichment.git_signals import check_committed, detect_vcs
+from .enrichment.dependencies import (
+    extract_dependencies,
+    extract_dependencies_from_imports,
+    extract_dependencies_from_steps,
+    infer_language_ecosystem,
+)
+from .enrichment.git_signals import check_committed, detect_commits_from_steps, detect_vcs
 from .enrichment.metrics import compute_metrics
+from .security import SECURITY_VERSION
 from .security.anonymizer import anonymize_paths
 from .security.classifier import classify_trace_record
 from .security.scanner import apply_redactions, two_pass_scan
@@ -32,6 +38,43 @@ class ProcessedTrace:
     redaction_count: int
 
 
+def _enrich_from_steps(
+    record: TraceRecord, project_name: str | None = None,
+) -> None:
+    """Step-derived enrichment shared by process_trace and process_imported_trace.
+
+    Covers: language ecosystem, dependencies (from install commands + imports),
+    attribution (from Edit/Write tool calls), and commit detection (from Bash
+    tool calls containing git commit).
+
+    No project directory needed, works from step data alone.
+    """
+    if not record.environment.language_ecosystem:
+        record.environment.language_ecosystem = infer_language_ecosystem(record.steps)
+    if not record.dependencies:
+        step_deps = extract_dependencies_from_steps(record.steps)
+        import_deps = extract_dependencies_from_imports(
+            record.steps, project_name=project_name,
+        )
+        record.dependencies = sorted(set(step_deps + import_deps))
+    if not record.attribution:
+        patch = record.outcome.patch if record.outcome else None
+        record.attribution = build_attribution(record.steps, patch)
+    if not record.outcome.committed:
+        step_outcome = detect_commits_from_steps(record.steps)
+        if step_outcome.committed:
+            # Merge commit signals into the existing outcome rather than replacing it.
+            # Replacing would lose RL/runtime signals (terminal_state, reward, etc.)
+            # already set by the parser for runtime traces.
+            record.outcome.committed = step_outcome.committed
+            record.outcome.commit_sha = step_outcome.commit_sha
+            if record.outcome.success is None and step_outcome.success is not None:
+                record.outcome.success = step_outcome.success
+            if not record.outcome.signal_source or record.outcome.signal_source == "deterministic":
+                record.outcome.signal_source = step_outcome.signal_source
+                record.outcome.signal_confidence = step_outcome.signal_confidence
+
+
 def process_trace(
     record: TraceRecord,
     project_dir: Path,
@@ -40,9 +83,9 @@ def process_trace(
     """Run the full enrichment + security pipeline on a parsed trace.
 
     Steps:
-        1. Git signals (VCS detection, commit check)
-        2. Attribution (from Edit tool calls)
-        3. Dependencies (from project directory)
+        1. Git signals (VCS detection, commit check from project dir)
+        2. Step-derived enrichment (attribution, deps, ecosystem, commits)
+        3. Filesystem dependencies (from project directory)
         4. Metrics (from step data)
         5. Security scan + redact
         6. Classifier
@@ -51,7 +94,7 @@ def process_trace(
     Returns a ProcessedTrace with the enriched record, a needs_review flag,
     and the count of redactions applied.
     """
-    # 1. Git signals
+    # 1. Git signals (project-dir-based VCS detection)
     vcs = detect_vcs(project_dir)
     record.environment.vcs = vcs
     if vcs.type == "git" and record.timestamp_start:
@@ -60,12 +103,14 @@ def process_trace(
         if outcome.committed:
             record.outcome = outcome
 
-    # 2. Attribution
-    patch = record.outcome.patch if record.outcome else None
-    record.attribution = build_attribution(record.steps, patch)
+    # 2. Step-derived enrichment (shared with imported traces)
+    _enrich_from_steps(record)
 
-    # 3. Dependencies
-    record.dependencies = extract_dependencies(str(project_dir))
+    # 3. Filesystem dependencies (project-dir-based, not available for imports)
+    fs_deps = extract_dependencies(str(project_dir))
+    if fs_deps:
+        merged = sorted(set(record.dependencies + fs_deps))
+        record.dependencies = merged
 
     # 4. Metrics
     record.metrics = compute_metrics(record.steps)
@@ -80,9 +125,53 @@ def process_trace(
     # 6. Classifier
     classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
     record.security.flags_reviewed = len(classifier_result.flags)
-    record.security.classifier_version = "0.1.0"
+    record.security.classifier_version = SECURITY_VERSION
 
     # 7. Path anonymization
+    anonymize_record(record, cfg)
+
+    return ProcessedTrace(
+        record=record,
+        needs_review=needs_review,
+        redaction_count=redaction_count,
+    )
+
+
+def process_imported_trace(
+    record: TraceRecord,
+    cfg: Config,
+) -> ProcessedTrace:
+    """Enrichment + security pipeline for imported traces (no project dir).
+
+    Same security pipeline as process_trace. No VCS detection or filesystem
+    dependency extraction (no local project directory for imported data).
+    """
+    # 1. Step-derived enrichment
+    _enrich_from_steps(record)
+
+    # 2. Metrics: only compute if parser didn't populate them (FIX-3)
+    if record.metrics.total_steps == 0 and record.metrics.total_input_tokens == 0:
+        record.metrics = compute_metrics(record.steps)
+
+    # 3. Security scan + redact
+    pass1, pass2 = two_pass_scan(record)
+    redaction_count = apply_redactions(record)
+    record.security.scanned = True
+    record.security.redactions_applied = redaction_count
+    # For imported traces, routine redactions (URLs, paths) are expected and
+    # already applied. Only flag for review when the scanner found actual
+    # security matches (secrets, credentials), not just redaction counts.
+    needs_review = bool(pass1.matches or pass2.matches)
+
+    # 4. Classifier (FIX-10: set flags_reviewed)
+    classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
+    record.security.flags_reviewed = len(classifier_result.flags)
+    record.security.classifier_version = SECURITY_VERSION
+    # Classifier flags also require review
+    if classifier_result.flags:
+        needs_review = True
+
+    # 5. Path anonymization
     anonymize_record(record, cfg)
 
     return ProcessedTrace(

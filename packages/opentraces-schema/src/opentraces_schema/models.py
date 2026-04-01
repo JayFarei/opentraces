@@ -121,18 +121,40 @@ class Outcome(BaseModel):
     """Session outcome signals for RL/reward modeling.
 
     signal_confidence indicates how trustworthy the signal is:
-    - derived: deterministic extraction (e.g. committed from git)
-    - inferred: heuristic-based (e.g. success from test output patterns)
+    - derived: deterministic extraction (e.g. committed from git, rl_environment reward)
+    - inferred: heuristic-based (e.g. success from test output, completed flag)
     - annotated: human or CI annotation
+
+    Devtime fields (committed, commit_sha, patch) are populated by code-editing agents.
+    Runtime fields (terminal_state, reward, reward_source) are populated by
+    task-execution agents. Both sets are nullable; consumers should check
+    TraceRecord.execution_context to know which fields are meaningful.
     """
 
     success: bool | None = None
     signal_source: str = "deterministic"
     signal_confidence: Literal["derived", "inferred", "annotated"] = "derived"
     description: str | None = None
+    # devtime fields
     patch: str | None = Field(None, description="Unified diff produced by the session")
     committed: bool = False
     commit_sha: str | None = None
+    # runtime fields (v0.2.0)
+    terminal_state: Literal["goal_reached", "interrupted", "error", "abandoned"] | None = Field(
+        None,
+        description=(
+            "How the action trajectory ended. "
+            "goal_reached: task completed successfully. "
+            "interrupted: budget/context exhausted or session cut short. "
+            "error: unrecoverable environment or tool error. "
+            "abandoned: agent explicitly gave up."
+        ),
+    )
+    reward: float | None = Field(None, description="Numeric reward from RL environment or evaluator")
+    reward_source: str | None = Field(
+        None,
+        description="Canonical values: rl_environment, judge, human_annotation, orchestrator",
+    )
 
 
 class AttributionRange(BaseModel):
@@ -171,7 +193,6 @@ class Attribution(BaseModel):
     Marked experimental in v0.1 - confidence varies by session complexity.
     """
 
-    version: str = SCHEMA_VERSION
     experimental: bool = True
     files: list[AttributionFile] = Field(default_factory=list)
 
@@ -210,6 +231,13 @@ class TraceRecord(BaseModel):
     content_hash: str | None = None
     timestamp_start: str | None = None
     timestamp_end: str | None = None
+    execution_context: Literal["devtime", "runtime"] | None = Field(
+        None,
+        description=(
+            "devtime: agent produces code artifacts (edits, commits, diffs). "
+            "runtime: agent executes action trajectories (browser, APIs, RL environments)."
+        ),
+    )
     task: Task = Field(default_factory=Task)
     agent: Agent
     environment: Environment = Field(default_factory=Environment)

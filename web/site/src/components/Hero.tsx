@@ -6,7 +6,7 @@ import Terminal from "./Terminal";
 import { AGENT_PROMPT } from "@/lib/agent-prompt";
 import pkg from "@/lib/version.json";
 
-const tabLabels = ["init", "status", "review", "push"];
+const tabLabels = ["init", "status", "review", "push", "consume"];
 const AGENT_LINES = AGENT_PROMPT.split("\n").length;
 
 const installMethods = [
@@ -38,7 +38,7 @@ function InitContent() {
       <span className="terminal-line"><span className="di">  [2] auto</span>    <span className="di">capture, sanitize, commit, and push automatically</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Created .opentraces/config.json</span></span>
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Installed Claude Code session hook</span></span>
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Installed agent session hook</span></span>
     </>
   );
 }
@@ -111,7 +111,31 @@ function PushContent() {
   );
 }
 
-const tabContents = [InitContent, StatusContent, ReviewContent, PushContent];
+function ConsumeContent() {
+  return (
+    <>
+      <span className="terminal-line"><span className="p">~$</span> <span className="c">hf-mount jayfarei/opentraces /mnt/traces</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  Starting daemon (pid=</span><span className="n">21104</span><span className="di">) </span><span className="ok">ready</span></span>
+      <span className="terminal-line"><span className="di">    stop: hf-mount-daemon stop /mnt/traces</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="p">~$</span> <span className="c">ls -la /mnt/traces/</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  total 3</span></span>
+      <span className="terminal-line"><span className="di">  -r--r--r--  jay  staff  </span><span className="n">2.1 MB</span><span className="di">  Mar 29  </span><span className="s">traces-0001.jsonl</span></span>
+      <span className="terminal-line"><span className="di">  -r--r--r--  jay  staff  </span><span className="n">1.8 MB</span><span className="di">  Mar 29  </span><span className="s">traces-0002.jsonl</span></span>
+      <span className="terminal-line"><span className="di">  -r--r--r--  jay  staff  </span><span className="n">983 KB</span><span className="di">  Mar 30  </span><span className="s">traces-0003.jsonl</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="p">~$</span> <span className="c">grep -c &quot;tool_use&quot; /mnt/traces/*.jsonl</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="s">traces-0001.jsonl</span><span className="di">: </span><span className="n">847</span></span>
+      <span className="terminal-line"><span className="s">traces-0002.jsonl</span><span className="di">: </span><span className="n">612</span></span>
+      <span className="terminal-line"><span className="s">traces-0003.jsonl</span><span className="di">: </span><span className="n">291</span></span>
+    </>
+  );
+}
+
+const tabContents = [InitContent, StatusContent, ReviewContent, PushContent, ConsumeContent];
 
 export default function Hero() {
   const [activeTab, setActiveTab] = useState(0);
@@ -127,7 +151,9 @@ export default function Hero() {
           <div style={{ height: 16 }} />
           <h1>Open data is the new open source.</h1>
           <p className="hero-sub">
-            Commit your agent traces to HuggingFace Hub. Private or public, like GitHub for code. One init, automatic collection, push when ready.
+            When LLMs drive the logic, <strong>traces</strong> become the real source: the record of decisions, tool calls, and reasoning behind the outcome.
+            <br /><br />
+            open<strong>traces</strong> lets you commit those sessions to HuggingFace Hub so others can build on real workflows, not synthetic benchmarks.
           </p>
           <div className="hero-install-tabs">
             {installMethods.map((m, i) => (

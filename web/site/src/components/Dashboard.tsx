@@ -9,6 +9,7 @@ const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 interface CacheEntry {
   datasetStats: DatasetStats[];
   sampleRows: TraceRow[];
+  readmeStatsList: ReadmeStats[];
   ts: number;
 }
 
@@ -29,9 +30,9 @@ function readCache(key: string): CacheEntry | null {
   } catch { return null; }
 }
 
-function writeCache(key: string, datasetStats: DatasetStats[], sampleRows: TraceRow[]) {
+function writeCache(key: string, datasetStats: DatasetStats[], sampleRows: TraceRow[], readmeStatsList: ReadmeStats[]) {
   try {
-    sessionStorage.setItem(key, JSON.stringify({ datasetStats, sampleRows, ts: Date.now() }));
+    sessionStorage.setItem(key, JSON.stringify({ datasetStats, sampleRows, readmeStatsList, ts: Date.now() }));
   } catch { /* quota exceeded, ignore */ }
 }
 
@@ -64,23 +65,54 @@ interface TraceRow {
   steps?: unknown[];
 }
 
-function getAgent(r: TraceRow): string {
-  if (typeof r.agent === "string") return r.agent;
-  if (typeof r.agent === "object" && r.agent) return r.agent.name || "-";
-  return "-";
+interface ReadmeStats {
+  total_traces: number;
+  total_tokens: number;
+  avg_steps_per_session: number | null;
+  success_rate: number | null;
+  top_dependencies: [string, number][];
+  agent_counts: Record<string, number>;
+  model_counts: Record<string, number>;
 }
 
-function getModel(r: TraceRow): string {
-  if (r.model && typeof r.model === "string") return r.model;
-  if (typeof r.agent === "object" && r.agent) return r.agent.model || "-";
-  return "-";
+function aggregateReadmeStats(statsList: ReadmeStats[]): ReadmeStats | null {
+  if (!statsList.length) return null;
+  const total = statsList.reduce((s, r) => s + r.total_traces, 0);
+  if (!total) return null;
+
+  let stepSum = 0, successSum = 0, successN = 0, totalTokens = 0;
+  const agents: Record<string, number> = {};
+  const models: Record<string, number> = {};
+  const depMap: Record<string, number> = {};
+
+  for (const s of statsList) {
+    const n = s.total_traces;
+    totalTokens += s.total_tokens || 0;
+    if (s.avg_steps_per_session != null) stepSum += s.avg_steps_per_session * n;
+    if (s.success_rate != null) { successSum += s.success_rate * n; successN += n; }
+    for (const [k, v] of Object.entries(s.agent_counts || {})) agents[k] = (agents[k] || 0) + v;
+    for (const [k, v] of Object.entries(s.model_counts || {})) models[k] = (models[k] || 0) + v;
+    for (const [k, v] of (s.top_dependencies || [])) {
+      const trimmed = k.trim();
+      if (trimmed.length > 1 && !/^[&|;<>!]+$/.test(trimmed)) depMap[trimmed] = (depMap[trimmed] || 0) + v;
+    }
+  }
+
+  const top_dependencies: [string, number][] = Object.entries(depMap)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10) as [string, number][];
+
+  return {
+    total_traces: total,
+    total_tokens: totalTokens,
+    avg_steps_per_session: total > 0 ? Math.round(stepSum / total) : null,
+    success_rate: successN > 0 ? Math.round(successSum / successN) : null,
+    top_dependencies,
+    agent_counts: agents,
+    model_counts: models,
+  };
 }
 
-function getSuccess(r: TraceRow): boolean | null {
-  if (typeof r.outcome === "boolean") return r.outcome;
-  if (typeof r.outcome === "object" && r.outcome) return r.outcome.success ?? null;
-  return null;
-}
 
 function fmt(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -102,7 +134,7 @@ export default function Dashboard() {
   const [username, setUsername] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [datasetStats, setDatasetStats] = useState<DatasetStats[]>([]);
-  const [sampleRows, setSampleRows] = useState<TraceRow[]>([]);
+  const [readmeStatsList, setReadmeStatsList] = useState<ReadmeStats[]>([]);
   const [phase, setPhase] = useState<"loading" | "datasets" | "enriching" | "done">("loading");
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,14 +146,14 @@ export default function Dashboard() {
 
     if (cached) {
       setDatasetStats(cached.datasetStats);
-      setSampleRows(cached.sampleRows);
+      setReadmeStatsList(cached.readmeStatsList || []);
       setPhase("done");
       setRefreshing(true);
     } else {
       setPhase("loading");
       setError(null);
       setDatasetStats([]);
-      setSampleRows([]);
+      setReadmeStatsList([]);
     }
 
     abortRef.current?.abort();
@@ -175,42 +207,98 @@ export default function Dashboard() {
       setDatasetStats(initial);
       setPhase("enriching");
 
-      // Fire /info requests + sample rows in parallel, stream results as they arrive
+      // Fire /info + README requests in parallel, stream results as they arrive
       const enriched = [...initial];
-      let bestRepoId = filtered.length > 0 ? filtered[0].id : null;
-      let bestCount = 0;
 
-      // Start sample rows fetch early (from first dataset, update if a bigger one is found)
-      const rowsFetchRef: { promise: Promise<TraceRow[]> | null } = { promise: null };
-      if (bestRepoId) {
-        rowsFetchRef.promise = fetch(
-          `${VIEWER}/rows?dataset=${encodeURIComponent(bestRepoId)}&config=default&split=train&offset=0&length=100`,
-          { signal: sig }
-        ).then(r => r.ok ? r.json() : null)
-         .then(d => d?.rows?.map((r: { row: TraceRow }) => r.row) || [])
-         .catch(() => []);
+      // Fetch README for trace count + pre-computed stats block (written by dataset_card.py on each push)
+      // Much lighter than fetching full JSONL shards — README is a few KB
+      async function fetchReadmeData(repoId: string, signal: AbortSignal): Promise<{ count: number; stats: ReadmeStats | null }> {
+        try {
+          const url = `https://huggingface.co/datasets/${repoId}/resolve/main/README.md`;
+          const r = await fetch(url, { signal });
+          if (!r.ok) return { count: 0, stats: null };
+          const text = await r.text();
+
+          const countMatch = text.match(/\|\s*Total traces\s*\|\s*([\d,]+)\s*\|/i);
+          const count = countMatch ? parseInt(countMatch[1].replace(/,/g, ""), 10) : 0;
+
+          const tokensMatch = text.match(/\|\s*Total tokens\s*\|\s*([\d,]+)\s*\|/i);
+          const tableTokens = tokensMatch ? parseInt(tokensMatch[1].replace(/,/g, ""), 10) : 0;
+
+          let stats: ReadmeStats | null = null;
+          const statsMatch = text.match(/<!--\s*opentraces:stats\s*(\{[\s\S]*?\})\s*(?:-->|<!--\s*opentraces:stats-end)/);
+          if (statsMatch) {
+            try {
+              const raw = JSON.parse(statsMatch[1]);
+              stats = {
+                total_traces: raw.total_traces || count,
+                total_tokens: raw.total_tokens || tableTokens,
+                avg_steps_per_session: raw.avg_steps_per_session ?? null,
+                success_rate: raw.success_rate ?? null,
+                top_dependencies: raw.top_dependencies || [],
+                agent_counts: raw.agent_counts || {},
+                model_counts: raw.model_counts || {},
+              };
+            } catch { /* malformed JSON, ignore */ }
+          } else if (count > 0) {
+            // Older README without stats block — use what we can parse from the table
+            stats = {
+              total_traces: count,
+              total_tokens: tableTokens,
+              avg_steps_per_session: null,
+              success_rate: null,
+              top_dependencies: [],
+              agent_counts: {},
+              model_counts: {},
+            };
+          }
+
+          return { count, stats };
+        } catch { return { count: 0, stats: null }; }
       }
 
       // Stream /info results as they complete
+      // Track separately: datasets-server count (used for row fetching) vs display count
+      // Collect readme stats in a local array so they can be saved to cache after all settle
+      const collectedReadmeStats: ReadmeStats[] = [];
+
       const infoPromises = filtered.map(async (ds, idx) => {
+        let serverCount = 0;
         try {
           const r = await fetch(`${VIEWER}/info?dataset=${encodeURIComponent(ds.id)}`, { signal: sig });
-          if (!r.ok) return;
-          const info = await r.json();
-          const num = info?.dataset_info?.default?.splits?.train?.num_examples ?? 0;
-          enriched[idx] = { ...enriched[idx], numTraces: num };
-          if (num > bestCount) {
-            bestCount = num;
-            bestRepoId = ds.id;
+          if (r.ok) {
+            const info = await r.json();
+            // Config name varies per dataset — sum across all configs and splits
+            const datasetInfo = info?.dataset_info ?? {};
+            serverCount = Object.values(datasetInfo).reduce((total: number, config) => {
+              const splits = (config as { splits?: Record<string, { num_examples?: number }> })?.splits ?? {};
+              return total + Object.values(splits).reduce((s, split) => s + (split?.num_examples ?? 0), 0);
+            }, 0);
           }
-          // Update state progressively
-          if (!sig.aborted) {
+        } catch { /* ignore, serverCount stays 0 */ }
+
+        enriched[idx] = { ...enriched[idx], numTraces: serverCount || null };
+        if (!sig.aborted) {
+          setDatasetStats([...enriched].sort((a, b) => (b.numTraces ?? 0) - (a.numTraces ?? 0)));
+        }
+
+        // Always fetch README — collects pre-computed stats block for community insights.
+        // Also updates count display if datasets-server didn't index this dataset (JSONL-only).
+        try {
+          const { count: rawCount, stats } = await fetchReadmeData(ds.id, sig);
+          if (sig.aborted) return;
+          if (serverCount === 0) {
+            enriched[idx] = { ...enriched[idx], numTraces: rawCount };
             setDatasetStats([...enriched].sort((a, b) => (b.numTraces ?? 0) - (a.numTraces ?? 0)));
+          }
+          if (stats) {
+            collectedReadmeStats.push(stats);
+            setReadmeStatsList([...collectedReadmeStats]);
           }
         } catch {
-          enriched[idx] = { ...enriched[idx], numTraces: 0 };
-          if (!sig.aborted) {
-            setDatasetStats([...enriched].sort((a, b) => (b.numTraces ?? 0) - (a.numTraces ?? 0)));
+          if (serverCount === 0) {
+            enriched[idx] = { ...enriched[idx], numTraces: 0 };
+            if (!sig.aborted) setDatasetStats([...enriched].sort((a, b) => (b.numTraces ?? 0) - (a.numTraces ?? 0)));
           }
         }
       });
@@ -218,30 +306,9 @@ export default function Dashboard() {
       await Promise.allSettled(infoPromises);
       if (sig.aborted) return;
 
-      // If a bigger dataset was found, fetch its rows instead
       const finalStats = [...enriched].sort((a, b) => (b.numTraces ?? 0) - (a.numTraces ?? 0));
       setDatasetStats(finalStats);
-
-      let rows: TraceRow[] = [];
-      if (bestRepoId && bestCount > 0 && bestRepoId !== filtered[0]?.id) {
-        // A different dataset turned out to be biggest, fetch its rows
-        try {
-          const rowsRes = await fetch(
-            `${VIEWER}/rows?dataset=${encodeURIComponent(bestRepoId)}&config=default&split=train&offset=0&length=100`,
-            { signal: sig }
-          );
-          if (rowsRes.ok) {
-            const rowsData = await rowsRes.json();
-            rows = rowsData.rows?.map((r: { row: TraceRow }) => r.row) || [];
-          }
-        } catch { /* ignore */ }
-      } else if (rowsFetchRef.promise) {
-        rows = await rowsFetchRef.promise;
-      }
-
-      if (sig.aborted) return;
-      setSampleRows(rows);
-      writeCache(key, finalStats, rows);
+      writeCache(key, finalStats, [], collectedReadmeStats);
     } catch (e) {
       if (sig.aborted) return;
       setError(e instanceof Error ? e.message : "Failed to fetch");
@@ -282,39 +349,11 @@ export default function Dashboard() {
   const datasetCount = datasetStats.length;
   const statsReady = phase === "done" || (phase === "enriching" && datasetStats.some(d => d.numTraces !== null));
 
-  // Stats from sample rows
-  const agents: Record<string, number> = {};
-  const models: Record<string, number> = {};
-  const deps: Record<string, number> = {};
-  let totalSteps = 0;
-  let totalCost = 0;
-  let totalTokens = 0;
-  let successCount = 0;
-  let outcomeCount = 0;
-  let costCount = 0;
-
-  for (const r of sampleRows) {
-    const a = getAgent(r);
-    if (a !== "-") agents[a] = (agents[a] || 0) + 1;
-    const m = getModel(r);
-    if (m !== "-") models[m] = (models[m] || 0) + 1;
-    if (r.dependencies && Array.isArray(r.dependencies)) {
-      for (const d of r.dependencies) deps[d] = (deps[d] || 0) + 1;
-    }
-    if (r.metrics?.total_steps) totalSteps += r.metrics.total_steps;
-    if (r.metrics?.estimated_cost_usd) { totalCost += r.metrics.estimated_cost_usd; costCount++; }
-    if (r.metrics?.total_input_tokens) totalTokens += r.metrics.total_input_tokens;
-    if (r.metrics?.total_output_tokens) totalTokens += r.metrics.total_output_tokens;
-    const s = getSuccess(r);
-    if (s !== null) { outcomeCount++; if (s) successCount++; }
-  }
-
-  const avgCost = costCount > 0 ? (totalCost / costCount).toFixed(2) : null;
-  const avgSteps = sampleRows.length > 0 ? Math.round(totalSteps / sampleRows.length) : 0;
-  const successRate = outcomeCount > 0 ? Math.round((successCount / outcomeCount) * 100) : null;
-  const sortedAgents = Object.entries(agents).sort((a, b) => b[1] - a[1]);
-  const sortedModels = Object.entries(models).sort((a, b) => b[1] - a[1]);
-  const sortedDeps = Object.entries(deps).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  // Community stats aggregated from README stats blocks (pre-computed on each push)
+  const communityStats = aggregateReadmeStats(readmeStatsList);
+  const csAgents = communityStats ? Object.entries(communityStats.agent_counts).sort((a, b) => b[1] - a[1]) : [];
+  const csModels = communityStats ? Object.entries(communityStats.model_counts).sort((a, b) => b[1] - a[1]) : [];
+  const csDeps = communityStats?.top_dependencies ?? [];
 
   return (
     <section style={{ padding: "48px 0" }}>
@@ -373,6 +412,10 @@ export default function Dashboard() {
             <div className="stat-value">{statsReady ? fmt(totalTraces) : <Skeleton width={48} height={28} />}</div>
           </div>
           <div className="stat-cell">
+            <div className="stat-label">total tokens</div>
+            <div className="stat-value">{communityStats ? fmt(communityStats.total_tokens) : <Skeleton width={48} height={28} />}</div>
+          </div>
+          <div className="stat-cell">
             <div className="stat-label">datasets</div>
             <div className="stat-value">{statsReady ? datasetCount : <Skeleton width={32} height={28} />}</div>
           </div>
@@ -387,75 +430,41 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Computed insights from sample data */}
-      {sampleRows.length > 0 && (
+      {/* Community stats aggregated from README stats blocks */}
+      {communityStats !== null && (
         <>
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase", marginBottom: 16 }}>
-            insights (sampled from {sampleRows.length} traces)
+            community stats (aggregated from {fmt(communityStats.total_traces)} traces)
           </div>
 
           <div className="insights-grid">
-            {/* Efficiency */}
-            <div style={{ border: "1px solid var(--border)", padding: 20, background: "var(--surface)" }}>
-              <div className="stat-label" style={{ marginBottom: 16 }}>efficiency</div>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                {avgSteps > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
-                    <span style={{ color: "var(--text-muted)" }}>avg steps/session</span>
-                    <span style={{ color: "var(--text)" }}>{avgSteps}</span>
-                  </div>
-                )}
-                {avgCost && (
-                  <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
-                    <span style={{ color: "var(--text-muted)" }}>avg cost/session</span>
-                    <span style={{ color: "var(--text)" }}>${avgCost}</span>
-                  </div>
-                )}
-                {totalTokens > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: "1px solid var(--border)" }}>
-                    <span style={{ color: "var(--text-muted)" }}>total tokens</span>
-                    <span style={{ color: "var(--text)" }}>{fmt(totalTokens)}</span>
-                  </div>
-                )}
-                {successRate !== null && (
-                  <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0" }}>
-                    <span style={{ color: "var(--text-muted)" }}>success rate</span>
-                    <span style={{ color: successRate >= 70 ? "var(--green)" : successRate >= 40 ? "var(--yellow)" : "var(--red)" }}>{successRate}%</span>
-                  </div>
-                )}
-                {avgSteps === 0 && !avgCost && totalTokens === 0 && successRate === null && (
-                  <div style={{ color: "var(--text-dim)", fontSize: 11 }}>No metrics in this dataset schema</div>
-                )}
-              </div>
-            </div>
-
             {/* Agent & Model breakdown */}
             <div style={{ border: "1px solid var(--border)", padding: 20, background: "var(--surface)" }}>
               <div className="stat-label" style={{ marginBottom: 16 }}>agents & models</div>
               <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                {sortedAgents.length > 0 && (
+                {csAgents.length > 0 && (
                   <>
                     <div style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 6 }}>agents</div>
-                    {sortedAgents.slice(0, 4).map(([name, count]) => (
+                    {csAgents.slice(0, 4).map(([name, count]) => (
                       <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", color: "var(--text-muted)" }}>
                         <span>{name}</span>
-                        <span style={{ color: "var(--text-dim)" }}>{Math.round((count / sampleRows.length) * 100)}%</span>
+                        <span style={{ color: "var(--text-dim)" }}>{Math.round((count / communityStats.total_traces) * 100)}%</span>
                       </div>
                     ))}
                   </>
                 )}
-                {sortedModels.length > 0 && (
+                {csModels.length > 0 && (
                   <>
                     <div style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em", textTransform: "uppercase", marginTop: 12, marginBottom: 6 }}>models</div>
-                    {sortedModels.slice(0, 4).map(([name, count]) => (
+                    {csModels.slice(0, 4).map(([name, count]) => (
                       <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", color: "var(--text-muted)" }}>
                         <span style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</span>
-                        <span style={{ color: "var(--text-dim)" }}>{Math.round((count / sampleRows.length) * 100)}%</span>
+                        <span style={{ color: "var(--text-dim)" }}>{Math.round((count / communityStats.total_traces) * 100)}%</span>
                       </div>
                     ))}
                   </>
                 )}
-                {sortedAgents.length === 0 && sortedModels.length === 0 && (
+                {csAgents.length === 0 && csModels.length === 0 && (
                   <div style={{ color: "var(--text-dim)", fontSize: 11 }}>No agent/model data</div>
                 )}
               </div>
@@ -465,10 +474,10 @@ export default function Dashboard() {
             <div style={{ border: "1px solid var(--border)", padding: 20, background: "var(--surface)" }}>
               <div className="stat-label" style={{ marginBottom: 16 }}>top dependencies</div>
               <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                {sortedDeps.length > 0 ? sortedDeps.map(([dep, count]) => (
+                {csDeps.length > 0 ? csDeps.map(([dep, count]) => (
                   <div key={dep} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0", color: "var(--text-muted)" }}>
                     <span>{dep}</span>
-                    <span style={{ color: "var(--text-dim)" }}>{count}</span>
+                    <span style={{ color: "var(--text-dim)" }}>{fmt(count)}</span>
                   </div>
                 )) : (
                   <div style={{ color: "var(--text-dim)", fontSize: 11 }}>No dependency data</div>
@@ -480,13 +489,13 @@ export default function Dashboard() {
       )}
 
       {/* Skeleton insights while enriching */}
-      {phase === "enriching" && sampleRows.length === 0 && (
+      {phase === "enriching" && communityStats === null && (
         <>
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase", marginBottom: 16 }}>
             <Skeleton width={200} height={12} />
           </div>
           <div className="insights-grid">
-            {[0, 1, 2].map(i => (
+            {[0, 1].map(i => (
               <div key={i} style={{ border: "1px solid var(--border)", padding: 20, background: "var(--surface)" }}>
                 <div className="stat-label" style={{ marginBottom: 16 }}><Skeleton width={80} height={12} /></div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

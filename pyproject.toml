@@ -20,6 +20,7 @@ dependencies = [
 [project.optional-dependencies]
 web = ["flask>=3.0"]
 tui = ["textual>=0.50.0"]
+import = ["datasets>=2.16.0"]
 dev = ["pytest>=8.0", "pytest-cov", "ruff"]
 release = ["build", "twine"]
 

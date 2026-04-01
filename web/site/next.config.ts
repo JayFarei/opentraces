@@ -13,6 +13,7 @@ writeFileSync(resolve(__dirname, "src/lib/version.json"), JSON.stringify({ versi
 
 const nextConfig: NextConfig = {
   transpilePackages: ["@opentraces/ui"],
+  allowedDevOrigins: ["gabrieles-mac-mini-1.taila1b059.ts.net"],
 };
 
 export default nextConfig;

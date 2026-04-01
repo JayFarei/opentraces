@@ -65,7 +65,7 @@ export default function RootLayout({
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'}var d=document.documentElement;d.setAttribute('data-theme',t);d.classList.add(t==='dark'?'theme-dark':'theme-light');d.style.colorScheme=t})()`,
+            __html: `(function(){var t=localStorage.getItem('theme');if(!t){t=window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'}var d=document.documentElement;d.setAttribute('data-theme',t);d.classList.add(t==='dark'?'theme-dark':'theme-light');d.style.colorScheme=t;function tog(){var n=d.getAttribute('data-theme')==='dark'?'light':'dark';d.setAttribute('data-theme',n);d.classList.remove('theme-dark','theme-light');d.classList.add(n==='dark'?'theme-dark':'theme-light');d.style.colorScheme=n;localStorage.setItem('theme',n)}document.addEventListener('DOMContentLoaded',function(){var b=document.querySelector('.nav-theme-btn');if(!b)return;b.addEventListener('click',tog);new MutationObserver(function(_,o){if(b.textContent&&b.textContent.trim()){b.removeEventListener('click',tog);o.disconnect()}}).observe(b,{childList:true,subtree:true,characterData:true})})})()`,
           }}
         />
         <script data-site-id="opentraces.ai" src="https://analytics-agent.fareiunastrage.workers.dev/tracker.js" async />

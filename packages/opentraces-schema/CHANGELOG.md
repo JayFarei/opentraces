@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
+## [0.2.0] - 2026-03-31
+
+### Added
+- `TraceRecord.execution_context: Literal["devtime", "runtime"] | None` — session-level
+  discriminator distinguishing code-editing agents (devtime: Claude Code, Cursor, Codex)
+  from task-execution agents (runtime: browser automation, API workflows, RL environments).
+  Nullable and backward compatible; existing devtime traces are unaffected.
+- `Outcome.terminal_state: Literal["goal_reached", "interrupted", "error", "abandoned"] | None` —
+  how the action trajectory ended. Meaningful for runtime agents; null for devtime traces.
+- `Outcome.reward: float | None` — numeric reward signal from an RL environment or evaluator.
+  Use `signal_confidence="derived"` when set directly from environment output.
+- `Outcome.reward_source: str | None` — free string identifying the reward provider.
+  Canonical values: `rl_environment`, `judge`, `human_annotation`, `orchestrator`.
+
+### Changed
+- `Outcome` docstring updated to describe devtime vs runtime field sets and
+  how `execution_context` should guide consumers choosing which fields to read.
+- `SCHEMA_VERSION` bumped from `0.1.1` to `0.2.0`.
+
 ## [0.1.0] - 2026-03-27
 
 ### Added

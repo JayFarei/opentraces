@@ -85,7 +85,7 @@ behind each model and field. The current rationale is
 ## Contributing
 
 Schema feedback, questions, and proposals are welcome via
-[GitHub Issues](https://github.com/opentraces/opentraces/issues). For schema changes,
+[GitHub Issues](https://github.com/JayFarei/opentraces/issues). For schema changes,
 include what you would change, why it matters for your use case, and how it relates
 to existing standards. See the schema
 [VERSION-POLICY.md](packages/opentraces-schema/VERSION-POLICY.md) for how changes
