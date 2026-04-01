@@ -3,11 +3,6 @@ import { useTraceData } from "../../hooks/useTraceData";
 import { useViewPreferences } from "../../contexts/ViewPreferencesContext";
 import { cleanSessionName, formatTokens, formatDuration } from "../../lib/format";
 
-const TIER_LABELS: Record<number, { label: string; color: string }> = {
-  1: { label: "OPEN", color: "var(--green)" },
-  2: { label: "GUARDED", color: "var(--yellow)" },
-  3: { label: "STRICT", color: "var(--red)" },
-};
 
 export function SessionHeader() {
   const { selectedSessionId } = useSelection();
@@ -67,8 +62,9 @@ export function SessionHeader() {
   const cacheRate = trace.metrics.cache_hit_rate;
   const cacheStr = cacheRate !== null ? `${Math.round(cacheRate * 100)}%` : null;
 
-  // Security tier
-  const tier = TIER_LABELS[trace.security.tier] ?? TIER_LABELS[1]!;
+  // Security
+  const securityLabel = trace.security.scanned ? "SCANNED" : "UNSCANNED";
+  const securityColor = trace.security.scanned ? "var(--green)" : "var(--text-dim)";
   const redactionCount = trace.security.redactions_applied;
 
   return (
@@ -100,9 +96,9 @@ export function SessionHeader() {
         )}
         <span
           className="flex-none px-1 py-0 border text-[9px] uppercase tracking-wider"
-          style={{ color: tier.color, borderColor: tier.color }}
+          style={{ color: securityColor, borderColor: securityColor }}
         >
-          {tier.label}
+          {securityLabel}
         </span>
         {redactionCount > 0 && (
           <span className="text-[var(--yellow)] flex-none">

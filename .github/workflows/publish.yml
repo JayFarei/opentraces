@@ -25,7 +25,7 @@ jobs:
   build-schema:
     name: Build opentraces-schema
     if: >-
-      github.event_name == 'release' ||
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'schema-v')) ||
       inputs.package == 'opentraces-schema' ||
       inputs.package == 'both'
     runs-on: ubuntu-latest
@@ -77,7 +77,7 @@ jobs:
     name: Publish opentraces-schema
     needs: build-schema
     if: >-
-      github.event_name == 'release' ||
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'schema-v')) ||
       inputs.package == 'opentraces-schema' ||
       inputs.package == 'both'
     runs-on: ubuntu-latest
