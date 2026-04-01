@@ -176,7 +176,7 @@ def _render_machine_json(stats: dict) -> str:
 
     Placed just before AUTO_START so the existing marker replacement logic
     is unaffected. Parseable with a simple regex in browser JS:
-        /<!-- opentraces:stats\\s*(\\{.*?\\})\\s*-->/s
+        /<!-- opentraces:stats\\s*(\\{[\\s\\S]*?\\})\\s*(?:-->|<!--\\s*opentraces:stats-end)/
     """
     payload = {
         "total_traces": stats["total_traces"],

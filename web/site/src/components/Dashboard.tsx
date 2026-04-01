@@ -226,7 +226,7 @@ export default function Dashboard() {
           const tableTokens = tokensMatch ? parseInt(tokensMatch[1].replace(/,/g, ""), 10) : 0;
 
           let stats: ReadmeStats | null = null;
-          const statsMatch = text.match(/<!--\s*opentraces:stats\s*(\{[\s\S]*?\})\s*-->/);
+          const statsMatch = text.match(/<!--\s*opentraces:stats\s*(\{[\s\S]*?\})\s*(?:-->|<!--\s*opentraces:stats-end)/);
           if (statsMatch) {
             try {
               const raw = JSON.parse(statsMatch[1]);
