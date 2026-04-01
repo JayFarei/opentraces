@@ -40,6 +40,30 @@ Parse these from the user's message before starting. The user-supplied bump type
 
 ---
 
+## Step 0: Resolve branch and worktree context
+
+Development often happens on feature branches or in git worktrees. Before touching any files or querying remote versions, establish where you are.
+
+```bash
+# Current branch and worktree
+git branch --show-current
+git worktree list
+
+# Is this a worktree?
+git rev-parse --git-dir
+```
+
+If you are on a feature branch (not `main`):
+1. **Do not cut a release from the branch.** Releases must be tagged on `main`.
+2. Check whether the branch has already been merged: `git log main..HEAD --oneline`
+3. If unmerged, stop and ask the user: "You're on branch `BRANCH`. Should I land this to main first, or were you planning to release from `main` after merging?"
+4. If the user confirms they want to release and the branch is already merged, switch to `main`: `git checkout main && git pull origin main`
+5. If in a **worktree**, all git operations (tags, pushes) still operate against the shared repo, but `git push` will use the worktree's checked-out branch. Confirm the right branch is checked out before pushing tags.
+
+Only proceed to Step 1 once you are on `main` and it reflects the intended release state.
+
+---
+
 ## Step 1: Determine the true released versions from remote sources
 
 Local version files cannot be trusted as the baseline — they may have been bumped during development without a corresponding release. Always query the live remote sources first.
