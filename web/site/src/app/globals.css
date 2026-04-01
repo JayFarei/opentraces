@@ -526,7 +526,7 @@ html { color-scheme: light; }
   display: grid;
   grid-template-columns: 1fr 1.2fr;
   gap: 32px;
-  align-items: center;
+  align-items: end;
 }
 
 /* ═══ Terminal ═══ */
