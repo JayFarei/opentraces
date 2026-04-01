@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>opentraces Badge Generator</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --accent: #58a6ff;
+    --green: #28a745;
+    --yellow: #ffc107;
+    --orange: #fd7e14;
+    --red: #dc3545;
+    --radius: 8px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa;
+      --surface: #ffffff;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --muted: #636c76;
+      --accent: #0969da;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; line-height: 1.6; padding: 24px; }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); margin-bottom: 24px; }
+  .layout { display: grid; grid-template-columns: 280px 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 700px) { .layout { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .panel h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 12px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .field input[type=number] { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); padding: 6px 8px; font-size: 13px; }
+  .field input[type=number]:focus { outline: none; border-color: var(--accent); }
+  .badges-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .badge-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+  .badge-name { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .badge-score { font-size: 28px; font-weight: 700; line-height: 1; margin-bottom: 4px; }
+  .badge-tier { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+  .badge-bar { height: 3px; border-radius: 2px; margin-top: 8px; background: var(--border); }
+  .badge-fill { height: 100%; border-radius: 2px; transition: width 0.3s ease; }
+  .score-green { color: var(--green); }
+  .score-yellow { color: var(--yellow); }
+  .score-orange { color: var(--orange); }
+  .score-red { color: var(--red); }
+  .fill-green { background: var(--green); }
+  .fill-yellow { background: var(--yellow); }
+  .fill-orange { background: var(--orange); }
+  .fill-red { background: var(--red); }
+  .export-section { margin-top: 0; }
+  .export-block { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 12px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; color: var(--text); margin-top: 8px; max-height: 160px; overflow-y: auto; }
+  .export-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .export-label { font-size: 12px; color: var(--muted); font-weight: 500; }
+  .copy-btn { background: var(--accent); color: #fff; border: none; border-radius: 4px; padding: 4px 10px; font-size: 12px; cursor: pointer; transition: opacity 0.15s; }
+  .copy-btn:hover { opacity: 0.85; }
+  .copy-btn.copied { background: var(--green); }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+  .metric-inputs { margin-top: 16px; }
+  .metric-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .metric-row label { flex: 1; font-size: 12px; color: var(--text); }
+  .metric-row input[type=number] { width: 70px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); padding: 4px 6px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>opentraces Badge Generator</h1>
+<p class="subtitle">Generate shields.io scorecard badges for your dataset card</p>
+
+<div class="layout">
+  <div>
+    <div class="panel">
+      <h2>Thresholds</h2>
+      <div class="field">
+        <label>Green (passing) &ge;</label>
+        <input type="number" id="thresh-green" value="80" min="0" max="100">
+      </div>
+      <div class="field">
+        <label>Yellow (warning) &ge;</label>
+        <input type="number" id="thresh-yellow" value="60" min="0" max="100">
+      </div>
+      <div class="field">
+        <label>Orange (poor) &ge;</label>
+        <input type="number" id="thresh-orange" value="40" min="0" max="100">
+      </div>
+
+      <hr class="divider">
+      <h2>Scores</h2>
+      <div class="metric-inputs" id="metric-inputs"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="badges-grid" id="badges-grid"></div>
+
+    <div class="panel export-section">
+      <div class="export-header">
+        <span class="export-label">Markdown (shields.io)</span>
+        <button class="copy-btn" id="copy-md">Copy</button>
+      </div>
+      <div class="export-block" id="md-output"></div>
+
+      <hr class="divider">
+
+      <div class="export-header">
+        <span class="export-label">JSON</span>
+        <button class="copy-btn" id="copy-json">Copy</button>
+      </div>
+      <div class="export-block" id="json-output"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const DEFAULT_METRICS = {
+  conformance_score: 88.4,
+  training_score: 89.0,
+  rl_score: 73.4,
+  analytics_score: 55.6,
+  domain_score: 84.1,
+  overall_quality: 78.1,
+};
+
+const COLOR_MAP = {
+  green: { hex: '28a745', cls: 'green', label: 'PASS' },
+  yellow: { hex: 'ffc107', cls: 'yellow', label: 'WARN' },
+  orange: { hex: 'fd7e14', cls: 'orange', label: 'POOR' },
+  red: { hex: 'dc3545', cls: 'red', label: 'FAIL' },
+};
+
+function getThresholds() {
+  return {
+    green: parseFloat(document.getElementById('thresh-green').value) || 80,
+    yellow: parseFloat(document.getElementById('thresh-yellow').value) || 60,
+    orange: parseFloat(document.getElementById('thresh-orange').value) || 40,
+  };
+}
+
+function getColor(score, thresh) {
+  if (score >= thresh.green) return COLOR_MAP.green;
+  if (score >= thresh.yellow) return COLOR_MAP.yellow;
+  if (score >= thresh.orange) return COLOR_MAP.orange;
+  return COLOR_MAP.red;
+}
+
+function formatLabel(key) {
+  return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function badgeUrl(label, score, hex) {
+  const enc = label.replace(/ /g, '_').replace(/-/g, '--');
+  return `https://img.shields.io/badge/${enc}-${score.toFixed(1)}%25-${hex}`;
+}
+
+function getScores() {
+  const scores = {};
+  document.querySelectorAll('.metric-row input').forEach(inp => {
+    scores[inp.dataset.key] = parseFloat(inp.value) || 0;
+  });
+  return scores;
+}
+
+function buildMetricInputs() {
+  const container = document.getElementById('metric-inputs');
+  container.innerHTML = '';
+  Object.entries(DEFAULT_METRICS).forEach(([key, val]) => {
+    const row = document.createElement('div');
+    row.className = 'metric-row';
+    row.innerHTML = `
+      <label>${formatLabel(key)}</label>
+      <input type="number" data-key="${key}" value="${val}" min="0" max="100" step="0.1">
+    `;
+    container.appendChild(row);
+  });
+  container.querySelectorAll('input').forEach(inp => inp.addEventListener('input', update));
+}
+
+function update() {
+  const thresh = getThresholds();
+  const scores = getScores();
+  const grid = document.getElementById('badges-grid');
+  grid.innerHTML = '';
+
+  const mdLines = [];
+  const jsonObj = { thresholds: thresh, metrics: {} };
+
+  Object.entries(scores).forEach(([key, score]) => {
+    const color = getColor(score, thresh);
+    const label = formatLabel(key);
+    const url = badgeUrl(label, score, color.hex);
+
+    // Card
+    const card = document.createElement('div');
+    card.className = 'badge-card';
+    card.innerHTML = `
+      <div class="badge-name">${label}</div>
+      <div class="badge-score score-${color.cls}">${score.toFixed(1)}%</div>
+      <div class="badge-tier score-${color.cls}">${color.label}</div>
+      <div class="badge-bar"><div class="badge-fill fill-${color.cls}" style="width:${score}%"></div></div>
+    `;
+    grid.appendChild(card);
+
+    mdLines.push(`![${label}](${url})`);
+    jsonObj.metrics[key] = { score, tier: color.label, hex: color.hex };
+  });
+
+  document.getElementById('md-output').textContent = mdLines.join('\n');
+  document.getElementById('json-output').textContent = JSON.stringify(jsonObj, null, 2);
+}
+
+function setupCopy(btnId, sourceId) {
+  const btn = document.getElementById(btnId);
+  btn.addEventListener('click', () => {
+    const text = document.getElementById(sourceId).textContent;
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1800);
+    });
+  });
+}
+
+// Init
+buildMetricInputs();
+document.querySelectorAll('#thresh-green, #thresh-yellow, #thresh-orange').forEach(inp => {
+  inp.addEventListener('input', update);
+});
+setupCopy('copy-md', 'md-output');
+setupCopy('copy-json', 'json-output');
+update();
+</script>
+</body>
+</html>
