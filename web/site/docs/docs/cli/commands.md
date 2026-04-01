@@ -24,6 +24,9 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces context` | Return machine-readable project context |
 | `opentraces config show` | Display current config |
 | `opentraces config set` | Update config values |
+| `opentraces import-hf` | Import traces from a HuggingFace dataset |
+| `opentraces hooks install` | Install Claude Code session capture hooks |
+| `opentraces log` | List uploaded traces grouped by date |
 | `opentraces upgrade` | Upgrade CLI and refresh project skill file |
 
 ## Authentication
@@ -230,6 +233,36 @@ opentraces assess --dataset user/my-traces
 By default, `assess` targets only **committed** traces, matching the population that `push` would upload. Use `--all-staged` to include traces that are staged but not yet committed.
 
 `--dataset` is independent of the local inbox. It downloads shards from the specified HF dataset repo and updates that repo's dataset card and `quality.json` sidecar in place, without requiring a new push.
+
+### opentraces import-hf
+
+Import traces from a HuggingFace dataset into your local inbox.
+
+```bash
+opentraces import-hf DATASET_ID [OPTIONS]
+```
+
+| Flag | Description |
+|------|-------------|
+| `DATASET_ID` | HuggingFace dataset ID (e.g. `user/my-traces`) |
+| `--parser` | Parser to use: `hermes` or `generic` (default: `hermes`) |
+| `--subset` | Dataset subset/config name |
+| `--split` | Dataset split (default: `train`) |
+| `--limit` | Maximum number of traces to import |
+| `--auto` | Commit imported traces immediately, skip inbox |
+| `--dry-run` | Preview import without writing any files |
+
+Exit codes: `0` success, `1` partial failure (some traces rejected by quality gate).
+
+### opentraces hooks install
+
+Install Claude Code session capture hooks into the current project. Hooks run automatically at session end (`on_stop`) and after context compaction (`on_compact`) to enrich traces with session metadata.
+
+```bash
+opentraces hooks install
+```
+
+Run this once per project after `opentraces init`.
 
 ### `opentraces remote`
 

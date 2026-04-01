@@ -80,7 +80,7 @@ The schema builds on public standards:
 
 Every schema version ships with a rationale document explaining the design decisions
 behind each model and field. The current rationale is
-[RATIONALE-0.1.0.md](packages/opentraces-schema/RATIONALE-0.1.0.md).
+[RATIONALE-0.2.0.md](packages/opentraces-schema/RATIONALE-0.2.0.md).
 
 ## Contributing
 
@@ -97,6 +97,7 @@ are versioned.
 packages/opentraces-schema/   Schema package (Pydantic v2 models)
 src/opentraces/               CLI package
   parsers/                    Agent session parsers
+  hooks/                      Claude Code hook scripts (on_stop, on_compact)
   security/                   Secret scanning, anonymization, classification
   enrichment/                 Git signals, attribution, metrics
   clients/                    Browser and terminal inbox frontends

@@ -30,7 +30,8 @@ pytest tests/ -v
 - `packages/opentraces-schema/` - Standalone schema package (Pydantic models)
 - `packages/opentraces-ui/` - Design system (tokens, base, components, React wrappers, logo assets, DESIGN.md)
 - `src/opentraces/` - Main CLI package
-  - `parsers/` - Agent session parsers (claude_code.py, dataclaw_import.py)
+  - `parsers/` - Agent session parsers (claude_code.py, hermes.py)
+  - `hooks/` - Claude Code hook scripts (on_stop.py, on_compact.py) for session enrichment
   - `security/` - Secret scanning, anonymization, classification (independently versioned via `SECURITY_VERSION`)
   - `enrichment/` - Git signals, attribution, dependencies, metrics
   - `quality/` - Trace quality assessment, persona rubrics, upload gates
@@ -47,7 +48,7 @@ pytest tests/ -v
 
 ## Key Decisions
 
-- Claude Code only for v0.1, adapter contract ready for multi-agent
+- Claude Code and Hermes (runtime agents) for v0.2, adapter contract ready for additional parsers
 - Own schema (superset of ATIF), export to ATIF via `opentraces export --format atif`
 - Sharded JSONL upload (one file per push, never append to existing)
 - Attribution derived from Edit tool calls, not unified diff

@@ -19,6 +19,7 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
   "content_hash": "sha256-hex",
   "timestamp_start": "ISO8601",
   "timestamp_end": "ISO8601",
+  "execution_context": "devtime",
   "task": { },
   "agent": { },
   "environment": { },

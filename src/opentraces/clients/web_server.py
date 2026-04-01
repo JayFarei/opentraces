@@ -21,6 +21,7 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from ..config import STAGING_DIR, auth_identity, load_config, load_project_config, save_project_config
 from ..security import SECURITY_VERSION
+from opentraces_schema import SCHEMA_VERSION
 from ..inbox import get_stage, load_traces, redact_step
 from ..state import StateManager, TraceStatus
 from ..workflow import (
@@ -185,7 +186,7 @@ def _generate_sample_traces() -> list[dict[str, Any]]:
         total_output = sum(s_["token_usage"]["output_tokens"] for s_ in steps)
 
         trace = {
-            "schema_version": "0.1.0",
+            "schema_version": SCHEMA_VERSION,
             "trace_id": trace_id,
             "session_id": f"session-{trace_id[:8]}",
             "content_hash": None,

@@ -85,6 +85,9 @@ export interface Outcome {
   patch: string | null;
   committed: boolean;
   commit_sha: string | null;
+  terminal_state: "goal_reached" | "interrupted" | "error" | "abandoned" | null;
+  reward: number | null;
+  reward_source: string | null;
 }
 
 export interface AttributionRange {
@@ -106,7 +109,6 @@ export interface AttributionFile {
 }
 
 export interface Attribution {
-  version: string;
   experimental: boolean;
   files: AttributionFile[];
 }
@@ -121,7 +123,7 @@ export interface Metrics {
 }
 
 export interface SecurityMetadata {
-  tier: 1 | 2;
+  scanned: boolean;
   flags_reviewed: number;
   redactions_applied: number;
   classifier_version: string | null;
@@ -132,6 +134,7 @@ export interface TraceRecord {
   trace_id: string;
   session_id: string;
   content_hash: string | null;
+  execution_context: "devtime" | "runtime" | null;
   timestamp_start: string | null;
   timestamp_end: string | null;
   task: Task;

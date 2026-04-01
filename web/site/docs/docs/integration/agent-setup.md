@@ -19,6 +19,20 @@ opentraces init --agent claude-code --review-policy review --start-fresh
 
 If the repo already has existing session logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.
 
+### Hook Enrichment
+
+For richer trace metadata, install the Claude Code session hooks:
+
+```bash
+opentraces hooks install
+```
+
+This registers two hooks in `.claude/settings.json`:
+- **`on_stop`** — runs at session end, captures context window state, token usage, and project metadata
+- **`on_compact`** (PostCompact event) — captures context compaction events for long sessions
+
+Hooks fire automatically on every session — no further action needed after `hooks install`.
+
 ### Hermes
 
 ```bash

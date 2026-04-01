@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
+## [0.1.1] - 2026-03-29
+
+### Changed
+- `SCHEMA_VERSION` bumped from `0.1.0` to `0.1.1` (patch release aligned with CLI v0.1.1).
+  No model changes; version bump only.
+
 ## [0.2.0] - 2026-04-01
 
 ### Added

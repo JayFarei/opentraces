@@ -59,6 +59,16 @@ Python 3.10 or later is required.
 
 ## Upgrading
 
+The preferred in-project upgrade path is:
+
+```bash
+opentraces upgrade
+```
+
+Auto-detects whether you installed via pipx, brew, or pip and upgrades accordingly. Also refreshes the skill file and session hook in the current project.
+
+If you are outside a project context, use the direct package manager command instead:
+
 ```bash
 pip install --upgrade opentraces
 ```

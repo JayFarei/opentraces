@@ -164,10 +164,11 @@ export function buildSampleTrace(session: SessionListItem): TraceRecord {
   const totalOutput = steps.reduce((sum, s) => sum + s.token_usage.output_tokens, 0);
 
   return {
-    schema_version: "0.1.0",
+    schema_version: "0.2.0",
     trace_id: session.trace_id,
     session_id: `session-${session.trace_id.slice(0, 8)}`,
     content_hash: null,
+    execution_context: null,
     timestamp_start: session.timestamp,
     timestamp_end: `2026-03-27T10:${String(5 + numSteps).padStart(2, "0")}:00Z`,
     task: {
@@ -198,6 +199,9 @@ export function buildSampleTrace(session: SessionListItem): TraceRecord {
       patch: null,
       committed: false,
       commit_sha: null,
+      terminal_state: null,
+      reward: null,
+      reward_source: null,
     },
     dependencies: [],
     metrics: {
@@ -209,7 +213,7 @@ export function buildSampleTrace(session: SessionListItem): TraceRecord {
       estimated_cost_usd: Math.round((totalInput * 0.000003 + totalOutput * 0.000015) * 10000) / 10000,
     },
     security: {
-      tier: 1,
+      scanned: false,
       flags_reviewed: 0,
       redactions_applied: 0,
       classifier_version: "0.1.0",

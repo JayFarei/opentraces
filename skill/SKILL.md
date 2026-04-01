@@ -348,6 +348,7 @@ opentraces capabilities --json         # feature flags + supported env vars
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
+| 1 | Needs review / quality gate not passed (import-hf partial failures) |
 | 2 | Usage error (bad flags, conflicting options) |
 | 3 | Auth/config error (not authenticated, not initialized) |
 | 4 | Network or upload error |

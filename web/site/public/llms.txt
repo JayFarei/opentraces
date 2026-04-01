@@ -125,6 +125,14 @@ Python 3.10 or later is required.
 
 ## Upgrading
 
+The preferred in-project upgrade command auto-detects whether opentraces was installed via pipx, brew, or pip:
+
+```bash
+opentraces upgrade
+```
+
+If you need to upgrade the package directly:
+
 ```bash
 pip install --upgrade opentraces
 ```
@@ -303,6 +311,8 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces context` | Return machine-readable project context |
 | `opentraces config show` | Display current config |
 | `opentraces config set` | Update config values |
+| `opentraces import-hf DATASET_ID` | Import traces from a HuggingFace dataset |
+| `opentraces hooks install` | Install Claude Code session capture hooks |
 | `opentraces upgrade` | Upgrade CLI and refresh project skill file |
 
 ## Authentication
@@ -608,13 +618,14 @@ These commands exist for automation, compatibility, or diagnostics and are hidde
 
 # Supported Agents
 
-opentraces currently ships with one live parser: Claude Code.
+opentraces currently ships with two live parsers: Claude Code (devtime) and Hermes (runtime).
 
 ## Current Support
 
 | Agent | Identifier | Status |
 |-------|-----------|--------|
 | Claude Code | `claude-code` | Supported |
+| Hermes | `hermes` | Supported |
 | Cursor | `cursor` | Planned |
 | Codex | `codex` | Planned |
 | Gemini CLI | `gemini-cli` | Planned |
@@ -631,7 +642,7 @@ from opentraces.parsers import get_parsers
 supported = list(get_parsers().keys())
 ```
 
-Today that registry contains `claude-code`. `opentraces init --agent ...` uses the same registry to validate agent selection.
+Today that registry contains `claude-code` and `hermes`. `opentraces init --agent ...` uses the same registry to validate agent selection. The `hermes` parser handles runtime agent logs imported via `opentraces import-hf`.
 
 ## What The Parser Extracts
 
@@ -969,12 +980,13 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
 
 ```json
 {
-  "schema_version": "0.1.1",
+  "schema_version": "0.2.0",
   "trace_id": "uuid",
   "session_id": "uuid",
   "content_hash": "sha256-hex",
   "timestamp_start": "ISO8601",
   "timestamp_end": "ISO8601",
+  "execution_context": "devtime",
   "task": { },
   "agent": { },
   "environment": { },
@@ -1035,7 +1047,7 @@ The top-level record. One per JSONL line, one per agent session.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `schema_version` | string | yes | Schema version, e.g. `"0.1.1"` |
+| `schema_version` | string | yes | Schema version, e.g. `"0.2.0"` |
 | `trace_id` | string (UUID) | yes | Unique identifier for this trace |
 | `session_id` | string | yes | Agent session reference |
 | `content_hash` | string | no | SHA-256 of the serialized record, populated when written |
@@ -1316,7 +1328,10 @@ The `outcome` object captures the session-level result and the confidence of the
     "description": "Test passes after fix",
     "patch": "unified diff string",
     "committed": true,
-    "commit_sha": "def789abc..."
+    "commit_sha": "def789abc...",
+    "terminal_state": "goal_reached",
+    "reward": null,
+    "reward_source": null
   }
 }
 ```
@@ -1332,6 +1347,9 @@ The `outcome` object captures the session-level result and the confidence of the
 | `patch` | string | no | Unified diff produced by the session |
 | `committed` | boolean | no | Whether changes were committed to git |
 | `commit_sha` | string | no | The specific commit, if committed |
+| `terminal_state` | string | no | Terminal state label, e.g. `"goal_reached"`, `"abandoned"`, `"error"` |
+| `reward` | number | no | Scalar reward signal for RL training (null if not set) |
+| `reward_source` | string | no | Source of the reward signal, e.g. `"human"`, `"verifier"`, `"heuristic"` |
 
 ### Committed as a Quality Signal
 
@@ -1465,7 +1483,7 @@ The opentraces schema follows semantic versioning. The version lives in `package
 ## Current Version
 
 ```text
-0.1.1
+0.2.0
 ```
 
 The `0.x` series means breaking changes may still land between minor versions until `1.0.0`.
