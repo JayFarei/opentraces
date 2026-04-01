@@ -127,7 +127,7 @@ export default function Hero() {
           <div style={{ height: 16 }} />
           <h1>Open data is the new open source.</h1>
           <p className="hero-sub">
-            Commit your agent traces to HuggingFace Hub. Private or public, like GitHub for code. One init, automatic collection, push when ready.
+            Traces are how agents improve. opentraces makes that loop open — commit sessions to HuggingFace Hub, private or public, and let the community build on real workflows instead of synthetic benchmarks.
           </p>
           <div className="hero-install-tabs">
             {installMethods.map((m, i) => (

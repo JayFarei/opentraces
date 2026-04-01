@@ -26,8 +26,8 @@ const features = [
     desc: "TUI and web interface to review redacted sessions before committing them to your dataset. Commit, reject, redact.",
   },
   {
-    title: "automatic collection",
-    desc: "Agent hook captures sessions after every conversation. No manual parsing.",
+    title: "agent-queryable datasets",
+    desc: "Public traces are queryable via the HF Datasets API. Any agent, pipeline, or eval framework — no subscription, no lock-in.",
   },
   {
     title: "automatic dedup",

@@ -38,9 +38,9 @@ const useCases = [
     desc: "Committed patches as reward proxies, per-step token costs for cost-penalized reward, sub-agent hierarchy for credit assignment.",
   },
   {
-    tag: "analytics",
-    title: "Cost and session observability",
-    desc: "Cache hit rates, per-step token breakdowns, duration timelines, model distribution. Step-level granularity, not trace-level aggregates.",
+    tag: "analytics / eval",
+    title: "Observability and ground truth",
+    desc: "Cache hit rates, per-step token breakdowns, duration timelines, model distribution. Real production inputs with outcome signals become reproducible eval datasets for quality gating — no annotation queue required.",
   },
   {
     tag: "domain sourcing",
