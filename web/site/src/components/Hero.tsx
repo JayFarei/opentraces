@@ -5,6 +5,7 @@ import { useState } from "react";
 import Terminal from "./Terminal";
 import { AGENT_PROMPT } from "@/lib/agent-prompt";
 import pkg from "@/lib/version.json";
+import type { HeroMetricItem } from "@/lib/homepage-metrics";
 
 const tabLabels = ["init", "status", "review", "push", "consume"];
 const AGENT_LINES = AGENT_PROMPT.split("\n").length;
@@ -15,6 +16,31 @@ const installMethods = [
   { label: "skill", cmd: "npx skills add jayfarei/opentraces", copyText: "npx skills add jayfarei/opentraces" },
   { label: "agent", cmd: `agent setup prompt +${AGENT_LINES} lines`, copyText: AGENT_PROMPT, prefix: ">" },
 ];
+
+function MetricIcon({ icon }: { icon: HeroMetricItem["icon"] }) {
+  if (icon === "download") {
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M8 2v7m0 0 3-3m-3 3L5 6M3 12.5h10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
+      </svg>
+    );
+  }
+
+  if (icon === "star") {
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="m8 2 1.6 3.3 3.6.5-2.6 2.5.6 3.6L8 10.1 4.8 11.9l.6-3.6L2.8 5.8l3.6-.5Z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="miter" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3 4.5h10M3 8h10M3 11.5h10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
+      <path d="M5 3v10M11 3v10" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="square" />
+    </svg>
+  );
+}
 
 function InitContent() {
   return (
@@ -137,7 +163,7 @@ function ConsumeContent() {
 
 const tabContents = [InitContent, StatusContent, ReviewContent, PushContent, ConsumeContent];
 
-export default function Hero() {
+export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
   const [activeTab, setActiveTab] = useState(0);
   const [installIdx, setInstallIdx] = useState(0);
 
@@ -153,7 +179,7 @@ export default function Hero() {
           <p className="hero-sub">
             When LLMs drive the logic, <strong>traces</strong> become the real source: the record of decisions, tool calls, and reasoning behind the outcome.
             <br /><br />
-            open<strong>traces</strong> lets you commit those sessions to HuggingFace Hub so others can build on real workflows, not synthetic benchmarks.
+            open<strong>traces</strong> lets you commit those sessions to HuggingFace Hub so you or others can build on real workflows, not synthetic benchmarks.
           </p>
           <div className="hero-install-tabs">
             {installMethods.map((m, i) => (
@@ -176,8 +202,27 @@ export default function Hero() {
             >[cp]</span>
           </div>
           <div className="hero-actions">
-            <Link className="btn btn-primary" href="/docs/getting-started/quickstart">[init your project]</Link>
-            <Link className="btn btn-outline" href="/docs/">[documentation]</Link>
+            <Link className="btn btn-primary hero-primary-cta" href="/docs/getting-started/quickstart">[init your project]</Link>
+            <Link
+              className="hero-metric-strip"
+              href="/explorer"
+              aria-label={`Explore community traces. Downloads ${metrics[0]?.value ?? "unavailable"}, stars ${metrics[1]?.value ?? "unavailable"}, traces ${metrics[2]?.value ?? "unavailable"}.`}
+            >
+              <span className="hero-metric-strip-default" aria-hidden="true">
+                {metrics.map((metric) => (
+                  <span key={metric.label} className="hero-metric-cell" title={metric.title}>
+                    <span className="hero-metric-label">{metric.label}</span>
+                    <span className="hero-metric-bottom">
+                      <span className="hero-metric-icon">
+                        <MetricIcon icon={metric.icon} />
+                      </span>
+                      <span className="hero-metric-value">{metric.value}</span>
+                    </span>
+                  </span>
+                ))}
+              </span>
+              <span className="hero-metric-strip-hover" aria-hidden="true">[explore]</span>
+            </Link>
           </div>
         </div>
         <div>

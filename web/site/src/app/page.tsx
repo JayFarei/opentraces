@@ -6,12 +6,16 @@ import InfraDiagram from "@/components/InfraDiagram";
 import SchemaExplorer from "@/components/SchemaExplorer";
 import GetStarted from "@/components/GetStarted";
 import Footer from "@/components/Footer";
-export default function Home() {
+import { getHomepageHeroMetrics } from "@/lib/homepage-metrics";
+
+export default async function Home() {
+  const heroMetrics = await getHomepageHeroMetrics();
+
   return (
     <>
       <div className="container">
         <Nav />
-        <Hero />
+        <Hero metrics={heroMetrics} />
         <Features />
         <PrivacyTrust />
         <InfraDiagram />

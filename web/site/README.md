@@ -2,9 +2,10 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
-First, run the development server:
+First, install dependencies and run the development server:
 
 ```bash
+npm install
 npm run dev
 # or
 yarn dev
@@ -15,6 +16,22 @@ bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+## Metrics API
+
+To render live package distribution stats on the homepage, point the site at the
+Cloudflare metrics Worker:
+
+```bash
+STATS_API_BASE_URL=https://<your-worker-domain>
+```
+
+An example file is provided at [`.env.example`](./.env.example).
+
+The homepage fetches:
+
+- `/v1/projects/opentraces/summary`
+- `/v1/projects/opentraces/timeseries?source=pypi&metric=downloads&window=30d`
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 

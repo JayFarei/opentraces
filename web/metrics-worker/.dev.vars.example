@@ -1,0 +1,2 @@
+ADMIN_TOKEN=replace-with-long-random-token
+GITHUB_TOKEN=optional-github-token-for-higher-rate-limits
