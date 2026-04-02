@@ -177,9 +177,9 @@ export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
           <div style={{ height: 16 }} />
           <h1>Open data is the new open source.</h1>
           <p className="hero-sub">
-            When LLMs drive the logic, <strong>traces</strong> become the real source: the record of decisions, tool calls, and reasoning behind the outcome.
+            When LLMs drive the logic, traces become the real source: the record of decisions, tool calls, and reasoning behind the outcome.
             <br /><br />
-            open<strong>traces</strong> lets you commit those sessions to HuggingFace Hub so you or others can build on real workflows, not synthetic benchmarks.
+            open<strong>traces</strong> lets you parse, sanitise and commit those sessions to HuggingFace Hub so you or others can build on real workflows, not synthetic benchmarks.
           </p>
           <div className="hero-install-tabs">
             {installMethods.map((m, i) => (

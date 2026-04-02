@@ -122,6 +122,10 @@
   color: #E4E2DF;
   border-color: #000000;
 }
+[data-theme="light"] .hero-metric-strip-hover {
+  background: #FFFFFF;
+  color: #000000;
+}
 [data-theme="light"] .btn-accent {
   background: #C2410C;
   color: #fff;
@@ -519,8 +523,8 @@ html { color-scheme: light; }
   font-size: 12px;
   line-height: 1.4;
   opacity: 0;
-  background: var(--text);
-  color: var(--bg);
+  background: var(--bg);
+  color: var(--text);
 }
 
 .hero-metric-strip:hover .hero-metric-strip-default,
