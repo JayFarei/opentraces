@@ -1,6 +1,6 @@
 # opentraces
 
-Open protocol + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses
+Open schema + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses
 coding agent sessions, applies security scanning and redaction, enriches with git
 signals, and publishes as structured JSONL datasets.
 
@@ -41,7 +41,7 @@ opentraces init --agent <chosen-agent> --review-policy review --start-fresh
 This sets up automatic trace collection with manual review before
 anything is shared, and installs the opentraces agent skill into
 .agents/skills/opentraces/ (plus a symlink in .<agent>/skills/)
-so you have the full CLI reference for future sessions. If Claude Code
+so you have the full CLI reference for future sessions. If your agent
 already has past sessions for this repo, use `--import-existing` to bring
 that backlog into the inbox immediately, or `--start-fresh` to begin from now on.
 

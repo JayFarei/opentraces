@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Open protocol + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses Claude Code sessions, applies security scanning and redaction, enriches with attribution/git signals, and publishes as structured JSONL datasets.
+Open schema + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses coding agent sessions, applies security scanning and redaction, enriches with attribution/git signals, and publishes as structured JSONL datasets.
 
 ## Stack
 
