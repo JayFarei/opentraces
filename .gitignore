@@ -7,6 +7,8 @@ build/
 .pytest_cache/
 *.egg-link
 node_modules/
+web/metrics-worker/.wrangler/
+web/metrics-worker/wrangler.local.jsonc
 web/site/.next/
 web/viewer/.next/
 web/coming-soon/.vercel/

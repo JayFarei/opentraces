@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "opentraces-metrics",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-15",
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "METRICS_DB",
+      "database_name": "opentraces-metrics",
+      "database_id": "your-d1-database-id"
+    }
+  ],
+  "vars": {
+    "CORS_ORIGIN": "https://opentraces.ai"
+  },
+  "triggers": {
+    "crons": ["0 */6 * * *"]
+  }
+}

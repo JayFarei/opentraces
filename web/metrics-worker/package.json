@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "dev": "node ./scripts/run-wrangler.mjs dev",
+    "deploy": "node ./scripts/run-wrangler.mjs deploy",
     "typecheck": "tsc --noEmit",
-    "types": "wrangler types"
+    "types": "node ./scripts/run-wrangler.mjs types"
   },
   "devDependencies": {
     "typescript": "^5.8.3",

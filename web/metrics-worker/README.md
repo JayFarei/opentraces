@@ -49,6 +49,12 @@ npx wrangler d1 execute opentraces-metrics --local --file=schema.sql
 npx wrangler d1 execute opentraces-metrics --remote --file=schema.sql
 ```
 
+For this open-source repo, the tracked [`wrangler.jsonc`](./wrangler.jsonc) keeps
+`database_id` as `replace-me`. For local development, copy
+[`wrangler.local.jsonc.example`](./wrangler.local.jsonc.example) to
+`wrangler.local.jsonc`, add your real D1 `database_id`, and the npm scripts will
+use that local override automatically.
+
 Optional secrets:
 
 ```bash
