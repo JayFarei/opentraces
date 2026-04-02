@@ -15,7 +15,7 @@ export async function generateStaticParams() {
 export default async function DocPage({ params }: Props) {
   const { slug } = await params;
   const slugStr = slug?.join("/") || "";
-  const content = getDocContent(slugStr);
+  const content = await getDocContent(slugStr);
 
   if (!content) notFound();
 

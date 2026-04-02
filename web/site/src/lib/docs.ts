@@ -12,7 +12,47 @@ function applyTemplates(content: string): string {
   return content.replace(/\{\{AGENT_PROMPT\}\}/g, AGENT_PROMPT);
 }
 
-export function getDocContent(slug: string): string | null {
+interface GitHubRelease {
+  tag_name: string;
+  name: string;
+  published_at: string;
+  body: string;
+  html_url: string;
+}
+
+async function fetchReleasesContent(): Promise<string> {
+  const res = await fetch(
+    "https://api.github.com/repos/JayFarei/opentraces/releases",
+    {
+      headers: { Accept: "application/vnd.github+json" },
+      next: { revalidate: 3600 },
+    }
+  );
+
+  if (!res.ok) return "# Releases\n\nUnable to load releases at this time.";
+
+  const releases: GitHubRelease[] = await res.json();
+
+  if (!releases.length) return "# Releases\n\nNo releases published yet.";
+
+  const sections = releases.map((r) => {
+    const date = new Date(r.published_at).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const body = (r.body || "No release notes.").trim();
+    return `## ${r.tag_name} — ${date}\n\n${body}`;
+  });
+
+  return `# Releases\n\n${sections.join("\n\n---\n\n")}`;
+}
+
+export async function getDocContent(slug: string): Promise<string | null> {
+  if (slug === "overview/releases") {
+    return fetchReleasesContent();
+  }
+
   // Try exact match: docs/docs/getting-started/installation.md
   const exactPath = path.join(CONTENT_DIR, `${slug || "index"}.md`);
   if (fs.existsSync(exactPath)) {

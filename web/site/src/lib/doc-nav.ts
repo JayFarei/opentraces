@@ -6,6 +6,7 @@ export interface DocEntry {
 
 export const DOC_NAV: DocEntry[] = [
   { slug: "", title: "Overview" },
+  { slug: "overview/releases", title: "Releases", group: "Overview" },
 
   // Getting Started
   { slug: "getting-started/installation", title: "Installation", group: "Getting Started" },
