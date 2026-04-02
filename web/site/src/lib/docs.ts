@@ -33,7 +33,9 @@ async function fetchReleasesContent(): Promise<string> {
 
   const releases: GitHubRelease[] = await res.json();
 
-  if (!releases.length) return "# Releases\n\nNo releases published yet.";
+  const githubLink = "[View all releases on GitHub →](https://github.com/JayFarei/opentraces/releases)";
+
+  if (!releases.length) return `# Releases\n\n${githubLink}\n\nNo releases published yet.`;
 
   const sections = releases.map((r) => {
     const date = new Date(r.published_at).toLocaleDateString("en-US", {
@@ -45,7 +47,7 @@ async function fetchReleasesContent(): Promise<string> {
     return `## ${r.tag_name} — ${date}\n\n${body}`;
   });
 
-  return `# Releases\n\n${sections.join("\n\n---\n\n")}`;
+  return `# Releases\n\n${githubLink}\n\n${sections.join("\n\n---\n\n")}`;
 }
 
 export async function getDocContent(slug: string): Promise<string | null> {
