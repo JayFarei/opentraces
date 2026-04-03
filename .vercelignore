@@ -29,7 +29,6 @@ src/opentraces/inbox.py
 tests/
 tools/
 scripts/
-skill/
 tmp/
 web/coming-soon/
 web/viewer/
