@@ -206,7 +206,7 @@ export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
             <Link
               className="hero-metric-strip"
               href="/explorer"
-              aria-label={`Explore community traces. Downloads ${metrics[0]?.value ?? "unavailable"}, stars ${metrics[1]?.value ?? "unavailable"}, traces ${metrics[2]?.value ?? "unavailable"}.`}
+              aria-label={`Explore community traces. Installs ${metrics[0]?.value ?? "unavailable"}, stars ${metrics[1]?.value ?? "unavailable"}, traces ${metrics[2]?.value ?? "unavailable"}.`}
             >
               <span className="hero-metric-strip-default" aria-hidden="true">
                 {metrics.map((metric) => (

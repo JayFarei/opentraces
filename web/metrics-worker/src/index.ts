@@ -102,7 +102,24 @@ export default {
     }
 
     if (method === "GET" && url.pathname === "/health") {
-      return withCors(json({ ok: true, now: new Date().toISOString() }), env);
+      const staleness = await env.METRICS_DB.prepare(
+        "SELECT source, MAX(as_of) AS last_collected FROM metrics_snapshots GROUP BY source",
+      ).all<{ source: string; last_collected: string }>();
+
+      const sources: Record<string, { lastCollected: string; staleMinutes: number }> = {};
+      const now = Date.now();
+      for (const row of staleness.results ?? []) {
+        const ageMs = now - new Date(row.last_collected).getTime();
+        sources[row.source] = {
+          lastCollected: row.last_collected,
+          staleMinutes: Math.round(ageMs / 60000),
+        };
+      }
+
+      const staleThresholdMinutes = 420; // 7 hours (cron is every 6)
+      const allHealthy = Object.values(sources).every((s) => s.staleMinutes < staleThresholdMinutes);
+
+      return withCors(json({ ok: allHealthy, now: new Date().toISOString(), sources }), env);
     }
 
     if (method === "GET" && url.pathname === "/v1/projects") {
@@ -186,6 +203,16 @@ async function collectAllProjects(env: Env, _ctx: ExecutionContext) {
     Object.values(PROJECTS).map(async (project) => [project.id, await collectProject(env, project)] as const),
   );
 
+  for (const [projectId, projectResult] of entries) {
+    for (const [source, outcome] of Object.entries(projectResult.sources)) {
+      if (outcome.status === "ok") {
+        console.log(`[cron] ${projectId}/${source}: ok (${outcome.inserted} rows)`);
+      } else {
+        console.error(`[cron] ${projectId}/${source}: ${outcome.status} - ${outcome.detail}`);
+      }
+    }
+  }
+
   return {
     collectedAt: new Date().toISOString(),
     projects: Object.fromEntries(entries),
@@ -215,8 +242,8 @@ async function collectPyPI(env: Env, project: ProjectConfig, collectedAt: string
   try {
     const base = `https://pypistats.org/api/packages/${encodeURIComponent(project.pypiPackage)}`;
     const [recent, overall] = await Promise.all([
-      fetchJson<PypiRecentResponse>(`${base}/recent`),
-      fetchJson<PypiOverallResponse>(`${base}/overall?mirrors=true`),
+      withRetry(() => fetchJson<PypiRecentResponse>(`${base}/recent`)),
+      withRetry(() => fetchJson<PypiOverallResponse>(`${base}/overall?mirrors=true`)),
     ]);
 
     let inserted = 0;
@@ -258,6 +285,7 @@ async function collectPyPI(env: Env, project: ProjectConfig, collectedAt: string
 
     return { status: "ok", inserted };
   } catch (error) {
+    console.error(`[collect:pypi] ${project.id}: ${toMessage(error)}`);
     return { status: "error", detail: toMessage(error) };
   }
 }
@@ -277,9 +305,9 @@ async function collectHomebrew(env: Env, project: ProjectConfig, collectedAt: st
     let inserted = 0;
 
     for (const [metric, window] of windows) {
-      const payload = await fetchJson<HomebrewAnalyticsResponse>(
+      const payload = await withRetry(() => fetchJson<HomebrewAnalyticsResponse>(
         `https://formulae.brew.sh/api/analytics/install-on-request/${window}.json`,
-      );
+      ));
       const targetFormula = normalizeFormula(project.homebrewFormula);
       const item = payload.items.find((candidate) => normalizeFormula(candidate.formula) === targetFormula);
 
@@ -311,18 +339,19 @@ async function collectHomebrew(env: Env, project: ProjectConfig, collectedAt: st
 
     return { status: "ok", inserted };
   } catch (error) {
+    console.error(`[collect:homebrew] ${project.id}: ${toMessage(error)}`);
     return { status: "error", detail: toMessage(error) };
   }
 }
 
 async function collectGitHub(env: Env, project: ProjectConfig, collectedAt: string): Promise<CollectSourceResult> {
   try {
-    const repo = await fetchJson<GitHubRepoResponse>(
+    const repo = await withRetry(() => fetchJson<GitHubRepoResponse>(
       `https://api.github.com/repos/${project.githubOwner}/${project.githubRepo}`,
       {
         headers: githubHeaders(env),
       },
-    );
+    ));
 
     const rows: MetricRow[] = [
       {
@@ -355,6 +384,7 @@ async function collectGitHub(env: Env, project: ProjectConfig, collectedAt: stri
 
     return { status: "ok", inserted: rows.length };
   } catch (error) {
+    console.error(`[collect:github] ${project.id}: ${toMessage(error)}`);
     return { status: "error", detail: toMessage(error) };
   }
 }
@@ -567,6 +597,25 @@ async function upsertMetric(env: Env, row: MetricRow): Promise<void> {
       row.meta ? JSON.stringify(row.meta) : null,
     )
     .run();
+}
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  { retries = 1, delayMs = 2000 }: { retries?: number; delayMs?: number } = {},
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt < retries) {
+        console.warn(`[retry] Attempt ${attempt + 1} failed, retrying in ${delayMs}ms: ${toMessage(error)}`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
