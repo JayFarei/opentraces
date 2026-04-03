@@ -57,11 +57,30 @@ Check the deployment URL in the Vercel output. The production URL is:
 https://opentraces.ai
 ```
 
+## .vercelignore
+
+The repo uses a positive-ignore `.vercelignore` (explicitly listing directories to exclude, not a `*` catch-all with negations). This matters because:
+
+- **Negation patterns (`*` then `!web/`) are fragile** and break across Vercel CLI versions. Avoid them.
+- The Vercel CLI merges `.gitignore` rules into `.vercelignore` (26 combined rules), which can cause unexpected exclusions with negation patterns.
+
+Files that must NOT be ignored (the build reads them at build time):
+
+| File | Read by | Purpose |
+|------|---------|---------|
+| `src/opentraces/__init__.py` | `next.config.ts` | Version detection for `version.json` |
+| `skill/SKILL.md` | `lib/docs.ts` (`getSkillContent()`) | Machine view content on docs pages |
+
+If you add a new file that the site reads at build time via a relative path like `../../foo`, you must ensure it is not excluded by `.vercelignore`.
+
 ## Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
 | "provided path does not exist" | You ran `vercel` from `web/site/`, run from repo root instead |
-| Build fails on `version.json` | `next.config.ts` generates it at build time, check `src/opentraces/__init__.py` exists |
+| "Root Directory does not exist" | `.vercelignore` is excluding `web/site/`. Check ignore patterns, avoid `*` catch-all with negations |
+| Build fails on `version.json` | `next.config.ts` generates it at build time, check `src/opentraces/__init__.py` is not in `.vercelignore` |
+| Machine view empty on production | `skill/SKILL.md` excluded by `.vercelignore`, `getSkillContent()` returns `""` |
 | OG image not showing | Check `metadataBase` in `layout.tsx` is set to `https://opentraces.ai` |
 | Theme flash after deploy | Verify `layout.tsx` uses raw `<script>` tag, not `next/script` |
+| Cloudflare API 503 on deploy | Transient, retry the deploy |

@@ -116,7 +116,7 @@ export default {
         };
       }
 
-      const staleThresholdMinutes = 420; // 7 hours (cron is every 6)
+      const staleThresholdMinutes = 240; // 4 hours (cron is every 3)
       const allHealthy = Object.values(sources).every((s) => s.staleMinutes < staleThresholdMinutes);
 
       return withCors(json({ ok: allHealthy, now: new Date().toISOString(), sources }), env);
