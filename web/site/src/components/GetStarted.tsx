@@ -65,7 +65,6 @@ export default function GetStarted() {
 
       <div className="hero-actions" style={{ marginTop: 32 }}>
         <Link className="btn btn-primary" href="/docs/getting-started/installation">[get started]</Link>
-        <Link className="btn btn-outline" href="/docs/">[documentation]</Link>
       </div>
     </section>
   );
