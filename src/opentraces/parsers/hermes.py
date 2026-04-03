@@ -40,6 +40,7 @@ TOOL_NAME_MAP: dict[str, str] = {
     "patch": "Edit",
     "search_files": "Grep",
     "execute_code": "Bash",
+    "process": "Bash",  # terminal toolset: process management maps to Bash for enrichment
 }
 
 # Tools that are known Hermes tools but don't need normalization.
@@ -53,11 +54,15 @@ KNOWN_PASSTHROUGH_TOOLS: set[str] = {
     "todo", "memory", "clarify", "delegate", "send_message",
     "session_search", "skill_manage", "skill_view", "skills_list",
     "mixture_of_agents", "text_to_speech", "code_execution",
-    "honcho_context", "honcho_conclude",
+    "honcho_context", "honcho_conclude", "honcho_profile", "honcho_search",
     "ha_get_state", "ha_list_entities", "ha_list_services", "ha_call_service",
     "rl_select_environment", "rl_start_training", "rl_stop_training",
     "rl_list_environments", "rl_list_runs", "rl_get_results",
-    "rl_get_current_config", "rl_edit_config", "rl_check_status",
+    "rl_get_current_config", "rl_edit_config", "rl_check_status", "rl_test_inference",
+    # Additional canonical Hermes toolsets
+    "delegate_task", # delegation toolset
+    "cronjob",       # cronjob toolset
+    # Note: "process" is NOT here - it maps to "Bash" via TOOL_NAME_MAP for enrichment
 }
 
 # Map Hermes argument keys to canonical keys (keyed by ORIGINAL tool name).
@@ -66,6 +71,7 @@ ARG_NAME_MAP: dict[str, dict[str, str]] = {
     "write_file": {"path": "file_path", "content": "content"},
     "read_file": {"path": "file_path"},
     "terminal": {"command": "command"},
+    "process": {"command": "command"},  # same shape as terminal; maps to Bash
 }
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
@@ -118,7 +124,14 @@ class HermesParser:
         if not conversations:
             return None
 
-        steps, system_prompts, linkage_failures = self._conversations_to_steps(conversations)
+        # Dynamic registry: tool_stats keys enumerate every tool used in this run.
+        # batch_runner.py always emits tool_stats with all possible tool names as keys,
+        # so this covers any tool not yet in KNOWN_PASSTHROUGH_TOOLS.
+        dynamic_known_tools: frozenset[str] = frozenset((row.get("tool_stats") or {}).keys())
+
+        steps, system_prompts, linkage_failures = self._conversations_to_steps(
+            conversations, dynamic_known_tools=dynamic_known_tools,
+        )
         if not steps:
             return None
 
@@ -377,7 +390,9 @@ class HermesParser:
     # ------------------------------------------------------------------
 
     def _conversations_to_steps(
-        self, conversations: list[dict],
+        self,
+        conversations: list[dict],
+        dynamic_known_tools: frozenset[str] = frozenset(),
     ) -> tuple[list[Step], dict[str, str], int]:
         """Convert Hermes conversations to Steps.
 
@@ -445,7 +460,7 @@ class HermesParser:
                 normalized_calls = []
                 for tc in tool_calls:
                     canonical, mapped_args, _ = self._normalize_tool_call(
-                        tc.tool_name, tc.input,
+                        tc.tool_name, tc.input, dynamic_known_tools=dynamic_known_tools,
                     )
                     normalized_calls.append(ToolCall(
                         tool_call_id=tc.tool_call_id,
@@ -520,7 +535,10 @@ class HermesParser:
         return steps, system_prompts, linkage_failures
 
     def _normalize_tool_call(
-        self, name: str, args: dict,
+        self,
+        name: str,
+        args: dict,
+        dynamic_known_tools: frozenset[str] = frozenset(),
     ) -> tuple[str, dict, str]:
         """Normalize tool name and argument keys.
 
@@ -542,6 +560,7 @@ class HermesParser:
             canonical == name
             and name not in TOOL_NAME_MAP.values()
             and name not in KNOWN_PASSTHROUGH_TOOLS
+            and name not in dynamic_known_tools
         ):
             logger.info("Unmapped tool name: %s", name)
 

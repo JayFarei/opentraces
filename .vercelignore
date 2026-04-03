@@ -1,0 +1,8 @@
+*
+!.vercelignore
+!web/
+!web/site/
+!web/site/**
+!packages/
+!packages/opentraces-ui/
+!packages/opentraces-ui/**

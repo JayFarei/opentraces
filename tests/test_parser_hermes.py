@@ -450,3 +450,38 @@ class TestRegressions:
         assert "hermes" in importers
         instance = importers["hermes"]()
         assert instance.format_name == "hermes"
+
+    def test_new_passthrough_tools_no_warning(self, caplog):
+        """New canonical Hermes tools (process, delegate_task, cronjob) don't log warnings."""
+        import logging
+        parser = HermesParser()
+        row = _make_hermes_row(conversations=[
+            {"from": "human", "value": "Run a task"},
+            {"from": "gpt", "value": (
+                '<tool_call>{"name": "process", "arguments": {"command": "ps aux"}}</tool_call>\n'
+                '<tool_call>{"name": "delegate_task", "arguments": {"task": "do x"}}</tool_call>\n'
+                '<tool_call>{"name": "cronjob", "arguments": {"schedule": "0 * * * *"}}</tool_call>'
+            )},
+        ])
+        with caplog.at_level(logging.INFO, logger="opentraces.parsers.hermes"):
+            record = parser.map_record(row, 0)
+        assert record is not None
+        unmapped_warnings = [r for r in caplog.records if "Unmapped tool" in r.message]
+        assert unmapped_warnings == [], f"Unexpected unmapped tool warnings: {unmapped_warnings}"
+
+    def test_dynamic_tool_registry_from_tool_stats(self, caplog):
+        """Tools declared in tool_stats keys are treated as known, suppressing warnings."""
+        import logging
+        parser = HermesParser()
+        row = _make_hermes_row(
+            conversations=[
+                {"from": "human", "value": "Do something"},
+                {"from": "gpt", "value": '<tool_call>{"name": "some_future_tool", "arguments": {}}</tool_call>'},
+            ],
+            tool_stats={"some_future_tool": {"count": 1, "success": 1, "failure": 0}},
+        )
+        with caplog.at_level(logging.INFO, logger="opentraces.parsers.hermes"):
+            record = parser.map_record(row, 0)
+        assert record is not None
+        unmapped_warnings = [r for r in caplog.records if "Unmapped tool" in r.message]
+        assert unmapped_warnings == [], "tool declared in tool_stats should not trigger unmapped warning"
