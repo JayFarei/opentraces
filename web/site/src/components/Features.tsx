@@ -6,36 +6,36 @@ const features = [
     desc: "init, status, review, push. The workflow you already know, applied to agent sessions.",
   },
   {
-    title: "private first",
-    desc: "Every trace is scanned for secrets, API keys, and PII before it leaves your machine. Push to private HF datasets by default. Share only what you choose.",
+    title: "security pipeline",
+    desc: "Three-tier scanning: regex redaction, heuristic classification, full local review. Nothing leaves your machine unscanned.",
   },
   {
     title: "auto or review",
-    desc: "Push traces automatically to a private dataset, or review each session before committing to the remote.",
-  },
-  {
-    title: "traces as source",
-    desc: "In LLM-driven systems the trace isn't a log — it's where the logic lives. Outcome signals, tool call sequences, reasoning paths. Designed for SFT, RL, and eval.",
-  },
-  {
-    title: "huggingface native",
-    desc: "Publishes JSONL to HF Hub. Loadable via datasets.load_dataset(). No proprietary lock-in.",
+    desc: "Set per-project policy. Auto-push to a private dataset, or gate every session through the local inbox first.",
   },
   {
     title: "traces inbox",
-    desc: "TUI and web interface to review redacted sessions before committing them to your dataset. Commit, reject, redact.",
+    desc: "TUI and web interface to inspect redacted sessions. Approve, reject, or redact individual steps before pushing.",
   },
   {
-    title: "agent-queryable datasets",
-    desc: "Public traces are queryable via the HF Datasets API. Any agent, pipeline, or eval framework — no subscription, no lock-in.",
+    title: "schema depth",
+    desc: "Steps, tool calls, reasoning, sub-agent hierarchy, token usage, attribution, outcome, and security metadata in one record.",
   },
   {
-    title: "automatic dedup",
-    desc: "Content-hash dedup on push. Reset your state, switch machines, re-push safely. No duplicates on the remote.",
+    title: "huggingface native",
+    desc: "Sharded JSONL on HF Hub. Load via datasets.load_dataset(), or mount large datasets as a virtual filesystem. No lock-in, take your data wherever you want.",
+  },
+  {
+    title: "quality scoring",
+    desc: "Five persona rubrics score every trace. Upload gates enforce minimums. Re-score remotely with opentraces assess.",
+  },
+  {
+    title: "content-hash dedup",
+    desc: "Reset your state, switch machines, re-push safely. Content hashing prevents duplicates on the remote.",
   },
   {
     title: "agent-native cli",
-    desc: "Every command outputs structured JSON. Built for agents to drive agents.",
+    desc: "Every command emits structured JSON with next_steps. Built for agents to drive agents.",
   },
 ];
 

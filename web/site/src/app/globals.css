@@ -648,6 +648,8 @@ html { color-scheme: light; }
   background: var(--bg-alt);
   font-family: var(--font-mono);
   font-size: 12px;
+  max-width: 100%;
+  overflow: hidden;
 }
 .terminal-bar {
   display: flex;
@@ -723,23 +725,29 @@ html { color-scheme: light; }
   border-bottom: none;
   font-size: 10px;
   gap: 16px;
+  overflow: hidden;
 }
 .tui-body {
   display: grid;
   grid-template-columns: 1fr 1.2fr;
   min-height: 180px;
   flex: 1;
+  overflow: hidden;
 }
 .tui-body > .tui-left {
   padding: 8px 10px;
   border-right: 1px solid var(--border);
+  overflow: hidden;
 }
 .tui-body > .tui-right {
   padding: 8px 10px;
+  overflow: hidden;
 }
 .tui-session {
   padding: 2px 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 11px;
 }
 .tui-session.tui-active {
@@ -770,6 +778,8 @@ html { color-scheme: light; }
   font-size: 10px;
   line-height: 1.6;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ═══ Section ═══ */
