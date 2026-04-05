@@ -1,0 +1,115 @@
+/* ── InspectReplayScreen layout ─────────────────────────────────── */
+/* Token values from app.tcss (hex for screen-level CSS compat)     */
+/* $ot-panel=#191919 $background=#111111 $foreground=#E0E0E0        */
+/* $primary=#F97316 $secondary=#22D3EE $accent=#22C55E              */
+/* $text-muted=#666666 $error=#EF4444 $warning=#EAB308              */
+
+#replay-shell {
+    height: 1fr;
+    width: 1fr;
+}
+
+#replay-topbar {
+    height: 2;
+    border-bottom: solid #666666;
+    padding: 0 2;
+    background: #191919;
+    color: #E0E0E0;
+}
+
+/* ── Scroll container ────────────────────────────────────────────── */
+
+#replay-scroll {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 2;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #666666;
+    scrollbar-color-hover: #F97316;
+    scrollbar-color-active: #F97316;
+    scrollbar-background: #111111;
+    scrollbar-background-hover: #111111;
+    scrollbar-background-active: #111111;
+}
+
+/* ── User message blocks ─────────────────────────────────────────── */
+
+.user-message {
+    background: #2A1A0F;
+    width: 1fr;
+    padding: 1 2;
+    border-left: tall #F97316;
+    margin: 1 0 0 0;
+}
+
+/* ── Agent message blocks ────────────────────────────────────────── */
+
+.agent-message {
+    background: #111111;
+    width: 1fr;
+    padding: 1 2;
+    margin: 1 0 0 0;
+}
+
+/* ── System message blocks ───────────────────────────────────────── */
+
+.system-message {
+    color: #666666;
+    padding: 0 2;
+    margin: 0 0 0 0;
+}
+
+/* ── Step internals ──────────────────────────────────────────────── */
+
+.step-header {
+    height: auto;
+    margin: 0 0 0 0;
+}
+
+.step-content {
+    height: auto;
+    padding: 0 0 0 0;
+}
+
+/* ── Tool call blocks ────────────────────────────────────────────── */
+
+.tool-call-block {
+    background: #191919;
+    padding: 0 2;
+    margin: 0 0 0 2;
+    height: auto;
+    border-left: tall #22C55E;
+}
+
+.tool-call-block.-expanded {
+    padding: 1 2;
+    margin: 1 0 1 2;
+}
+
+/* ── Observation blocks ──────────────────────────────────────────── */
+
+.observation {
+    color: #666666;
+    padding: 0 2 0 4;
+}
+
+/* ── Time offset labels ──────────────────────────────────────────── */
+
+.step-offset {
+    color: #666666;
+    width: 8;
+}
+
+/* ── Help overlay (replay-specific) ──────────────────────────────── */
+
+#help-overlay {
+    layer: overlay;
+    width: 72;
+    height: auto;
+    max-height: 24;
+    align: center middle;
+    background: #191919;
+    border: tall #22D3EE;
+    padding: 1 2;
+    display: none;
+}

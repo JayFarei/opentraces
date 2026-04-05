@@ -1,0 +1,179 @@
+/* ── opentraces TUI design tokens ──────────────────────────────── */
+/* Mapped from @opentraces/ui DESIGN.md v1.1 (dark mode)           */
+
+$primary: #F97316;
+$secondary: #22D3EE;
+$accent: #22C55E;
+$background: #111111;
+$foreground: #E0E0E0;
+$text-muted: #666666;
+$text-dim: #444444;
+$error: #EF4444;
+$warning: #EAB308;
+$success: #22C55E;
+$blue: #3B82F6;
+$border: #2A2A2A;
+$border-strong: #3A3A3A;
+$surface-hover: #222222;
+
+/* Derived tokens (color + alpha) */
+$primary-muted: #F97316 15%;
+$secondary-muted: #22D3EE 15%;
+$error-muted: #EF4444 15%;
+$success-muted: #22C55E 15%;
+
+/* ── Screen ───────────────────────────────────────────────────── */
+
+Screen {
+    background: $background;
+    color: $foreground;
+    layers: base overlay;
+}
+
+/* ── App shell ────────────────────────────────────────────────── */
+
+#app-shell {
+    height: 1fr;
+    width: 1fr;
+}
+
+#topbar {
+    height: 1;
+    padding: 0 1;
+    background: #191919;
+    color: $foreground;
+}
+
+#workspace {
+    height: 1fr;
+    padding: 0 1 1 1;
+}
+
+/* ── Panel base ───────────────────────────────────────────────── */
+
+.panel {
+    background: #191919;
+    border: tall transparent;
+    padding: 0 1;
+}
+
+.panel:focus-within {
+    border: tall #F97316;
+}
+
+.panel-title {
+    color: $text-muted;
+    text-style: bold;
+    padding: 0 1;
+    height: 1;
+}
+
+/* ── Stage colors ─────────────────────────────────────────────── */
+
+.-stage-inbox {
+    color: $warning;
+}
+
+.-stage-committed {
+    color: $primary;
+}
+
+.-stage-pushed {
+    color: $success;
+}
+
+.-stage-rejected {
+    color: $error;
+}
+
+/* ── Session list ─────────────────────────────────────────────── */
+
+#session-list {
+    height: 1fr;
+    scrollbar-color: $text-muted;
+    scrollbar-color-hover: $primary;
+    scrollbar-color-active: $primary;
+    scrollbar-background: #191919;
+    scrollbar-background-hover: #191919;
+    scrollbar-background-active: #191919;
+}
+
+#session-list > .list-item {
+    padding: 0 1;
+    height: 1;
+}
+
+#session-list > .list-item:hover {
+    background: #222222;
+}
+
+#session-list > .list-item.-highlight {
+    background: $primary-muted;
+}
+
+/* ── List panel ──────────────────────────────────────────────── */
+
+#list-panel {
+    width: 45%;
+    background: #191919;
+}
+
+/* ── Trace detail ────────────────────────────────────────────── */
+
+#trace-detail {
+    width: 1fr;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+/* ── Help overlay ─────────────────────────────────────────────── */
+
+HelpOverlay {
+    layer: overlay;
+    width: 72;
+    height: auto;
+    align: center middle;
+    background: #191919;
+    border: tall #22D3EE;
+    padding: 1 2;
+    display: none;
+}
+
+HelpOverlay.visible {
+    display: block;
+}
+
+/* ── KeyBar ───────────────────────────────────────────────────── */
+
+#keybar {
+    height: 1;
+    padding: 0 2;
+    background: #191919;
+    color: $foreground;
+    dock: bottom;
+}
+
+/* ── EmptyState ───────────────────────────────────────────────── */
+
+EmptyState {
+    padding: 2 3;
+    color: $text-muted;
+}
+
+/* ── Role classes ─────────────────────────────────────────────── */
+
+.-role-user {
+    color: $secondary;
+}
+
+.-role-assistant {
+    color: $primary;
+}
+
+.-role-tool {
+    color: $accent;
+}
+
+.-role-system {
+    color: $text-muted;
+}

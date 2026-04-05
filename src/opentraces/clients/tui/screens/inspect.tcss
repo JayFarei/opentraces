@@ -1,0 +1,142 @@
+/* ── InspectScreen layout ──────────────────────────────────────── */
+
+#inspect-shell {
+    height: 1fr;
+    width: 1fr;
+}
+
+/* ── Top bar ───────────────────────────────────────────────────── */
+
+#inspect-topbar {
+    height: 2;
+    padding: 0 1;
+    color: $foreground;
+}
+
+/* ── Main workspace (sidebar + center) ─────────────────────────── */
+
+#inspect-workspace {
+    height: 1fr;
+    width: 1fr;
+}
+
+/* ── Sidebar ───────────────────────────────────────────────────── */
+
+#inspect-sidebar {
+    width: 36;
+    min-width: 32;
+    margin-right: 1;
+    height: 1fr;
+}
+
+#step-index-list {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: $text-muted;
+    scrollbar-color-hover: $primary;
+    scrollbar-background: #191919;
+}
+
+#step-index-list > .list-item {
+    padding: 0 1;
+    height: 1;
+    background: #191919;
+    color: $foreground;
+}
+
+#step-index-list > .list-item:hover {
+    background: #222222;
+}
+
+#step-index-list > .list-item.-highlight {
+    background: $primary-muted;
+}
+
+#step-index-list > .list-item.-selected {
+    background: #191919;
+    color: $foreground;
+    text-style: none;
+}
+
+#step-index-list:focus > .list-item.-selected {
+    background: #191919;
+    color: $foreground;
+    text-style: none;
+}
+
+#quality-panel {
+    height: auto;
+    max-height: 12;
+    padding: 0 1;
+    margin-top: 1;
+}
+
+#security-panel {
+    height: auto;
+    max-height: 12;
+    padding: 0 1;
+    margin-top: 1;
+}
+
+/* ── Center column (block stream) ──────────────────────────────── */
+
+#inspect-center {
+    width: 1fr;
+    height: 1fr;
+}
+
+#block-stream {
+    height: 1fr;
+    padding: 0 1;
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: $text-muted;
+    scrollbar-color-hover: $primary;
+    scrollbar-background: #191919;
+}
+
+/* ── Bottom panel (token waterfall) ─────────────────────────────── */
+
+#inspect-bottom {
+    height: 6;
+    padding: 0 1;
+    dock: bottom;
+}
+
+#token-waterfall {
+    height: 1fr;
+}
+
+/* ── Timing overlay ────────────────────────────────────────────── */
+
+.timing-bar {
+    height: 1;
+}
+
+/* ── Git state panel ──────────────────────────────────────────── */
+
+#git-state-panel {
+    height: auto;
+    max-height: 10;
+    padding: 0 1;
+    dock: bottom;
+    margin-bottom: 2;
+}
+
+/* ── Help overlay (inspect-specific) ───────────────────────────── */
+
+#help-overlay {
+    layer: overlay;
+    width: 72;
+    height: auto;
+    max-height: 24;
+    align: center middle;
+    background: #191919;
+    border: tall #22D3EE;
+    padding: 1 2;
+    display: none;
+}
+
+#help-overlay.visible {
+    display: block;
+}

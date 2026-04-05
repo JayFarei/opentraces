@@ -1,0 +1,176 @@
+/* ── TraceScreen layout ──────────────────────────────────────────── */
+/* Two-panel: transcript (left) + analysis sidebar (right)            */
+/* opencode-inspired block rendering with thick left borders          */
+
+#trace-shell {
+    height: 1fr;
+    width: 1fr;
+}
+
+#trace-topbar {
+    height: 1;
+    padding: 0 1;
+    background: #191919;
+    color: #E0E0E0;
+}
+
+#trace-workspace {
+    height: 1fr;
+}
+
+/* ── Transcript panel ────────────────────────────────────────────── */
+
+#transcript {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 1 0 1;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #444444;
+    scrollbar-color-hover: #fab283;
+    scrollbar-color-active: #fab283;
+    scrollbar-background: #111111;
+    scrollbar-background-hover: #111111;
+    scrollbar-background-active: #111111;
+}
+
+#transcript > .trace-step {
+    width: 1fr;
+    height: auto;
+    margin: 0;
+    padding: 0 1 1 1;
+    background: #111111;
+    border-left: tall transparent;
+}
+
+#transcript > .trace-step.user-message {
+    background: transparent;
+    border-left: tall #5c9cf5;
+}
+
+#transcript > .trace-step.agent-message {
+    background: #111111;
+}
+
+#transcript > .trace-step.system-message {
+    background: #151515;
+    border-left: tall #2A2A2A;
+}
+
+#transcript > .trace-step.-selected {
+    background: #1D1D1D;
+    border-left: tall #fab283;
+}
+
+#transcript > .trace-step.user-message.-selected {
+    background: transparent;
+    border-left: tall #7cb1ff;
+}
+
+.step-header {
+    height: auto;
+    margin: 0 0 0 0;
+}
+
+.step-content {
+    height: auto;
+    margin: 0;
+    padding: 0;
+}
+
+.step-preview {
+    height: auto;
+    margin: 0;
+    padding: 0;
+}
+
+.step-hint {
+    height: auto;
+    margin: 0;
+    padding: 0;
+}
+
+.tool-call-block {
+    background: #191919;
+    padding: 0 2;
+    margin: 1 0 0 2;
+    height: auto;
+    border-left: tall #22C55E;
+}
+
+.tool-call-block.-expanded {
+    padding: 1 2;
+}
+
+/* ── Sidebar (always visible) ────────────────────────────────────── */
+
+#sidebar {
+    width: 42;
+    min-width: 34;
+    background: #191919;
+    border-left: solid #2A2A2A;
+}
+
+#sidebar-summary {
+    height: auto;
+    max-height: 12;
+    padding: 1 0 0 0;
+}
+
+#step-index {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #444444;
+    scrollbar-color-hover: #fab283;
+    scrollbar-background: #191919;
+    scrollbar-background-hover: #191919;
+}
+
+#step-index > .list-item {
+    height: 1;
+    padding: 0 1;
+    background: #191919;
+    color: #E0E0E0;
+}
+
+#step-index > .list-item:hover {
+    background: #222222;
+}
+
+#step-index > .list-item.-highlight {
+    background: #2A1A0F;
+}
+
+#step-index:focus > .list-item.-highlight {
+    background: #3A2510;
+}
+
+/* ── Jump input ──────────────────────────────────────────────────── */
+
+#jump-bar {
+    height: auto;
+    max-height: 1;
+    padding: 0 1;
+    background: #191919;
+}
+
+#jump-bar #jump-input {
+    width: 20;
+    height: 1;
+    border: none;
+    background: #191919;
+    color: #E0E0E0;
+}
+
+/* ── Help overlay ───────────────────────────────────────────────── */
+
+#help-overlay {
+    layer: overlay;
+    width: 64;
+    height: auto;
+    max-height: 22;
+    align: center middle;
+    background: #191919;
+    border: tall #22D3EE;
+    padding: 1 2;
+    display: none;
+}

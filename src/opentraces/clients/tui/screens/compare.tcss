@@ -1,0 +1,117 @@
+/* -- CompareScreen layout ------------------------------------------------- */
+
+#compare-shell {
+    height: 1fr;
+    width: 1fr;
+}
+
+/* -- Top bar -------------------------------------------------------------- */
+
+#compare-topbar {
+    height: 2;
+    padding: 0 1;
+    color: #E5E5E5;
+}
+
+/* -- Side-by-side panels -------------------------------------------------- */
+
+#compare-panels {
+    height: 1fr;
+    width: 1fr;
+}
+
+#panel-left {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 1;
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #737373;
+    scrollbar-color-hover: #22D3EE;
+    scrollbar-background: #191919;
+}
+
+#panel-divider {
+    width: 1;
+    height: 1fr;
+    color: #404040;
+}
+
+#panel-right {
+    width: 1fr;
+    height: 1fr;
+    padding: 0 1;
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #737373;
+    scrollbar-color-hover: #22D3EE;
+    scrollbar-background: #191919;
+}
+
+/* -- Unified diff view ---------------------------------------------------- */
+
+#unified-view {
+    height: 1fr;
+    width: 1fr;
+    padding: 0 1;
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #737373;
+    scrollbar-color-hover: #22D3EE;
+    scrollbar-background: #191919;
+    display: none;
+}
+
+/* -- Bottom panel (coverage + errors) ------------------------------------- */
+
+#compare-bottom {
+    height: auto;
+    max-height: 20;
+    padding: 0 1;
+    dock: bottom;
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #737373;
+    scrollbar-color-hover: #22D3EE;
+    scrollbar-background: #191919;
+}
+
+#schema-coverage {
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+#error-row {
+    height: auto;
+}
+
+#errors-a {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+}
+
+#errors-b {
+    width: 1fr;
+    height: auto;
+    padding: 0 1;
+}
+
+/* -- Help overlay --------------------------------------------------------- */
+
+#help-overlay {
+    layer: overlay;
+    width: 72;
+    height: auto;
+    max-height: 24;
+    align: center middle;
+    background: #191919;
+    border: tall #22D3EE;
+    padding: 1 2;
+    display: none;
+}
+
+#help-overlay.visible {
+    display: block;
+}

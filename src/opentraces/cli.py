@@ -46,7 +46,7 @@ COMMAND_SECTIONS = [
     ("Getting Started", ["login", "init", "status"]),
     ("Import", ["import-hf"]),
     ("Review & Publish", ["session", "commit", "push", "log"]),
-    ("Inspect", ["stats", "web", "tui"]),
+    ("Inspect", ["stats", "web", "tui", "view", "serve"]),
     ("Settings", ["auth", "config", "remote", "whoami", "logout", "remove", "upgrade"]),
     ("Integrations", ["hooks"]),
 ]
@@ -2702,6 +2702,57 @@ def tui(fullscreen: bool) -> None:
     except ImportError:
         click.echo("Textual not installed. Run: pip install opentraces[tui]")
         sys.exit(2)
+
+
+@main.command()
+@click.argument("trace_id", required=False)
+@click.option("--latest", is_flag=True, help="View the most recently parsed trace")
+def view(trace_id: str | None, latest: bool) -> None:
+    """Inspect a single trace in the terminal viewer."""
+    from .config import get_project_staging_dir
+    from .inbox import load_traces
+
+    project_staging = get_project_staging_dir(Path.cwd())
+    traces = load_traces(project_staging)
+    if not traces:
+        click.echo("No traces found. Run 'opentraces parse' first.")
+        sys.exit(1)
+
+    if latest:
+        traces.sort(key=lambda t: t.get("timestamp_start") or "", reverse=True)
+        target = traces[0]
+    elif trace_id:
+        target = next((t for t in traces if t.get("trace_id") == trace_id), None)
+        if not target:
+            click.echo(f"Trace '{trace_id}' not found in staging.")
+            sys.exit(1)
+    else:
+        click.echo("Provide a trace_id or use --latest.")
+        sys.exit(1)
+
+    try:
+        from .clients.tui.app import OpenTracesApp
+        from .clients.tui.screens.inspect_replay import InspectReplayScreen
+
+        app = OpenTracesApp(staging_dir=project_staging)
+
+        original_mount = app.on_mount
+
+        def patched_mount() -> None:
+            original_mount()
+            app.push_screen(InspectReplayScreen(target))
+
+        app.on_mount = patched_mount
+        app.run()
+    except ImportError:
+        click.echo("Textual not installed. Run: pip install opentraces[tui]")
+        sys.exit(2)
+
+
+@main.command()
+def serve() -> None:
+    """Open the pipeline diagnostics dashboard."""
+    click.echo("Pipeline dashboard is available via the web UI: opentraces web")
 
 
 @main.command(hidden=True)

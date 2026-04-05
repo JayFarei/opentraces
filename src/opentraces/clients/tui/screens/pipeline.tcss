@@ -1,0 +1,126 @@
+/* ── PipelineScreen layout ────────────────────────────────────── */
+
+#pipeline-shell {
+    height: 1fr;
+    width: 1fr;
+}
+
+/* ── Top bar ──────────────────────────────────────────────────── */
+
+#pipeline-topbar {
+    height: 2;
+    padding: 0 1;
+    color: #E0E0E0;
+}
+
+/* ── Top row (60% height): Stage Board + Stats ────────────────── */
+
+#pipeline-top-row {
+    height: 60%;
+    width: 1fr;
+}
+
+#stage-board-container {
+    width: 2fr;
+    margin-right: 1;
+}
+
+#stats-container {
+    width: 1fr;
+}
+
+/* ── Bottom row (40% height): Security + Quality + Behavior ───── */
+
+#pipeline-bottom-row {
+    height: 1fr;
+    width: 1fr;
+}
+
+#security-container {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#quality-container {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#behavior-container {
+    width: 1fr;
+}
+
+/* ── Panel shared styling ─────────────────────────────────────── */
+
+.pipeline-panel {
+    background: #191919;
+    border: tall #333333;
+    padding: 0 1;
+    overflow-y: auto;
+    scrollbar-size-vertical: 1;
+    scrollbar-color: #666666;
+    scrollbar-color-hover: #F97316;
+    scrollbar-background: #191919;
+}
+
+.pipeline-panel.active-panel {
+    border: tall #22D3EE;
+}
+
+.panel-title {
+    height: 1;
+    color: #E0E0E0;
+}
+
+/* ── Stage Board ──────────────────────────────────────────────── */
+
+#stage-board {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+/* ── Stats Panel ──────────────────────────────────────────────── */
+
+#stats-panel {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+/* ── Security Stream ──────────────────────────────────────────── */
+
+#security-stream {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+/* ── Quality Panel ────────────────────────────────────────────── */
+
+#quality-panel {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+/* ── Behavior Discovery ───────────────────────────────────────── */
+
+#behavior-panel {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+/* ── Help overlay (pipeline-specific) ─────────────────────────── */
+
+#help-overlay {
+    layer: overlay;
+    width: 72;
+    height: auto;
+    max-height: 28;
+    align: center middle;
+    background: #191919;
+    border: tall #22D3EE;
+    padding: 1 2;
+    display: none;
+}
+
+#help-overlay.visible {
+    display: block;
+}

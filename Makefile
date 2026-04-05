@@ -1,10 +1,13 @@
 .PHONY: version-check dirty-check clean build-viewer build-schema build-cli build \
        test lint publish-schema publish-cli publish-test-schema publish-test-cli \
-       tag release brew-update
+       tag release brew-update tui-capture
 
 SCHEMA_DIR := packages/opentraces-schema
 VERSION := $(shell python3 -c "import re; m=re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('src/opentraces/__init__.py').read()); print(m.group(1))")
 SCHEMA_VERSION := $(shell python3 -c "import re; m=re.search(r'SCHEMA_VERSION\s*=\s*\"([^\"]+)\"', open('$(SCHEMA_DIR)/src/opentraces_schema/version.py').read()); print(m.group(1))")
+TUI_CAPTURE_DIR ?= tmp/tui-capture
+TUI_CAPTURE_CMD ?= cd $(PWD) && PYTHONPATH=$(PWD)/src python3 -m opentraces.clients.tui --staging-dir $(PWD)/.opentraces/staging
+TUI_CAPTURE_STEPS ?= --step open=Enter
 
 # ---------- Guards ----------
 
@@ -81,3 +84,11 @@ brew-update:
 		"import sys,json; d=json.load(sys.stdin); urls=[u for u in d['urls'] if u['packagetype']=='sdist']; print(urls[0]['digests']['sha256'] if urls else 'NOT FOUND')"
 	@echo ""
 	@echo "Update Formula/opentraces.rb with the new URL and SHA256."
+
+# ---------- TUI Capture ----------
+
+tui-capture:
+	python3 tools/tui_capture.py \
+		--output-dir "$(TUI_CAPTURE_DIR)" \
+		--command "$(TUI_CAPTURE_CMD)" \
+		$(TUI_CAPTURE_STEPS)

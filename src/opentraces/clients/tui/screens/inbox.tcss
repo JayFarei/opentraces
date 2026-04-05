@@ -1,0 +1,191 @@
+/* -- InboxScreen layout (2-panel) ---------------------------------------- */
+
+/* -- TopBar (1 line) ----------------------------------------------------- */
+
+#topbar {
+    height: 1;
+    padding: 0 1;
+    background: #191919;
+}
+
+/* -- Workspace ----------------------------------------------------------- */
+
+#workspace {
+    height: 1fr;
+}
+
+/* -- List panel (left, ~45%) --------------------------------------------- */
+
+#list-panel {
+    width: 45%;
+    background: #191919;
+    border: tall transparent;
+    padding: 0;
+}
+
+#list-panel:focus-within {
+    border: tall #F97316;
+}
+
+#session-list {
+    height: 1fr;
+    scrollbar-size-vertical: 1;
+    scrollbar-size-horizontal: 1;
+    scrollbar-color: #666666;
+    scrollbar-color-hover: #F97316;
+    scrollbar-color-active: #F97316;
+    scrollbar-background: #191919;
+    scrollbar-background-hover: #191919;
+    scrollbar-background-active: #191919;
+    scrollbar-corner-color: #191919;
+}
+
+#session-list > .list-item {
+    padding: 0;
+    height: 1;
+    background: #191919;
+    color: #E0E0E0;
+}
+
+#session-list > .list-item:hover {
+    background: #222222;
+}
+
+#session-list > .list-item.-highlight {
+    background: #F97316 15%;
+}
+
+/* Prevent Textual default selected styling from overriding */
+#session-list > .list-item.-selected {
+    background: #191919;
+    color: #E0E0E0;
+    text-style: none;
+}
+
+#session-list:focus > .list-item.-selected {
+    background: #191919;
+    color: #E0E0E0;
+    text-style: none;
+}
+
+.session-row {
+    height: 1;
+}
+
+/* -- Stage headers ------------------------------------------------------- */
+
+.stage-header {
+    height: 1;
+    color: #666666;
+}
+
+#session-list > StageHeader {
+    height: 1;
+    padding: 0 1;
+    background: #191919;
+    color: #666666;
+}
+
+/* -- Stage color modifiers ----------------------------------------------- */
+
+.-stage-inbox {
+    color: #EAB308;
+}
+
+.-stage-committed {
+    color: #F97316;
+}
+
+.-stage-pushed {
+    color: #22C55E;
+}
+
+.-stage-rejected {
+    color: #EF4444;
+}
+
+/* -- Filter bar ---------------------------------------------------------- */
+
+#filter-bar {
+    height: auto;
+    max-height: 1;
+    padding: 0;
+    background: #191919;
+}
+
+#filter-bar .filter-prefix {
+    width: 3;
+    color: #F97316;
+}
+
+#filter-bar #filter-input {
+    width: 1fr;
+    height: 1;
+    border: none;
+    background: #191919;
+    color: #E0E0E0;
+}
+
+/* -- Filter popup -------------------------------------------------------- */
+
+FilterPopup {
+    align: center middle;
+}
+
+#filter-popup-container {
+    width: 58%;
+    height: 42%;
+    min-height: 10;
+    background: #191919;
+    border: tall #22D3EE;
+    padding: 1 2;
+}
+
+#filter-title {
+    height: 1;
+    text-style: bold;
+    color: #E0E0E0;
+}
+
+#filter-body {
+    height: 1fr;
+    padding: 1 0;
+}
+
+#filter-hints {
+    height: 1;
+    color: #666666;
+    dock: bottom;
+}
+
+/* -- Trace detail (right panel) ------------------------------------------ */
+
+#trace-detail {
+    width: 1fr;
+    padding: 1 2;
+    overflow-y: auto;
+    background: #191919;
+    border: tall transparent;
+}
+
+#trace-detail:focus {
+    border: tall #F97316;
+}
+
+/* -- Help overlay (inbox-specific overrides) ----------------------------- */
+
+#help-overlay {
+    layer: overlay;
+    width: 72;
+    height: auto;
+    max-height: 24;
+    align: center middle;
+    background: #191919;
+    border: tall #22D3EE;
+    padding: 1 2;
+    display: none;
+}
+
+#help-overlay.visible {
+    display: block;
+}

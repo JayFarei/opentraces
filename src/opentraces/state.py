@@ -89,8 +89,27 @@ class StateManager:
                 self._state = {"processed_files": {}, "traces": {}, "commit_groups": {}}
 
     def save(self) -> None:
+        """Mark state as needing a save (buffered).
+
+        Call ``flush()`` to actually write to disk.  For backward compat,
+        callers that previously relied on immediate writes should add a
+        ``flush()`` call or use a periodic timer.
+        """
+        self._save_dirty = True
+
+    def flush(self) -> None:
+        """Actually write state to disk if dirty."""
+        if not getattr(self, "_save_dirty", False):
+            return
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         self._state_path.write_text(json.dumps(self._state, indent=2, default=str))
+        self._save_dirty = False
+
+    def save_immediate(self) -> None:
+        """Write state to disk immediately (bypass buffering)."""
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._state_path.write_text(json.dumps(self._state, indent=2, default=str))
+        self._save_dirty = False
 
     # --- Processed files tracking ---
 
@@ -107,7 +126,7 @@ class StateManager:
             "mtime": pf.mtime,
             "last_byte_offset": pf.last_byte_offset,
         }
-        self.save()
+        self.save_immediate()
 
     def should_reprocess(self, file_path: str) -> tuple[bool, int]:
         """Check if a file needs reprocessing. Returns (should_reprocess, byte_offset)."""
@@ -149,6 +168,11 @@ class StateManager:
             }
         self._state["traces"][trace_id]["status"] = status.value
         self._state["traces"][trace_id].update(kwargs)
+        self.save_immediate()
+
+    def delete_trace(self, trace_id: str) -> None:
+        """Remove a trace from state entirely (used by discard action)."""
+        self._state["traces"].pop(trace_id, None)
         self.save()
 
     def get_traces_by_status(self, status: TraceStatus) -> list[TraceStagingEntry]:
@@ -182,7 +206,7 @@ class StateManager:
         }
         for trace_id in trace_ids:
             self.set_trace_status(trace_id, TraceStatus.COMMITTED)
-        self.save()
+        self.save_immediate()
         return commit_id
 
     def get_committed_traces(self) -> dict[str, dict]:
