@@ -330,6 +330,51 @@ html { color-scheme: light; }
   .nav-theme-btn { align-self: flex-start; margin-top: 8px; }
 }
 
+/* ═══ Star callout ═══ */
+.star-callout {
+  position: fixed;
+  z-index: 500;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  text-decoration: none;
+  pointer-events: all;
+  animation: star-callout-in 0.3s ease-out forwards;
+}
+.star-callout-fading {
+  animation: star-callout-out 0.6s ease-in forwards;
+}
+.star-callout-line {
+  display: block;
+  width: 1px;
+  height: 10px;
+  background: var(--text-dim);
+}
+.star-callout-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  padding-top: 3px;
+}
+.star-callout-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.star-callout:hover .star-callout-text { color: var(--text); }
+
+@keyframes star-callout-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@keyframes star-callout-out {
+  from { opacity: 1; transform: translateX(-50%) translateY(0); }
+  to   { opacity: 0; transform: translateX(-50%) translateY(2px); }
+}
+
 /* ═══ Hero Pill ═══ */
 .hero-pill {
   display: inline-block;

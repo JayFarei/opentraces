@@ -17,6 +17,27 @@ function applyTheme(t: "dark" | "light") {
   el.style.colorScheme = t;
 }
 
+function ExternalArrow() {
+  return (
+    <svg
+      width="9"
+      height="9"
+      viewBox="0 0 9 9"
+      fill="none"
+      aria-hidden="true"
+      style={{ marginLeft: "3px", verticalAlign: "middle", opacity: 0.55, flexShrink: 0 }}
+    >
+      <path
+        d="M1 8L8 1M8 1H3M8 1V6"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export default function Nav() {
   const [theme, setTheme] = useState<"dark" | "light" | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -64,7 +85,15 @@ export default function Nav() {
         <Link href="/explorer" className="nav-link" onClick={() => setMenuOpen(false)}>explorer</Link>
         <Link href="/docs" className="nav-link" onClick={() => setMenuOpen(false)}>docs</Link>
         <a href="/llms.txt" className="nav-link" target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)}>/llms.txt</a>
-        <a href="https://github.com/jayfarei/opentraces" className="nav-link" target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)}>github</a>
+        <a
+          href="https://github.com/jayfarei/opentraces"
+          className="nav-link"
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={() => setMenuOpen(false)}
+        >
+          github<ExternalArrow />
+        </a>
         <span className="nav-divider" style={{ color: "var(--border)" }}>|</span>
         <button className="nav-theme-btn" onClick={toggle} aria-label="Toggle theme">
           {theme === null ? null : theme === "dark" ? "light" : "dark"}

@@ -210,7 +210,7 @@ export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
             >
               <span className="hero-metric-strip-default" aria-hidden="true">
                 {metrics.map((metric) => (
-                  <span key={metric.label} className="hero-metric-cell" title={metric.title}>
+                  <span key={metric.label} className="hero-metric-cell" data-metric-type={metric.icon} title={metric.title}>
                     <span className="hero-metric-label">{metric.label}</span>
                     <span className="hero-metric-bottom">
                       <span className="hero-metric-icon">

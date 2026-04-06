@@ -6,6 +6,7 @@ import InfraDiagram from "@/components/InfraDiagram";
 import SchemaExplorer from "@/components/SchemaExplorer";
 import GetStarted from "@/components/GetStarted";
 import Footer from "@/components/Footer";
+import StarCallout from "@/components/StarCallout";
 import { getHomepageHeroMetrics } from "@/lib/homepage-metrics";
 
 export default async function Home() {
@@ -23,6 +24,7 @@ export default async function Home() {
         <GetStarted />
         <Footer />
       </div>
+      <StarCallout />
     </>
   );
 }
