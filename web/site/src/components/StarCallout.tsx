@@ -12,15 +12,13 @@ export default function StarCallout() {
   useEffect(() => {
     if (localStorage.getItem("star-callout-dismissed")) return;
 
-    // On mobile the Nav has its own star CTA, so skip the floating callout
-    if (window.matchMedia("(max-width: 680px)").matches) return;
-
     function measure() {
-      const el = document.querySelector("[data-star-nav]") as HTMLElement | null;
+      const el = document.querySelector(
+        '.hero-metric-cell[data-metric-type="star"]'
+      ) as HTMLElement | null;
       if (!el) return;
       const r = el.getBoundingClientRect();
-      // Start above the link bottom so the line bridges from the link down to the text
-      setPos({ x: r.left + r.width / 2, bottom: r.bottom - 12 });
+      setPos({ x: r.left + r.width / 2, bottom: r.bottom });
     }
 
     const showTimer = setTimeout(() => {
@@ -30,11 +28,11 @@ export default function StarCallout() {
       window.addEventListener("resize", measure, { passive: true });
     }, 600);
 
-    const fadeTimer = setTimeout(() => setFading(true), 6000);
+    const fadeTimer = setTimeout(() => setFading(true), 12000);
     const hideTimer = setTimeout(() => {
       setVisible(false);
       setFading(false);
-    }, 7000);
+    }, 13000);
 
     return () => {
       clearTimeout(showTimer);
@@ -57,7 +55,10 @@ export default function StarCallout() {
       onClick={() => localStorage.setItem("star-callout-dismissed", "1")}
     >
       <span className="star-callout-line" aria-hidden="true" />
-      <span className="star-callout-text">give us a star!</span>
+      <span className="star-callout-text">
+        give us a star on{" "}
+        <span className="star-callout-link">github</span>!
+      </span>
     </a>
   );
 }
