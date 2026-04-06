@@ -28,11 +28,11 @@ export default function StarCallout() {
       window.addEventListener("resize", measure, { passive: true });
     }, 600);
 
-    const fadeTimer = setTimeout(() => setFading(true), 12000);
+    const fadeTimer = setTimeout(() => setFading(true), 6000);
     const hideTimer = setTimeout(() => {
       setVisible(false);
       setFading(false);
-    }, 13000);
+    }, 7000);
 
     return () => {
       clearTimeout(showTimer);
