@@ -46,16 +46,19 @@ pip install -e packages/opentraces-schema
 pip install -e ".[dev]"
 ```
 
-### External tools
-
-`push` needs `huggingface-cli`:
+### Authenticate
 
 ```bash
-pip install "huggingface_hub[cli]"
-huggingface-cli login
+# Browser-based OAuth (recommended)
+opentraces login
+
+# Or paste a token directly
+opentraces login --token
 ```
 
-When logging in, create a token at https://huggingface.co/settings/tokens with **write** scope.
+`opentraces login` opens a browser-based device code flow. `opentraces login --token` prompts for a HuggingFace access token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
+
+> **Note:** OAuth tokens can write to existing dataset repos but cannot create new ones. Use `opentraces login --token` with a personal access token if your dataset repo doesn't exist yet.
 
 ---
 
@@ -102,8 +105,8 @@ After setup, the workflow is:
 ## Quick start
 
 ```bash
-# Authenticate and initialize
-opentraces login --token
+# Authenticate (browser OAuth, or use --token for new datasets)
+opentraces login
 opentraces init --review-policy review
 
 # Review traces in the browser
