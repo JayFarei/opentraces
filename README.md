@@ -34,7 +34,7 @@ Published datasets are tagged `opentraces` and `agent-traces`, findable via:
 ## Install
 
 ```bash
-pip install opentraces
+pipx install opentraces
 ```
 
 Or from source:
