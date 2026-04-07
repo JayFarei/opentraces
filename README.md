@@ -10,7 +10,7 @@ Every coding session with an AI agent produces action trajectories, tool-use seq
 
 ## What it does
 
-1. **Parse** agent sessions (Claude Code, Cursor, Cline, Codex, Hermes)
+1. **Parse** agent sessions (Claude Code, Hermes, more to come)
 2. **Scan** every field for secrets, API keys, paths, and PII
 3. **Redact** detected secrets with `[REDACTED]` or hashed path segments
 4. **Enrich** with git signals, attribution, cost estimates, dependency metadata
