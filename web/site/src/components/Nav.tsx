@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
+const GH_URL = "https://github.com/jayfarei/opentraces";
+
 function resolveTheme(): "dark" | "light" {
   const stored = localStorage.getItem("theme") as "dark" | "light" | null;
   if (stored) return stored;
@@ -38,10 +40,23 @@ function ExternalArrow() {
   );
 }
 
-export default function Nav() {
+function StarIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path
+        d="m8 2 1.6 3.3 3.6.5-2.6 2.5.6 3.6L8 10.1 4.8 11.9l.6-3.6L2.8 5.8l3.6-.5Z"
+        fill="currentColor"
+        stroke="currentColor"
+        strokeWidth="0.5"
+        strokeLinejoin="miter"
+      />
+    </svg>
+  );
+}
+
+export default function Nav({ stars }: { stars?: string }) {
   const [theme, setTheme] = useState<"dark" | "light" | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-
   useEffect(() => {
     const resolved = resolveTheme();
     setTheme(resolved);
@@ -86,13 +101,14 @@ export default function Nav() {
         <Link href="/docs" className="nav-link" onClick={() => setMenuOpen(false)}>docs</Link>
         <a href="/llms.txt" className="nav-link" target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)}>/llms.txt</a>
         <a
-          href="https://github.com/jayfarei/opentraces"
-          className="nav-link"
+          href={GH_URL}
+          className="nav-link nav-github-link"
           target="_blank"
           rel="noopener noreferrer"
           onClick={() => setMenuOpen(false)}
+          data-star-nav
         >
-          github<ExternalArrow />
+          github{stars && <span className="nav-star-badge">&thinsp;[<StarIcon />{stars}]</span>}<ExternalArrow />
         </a>
         <span className="nav-divider" style={{ color: "var(--border)" }}>|</span>
         <button className="nav-theme-btn" onClick={toggle} aria-label="Toggle theme">
