@@ -19,7 +19,8 @@ export default function StarCallout() {
       const el = document.querySelector("[data-star-nav]") as HTMLElement | null;
       if (!el) return;
       const r = el.getBoundingClientRect();
-      setPos({ x: r.left + r.width / 2, bottom: r.bottom });
+      // Start above the link bottom so the line bridges from the link down to the text
+      setPos({ x: r.left + r.width / 2, bottom: r.bottom - 12 });
     }
 
     const showTimer = setTimeout(() => {
@@ -56,10 +57,7 @@ export default function StarCallout() {
       onClick={() => localStorage.setItem("star-callout-dismissed", "1")}
     >
       <span className="star-callout-line" aria-hidden="true" />
-      <span className="star-callout-text">
-        give us a star on{" "}
-        <span className="star-callout-link">github</span>!
-      </span>
+      <span className="star-callout-text">give us a star!</span>
     </a>
   );
 }
