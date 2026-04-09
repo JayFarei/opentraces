@@ -245,6 +245,7 @@ html { color-scheme: light; }
   display: inline-flex;
   align-items: baseline;
   gap: 0;
+  flex-shrink: 0;
 }
 /* ═══ Brand Typography ═══ */
 .brand-open {
@@ -307,6 +308,21 @@ html { color-scheme: light; }
   font-family: var(--font-mono);
 }
 .nav-hamburger:hover { color: var(--text); border-color: var(--border-strong); }
+
+/* ═══ Nav star badge (desktop, next to github link) ═══ */
+.nav-star-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.nav-star-badge svg {
+  color: var(--accent);
+  vertical-align: middle;
+}
+.nav-github-link:hover .nav-star-badge { color: var(--text); }
+
 
 @media (max-width: 680px) {
   .nav-hamburger { display: block; }
@@ -1429,6 +1445,8 @@ tr:hover td { background: var(--surface-hover); }
 }
 @media (max-width: 600px) {
   .get-started-dual { grid-template-columns: 1fr; }
+  .get-started-dual + .hero-actions { display: flex; justify-content: center; }
+  .get-started-dual + .hero-actions .btn { text-align: center; }
 }
 
 /* ═══ Privacy Grid ═══ */

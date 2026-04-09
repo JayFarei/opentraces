@@ -18,18 +18,19 @@ const installMethods = [
 ];
 
 function MetricIcon({ icon }: { icon: HeroMetricItem["icon"] }) {
-  if (icon === "download") {
+  if (icon === "install") {
     return (
       <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="M8 2v7m0 0 3-3m-3 3L5 6M3 12.5h10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
+        <path d="M8 2l5 2.5v5L8 12 3 9.5v-5L8 2Z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+        <path d="M3 4.5L8 7l5-2.5M8 7v5" fill="none" stroke="currentColor" strokeWidth="1.1" />
       </svg>
     );
   }
 
-  if (icon === "star") {
+  if (icon === "download") {
     return (
       <svg viewBox="0 0 16 16" aria-hidden="true">
-        <path d="m8 2 1.6 3.3 3.6.5-2.6 2.5.6 3.6L8 10.1 4.8 11.9l.6-3.6L2.8 5.8l3.6-.5Z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="miter" />
+        <path d="M8 2v7m0 0 3-3m-3 3L5 6M3 12.5h10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="square" />
       </svg>
     );
   }

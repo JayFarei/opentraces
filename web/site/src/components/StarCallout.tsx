@@ -12,10 +12,11 @@ export default function StarCallout() {
   useEffect(() => {
     if (localStorage.getItem("star-callout-dismissed")) return;
 
+    // On mobile the Nav has its own star CTA, so skip the floating callout
+    if (window.matchMedia("(max-width: 680px)").matches) return;
+
     function measure() {
-      const el = document.querySelector(
-        '.hero-metric-cell[data-metric-type="star"]'
-      ) as HTMLElement | null;
+      const el = document.querySelector("[data-star-nav]") as HTMLElement | null;
       if (!el) return;
       const r = el.getBoundingClientRect();
       setPos({ x: r.left + r.width / 2, bottom: r.bottom });

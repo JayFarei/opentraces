@@ -10,13 +10,13 @@ import StarCallout from "@/components/StarCallout";
 import { getHomepageHeroMetrics } from "@/lib/homepage-metrics";
 
 export default async function Home() {
-  const heroMetrics = await getHomepageHeroMetrics();
+  const { metrics, stars } = await getHomepageHeroMetrics();
 
   return (
     <>
       <div className="container">
-        <Nav />
-        <Hero metrics={heroMetrics} />
+        <Nav stars={stars} />
+        <Hero metrics={metrics} />
         <Features />
         <PrivacyTrust />
         <InfraDiagram />
