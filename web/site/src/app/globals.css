@@ -370,15 +370,11 @@ html { color-scheme: light; }
 }
 .star-callout-text {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1;
   color: var(--text-secondary);
   white-space: nowrap;
-  padding-top: 3px;
-}
-.star-callout-link {
-  color: var(--accent);
-  text-decoration: underline;
-  text-underline-offset: 2px;
+  padding-top: 1px;
 }
 .star-callout:hover .star-callout-text { color: var(--text); }
 
