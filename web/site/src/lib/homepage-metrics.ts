@@ -19,6 +19,7 @@ interface TimeseriesResponse {
 interface HFDataset {
   id: string;
   tags?: string[];
+  downloads?: number;
 }
 
 interface ViewerSplit {
@@ -137,12 +138,15 @@ async function getDatasetTraceCount(repoId: string): Promise<number> {
   return getReadmeTraceCount(repoId);
 }
 
-async function getTotalTraceCount(): Promise<number | null> {
+async function getCommunityDatasetStats(): Promise<{ totalTraces: number | null; totalDownloads: number }> {
   const datasets = await getCommunityDatasets();
-  if (!datasets.length) return null;
+  if (!datasets.length) return { totalTraces: null, totalDownloads: 0 };
 
+  const totalDownloads = datasets.reduce((sum, ds) => sum + (ds.downloads ?? 0), 0);
   const counts = await Promise.all(datasets.map((dataset) => getDatasetTraceCount(dataset.id)));
-  return counts.reduce((sum, count) => sum + count, 0);
+  const totalTraces = counts.reduce((sum, count) => sum + count, 0);
+
+  return { totalTraces, totalDownloads };
 }
 
 async function getDistributionSummary(baseUrl: string): Promise<SummaryResponse | null> {
@@ -161,43 +165,51 @@ async function getPypiAllTimeDownloads(baseUrl: string): Promise<number | null> 
 }
 
 export interface HeroMetricItem {
-  icon: "download" | "star" | "trace";
+  icon: "install" | "download" | "trace";
   label: string;
   value: string;
   title: string;
 }
 
-export async function getHomepageHeroMetrics(): Promise<HeroMetricItem[]> {
+export interface HomepageHeroData {
+  metrics: HeroMetricItem[];
+  stars: string;
+}
+
+export async function getHomepageHeroMetrics(): Promise<HomepageHeroData> {
   const baseUrl = getStatsApiBaseUrl();
 
-  const [summary, pypiAllTimeDownloads, totalTraces] = await Promise.all([
+  const [summary, pypiAllTimeDownloads, communityStats] = await Promise.all([
     baseUrl ? getDistributionSummary(baseUrl) : Promise.resolve(null),
     baseUrl ? getPypiAllTimeDownloads(baseUrl) : Promise.resolve(null),
-    getTotalTraceCount(),
+    getCommunityDatasetStats(),
   ]);
 
   const brewInstalls365d = summary?.sources.homebrew.metrics.installs_365d?.value ?? 0;
   const githubStars = summary?.sources.github.metrics.stars?.value ?? null;
-  const combinedDownloads = pypiAllTimeDownloads == null ? null : pypiAllTimeDownloads + brewInstalls365d;
+  const combinedInstalls = pypiAllTimeDownloads == null ? null : pypiAllTimeDownloads + brewInstalls365d;
 
-  return [
-    {
-      icon: "download",
-      label: "installs",
-      value: formatCompact(combinedDownloads),
-      title: "PyPI cumulative history plus the latest Homebrew 365d window.",
-    },
-    {
-      icon: "star",
-      label: "stars",
-      value: formatCompact(githubStars),
-      title: "Latest GitHub star snapshot from the metrics worker.",
-    },
-    {
-      icon: "trace",
-      label: "traces",
-      value: formatCompact(totalTraces),
-      title: "Community trace total using the same Hugging Face explorer sources as /explorer.",
-    },
-  ];
+  return {
+    metrics: [
+      {
+        icon: "install",
+        label: "installs",
+        value: formatCompact(combinedInstalls),
+        title: "PyPI cumulative history plus the latest Homebrew 365d window.",
+      },
+      {
+        icon: "download",
+        label: "downloads",
+        value: formatCompact(communityStats.totalDownloads || null),
+        title: "Total dataset downloads across all community HuggingFace datasets.",
+      },
+      {
+        icon: "trace",
+        label: "traces",
+        value: formatCompact(communityStats.totalTraces),
+        title: "Community trace total using the same Hugging Face explorer sources as /explorer.",
+      },
+    ],
+    stars: formatCompact(githubStars),
+  };
 }
