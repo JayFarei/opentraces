@@ -32,7 +32,7 @@
 #step-index-list {
     height: 1fr;
     scrollbar-size-vertical: 1;
-    scrollbar-color: $text-muted;
+    scrollbar-color: $muted_grey;
     scrollbar-color-hover: $primary;
     scrollbar-background: #191919;
 }
@@ -90,7 +90,7 @@
     padding: 0 1;
     overflow-y: auto;
     scrollbar-size-vertical: 1;
-    scrollbar-color: $text-muted;
+    scrollbar-color: $muted_grey;
     scrollbar-color-hover: $primary;
     scrollbar-background: #191919;
 }

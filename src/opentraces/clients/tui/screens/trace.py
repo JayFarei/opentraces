@@ -7,10 +7,6 @@ import re
 from datetime import datetime
 from typing import Any
 
-from rich.console import Group, RenderableType
-from rich.markdown import Markdown as RichMarkdown
-from rich.syntax import Syntax
-from rich.text import Text
 from textual import on
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -19,39 +15,39 @@ from textual.screen import Screen
 from textual.widgets import Input, ListItem, ListView, Static
 
 from ..messages import FlashMessage
-from ..utils import _truncate, escape
+from ..utils import _truncate, escape, PALETTE
 from ..widgets.help_overlay import HelpOverlay
 from ..widgets.key_bar import KeyBar
 from ..widgets.step_block import StepBlock
-from ..widgets.tool_call_block import format_tool_call_summary
 
 logger = logging.getLogger(__name__)
 
-C_PRIMARY = "#fab283"
-C_SECONDARY = "#5c9cf5"
-C_TOOL = "#6a6a6a"
-C_SUCCESS = "#7fd88f"
-C_ERROR = "#e06c75"
-C_WARN = "#e5c07b"
-C_ACCENT = "#9d7cd8"
+# Semantic color aliases from the unified palette
+C_PRIMARY = PALETTE["primary"]
+C_SECONDARY = PALETTE["secondary"]
+C_TOOL = PALETTE["text_muted"]
+C_SUCCESS = PALETTE["success"]
+C_ERROR = PALETTE["error"]
+C_WARN = PALETTE["warning"]
+C_ACCENT = PALETTE["accent"]
 
 TOOL_COLORS: dict[str, str] = {
     "Read": C_SUCCESS,
     "Edit": C_PRIMARY,
     "Write": C_PRIMARY,
-    "Bash": "#56b6c2",
+    "Bash": PALETTE["secondary"],
     "Grep": C_SUCCESS,
     "Glob": C_SUCCESS,
     "Agent": C_ACCENT,
     "WebSearch": C_WARN,
     "WebFetch": C_WARN,
     "Skill": C_ACCENT,
-    "AskUserQuestion": C_SECONDARY,
+    "AskUserQuestion": PALETTE["blue"],
     "TaskCreate": C_ACCENT,
     "TaskUpdate": C_ACCENT,
     "EnterPlanMode": C_ACCENT,
     "ExitPlanMode": C_ACCENT,
-    "SendMessage": C_SECONDARY,
+    "SendMessage": PALETTE["blue"],
     "ToolSearch": C_TOOL,
     "todo": C_ACCENT,
     "TodoWrite": C_ACCENT,
@@ -178,9 +174,17 @@ def _sparkline(steps: list[dict[str, Any]], width: int = 20) -> str:
 def _step_label(step: dict[str, Any], idx: int) -> str:
     role = step.get("role", "?")
     tool_calls = step.get("tool_calls") or []
+    call_type = step.get("call_type")
+    is_subagent = call_type == "subagent"
+
+    # Indent sub-agent steps
+    indent = "  " if is_subagent else ""
 
     if role == "user":
         tag = f"[bold {C_SECONDARY}]USER[/bold {C_SECONDARY}]"
+    elif is_subagent:
+        agent_role = step.get("agent_role") or "sub"
+        tag = f"[{C_SECONDARY}]{escape(agent_role[:4].upper()):4s}[/{C_SECONDARY}]"
     elif role in ("assistant", "agent"):
         tag = f"[{C_PRIMARY}]AGNT[/{C_PRIMARY}]"
     elif role == "system":
@@ -199,352 +203,16 @@ def _step_label(step: dict[str, Any], idx: int) -> str:
         content = _truncate(step.get("content") or "", 18)
         label = f"[dim]{escape(content)}[/dim]" if content else ""
 
-    return f"[dim]{idx:3d}[/dim]  {tag}  {label}"
+    # Per-step token count
+    usage = step.get("token_usage") or {}
+    total_tok = (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0)
+    tok_suffix = f" [dim]{_fmt_tok(total_tok)}[/dim]" if total_tok else ""
+
+    return f"{indent}[dim]{idx:3d}[/dim]  {tag}  {label}{tok_suffix}"
 
 
 def _tool_name(tool_call: dict[str, Any]) -> str:
     return tool_call.get("name") or tool_call.get("tool_name") or "unknown"
-
-
-def _tool_status_text(tool_call: dict[str, Any]) -> Text:
-    status = tool_call.get("status") or ""
-    if not status:
-        return Text("")
-    if status == "success":
-        return Text("  OK", style=f"bold {C_SUCCESS}")
-    if status == "error":
-        return Text("  ERR", style=f"bold {C_ERROR}")
-    return Text(f"  {status}", style="#888888")
-
-
-def _tool_text_line(name: str, summary: str) -> Text:
-    line = Text()
-    line.append(name, style=f"bold {_tc(name)}")
-    if summary:
-        line.append("  ")
-        line.append(summary, style="#D6D6D6")
-    return line
-
-
-def _task_line(title: str, status: str | None = None) -> Text:
-    colors = {
-        "new": C_ACCENT,
-        "in_progress": C_WARN,
-        "completed": C_SUCCESS,
-        "pending": "#888888",
-    }
-    labels = {
-        "new": "NEW",
-        "in_progress": "DOING",
-        "completed": "DONE",
-        "pending": "TASK",
-    }
-    key = status or "pending"
-    line = Text()
-    line.append(labels.get(key, "TASK"), style=f"bold {colors.get(key, '#888888')}")
-    line.append("  ")
-    line.append(title, style="bold #E8E8E8")
-    return line
-
-
-def _todo_label(status: str | None) -> tuple[str, str]:
-    labels = {
-        "pending": ("TODO", "#888888"),
-        "in_progress": ("DOING", C_WARN),
-        "completed": ("DONE", C_SUCCESS),
-        "cancelled": ("DROP", C_ERROR),
-    }
-    return labels.get(status or "pending", ("TODO", "#888888"))
-
-
-def _indented_text(value: str, *, style: str = "#B8B8B8") -> Text:
-    line = Text("  ")
-    line.append(value, style=style)
-    return line
-
-
-def _compact_text(value: Any) -> str:
-    return " ".join(str(value or "").split()).strip()
-
-
-def _todo_items(tool_call: dict[str, Any]) -> list[dict[str, Any]]:
-    inp = tool_call.get("input") or tool_call.get("arguments") or {}
-    todos = inp.get("todos")
-    if not isinstance(todos, list):
-        return []
-    return [todo for todo in todos if isinstance(todo, dict)]
-
-
-def _todo_summary(items: list[dict[str, Any]]) -> Text:
-    counts = {"pending": 0, "in_progress": 0, "completed": 0, "cancelled": 0}
-    for item in items:
-        status = str(item.get("status") or "pending")
-        counts[status] = counts.get(status, 0) + 1
-
-    line = Text()
-    line.append("TODOS", style=f"bold {C_ACCENT}")
-    line.append(f"  {len(items)}", style="bold #E8E8E8")
-    for key, label in (
-        ("in_progress", "doing"),
-        ("completed", "done"),
-        ("pending", "pending"),
-    ):
-        count = counts.get(key, 0)
-        if count:
-            _, color = _todo_label(key)
-            line.append("  ")
-            line.append(f"{count} {label}", style=color)
-    if counts.get("cancelled", 0):
-        line.append("  ")
-        line.append(f"{counts['cancelled']} dropped", style=C_ERROR)
-    return line
-
-
-def _todo_changed_items(
-    items: list[dict[str, Any]],
-    previous_items: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
-    if not previous_items:
-        return items
-
-    previous_by_id = {str(item.get("id") or ""): item for item in previous_items}
-    changed: list[dict[str, Any]] = []
-    for item in items:
-        item_id = str(item.get("id") or "")
-        previous = previous_by_id.get(item_id)
-        if previous != item:
-            changed.append(item)
-    return changed
-
-
-def _todo_item_line(item: dict[str, Any]) -> Text:
-    status = str(item.get("status") or "pending")
-    label, color = _todo_label(status)
-    line = Text()
-    line.append(label, style=f"bold {color}")
-    item_id = str(item.get("id") or "").strip()
-    if item_id:
-        line.append("  ")
-        line.append(f"#{item_id}", style="#7A7A7A")
-    content = _compact_text(item.get("content") or item.get("title") or "Untitled todo")
-    if content:
-        line.append("  ")
-        line.append(content, style="#E8E8E8")
-    priority = _compact_text(item.get("priority"))
-    if priority:
-        line.append("  ")
-        line.append(f"[{priority}]", style="#7FAFD4")
-    return line
-
-
-def _todo_renderable(
-    tool_call: dict[str, Any],
-    previous_items: list[dict[str, Any]] | None = None,
-) -> RenderableType:
-    items = _todo_items(tool_call)
-    if not items:
-        return _tool_text_line("todo", format_tool_call_summary(tool_call, limit=120))
-
-    changed = _todo_changed_items(items, previous_items)
-    parts: list[RenderableType] = [_todo_summary(items)]
-    if previous_items and changed and len(changed) < len(items):
-        parts.append(_indented_text("updated", style="#7A7A7A"))
-    for item in changed or items:
-        parts.append(_todo_item_line(item))
-    return Group(*parts)
-
-
-def _task_create_renderable(tool_call: dict[str, Any]) -> RenderableType:
-    inp = tool_call.get("input") or tool_call.get("arguments") or {}
-    subject = str(inp.get("subject") or "Task")
-    description = str(inp.get("description") or "").strip()
-    parts: list[RenderableType] = [_task_line(subject, "new")]
-    if description:
-        parts.append(_indented_text(description))
-    return Group(*parts)
-
-
-def _task_update_renderable(tool_call: dict[str, Any], task_lookup: dict[str, str] | None) -> RenderableType:
-    inp = tool_call.get("input") or tool_call.get("arguments") or {}
-    task_id = str(inp.get("taskId") or inp.get("task_id") or "?")
-    title = ""
-    if task_lookup:
-        title = task_lookup.get(task_id, "")
-    active_form = str(inp.get("activeForm") or inp.get("active_form") or "").strip()
-    status = str(inp.get("status") or "pending")
-    heading = title or active_form or f"Task {task_id}"
-    parts: list[RenderableType] = [_task_line(f"#{task_id}  {heading}", status)]
-    if active_form and active_form != heading:
-        parts.append(_indented_text(active_form, style="#D2D2D2"))
-    return Group(*parts)
-
-
-def _delegate_task_renderable(tool_call: dict[str, Any]) -> RenderableType:
-    inp = tool_call.get("input") or tool_call.get("arguments") or {}
-    tasks = inp.get("tasks")
-    if not isinstance(tasks, list):
-        tasks = [inp]
-
-    parts: list[RenderableType] = []
-    for index, task in enumerate(tasks, start=1):
-        if not isinstance(task, dict):
-            continue
-        goal = str(task.get("goal") or f"Delegated task {index}")
-        toolsets = task.get("toolsets") or []
-        parts.append(_task_line(goal, "pending"))
-        if isinstance(toolsets, list) and toolsets:
-            parts.append(
-                _indented_text(
-                    "[" + ", ".join(str(item) for item in toolsets) + "]",
-                    style="#7FAFD4",
-                )
-            )
-        context = _compact_text(task.get("context"))
-        if context:
-            parts.append(_indented_text(context))
-    if parts:
-        return Group(*parts)
-    return _tool_text_line("delegate_task", format_tool_call_summary(tool_call, limit=120))
-
-
-def _bash_command(tool_call: dict[str, Any]) -> str:
-    inp = tool_call.get("input") or tool_call.get("arguments") or {}
-    if isinstance(inp, dict):
-        for key in ("command", "cmd"):
-            value = inp.get(key)
-            if isinstance(value, str) and value.strip():
-                return value
-    return ""
-
-
-def _render_tool_call(tool_call: dict[str, Any], task_lookup: dict[str, str] | None = None) -> RenderableType:
-    name = _tool_name(tool_call)
-    if name in {"todo", "TodoWrite"}:
-        return _todo_renderable(tool_call)
-    if name == "TaskCreate":
-        return _task_create_renderable(tool_call)
-    if name == "TaskUpdate":
-        return _task_update_renderable(tool_call, task_lookup)
-    if name == "delegate_task":
-        return _delegate_task_renderable(tool_call)
-
-    summary = format_tool_call_summary(tool_call, limit=120)
-    if name == "Bash":
-        command = _bash_command(tool_call)
-        header = _tool_text_line(name, "")
-        header.append_text(_tool_status_text(tool_call))
-        if command:
-            return Group(
-                header,
-                Syntax(
-                    command,
-                    "bash",
-                    theme="monokai",
-                    line_numbers=False,
-                    word_wrap=True,
-                    background_color="#101318",
-                    padding=(0, 1),
-                ),
-            )
-        fallback = _tool_text_line(name, summary)
-        fallback.append_text(_tool_status_text(tool_call))
-        return fallback
-
-    line = _tool_text_line(name, summary)
-    line.append_text(_tool_status_text(tool_call))
-    return line
-
-
-def _render_tool_sequence(tool_calls: list[dict[str, Any]], task_lookup: dict[str, str] | None = None) -> RenderableType:
-    renderables: list[RenderableType] = []
-    previous_todos: list[dict[str, Any]] | None = None
-    for tool_call in tool_calls:
-        name = _tool_name(tool_call)
-        if name in {"todo", "TodoWrite"}:
-            renderables.append(_todo_renderable(tool_call, previous_todos))
-            previous_todos = _todo_items(tool_call)
-            continue
-        renderables.append(_render_tool_call(tool_call, task_lookup))
-    return Group(*renderables)
-
-
-def _plain_tool_sequence(tool_calls: list[dict[str, Any]], task_lookup: dict[str, str] | None = None) -> str:
-    lines: list[str] = []
-    previous_todos: list[dict[str, Any]] | None = None
-    for tool_call in tool_calls:
-        name = _tool_name(tool_call)
-        if name in {"todo", "TodoWrite"}:
-            items = _todo_items(tool_call)
-            changed = _todo_changed_items(items, previous_todos)
-            counts = {
-                "in_progress": sum(1 for item in items if item.get("status") == "in_progress"),
-                "completed": sum(1 for item in items if item.get("status") == "completed"),
-                "pending": sum(1 for item in items if item.get("status") == "pending"),
-            }
-            summary = [f"TODOS  {len(items)}"]
-            if counts["in_progress"]:
-                summary.append(f"{counts['in_progress']} doing")
-            if counts["completed"]:
-                summary.append(f"{counts['completed']} done")
-            if counts["pending"]:
-                summary.append(f"{counts['pending']} pending")
-            lines.append("  ".join(summary))
-            if previous_todos and changed and len(changed) < len(items):
-                lines.append("  updated")
-            for item in changed or items:
-                label, _ = _todo_label(str(item.get("status") or "pending"))
-                item_id = str(item.get("id") or "").strip()
-                content = _compact_text(item.get("content") or item.get("title") or "Untitled todo")
-                prefix = f"{label}  "
-                if item_id:
-                    prefix += f"#{item_id}  "
-                line = prefix + content
-                priority = _compact_text(item.get("priority"))
-                if priority:
-                    line += f"  [{priority}]"
-                lines.append(line)
-            previous_todos = items
-            continue
-        if name == "TaskCreate":
-            inp = tool_call.get("input") or tool_call.get("arguments") or {}
-            subject = str(inp.get("subject") or "Task")
-            description = str(inp.get("description") or "").strip()
-            lines.append(f"NEW  {subject}")
-            if description:
-                lines.append(f"  {description}")
-            continue
-        if name == "TaskUpdate":
-            inp = tool_call.get("input") or tool_call.get("arguments") or {}
-            task_id = str(inp.get("taskId") or inp.get("task_id") or "?")
-            status = str(inp.get("status") or "pending")
-            active_form = str(inp.get("activeForm") or inp.get("active_form") or "").strip()
-            title = task_lookup.get(task_id, "") if task_lookup else ""
-            heading = title or active_form or f"Task {task_id}"
-            lines.append(f"{status.upper()}  #{task_id}  {heading}")
-            continue
-        if name == "delegate_task":
-            inp = tool_call.get("input") or tool_call.get("arguments") or {}
-            tasks = inp.get("tasks")
-            if not isinstance(tasks, list):
-                tasks = [inp]
-            for task in tasks:
-                if isinstance(task, dict):
-                    goal = str(task.get("goal") or "Delegated task")
-                    lines.append(f"TASK  {goal}")
-                    toolsets = task.get("toolsets") or []
-                    if isinstance(toolsets, list) and toolsets:
-                        lines.append(f"  [{', '.join(str(item) for item in toolsets)}]")
-                    context = _compact_text(task.get("context"))
-                    if context:
-                        lines.append(f"  {context}")
-            continue
-        if name == "Bash":
-            command = _bash_command(tool_call)
-            if command:
-                lines.append(f"{name}\n{command}")
-                continue
-        lines.append(f"{name}  {format_tool_call_summary(tool_call)}")
-    return "\n".join(lines)
 
 
 class StepIndexItem(ListItem):
@@ -689,14 +357,13 @@ class TraceScreen(Screen):
         cloned = dict(step)
         content = step.get("content")
         sanitized = _strip_xml(content) if isinstance(content, str) else ""
-        if sanitized:
-            cloned["content"] = sanitized
-            cloned["_content_plain"] = sanitized
-            cloned["_content_markdown"] = True
-        else:
-            cloned["content"] = sanitized
-            cloned["_content_plain"] = sanitized
-            cloned["_content_markdown"] = True
+        cloned["content"] = sanitized
+        cloned["_content_plain"] = sanitized
+        cloned["_content_markdown"] = True
+        # Pass through fields needed by StepBlock / ToolCallBlock
+        for key in ("tool_calls", "observations", "reasoning_content", "call_type", "snippets"):
+            if key in step:
+                cloned[key] = step[key]
         return cloned
 
     def _is_tool_only_step(self, step: dict[str, Any]) -> bool:
@@ -713,40 +380,24 @@ class TraceScreen(Screen):
     def _group_tool_steps(self, grouped_steps: list[dict[str, Any]]) -> dict[str, Any]:
         first = self._sanitized_step(grouped_steps[0])
         tool_calls: list[dict[str, Any]] = []
+        observations: list[dict[str, Any]] = []
         for step in grouped_steps:
-            tool_calls.extend(step.get("tool_calls") or [])
+            step_tcs = step.get("tool_calls") or []
+            step_obs = step.get("observations") or []
+            tool_calls.extend(step_tcs)
+            observations.extend(step_obs)
 
         grouped = dict(first)
         grouped["tool_calls"] = tool_calls
-        grouped["content"] = _plain_tool_sequence(tool_calls, self._task_lookup)
-        grouped["_content_plain"] = grouped["content"]
-        grouped["_content_renderable"] = _render_tool_sequence(tool_calls, self._task_lookup)
+        grouped["observations"] = observations
+        grouped["content"] = ""
+        grouped["_content_plain"] = ""
         grouped["_content_markdown"] = False
-        grouped["_force_full_content"] = True
         return grouped
 
     def _step_with_renderable(self, step: dict[str, Any]) -> dict[str, Any]:
         sanitized = self._sanitized_step(step)
-        tool_calls = step.get("tool_calls") or []
-        if not tool_calls:
-            return sanitized
-
-        renderables: list[RenderableType] = []
-        plain_parts: list[str] = []
-        content = sanitized.get("content") or ""
-        if content:
-            if sanitized.get("_content_markdown", True):
-                renderables.append(RichMarkdown(content))
-            else:
-                renderables.append(content)
-            plain_parts.append(content)
-
-        renderables.append(_render_tool_sequence(tool_calls, self._task_lookup))
-        plain_parts.append(_plain_tool_sequence(tool_calls, self._task_lookup))
-        sanitized["_content_renderable"] = Group(*renderables)
-        sanitized["_content_plain"] = "\n\n".join(part for part in plain_parts if part)
-        sanitized["_content_markdown"] = False
-        sanitized["_force_full_content"] = True
+        # tool_calls and observations are already passed through by _sanitized_step
         return sanitized
 
     def _build_task_lookup(self, steps: list[dict[str, Any]]) -> dict[str, str]:
@@ -795,16 +446,19 @@ class TraceScreen(Screen):
 
         widgets: list[StepBlock] = []
         for index, step in enumerate(steps):
-            sanitized = self._sanitized_step(step)
+            has_tools = bool(step.get("tool_calls"))
+            css_classes = "trace-step"
+            if step.get("call_type") == "subagent":
+                css_classes += " subagent-step"
             widgets.append(
                 StepBlock(
-                    sanitized,
+                    step,
                     step_index=index,
                     agent_name=self._agent_name,
-                    timestamp_label=_fmt_time_24h(sanitized.get("timestamp")),
-                    collapse_content=not sanitized.get("_force_full_content", False),
-                    render_tool_calls=False,
-                    classes="trace-step",
+                    timestamp_label=_fmt_time_24h(step.get("timestamp")),
+                    collapse_content=not has_tools and len((step.get("content") or "").splitlines()) > 5,
+                    render_tool_calls=True,
+                    classes=css_classes,
                 )
             )
         transcript.mount_all(widgets)

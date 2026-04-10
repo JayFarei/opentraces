@@ -11,7 +11,7 @@ from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.widgets import Static
 
-from ..utils import _format_offset, escape
+from ..utils import _format_offset, escape, PALETTE
 from .tool_call_block import ToolCallBlock
 
 
@@ -54,16 +54,43 @@ class StepBlock(Vertical):
             else:
                 content_renderable = initial_content
         yield initial_header
-        yield Static(content_renderable, classes="step-content")
-        yield Static("", markup=True, classes="step-preview")
-        yield Static("", markup=True, classes="step-hint")
+
+        # Thinking / chain-of-thought (hidden until expanded)
+        thinking = self.step.get("reasoning_content") or ""
+        if thinking:
+            _m = PALETTE["text_muted"]
+            lines = thinking.splitlines()
+            if len(lines) > 30:
+                truncated = "\n".join(lines[:30])
+                thinking_markup = f"[{_m}][italic]Thinking...[/italic][/{_m}]\n{escape(truncated)}\n[{_m}]... +{len(lines) - 30} more lines[/{_m}]"
+            else:
+                thinking_markup = f"[{_m}][italic]Thinking...[/italic][/{_m}]\n{escape(thinking)}"
+            thinking_widget = Static(thinking_markup, markup=True, classes="step-thinking")
+            thinking_widget.display = False
+            yield thinking_widget
+
+        content_static = Static(content_renderable, classes="step-content")
+        if not content_renderable:
+            content_static.display = False
+        yield content_static
+        preview_static = Static("", markup=True, classes="step-preview")
+        preview_static.display = False
+        yield preview_static
+        hint_static = Static("", markup=True, classes="step-hint")
+        hint_static.display = False
+        yield hint_static
 
         if self._render_tool_calls:
             tool_calls = self.step.get("tool_calls") or []
             observations = self.step.get("observations") or []
+            has_prose = bool((self.step.get("content") or "").strip())
             for i, tc in enumerate(tool_calls):
                 obs = observations[i] if i < len(observations) else None
-                yield ToolCallBlock(tc, observation=obs)
+                block = ToolCallBlock(tc, observation=obs)
+                # Tool-only steps: show tool blocks immediately (collapsed summaries).
+                # Steps with prose + tools: hide tools until step is expanded.
+                block.display = not has_prose or self.expanded
+                yield block
 
     def on_mount(self) -> None:
         role = self._role
@@ -100,15 +127,18 @@ class StepBlock(Vertical):
 
     def _header_text(self) -> str:
         time_text = self._time_text()
-        time_markup = f"  [#666666]{escape(time_text)}[/#666666]" if time_text else ""
+        _m = PALETTE["text_muted"]
+        time_markup = f"  [{_m}]{escape(time_text)}[/{_m}]" if time_text else ""
 
         if self._role == "user":
-            return f"[bold #5C9CF5]User[/bold #5C9CF5]{time_markup}"
+            _c = PALETTE["blue"]
+            return f"[bold {_c}]User[/bold {_c}]{time_markup}"
         if self._role == "assistant":
-            return f"[bold #E0E0E0]{escape(self._agent_name)}[/bold #E0E0E0]{time_markup}"
+            _c = PALETTE["foreground"]
+            return f"[bold {_c}]{escape(self._agent_name)}[/bold {_c}]{time_markup}"
         if self._role == "system":
-            return f"[#666666]System[/#666666]{time_markup}"
-        return f"[#666666]{escape(self._role)}[/#666666]{time_markup}"
+            return f"[{_m}]System[/{_m}]{time_markup}"
+        return f"[{_m}]{escape(self._role)}[/{_m}]{time_markup}"
 
     def _preview_text(self, content: str) -> tuple[str, int]:
         lines = content.splitlines()
@@ -146,15 +176,20 @@ class StepBlock(Vertical):
         else:
             preview_text, remaining = self._preview_text(content)
             preview.update(escape(preview_text))
-            hint.update(f"[#666666]... +{remaining} lines (enter to expand)[/#666666]")
+            hint.update(f"[{PALETTE['text_muted']}]... +{remaining} lines (enter to expand)[/{PALETTE['text_muted']}]")
             content_widget.display = False
             preview.display = True
             hint.display = True
 
+        # Show thinking block only when expanded
+        thinking_widgets = self.query(".step-thinking")
+        for tw in thinking_widgets:
+            tw.display = self.expanded
+
         if self._render_tool_calls:
+            has_prose = bool((self.step.get("content") or "").strip())
             for block in self.query(ToolCallBlock):
-                if block.expanded != self.expanded:
-                    block.expanded = self.expanded
+                block.display = not has_prose or self.expanded
 
     def get_copyable_text(self) -> str:
         """Return plain text content for clipboard copy."""

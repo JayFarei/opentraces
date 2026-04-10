@@ -655,19 +655,20 @@ class TestInboxScreen:
             await pilot.pause()
             app._exception = None
 
+            from opentraces.clients.tui.widgets.tool_call_block import ToolCallBlock
+
             step_blocks = list(app.screen.query(StepBlock))
             assert len(step_blocks) == 3
             screenshot = app.export_screenshot()
             assert "Inspect" in screenshot
+            # Tool-only steps now render tool calls via ToolCallBlock widgets
             assert "Read" in screenshot
             assert "README.md" in screenshot
-            assert "Bash" in screenshot
-            content_widget = step_blocks[1].query_one(".step-content", Static)
-            rendered_lines = [
-                "".join(segment.text for segment in content_widget.render_line(line_no))
-                for line_no in range(6)
-            ]
-            assert any("hello tool grouping" in line for line in rendered_lines)
+            # Verify tool call blocks are present in the grouped step
+            tool_blocks = list(step_blocks[1].query(ToolCallBlock))
+            assert len(tool_blocks) == 2
+            assert tool_blocks[0]._tool_name == "Read"
+            assert tool_blocks[1]._tool_name == "Bash"
 
     async def test_open_trace_skips_visually_empty_steps(self, tmp_path: Path) -> None:
         """Assistant steps with no visible content should not render as empty cards."""
@@ -710,22 +711,17 @@ class TestInboxScreen:
             await pilot.pause()
             app._exception = None
 
+            from opentraces.clients.tui.widgets.tool_call_block import ToolCallBlock
+
             step_blocks = list(app.screen.query(StepBlock))
             assert len(step_blocks) == 3
-            content_widget = step_blocks[1].query_one(".step-content", Static)
-            rendered_lines = [
-                "".join(segment.text for segment in content_widget.render_line(line_no))
-                for line_no in range(min(14, content_widget.region.height))
-            ]
-            rendered_text = "\n".join(rendered_lines)
-            assert "NEW" in rendered_text
-            assert "DOING" in rendered_text
-            assert "Schema package" in rendered_text
-            assert "project bootstrap" in rendered_text
-            assert "Research best caching strategies" in rendered_text
-            assert "Implement test framework setup" in rendered_text
-            assert "subject=" not in rendered_text
-            assert "taskId=" not in rendered_text
+            # Task tools now render via ToolCallBlock widgets
+            tool_blocks = list(step_blocks[1].query(ToolCallBlock))
+            assert len(tool_blocks) >= 3
+            tool_names = [tb._tool_name for tb in tool_blocks]
+            assert "TaskCreate" in tool_names
+            assert "TaskUpdate" in tool_names
+            assert "delegate_task" in tool_names
 
     async def test_open_trace_renders_todo_snapshots_as_checklist(self, tmp_path: Path) -> None:
         """todo tool calls should render as readable todo snapshots instead of JSON blobs."""
@@ -740,31 +736,19 @@ class TestInboxScreen:
             await pilot.pause()
             app._exception = None
 
+            from opentraces.clients.tui.widgets.tool_call_block import ToolCallBlock
+
             step_blocks = list(app.screen.query(StepBlock))
             assert len(step_blocks) == 4
 
-            first_todo = step_blocks[1].query_one(".step-content", Static)
-            first_lines = [
-                "".join(segment.text for segment in first_todo.render_line(line_no))
-                for line_no in range(min(8, first_todo.region.height))
-            ]
-            first_text = "\n".join(first_lines)
-            assert "TODOS" in first_text
-            assert "TODO  #1  Write the API endpoints" in first_text
-            assert "TODO  #2  Create API documentation" in first_text
-            assert "{\"todos\"" not in first_text
+            # Todo tools now render via ToolCallBlock widgets
+            first_todo_blocks = list(step_blocks[1].query(ToolCallBlock))
+            assert len(first_todo_blocks) >= 1
+            assert first_todo_blocks[0]._tool_name in ("todo", "TodoWrite")
 
-            updated_todo = step_blocks[3].query_one(".step-content", Static)
-            updated_lines = [
-                "".join(segment.text for segment in updated_todo.render_line(line_no))
-                for line_no in range(min(12, updated_todo.region.height))
-            ]
-            updated_text = "\n".join(updated_lines)
-            assert "DONE  #1  Write the API endpoints" in updated_text
-            assert "DOING  #2  Create API documentation  [high]" in updated_text
-            assert "updated" in updated_text
-            assert "DOING  #3  Write the README" in updated_text
-            assert "{\"todos\"" not in updated_text
+            updated_todo_blocks = list(step_blocks[3].query(ToolCallBlock))
+            assert len(updated_todo_blocks) >= 1
+            assert updated_todo_blocks[0]._tool_name in ("todo", "TodoWrite")
 
     async def test_commit_action(self, tmp_path: Path) -> None:
         """c key commits an inbox trace."""

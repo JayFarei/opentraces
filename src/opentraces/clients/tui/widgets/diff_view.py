@@ -11,11 +11,12 @@ import difflib
 from rich.text import Text
 from textual.widgets import Static
 
-# Palette (Rich hex colors, not CSS tokens)
-_GREEN = "#22C55E"
-_RED = "#EF4444"
-_CYAN = "#22D3EE"
-_DIM = "#666666"
+from ..utils import PALETTE
+
+_GREEN = PALETTE["success"]
+_RED = PALETTE["error"]
+_CYAN = PALETTE["secondary"]
+_DIM = PALETTE["text_muted"]
 _BOLD_GREEN = f"bold {_GREEN}"
 _BOLD_RED = f"bold {_RED}"
 

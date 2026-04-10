@@ -75,7 +75,7 @@ class SideBar(Vertical):
     .sidebar-panel-title {
         height: 1;
         padding: 0 1;
-        color: $text-muted;
+        color: $muted_grey;
     }
     """
 

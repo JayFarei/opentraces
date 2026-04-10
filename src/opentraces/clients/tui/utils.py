@@ -50,20 +50,26 @@ ANSI_COLORS: dict[str, str] = {
     "source_default": "ansi_default",
 }
 
-# Rich markup color names (hex values for Rich, not CSS tokens)
-# These match the DESIGN.md color palette
-RICH_COLORS: dict[str, str] = {
+# Rich markup hex values matching DESIGN.md / app.tcss tokens.
+# Use these for Rich markup strings (Rich cannot reference CSS $tokens).
+PALETTE: dict[str, str] = {
     "primary": "#F97316",
     "secondary": "#22D3EE",
     "accent": "#22C55E",
-    "panel": "#191919",
+    "surface": "#191919",
     "background": "#111111",
     "foreground": "#E0E0E0",
-    "text-muted": "#666666",
+    "text_muted": "#666666",
+    "text_dim": "#444444",
+    "border": "#2A2A2A",
     "error": "#EF4444",
     "warning": "#EAB308",
     "success": "#22C55E",
+    "blue": "#3B82F6",
 }
+
+# Backwards compat alias
+RICH_COLORS = PALETTE
 
 # Tool category sets (reused by _tool_color and _source_label)
 _FILE_TOOLS = {"Read", "Edit", "Write", "Grep", "Glob", "Bash"}
@@ -268,7 +274,7 @@ def _tool_color(tool_name: str) -> str:
         return "$primary"
     if tool_name == "Skill":
         return "$accent"
-    return "$text-muted"
+    return "$muted_grey"
 
 
 def _tool_color_ansi(tool_name: str) -> str:
@@ -295,7 +301,7 @@ def _role_color(role: str, call_type: str | None = None) -> str:
     if role == "agent":
         return "$accent"
     if role == "system":
-        return "$text-muted"
+        return "$muted_grey"
     return "$text"
 
 

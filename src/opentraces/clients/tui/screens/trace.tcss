@@ -1,6 +1,17 @@
 /* ── TraceScreen layout ──────────────────────────────────────────── */
 /* Two-panel: transcript (left) + analysis sidebar (right)            */
-/* opencode-inspired block rendering with thick left borders          */
+/* Design tokens (duplicated from app.tcss, needed for screen CSS)    */
+
+$ot_primary: #F97316;
+$ot_secondary: #22D3EE;
+$ot_accent: #22C55E;
+$ot_background: #111111;
+$ot_foreground: #E0E0E0;
+$ot_muted: #666666;
+$ot_dim: #444444;
+$ot_blue: #3B82F6;
+$ot_surface: #191919;
+$ot_border: #2A2A2A;
 
 #trace-shell {
     height: 1fr;
@@ -10,8 +21,8 @@
 #trace-topbar {
     height: 1;
     padding: 0 1;
-    background: #191919;
-    color: #E0E0E0;
+    background: $ot_surface;
+    color: $ot_foreground;
 }
 
 #trace-workspace {
@@ -25,45 +36,55 @@
     height: 1fr;
     padding: 0 1 0 1;
     scrollbar-size-vertical: 1;
-    scrollbar-color: #444444;
-    scrollbar-color-hover: #fab283;
-    scrollbar-color-active: #fab283;
-    scrollbar-background: #111111;
-    scrollbar-background-hover: #111111;
-    scrollbar-background-active: #111111;
+    scrollbar-color: $ot_dim;
+    scrollbar-color-hover: $ot_primary;
+    scrollbar-color-active: $ot_primary;
+    scrollbar-background: $ot_background;
+    scrollbar-background-hover: $ot_background;
+    scrollbar-background-active: $ot_background;
 }
 
 #transcript > .trace-step {
     width: 1fr;
     height: auto;
     margin: 0;
-    padding: 0 1 1 1;
-    background: #111111;
+    padding: 0 1 0 1;
+    background: $ot_background;
     border-left: tall transparent;
 }
 
 #transcript > .trace-step.user-message {
     background: transparent;
-    border-left: tall #5c9cf5;
+    border-left: tall $ot_blue;
 }
 
 #transcript > .trace-step.agent-message {
-    background: #111111;
+    background: $ot_background;
 }
 
 #transcript > .trace-step.system-message {
     background: #151515;
-    border-left: tall #2A2A2A;
+    border-left: tall $ot_border;
 }
 
 #transcript > .trace-step.-selected {
     background: #1D1D1D;
-    border-left: tall #fab283;
+    border-left: tall $ot_primary;
 }
 
 #transcript > .trace-step.user-message.-selected {
     background: transparent;
-    border-left: tall #7cb1ff;
+    border-left: tall $ot_blue;
+}
+
+#transcript > .trace-step.subagent-step {
+    margin-left: 3;
+    border-left: tall $ot_secondary;
+}
+
+#transcript > .trace-step.subagent-step.-selected {
+    border-left: tall $ot_secondary;
+    background: #1D1D1D;
 }
 
 .step-header {
@@ -89,16 +110,33 @@
     padding: 0;
 }
 
-.tool-call-block {
-    background: #191919;
-    padding: 0 2;
-    margin: 1 0 0 2;
+.step-thinking {
     height: auto;
-    border-left: tall #22C55E;
+    margin: 0 0 1 0;
+    padding: 0 0 0 2;
+    border-left: tall $ot_dim;
+    opacity: 60%;
+}
+
+/* ToolCallBlock (Vertical container) */
+.tool-call-block {
+    background: $ot_surface;
+    padding: 0 1;
+    margin: 0 0 0 2;
+    height: auto;
+    border-left: tall $ot_accent;
 }
 
 .tool-call-block.-expanded {
-    padding: 1 2;
+    padding: 1 1;
+}
+
+/* Inner Statics (collapsed/expanded views) */
+.tool-call-collapsed,
+.tool-call-expanded {
+    height: auto;
+    margin: 0;
+    padding: 0;
 }
 
 /* ── Sidebar (always visible) ────────────────────────────────────── */
@@ -106,8 +144,8 @@
 #sidebar {
     width: 42;
     min-width: 34;
-    background: #191919;
-    border-left: solid #2A2A2A;
+    background: $ot_surface;
+    border-left: solid $ot_border;
 }
 
 #sidebar-summary {
@@ -119,17 +157,17 @@
 #step-index {
     height: 1fr;
     scrollbar-size-vertical: 1;
-    scrollbar-color: #444444;
-    scrollbar-color-hover: #fab283;
-    scrollbar-background: #191919;
-    scrollbar-background-hover: #191919;
+    scrollbar-color: $ot_dim;
+    scrollbar-color-hover: $ot_primary;
+    scrollbar-background: $ot_surface;
+    scrollbar-background-hover: $ot_surface;
 }
 
 #step-index > .list-item {
     height: 1;
     padding: 0 1;
-    background: #191919;
-    color: #E0E0E0;
+    background: $ot_surface;
+    color: $ot_foreground;
 }
 
 #step-index > .list-item:hover {
@@ -137,11 +175,11 @@
 }
 
 #step-index > .list-item.-highlight {
-    background: #2A1A0F;
+    background: #F97316 15%;
 }
 
 #step-index:focus > .list-item.-highlight {
-    background: #3A2510;
+    background: #F97316 20%;
 }
 
 /* ── Jump input ──────────────────────────────────────────────────── */
@@ -150,15 +188,15 @@
     height: auto;
     max-height: 1;
     padding: 0 1;
-    background: #191919;
+    background: $ot_surface;
 }
 
 #jump-bar #jump-input {
     width: 20;
     height: 1;
     border: none;
-    background: #191919;
-    color: #E0E0E0;
+    background: $ot_surface;
+    color: $ot_foreground;
 }
 
 /* ── Help overlay ───────────────────────────────────────────────── */
@@ -169,8 +207,8 @@
     height: auto;
     max-height: 22;
     align: center middle;
-    background: #191919;
-    border: tall #22D3EE;
+    background: $ot_surface;
+    border: tall $ot_secondary;
     padding: 1 2;
     display: none;
 }

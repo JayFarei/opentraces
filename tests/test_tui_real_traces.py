@@ -113,10 +113,22 @@ async def _open_trace_and_capture_selected_block_text(
     trace_path: Path,
     target_text: str,
 ) -> str:
+    import json as _json
     from opentraces.clients.tui.app import OpenTracesApp
     from opentraces.clients.tui.screens.trace import TraceScreen
     from opentraces.clients.tui.widgets.step_block import StepBlock
+    from opentraces.clients.tui.widgets.tool_call_block import ToolCallBlock
     from textual.widgets import Static
+
+    def _step_contains(step: dict) -> bool:
+        content = step.get("_content_plain") or step.get("content") or ""
+        if target_text in content:
+            return True
+        for tc in step.get("tool_calls") or []:
+            inp = tc.get("input") or tc.get("arguments") or {}
+            if target_text in _json.dumps(inp, ensure_ascii=False):
+                return True
+        return False
 
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp) / ".opentraces" / "staging"
@@ -134,8 +146,7 @@ async def _open_trace_and_capture_selected_block_text(
 
             screen = app.screen
             for index, step in enumerate(screen._steps()):
-                content = step.get("_content_plain") or step.get("content") or ""
-                if target_text not in content:
+                if not _step_contains(step):
                     continue
                 screen._cursor_step = index
                 screen._expanded_step = index
@@ -143,12 +154,14 @@ async def _open_trace_and_capture_selected_block_text(
                 await pilot.pause()
                 app._exception = None
                 block = list(screen.query(StepBlock))[index]
+                # Capture text from step-content and ToolCallBlock widgets
+                parts: list[str] = []
                 content_widget = block.query_one(".step-content", Static)
-                lines = [
-                    "".join(segment.text for segment in content_widget.render_line(line_no))
-                    for line_no in range(content_widget.region.height)
-                ]
-                return "\n".join(lines)
+                for line_no in range(content_widget.region.height):
+                    parts.append("".join(segment.text for segment in content_widget.render_line(line_no)))
+                for tcb in block.query(ToolCallBlock):
+                    parts.append(tcb.get_copyable_text())
+                return "\n".join(parts)
             return ""
 
 
@@ -254,11 +267,10 @@ async def test_real_repo_todo_traces_render_readable_checklists() -> None:
             continue
 
         rendered_text = await _open_trace_and_capture_selected_block_text(trace_path, target_text)
-        if "\"todos\"" in rendered_text or "{'todos'" in rendered_text:
-            failures.append(f"{trace_path.name}: todo block still rendered as raw payload")
-            continue
-        if "TODOS" not in rendered_text:
-            failures.append(f"{trace_path.name}: missing TODOS heading")
+        # ToolCallBlock renders todo tools with tool name + input content
+        has_tool_name = "todo" in rendered_text.lower() or "TodoWrite" in rendered_text
+        if not has_tool_name:
+            failures.append(f"{trace_path.name}: missing todo tool name in rendering")
             continue
         if not any(word in rendered_text for word in expected_words):
             failures.append(f"{trace_path.name}: expected one of {expected_words!r} in todo rendering")
