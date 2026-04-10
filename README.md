@@ -10,7 +10,7 @@ Every coding session with an AI agent produces action trajectories, tool-use seq
 
 ## What it does
 
-1. **Parse** agent sessions (Claude Code, Hermes, more to come)
+1. **Parse** agent sessions (Claude Code, Cursor, Cline, Codex, Hermes)
 2. **Scan** every field for secrets, API keys, paths, and PII
 3. **Redact** detected secrets with `[REDACTED]` or hashed path segments
 4. **Enrich** with git signals, attribution, cost estimates, dependency metadata
@@ -34,7 +34,7 @@ Published datasets are tagged `opentraces` and `agent-traces`, findable via:
 ## Install
 
 ```bash
-pipx install opentraces
+pip install opentraces
 ```
 
 Or from source:
@@ -46,19 +46,16 @@ pip install -e packages/opentraces-schema
 pip install -e ".[dev]"
 ```
 
-### Authenticate
+### External tools
+
+`push` needs `huggingface-cli`:
 
 ```bash
-# Browser-based OAuth (recommended)
-opentraces login
-
-# Or paste a token directly
-opentraces login --token
+pip install "huggingface_hub[cli]"
+huggingface-cli login
 ```
 
-`opentraces login` opens a browser-based device code flow. `opentraces login --token` prompts for a HuggingFace access token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
-
-> **Note:** OAuth tokens can write to existing dataset repos but cannot create new ones. Use `opentraces login --token` with a personal access token if your dataset repo doesn't exist yet.
+When logging in, create a token at https://huggingface.co/settings/tokens with **write** scope.
 
 ---
 
@@ -105,8 +102,8 @@ After setup, the workflow is:
 ## Quick start
 
 ```bash
-# Authenticate (browser OAuth, or use --token for new datasets)
-opentraces login
+# Authenticate and initialize
+opentraces login --token
 opentraces init --review-policy review
 
 # Review traces in the browser
