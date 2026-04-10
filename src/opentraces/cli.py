@@ -1210,7 +1210,7 @@ def _install_capture_hook(project_dir: Path, agents: list[str]) -> bool:
 
     hook_entry = {
         "type": "command",
-        "command": "opentraces _capture --session-dir \"$CLAUDE_SESSION_DIR\" --project-dir .",
+        "command": "opentraces _capture --project-dir .",
         "timeout": 60,
     }
 
@@ -1362,12 +1362,22 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
 
 
 @main.command("_capture", hidden=True)
-@click.option("--session-dir", required=True, type=click.Path(exists=True), help="Path to Claude Code session dir")
+@click.option("--session-dir", required=False, default=None, type=click.Path(), help="Path to Claude Code session dir (auto-discovered if omitted)")
 @click.option("--project-dir", required=True, type=click.Path(exists=True), help="Path to project root")
-def capture(session_dir: str, project_dir: str) -> None:
+def capture(session_dir: str | None, project_dir: str) -> None:
     """Capture a Claude Code session (hidden, for automation)."""
-    session_path = Path(session_dir)
     proj_path = Path(project_dir)
+
+    if session_dir:
+        session_path = Path(session_dir)
+        if not session_path.exists():
+            click.echo(f"Session dir not found: {session_dir}", err=True)
+            return
+    else:
+        session_path = _current_project_session_dir(proj_path)
+        if session_path is None:
+            click.echo("No session dir found for this project.", err=True)
+            return
 
     # Find JSONL files in session dir
     session_files = list(session_path.glob("*.jsonl"))
