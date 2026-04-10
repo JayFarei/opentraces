@@ -55,7 +55,9 @@ _ALLOWLIST_URLS = re.compile(
 )
 
 _ALLOWLIST_DUMMY_TOKENS = re.compile(
-    r"sk-(?:test|dummy|fake|example|xxx|your|placeholder)|Bearer\s+(?:\$|<|{|\[|test|dummy|fake|example|xxx|your)"
+    r"sk-(?:test|dummy|fake|example|xxx|your|placeholder)"
+    r"|sk-or-(?:test|dummy|fake|example|xxx|your|placeholder)"
+    r"|Bearer\s+(?:\$|<|\{|\[|test|dummy|fake|example|xxx|your)"
 )
 
 
@@ -133,11 +135,73 @@ _PATTERNS: list[dict] = [
         "description": "AWS access key ID",
         "severity": "critical",
     },
+    # AWS STS temporary credentials (session tokens use ASIA prefix)
+    {
+        "name": "aws_sts_key",
+        "pattern": re.compile(r"ASIA[0-9A-Z]{16}"),
+        "description": "AWS STS temporary access key ID",
+        "severity": "critical",
+    },
+    # Groq
+    {
+        "name": "groq_api_key",
+        "pattern": re.compile(r"gsk_[A-Za-z0-9]{20,}"),
+        "description": "Groq API key",
+        "severity": "critical",
+    },
+    # xAI (Grok)
+    {
+        "name": "xai_api_key",
+        "pattern": re.compile(r"xai-[A-Za-z0-9_-]{20,}"),
+        "description": "xAI API key",
+        "severity": "critical",
+    },
+    # Google AI / Gemini
+    {
+        "name": "google_ai_key",
+        "pattern": re.compile(r"AIza[A-Za-z0-9_-]{30,}"),
+        "description": "Google AI (Gemini) API key",
+        "severity": "critical",
+    },
+    # Cerebras
+    {
+        "name": "cerebras_api_key",
+        "pattern": re.compile(r"csk-[A-Za-z0-9_-]{20,}"),
+        "description": "Cerebras API key",
+        "severity": "critical",
+    },
+    # OpenRouter (sk-or- prefix; not caught by generic sk- pattern due to dashes)
+    {
+        "name": "openrouter_api_key",
+        "pattern": re.compile(r"sk-or-[A-Za-z0-9_-]{20,}"),
+        "description": "OpenRouter API key",
+        "severity": "critical",
+    },
+    # Vercel
+    {
+        "name": "vercel_token",
+        "pattern": re.compile(r"vc_[A-Za-z0-9]{20,}"),
+        "description": "Vercel API token",
+        "severity": "critical",
+    },
     # Slack tokens
     {
         "name": "slack_token",
         "pattern": re.compile(r"xox[bpse]-[A-Za-z0-9-]{10,}"),
         "description": "Slack bot/user/enterprise token",
+        "severity": "critical",
+    },
+    # Stripe
+    {
+        "name": "stripe_secret_key",
+        "pattern": re.compile(r"sk_live_[A-Za-z0-9]{24,}"),
+        "description": "Stripe live secret key",
+        "severity": "critical",
+    },
+    {
+        "name": "stripe_restricted_key",
+        "pattern": re.compile(r"rk_live_[A-Za-z0-9]{24,}"),
+        "description": "Stripe live restricted key",
         "severity": "critical",
     },
     # Discord webhook
@@ -304,7 +368,7 @@ def _is_allowlisted(pattern_name: str, matched_text: str, full_text: str, start:
         ctx = full_text[ctx_start:ctx_end]
         return bool(_PRIVATE_IP_V4.search(ctx))
 
-    if pattern_name in ("bearer_token", "openai_api_key", "anthropic_api_key"):
+    if pattern_name in ("bearer_token", "openai_api_key", "anthropic_api_key", "openrouter_api_key"):
         return bool(_ALLOWLIST_DUMMY_TOKENS.search(matched_text))
 
     if pattern_name == "database_url":
