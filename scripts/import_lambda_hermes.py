@@ -61,7 +61,7 @@ def main(limit: int, dry_run: bool, auto: bool) -> None:
         sys.exit(3)
 
     from opentraces.config import get_project_staging_dir, get_project_state_path, load_config
-    from opentraces.parsers.hermes import HermesParser
+    from opentraces.agents.hermes.parser import HermesParser
     from opentraces.pipeline import process_imported_trace
     from opentraces.state import StateManager, TraceStatus
 

@@ -599,7 +599,7 @@ def _current_project_session_dir(project_dir: Path, cfg=None) -> Path | None:
 def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=None) -> tuple[int, int]:
     """Import existing session files into the project's local inbox."""
     from .config import load_project_config, get_project_staging_dir, get_project_state_path
-    from .parsers.claude_code import ClaudeCodeParser
+    from .agents.claude_code import ClaudeCodeParser
     from .pipeline import process_trace
     from .state import StateManager, TraceStatus, ProcessedFile
 
@@ -2425,7 +2425,7 @@ def discover() -> None:
 def parse(auto: bool, limit: int) -> None:
     """Parse agent sessions into enriched JSONL traces."""
     from .config import get_projects_path, is_project_excluded
-    from .parsers.claude_code import ClaudeCodeParser
+    from .agents.claude_code import ClaudeCodeParser
     from .pipeline import process_trace
     from .state import StateManager, TraceStatus, ProcessedFile, STAGING_DIR
 
@@ -3597,7 +3597,7 @@ def hooks_install(hooks_dir: str | None, settings_file: str | None, dry_run: boo
     target_settings = Path(settings_file) if settings_file else claude_dir / "settings.json"
 
     # Source hook scripts are shipped with the package
-    src_hooks_dir = Path(__file__).parent / "hooks"
+    src_hooks_dir = Path(__file__).parent / "agents" / "claude_code" / "hooks"
     hook_scripts = {
         "Stop": src_hooks_dir / "on_stop.py",
         "PostCompact": src_hooks_dir / "on_compact.py",

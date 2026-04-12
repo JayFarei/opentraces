@@ -29,8 +29,8 @@ def _register_defaults() -> None:
     Called lazily on first access to avoid importing concrete modules
     at package import time.
     """
-    from .claude_code import ClaudeCodeParser
-    from .hermes import HermesParser
+    from ..agents.claude_code import ClaudeCodeParser
+    from ..agents.hermes import HermesParser
 
     PARSERS["claude-code"] = ClaudeCodeParser
     IMPORTERS["hermes"] = HermesParser

@@ -36,7 +36,7 @@ from opentraces_schema import (
     VCS,
 )
 
-from .quality import meets_quality_threshold
+from ...parsers.quality import meets_quality_threshold
 
 logger = logging.getLogger(__name__)
 

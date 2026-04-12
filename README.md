@@ -202,8 +202,8 @@ packages/
   opentraces-schema/        Schema package (Pydantic v2 models)
   opentraces-ui/            Design system (tokens, components)
 src/opentraces/
-  parsers/                  Agent session parsers
-  hooks/                    Claude Code hook scripts (on_stop, on_compact)
+  agents/<name>/            Agent integrations (parser + hooks per agent)
+  parsers/                  Cross-agent parser infrastructure (base, quality, registry)
   security/                 Secret scanning, anonymization, classification
   enrichment/               Git signals, attribution, metrics
   quality/                  Trace quality assessment, upload gates

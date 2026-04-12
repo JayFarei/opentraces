@@ -16,7 +16,7 @@ from opentraces_schema.models import (
     TraceRecord,
 )
 
-from opentraces.parsers.hermes import HermesParser
+from opentraces.agents.hermes.parser import HermesParser
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +463,7 @@ class TestRegressions:
                 '<tool_call>{"name": "cronjob", "arguments": {"schedule": "0 * * * *"}}</tool_call>'
             )},
         ])
-        with caplog.at_level(logging.INFO, logger="opentraces.parsers.hermes"):
+        with caplog.at_level(logging.INFO, logger="opentraces.agents.hermes.parser"):
             record = parser.map_record(row, 0)
         assert record is not None
         unmapped_warnings = [r for r in caplog.records if "Unmapped tool" in r.message]
@@ -480,7 +480,7 @@ class TestRegressions:
             ],
             tool_stats={"some_future_tool": {"count": 1, "success": 1, "failure": 0}},
         )
-        with caplog.at_level(logging.INFO, logger="opentraces.parsers.hermes"):
+        with caplog.at_level(logging.INFO, logger="opentraces.agents.hermes.parser"):
             record = parser.map_record(row, 0)
         assert record is not None
         unmapped_warnings = [r for r in caplog.records if "Unmapped tool" in r.message]

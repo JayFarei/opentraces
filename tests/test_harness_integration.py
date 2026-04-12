@@ -14,7 +14,7 @@ import pytest
 
 from opentraces.config import Config
 from opentraces.pipeline import process_trace
-from opentraces.parsers.claude_code import ClaudeCodeParser
+from opentraces.agents.claude_code.parser import ClaudeCodeParser
 from opentraces_schema import TraceRecord
 
 from opentraces.quality import (
