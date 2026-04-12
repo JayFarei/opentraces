@@ -1140,8 +1140,9 @@ class OpenTracesApp(App):
             self.notify("Only inbox sessions can be committed", severity="warning")
             return
 
+        from ..core.review import commit_single
         task = (trace.get("task", {}).get("description") or "trace")[:60]
-        self.state.create_commit_group([trace_id], task)
+        commit_single(self.state, trace_id, task)
         self._reload_traces(selected_trace_id=trace_id)
         self.notify("Committed", severity="information")
 
@@ -1149,8 +1150,9 @@ class OpenTracesApp(App):
         trace = self._get_selected_trace()
         if not trace:
             return
+        from ..core.review import reject_trace
         trace_id = trace["trace_id"]
-        self.state.set_trace_status(trace_id, TraceStatus.REJECTED, session_id=trace_id)
+        reject_trace(self.state, trace_id, with_session_kwarg=True)
         self._reload_traces(selected_trace_id=trace_id)
         self.notify("Rejected", severity="warning")
 
@@ -1158,20 +1160,10 @@ class OpenTracesApp(App):
         trace = self._get_selected_trace()
         if not trace:
             return
+        from ..core.review import discard_trace_state_only
         trace_id = trace["trace_id"]
-
-        # Delete staging file
         staging_file = self.staging_dir / f"{trace_id}.jsonl"
-        if staging_file.exists():
-            try:
-                staging_file.unlink()
-            except OSError:
-                logger.warning("Failed to delete staging file %s", staging_file, exc_info=True)
-
-        # Remove from state
-        if trace_id in self.state._state.get("traces", {}):
-            del self.state._state["traces"][trace_id]
-            self.state.save()
+        discard_trace_state_only(self.state, trace_id, staging_file=staging_file)
 
         self._reload_traces()
         self.notify("Discarded", severity="warning")

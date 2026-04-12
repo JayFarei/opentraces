@@ -1948,7 +1948,8 @@ def _session_commit_impl(trace_id: str) -> None:
     except Exception:
         pass
 
-    commit_id = state.create_commit_group([trace_id], message)
+    from .core.review import commit_single
+    commit_id = commit_single(state, trace_id, message)
     human_echo(f"Committed: {trace_id[:8]} (commit {commit_id})")
 
     emit_json({
@@ -1988,7 +1989,8 @@ def session_reject(trace_id: str) -> None:
         emit_json(error_response("NOT_FOUND", "session", f"No trace entry for {trace_id}"))
         sys.exit(6)
 
-    state.set_trace_status(trace_id, TraceStatus.REJECTED)
+    from .core.review import reject_trace
+    reject_trace(state, trace_id, with_session_kwarg=False)
     human_echo(f"Rejected: {trace_id[:8]}")
 
     emit_json({
@@ -2019,7 +2021,8 @@ def session_reset(trace_id: str) -> None:
         emit_json(error_response("INVALID_STATE", "session", f"Cannot reset from {current.value}"))
         sys.exit(2)
 
-    state.set_trace_status(trace_id, TraceStatus.STAGED)
+    from .core.review import reset_to_staged
+    reset_to_staged(state, trace_id)
     human_echo(f"Reset to inbox: {trace_id[:8]}")
 
     emit_json({
@@ -2035,8 +2038,6 @@ def session_reset(trace_id: str) -> None:
 def session_redact(trace_id: str, step_index: int) -> None:
     """Redact a step's content from a staged trace."""
     import re as _re
-    import os
-    import tempfile
 
     if not _re.match(r'^[a-f0-9-]+$', trace_id):
         click.echo("Invalid trace ID format.")
@@ -2049,6 +2050,8 @@ def session_redact(trace_id: str, step_index: int) -> None:
         emit_json(error_response("NOT_FOUND", "session", f"No staging file for {trace_id}"))
         sys.exit(6)
 
+    # Preserve original CLI-only "empty" + OUT_OF_RANGE error messaging by
+    # pre-checking before delegating to the shared helper.
     text = staging_file.read_text().strip()
     if not text:
         click.echo("Staging file is empty.")
@@ -2061,27 +2064,14 @@ def session_redact(trace_id: str, step_index: int) -> None:
         emit_json(error_response("OUT_OF_RANGE", "session", f"Step {step_index} out of range"))
         sys.exit(2)
 
-    from .inbox import redact_step
-    redact_step(steps[step_index])
-
-    # Atomic write
-    new_line = json.dumps(trace_data, ensure_ascii=False)
-    fd = tempfile.NamedTemporaryFile(
-        mode="w", dir=str(staging_dir), suffix=".jsonl.tmp", delete=False,
-    )
-    try:
-        fd.write(new_line + "\n")
-        fd.flush()
-        os.fsync(fd.fileno())
-        fd.close()
-        os.replace(fd.name, str(staging_file))
-    except BaseException:
-        fd.close()
-        try:
-            os.unlink(fd.name)
-        except OSError:
-            pass
-        raise
+    from .core.review import redact_step_and_persist
+    result = redact_step_and_persist(staging_dir, trace_id, step_index)
+    if not result.ok:
+        # Defensive: redact_step_and_persist re-validates the same conditions
+        # we just checked, so this branch is effectively unreachable. Kept so
+        # the contract stays honest if upstream changes.
+        click.echo(result.error or "Redaction failed.")
+        sys.exit(5)
 
     human_echo(f"Redacted step {step_index} in {trace_id[:8]}")
 
@@ -2117,16 +2107,8 @@ def session_discard(trace_id: str, confirmed: bool) -> None:
             click.echo("Cancelled.")
             return
 
-    # Delete staging file
-    if staging_file.exists():
-        staging_file.unlink()
-
-    # Remove from state
-    entry = state.get_trace(trace_id)
-    if entry is not None:
-        # Remove trace from state dict directly and save
-        state._state["traces"].pop(trace_id, None)
-        state.save()
+    from .core.review import discard_trace
+    discard_trace(state, trace_id, staging_file=staging_file)
 
     human_echo(f"Discarded: {trace_id[:8]}")
 
@@ -3582,9 +3564,11 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
 
                 if duplicate_trace_ids:
                     # Mark duplicates as uploaded (they exist on the remote)
-                    for entry in traces_to_upload:
-                        if entry.trace_id in duplicate_trace_ids:
-                            state.set_trace_status(entry.trace_id, TraceStatus.UPLOADED)
+                    from .core.publish_flow import mark_uploaded as _mark_uploaded
+                    _mark_uploaded(
+                        state,
+                        (e.trace_id for e in traces_to_upload if e.trace_id in duplicate_trace_ids),
+                    )
                     click.echo(f"Skipped {len(duplicate_trace_ids)} duplicate trace(s) already on remote.")
 
                 if not new_records:
@@ -3651,9 +3635,11 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                         click.echo(f"  Warning: failed to set gated access: {e}", err=True)
 
                 # Only mark traces that were actually loaded and uploaded
-                for entry in traces_to_upload:
-                    if entry.trace_id in loaded_trace_ids:
-                        state.set_trace_status(entry.trace_id, TraceStatus.UPLOADED)
+                from .core.publish_flow import mark_uploaded as _mark_uploaded
+                _mark_uploaded(
+                    state,
+                    (e.trace_id for e in traces_to_upload if e.trace_id in loaded_trace_ids),
+                )
 
                 # Print visibility-aware success message
                 if is_private:
@@ -3682,8 +3668,9 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                     "next_steps": [f"View at https://huggingface.co/datasets/{repo_id}"],
                 })
             else:
+                from .core.publish_flow import mark_failed as _mark_failed
                 for entry in traces_to_upload:
-                    state.set_trace_status(entry.trace_id, TraceStatus.FAILED, error=result.error)
+                    _mark_failed(state, entry.trace_id, result.error)
                 click.echo(f"Upload failed: {result.error}")
                 emit_json(error_response("UPLOAD_FAILED", "network", str(result.error), retryable=True))
                 sys.exit(4)

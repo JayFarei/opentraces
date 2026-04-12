@@ -491,8 +491,9 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
     @app.route("/api/session/<trace_id>/reject", methods=["POST"])
     def api_reject(trace_id: str):
         """Reject a session, persisting to StateManager."""
+        from ..core.review import reject_trace
         state = _get_state()
-        state.set_trace_status(trace_id, TraceStatus.REJECTED, session_id=trace_id)
+        reject_trace(state, trace_id, with_session_kwarg=True)
         _invalidate_cache()
         return jsonify({"status": "rejected", "trace_id": trace_id})
 
@@ -504,46 +505,10 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         if not _re.match(r'^[a-f0-9-]+$', trace_id):
             return jsonify({"error": "Invalid trace ID format"}), 400
 
-        # Locate the staging JSONL file for this trace
-        staging_file = staging_path / f"{trace_id}.jsonl"
-        if not staging_file.exists():
-            return jsonify({"error": f"Staging file not found for {trace_id}"}), 404
-
-        # Load, modify, and atomically rewrite the staging file
-        text = staging_file.read_text().strip()
-        if not text:
-            return jsonify({"error": "Staging file is empty"}), 404
-
-        trace_data = json.loads(text.splitlines()[0])
-
-        # Find and redact the matching step
-        steps = trace_data.get("steps", [])
-        if step_index < 0 or step_index >= len(steps):
-            return jsonify({"error": f"Step index {step_index} out of range"}), 404
-
-        redact_step(steps[step_index])
-
-        # Atomic write: temp file + os.replace for crash safety
-        new_line = json.dumps(trace_data, ensure_ascii=False)
-        fd = tempfile.NamedTemporaryFile(
-            mode="w",
-            dir=str(staging_path),
-            suffix=".jsonl.tmp",
-            delete=False,
-        )
-        try:
-            fd.write(new_line + "\n")
-            fd.flush()
-            os.fsync(fd.fileno())
-            fd.close()
-            os.replace(fd.name, str(staging_file))
-        except BaseException:
-            fd.close()
-            try:
-                os.unlink(fd.name)
-            except OSError:
-                logger.debug("Failed to clean up temp file: %s", fd.name)
-            raise
+        from ..core.review import redact_step_and_persist
+        result = redact_step_and_persist(staging_path, trace_id, step_index)
+        if not result.ok:
+            return jsonify({"error": result.error}), 404
 
         _invalidate_cache()
 
@@ -576,15 +541,17 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
     @app.route("/api/session/<trace_id>/stage", methods=["POST"])
     def api_stage(trace_id: str):
         """Transition a session to STAGED status."""
+        from ..core.review import stage_trace
         state = _get_state()
-        state.set_trace_status(trace_id, TraceStatus.STAGED, session_id=trace_id)
+        stage_trace(state, trace_id)
         return jsonify({"status": "inbox"})
 
     @app.route("/api/session/<trace_id>/unstage", methods=["POST"])
     def api_unstage(trace_id: str):
         """Revert a session to PARSED status."""
+        from ..core.review import unstage_trace
         state = _get_state()
-        state.set_trace_status(trace_id, TraceStatus.PARSED, session_id=trace_id)
+        unstage_trace(state, trace_id)
         return jsonify({"status": "inbox"})
 
     @app.route("/api/commit", methods=["POST"])
@@ -612,13 +579,10 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
                 if status_val not in (TraceStatus.STAGED, TraceStatus.PARSED, TraceStatus.DISCOVERED, TraceStatus.REVIEWING, TraceStatus.APPROVED):
                     return jsonify({"error": f"Session {sid} is not in inbox (status: {status_val})"}), 400
 
-        # Create the commit group
-        commit_id = state.create_commit_group(trace_ids=ids, message=message)
+        # Create the commit group + loop COMMITTED status (bulk semantics).
+        from ..core.review import commit_bulk
+        commit_id = commit_bulk(state, ids, message)
         group = state.get_commit_group(commit_id)
-
-        # Transition each session to COMMITTED
-        for sid in ids:
-            state.set_trace_status(sid, TraceStatus.COMMITTED, session_id=sid)
 
         return jsonify({
             "commit_id": commit_id,
