@@ -295,6 +295,56 @@ class TestClaudeCodeParser:
         assert record.task.description is not None
         assert "bug" in record.task.description.lower() or "parser" in record.task.description.lower()
 
+    def test_first_user_message_skips_synthetic_wrappers(self, tmp_path):
+        """Local-command caveats and slash-command wrappers must not be task.description."""
+        lines = [
+            {
+                "type": "user", "sessionId": "s", "timestamp": "2026-03-27T10:00:00Z",
+                "message": {"role": "user", "content": "<local-command-caveat>Caveat: ignore this</local-command-caveat>"},
+            },
+            {
+                "type": "user", "sessionId": "s", "timestamp": "2026-03-27T10:00:01Z",
+                "message": {"role": "user", "content": "<command-name>/clear</command-name>"},
+            },
+            {
+                "type": "user", "sessionId": "s", "timestamp": "2026-03-27T10:00:02Z",
+                "message": {"role": "user", "content": "Actually fix the login bug"},
+            },
+        ] + _make_minimal_session()[1:]  # drop the default first user message
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.task.description == "Actually fix the login bug"
+
+    def test_first_user_message_skips_compact_resumption(self, tmp_path):
+        lines = [
+            {
+                "type": "user", "sessionId": "s", "timestamp": "2026-03-27T10:00:00Z",
+                "message": {"role": "user",
+                            "content": "This session is being continued from a previous conversation that ran out of context."},
+            },
+            {
+                "type": "user", "sessionId": "s", "timestamp": "2026-03-27T10:00:01Z",
+                "message": {"role": "user", "content": "Add a retry to the uploader"},
+            },
+        ] + _make_minimal_session()[1:]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.task.description == "Add a retry to the uploader"
+
+    def test_agent_model_normalized_with_provider_prefix(self, tmp_path):
+        lines = [{
+            "type": "system", "subtype": "init",
+            "sessionId": "s", "timestamp": "2026-03-27T10:00:00Z",
+            "model": "claude-opus-4-6", "claude_code_version": "2.1.85",
+            "cwd": "/home/user/project", "tools": [], "mcp_servers": [],
+        }] + _make_minimal_session()
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        assert record.agent.model == "anthropic/claude-opus-4-6"
+        for step in record.steps:
+            if step.model is not None:
+                assert "/" in step.model
+
     def test_dangling_tool_use_handled(self, tmp_path):
         """Tool call without result should get error observation."""
         lines = [
@@ -658,7 +708,7 @@ class TestSessionEnrichmentLines:
         }] + _make_minimal_session()
         record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
         assert record is not None
-        assert record.agent.model == "claude-opus-4-5"
+        assert record.agent.model == "anthropic/claude-opus-4-5"
         assert record.agent.version == "2.0.0"
 
     def test_system_init_extracts_mcp_servers(self, tmp_path):
@@ -685,7 +735,7 @@ class TestSessionEnrichmentLines:
         }] + _make_minimal_session()
         record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
         assert record is not None
-        assert record.agent.model == "claude-opus-4-5"
+        assert record.agent.model == "anthropic/claude-opus-4-5"
 
     def test_system_init_extracts_permission_mode(self, tmp_path):
         lines = [{
