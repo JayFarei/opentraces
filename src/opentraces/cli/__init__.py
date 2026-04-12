@@ -1384,11 +1384,15 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
         human_echo(f"  Could not install skill: {e}")
         return False
 @main.command()
-@click.option("--no-pager", is_flag=True, help="Print inline instead of paging long output.")
-@click.option("--limit", type=int, default=None, help="Show only the most recent N sessions.")
-def status(no_pager: bool, limit: int | None) -> None:
+@click.option(
+    "--limit",
+    type=int,
+    default=10,
+    show_default=True,
+    help="Show N most-recent sessions. Use 0 to list all.",
+)
+def status(limit: int) -> None:
     """Show status of the current opentraces project."""
-    import shutil as _shutil
     import time as _time
     from ..core.config import load_project_config, get_project_staging_dir, get_project_state_path
     from ..core.state import StateManager
@@ -1404,105 +1408,114 @@ def status(no_pager: bool, limit: int | None) -> None:
     remote = proj_config.get("remote", None)
     project_name = project_dir.name
 
-    lines: list[str] = []
-    lines.append(f"{project_name} inbox")
-    lines.append(f"mode:    {proj_config.get('review_policy', 'review')}")
-    lines.append(f"agents:  {', '.join(proj_config['agents'])}")
-    visibility = proj_config.get("visibility", "private")
-    if remote:
-        lines.append(f"remote:  {remote} ({visibility})")
-    else:
-        lines.append("remote:  not set")
-    lines.append("")
-
     staging_dir = get_project_staging_dir(project_dir)
-    staged_files = list(staging_dir.glob("*.jsonl")) if staging_dir.exists() else []
-
     state_path = get_project_state_path(project_dir)
     state = StateManager(state_path=state_path if state_path.parent.exists() else None)
-    counts = {stage: 0 for stage in ("inbox", "committed", "pushed", "rejected")}
 
-    if not staged_files:
-        lines.append("0 sessions in inbox")
+    # Stage counts come from state.json directly — O(entries) in memory,
+    # no file I/O. Reading every staged JSONL here used to take seconds
+    # on big inboxes and make the command feel frozen.
+    counts = {stage: 0 for stage in ("inbox", "committed", "pushed", "rejected")}
+    for entry in state._state.get("traces", {}).values():  # noqa: SLF001
+        visible_stage = resolve_visible_stage(entry.get("status"))
+        counts[visible_stage] = counts.get(visible_stage, 0) + 1
+    # Staged files without a state entry fall under "inbox".
+    total_files = sum(1 for _ in staging_dir.glob("*.jsonl")) if staging_dir.exists() else 0
+    tracked = sum(counts.values())
+    counts["inbox"] += max(0, total_files - tracked)
+
+    # Project header
+    click.echo(f"{project_name} inbox")
+    click.echo(f"mode:    {proj_config.get('review_policy', 'review')}")
+    click.echo(f"agents:  {', '.join(proj_config['agents'])}")
+    visibility = proj_config.get("visibility", "private")
+    if remote:
+        click.echo(f"remote:  {remote} ({visibility})")
     else:
-        sorted_files = sorted(staged_files)
-        visible_files = sorted_files[-limit:] if limit and limit > 0 else sorted_files
-        hidden = len(sorted_files) - len(visible_files)
-        header = f"{len(sorted_files)} session files tracked"
-        if hidden > 0:
-            header += f" (showing last {len(visible_files)}; {hidden} older hidden)"
-        lines.append(header)
-        lines.append("")
+        click.echo("remote:  not set")
+    click.echo()
+
+    # Session list (only the top N by mtime)
+    if total_files == 0:
+        click.echo("0 sessions in inbox")
+    else:
+        if limit and limit > 0 and total_files > limit:
+            staged_files = sorted(
+                staging_dir.glob("*.jsonl"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )[:limit]
+        else:
+            staged_files = sorted(
+                staging_dir.glob("*.jsonl"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if limit == 0:
+                # Unbounded: still mtime-desc, full list
+                pass
+
+        shown = len(staged_files)
+        if shown < total_files:
+            pages = (total_files + shown - 1) // shown if shown else 1
+            click.echo(
+                f"showing {shown} of {total_files} sessions  "
+                f"(page 1 of ~{pages}; use --limit N or --limit 0 for more)"
+            )
+        else:
+            click.echo(f"{total_files} session{'s' if total_files != 1 else ''}")
+        click.echo()
 
         from opentraces_schema import TraceRecord
         now = _time.time()
-        for i, sf in enumerate(visible_files):
-            is_last = (i == len(visible_files) - 1)
+        for i, sf in enumerate(staged_files):
+            is_last = (i == len(staged_files) - 1)
             prefix = "└── " if is_last else "├── "
             try:
                 data = sf.read_text().strip()
                 record = TraceRecord.model_validate_json(data)
                 entry = state.get_trace(record.trace_id)
                 visible_stage = resolve_visible_stage(entry.status if entry else None)
-                counts[visible_stage] += 1
-                # Relative timestamp
+                rel_time = "unknown"
                 if record.timestamp_end:
-                    ts = record.timestamp_end.timestamp()
-                    diff_seconds = now - ts
-                    if diff_seconds < 3600:
-                        rel_time = f"{int(diff_seconds / 60)}m ago"
-                    elif diff_seconds < 86400:
-                        rel_time = f"{int(diff_seconds / 3600)}h ago"
-                    elif diff_seconds < 172800:
-                        rel_time = "yesterday"
-                    else:
-                        rel_time = f"{int(diff_seconds / 86400)}d ago"
-                else:
-                    rel_time = "unknown"
+                    try:
+                        if hasattr(record.timestamp_end, "timestamp"):
+                            ts = record.timestamp_end.timestamp()
+                        else:
+                            from datetime import datetime as _dt
+                            ts = _dt.fromisoformat(
+                                str(record.timestamp_end).replace("Z", "+00:00")
+                            ).timestamp()
+                        diff_seconds = now - ts
+                        if diff_seconds < 3600:
+                            rel_time = f"{int(diff_seconds / 60)}m ago"
+                        elif diff_seconds < 86400:
+                            rel_time = f"{int(diff_seconds / 3600)}h ago"
+                        elif diff_seconds < 172800:
+                            rel_time = "yesterday"
+                        else:
+                            rel_time = f"{int(diff_seconds / 86400)}d ago"
+                    except (ValueError, TypeError, AttributeError):
+                        pass
 
                 task_desc = (record.task.description or "untitled")[:40]
                 n_steps = len(record.steps)
                 n_tools = sum(len(s.tool_calls) for s in record.steps)
                 n_flags = record.security.flags_reviewed or 0
-                lines.append(
+                click.echo(
                     f"{prefix}{stage_label(visible_stage):<10} {rel_time:<12} "
                     f"\"{task_desc}\"  {n_steps} steps  {n_tools} tools  {n_flags} flags"
                 )
             except Exception:
-                lines.append(f"{prefix}{sf.name}")
+                click.echo(f"{prefix}{sf.name}")
 
-        # Count hidden files too, so summary reflects the whole inbox.
-        if hidden > 0:
-            for sf in sorted_files[:-len(visible_files) or None]:
-                try:
-                    data = sf.read_text().strip()
-                    record = TraceRecord.model_validate_json(data)
-                    entry = state.get_trace(record.trace_id)
-                    counts[resolve_visible_stage(entry.status if entry else None)] += 1
-                except Exception:
-                    pass
-
-    lines.append("")
-    lines.append(
+    click.echo()
+    click.echo(
         f"inbox {counts['inbox']}  "
         f"committed {counts['committed']}  "
         f"pushed {counts['pushed']}  "
         f"rejected {counts['rejected']}"
     )
-
-    # Paginate when human output is long and stdout is a TTY.
-    output = "\n".join(lines)
-    rows = _shutil.get_terminal_size(fallback=(80, 24)).lines
-    should_page = (
-        not no_pager
-        and not _json_mode
-        and sys.stdout.isatty()
-        and len(lines) > max(rows - 4, 10)
-    )
-    if should_page:
-        click.echo_via_pager(output)
-    else:
-        click.echo(output)
 
     emit_json({
         "status": "ok",
@@ -1512,6 +1525,7 @@ def status(no_pager: bool, limit: int | None) -> None:
         "agents": proj_config["agents"],
         "remote": remote,
         "counts": counts,
+        "total_staged": total_files,
     })
 
 
