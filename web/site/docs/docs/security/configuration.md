@@ -69,3 +69,29 @@ opentraces config set --classifier-sensitivity high
 ```
 
 Higher sensitivity adds more heuristic flags (internal hostnames, deep file paths, identifier density).
+
+## Optional Tier 1.5 — TruffleHog
+
+The optional TruffleHog tier is controlled by two keys under `security.trufflehog` in the root config:
+
+```json
+{
+  "security": {
+    "trufflehog": {
+      "enabled": false,
+      "verify_secrets": false
+    }
+  }
+}
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `security.trufflehog.enabled` | `false` | Opt-in switch for the Tier 1.5 tier. Toggled by `opentraces setup trufflehog` / `--disable` / `--verify`. |
+| `security.trufflehog.verify_secrets` | `false` | Whether TruffleHog should verify findings by probing third-party APIs. Kept off by default to avoid outbound calls. |
+
+Once `enabled` is `true`, a missing binary is a hard error on scan and push, not a silent skip. Use `opentraces doctor` to check status.
+
+## Security Pipeline Version
+
+The security pipeline has its own `SECURITY_VERSION` (currently `0.4.0`) defined in `src/opentraces/security/version.py`, bumped whenever detection logic changes (regex patterns, entropy thresholds, classifier heuristics, anonymization rules). `opentraces doctor` reports it.

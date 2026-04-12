@@ -16,6 +16,7 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces remote` | Manage the configured dataset remote |
 | `opentraces session` | Inspect and edit staged traces |
 | `opentraces commit` | Commit inbox traces for upload |
+| `opentraces enrich` | Enrich a trace file with an Intent summary and any configured post-processors |
 | `opentraces push` | Upload committed traces to Hugging Face Hub |
 | `opentraces assess` | Run quality assessment on committed traces or a remote dataset |
 | `opentraces web` | Open the browser inbox UI |
@@ -28,6 +29,9 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces hooks install` | Install Claude Code session capture hooks |
 | `opentraces log` | List uploaded traces grouped by date |
 | `opentraces upgrade` | Upgrade CLI and refresh project skill file |
+| `opentraces setup trufflehog` | Install or toggle the optional Tier 1.5 TruffleHog scanner |
+| `opentraces doctor` | Report the health of the security pipeline (tiers, versions, auth), the current `intent.mode`, and any configured post-processors |
+| `opentraces review-llm` | Run optional Tier 2 LLM semantic review over staged traces |
 
 ## Authentication
 
@@ -193,6 +197,8 @@ opentraces push --public
 opentraces push --publish
 opentraces push --gated
 opentraces push --assess
+opentraces push --llm-review
+opentraces push --no-trufflehog
 opentraces push --repo user/custom-dataset
 ```
 
@@ -203,9 +209,14 @@ opentraces push --repo user/custom-dataset
 | `--publish` | off | Publish an existing private dataset |
 | `--gated` | off | Enable gated access on the dataset |
 | `--assess` | off | Run quality assessment after upload and embed scores in dataset card |
+| `--llm-review` | off | Require every committed trace to carry a clean Tier 2 LLM verdict before uploading. Aborts with exit code 3 if any trace lacks a `"status":"complete"` verdict, or has `shareable == "no"`, or has `missed_sensitive_data == "yes"`. |
+| `--no-trufflehog` | off | One-shot override: skip Tier 1.5 TruffleHog scanning for this push only. Does not change the config. |
+| `--no-intent` | off | One-shot override: skip Intent enrichment for this push only. |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
 
 `--approved-only` is not part of the current CLI. The public path is `commit -> push`.
+
+When `--llm-review` aborts, the hint points you at `opentraces review-llm` (see below) to produce verdicts.
 
 ### `opentraces assess`
 
@@ -334,6 +345,85 @@ OPENTRACES_NO_TUI=1 opentraces    # always prints help, never opens TUI
 ```
 
 `HF_TOKEN` is also respected as the highest-priority credential source, so CI pipelines can authenticate without running `opentraces login`.
+
+## Security Pipeline
+
+### `opentraces setup trufflehog`
+
+Install or toggle the optional Tier 1.5 TruffleHog scanner. TruffleHog is **off by default**; once you opt in, a missing binary becomes a hard error on subsequent scans and pushes, not a silent skip.
+
+```bash
+opentraces setup trufflehog            # install (or detect) and enable
+opentraces setup trufflehog --verify   # skip install, verify binary, enable
+opentraces setup trufflehog --disable  # disable the tier, leave binary in place
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--disable` | off | Turn the Tier 1.5 tier off without uninstalling the binary |
+| `--verify` | off | Skip install; verify the binary is present and enable the tier |
+
+Installation tries `brew` then `go install`. If both fail, the command prints the upstream install URL and exits `4` so you can install manually and re-run with `--verify`.
+
+TruffleHog runs locally in `--verify_secrets=false` mode, so no secrets are probed against third-party APIs.
+
+### `opentraces doctor`
+
+Report the health of the opentraces security pipeline. Exits `3` when Tier 1.5 is enabled in config but the binary is missing.
+
+```bash
+opentraces doctor
+opentraces --json doctor
+```
+
+The JSON payload under `doctor` contains:
+
+| Field | Description |
+|-------|-------------|
+| `security_version` | Current `SECURITY_VERSION` (for example `0.4.0`) |
+| `schema_version` | `opentraces_schema.SCHEMA_VERSION` if installed |
+| `trufflehog.enabled` | Whether Tier 1.5 is enabled in config |
+| `trufflehog.binary_version` | Output of `trufflehog --version`, or `null` |
+| `trufflehog.status` | Human-readable status (`disabled ...`, `ENABLED-BUT-MISSING ...`, or `enabled (<version>)`) |
+| `hf_auth` | `"ok"` when a token is loaded, `"missing"` otherwise |
+| `intent.mode` | Intent enrichment mode (`on`/`off`) |
+| `post_processors[]` | Configured post-processors with their resolved path and status |
+
+### `opentraces review-llm`
+
+Run the optional Tier 2 LLM semantic review over the staged traces. Each session's transcript is chunked (400k chars per chunk) and sent to the chosen provider; per-chunk verdicts are aggregated pessimistically (`shareable`: `no` > `manual_review` > `yes`; `missed_sensitive_data`: `yes` > `maybe` > `no`). Results are cached on `sha256(content + model + prompt_version + context)`.
+
+```bash
+opentraces review-llm
+opentraces review-llm --provider anthropic --model claude-haiku-4-5-20251001
+opentraces review-llm --dry-run
+opentraces review-llm --context-file AGENTS.md --limit 10
+opentraces review-llm --force
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--provider` | `ollama` | LLM provider: `ollama`, `anthropic`, or `fake` |
+| `--model` | `gemma4:e4b` | Model name. `claude-haiku-4-5-20251001` recommended for `anthropic` |
+| `--dry-run` | off | Estimate token usage and cost without calling the provider |
+| `--limit` | `0` (all) | Max staged sessions to review this invocation |
+| `--force` | off | Re-review sessions that already have a cached verdict |
+| `--context-file` | unset | Path to a README/AGENTS.md passed as project context (first 10k chars used) |
+
+Each result carries a verdict shaped like:
+
+```json
+{
+  "shareable": "yes",
+  "missed_sensitive_data": "no",
+  "flagged_parts": [{"reason": "...", "evidence": "..."}],
+  "summary": "..."
+}
+```
+
+Verdicts are written back to the staged trace's `metadata.llm_review` so `opentraces push --llm-review` can gate on them.
+
+`--dry-run` emits a `sessions / chars / estimate {tokens, cost_usd} / model / provider` summary and does not contact any provider.
 
 ## Hidden and Internal Commands
 

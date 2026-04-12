@@ -39,8 +39,13 @@ opentraces session discard <ID> --yes  # permanently delete a trace
 opentraces commit --all                # bulk commit all inbox traces
 opentraces push                        # upload committed traces to HF Hub
 opentraces push --assess               # upload + run quality assessment after push
+opentraces push --llm-review           # block push unless every committed trace has a clean Tier 2 verdict
+opentraces push --no-trufflehog        # one-shot: skip Tier 1.5 TruffleHog for this push
 opentraces assess                      # score committed traces (local quality.json)
 opentraces assess --dataset owner/name # refresh quality.json on remote HF dataset
+opentraces review-llm                  # Tier 2 LLM semantic review over staged sessions
+opentraces doctor                      # report security pipeline health + SECURITY_VERSION
+opentraces setup trufflehog            # install + enable Tier 1.5 TruffleHog scanning
 ```
 
 ### Inspect
@@ -262,7 +267,22 @@ quality scorecard badges when a `quality.json` is present.
 ## Security
 
 Every captured trace passes through a security pipeline automatically.
-There is no "unfiltered" mode.
+There is no "unfiltered" mode. The pipeline is versioned independently as
+`SECURITY_VERSION` (currently `0.4.0`) — bumps signal detection-logic changes.
+
+### Security tiers (Plan 032)
+
+| Tier | What it does | Default |
+|------|--------------|---------|
+| 1a | Regex rules for known secret shapes (API keys, tokens, DB URLs) | Always on |
+| 1b | Shannon-entropy heuristics on tool-input fields | Always on |
+| 1.5 | TruffleHog verified-secret scanner | Opt-in via `opentraces setup trufflehog` |
+| 1.8 | LLM-assisted PII detection | Opt-in |
+| 2 | LLM semantic review (per-trace shareability verdict) | Opt-in via `review-llm` |
+| 3 | Human review in the inbox | Controlled by review policy |
+
+Findings from Tier 1.5 move traces to the `BLOCKED` state; `BLOCKED` traces
+never reach upload. Run `opentraces doctor` to see which tiers are active.
 
 ### What happens on capture
 
@@ -274,8 +294,78 @@ There is no "unfiltered" mode.
    the staged JSONL. Raw session files on disk are never modified.
 3. **Heuristic classification**: flags internal hostnames, AWS account IDs,
    database connection strings, dense UUID sequences, and deep file paths.
-4. **Path anonymization**: replaces usernames in file paths with hashed
+4. **Named-entity placeholders**: recognized entities are replaced with stable
+   named tokens like `[PERSON_1]`, `[EMAIL_2]`, and home-directory paths are
+   normalized to `USER_PATH` across platforms.
+5. **Path anonymization**: replaces usernames in file paths with hashed
    prefixes across macOS, Linux, Windows, and WSL path formats.
+
+### Pipeline health: `opentraces doctor`
+
+```bash
+opentraces doctor
+```
+
+Reports `security_version`, `schema_version`, TruffleHog binary + enabled
+state, HF auth status, intent mode, and configured post-processors. JSON
+payload is emitted under `doctor` with the same fields plus a nested
+`trufflehog: {enabled, binary_version, status}`.
+
+**Exit codes**: returns `3` when TruffleHog is enabled in config but the
+binary is not on PATH. Always safe to run non-destructively.
+
+### Tier 1.5 — TruffleHog
+
+```bash
+opentraces setup trufflehog            # install (brew or go install) + enable
+opentraces setup trufflehog --verify   # assume installed; verify + enable
+opentraces setup trufflehog --disable  # turn the tier off (keeps binary)
+```
+
+When enabled, every capture and push runs TruffleHog over serialized trace
+bytes. Verified findings block the trace (status becomes `BLOCKED`).
+
+Errors:
+- `TRUFFLEHOG_MISSING` (exit 3): `--verify` ran but no binary found.
+- `TRUFFLEHOG_INSTALL_FAILED` (exit 4): no supported installer (`brew`,
+  `go install`) available.
+
+### Tier 2 — LLM semantic review
+
+```bash
+opentraces review-llm                                # default: ollama + gemma4:e4b
+opentraces review-llm --provider anthropic --model claude-haiku-4-5-20251001
+opentraces review-llm --provider fake                # offline stub, for tests
+opentraces review-llm --dry-run                      # estimate tokens + cost only
+opentraces review-llm --limit 5                      # cap sessions reviewed
+opentraces review-llm --force                        # re-review cached verdicts
+opentraces review-llm --context-file AGENTS.md       # pass project README as context
+```
+
+Writes each verdict under `metadata.llm_review` on the staged trace:
+`{status, shareable, missed_sensitive_data, review_key, ...}`. The
+`review_key` binds verdict to `content_hash + model + prompt-version + context`
+so unchanged traces reuse the verdict on re-runs unless `--force` is set.
+
+### Enforcing Tier 2 at push
+
+```bash
+opentraces push --llm-review
+```
+
+Aborts with exit code `3` and error code `LLM_REVIEW_BLOCKED` if any
+committed trace is missing a verdict, has `shareable="no"`, or has
+`missed_sensitive_data="yes"`. Fix by running `opentraces review-llm`,
+then retry.
+
+### Skipping Tier 1.5 for one push
+
+```bash
+opentraces push --no-trufflehog
+```
+
+One-shot override — config stays unchanged; next push runs TruffleHog
+again as usual.
 
 ### Tunables
 
@@ -350,7 +440,7 @@ opentraces capabilities --json         # feature flags + supported env vars
 | 0 | Success |
 | 1 | Needs review / quality gate not passed (import-hf partial failures) |
 | 2 | Usage error (bad flags, conflicting options) |
-| 3 | Auth/config error (not authenticated, not initialized) |
+| 3 | Auth/config error, blocked push (e.g. `LLM_REVIEW_BLOCKED`, `TRUFFLEHOG_MISSING`) |
 | 4 | Network or upload error |
 | 5 | Data corruption or invalid state |
 | 6 | Not found (trace ID, project, or resource) |

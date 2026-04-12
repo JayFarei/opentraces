@@ -178,6 +178,13 @@ export type SessionStage =
   | "pushed"
   | "rejected";
 
+export interface LLMReviewSummary {
+  status: "not_run" | "complete" | string;
+  shareable?: "yes" | "no" | "unclear";
+  missed_sensitive_data?: "yes" | "no" | "unclear";
+  summary?: string;
+}
+
 export interface SessionListItem {
   trace_id: string;
   task_description: string;
@@ -187,6 +194,8 @@ export interface SessionListItem {
   flag_count: number;
   stage: SessionStage;
   timestamp: string;
+  // Plan 032: optional LLM review verdict for reviewer UI.
+  llm_review?: LLMReviewSummary;
 }
 
 export interface AppContext {

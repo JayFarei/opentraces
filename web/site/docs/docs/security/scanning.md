@@ -39,9 +39,11 @@ After:  /Users/[REDACTED]/src/project/...
 
 The staged JSONL is rewritten in place. Raw session files on disk are not modified.
 
-## Tier 2 Classifier
+> **Note:** Detected secrets can also be replaced with named placeholders such as `[API_KEY_1]`, `[EMAIL_2]`, `[PERSON_3]` when the EntityMap is in use. `USER_PATH` entities normalize paths in place (for example replacing only the username segment). See [Security Tiers](/docs/security/tiers) for the full tier model and the optional Tier 1.5 / 1.8 / 2 layers.
 
-Tier 2 adds a heuristic classifier on top of scanning and redaction. It flags:
+## Heuristic Classifier
+
+A heuristic classifier runs on top of scanning and redaction. It flags:
 
 - internal hostnames
 - AWS account IDs in ARNs

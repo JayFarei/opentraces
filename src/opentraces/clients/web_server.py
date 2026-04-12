@@ -433,6 +433,9 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
                 "_stage": resolve_visible_stage(status_enum),
                 "security_flags": len(t.get("_security_flags", [])),
                 "project": t.get("metadata", {}).get("project", "unknown"),
+                # Plan 032: surface cached LLM review verdict so reviewers
+                # can see at a glance whether a session has been reviewed.
+                "llm_review": (t.get("metadata", {}) or {}).get("llm_review") or {"status": "not_run"},
             })
         return jsonify(sessions)
 

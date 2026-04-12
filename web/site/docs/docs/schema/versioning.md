@@ -29,6 +29,16 @@ There is no public migration workflow today. Version checks happen when configs 
 
 Each schema version ships with a rationale document and a changelog entry in the schema package. See [`VERSION-POLICY.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/VERSION-POLICY.md) for the full versioning policy and [`CHANGELOG.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/CHANGELOG.md) for the release history.
 
+## Security Pipeline Version
+
+The security pipeline is versioned independently of the schema, under `SECURITY_VERSION` in `src/opentraces/security/version.py`. It is bumped whenever detection logic changes (regex patterns, entropy thresholds, classifier heuristics, anonymization rules).
+
+```text
+SECURITY_VERSION = 0.4.0
+```
+
+`opentraces doctor` reports the active value alongside the schema version.
+
 ## Field Mappings
 
 The repository keeps downstream mapping tables in `packages/opentraces-schema/FIELD-MAPPINGS.md`.

@@ -21,4 +21,11 @@ This creates a private HuggingFace dataset, installs the session capture
 hook, and installs the opentraces skill into this project.
 
 Once initialized, read the skill at .agents/skills/opentraces/SKILL.md
-for the full command reference and workflows.`;
+for the full command reference and workflows.
+
+Optional hardening:
+Run \`opentraces doctor\` to verify environment and security pipeline.
+For extra coverage, \`opentraces setup trufflehog\` enables TruffleHog
+scanning (800+ detectors, opt-in, requires the binary), and
+\`opentraces review-llm\` runs a local LLM session-level privacy pass.
+To gate uploads on that review, push with \`opentraces push --llm-review\`.`;

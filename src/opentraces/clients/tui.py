@@ -890,13 +890,23 @@ class OpenTracesApp(App):
         cost = trace.get("metrics", {}).get("estimated_cost_usd")
         tokens_in = trace.get("metrics", {}).get("total_input_tokens", 0)
         tokens_out = trace.get("metrics", {}).get("total_output_tokens", 0)
+        # Plan 032: surface LLM review verdict badge inline.
+        _lr = (trace.get("metadata", {}) or {}).get("llm_review") or {}
+        if _lr.get("status") != "complete":
+            _lr_badge = "llm-review: not run"
+        elif _lr.get("shareable") == "yes" and _lr.get("missed_sensitive_data") == "no":
+            _lr_badge = "llm-review: ✓ shareable"
+        elif _lr.get("shareable") == "no" or _lr.get("missed_sensitive_data") == "yes":
+            _lr_badge = "llm-review: ✗ blocked"
+        else:
+            _lr_badge = "llm-review: ? needs manual review"
         summary.update(
             f"[{_stage_color(status)}]{stage_label(status).upper()}[/{_stage_color(status)}]  "
             f"[dim]{trace['trace_id']}[/dim]\n"
             f"[bold]{task}[/bold]\n"
             f"[dim]agent[/dim] {agent}   [dim]model[/dim] {model}\n"
             f"[dim]steps[/dim] {total_steps}   [dim]tools[/dim] {tool_calls}   "
-            f"[dim]flags[/dim] {len(flags)}\n"
+            f"[dim]flags[/dim] {len(flags)}   [dim]{_lr_badge}[/dim]\n"
             f"[dim]tokens[/dim] {tokens_in} in / {tokens_out} out   "
             f"[dim]started[/dim] {ts_start[:19] if ts_start else 'unknown'}"
             + (f"\n[dim]cost[/dim] ${cost:.4f}" if cost is not None else "")

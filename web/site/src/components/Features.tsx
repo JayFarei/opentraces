@@ -7,7 +7,7 @@ const features = [
   },
   {
     title: "security pipeline",
-    desc: "Three-tier scanning: regex redaction, heuristic classification, full local review. Nothing leaves your machine unscanned.",
+    desc: "Layered scanning: regex + entropy, optional TruffleHog (800+ detectors), optional LLM PII pass, and optional local LLM session review. Named placeholders like [EMAIL_1] keep traces coherent after redaction.",
   },
   {
     title: "auto or review",
@@ -19,7 +19,11 @@ const features = [
   },
   {
     title: "schema depth",
-    desc: "Steps, tool calls, reasoning, sub-agent hierarchy, token usage, attribution, outcome, and security metadata in one record.",
+    desc: "Steps, tool calls, reasoning, sub-agent hierarchy, token usage, attribution, outcome, intent, and security metadata in one record.",
+  },
+  {
+    title: "session intent",
+    desc: "LLM- or user-supplied Intent captures the why behind each trace. Source-tagged (llm_hook, post_processor, user) so consumers can filter; excluded from the dedup hash.",
   },
   {
     title: "huggingface native",

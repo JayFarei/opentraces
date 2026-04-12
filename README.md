@@ -98,8 +98,12 @@ After setup, the workflow is:
   configured post-processors) — optional; `push` does this automatically
   unless `--no-intent` is passed or `intent.mode=off` is set
 - `opentraces push` to publish committed traces to HuggingFace
-- `opentraces doctor` to check installed integrations, Intent mode, and
-  any configured post-processors
+- `opentraces doctor` to check installed integrations, Intent mode, any
+  configured post-processors, and the security pipeline (SECURITY_VERSION,
+  TruffleHog status)
+- `opentraces setup trufflehog` to opt into Tier 1.5 verified-secret scanning
+- `opentraces review-llm` then `opentraces push --llm-review` to gate pushes
+  on a Tier 2 LLM shareability verdict per trace
 ~~~
 
 ---

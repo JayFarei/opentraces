@@ -57,7 +57,7 @@ pytest tests/ -v
 - Context-aware security scanning (different rules per field type)
 - Per-project review policy (auto/review) controlling whether traces need manual approval
 - Zero required annotation, all enrichment is deterministic
-- Security pipeline has its own `SECURITY_VERSION` in `security/version.py`, bump it when changing detection logic (regex patterns, entropy thresholds, classifier heuristics, anonymization rules)
+- Security pipeline has its own `SECURITY_VERSION` in `security/version.py` (currently `0.4.0`), bump it when changing detection logic (regex patterns, entropy thresholds, classifier heuristics, anonymization rules). Tiers: 1a regex, 1b entropy (always on); 1.5 TruffleHog, 1.8 LLM PII, 2 LLM semantic review (opt-in); 3 human inbox. Tier 1.5 findings move traces to the CLI-local `TraceStatus.BLOCKED` state and never reach upload. Opt-in commands: `opentraces setup trufflehog`, `opentraces review-llm`, `opentraces push --llm-review`, and `opentraces doctor` for pipeline health.
 - Session `Intent` block (schema 0.3.0, plan 038) is written by LLM hook, post-processor, or user; `source` is a closed enum (`llm_hook` / `post_processor` / `user`). Security pipeline always runs before Intent or any post-processor — enforced by the ordering-invariant test.
 - Post-processors are declared per-project as an ordered list (`post_processors: [{name, command, args, env, when}]`). Contract: stdin = trace JSON, stdout = trace JSON, exit 0. Non-zero exit / missing binary / invalid output are non-fatal by default, promoted to hard errors under `--strict`. Byte-identical output = no-op. `opentraces doctor` probes configured processors.
 

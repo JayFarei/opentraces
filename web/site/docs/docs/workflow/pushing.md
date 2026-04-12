@@ -20,9 +20,20 @@ opentraces push --repo user/custom-dataset
 | `--publish` | off | Change an existing private dataset to public |
 | `--gated` | off | Enable gated access on the dataset |
 | `--assess` | off | Run quality assessment after upload and embed scores in dataset card |
+| `--llm-review` | off | Require a clean Tier 2 LLM verdict on every committed trace before upload |
+| `--no-trufflehog` | off | One-shot override: skip Tier 1.5 TruffleHog for this push only |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
 
 `--approved-only` is not part of the current CLI. The supported path is `commit -> push`.
+
+## Security Gates
+
+Two optional gates can run at push time:
+
+- `--llm-review` blocks the upload unless every committed trace carries `metadata.llm_review.status == "complete"` with `shareable != "no"` and `missed_sensitive_data != "yes"`. Produce verdicts in advance with `opentraces review-llm` (see [Security Tiers](/docs/security/tiers)).
+- `--no-trufflehog` is a one-shot escape hatch for projects where Tier 1.5 TruffleHog is enabled in config but you want to skip it just for this push. It does not change the persisted config.
+
+When `--llm-review` aborts, the CLI exits `3` and prints `opentraces review-llm` as the hint.
 
 ## How Upload Works
 

@@ -48,10 +48,10 @@ const modes = [
 ];
 
 const redactionDemo = [
-  { label: "API key", original: "sk-proj-abc123def456ghi789...", redacted: "[REDACTED_API_KEY]" },
-  { label: "email", original: "jay@company.internal", redacted: "[REDACTED_EMAIL]" },
-  { label: "DB URL", original: "postgresql://admin:pass@db.internal:5432/prod", redacted: "[REDACTED_DB_URL]" },
-  { label: "path", original: "/Users/jayfarei/src/client-project/", redacted: "/Users/[REDACTED]/src/[REDACTED]/" },
+  { label: "API key", original: "sk-proj-abc123def456ghi789...", redacted: "[API_KEY_1]" },
+  { label: "email", original: "jay@company.internal", redacted: "[EMAIL_1]" },
+  { label: "DB URL", original: "postgresql://admin:pass@db.internal:5432/prod", redacted: "[DB_URL_1]" },
+  { label: "path", original: "/Users/jayfarei/src/client-project/", redacted: "/Users/user/src/client-project/" },
 ];
 
 interface TermLine {
@@ -101,7 +101,7 @@ export default function PrivacyTrust() {
       <div className="privacy-grid">
         <div>
           <p className="section-sub" style={{ marginBottom: 20 }}>
-            19 regex patterns, Shannon entropy analysis, context-aware scanning. API keys, emails, database credentials, filesystem paths, all auto-redacted.
+            Layered scanning: 30+ regex patterns, Shannon entropy, optional TruffleHog (800+ detectors, opt-in), and optional local LLM review. Stable placeholders like [EMAIL_1] preserve referential meaning across a trace.
           </p>
           <div style={{ border: "1px solid var(--border)", background: "var(--bg-alt)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
             <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border)", background: "var(--surface)", fontSize: 10, color: "var(--text-dim)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
