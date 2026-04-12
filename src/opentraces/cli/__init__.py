@@ -171,18 +171,19 @@ def _git_chip(record) -> tuple[str, str, str] | None:
     return (glyph, sha, color)
 
 
-def _status_cell(entry, record) -> str:
-    """One-word Git-log-style status combining workflow stage + outcome.
+def _status_cell(entry, record) -> tuple[str, str]:
+    """Git-log-style status combining workflow stage + outcome.
 
-    Returns a Rich-markup string.
+    Returns (rich_markup, plain_text) so callers can render or emit JSON
+    without re-deriving or stripping markup.
     """
     visible = resolve_visible_stage(entry.status if entry else None)
     if visible == "pushed":
-        return "[green bold]✓ pushed[/]"
+        return "[green bold]✓ pushed[/]", "pushed"
     if visible == "rejected":
-        return "[red]✗ rejected[/]"
+        return "[red]✗ rejected[/]", "rejected"
     if visible == "committed":
-        return "[green]✓ committed[/]"
+        return "[green]✓ committed[/]", "committed"
 
     # inbox — differentiate by outcome signals
     outcome = getattr(record, "outcome", None)
@@ -190,12 +191,12 @@ def _status_cell(entry, record) -> str:
         terminal = getattr(outcome, "terminal_state", None)
         success = getattr(outcome, "success", None)
         if success is False or terminal == "error":
-            return "[red]✗ failed[/]"
+            return "[red]✗ failed[/]", "failed"
         if terminal == "compacted":
-            return "[yellow]~ compacted[/]"
+            return "[yellow]~ compacted[/]", "compacted"
         if getattr(outcome, "committed", False):
-            return "[green]✓ done[/]"
-    return "[dim]○ open[/]"
+            return "[green]✓ done[/]", "done"
+    return "[dim]○ open[/]", "open"
 
 
 def print_banner(*, tagline: str | None = OPENTRACES_TAGLINE, file=None) -> None:
@@ -1578,6 +1579,9 @@ def status(limit: int) -> None:
         click.echo(f"{_dim('remote: ')} {_warn('not set')}")
     click.echo()
 
+    # Machine-readable mirror of visible rows for --json consumers.
+    session_summary: list[dict] = []
+
     # Session list (only the top N by mtime)
     if total_files == 0:
         click.echo("0 sessions in inbox")
@@ -1619,6 +1623,7 @@ def status(limit: int) -> None:
             padding=(0, 1),
             header_style="dim",
         )
+        table.add_column("ID", no_wrap=True)
         table.add_column("Age", no_wrap=True, justify="right")
         table.add_column("Status", no_wrap=True)
         table.add_column("Intent", overflow="ellipsis", no_wrap=True)
@@ -1665,7 +1670,7 @@ def status(limit: int) -> None:
                 if len(title) > 60:
                     title = title[:59] + "…"
 
-                status_cell = _status_cell(entry, record)
+                status_cell, status_plain = _status_cell(entry, record)
 
                 chip = _git_chip(record)
                 if chip is not None:
@@ -1682,7 +1687,9 @@ def status(limit: int) -> None:
                     "none": "[red]○[/]",              # nothing usable
                 }.get(source, "")
 
+                short_id = record.trace_id[:8]
                 table.add_row(
+                    f"[dim]{short_id}[/]",
                     f"[dim]{rel_time}[/]",
                     status_cell,
                     title,
@@ -1694,9 +1701,25 @@ def status(limit: int) -> None:
                     intent_hits += 1
                 if chip is not None:
                     git_link_hits += 1
+                tier = (
+                    record.git_links[0].tier
+                    if record.git_links
+                    else None
+                )
+                session_summary.append({
+                    "trace_id": record.trace_id,
+                    "short_id": short_id,
+                    "stage": visible_stage,
+                    "status": status_plain,
+                    "intent": title,
+                    "intent_source": source,
+                    "commit": chip[1] if chip else None,
+                    "commit_tier": tier,
+                    "age": rel_time,
+                })
             except Exception:
                 table.add_row(
-                    "", "[red]? error[/]", f"[dim]{sf.name}[/]", "", "",
+                    "", "", "[red]? error[/]", f"[dim]{sf.name}[/]", "", "",
                 )
 
         console.print(table)
@@ -1795,6 +1818,7 @@ def status(limit: int) -> None:
         "remote": remote,
         "counts": counts,
         "total_staged": total_files,
+        "sessions": session_summary,
     })
 
 
