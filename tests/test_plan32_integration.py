@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import pytest
 
-from opentraces.config import Config, TruffleHogConfig
-from opentraces.parsers.base import ParseOutcome
+from opentraces.core.config import Config, TruffleHogConfig
+from opentraces.capture._base import ParseOutcome
 from opentraces.security.anonymizer import EntityMap, normalize_user_paths
 from opentraces.security.llm_provider import FakeProvider
 from opentraces.security.llm_review import review_session
@@ -25,8 +25,8 @@ from opentraces.security.pii_detector import LLMPIIDetector
 from opentraces.security.scanner import is_base64_blob, is_safe_field_path
 from opentraces.security.scanner_trufflehog import maybe_run_trufflehog
 from opentraces.security.version import SECURITY_VERSION
-from opentraces.state import StateManager, TraceStatus
-from opentraces.upload.hf_hub import verify_hf_token
+from opentraces.core.state import StateManager, TraceStatus
+from opentraces.publish.huggingface.upload import verify_hf_token
 
 
 def test_security_version_is_0_4_0() -> None:
@@ -58,7 +58,7 @@ def test_full_stack_integration(monkeypatch, tmp_path) -> None:
     # ---- Part B: token resolver finds HF_TOKEN.
     monkeypatch.setenv("HF_TOKEN", "hf_integration_test")
     monkeypatch.setattr(
-        "opentraces.upload.hf_hub._HF_CACHE_TOKEN_PATH",
+        "opentraces.publish.huggingface.upload._HF_CACHE_TOKEN_PATH",
         tmp_path / "nope",
     )
     token, source = verify_hf_token()

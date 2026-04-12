@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import json
 
-from opentraces.config import Config
+from opentraces.core.config import Config
 from opentraces.enrichment.intent import enrich_intent
-from opentraces.pipeline import process_imported_trace
+from opentraces.core.pipeline import process_imported_trace
 from opentraces_schema import Agent, Step, Task, TraceRecord
 
 

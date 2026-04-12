@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from opentraces.upload.hf_hub import verify_hf_token
+from opentraces.publish.huggingface.upload import verify_hf_token
 
 
 class TestVerifyHfToken:
@@ -21,7 +21,7 @@ class TestVerifyHfToken:
         monkeypatch.setenv("HF_TOKEN", "hf_env_token_123")
         monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
         monkeypatch.setattr(
-            "opentraces.upload.hf_hub._HF_CACHE_TOKEN_PATH",
+            "opentraces.publish.huggingface.upload._HF_CACHE_TOKEN_PATH",
             tmp_path / "nope",
         )
         token, source = verify_hf_token()
@@ -32,7 +32,7 @@ class TestVerifyHfToken:
         monkeypatch.delenv("HF_TOKEN", raising=False)
         monkeypatch.setenv("HUGGINGFACE_TOKEN", "hf_alt_456")
         monkeypatch.setattr(
-            "opentraces.upload.hf_hub._HF_CACHE_TOKEN_PATH",
+            "opentraces.publish.huggingface.upload._HF_CACHE_TOKEN_PATH",
             tmp_path / "nope",
         )
         token, source = verify_hf_token()
@@ -45,7 +45,7 @@ class TestVerifyHfToken:
         cache_file = tmp_path / "token"
         cache_file.write_text("hf_file_789\n")
         monkeypatch.setattr(
-            "opentraces.upload.hf_hub._HF_CACHE_TOKEN_PATH", cache_file,
+            "opentraces.publish.huggingface.upload._HF_CACHE_TOKEN_PATH", cache_file,
         )
         token, source = verify_hf_token()
         assert token == "hf_file_789"
@@ -55,7 +55,7 @@ class TestVerifyHfToken:
         monkeypatch.delenv("HF_TOKEN", raising=False)
         monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
         monkeypatch.setattr(
-            "opentraces.upload.hf_hub._HF_CACHE_TOKEN_PATH",
+            "opentraces.publish.huggingface.upload._HF_CACHE_TOKEN_PATH",
             tmp_path / "missing",
         )
         token, diagnostic = verify_hf_token()
@@ -69,7 +69,7 @@ class TestVerifyHfToken:
         cache_file = tmp_path / "token"
         cache_file.write_text("   hf_with_ws  \n\n")
         monkeypatch.setattr(
-            "opentraces.upload.hf_hub._HF_CACHE_TOKEN_PATH", cache_file,
+            "opentraces.publish.huggingface.upload._HF_CACHE_TOKEN_PATH", cache_file,
         )
         token, _ = verify_hf_token()
         assert token == "hf_with_ws"
@@ -80,7 +80,7 @@ class TestVerifyHfToken:
         cache_file = tmp_path / "token"
         cache_file.write_text("   \n")
         monkeypatch.setattr(
-            "opentraces.upload.hf_hub._HF_CACHE_TOKEN_PATH", cache_file,
+            "opentraces.publish.huggingface.upload._HF_CACHE_TOKEN_PATH", cache_file,
         )
         token, _ = verify_hf_token()
         assert token is None
@@ -89,7 +89,7 @@ class TestVerifyHfToken:
         monkeypatch.setenv("HF_TOKEN", "")
         monkeypatch.setenv("HUGGINGFACE_TOKEN", "hf_fallback")
         monkeypatch.setattr(
-            "opentraces.upload.hf_hub._HF_CACHE_TOKEN_PATH",
+            "opentraces.publish.huggingface.upload._HF_CACHE_TOKEN_PATH",
             tmp_path / "nope",
         )
         token, source = verify_hf_token()

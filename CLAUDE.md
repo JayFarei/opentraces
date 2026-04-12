@@ -8,7 +8,7 @@ Open schema + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses codi
 
 - **Language**: Python 3.10+
 - **Schema**: `opentraces-schema` (standalone Pydantic v2 package in `packages/`)
-- **CLI**: Click-based (`src/opentraces/cli.py`)
+- **CLI**: Click-based (`src/opentraces/cli/`)
 - **Web review**: Flask (`src/opentraces/clients/web/`) + React SPA (`web/viewer/`)
 - **Marketing site**: Next.js (`web/site/`)
 - **Coming soon page**: Static HTML (`web/coming-soon/`)
@@ -29,18 +29,15 @@ pytest tests/ -v
 - `skill/` - Claude Code skill definition (skills.sh convention)
 - `packages/opentraces-schema/` - Standalone schema package (Pydantic models)
 - `packages/opentraces-ui/` - Design system (tokens, base, components, React wrappers, logo assets, DESIGN.md)
-- `src/opentraces/` - Main CLI package
-  - `agents/<name>/` - Agent-specific parsers. `agents/claude_code/parser.py`, `agents/hermes/parser.py`.
-  - `installers/` - One-off installers for integrations we wire into external tools. `installers/claude_code_hooks/` ships the `on_stop` / `on_compact` / `on_tool_use` scripts that `opentraces hooks install` copies to `~/.claude/hooks/`, plus `intent_adapter.py`. `installers/git_hook.py` installs the post-commit correlator.
-  - `parsers/` - Cross-agent parser infrastructure: base protocol, quality gate, lazy registry.
+- `src/opentraces/` - Main CLI package (7 top-level folders after the phase-6 reorg):
+  - `cli/` - Command surface (split by workflow area)
+  - `core/` - Domain glue: config, paths, state, workflow, inbox, pipeline, processors, review, publish_flow
+  - `capture/` - Inbound boundary: parsers + hooks + installers per external system. `capture/claude_code/` (parse + hooks), `capture/hermes.py`, `capture/git/` (post-commit correlator + install).
+  - `publish/` - Outbound boundary: format serializers (`atif.py`, `agent_trace.py`) and destination publishers (`huggingface/` — sharded upload, dataset card, HF schema).
+  - `enrichment/` - Read-only enrichers: git signals, attribution, dependencies, metrics, and session intent summarization (`intent.py` + `intent_backends.py`, plan 038). `enrichment/git/` holds the plan-041 commit-correlation stack — `correlator.py`, `notes_store.py` (`refs/notes/opentraces` read/write), `blame.py` (file:line to trace), `liveness.py` (lazy `commit_reachable` / `content_alive`), `jj_support.py` (Jujutsu change-id fallback). Note: post-commit tier assignment lives in `capture/git/post_commit.py`.
+  - `quality/` - Trace quality assessment, persona rubrics, upload gates, parse gate
   - `security/` - Secret scanning, anonymization, classification (independently versioned via `SECURITY_VERSION`)
-  - `enrichment/` - Git signals, attribution, dependencies, metrics, and session intent summarization (`intent.py` + `intent_backends.py`, plan 038). `enrichment/git/` holds the plan-041 commit-correlation stack: `post_commit.py` (tier assignment), `correlator.py`, `notes_store.py` (`refs/notes/opentraces` read/write), `blame.py` (file:line to trace), `liveness.py` (lazy `commit_reachable` / `content_alive`), `jj_support.py` (Jujutsu change-id fallback).
-  - `processors.py` - Generic post-processor subprocess runner (stdin/stdout JSON contract, plan 038 phase 4)
-  - `quality/` - Trace quality assessment, persona rubrics, upload gates
-  - `exporters/` - ATIF export and Agent Trace v0.1.0 export (`agent_trace.py`, plan 041)
-  - `upload/` - HF Hub sharded upload, dataset card generation (includes Intent coverage stats)
-  - `inbox.py` - Shared data access for all review clients
-  - `clients/` - Presentation layers (CLI, TUI, web backend)
+  - `clients/` - Presentation layers (TUI, web backend) — business logic lives in `core/`
 - `web/` - Web frontends
   - `viewer/` - React SPA trace review UI
   - `site/` - Next.js marketing site

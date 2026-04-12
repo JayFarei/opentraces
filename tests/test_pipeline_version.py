@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from opentraces_schema.models import Agent, Outcome, Step, TraceRecord
 
-from opentraces.config import Config
-from opentraces.pipeline import process_imported_trace
+from opentraces.core.config import Config
+from opentraces.core.pipeline import process_imported_trace
 from opentraces.security import SECURITY_VERSION
 
 

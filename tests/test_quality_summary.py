@@ -18,8 +18,8 @@ from opentraces.quality.engine import (
     TraceAssessment,
 )
 from opentraces.quality.gates import GateResult, check_gate
-from opentraces.upload.dataset_card import generate_dataset_card
-from opentraces.upload.hf_hub import HFUploader
+from opentraces.publish.huggingface.dataset_card import generate_dataset_card
+from opentraces.publish.huggingface.upload import HFUploader
 from opentraces_schema.models import Agent, Metrics, Step, TokenUsage, TraceRecord
 from opentraces_schema.version import SCHEMA_VERSION
 

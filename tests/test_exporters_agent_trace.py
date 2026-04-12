@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from opentraces.exporters.agent_trace import (
+from opentraces.publish.agent_trace import (
     export_to_jsonl, from_agent_trace, to_agent_trace,
 )
 from opentraces_schema import (

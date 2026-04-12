@@ -29,7 +29,7 @@ def _invoke(module_main, payload: dict, monkeypatch) -> None:
 
 
 def test_on_stop_captures_changed_paths(tmp_path, monkeypatch):
-    from opentraces.installers.claude_code_hooks.on_stop import main
+    from opentraces.capture.claude_code.hooks.on_stop import main
 
     # bootstrap a git repo with one committed file
     _run(["git", "init", "-q", "-b", "main"], tmp_path)
@@ -62,7 +62,7 @@ def test_on_stop_captures_changed_paths(tmp_path, monkeypatch):
 
 
 def test_changed_paths_empty_on_clean_tree(tmp_path, monkeypatch):
-    from opentraces.installers.claude_code_hooks.on_stop import main
+    from opentraces.capture.claude_code.hooks.on_stop import main
 
     _run(["git", "init", "-q", "-b", "main"], tmp_path)
     _run(["git", "config", "user.email", "t@t.t"], tmp_path)

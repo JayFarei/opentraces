@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from opentraces.agents.claude_code.parser import ClaudeCodeParser
+from opentraces.capture.claude_code.parse import ClaudeCodeParser
 from opentraces_schema import TraceRecord
 
 

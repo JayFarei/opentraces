@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 
-from opentraces.config import Config
-from opentraces.pipeline import process_trace
-from opentraces.agents.claude_code.parser import ClaudeCodeParser
-from opentraces.parsers.quality import meets_quality_threshold
+from opentraces.core.config import Config
+from opentraces.core.pipeline import process_trace
+from opentraces.capture.claude_code.parse import ClaudeCodeParser
+from opentraces.quality.parse_gate import meets_quality_threshold
 from opentraces.quality import score_trace
 from opentraces.security.scanner import scan_trace_record
 from opentraces.security.classifier import classify_trace_record

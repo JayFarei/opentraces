@@ -34,7 +34,7 @@ def _read_appended_lines(path: Path) -> list[dict]:
 
 class TestOnStopHook:
     def test_appends_valid_hook_line(self, tmp_path, monkeypatch):
-        from opentraces.installers.claude_code_hooks.on_stop import main
+        from opentraces.capture.claude_code.hooks.on_stop import main
 
         transcript = tmp_path / "session.jsonl"
         transcript.write_text("")
@@ -58,7 +58,7 @@ class TestOnStopHook:
         assert "git" in line["data"]
 
     def test_missing_transcript_path_exits_clean(self, monkeypatch):
-        from opentraces.installers.claude_code_hooks.on_stop import main
+        from opentraces.capture.claude_code.hooks.on_stop import main
 
         monkeypatch.setattr("sys.stdin", StringIO(json.dumps({})))
         with pytest.raises(SystemExit) as exc:
@@ -67,7 +67,7 @@ class TestOnStopHook:
 
     def test_git_failure_still_writes_line(self, tmp_path, monkeypatch):
         """When git is unavailable the hook still writes a line with git: {}."""
-        from opentraces.installers.claude_code_hooks import on_stop
+        from opentraces.capture.claude_code.hooks import on_stop
 
         # Patch _git_info to simulate failure
         monkeypatch.setattr(on_stop, "_git_info", lambda cwd: {})
@@ -82,7 +82,7 @@ class TestOnStopHook:
         assert lines[0]["data"]["git"] == {}
 
     def test_invalid_stdin_json_exits_clean(self, monkeypatch):
-        from opentraces.installers.claude_code_hooks.on_stop import main
+        from opentraces.capture.claude_code.hooks.on_stop import main
 
         monkeypatch.setattr("sys.stdin", StringIO("not-json{{{"))
         with pytest.raises(SystemExit) as exc:
@@ -91,7 +91,7 @@ class TestOnStopHook:
 
     def test_appends_to_existing_content(self, tmp_path, monkeypatch):
         """Hook appends, not overwrites."""
-        from opentraces.installers.claude_code_hooks.on_stop import main
+        from opentraces.capture.claude_code.hooks.on_stop import main
 
         existing = {"type": "user", "sessionId": "s"}
         transcript = tmp_path / "session.jsonl"
@@ -106,7 +106,7 @@ class TestOnStopHook:
         assert lines[1]["type"] == "opentraces_hook"
 
     def test_written_line_is_valid_json(self, tmp_path, monkeypatch):
-        from opentraces.installers.claude_code_hooks.on_stop import main
+        from opentraces.capture.claude_code.hooks.on_stop import main
 
         transcript = tmp_path / "session.jsonl"
         transcript.write_text("")
@@ -125,7 +125,7 @@ class TestOnStopHook:
 
 class TestOnCompactHook:
     def test_appends_valid_hook_line(self, tmp_path, monkeypatch):
-        from opentraces.installers.claude_code_hooks.on_compact import main
+        from opentraces.capture.claude_code.hooks.on_compact import main
 
         transcript = tmp_path / "session.jsonl"
         transcript.write_text("")
@@ -148,7 +148,7 @@ class TestOnCompactHook:
         assert line["data"]["summary"] == "Context compacted"
 
     def test_missing_transcript_path_exits_clean(self, monkeypatch):
-        from opentraces.installers.claude_code_hooks.on_compact import main
+        from opentraces.capture.claude_code.hooks.on_compact import main
 
         monkeypatch.setattr("sys.stdin", StringIO(json.dumps({})))
         with pytest.raises(SystemExit) as exc:
@@ -156,7 +156,7 @@ class TestOnCompactHook:
         assert exc.value.code == 0
 
     def test_invalid_stdin_exits_clean(self, monkeypatch):
-        from opentraces.installers.claude_code_hooks.on_compact import main
+        from opentraces.capture.claude_code.hooks.on_compact import main
 
         monkeypatch.setattr("sys.stdin", StringIO("bad json"))
         with pytest.raises(SystemExit) as exc:
@@ -165,7 +165,7 @@ class TestOnCompactHook:
 
     def test_partial_payload_writes_safely(self, tmp_path, monkeypatch):
         """Hook handles missing optional fields without error."""
-        from opentraces.installers.claude_code_hooks.on_compact import main
+        from opentraces.capture.claude_code.hooks.on_compact import main
 
         transcript = tmp_path / "session.jsonl"
         transcript.write_text("")

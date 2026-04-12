@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from opentraces.config import Config
-from opentraces.pipeline import process_imported_trace
+from opentraces.core.config import Config
+from opentraces.core.pipeline import process_imported_trace
 from opentraces.security.trufflehog import TruffleHogReport
 
 

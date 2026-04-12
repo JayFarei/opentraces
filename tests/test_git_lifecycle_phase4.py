@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import pytest
 
-from opentraces.enrichment.git import post_commit
+from opentraces.capture.git import post_commit
 from opentraces_schema import (
     Agent, Attribution, AttributionConversation, AttributionFile,
     AttributionRange, Step, TokenUsage, ToolCall, TraceRecord,

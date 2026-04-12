@@ -8,7 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from opentraces.enrichment.git import notes_store, post_commit
+from opentraces.enrichment.git import notes_store
+from opentraces.capture.git import post_commit
 from opentraces_schema import Agent, Step, TokenUsage, ToolCall, TraceRecord
 
 

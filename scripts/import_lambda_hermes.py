@@ -60,10 +60,10 @@ def main(limit: int, dry_run: bool, auto: bool) -> None:
         click.echo("Not an opentraces project. Run 'opentraces init' first.", err=True)
         sys.exit(3)
 
-    from opentraces.config import get_project_staging_dir, get_project_state_path, load_config
-    from opentraces.agents.hermes.parser import HermesParser
-    from opentraces.pipeline import process_imported_trace
-    from opentraces.state import StateManager, TraceStatus
+    from opentraces.core.config import get_project_staging_dir, get_project_state_path, load_config
+    from opentraces.capture.hermes import HermesParser
+    from opentraces.core.pipeline import process_imported_trace
+    from opentraces.core.state import StateManager, TraceStatus
 
     cfg = load_config()
     parser = HermesParser()

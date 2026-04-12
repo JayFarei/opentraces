@@ -13,8 +13,8 @@ import pytest
 
 from opentraces_schema import Agent, Intent, Task, TraceRecord
 
-from opentraces.config import PostProcessorConfig
-from opentraces.processors import (
+from opentraces.core.config import PostProcessorConfig
+from opentraces.core.processors import (
     ProcessorError,
     probe_processors,
     run_chain,
@@ -200,8 +200,8 @@ class TestRedactionOrderingInvariant:
     a post-redaction trace, the secret does not reach the processor."""
 
     def test_secret_absent_from_processor_stdin(self, tmp_path):
-        from opentraces.config import Config
-        from opentraces.pipeline import process_imported_trace
+        from opentraces.core.config import Config
+        from opentraces.core.pipeline import process_imported_trace
         from opentraces_schema import Step
 
         SECRET = "ghp_RealSecretThatShouldNeverReachProcessorStdin0"

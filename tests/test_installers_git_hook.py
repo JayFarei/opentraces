@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from opentraces.installers import git_hook
+from opentraces.capture.git import install as git_hook
 
 
 def _sh(cmd: list[str], cwd: Path) -> None:

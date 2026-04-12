@@ -12,7 +12,7 @@ from opentraces.cli import (
     _current_project_session_dir,
     main,
 )
-from opentraces.config import Config
+from opentraces.core.config import Config
 
 
 class _FakeOption:
@@ -82,7 +82,7 @@ def test_choose_remote_interactively_async_inside_event_loop(monkeypatch):
             assert username == "alice"
             return [{"id": "alice/existing-traces", "private": True}]
 
-    monkeypatch.setattr("opentraces.upload.hf_hub.HFUploader", FakeUploader)
+    monkeypatch.setattr("opentraces.publish.huggingface.upload.HFUploader", FakeUploader)
 
     async def run_test():
         return await _choose_remote_interactively_async("alice/opentraces")

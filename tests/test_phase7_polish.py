@@ -25,7 +25,7 @@ class TestJjSupport:
 
 class TestDualEmit:
     def test_hook_writes_agent_trace_line(self, tmp_path, monkeypatch):
-        from opentraces.installers.claude_code_hooks.on_tool_use import main
+        from opentraces.capture.claude_code.hooks.on_tool_use import main
 
         target = tmp_path / "f.py"
         target.write_text("a\nHELLO_WORLD\n")
@@ -60,7 +60,7 @@ class TestDualEmit:
         assert line["start_line"] == 2
 
     def test_dual_emit_appends_not_overwrites(self, tmp_path, monkeypatch):
-        from opentraces.installers.claude_code_hooks.on_tool_use import main
+        from opentraces.capture.claude_code.hooks.on_tool_use import main
 
         target = tmp_path / "f.py"
         target.write_text("A\nB\n")

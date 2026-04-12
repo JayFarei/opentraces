@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from opentraces.installers.claude_code_hooks.intent_adapter import (
+from opentraces.capture.claude_code.hooks.intent_adapter import (
     enrich_from_hook_payload,
     parse_session_file,
 )

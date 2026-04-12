@@ -73,8 +73,8 @@ def _make_minimal_record(**overrides) -> TraceRecord:
 class TestProtocolConformance:
 
     def test_atif_exporter_satisfies_protocol(self):
-        from opentraces.exporters.base import FormatExporter
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish._base import FormatExporter
+        from opentraces.publish.atif import ATIFExporter
 
         assert isinstance(ATIFExporter(), FormatExporter)
 
@@ -86,7 +86,7 @@ class TestProtocolConformance:
 class TestATIFExporter:
 
     def test_produces_valid_jsonl(self):
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         record = _make_minimal_record()
         exporter = ATIFExporter()
@@ -100,7 +100,7 @@ class TestATIFExporter:
         assert "steps" in parsed
 
     def test_agent_mapping(self):
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         record = _make_minimal_record()
         exporter = ATIFExporter()
@@ -114,7 +114,7 @@ class TestATIFExporter:
 
     def test_step_renumbering_starts_at_1(self):
         """ATIF step_id is 1-indexed regardless of source step_index."""
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         record = _make_minimal_record()
         exporter = ATIFExporter()
@@ -126,7 +126,7 @@ class TestATIFExporter:
 
     def test_tool_call_mapping(self):
         """tool_name -> function_name, input -> arguments."""
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         record = _make_minimal_record()
         exporter = ATIFExporter()
@@ -142,7 +142,7 @@ class TestATIFExporter:
 
     def test_observation_singular_wrapper(self):
         """observations[] -> observation.results[] (singular wrapper)."""
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         record = _make_minimal_record()
         exporter = ATIFExporter()
@@ -158,7 +158,7 @@ class TestATIFExporter:
 
     def test_zero_observations_omits_field(self):
         """Step with no observations should not have observation key."""
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         record = _make_minimal_record()
         # User step has no observations
@@ -171,7 +171,7 @@ class TestATIFExporter:
 
     def test_content_none_step(self):
         """Step with content=None (pure tool call) should omit message."""
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         record = _make_minimal_record(
             steps=[
@@ -198,7 +198,7 @@ class TestATIFExporter:
 
     def test_dangling_tool_call_exported(self):
         """Observation with error='no_result' should export as error content."""
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         record = _make_minimal_record(
             steps=[
@@ -224,7 +224,7 @@ class TestATIFExporter:
 
     def test_token_usage_mapping(self):
         """Token usage maps to ATIF metrics (partial: drops prefix_reuse)."""
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         record = _make_minimal_record()
         exporter = ATIFExporter()
@@ -239,7 +239,7 @@ class TestATIFExporter:
         assert "prefix_reuse_tokens" not in metrics
 
     def test_reasoning_content_preserved(self):
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         record = _make_minimal_record()
         exporter = ATIFExporter()
@@ -249,7 +249,7 @@ class TestATIFExporter:
         assert parsed["steps"][1]["reasoning_content"] == "The user wants me to fix auth.py"
 
     def test_field_coverage_categories(self):
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         exporter = ATIFExporter()
         coverage = exporter.field_coverage()
@@ -260,14 +260,14 @@ class TestATIFExporter:
         assert coverage["security"] == "dropped"
 
     def test_empty_input_produces_no_output(self):
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         exporter = ATIFExporter()
         lines = list(exporter.export_traces([]))
         assert lines == []
 
     def test_multiple_records(self):
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         records = [_make_minimal_record() for _ in range(3)]
         exporter = ATIFExporter()
@@ -280,7 +280,7 @@ class TestATIFExporter:
 
     def test_round_trip_realistic_record(self):
         """A realistic record with all fields populated survives export."""
-        from opentraces.exporters.atif import ATIFExporter
+        from opentraces.publish.atif import ATIFExporter
 
         record = _make_minimal_record(
             timestamp_start="2026-03-28T10:00:00Z",
@@ -346,15 +346,15 @@ class TestATIFExporter:
 class TestRegistries:
 
     def test_parsers_registry_has_claude_code(self):
-        from opentraces.parsers import get_parsers
+        from opentraces.capture import get_parsers
         parsers = get_parsers()
         assert "claude-code" in parsers
 
     def test_exporters_registry_has_atif(self):
-        from opentraces.exporters import get_exporters
+        from opentraces.publish import get_exporters
         exporters = get_exporters()
         assert "atif" in exporters
 
     def test_import_alias_resolution(self):
-        from opentraces.parsers import resolve_import_format
+        from opentraces.capture import resolve_import_format
         assert resolve_import_format("nonexistent") is None

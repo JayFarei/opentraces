@@ -30,7 +30,7 @@ def isolated_config(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    from opentraces import paths as _paths
+    from opentraces.core import paths as _paths
 
     opentraces_dir = home / ".opentraces"
     opentraces_dir.mkdir()
@@ -41,7 +41,7 @@ def isolated_config(tmp_path, monkeypatch):
     monkeypatch.setattr(_paths, "STATE_PATH", opentraces_dir / "state.json")
     monkeypatch.setattr(_paths, "UPLOADED_DIR", opentraces_dir / "uploaded")
 
-    from opentraces import config as _config
+    from opentraces.core import config as _config
     monkeypatch.setattr(_config, "CONFIG_PATH", opentraces_dir / "config.json")
     monkeypatch.setattr(_config, "CREDENTIALS_PATH", opentraces_dir / "credentials")
     monkeypatch.setattr(_config, "OPENTRACES_DIR", opentraces_dir)
@@ -91,7 +91,7 @@ class TestSetupTruffleHogVerify:
 class TestSetupTruffleHogDisable:
     def test_disable_flips_config_off(self, runner, isolated_config) -> None:
         # Write a config that has it enabled so --disable has something to flip.
-        from opentraces.config import Config, save_config
+        from opentraces.core.config import Config, save_config
         cfg = Config()
         cfg.security.trufflehog.enabled = True
         save_config(cfg)
@@ -114,7 +114,7 @@ class TestDoctor:
     def test_enabled_but_missing_exits_nonzero(
         self, runner, isolated_config, monkeypatch
     ) -> None:
-        from opentraces.config import Config, save_config
+        from opentraces.core.config import Config, save_config
         cfg = Config()
         cfg.security.trufflehog.enabled = True
         save_config(cfg)
@@ -142,10 +142,10 @@ class TestPushLLMReviewGate:
         staging = isolated_config / "staging"
         staging.mkdir()
         monkeypatch.setattr(
-            "opentraces.config.get_project_staging_dir", lambda _: staging
+            "opentraces.core.config.get_project_staging_dir", lambda _: staging
         )
         monkeypatch.setattr(
-            "opentraces.inbox.load_traces",
+            "opentraces.core.inbox.load_traces",
             lambda _p: [{"trace_id": "t1", "metadata": {}}],
         )
 
@@ -166,10 +166,10 @@ class TestPushLLMReviewGate:
         staging = isolated_config / "staging"
         staging.mkdir()
         monkeypatch.setattr(
-            "opentraces.config.get_project_staging_dir", lambda _: staging
+            "opentraces.core.config.get_project_staging_dir", lambda _: staging
         )
         monkeypatch.setattr(
-            "opentraces.inbox.load_traces",
+            "opentraces.core.inbox.load_traces",
             lambda _p: [{
                 "trace_id": "t1",
                 "metadata": {
@@ -194,11 +194,11 @@ class TestReviewLLMDryRun:
         staging.mkdir(exist_ok=True)
         # Patch the project-local staging lookup to this path.
         monkeypatch.setattr(
-            "opentraces.config.get_project_staging_dir",
+            "opentraces.core.config.get_project_staging_dir",
             lambda _: staging,
         )
         monkeypatch.setattr(
-            "opentraces.inbox.load_traces", lambda _path: []
+            "opentraces.core.inbox.load_traces", lambda _path: []
         )
         result = runner.invoke(
             main, ["review-llm", "--dry-run", "--provider", "fake"]

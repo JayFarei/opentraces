@@ -51,6 +51,3 @@ line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = [
-    "ignore:opentraces\\..*is deprecated:DeprecationWarning",
-]

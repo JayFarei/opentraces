@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from opentraces.parsers.base import ParseOutcome
-from opentraces.state import (
+from opentraces.capture._base import ParseOutcome
+from opentraces.core.state import (
     StateManager,
     TraceStagingEntry,
     TraceStatus,

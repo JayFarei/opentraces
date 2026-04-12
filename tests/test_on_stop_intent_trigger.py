@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from opentraces.installers.claude_code_hooks import on_stop
+from opentraces.capture.claude_code.hooks import on_stop
 
 
 def _make_executable(path: Path, body: str) -> Path:

@@ -16,7 +16,7 @@ from opentraces_schema.models import (
     TraceRecord,
 )
 
-from opentraces.agents.hermes.parser import HermesParser
+from opentraces.capture.hermes import HermesParser
 
 
 # ---------------------------------------------------------------------------
@@ -380,8 +380,8 @@ class TestImportTraces:
 class TestPipelineIntegration:
     def test_process_imported_trace(self):
         """Integration: parse -> enrich -> security pipeline."""
-        from opentraces.config import Config
-        from opentraces.pipeline import process_imported_trace
+        from opentraces.core.config import Config
+        from opentraces.core.pipeline import process_imported_trace
 
         parser = HermesParser()
         row = _make_hermes_row(conversations=_make_tool_conversation())
@@ -398,7 +398,7 @@ class TestPipelineIntegration:
 
     def test_enrich_from_steps_runs(self):
         """Shared enrichment populates language_ecosystem and dependencies."""
-        from opentraces.pipeline import _enrich_from_steps
+        from opentraces.core.pipeline import _enrich_from_steps
 
         parser = HermesParser()
         row = _make_hermes_row(conversations=_make_tool_conversation())
@@ -445,7 +445,7 @@ class TestRegressions:
 
     def test_importers_registry(self):
         """HermesParser is registered in the IMPORTERS registry."""
-        from opentraces.parsers import get_importers
+        from opentraces.capture import get_importers
         importers = get_importers()
         assert "hermes" in importers
         instance = importers["hermes"]()
@@ -463,7 +463,7 @@ class TestRegressions:
                 '<tool_call>{"name": "cronjob", "arguments": {"schedule": "0 * * * *"}}</tool_call>'
             )},
         ])
-        with caplog.at_level(logging.INFO, logger="opentraces.agents.hermes.parser"):
+        with caplog.at_level(logging.INFO, logger="opentraces.capture.hermes"):
             record = parser.map_record(row, 0)
         assert record is not None
         unmapped_warnings = [r for r in caplog.records if "Unmapped tool" in r.message]
@@ -480,7 +480,7 @@ class TestRegressions:
             ],
             tool_stats={"some_future_tool": {"count": 1, "success": 1, "failure": 0}},
         )
-        with caplog.at_level(logging.INFO, logger="opentraces.agents.hermes.parser"):
+        with caplog.at_level(logging.INFO, logger="opentraces.capture.hermes"):
             record = parser.map_record(row, 0)
         assert record is not None
         unmapped_warnings = [r for r in caplog.records if "Unmapped tool" in r.message]

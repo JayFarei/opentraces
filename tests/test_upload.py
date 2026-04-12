@@ -19,10 +19,10 @@ from opentraces_schema.models import Agent, Metrics, Step, TokenUsage, TraceReco
 from opentraces_schema.version import SCHEMA_VERSION
 
 from opentraces.cli import main
-from opentraces.config import Config, get_project_state_path, save_project_config
-from opentraces.state import StateManager, TraceStatus
-from opentraces.upload.hf_hub import HFUploader, RemoteShardError, UploadResult
-from opentraces.upload.dataset_card import (
+from opentraces.core.config import Config, get_project_state_path, save_project_config
+from opentraces.core.state import StateManager, TraceStatus
+from opentraces.publish.huggingface.upload import HFUploader, RemoteShardError, UploadResult
+from opentraces.publish.huggingface.dataset_card import (
     AUTO_END,
     AUTO_START,
     generate_dataset_card,
@@ -85,7 +85,7 @@ def sample_traces() -> list[TraceRecord]:
 class TestShardNaming:
     def test_shard_name_format(self):
         """Shard names follow traces_{timestamp}_{uuid}.jsonl pattern."""
-        with patch("opentraces.upload.hf_hub.HfApi"):
+        with patch("opentraces.publish.huggingface.upload.HfApi"):
             uploader = HFUploader(token="fake-token", repo_id="user/dataset")
             name = uploader._generate_shard_name()
 
@@ -97,7 +97,7 @@ class TestShardNaming:
 
     def test_shard_names_are_unique(self):
         """Each call generates a unique shard name."""
-        with patch("opentraces.upload.hf_hub.HfApi"):
+        with patch("opentraces.publish.huggingface.upload.HfApi"):
             uploader = HFUploader(token="fake-token", repo_id="user/dataset")
             names = {uploader._generate_shard_name() for _ in range(100)}
         assert len(names) == 100
@@ -106,7 +106,7 @@ class TestShardNaming:
 class TestUploadTraces:
     def test_upload_produces_valid_jsonl(self, sample_traces):
         """Upload serializes traces as valid JSONL."""
-        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
             mock_api = MockApi.return_value
             mock_api.upload_file = MagicMock()
 
@@ -133,7 +133,7 @@ class TestUploadTraces:
 
     def test_upload_empty_traces(self):
         """Upload with empty list returns failure."""
-        with patch("opentraces.upload.hf_hub.HfApi"):
+        with patch("opentraces.publish.huggingface.upload.HfApi"):
             uploader = HFUploader(token="fake-token", repo_id="user/dataset")
             result = uploader.upload_traces([])
 
@@ -142,7 +142,7 @@ class TestUploadTraces:
 
     def test_upload_file_path_in_repo(self, sample_traces):
         """Uploaded file goes to data/ directory."""
-        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
             mock_api = MockApi.return_value
             mock_api.upload_file = MagicMock()
 
@@ -160,7 +160,7 @@ class TestUploadTraces:
 class TestRetryLogic:
     def test_retry_on_failure(self, sample_traces):
         """Upload retries on transient failures."""
-        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
             mock_api = MockApi.return_value
             # Fail twice, succeed on third
             mock_api.upload_file = MagicMock(
@@ -182,7 +182,7 @@ class TestRetryLogic:
 
     def test_retry_exhaustion(self, sample_traces):
         """Upload fails after max retries."""
-        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
             mock_api = MockApi.return_value
             mock_api.upload_file = MagicMock(
                 side_effect=ConnectionError("Server error")
@@ -202,7 +202,7 @@ class TestRetryLogic:
 class TestEnsureRepo:
     def test_ensure_repo_creates_dataset(self):
         """ensure_repo_exists calls create_repo with correct params."""
-        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
             mock_api = MockApi.return_value
             mock_api.create_repo = MagicMock(
                 return_value="https://huggingface.co/datasets/user/dataset"
@@ -226,7 +226,7 @@ class TestEnsureRepo:
 class TestFetchRemoteContentHashes:
     def test_empty_repo_returns_empty_set(self):
         """No shards on remote yields empty hash set."""
-        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
             mock_api = MockApi.return_value
             mock_api.list_repo_files = MagicMock(return_value=["README.md"])
 
@@ -245,7 +245,7 @@ class TestFetchRemoteContentHashes:
             + json.dumps({"trace_id": "t2", "content_hash": "bbb222"}) + "\n"
         )
 
-        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
             mock_api = MockApi.return_value
             mock_api.list_repo_files = MagicMock(
                 return_value=["data/traces_20260301T000000Z_abcd1234.jsonl"]
@@ -267,7 +267,7 @@ class TestFetchRemoteContentHashes:
             + json.dumps({"trace_id": "t2"}) + "\n"
         )
 
-        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
             mock_api = MockApi.return_value
             mock_api.list_repo_files = MagicMock(
                 return_value=["data/traces_20260301T000000Z_abcd1234.jsonl"]
@@ -283,7 +283,7 @@ class TestFetchRemoteContentHashes:
 
     def test_raises_on_shard_download_failure(self, tmp_path):
         """A shard download failure raises RemoteShardError (fail-closed for dedup safety)."""
-        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
             mock_api = MockApi.return_value
             mock_api.list_repo_files = MagicMock(
                 return_value=[
@@ -307,7 +307,7 @@ class TestFetchRemoteContentHashes:
 class TestGetExistingShards:
     def test_lists_shard_files(self):
         """get_existing_shards filters to trace shard files."""
-        with patch("opentraces.upload.hf_hub.HfApi") as MockApi:
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
             mock_api = MockApi.return_value
             mock_api.list_repo_files = MagicMock(
                 return_value=[
@@ -389,7 +389,7 @@ class TestLivePushIntegration:
             "opentraces.cli.load_config",
             lambda: Config(hf_token=token, dataset_visibility="private"),
         )
-        monkeypatch.setattr("opentraces.state.STAGING_DIR", staging_dir)
+        monkeypatch.setattr("opentraces.core.state.STAGING_DIR", staging_dir)
 
         runner = CliRunner()
         result = runner.invoke(main, ["push", "--private", "--repo", repo_id])

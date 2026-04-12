@@ -46,8 +46,8 @@ def project_with_traces(initialized_project):
     """Tier 3: initialized project with a staged trace."""
     project_dir, runner = initialized_project
 
-    from opentraces.state import StateManager, TraceStatus
-    from opentraces.config import get_project_state_path, get_project_staging_dir
+    from opentraces.core.state import StateManager, TraceStatus
+    from opentraces.core.config import get_project_state_path, get_project_staging_dir
     from opentraces_schema import TraceRecord
 
     staging_dir = get_project_staging_dir(project_dir)
@@ -174,8 +174,8 @@ class TestPostInitCommands:
 
     def test_log(self, initialized_project, monkeypatch):
         project_dir, runner = initialized_project
-        from opentraces.config import get_project_state_path
-        from opentraces.state import StateManager as _OrigSM
+        from opentraces.core.config import get_project_state_path
+        from opentraces.core.state import StateManager as _OrigSM
 
         state_path = get_project_state_path(project_dir)
 
@@ -183,7 +183,7 @@ class TestPostInitCommands:
             def __init__(self, state_path=None):
                 super().__init__(state_path=get_project_state_path(project_dir))
 
-        monkeypatch.setattr("opentraces.state.StateManager", ProjectLocalSM)
+        monkeypatch.setattr("opentraces.core.state.StateManager", ProjectLocalSM)
         result = runner.invoke(main, ["log"])
         assert result.exit_code == 0
 
@@ -385,7 +385,7 @@ class TestSessionShowTruncation:
         """Human output should truncate step content > 500 chars."""
         project_dir, runner, trace_id = project_with_traces
         # Inject a long step content into the staging file
-        from opentraces.config import get_project_staging_dir
+        from opentraces.core.config import get_project_staging_dir
         staging_dir = get_project_staging_dir(project_dir)
         staging_file = next(staging_dir.glob("*.jsonl"))
         import json as _json
@@ -405,7 +405,7 @@ class TestSessionShowTruncation:
     def test_session_show_verbose_shows_full_content(self, project_with_traces):
         """--verbose should show full step content without truncation."""
         project_dir, runner, trace_id = project_with_traces
-        from opentraces.config import get_project_staging_dir
+        from opentraces.core.config import get_project_staging_dir
         staging_dir = get_project_staging_dir(project_dir)
         staging_file = next(staging_dir.glob("*.jsonl"))
         import json as _json
@@ -423,7 +423,7 @@ class TestSessionShowTruncation:
     def test_session_show_json_never_truncated(self, project_with_traces):
         """--json mode must return the full record regardless of content length."""
         project_dir, runner, trace_id = project_with_traces
-        from opentraces.config import get_project_staging_dir
+        from opentraces.core.config import get_project_staging_dir
         staging_dir = get_project_staging_dir(project_dir)
         staging_file = next(staging_dir.glob("*.jsonl"))
         import json as _json

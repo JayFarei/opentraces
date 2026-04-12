@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from opentraces.config import Config, TruffleHogConfig
+from opentraces.core.config import Config, TruffleHogConfig
 from opentraces.security.scanner_trufflehog import (
     maybe_run_trufflehog,
 )

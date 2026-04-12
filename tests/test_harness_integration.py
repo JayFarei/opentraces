@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from opentraces.config import Config
-from opentraces.pipeline import process_trace
-from opentraces.agents.claude_code.parser import ClaudeCodeParser
+from opentraces.core.config import Config
+from opentraces.core.pipeline import process_trace
+from opentraces.capture.claude_code.parse import ClaudeCodeParser
 from opentraces_schema import TraceRecord
 
 from opentraces.quality import (

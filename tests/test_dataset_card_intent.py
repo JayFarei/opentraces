@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from opentraces_schema import Agent, Intent, Task, TraceRecord
 
-from opentraces.upload.dataset_card import _compute_stats, _render_stats_section
+from opentraces.publish.huggingface.dataset_card import _compute_stats, _render_stats_section
 
 
 def _t(intent: Intent | None) -> TraceRecord:
