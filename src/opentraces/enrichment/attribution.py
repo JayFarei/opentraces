@@ -164,6 +164,7 @@ def build_attribution(
     *,
     trace_id: str | None = None,
     end_state_changed_files: list[str] | None = None,
+    hook_post_tool_use: dict[str, dict] | None = None,
 ) -> Attribution | None:
     """Derive attribution from Edit and Write tool calls in the steps.
 
@@ -238,16 +239,31 @@ def build_attribution(
 
                 used_fallback = False
                 diff_matched = False
+                hook_matched = False
+                hook_confidence: str | None = None
 
-                # R5: diff hunk is the primary line-range source for
-                # committed changes. If the Edit's new_string appears
-                # in a hunk's + region for this file, use the hunk's
-                # actual lines and stamp diff-sourced (high confidence).
-                hunk = _match_edit_to_hunk(new_string, _hunks_for(file_path))
-                if hunk is not None and hunk.get("added_start") is not None:
-                    start_line = hunk["added_start"]
-                    end_line = hunk["added_end"]
-                    diff_matched = True
+                # R6/R7: hook-captured PostToolUse data is the primary
+                # source. When present for this tool_use_id, it is
+                # authoritative — it was read from disk at the exact
+                # moment the tool call completed.
+                hook_entry = None
+                if hook_post_tool_use and tc.tool_call_id:
+                    hook_entry = hook_post_tool_use.get(tc.tool_call_id)
+                if hook_entry and hook_entry.get("start_line") is not None:
+                    start_line = hook_entry["start_line"]
+                    end_line = hook_entry["end_line"]
+                    hook_matched = True
+                    hook_confidence = hook_entry.get("confidence") or "high"
+                else:
+                    # R5: diff hunk is the second-priority source for
+                    # committed changes. If the Edit's new_string appears
+                    # in a hunk's + region for this file, use the hunk's
+                    # actual lines and stamp diff-sourced (high confidence).
+                    hunk = _match_edit_to_hunk(new_string, _hunks_for(file_path))
+                    if hunk is not None and hunk.get("added_start") is not None:
+                        start_line = hunk["added_start"]
+                        end_line = hunk["added_end"]
+                        diff_matched = True
 
                 if start_line is None:
                     start_line = 1
@@ -262,6 +278,8 @@ def build_attribution(
                     "content_hash": _content_hash(new_string),
                     "used_fallback": used_fallback,
                     "diff_matched": diff_matched,
+                    "hook_matched": hook_matched,
+                    "hook_confidence": hook_confidence,
                 })
 
             elif tool_name == "write":
@@ -315,12 +333,15 @@ def build_attribution(
             confidence = "medium"
 
         # Confidence precedence:
-        #   diff_matched → high (diff is authoritative post-commit)
+        #   hook_matched  → hook's own confidence (high / medium / low)
+        #   diff_matched  → high (diff is authoritative post-commit)
         #   used_fallback → low (we don't actually know where the edit landed)
-        #   else → the overlap/multi-edit bucket computed above
+        #   else          → the overlap/multi-edit bucket computed above
         ranges: list[AttributionRange] = []
         for edit in edits:
-            if edit.get("diff_matched"):
+            if edit.get("hook_matched"):
+                eff_conf = edit.get("hook_confidence") or "high"
+            elif edit.get("diff_matched"):
                 eff_conf = "high"
             elif edit["used_fallback"]:
                 eff_conf = "low"

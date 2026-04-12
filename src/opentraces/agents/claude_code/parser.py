@@ -137,7 +137,8 @@ class ClaudeCodeParser:
         for key in (
             "slug", "stop_reason", "is_compacted", "num_turns",
             "permission_denials", "model_usage", "permission_mode",
-            "mcp_servers", "hook_git_final", "compaction_events",
+            "mcp_servers", "hook_git_final", "hook_post_tool_use",
+            "compaction_events",
             "post_turn_summaries", "session_errors",
         ):
             val = metadata.get(key)
@@ -322,6 +323,21 @@ class ClaudeCodeParser:
                         "messages_removed": data.get("messages_removed"),
                         "messages_kept": data.get("messages_kept"),
                     })
+                elif event == "PostToolUse":
+                    # Plan 041 R6: post-tool-use hook events become the
+                    # primary source for attribution line ranges. Keyed
+                    # by tool_use_id so build_attribution can look up
+                    # the exact post-edit coordinates per Edit/Write.
+                    tool_use_id = data.get("tool_use_id")
+                    if tool_use_id:
+                        metadata.setdefault("hook_post_tool_use", {})[tool_use_id] = {
+                            "tool": data.get("tool"),
+                            "file_path": data.get("file_path"),
+                            "start_line": data.get("start_line"),
+                            "end_line": data.get("end_line"),
+                            "content_hash": data.get("content_hash"),
+                            "confidence": data.get("confidence"),
+                        }
 
             # Extract model from assistant message lines (fallback if init missing)
             if line_type == "assistant" and not metadata.get("model"):

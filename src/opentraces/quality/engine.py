@@ -625,8 +625,11 @@ def assess_multi_project(
                     record.steps, project_name=proj_basename,
                 )
                 record.dependencies = sorted(set(step_deps + import_deps))
+                meta_qe = record.metadata or {}
                 record.attribution = build_attribution(
-                    record.steps, trace_id=record.trace_id
+                    record.steps,
+                    trace_id=record.trace_id,
+                    hook_post_tool_use=meta_qe.get("hook_post_tool_use") or None,
                 )
                 # Detect commits from Bash tool calls in the session itself
                 step_outcome = detect_commits_from_steps(record.steps)
