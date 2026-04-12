@@ -677,7 +677,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
 
         # Try the real upload pipeline
         try:
-            from ..upload.hf_hub import HFUploader
+            from ..publish.huggingface.upload import HFUploader
             from opentraces_schema import TraceRecord
 
             cfg = load_config()

@@ -1,32 +1,14 @@
-"""Trace format exporters.
-
-Registries map format names to exporter classes (not instances)
-for lazy instantiation. The CLI imports these registries inside
-command functions.
-"""
+"""Deprecated shim. Use `opentraces.publish` instead."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import warnings
 
-if TYPE_CHECKING:
-    from .base import FormatExporter
+warnings.warn(
+    "opentraces.exporters is deprecated, use opentraces.publish",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-EXPORTERS: dict[str, type] = {}
-
-_registered = False
-
-
-def _register_defaults() -> None:
-    from .atif import ATIFExporter
-
-    EXPORTERS["atif"] = ATIFExporter
-
-
-def get_exporters() -> dict[str, type]:
-    """Get the EXPORTERS registry, registering defaults on first call."""
-    global _registered
-    if not _registered:
-        _register_defaults()
-        _registered = True
-    return EXPORTERS
+from opentraces.publish import get_exporters  # noqa: F401,E402
+from opentraces.publish import _EXPORTERS as EXPORTERS  # noqa: F401,E402

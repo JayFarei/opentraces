@@ -506,7 +506,7 @@ async def _choose_remote_interactively_async(default_repo: str) -> tuple[str | N
     username = identity.get("name", "unknown")
 
     try:
-        from .upload.hf_hub import HFUploader
+        from .publish.huggingface.upload import HFUploader
 
         uploader = HFUploader(token=cfg.hf_token, repo_id="placeholder")
         existing = uploader.list_opentraces_datasets(username)
@@ -1412,8 +1412,8 @@ def assess_remote(repo: str, judge: bool, judge_model: str, limit: int, rewrite_
     from .quality.engine import assess_batch, generate_report
     from .quality.gates import check_gate
     from .quality.summary import build_summary
-    from .upload.hf_hub import HFUploader
-    from .upload.dataset_card import generate_dataset_card
+    from .publish.huggingface.upload import HFUploader
+    from .publish.huggingface.dataset_card import generate_dataset_card
     from .config import load_config
     from opentraces_schema import TraceRecord
 
@@ -2932,8 +2932,8 @@ def _assess_dataset(repo_id: str, judge: bool = False, judge_model: str = "haiku
     from .quality.engine import assess_batch, generate_report
     from .quality.gates import check_gate
     from .quality.summary import build_summary
-    from .upload.hf_hub import HFUploader, RemoteShardError
-    from .upload.dataset_card import generate_dataset_card
+    from .publish.huggingface.upload import HFUploader, RemoteShardError
+    from .publish.huggingface.dataset_card import generate_dataset_card
     from .config import load_config
 
     config = load_config()
@@ -3327,8 +3327,8 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     from .config import get_project_staging_dir, load_project_config, save_project_config
     from .inbox import load_traces
     from .state import StateManager, TraceStatus, StagingLock
-    from .upload.hf_hub import HFUploader
-    from .upload.dataset_card import generate_dataset_card
+    from .publish.huggingface.upload import HFUploader
+    from .publish.huggingface.dataset_card import generate_dataset_card
     from opentraces_schema import TraceRecord
 
     # Plan 032: --llm-review gate — abort before touching the uploader if any
@@ -3701,7 +3701,7 @@ def export(output_format: str, output_path: str | None) -> None:
     out = Path(output_path) if output_path else Path.cwd() / "opentraces-export.jsonl"
 
     if output_format == "agent-trace":
-        from .exporters.agent_trace import export_to_jsonl
+        from .publish.agent_trace import export_to_jsonl
         n = export_to_jsonl(records, out)
         human_echo(f"exported {n} traces to {out} (agent-trace/v0.1.0)")
         emit_json({"status": "ok", "format": output_format, "count": n, "output": str(out)})
