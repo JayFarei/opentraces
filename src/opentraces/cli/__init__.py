@@ -1574,6 +1574,11 @@ def status(limit: int) -> None:
         table.add_column("Commit", no_wrap=True)
         table.add_column("", no_wrap=True)  # intent-source dot
 
+        # Coverage counters drive the "setup hint" block below the legend.
+        intent_hits = 0  # rows whose title came from intent.title
+        git_link_hits = 0  # rows with at least one git_link populated
+        rows_rendered = 0
+
         for sf in staged_files:
             try:
                 data = sf.read_text().strip()
@@ -1642,6 +1647,11 @@ def status(limit: int) -> None:
                     commit_cell,
                     intent_cell,
                 )
+                rows_rendered += 1
+                if source == "intent":
+                    intent_hits += 1
+                if chip is not None:
+                    git_link_hits += 1
             except Exception:
                 table.add_row(
                     "[red]?[/]", "", f"[dim]{sf.name}[/]", "", "", "",
@@ -1655,6 +1665,67 @@ def status(limit: int) -> None:
             "[yellow]~[/][dim] diverged[/]  [dim]? overlap  · orphan[/]",
             highlight=False,
         )
+
+        # Setup hints — only shown when coverage is low across the visible
+        # window. Dim and terse so they don't nag once hooks are active.
+        if rows_rendered > 0:
+            hints = []
+            git_hook_installed = (project_dir / ".git" / "hooks" / "post-commit").exists()
+            cc_settings = Path.home() / ".claude" / "settings.json"
+            cc_hook_stop = False
+            if cc_settings.exists():
+                try:
+                    import json as _json
+                    data = _json.loads(cc_settings.read_text())
+                    stop_blocks = data.get("hooks", {}).get("Stop", []) or []
+                    for block in stop_blocks:
+                        if not isinstance(block, dict):
+                            continue
+                        # Two legal shapes: {"hooks": [{command,...}]} and
+                        # {"type": "command", "command": "..."} at top level.
+                        for h in block.get("hooks", []) or []:
+                            if "opentraces_on_stop" in (h.get("command") or ""):
+                                cc_hook_stop = True
+                                break
+                        if "opentraces_on_stop" in (block.get("command") or ""):
+                            cc_hook_stop = True
+                        if cc_hook_stop:
+                            break
+                except Exception:
+                    pass
+
+            if git_link_hits == 0:
+                if git_hook_installed:
+                    hints.append(
+                        "no commit links yet  "
+                        f"{_dim('— links populate on next git commit')}"
+                    )
+                else:
+                    hints.append(
+                        "no commit links  "
+                        f"{_dim('— run')} opentraces setup git "
+                        f"{_dim('to install the post-commit hook')}"
+                    )
+
+            if intent_hits == 0:
+                if cc_hook_stop:
+                    hints.append(
+                        "no intent summaries yet  "
+                        f"{_dim('— new sessions auto-enrich; for existing traces run')} "
+                        f"opentraces enrich <trace_path>"
+                    )
+                else:
+                    hints.append(
+                        "no intent summaries  "
+                        f"{_dim('— run')} opentraces hooks install "
+                        f"{_dim('for new sessions, or')} opentraces enrich <trace_path> "
+                        f"{_dim('for existing')}"
+                    )
+
+            if hints:
+                console.print()
+                for h in hints:
+                    console.print(f"  {_warn('hint:')} {h}", highlight=False)
 
     click.echo()
     click.echo(
