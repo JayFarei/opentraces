@@ -1,0 +1,292 @@
+schema_version:
+  description: Schema version string
+  good_example: ''
+  failure_modes: []
+trace_id:
+  description: Random UUID
+  good_example: ''
+  failure_modes: []
+session_id:
+  description: Claude Code session ID
+  good_example: ''
+  failure_modes: []
+content_hash:
+  description: SHA-256 of record content
+  good_example: ''
+  failure_modes: []
+timestamp_start:
+  description: ISO 8601 start time
+  good_example: ''
+  failure_modes: []
+timestamp_end:
+  description: ISO 8601 end time
+  good_example: ''
+  failure_modes: []
+task.description:
+  description: First user message (<=500 chars)
+  good_example: ''
+  failure_modes: []
+task.source:
+  description: How the task was initiated
+  good_example: ''
+  failure_modes: []
+task.repository:
+  description: owner/repo format
+  good_example: ''
+  failure_modes: []
+task.base_commit:
+  description: Git SHA at task start
+  good_example: ''
+  failure_modes: []
+agent.name:
+  description: Agent identifier
+  good_example: ''
+  failure_modes: []
+agent.version:
+  description: CLI version string
+  good_example: ''
+  failure_modes: []
+agent.model:
+  description: provider/model format
+  good_example: ''
+  failure_modes: []
+environment.os:
+  description: Operating system
+  good_example: ''
+  failure_modes: []
+environment.shell:
+  description: Shell type
+  good_example: ''
+  failure_modes: []
+environment.vcs.type:
+  description: git or none
+  good_example: ''
+  failure_modes: []
+environment.vcs.base_commit:
+  description: HEAD SHA
+  good_example: ''
+  failure_modes: []
+environment.vcs.branch:
+  description: Branch name
+  good_example: ''
+  failure_modes: []
+environment.vcs.diff:
+  description: Unified diff
+  good_example: ''
+  failure_modes: []
+environment.language_ecosystem:
+  description: Detected languages
+  good_example: ''
+  failure_modes: []
+system_prompts:
+  description: Deduplicated system prompts by hash
+  good_example: ''
+  failure_modes: []
+tool_definitions:
+  description: Tool schemas from session
+  good_example: ''
+  failure_modes: []
+steps:
+  description: TAO loop steps
+  good_example: ''
+  failure_modes: []
+steps[].content:
+  description: Text content
+  good_example: ''
+  failure_modes: []
+steps[].reasoning_content:
+  description: Chain-of-thought
+  good_example: ''
+  failure_modes: []
+steps[].model:
+  description: Per-step model ID
+  good_example: ''
+  failure_modes: []
+steps[].system_prompt_hash:
+  description: Ref into system_prompts map
+  good_example: ''
+  failure_modes: []
+steps[].agent_role:
+  description: main/explore/plan
+  good_example: ''
+  failure_modes: []
+steps[].parent_step:
+  description: Sub-agent hierarchy link
+  good_example: ''
+  failure_modes: []
+steps[].call_type:
+  description: main/subagent/warmup
+  good_example: ''
+  failure_modes: []
+steps[].subagent_trajectory_ref:
+  description: Sub-agent session ID
+  good_example: ''
+  failure_modes: []
+steps[].tools_available:
+  description: Tool names in this step
+  good_example: ''
+  failure_modes: []
+steps[].timestamp:
+  description: Per-step timestamp
+  good_example: ''
+  failure_modes: []
+steps[].tool_calls[].tool_call_id:
+  description: Unique tool call ID
+  good_example: ''
+  failure_modes: []
+steps[].tool_calls[].tool_name:
+  description: Tool identifier
+  good_example: ''
+  failure_modes: []
+steps[].tool_calls[].input:
+  description: Tool input dict
+  good_example: ''
+  failure_modes: []
+steps[].tool_calls[].duration_ms:
+  description: Execution duration
+  good_example: ''
+  failure_modes: []
+steps[].observations[].source_call_id:
+  description: Link to tool call
+  good_example: ''
+  failure_modes: []
+steps[].observations[].content:
+  description: Result content (<=10K)
+  good_example: ''
+  failure_modes: []
+steps[].observations[].output_summary:
+  description: Preview (<=200 chars)
+  good_example: ''
+  failure_modes: []
+steps[].observations[].error:
+  description: Error info
+  good_example: ''
+  failure_modes: []
+steps[].snippets[].file_path:
+  description: File path
+  good_example: ''
+  failure_modes: []
+steps[].snippets[].language:
+  description: Detected language
+  good_example: ''
+  failure_modes: []
+steps[].snippets[].text:
+  description: Code content (<=5K)
+  good_example: ''
+  failure_modes: []
+steps[].snippets[].start_line:
+  description: Start line
+  good_example: ''
+  failure_modes: []
+steps[].snippets[].end_line:
+  description: End line
+  good_example: ''
+  failure_modes: []
+steps[].snippets[].source_step:
+  description: Step reference
+  good_example: ''
+  failure_modes: []
+steps[].token_usage.input_tokens:
+  description: Input tokens
+  good_example: ''
+  failure_modes: []
+steps[].token_usage.output_tokens:
+  description: Output tokens
+  good_example: ''
+  failure_modes: []
+steps[].token_usage.cache_read_tokens:
+  description: Cache read tokens
+  good_example: ''
+  failure_modes: []
+steps[].token_usage.cache_write_tokens:
+  description: Cache write tokens
+  good_example: ''
+  failure_modes: []
+steps[].token_usage.prefix_reuse_tokens:
+  description: Prefix reuse tokens
+  good_example: ''
+  failure_modes: []
+outcome.success:
+  description: Success boolean
+  good_example: ''
+  failure_modes: []
+outcome.signal_source:
+  description: Signal source type
+  good_example: ''
+  failure_modes: []
+outcome.signal_confidence:
+  description: derived/inferred/annotated
+  good_example: ''
+  failure_modes: []
+outcome.description:
+  description: Outcome description
+  good_example: ''
+  failure_modes: []
+outcome.patch:
+  description: Unified diff from session
+  good_example: ''
+  failure_modes: []
+outcome.committed:
+  description: Whether session produced a commit
+  good_example: ''
+  failure_modes: []
+outcome.commit_sha:
+  description: Commit SHA
+  good_example: ''
+  failure_modes: []
+attribution:
+  description: Agent Trace attribution block
+  good_example: ''
+  failure_modes: []
+attribution.files:
+  description: Attributed files list
+  good_example: ''
+  failure_modes: []
+metrics.total_steps:
+  description: Total step count
+  good_example: ''
+  failure_modes: []
+metrics.total_input_tokens:
+  description: Sum of input tokens
+  good_example: ''
+  failure_modes: []
+metrics.total_output_tokens:
+  description: Sum of output tokens
+  good_example: ''
+  failure_modes: []
+metrics.total_duration_s:
+  description: Wall clock seconds
+  good_example: ''
+  failure_modes: []
+metrics.cache_hit_rate:
+  description: Cache hit rate [0.0, 1.0]
+  good_example: ''
+  failure_modes: []
+metrics.estimated_cost_usd:
+  description: Estimated cost in USD
+  good_example: ''
+  failure_modes: []
+security.scanned:
+  description: Whether security scan was applied
+  good_example: ''
+  failure_modes: []
+security.flags_reviewed:
+  description: Flags reviewed count
+  good_example: ''
+  failure_modes: []
+security.redactions_applied:
+  description: Redactions applied count
+  good_example: ''
+  failure_modes: []
+security.classifier_version:
+  description: Classifier version
+  good_example: ''
+  failure_modes: []
+dependencies:
+  description: Package names from manifests
+  good_example: ''
+  failure_modes: []
+metadata:
+  description: Catch-all metadata dict
+  good_example: ''
+  failure_modes: []

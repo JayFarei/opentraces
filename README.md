@@ -232,6 +232,15 @@ pip install -e ".[dev]"
 pytest tests/ -v
 ```
 
+### Field-intent auditor (dev-only)
+
+Two hidden commands help contributors catch parser and enrichment regressions that deterministic checks miss:
+
+- `opentraces _audit-spec` keeps `packages/opentraces-schema/src/opentraces_schema/field_intent.yaml` in sync with `TraceRecord`. Adding a schema field naturally pairs with writing its intent; existing entries are never touched.
+- `opentraces _audit-run --sample N` samples staged traces (or a remote `--dataset user/repo`) and runs pure-Python cross-field invariants plus per-field LLM value sanity via `claude -p`. Emits `audit_report.md` + `findings.json` under `.opentraces/reports/`.
+
+Not an upload gate. Findings are informational, for humans triaging parser and enrichment bugs.
+
 ## License
 
 MIT
