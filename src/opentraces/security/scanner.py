@@ -77,6 +77,60 @@ _INPUT_TOOLS = {"bash", "write", "edit", "Write", "Edit", "Bash"}
 _RESULT_TOOLS = {"read", "grep", "glob", "Read", "Grep", "Glob"}
 
 
+# ---------------------------------------------------------------------------
+# Field-filter calibration (Part E of plan 032)
+#
+# Path suffixes and prefixes that never contain PII or secrets for an agent
+# trace. Used by Tier 1.8 (LLM PII detection) and any future scanner tiers
+# that walk the JSON tree by key path. The existing regex+entropy pipeline
+# is value-only and already ignores these in practice; exposing them as a
+# shared API keeps behaviour consistent across tiers.
+# ---------------------------------------------------------------------------
+
+_SAFE_FIELD_SUFFIXES: tuple[str, ...] = (
+    ".type",
+    ".id",
+    ".timestamp",
+    ".stopReason",
+    ".model",
+    ".provider",
+    ".parentId",
+    ".mimeType",
+)
+
+_SAFE_FIELD_PREFIXES: tuple[str, ...] = (
+    "usage.",
+    "message.usage.",
+)
+
+_BASE64_MIN_LEN: int = 256
+
+
+def is_safe_field_path(path: str) -> bool:
+    """Return True if ``path`` names a metadata field never containing PII."""
+    if not path:
+        return False
+    if any(path.endswith(suffix) for suffix in _SAFE_FIELD_SUFFIXES):
+        return True
+    if any(path.startswith(prefix) for prefix in _SAFE_FIELD_PREFIXES):
+        return True
+    return False
+
+
+def is_base64_blob(value: object, siblings: dict[str, object]) -> bool:
+    """Return True if ``value`` looks like inline base64 media data.
+
+    Heuristic: sibling ``mimeType`` key present and the string value is
+    at least ``_BASE64_MIN_LEN`` characters long. Used to skip inline
+    images and other binary blobs during scanning.
+    """
+    if not isinstance(value, str):
+        return False
+    if "mimeType" not in siblings:
+        return False
+    return len(value) >= _BASE64_MIN_LEN
+
+
 def _classify_tool(tool_name: str) -> FieldType:
     """Classify a tool name into input or result field type."""
     base = tool_name.split("__")[-1] if "__" in tool_name else tool_name
