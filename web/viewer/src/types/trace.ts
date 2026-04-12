@@ -178,11 +178,18 @@ export type SessionStage =
   | "pushed"
   | "rejected";
 
+export interface LLMReviewFlaggedPart {
+  reason: string;
+  evidence: string;
+}
+
 export interface LLMReviewSummary {
   status: "not_run" | "complete" | string;
-  shareable?: "yes" | "no" | "unclear";
-  missed_sensitive_data?: "yes" | "no" | "unclear";
+  shareable?: "yes" | "no" | "manual_review";
+  missed_sensitive_data?: "yes" | "no" | "maybe";
   summary?: string;
+  flagged_parts?: LLMReviewFlaggedPart[];
+  badge?: string;
 }
 
 export interface SessionListItem {

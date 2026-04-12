@@ -1,6 +1,7 @@
 import { useSelection } from "../../contexts/SelectionContext";
 import { cleanSessionName } from "../../lib/format";
 import type { SessionListItem } from "../../types/trace";
+import { VerdictBadge } from "./VerdictBadge";
 
 interface SessionRowProps {
   session: SessionListItem;
@@ -42,6 +43,9 @@ export function SessionRow({ session }: SessionRowProps) {
         <span className="text-[var(--text-dim)]">{session.step_count}s</span>
         {session.flag_count > 0 && (
           <span className="text-[var(--red)]">{session.flag_count}f</span>
+        )}
+        {session.llm_review && session.llm_review.status === "complete" && (
+          <VerdictBadge review={session.llm_review} compact />
         )}
       </div>
       {/* Line 2: task keywords */}
