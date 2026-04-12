@@ -19,7 +19,7 @@ from pathlib import Path
 
 from opentraces_schema import GitLink, TraceRecord
 
-from . import notes_store
+from . import jj_support, notes_store
 from .correlator import correlate
 
 
@@ -115,12 +115,24 @@ def run(
     repo_url = remote_url(cwd)
     branch = current_branch(cwd)
 
+    # R36: prefer jj change_id when available. change_id is rebase +
+    # amend invariant, so a GitLink pinned to it survives history
+    # rewrites that would otherwise orphan a sha-based pin.
+    vcs_type = "git"
+    revision = sha
+    if jj_support.is_jj_repo(cwd):
+        change_id = jj_support.current_change_id(cwd)
+        if change_id:
+            vcs_type = "jj"
+            revision = change_id
+
     candidates = filter_recent(traces, timedelta(hours=window_hours))
     results: list[tuple[str, list[GitLink]]] = []
     lines_to_append: list[str] = []
     for trace in candidates:
         links = correlate(
-            trace, sha, diff, repo_url=repo_url, branch=branch,
+            trace, revision, diff, repo_url=repo_url, branch=branch,
+            vcs_type=vcs_type,
         )
         if not links or links[0].tier == "orphan":
             continue
@@ -140,7 +152,7 @@ def run(
             if trace.attribution is not None:
                 trace.attribution.revision = {
                     "vcs_type": links[0].vcs_type,
-                    "revision": sha,
+                    "revision": revision,
                 }
         if tier == "tool_emitted_with_divergence":
             _stamp_divergence(trace)
@@ -150,6 +162,11 @@ def run(
 
     if lines_to_append:
         try:
+            # Notes storage is always keyed by the git sha — `git notes`
+            # attaches to an object, and for jj we still have the
+            # underlying git sha of the current commit. The link's
+            # revision field may be jj's change_id; the notes anchor
+            # remains the git sha.
             notes_store.append(sha, lines_to_append, cwd)
         except Exception:
             pass  # notes append is best-effort; never block

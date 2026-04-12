@@ -129,6 +129,39 @@ def _handle_write(tool_input: dict) -> dict | None:
     }
 
 
+def _dual_emit_agent_trace(cwd: str | None, data: dict, session_id: str | None) -> None:
+    """Plan 041 R37: append an Agent Trace-compatible attribution line
+    to `.agent-trace/traces.jsonl` in the repo root so any opentraces-
+    instrumented repo is natively Agent Trace-readable at rest.
+
+    Best-effort: silently swallows every error path. Skipped when cwd
+    isn't set.
+    """
+    if not cwd:
+        return
+    try:
+        from pathlib import Path
+        root = Path(cwd)
+        target_dir = root / ".agent-trace"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        out = {
+            "schema": "agent-trace/v0.1.0",
+            "session_id": session_id,
+            "file_path": data.get("file_path"),
+            "start_line": data.get("start_line"),
+            "end_line": data.get("end_line"),
+            "content_hash": data.get("content_hash"),
+            "confidence": data.get("confidence"),
+            "tool": data.get("tool"),
+            "tool_use_id": data.get("tool_use_id"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(target_dir / "traces.jsonl", "a") as f:
+            f.write(json.dumps(out) + "\n")
+    except Exception:
+        pass
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -142,6 +175,8 @@ def main() -> None:
     tool_name = (payload.get("tool_name") or "").strip()
     tool_input = payload.get("tool_input") or {}
     tool_use_id = payload.get("tool_use_id")
+    session_id = payload.get("session_id")
+    cwd = payload.get("cwd")
 
     if tool_name == "Edit":
         data = _handle_edit(tool_input)
@@ -154,7 +189,7 @@ def main() -> None:
         sys.exit(0)
 
     data["tool_use_id"] = tool_use_id
-    data["session_id"] = payload.get("session_id")
+    data["session_id"] = session_id
 
     line = json.dumps({
         "type": "opentraces_hook",
@@ -168,6 +203,8 @@ def main() -> None:
             f.write(line + "\n")
     except Exception:
         pass  # Never break Claude Code on our account
+
+    _dual_emit_agent_trace(cwd, data, session_id)
 
 
 if __name__ == "__main__":
