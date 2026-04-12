@@ -72,12 +72,27 @@ def _load_project_state():
 
 
 def _load_trace_record(staging_dir: Path, trace_id: str):
-    """Load a TraceRecord from staging by trace_id."""
+    """Load a TraceRecord from staging by trace_id.
+
+    Accepts the full UUID or a unique prefix (>=4 chars) matching exactly
+    one staging file. Ambiguous prefixes return (None, None).
+    """
     from opentraces_schema import TraceRecord
 
+    # Exact file first (fast path for full UUIDs).
     staging_file = staging_dir / f"{trace_id}.jsonl"
     if not staging_file.exists():
-        return None, staging_file
+        # Prefix match fallback — only if user gave at least 4 chars.
+        if len(trace_id) < 4:
+            return None, staging_file
+        matches = list(staging_dir.glob(f"{trace_id}*.jsonl"))
+        if not matches:
+            return None, staging_file
+        if len(matches) > 1:
+            # Ambiguous prefix.
+            return None, staging_file
+        staging_file = matches[0]
+
     data = staging_file.read_text().strip()
     if not data:
         return None, staging_file
@@ -218,8 +233,16 @@ def session_show(trace_id: str, verbose: bool, markdown: bool) -> None:
     record, staging_file = _load_trace_record(staging_dir, trace_id)
 
     if record is None:
-        click.echo(f"Trace not found: {trace_id}")
-        emit_json(error_response("NOT_FOUND", "session", f"No staging file for {trace_id}"))
+        # Distinguish "no match" from "ambiguous prefix" so users understand.
+        matches = list(staging_dir.glob(f"{trace_id}*.jsonl")) if len(trace_id) >= 4 else []
+        if len(matches) > 1:
+            click.echo(f"'{trace_id}' is ambiguous ({len(matches)} matches). Use more characters.")
+            for m in matches[:5]:
+                click.echo(f"  {m.stem}")
+            emit_json(error_response("AMBIGUOUS", "session", f"'{trace_id}' matches {len(matches)} traces"))
+        else:
+            click.echo(f"Trace not found: {trace_id}")
+            emit_json(error_response("NOT_FOUND", "session", f"No staging file for {trace_id}"))
         sys.exit(6)
 
     entry = state.get_trace(trace_id)
@@ -255,13 +278,44 @@ def session_show(trace_id: str, verbose: bool, markdown: bool) -> None:
     record_dict = json.loads(record.model_dump_json())
     record_dict["_stage"] = visible_stage
 
-    human_echo(f"Trace: {trace_id}")
-    human_echo(f"Stage: {visible_stage}")
-    human_echo(f"Task:  {record.task.description or 'untitled'}")
-    human_echo(f"Agent: {record.agent.name} ({record.agent.model or 'unknown'})")
-    human_echo(f"Steps: {len(record.steps)}")
-    if record.metrics:
-        human_echo(f"Cost:  ${record.metrics.estimated_cost_usd:.4f}" if record.metrics.estimated_cost_usd else "")
+    from opentraces import cli as _cli
+
+    human_echo(f"{_cli._dim('Trace: ')}    {record.trace_id}")
+    human_echo(f"{_cli._dim('Stage: ')}    {visible_stage}")
+    human_echo(f"{_cli._dim('Task:  ')}    {record.task.description or 'untitled'}")
+    human_echo(f"{_cli._dim('Agent: ')}    {record.agent.name} ({record.agent.model or 'unknown'})")
+    human_echo(f"{_cli._dim('Steps: ')}    {len(record.steps)}")
+    if record.metrics and record.metrics.estimated_cost_usd:
+        human_echo(f"{_cli._dim('Cost:  ')}    ${record.metrics.estimated_cost_usd:.4f}")
+    if record.intent and record.intent.title:
+        human_echo(f"{_cli._dim('Intent:')}    {record.intent.title}")
+    if record.session_id:
+        human_echo(
+            f"{_cli._dim('Session:')}   {record.session_id[:18]}…  "
+            f"{_cli._dim(f'(opentraces resume {record.trace_id[:8]})')}"
+        )
+
+    # Reverse-view: which commits did this session produce?
+    # This is the "session spine → commits" direction — complements
+    # `opentraces blame <sha>` which goes commit → sessions.
+    if record.git_links:
+        human_echo("")
+        n = len(record.git_links)
+        human_echo(_cli._dim(f"Commits produced ({n}):"))
+        tier_glyph = {
+            "tool_emitted": ("✓", "green"),
+            "tool_emitted_with_divergence": ("~", "yellow"),
+            "overlapping": ("?", "bright_black"),
+            "orphan": ("·", "bright_black"),
+        }
+        for gl in record.git_links:
+            glyph, color = tier_glyph.get(gl.tier, ("·", "bright_black"))
+            sha = (gl.revision or "")[:10]
+            styled_glyph = click.style(glyph, fg=color)
+            human_echo(f"  {styled_glyph}  {_cli._bold(sha)}   {_cli._dim(gl.tier)}")
+    elif record.lifecycle == "provisional":
+        human_echo("")
+        human_echo(_cli._dim("Commits produced: none yet (provisional — install the git hook to correlate)"))
 
     _STEP_TRUNCATE = 500
     for i, step in enumerate(record.steps):
