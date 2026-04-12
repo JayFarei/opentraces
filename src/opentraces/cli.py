@@ -3237,13 +3237,57 @@ def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
 @click.option("--gated", is_flag=True, help="Enable gated access (auto-approve) on the dataset")
 @click.option("--repo", default=None, help="HF dataset repo (default: username/opentraces)")
 @click.option("--assess", "run_assess", is_flag=True, help="Run quality assessment after upload and include scores in dataset card")
-def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None, run_assess: bool) -> None:
+@click.option("--llm-review", "llm_review", is_flag=True,
+              help="Require a non-blocking LLM review verdict on every committed trace before upload (Plan 032 Tier 2).")
+@click.option("--no-trufflehog", "no_trufflehog", is_flag=True,
+              help="One-shot override: skip Tier 1.5 TruffleHog scanning for this push only.")
+def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None,
+         run_assess: bool, llm_review: bool, no_trufflehog: bool) -> None:
     """Upload committed traces to HuggingFace Hub."""
-    from .config import load_project_config, save_project_config
+    from .config import get_project_staging_dir, load_project_config, save_project_config
+    from .inbox import load_traces
     from .state import StateManager, TraceStatus, StagingLock
     from .upload.hf_hub import HFUploader
     from .upload.dataset_card import generate_dataset_card
     from opentraces_schema import TraceRecord
+
+    # Plan 032: --llm-review gate — abort before touching the uploader if any
+    # committed trace lacks a verdict or has a blocking one.
+    if llm_review:
+        staging = get_project_staging_dir(Path.cwd())
+        pending_block: list[str] = []
+        if staging.exists():
+            for rec in load_traces(staging):
+                meta = (rec.get("metadata") or {}).get("llm_review") or {}
+                status = meta.get("status")
+                shareable = meta.get("shareable")
+                missed = meta.get("missed_sensitive_data")
+                if status != "complete":
+                    pending_block.append(
+                        f"{rec.get('trace_id', '?')} (not reviewed)"
+                    )
+                    continue
+                if shareable == "no" or missed == "yes":
+                    pending_block.append(
+                        f"{rec.get('trace_id', '?')} (verdict: shareable={shareable}, missed={missed})"
+                    )
+        if pending_block:
+            human_echo("Aborting: --llm-review requires a clean verdict for every committed trace.")
+            for entry in pending_block:
+                human_echo(f"  - {entry}")
+            human_hint("Run: opentraces review-llm")
+            emit_json(error_response(
+                "LLM_REVIEW_BLOCKED", "upload",
+                f"{len(pending_block)} trace(s) lack a shareable verdict",
+                "Run 'opentraces review-llm' to produce verdicts, then retry.",
+            ))
+            sys.exit(3)
+
+    if no_trufflehog:
+        # One-shot override. Only relevant when Tier 1.5 is enabled in config;
+        # push does not invoke trufflehog directly today, but logging the
+        # override keeps it obvious in CI if the push later inherits the tier.
+        human_echo("[--no-trufflehog] Tier 1.5 scanning skipped for this push.")
 
     cfg = load_config()
     if private and public:
@@ -3912,7 +3956,7 @@ def blame_cmd(target: str, json_out: bool) -> None:
 @click.option("--uninstall", is_flag=True, help="Remove the hook instead of installing.")
 def setup_git(uninstall: bool) -> None:
     """Install/remove the opentraces post-commit hook (plan 041 R21)."""
-    from .enrichment.git import hook_installer as git_hook
+    from .installers import git_hook
     if uninstall:
         git_hook.remove(Path.cwd())
         human_echo("opentraces post-commit hook removed.")
