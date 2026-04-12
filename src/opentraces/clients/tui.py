@@ -20,10 +20,10 @@ from textual.containers import Horizontal, Vertical
 from textual.events import Key
 from textual.widgets import ListItem, ListView, RichLog, Static
 
-from ..config import STAGING_DIR, get_project_state_path, load_project_config
-from ..inbox import get_stage, load_traces
-from ..state import StateManager, TraceStatus
-from ..workflow import OPENTRACES_ASCII, VISIBLE_STAGE_ORDER, resolve_visible_stage, stage_label
+from ..core.config import STAGING_DIR, get_project_state_path, load_project_config
+from ..core.inbox import get_stage, load_traces
+from ..core.state import StateManager, TraceStatus
+from ..core.workflow import OPENTRACES_ASCII, VISIBLE_STAGE_ORDER, resolve_visible_stage, stage_label
 
 logger = logging.getLogger(__name__)
 

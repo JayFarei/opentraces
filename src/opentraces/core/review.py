@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
-from ..inbox import redact_step
-from ..state import StateManager, TraceStatus
+from .inbox import redact_step
+from .state import StateManager, TraceStatus
 
 logger = logging.getLogger(__name__)
 

@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 from pathlib import Path
 
 from . import __version__
-from .config import auth_identity, load_config, load_project_config, save_config
-from .workflow import (
+from .core.config import auth_identity, load_config, load_project_config, save_config
+from .core.workflow import (
     DEFAULT_AGENT,
     DEFAULT_PUSH_POLICY,
     DEFAULT_REMOTE_NAME,
@@ -167,7 +167,7 @@ def _default_repo(identity: dict | None) -> str:
 
 
 def _launch_tui_ui(fullscreen: bool = False) -> None:
-    from .config import get_project_staging_dir
+    from .core.config import get_project_staging_dir
     from .clients.tui import OpenTracesApp
 
     project_staging = get_project_staging_dir(Path.cwd())
@@ -176,7 +176,7 @@ def _launch_tui_ui(fullscreen: bool = False) -> None:
 
 
 def _launch_web_ui(port: int = 5050, open_browser: bool = False) -> None:
-    from .config import get_project_staging_dir, get_project_state_path
+    from .core.config import get_project_staging_dir, get_project_state_path
     from .clients.web_server import create_app
 
     project_staging = get_project_staging_dir(Path.cwd())
@@ -275,7 +275,7 @@ HF_DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code"
 
 def _login_impl(token: bool) -> None:
     """Log in to HuggingFace Hub (like gh auth login)."""
-    from .config import save_credentials, clear_credentials, CREDENTIALS_PATH
+    from .core.config import save_credentials, clear_credentials, CREDENTIALS_PATH
 
     config = load_config()
 
@@ -309,7 +309,7 @@ def _login_impl(token: bool) -> None:
 
 
 def _logout_impl() -> None:
-    from .config import clear_credentials, CREDENTIALS_PATH
+    from .core.config import clear_credentials, CREDENTIALS_PATH
 
     if CREDENTIALS_PATH.exists():
         clear_credentials()
@@ -586,7 +586,7 @@ async def _choose_remote_interactively_async(default_repo: str) -> tuple[str | N
 
 def _current_project_session_dir(project_dir: Path, cfg=None) -> Path | None:
     """Return the Claude Code session directory for the current repo, if present."""
-    from .config import get_projects_path
+    from .core.config import get_projects_path
 
     if cfg is None:
         cfg = load_config()
@@ -598,10 +598,10 @@ def _current_project_session_dir(project_dir: Path, cfg=None) -> Path | None:
 
 def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=None) -> tuple[int, int]:
     """Import existing session files into the project's local inbox."""
-    from .config import load_project_config, get_project_staging_dir, get_project_state_path
+    from .core.config import load_project_config, get_project_staging_dir, get_project_state_path
     from .capture.claude_code import ClaudeCodeParser
-    from .pipeline import process_trace
-    from .state import StateManager, TraceStatus, ProcessedFile
+    from .core.pipeline import process_trace
+    from .core.state import StateManager, TraceStatus, ProcessedFile
 
     if cfg is None:
         cfg = load_config()
@@ -807,7 +807,7 @@ def init(
 
     Sets up the repo-local inbox, agent hooks, policies, and optional remote.
     """
-    from .config import load_project_config, save_project_config
+    from .core.config import load_project_config, save_project_config
 
     project_dir = Path.cwd()
     ot_dir = project_dir / ".opentraces"
@@ -901,7 +901,7 @@ def init(
                         inactive="Skip",
                     )
                     if should_login:
-                        from .config import save_credentials, CREDENTIALS_PATH
+                        from .core.config import save_credentials, CREDENTIALS_PATH
 
                         _login_with_device_code(save_credentials, CREDENTIALS_PATH)
                 identity = _auth_identity(load_config().hf_token)
@@ -1414,7 +1414,7 @@ def assess_remote(repo: str, judge: bool, judge_model: str, limit: int, rewrite_
     from .quality.summary import build_summary
     from .publish.huggingface.upload import HFUploader
     from .publish.huggingface.dataset_card import generate_dataset_card
-    from .config import load_config
+    from .core.config import load_config
     from opentraces_schema import TraceRecord
 
     if not shutil.which("hf-mount"):
@@ -1606,8 +1606,8 @@ def audit_run(sample: int, dataset: str | None, model: str,
 def status() -> None:
     """Show status of the current opentraces project."""
     import time as _time
-    from .config import load_project_config, get_project_staging_dir, get_project_state_path
-    from .state import StateManager
+    from .core.config import load_project_config, get_project_staging_dir, get_project_state_path
+    from .core.state import StateManager
 
     project_dir = Path.cwd()
     ot_dir = project_dir / ".opentraces"
@@ -1710,8 +1710,8 @@ def session() -> None:
 
 def _load_project_state():
     """Shared helper: load project-local StateManager and staging dir."""
-    from .config import get_project_staging_dir, get_project_state_path
-    from .state import StateManager
+    from .core.config import get_project_staging_dir, get_project_state_path
+    from .core.state import StateManager
 
     project_dir = Path.cwd()
     ot_dir = project_dir / ".opentraces"
@@ -1927,7 +1927,7 @@ def session_show(trace_id: str, verbose: bool, markdown: bool) -> None:
 
 def _session_commit_impl(trace_id: str) -> None:
     """Commit a single session for push."""
-    from .state import TraceStatus
+    from .core.state import TraceStatus
 
     state, staging_dir = _load_project_state()
     entry = state.get_trace(trace_id)
@@ -1980,7 +1980,7 @@ def session_approve(trace_id: str) -> None:
 @click.argument("trace_id")
 def session_reject(trace_id: str) -> None:
     """Reject a session (kept local only, not pushed)."""
-    from .state import TraceStatus
+    from .core.state import TraceStatus
 
     state, staging_dir = _load_project_state()
     entry = state.get_trace(trace_id)
@@ -2004,7 +2004,7 @@ def session_reject(trace_id: str) -> None:
 @click.argument("trace_id")
 def session_reset(trace_id: str) -> None:
     """Reset a session back to Inbox (undo commit or reject)."""
-    from .state import TraceStatus
+    from .core.state import TraceStatus
 
     state, staging_dir = _load_project_state()
     entry = state.get_trace(trace_id)
@@ -2141,7 +2141,7 @@ def remote(ctx) -> None:
 @click.option("--private/--public", "is_private", default=None, help="Dataset visibility")
 def remote_set(name: str | None, is_private: bool | None) -> None:
     """Set the dataset remote. Interactive if no arguments given."""
-    from .config import load_project_config, save_project_config
+    from .core.config import load_project_config, save_project_config
 
     project_dir = Path.cwd()
     proj_config = load_project_config(project_dir)
@@ -2193,7 +2193,7 @@ def remote_use(ctx: click.Context, repo: str | None) -> None:
 @remote.command("remove")
 def remote_remove() -> None:
     """Remove the configured remote."""
-    from .config import load_project_config, save_project_config
+    from .core.config import load_project_config, save_project_config
 
     project_dir = Path.cwd()
     proj_config = load_project_config(project_dir)
@@ -2215,8 +2215,8 @@ def remote_remove() -> None:
 @main.command()
 def stats() -> None:
     """Show aggregate statistics for the current project inbox."""
-    from .config import get_project_staging_dir, get_project_state_path
-    from .state import StateManager
+    from .core.config import get_project_staging_dir, get_project_state_path
+    from .core.state import StateManager
     from opentraces_schema import TraceRecord
 
     project_dir = Path.cwd()
@@ -2296,8 +2296,8 @@ def stats() -> None:
 @main.command()
 def context() -> None:
     """Show full project context for agent consumption."""
-    from .config import get_project_staging_dir, get_project_state_path
-    from .state import StateManager
+    from .core.config import get_project_staging_dir, get_project_state_path
+    from .core.state import StateManager
     from opentraces_schema import SCHEMA_VERSION
 
     project_dir = Path.cwd()
@@ -2375,7 +2375,7 @@ def context() -> None:
 @main.command()
 def log() -> None:
     """List uploaded traces grouped by date."""
-    from .state import StateManager, TraceStatus
+    from .core.state import StateManager, TraceStatus
     from datetime import datetime
 
     state = StateManager()
@@ -2406,7 +2406,7 @@ def log() -> None:
 @main.command(hidden=True)
 def discover() -> None:
     """List available agent sessions across projects."""
-    from .config import get_projects_path
+    from .core.config import get_projects_path
 
     cfg = load_config()
     projects_path = get_projects_path(cfg)
@@ -2475,10 +2475,10 @@ def enrich(trace_path: Path, run_intent: bool | None, force: bool, strict: bool,
     Writes the enriched trace back to ``trace_path`` by default, or to
     ``--output`` if given.
     """
-    from .config import ProjectConfig, load_project_config
+    from .core.config import ProjectConfig, load_project_config
     from .enrichment.intent import enrich_intent
     from .enrichment.intent_backends import claude_cli_client
-    from .processors import run_chain
+    from .core.processors import run_chain
     from opentraces_schema import TraceRecord
 
     cfg = load_config()
@@ -2544,7 +2544,7 @@ def _enrich_transcript(transcript_path: Path) -> None:
         trace = enrich_from_hook_payload(payload, claude_cli_client)
         if trace is None or trace.intent is None:
             return
-        from .paths import OPENTRACES_DIR
+        from .core.paths import OPENTRACES_DIR
         cache_dir = OPENTRACES_DIR / "intent-cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         out = cache_dir / f"{trace.session_id}.json"
@@ -2559,10 +2559,10 @@ def _enrich_transcript(transcript_path: Path) -> None:
 @click.option("--limit", type=int, default=0, help="Max sessions to parse (0=all)")
 def parse(auto: bool, limit: int) -> None:
     """Parse agent sessions into enriched JSONL traces."""
-    from .config import get_projects_path, is_project_excluded
+    from .core.config import get_projects_path, is_project_excluded
     from .capture.claude_code import ClaudeCodeParser
-    from .pipeline import process_trace
-    from .state import StateManager, TraceStatus, ProcessedFile, STAGING_DIR
+    from .core.pipeline import process_trace
+    from .core.state import StateManager, TraceStatus, ProcessedFile, STAGING_DIR
 
     cfg = load_config()
     projects_path = get_projects_path(cfg)
@@ -2660,10 +2660,10 @@ def import_hf(
     dry_run: bool,
 ) -> None:
     """Import traces from a HuggingFace dataset."""
-    from .config import get_project_staging_dir, get_project_state_path
+    from .core.config import get_project_staging_dir, get_project_state_path
     from .capture import get_importers
-    from .pipeline import process_imported_trace
-    from .state import StateManager, TraceStatus
+    from .core.pipeline import process_imported_trace
+    from .core.state import StateManager, TraceStatus
 
     # 1. Project guard
     project_dir = Path.cwd()
@@ -2934,7 +2934,7 @@ def _assess_dataset(repo_id: str, judge: bool = False, judge_model: str = "haiku
     from .quality.summary import build_summary
     from .publish.huggingface.upload import HFUploader, RemoteShardError
     from .publish.huggingface.dataset_card import generate_dataset_card
-    from .config import load_config
+    from .core.config import load_config
 
     config = load_config()
     token = config.hf_token
@@ -3069,8 +3069,8 @@ def assess(judge: bool, judge_model: str, limit: int, compare_remote: bool, all_
                     continue
     else:
         # Default: read only COMMITTED traces (matches push population)
-        from .state import StateManager
-        from .config import get_project_state_path
+        from .core.state import StateManager
+        from .core.config import get_project_state_path
 
         project_dir = Path.cwd()
         state_path = get_project_state_path(project_dir)
@@ -3161,7 +3161,7 @@ def assess(judge: bool, judge_model: str, limit: int, compare_remote: bool, all_
     if compare_remote:
         click.echo("\nFetching remote quality scores...")
         try:
-            from .config import load_config, get_project_state_path
+            from .core.config import load_config, get_project_state_path
             config = load_config()
             project_dir = Path.cwd()
             project_name = project_dir.name
@@ -3217,8 +3217,8 @@ def assess(judge: bool, judge_model: str, limit: int, compare_remote: bool, all_
 @click.option("--all", "commit_all", is_flag=True, help="Commit all inbox traces")
 def commit_traces(message: str | None, commit_all: bool) -> None:
     """Commit inbox traces for push."""
-    from .state import StateManager, TraceStatus
-    from .config import get_project_state_path
+    from .core.state import StateManager, TraceStatus
+    from .core.config import get_project_state_path
     from opentraces_schema import TraceRecord
 
     project_dir = Path.cwd()
@@ -3299,7 +3299,7 @@ def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
     if repo_flag:
         return repo_flag
 
-    from .config import load_project_config
+    from .core.config import load_project_config
     proj_config = load_project_config(Path.cwd())
     config_remote = proj_config.get("remote")
     if config_remote:
@@ -3324,9 +3324,9 @@ def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
 def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None,
          run_assess: bool, llm_review: bool, no_trufflehog: bool, no_intent: bool) -> None:
     """Upload committed traces to HuggingFace Hub."""
-    from .config import get_project_staging_dir, load_project_config, save_project_config
-    from .inbox import load_traces
-    from .state import StateManager, TraceStatus, StagingLock
+    from .core.config import get_project_staging_dir, load_project_config, save_project_config
+    from .core.inbox import load_traces
+    from .core.state import StateManager, TraceStatus, StagingLock
     from .publish.huggingface.upload import HFUploader
     from .publish.huggingface.dataset_card import generate_dataset_card
     from opentraces_schema import TraceRecord
@@ -3438,7 +3438,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
         return
 
     # Use project-local state if available, fall back to global
-    from .config import get_project_state_path
+    from .core.config import get_project_state_path
     proj_state_path = get_project_state_path(Path.cwd())
     state = StateManager(
         state_path=proj_state_path if proj_state_path.parent.exists() else None
@@ -3483,7 +3483,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
 
     # Intent enrichment (plan 038) + post-processor chain — one pre-upload pass.
     # Precedence: CLI flag (--no-intent) > project intent.mode > global intent.mode.
-    from .config import ProjectConfig as _ProjectConfig
+    from .core.config import ProjectConfig as _ProjectConfig
     try:
         _raw = load_project_config(Path.cwd())
         proj_cfg_obj = _ProjectConfig.model_validate(_raw) if _raw else None
@@ -3508,7 +3508,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     processor_specs = proj_cfg_obj.post_processors if proj_cfg_obj else []
     push_processors = [s for s in processor_specs if s.when == "push"]
     if push_processors:
-        from .processors import run_chain
+        from .core.processors import run_chain
         processed_records = []
         for rec in records:
             res = run_chain(rec, push_processors, when="push")
@@ -3689,8 +3689,8 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
               help="Output JSONL path (default: ./opentraces-export.jsonl)")
 def export(output_format: str, output_path: str | None) -> None:
     """Export staged traces to another format (plan 041 R31)."""
-    from .config import get_project_staging_dir
-    from .inbox import load_trace_records
+    from .core.config import get_project_staging_dir
+    from .core.inbox import load_trace_records
     staging = get_project_staging_dir(Path.cwd())
     records = load_trace_records(staging)
     if not records:
@@ -3984,9 +3984,9 @@ def run_post_commit_hook(repo_path: str) -> None:
     try:
         from datetime import datetime, timedelta, timezone
 
-        from .config import get_project_staging_dir
+        from .core.config import get_project_staging_dir
         from .capture.git import post_commit
-        from .inbox import load_trace_records
+        from .core.inbox import load_trace_records
 
         repo = Path(repo_path).resolve()
         staging = get_project_staging_dir(repo)
@@ -4015,9 +4015,9 @@ def blame_cmd(target: str, json_out: bool) -> None:
 
     TARGET is `path:line`, e.g. `src/auth.py:42`.
     """
-    from .config import get_project_staging_dir
+    from .core.config import get_project_staging_dir
     from .enrichment.git import blame as git_blame
-    from .inbox import load_trace_records
+    from .core.inbox import load_trace_records
 
     if ":" not in target:
         raise click.BadParameter("expected <path>:<line>")
@@ -4199,8 +4199,8 @@ def doctor_cmd() -> None:
     report["intent"] = {"mode": cfg.intent.mode}
 
     # Post-processors — enumerate + probe (plan 038 phase 4)
-    from .config import ProjectConfig, load_project_config
-    from .processors import probe_processors
+    from .core.config import ProjectConfig, load_project_config
+    from .core.processors import probe_processors
     try:
         raw = load_project_config(Path.cwd())
         proj_cfg = ProjectConfig.model_validate(raw) if raw else None
@@ -4260,8 +4260,8 @@ def _trufflehog_status(enabled: bool, version: str | None) -> str:
 def review_llm_cmd(provider: str, model: str, dry_run: bool, limit: int, force: bool,
                    context_file: str | None) -> None:
     """Run Tier 2 LLM semantic review over staged/committed sessions."""
-    from .config import get_project_staging_dir
-    from .inbox import load_traces
+    from .core.config import get_project_staging_dir
+    from .core.inbox import load_traces
     from .security.llm_provider import build_provider
     from .security.llm_review import (
         estimate_cost,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..config import TruffleHogConfig
+from ..core.config import TruffleHogConfig
 from .trufflehog import TruffleHogReport, scan_trace_jsonl
 
 

@@ -1,10 +1,13 @@
-"""Shared path constants. No internal imports to avoid circular dependencies."""
+"""Compatibility shim. Moved to opentraces.core.paths."""
+import warnings
+import sys
 
-from pathlib import Path
+warnings.warn(
+    "opentraces.paths is deprecated; use opentraces.core.paths",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-OPENTRACES_DIR = Path.home() / ".opentraces"
-CONFIG_PATH = OPENTRACES_DIR / "config.json"
-CREDENTIALS_PATH = OPENTRACES_DIR / "credentials"
-STATE_PATH = OPENTRACES_DIR / "state.json"
-STAGING_DIR = OPENTRACES_DIR / "staging"
-UPLOADED_DIR = OPENTRACES_DIR / "uploaded"
+from opentraces.core import paths as _mod
+
+sys.modules[__name__] = _mod

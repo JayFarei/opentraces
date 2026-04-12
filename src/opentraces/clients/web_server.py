@@ -19,12 +19,12 @@ from typing import Any
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from ..config import STAGING_DIR, auth_identity, load_config, load_project_config, save_project_config
+from ..core.config import STAGING_DIR, auth_identity, load_config, load_project_config, save_project_config
 from ..security import SECURITY_VERSION
 from opentraces_schema import SCHEMA_VERSION
-from ..inbox import get_stage, load_traces, redact_step
-from ..state import StateManager, TraceStatus
-from ..workflow import (
+from ..core.inbox import get_stage, load_traces, redact_step
+from ..core.state import StateManager, TraceStatus
+from ..core.workflow import (
     DEFAULT_AGENT,
     DEFAULT_PUSH_POLICY,
     DEFAULT_REVIEW_POLICY,

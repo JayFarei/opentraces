@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
-from ..state import StateManager, TraceStatus
+from .state import StateManager, TraceStatus
 
 
 def mark_uploaded(state: StateManager, trace_ids: Iterable[str]) -> None:
