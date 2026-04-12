@@ -8,7 +8,7 @@ phase 4.
 
 from __future__ import annotations
 
-from opentraces.git.correlator import correlate
+from opentraces.enrichment.git.correlator import correlate
 from opentraces_schema import Agent, Step, TokenUsage, ToolCall, TraceRecord
 
 

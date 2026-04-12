@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from opentraces.git import notes_store
+from opentraces.enrichment.git import notes_store
 
 
 def _run(cmd: list[str], cwd: Path) -> None:

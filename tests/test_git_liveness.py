@@ -8,7 +8,7 @@ from pathlib import Path
 import mmh3
 import pytest
 
-from opentraces.git import liveness
+from opentraces.enrichment.git import liveness
 from opentraces_schema import (
     Attribution, AttributionConversation, AttributionFile, AttributionRange,
 )

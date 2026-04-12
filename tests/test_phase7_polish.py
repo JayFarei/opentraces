@@ -6,7 +6,7 @@ import json
 from io import StringIO
 from pathlib import Path
 
-from opentraces.git import jj_support
+from opentraces.enrichment.git import jj_support
 
 
 class TestJjSupport:

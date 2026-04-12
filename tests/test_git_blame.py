@@ -8,7 +8,7 @@ from pathlib import Path
 import mmh3
 import pytest
 
-from opentraces.git import blame, notes_store
+from opentraces.enrichment.git import blame, notes_store
 from opentraces_schema import (
     Agent, Attribution, AttributionConversation, AttributionFile,
     AttributionRange, Step, TokenUsage, TraceRecord,
