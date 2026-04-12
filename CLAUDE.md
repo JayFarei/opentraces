@@ -30,7 +30,8 @@ pytest tests/ -v
 - `packages/opentraces-schema/` - Standalone schema package (Pydantic models)
 - `packages/opentraces-ui/` - Design system (tokens, base, components, React wrappers, logo assets, DESIGN.md)
 - `src/opentraces/` - Main CLI package
-  - `agents/<name>/` - Agent-specific integrations. `agents/claude_code/` owns the Claude Code parser and the `on_stop` / `on_compact` hook scripts; `agents/hermes/` owns the Hermes importer.
+  - `agents/<name>/` - Agent-specific parsers. `agents/claude_code/parser.py`, `agents/hermes/parser.py`.
+  - `installers/` - One-off installers for integrations we wire into external tools. `installers/claude_code_hooks/` ships the `on_stop` / `on_compact` / `on_tool_use` scripts that `opentraces hooks install` copies to `~/.claude/hooks/`, plus `intent_adapter.py`. `installers/git_hook.py` installs the post-commit correlator.
   - `parsers/` - Cross-agent parser infrastructure: base protocol, quality gate, lazy registry.
   - `security/` - Secret scanning, anonymization, classification (independently versioned via `SECURITY_VERSION`)
   - `enrichment/` - Git signals, attribution, dependencies, metrics

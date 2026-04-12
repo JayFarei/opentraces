@@ -24,7 +24,7 @@ def _read_events(transcript: Path) -> list[dict]:
 
 class TestPostToolUseEdit:
     def test_single_match_stamps_high_confidence(self, tmp_path, monkeypatch):
-        from opentraces.agents.claude_code.hooks.on_tool_use import main
+        from opentraces.installers.claude_code_hooks.on_tool_use import main
 
         target = tmp_path / "app.py"
         target.write_text("alpha\nbeta\nGAMMA_NEW\ndelta\n")
@@ -59,7 +59,7 @@ class TestPostToolUseEdit:
         assert d["confidence"] == "high"
 
     def test_multi_match_disambiguated_medium(self, tmp_path, monkeypatch):
-        from opentraces.agents.claude_code.hooks.on_tool_use import main
+        from opentraces.installers.claude_code_hooks.on_tool_use import main
 
         # new_string "X" appears twice; old_string proximity picks
         # the first one (line 2).
@@ -84,7 +84,7 @@ class TestPostToolUseEdit:
         assert ev["data"]["start_line"] == 2
 
     def test_multiline_new_string_spans_range(self, tmp_path, monkeypatch):
-        from opentraces.agents.claude_code.hooks.on_tool_use import main
+        from opentraces.installers.claude_code_hooks.on_tool_use import main
 
         target = tmp_path / "f.py"
         target.write_text("a\nNEW1\nNEW2\nNEW3\nb\n")
@@ -109,7 +109,7 @@ class TestPostToolUseEdit:
 
 class TestPostToolUseWrite:
     def test_write_spans_full_file(self, tmp_path, monkeypatch):
-        from opentraces.agents.claude_code.hooks.on_tool_use import main
+        from opentraces.installers.claude_code_hooks.on_tool_use import main
 
         target = tmp_path / "new.py"
         content = "l1\nl2\nl3\nl4\n"
@@ -136,7 +136,7 @@ class TestPostToolUseWrite:
 
 class TestHookRobustness:
     def test_missing_transcript_path_exits_clean(self, monkeypatch):
-        from opentraces.agents.claude_code.hooks.on_tool_use import main
+        from opentraces.installers.claude_code_hooks.on_tool_use import main
 
         import pytest
         monkeypatch.setattr("sys.stdin", StringIO(json.dumps({})))
@@ -146,7 +146,7 @@ class TestHookRobustness:
 
     def test_missing_file_on_disk_does_not_crash(self, tmp_path, monkeypatch):
         import pytest
-        from opentraces.agents.claude_code.hooks.on_tool_use import main
+        from opentraces.installers.claude_code_hooks.on_tool_use import main
 
         transcript = tmp_path / "s.jsonl"
         transcript.write_text("")
@@ -171,7 +171,7 @@ class TestHookRobustness:
             assert events[0]["data"].get("confidence") in ("low", "medium", "high")
 
     def test_non_edit_write_tool_is_ignored(self, tmp_path, monkeypatch):
-        from opentraces.agents.claude_code.hooks.on_tool_use import main
+        from opentraces.installers.claude_code_hooks.on_tool_use import main
 
         transcript = tmp_path / "s.jsonl"
         transcript.write_text("")
@@ -189,7 +189,7 @@ class TestHookRobustness:
         assert _read_events(transcript) == []
 
     def test_hook_runs_under_50ms_budget(self, tmp_path, monkeypatch):
-        from opentraces.agents.claude_code.hooks.on_tool_use import main
+        from opentraces.installers.claude_code_hooks.on_tool_use import main
 
         # 500-line file; edit replaces a single interior line. Hook
         # reads the file, locates the line, writes the event.

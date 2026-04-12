@@ -21,8 +21,8 @@ from typing import Any
 
 from opentraces_schema import TraceRecord
 
-from ....enrichment.intent import ModelClient, enrich_intent
-from ..parser import ClaudeCodeParser
+from ...enrichment.intent import ModelClient, enrich_intent
+from ...agents.claude_code.parser import ClaudeCodeParser
 
 logger = logging.getLogger(__name__)
 

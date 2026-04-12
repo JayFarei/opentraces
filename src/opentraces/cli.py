@@ -3724,7 +3724,7 @@ def hooks_install(hooks_dir: str | None, settings_file: str | None, dry_run: boo
     target_settings = Path(settings_file) if settings_file else claude_dir / "settings.json"
 
     # Source hook scripts are shipped with the package
-    src_hooks_dir = Path(__file__).parent / "agents" / "claude_code" / "hooks"
+    src_hooks_dir = Path(__file__).parent / "installers" / "claude_code_hooks"
     hook_scripts = {
         "Stop": src_hooks_dir / "on_stop.py",
         "PostCompact": src_hooks_dir / "on_compact.py",
