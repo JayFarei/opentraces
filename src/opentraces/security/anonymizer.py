@@ -7,8 +7,11 @@ Strips usernames from file paths across all major OS conventions
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+from collections import defaultdict
+from pathlib import Path
 
 # Usernames that commonly appear in paths but are not real people.
 SYSTEM_USERNAMES: set[str] = {
@@ -240,3 +243,123 @@ def anonymize_paths(
         result = re.sub(re.escape(uname), hashed, result)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Part D: EntityMap — named placeholders for Tier 1.8 PII detection
+# ---------------------------------------------------------------------------
+
+# USER_PATH normalization: matches /Users/<name>/ or /home/<name>/ with
+# usernames containing letters, digits, dots, underscores, and dashes.
+_USER_PATH_RE = re.compile(r"(/(?:Users|home)/)[A-Za-z0-9._-]+(/)")
+
+
+def normalize_user_paths(text: str) -> str:
+    """Replace ``/Users/<name>/`` and ``/home/<name>/`` with ``.../user/...``.
+
+    Preserves path structure for trace analysis rather than fully redacting.
+    Matches usernames with letters, digits, dots, underscores, and dashes.
+    """
+    if not text:
+        return text
+    return _USER_PATH_RE.sub(r"\1user\2", text)
+
+
+class EntityMap:
+    """Stable named placeholders for detected entities.
+
+    Maps ``(entity_type, entity_text)`` pairs to numbered placeholders like
+    ``[PERSON_1]`` and ``[EMAIL_2]``. Same entity text always gets the same
+    placeholder within a map; per-type counters are independent so PERSON
+    numbering does not interfere with EMAIL numbering.
+
+    ``USER_PATH`` is a special case: rather than producing a numbered
+    placeholder, ``apply_all()`` normalizes ``/Users/<name>/`` paths to
+    ``/Users/user/`` so path structure survives for reviewers.
+
+    Persistable via :meth:`save` / :meth:`load` so entity numbering can be
+    kept consistent across sessions.
+    """
+
+    _USER_PATH_TYPE = "USER_PATH"
+
+    def __init__(self) -> None:
+        # entity_type -> {entity_text: placeholder_number}
+        self._entries: dict[str, dict[str, int]] = defaultdict(dict)
+        self._counters: dict[str, int] = defaultdict(int)
+
+    def get_placeholder(self, entity_type: str, entity_text: str) -> str:
+        """Return a stable placeholder for ``(entity_type, entity_text)``.
+
+        Registers the entity if new; returns the existing placeholder if seen.
+        For ``USER_PATH`` the entity is registered (so :meth:`apply_all`
+        triggers the normalization branch) but the returned token is a
+        sentinel not actually substituted into text.
+        """
+        bucket = self._entries[entity_type]
+        if entity_text not in bucket:
+            self._counters[entity_type] += 1
+            bucket[entity_text] = self._counters[entity_type]
+        n = bucket[entity_text]
+        return f"[{entity_type}_{n}]"
+
+    def apply_all(self, text: str) -> str:
+        """Replace every registered entity in ``text`` with its placeholder.
+
+        Entities are sorted by text length descending before substitution to
+        prevent shorter names clobbering longer matches (e.g. ``sarah``
+        replacing part of ``sarah.chen@corp.com``).
+
+        ``USER_PATH`` entities trigger :func:`normalize_user_paths` rather
+        than opaque substitution.
+        """
+        if not text:
+            return text
+
+        out = text
+
+        # USER_PATH: normalization, not numbered placeholder.
+        if self._entries.get(self._USER_PATH_TYPE):
+            out = normalize_user_paths(out)
+
+        # Gather all non-USER_PATH entities, longest first.
+        pairs: list[tuple[str, str, int]] = []
+        for etype, bucket in self._entries.items():
+            if etype == self._USER_PATH_TYPE:
+                continue
+            for etext, num in bucket.items():
+                pairs.append((etype, etext, num))
+        pairs.sort(key=lambda p: len(p[1]), reverse=True)
+
+        for etype, etext, num in pairs:
+            out = out.replace(etext, f"[{etype}_{num}]")
+
+        return out
+
+    def save(self, path: Path | str) -> None:
+        """Persist the map as JSON.
+
+        Schema: ``{entity_type: {entity_text: placeholder_number, ...}, ...}``.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {etype: dict(bucket) for etype, bucket in self._entries.items()}
+        path.write_text(json.dumps(data, indent=2, sort_keys=True))
+
+    @classmethod
+    def load(cls, path: Path | str) -> "EntityMap":
+        """Load a map previously written by :meth:`save`.
+
+        Returns an empty map if the file does not exist, so callers can
+        treat the entity-map path as optional.
+        """
+        path = Path(path)
+        em = cls()
+        if not path.exists():
+            return em
+        data = json.loads(path.read_text())
+        for etype, bucket in data.items():
+            em._entries[etype] = {k: int(v) for k, v in bucket.items()}
+            if bucket:
+                em._counters[etype] = max(int(v) for v in bucket.values())
+        return em
