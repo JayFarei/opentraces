@@ -1546,6 +1546,62 @@ def assess_remote(repo: str, judge: bool, judge_model: str, limit: int, rewrite_
             logger.warning("hf-mount stop failed: %s", _e)
 
 
+@main.command("_audit-spec", hidden=True)
+@click.option("--model", default="haiku", type=click.Choice(["haiku", "sonnet", "opus"]),
+              help="Draft model for proposing intent entries")
+@click.option("--non-interactive", is_flag=True, default=False,
+              help="Fail if the spec is incomplete (no prompts, no writes)")
+@click.option("--spec-path", default=None, type=click.Path(),
+              help="Override field_intent.yaml path (for testing)")
+def audit_spec(model: str, non_interactive: bool, spec_path: str | None) -> None:
+    """Fill missing entries in field_intent.yaml (dev-only, hidden)."""
+    from .quality.field_intent.generator import SPEC_PATH, fill_interactive
+    path = Path(spec_path) if spec_path else SPEC_PATH
+    rc = fill_interactive(path, model=model, non_interactive=non_interactive)
+    if rc != 0:
+        raise SystemExit(rc)
+
+
+@main.command("_audit-run", hidden=True)
+@click.option("--sample", type=int, default=10, help="Number of traces to sample")
+@click.option("--dataset", default=None, help="Remote HF dataset (user/repo) instead of local staging")
+@click.option("--model", default="haiku", type=click.Choice(["haiku", "sonnet", "opus"]))
+@click.option("--staging-dir", default=None, type=click.Path(),
+              help="Override staging dir (default: .opentraces/staging)")
+@click.option("--spec-path", default=None, type=click.Path(),
+              help="Override field_intent.yaml path (for testing)")
+@click.option("--output-dir", default=None, type=click.Path(),
+              help="Where to write audit_report.md / findings.json (default: .opentraces/reports)")
+def audit_run(sample: int, dataset: str | None, model: str,
+              staging_dir: str | None, spec_path: str | None,
+              output_dir: str | None) -> None:
+    """Run field-intent audit on sampled traces (dev-only, hidden)."""
+    from .quality.field_intent.auditor import (
+        SPEC_PATH, audit_run as _run, findings_to_json, format_report,
+    )
+    spec = Path(spec_path) if spec_path else SPEC_PATH
+    staging = Path(staging_dir) if staging_dir else None
+    try:
+        report = _run(
+            sample=sample, staging_dir=staging, dataset=dataset,
+            spec_path=spec, model=model,
+        )
+    except RuntimeError as e:
+        click.echo(str(e), err=True)
+        raise SystemExit(2)
+
+    out_dir = Path(output_dir) if output_dir else Path(".opentraces/reports")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    md = out_dir / "audit_report.md"
+    js = out_dir / "findings.json"
+    md.write_text(format_report(report))
+    js.write_text(findings_to_json(report))
+    click.echo(
+        f"Audited {report.traces_sampled} traces, {len(report.findings)} findings. "
+        f"{md} + {js}"
+    )
+
+
 @main.command()
 def status() -> None:
     """Show status of the current opentraces project."""
