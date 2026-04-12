@@ -252,7 +252,14 @@ class GroupedGroup(click.Group):
 
 
 def emit_json(data: dict) -> None:
-    """Emit structured JSON after the sentinel for agent-native parsing."""
+    """Emit structured JSON after the sentinel for agent-native parsing.
+
+    Emitted when ``--json`` is explicit OR when stdout is not a TTY
+    (piped into another tool, Click test runner, etc.). Suppressed
+    for interactive human sessions so the terminal stays clean.
+    """
+    if not _json_mode and sys.stdout.isatty():
+        return
     click.echo(f"\n{SENTINEL}")
     click.echo(json.dumps(data, indent=2))
 
