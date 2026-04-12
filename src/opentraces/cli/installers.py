@@ -114,20 +114,113 @@ def setup_group() -> None:
     """Install opentraces integrations (git hook, etc.)."""
 
 
+import re as _re
+
+_SHA_RE = _re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _looks_like_sha(s: str) -> bool:
+    return bool(_SHA_RE.match(s.strip()))
+
+
+def _resolve_sha(ref: str, cwd: Path) -> str | None:
+    """Resolve any git ref (HEAD, branch, short sha) to a full commit SHA."""
+    import subprocess
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+            cwd=cwd, capture_output=True, text=True, check=False,
+        )
+        return res.stdout.strip() if res.returncode == 0 else None
+    except FileNotFoundError:
+        return None
+
+
+def _blame_commit(sha: str, json_out: bool) -> None:
+    """Commit-mode blame: resolve SHA to the contributing traces via git notes."""
+    from ..enrichment.git import notes_store
+    from ..core.config import get_project_staging_dir
+    from ..core.inbox import load_trace_records
+    from opentraces import cli as _cli
+
+    cwd = Path.cwd()
+    full_sha = _resolve_sha(sha, cwd) or sha
+    lines = notes_store.read(full_sha, cwd)
+    parsed = [p for p in (notes_store.parse_link(l) for l in lines) if p]
+
+    if not parsed:
+        if json_out:
+            emit_json({"commit": full_sha, "traces": []})
+            return
+        human_echo(f"no opentraces notes attached to {full_sha[:10]}")
+        human_hint(
+            "install the hook with 'opentraces setup git' and commit to start "
+            "correlating; old commits can't be backfilled."
+        )
+        return
+
+    staging = get_project_staging_dir(cwd)
+    traces_by_id = {rec.trace_id: rec for rec in load_trace_records(staging)}
+
+    if json_out:
+        emit_json({
+            "commit": full_sha,
+            "traces": [
+                {
+                    "trace_id": tid,
+                    "session_id": getattr(traces_by_id.get(tid), "session_id", None),
+                    "url": url,
+                }
+                for (tid, url) in parsed
+            ],
+        })
+        return
+
+    human_echo(f"commit {_cli._bold(full_sha[:10])} has {len(parsed)} trace{'s' if len(parsed) != 1 else ''}:")
+    human_echo("")
+    for tid, url in parsed:
+        rec = traces_by_id.get(tid)
+        session_id = getattr(rec, "session_id", None) if rec else None
+        intent = None
+        if rec is not None:
+            intent, _src = _cli._describe_trace(rec)
+            if intent and len(intent) > 70:
+                intent = intent[:69] + "…"
+        human_echo(f"  {_cli._dim('trace:  ')} {tid}")
+        if intent:
+            human_echo(f"  {_cli._dim('intent: ')} {intent}")
+        if session_id:
+            human_echo(
+                f"  {_cli._dim('resume: ')} opentraces resume {tid}  "
+                f"{_cli._dim(f'(claude session {session_id[:8]})')}"
+            )
+        if url:
+            human_echo(f"  {_cli._dim('url:    ')} {url}")
+        human_echo("")
+
+
 @main.command("blame")
 @click.argument("target")
 @click.option("--json", "json_out", is_flag=True)
 def blame_cmd(target: str, json_out: bool) -> None:
-    """Resolve `file:line` to the opentraces session that authored it (R30).
+    """Resolve an authoring source to the opentraces session(s) behind it.
 
-    TARGET is `path:line`, e.g. `src/auth.py:42`.
+    TARGET can be:
+      - a file:line, e.g. `src/auth.py:42`  (R30 line-level blame)
+      - a commit sha (short or full), e.g. `e7ba5d8`  (commit-level blame)
+      - a ref, e.g. `HEAD`, `HEAD~2`, a branch name
     """
     from ..core.config import get_project_staging_dir
     from ..enrichment.git import blame as git_blame
     from ..core.inbox import load_trace_records
 
+    # SHA / ref path: delegate to commit-mode blame.
     if ":" not in target:
-        raise click.BadParameter("expected <path>:<line>")
+        if _looks_like_sha(target) or _resolve_sha(target, Path.cwd()) is not None:
+            _blame_commit(target, json_out)
+            return
+        raise click.BadParameter("expected <path>:<line> or a commit sha/ref")
+
     file_path, line_str = target.rsplit(":", 1)
     try:
         line = int(line_str)
@@ -160,6 +253,62 @@ def blame_cmd(target: str, json_out: bool) -> None:
         alive = "alive" if h.content_alive else "dead"
         step = f" step_{h.step}" if h.step is not None else ""
         human_echo(f"  {h.trace_id}{step}  {h.revision[:10]}  [{alive}]")
+
+
+@main.command("resume")
+@click.argument("trace_id")
+@click.option("--exec", "do_exec", is_flag=True, help="Exec the claude resume command instead of printing it.")
+def resume_cmd(trace_id: str, do_exec: bool) -> None:
+    """Resume the Claude Code session that produced a trace.
+
+    Looks up the trace's session_id and either prints the resume command
+    (default) or execs it with --exec. Pairs naturally with `blame <sha>`
+    to re-open the session behind a given commit.
+    """
+    from ..core.config import get_project_staging_dir
+    from ..core.inbox import load_trace_records
+    from opentraces import cli as _cli
+
+    cwd = Path.cwd()
+    staging = get_project_staging_dir(cwd)
+    # Allow short-id prefix lookup so users can paste from `status`.
+    traces = list(load_trace_records(staging))
+    matches = [t for t in traces if t.trace_id.startswith(trace_id)]
+    if not matches:
+        human_echo(f"no trace matches '{trace_id}'")
+        sys.exit(3)
+    if len(matches) > 1:
+        human_echo(f"'{trace_id}' is ambiguous ({len(matches)} matches):")
+        for m in matches[:5]:
+            human_echo(f"  {m.trace_id}")
+        sys.exit(3)
+
+    rec = matches[0]
+    session_id = getattr(rec, "session_id", None)
+    if not session_id:
+        human_echo(f"trace {rec.trace_id} has no session_id recorded.")
+        sys.exit(4)
+
+    cmd = ["claude", "--resume", session_id]
+    cmd_str = " ".join(cmd)
+
+    if do_exec:
+        import shutil as _sh
+        if _sh.which("claude") is None:
+            human_echo("'claude' not on PATH. Install Claude Code or run the command manually.")
+            human_echo(f"  {cmd_str}")
+            sys.exit(5)
+        import os as _os
+        _os.execvp(cmd[0], cmd)
+
+    human_echo(f"{_cli._dim('session:')} {session_id}")
+    human_echo(f"{_cli._dim('run:')}     {_cli._bold(cmd_str)}")
+    human_echo(f"{_cli._dim('or:')}      opentraces resume {trace_id[:8]} --exec")
+    emit_json({
+        "trace_id": rec.trace_id,
+        "session_id": session_id,
+        "resume_command": cmd_str,
+    })
 
 
 @setup_group.command("git")
