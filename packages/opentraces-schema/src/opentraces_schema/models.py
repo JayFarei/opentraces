@@ -24,6 +24,10 @@ class Task(BaseModel):
     description: str | None = None
     source: str | None = Field(None, description="user_prompt, cli_arg, skill, etc.")
     repository: str | None = Field(None, description="owner/repo format")
+    repository_url: str | None = Field(
+        None,
+        description="Canonical remote URL (RFC #22). e.g. https://github.com/org/repo",
+    )
     base_commit: str | None = None
 
 
@@ -192,6 +196,25 @@ class AttributionRange(BaseModel):
     end_line: int
     content_hash: str | None = Field(None, description="murmur3 hash for cross-refactor tracking")
     confidence: Literal["high", "medium", "low"] | None = None
+    change_type: Literal["addition", "modification", "deletion"] = Field(
+        "addition",
+        description="Nature of the change (RFC #11).",
+    )
+    original: dict[str, Any] | None = Field(
+        None,
+        description=(
+            "Pre-processing state for divergent ranges (RFC #5). "
+            "Keys: start_line, end_line, content_hash. Populated when a formatter "
+            "or human rewrote the agent's output after the fact."
+        ),
+    )
+    contributor: dict[str, str] | None = Field(
+        None,
+        description=(
+            "Per-range contributor override. When absent, the enclosing "
+            "AttributionConversation.contributor applies."
+        ),
+    )
 
 
 class AttributionConversation(BaseModel):
@@ -202,6 +225,20 @@ class AttributionConversation(BaseModel):
         description="e.g. {type: 'ai', model_id: 'anthropic/claude-sonnet-4-20250514'}",
     )
     url: str | None = Field(None, description="opentraces://trace_id/step_N")
+    ids: dict[str, str | list[str]] | None = Field(
+        None,
+        description=(
+            "Provider-native conversation identifiers (RFC #9). "
+            "e.g. {anthropic: 'msg_01xyz', openai: ['resp_1', 'resp_2']}"
+        ),
+    )
+    related: list[dict[str, str]] | None = Field(
+        None,
+        description=(
+            "Links to broader resources (RFC #16 baseline vocabulary). "
+            "Each entry: {type, url}. e.g. {type: 'plan', url: 'opentraces://t/plan_3'}"
+        ),
+    )
     ranges: list[AttributionRange] = Field(default_factory=list)
 
 
@@ -218,11 +255,53 @@ class Attribution(BaseModel):
     Bridges trajectory (process) and attribution (output). Records which
     files and line ranges were produced by the agent session.
 
-    Marked experimental in v0.1 - confidence varies by session complexity.
+    `experimental` is True when any range is low-confidence or a fallback
+    line resolution was used; False when every range is high-confidence
+    (hook- or diff-sourced).
     """
 
     experimental: bool = True
+    revision: dict[str, str] | None = Field(
+        None,
+        description=(
+            "Pin this attribution block to a specific commit/revision. "
+            "Keys: vcs_type ('git'|'jj'), revision (sha or change_id)."
+        ),
+    )
     files: list[AttributionFile] = Field(default_factory=list)
+    unaccounted_files: list[str] | None = Field(
+        None,
+        description=(
+            "Files changed at commit time whose hunks were not produced by any "
+            "tracked Edit/Write tool call. Typically Bash-applied edits "
+            "(sed, codemods). Surfaced at low confidence."
+        ),
+    )
+
+
+class GitLink(BaseModel):
+    """Link between a trace and a commit/revision, with an evidence tier.
+
+    Tiers (plan 041 R25):
+    - tool_emitted: Edit-derived hashes appear in commit's staged hunks.
+    - tool_emitted_with_divergence: files match but committed bytes don't hash-match.
+    - overlapping: file-set + time-window overlap, no hash match.
+    - orphan: no viable commit link.
+    """
+
+    vcs_type: Literal["git", "jj"] = "git"
+    revision: str
+    repo_url: str | None = None
+    branch: str | None = None
+    tier: Literal["tool_emitted", "tool_emitted_with_divergence", "overlapping", "orphan"]
+    commit_reachable: bool | None = Field(
+        None,
+        description="Computed lazily on read; False if commit was force-pushed away.",
+    )
+    content_alive: bool | None = Field(
+        None,
+        description="Computed lazily on read; False if agent's hashes no longer appear at HEAD.",
+    )
 
 
 class Metrics(BaseModel):
@@ -288,6 +367,22 @@ class TraceRecord(BaseModel):
     metrics: Metrics = Field(default_factory=Metrics)
     security: SecurityMetadata = Field(default_factory=SecurityMetadata)
     attribution: Attribution | None = None
+    lifecycle: Literal["provisional", "final"] = Field(
+        "provisional",
+        description=(
+            "provisional: pre-commit-correlation (session ended, not yet tied to a revision). "
+            "final: revision-anchored (post-commit hook has correlated and pinned). "
+            "RFC #25."
+        ),
+    )
+    git_links: list[GitLink] = Field(
+        default_factory=list,
+        description=(
+            "Evidence-graded links to commits/revisions this trace contributed to. "
+            "A trace can link to many commits (rebase, squash, long session); "
+            "a commit can link to many traces (cherry-pick, composition)."
+        ),
+    )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def compute_content_hash(self) -> str:

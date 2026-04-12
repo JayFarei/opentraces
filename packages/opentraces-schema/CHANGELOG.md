@@ -15,6 +15,30 @@ schema-specific semantics described in VERSION-POLICY.md.
   vs Intent split.
 - `TraceRecord.intent: Intent | None` — absent on traces captured before
   Intent enrichment ran or when `intent.mode=off`.
+- `GitLink` model — evidence-graded link between a trace and a commit/revision
+  (plan 041). `tier`: `tool_emitted` | `tool_emitted_with_divergence` |
+  `overlapping` | `orphan`. Optional lazy-computed `commit_reachable` and
+  `content_alive` liveness booleans. Supports `vcs_type="jj"` for Jujutsu.
+- `TraceRecord.git_links: list[GitLink]` — many-to-many link between traces
+  and commits.
+- `TraceRecord.lifecycle: Literal["provisional", "final"]` — RFC #25.
+  `provisional` is the default; promoted to `final` once a post-commit hook
+  correlates the trace to a revision.
+- `Task.repository_url: str | None` — canonical remote URL (RFC #22).
+- `Attribution.revision: dict | None` — `{vcs_type, revision}` pin for
+  attribution data.
+- `Attribution.unaccounted_files: list[str] | None` — surfaces Bash-applied
+  edits absent from tool-call attribution.
+- `AttributionRange.original: dict | None` — pre-divergence
+  `{start_line, end_line, content_hash}` (RFC #5).
+- `AttributionRange.change_type: Literal["addition","modification","deletion"]` —
+  default `addition` (RFC #11).
+- `AttributionRange.contributor: dict | None` — per-range contributor override
+  for stamping `mixed` on divergent ranges.
+- `AttributionConversation.ids: dict[str, str | list[str]] | None` — provider-
+  native conversation identifiers (RFC #9).
+- `AttributionConversation.related: list[dict] | None` — `{type, url}` baseline
+  vocabulary (RFC #16) for plan/issue/PR links.
 
 ### Changed
 - `TraceRecord.compute_content_hash()` now excludes `intent` alongside
