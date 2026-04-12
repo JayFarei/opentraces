@@ -37,6 +37,7 @@ export const DOC_NAV: DocEntry[] = [
   { slug: "workflow/quality", title: "Assess", group: "Workflow" },
   { slug: "workflow/pushing", title: "Push", group: "Workflow" },
   { slug: "workflow/consume", title: "Consume", group: "Workflow" },
+  { slug: "workflow/export", title: "Export", group: "Workflow" },
 
   // Integration
   { slug: "integration/ci-cd", title: "CI/CD & Automation", group: "Integration" },

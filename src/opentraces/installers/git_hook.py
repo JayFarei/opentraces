@@ -1,149 +1,21 @@
-"""Install / remove / verify the opentraces git post-commit hook.
+"""Compatibility shim. Moved to :mod:`opentraces.capture.git.install`."""
 
-Minimal installer that doesn't depend on plan 042's unified installer
-framework: just writes a small .git/hooks/opentraces-post-commit
-script owned by us and chains it from .git/hooks/post-commit via a
-fenced block we can detect and remove cleanly.
+import warnings
 
-Plan 041 R21.
-"""
+warnings.warn(
+    "opentraces.installers.git_hook is deprecated; use opentraces.capture.git.install",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-from __future__ import annotations
-
-import os
-import stat
-import subprocess
-from pathlib import Path
-
-from ..enrichment.git.notes_store import NOTES_REF
-
-HOOK_FILENAME = "opentraces-post-commit"
-CHAIN_BEGIN = "# >>> opentraces post-commit chain >>>"
-CHAIN_END = "# <<< opentraces post-commit chain <<<"
-NOTES_REFSPEC = f"+{NOTES_REF}:{NOTES_REF}"
-
-OWNED_HOOK_CONTENT = """\
-#!/usr/bin/env sh
-# Installed by opentraces. Plan 041. Safe to delete.
-# Runs the post-commit correlator and appends notes on refs/notes/opentraces.
-# Never blocks git commit: any failure exits 0.
-set +e
-opentraces _run-post-commit-hook "$(pwd)" >/dev/null 2>&1 || true
-exit 0
-"""
-
-
-def _git_dir(repo: Path) -> Path | None:
-    try:
-        out = subprocess.check_output(
-            ["git", "rev-parse", "--git-dir"],
-            cwd=str(repo), text=True,
-            stderr=subprocess.DEVNULL, timeout=5,
-        ).strip()
-    except Exception:
-        return None
-    p = Path(out)
-    if not p.is_absolute():
-        p = (repo / p).resolve()
-    return p
-
-
-def _chmod_x(path: Path) -> None:
-    st = path.stat().st_mode
-    path.chmod(st | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-
-
-def install(repo: Path) -> bool:
-    """Install the opentraces post-commit hook + notes refspec.
-
-    Returns True on success. Idempotent: re-installing does not
-    duplicate the chain block.
-    """
-    gdir = _git_dir(repo)
-    if gdir is None:
-        return False
-    hooks_dir = gdir / "hooks"
-    hooks_dir.mkdir(parents=True, exist_ok=True)
-
-    owned = hooks_dir / HOOK_FILENAME
-    owned.write_text(OWNED_HOOK_CONTENT)
-    _chmod_x(owned)
-
-    pc = hooks_dir / "post-commit"
-    chain_block = (
-        f"{CHAIN_BEGIN}\n"
-        f'"$(dirname "$0")"/{HOOK_FILENAME} "$@"\n'
-        f"{CHAIN_END}\n"
-    )
-    if pc.exists():
-        existing = pc.read_text()
-        if CHAIN_BEGIN in existing:
-            # already installed
-            pass
-        else:
-            new = existing.rstrip("\n") + "\n\n" + chain_block
-            pc.write_text(new)
-    else:
-        pc.write_text("#!/usr/bin/env sh\n\n" + chain_block)
-    _chmod_x(pc)
-
-    # Fetch refspec: ensure notes come along on `git fetch`.
-    try:
-        subprocess.check_call(
-            ["git", "config", "--add", "remote.origin.fetch", NOTES_REFSPEC],
-            cwd=str(repo),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        pass  # no origin remote is fine
-    return True
-
-
-def remove(repo: Path) -> bool:
-    """Remove the opentraces hook and chain block. Idempotent."""
-    gdir = _git_dir(repo)
-    if gdir is None:
-        return False
-    hooks_dir = gdir / "hooks"
-    owned = hooks_dir / HOOK_FILENAME
-    if owned.exists():
-        owned.unlink()
-    pc = hooks_dir / "post-commit"
-    if pc.exists():
-        text = pc.read_text()
-        if CHAIN_BEGIN in text and CHAIN_END in text:
-            start = text.index(CHAIN_BEGIN)
-            end = text.index(CHAIN_END) + len(CHAIN_END)
-            cleaned = (text[:start].rstrip() + text[end:].lstrip()).strip()
-            if cleaned and cleaned != "#!/usr/bin/env sh":
-                pc.write_text(cleaned + "\n")
-            else:
-                pc.unlink()
-    # Remove the notes refspec entry if it exists.
-    try:
-        subprocess.check_call(
-            ["git", "config", "--unset-all", "remote.origin.fetch", NOTES_REFSPEC],
-            cwd=str(repo),
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        pass
-    return True
-
-
-def status(repo: Path) -> dict:
-    """Return a dict describing installation state."""
-    gdir = _git_dir(repo)
-    if gdir is None:
-        return {"installed": False, "reason": "not a git repo"}
-    hooks_dir = gdir / "hooks"
-    owned = hooks_dir / HOOK_FILENAME
-    pc = hooks_dir / "post-commit"
-    has_owned = owned.exists()
-    has_chain = pc.exists() and CHAIN_BEGIN in pc.read_text()
-    return {
-        "installed": has_owned and has_chain,
-        "owned_hook_present": has_owned,
-        "chain_present": has_chain,
-        "hook_dir": str(hooks_dir),
-    }
+from ..capture.git.install import *  # noqa: F401,F403,E402
+from ..capture.git.install import (  # noqa: F401,E402
+    CHAIN_BEGIN,
+    CHAIN_END,
+    HOOK_FILENAME,
+    NOTES_REFSPEC,
+    OWNED_HOOK_CONTENT,
+    install,
+    remove,
+    status,
+)

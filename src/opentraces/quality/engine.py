@@ -572,7 +572,7 @@ def assess_multi_project(
         max_total: Total cap across all projects.
         personas: Custom persona list. If None, uses defaults.
     """
-    from ..agents.claude_code import ClaudeCodeParser
+    from ..capture.claude_code import ClaudeCodeParser
     from ..enrichment.metrics import compute_metrics
     from ..enrichment.attribution import build_attribution
     from ..enrichment.git_signals import detect_commits_from_steps

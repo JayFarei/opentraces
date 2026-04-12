@@ -1,129 +1,18 @@
-#!/usr/bin/env python3
-"""Claude Code Stop hook for opentraces.
+"""Compatibility shim. Moved to :mod:`opentraces.capture.claude_code.hooks.on_stop`."""
 
-Appends a single opentraces_hook line to the session transcript capturing
-git state at the exact moment the session ends. This data is not otherwise
-present in the JSONL and enriches commit/outcome signals in the parser.
-
-Also fire-and-forget triggers an Intent-enrichment subprocess
-(``opentraces _enrich-transcript``) so a summary is ready for the next
-``opentraces push`` / ``enrich`` / viewer load without the user having
-to do anything. Backgrounded with ``start_new_session=True`` so Claude
-Code never waits on the LLM call.
-
-Install via: opentraces hooks install
-"""
-import json
-import os
-import shutil
-import subprocess
 import sys
-from datetime import datetime, timezone
+import warnings
 
+warnings.warn(
+    "opentraces.installers.claude_code_hooks.on_stop is deprecated; "
+    "use opentraces.capture.claude_code.hooks.on_stop",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-def _git_info(cwd: str) -> dict:
-    """Return git state dict, empty on any failure.
+from opentraces.capture.claude_code.hooks import on_stop as _target  # noqa: E402
 
-    Captures the file list at `git diff HEAD` (tracked mods + staged +
-    committed-but-dirty) so build_attribution can compute
-    Attribution.unaccounted_files from the hook side even for
-    uncommitted sessions. Plan 041 R8.
-    """
-    if not cwd:
-        return {}
-    try:
-        sha = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=cwd, text=True,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        ).strip()
-        status_out = subprocess.check_output(
-            ["git", "status", "--porcelain"],
-            cwd=cwd, text=True,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        )
-        status_lines = [l for l in status_out.splitlines() if l.strip()]
-        # `git diff HEAD --name-only` is the authoritative list for R8:
-        # it includes tracked changes vs HEAD (staged + unstaged) and
-        # excludes untracked files we didn't mean to claim attribution for.
-        try:
-            diff_names = subprocess.check_output(
-                ["git", "diff", "HEAD", "--name-only"],
-                cwd=cwd, text=True,
-                stderr=subprocess.DEVNULL,
-                timeout=5,
-            )
-            changed_paths = [p for p in diff_names.splitlines() if p.strip()]
-        except Exception:
-            changed_paths = []
-        return {
-            "sha": sha,
-            "dirty": bool(status_lines),
-            "files_changed": len(status_lines),
-            "changed_paths": changed_paths,
-        }
-    except Exception:
-        return {}
-
-
-def main() -> None:
-    try:
-        payload = json.load(sys.stdin)
-    except Exception:
-        sys.exit(0)
-
-    transcript_path = payload.get("transcript_path")
-    if not transcript_path:
-        sys.exit(0)
-
-    cwd = payload.get("cwd") or ""  # empty string handled by _git_info guard
-    line = json.dumps({
-        "type": "opentraces_hook",
-        "event": "Stop",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "data": {
-            "session_id": payload.get("session_id"),
-            "agent_type": payload.get("agent_type"),
-            "permission_mode": payload.get("permission_mode"),
-            "stop_hook_active": payload.get("stop_hook_active"),
-            "git": _git_info(cwd),
-        },
-    })
-
-    try:
-        with open(transcript_path, "a") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass  # Never break Claude Code on our account
-
-    _spawn_intent_enrichment(transcript_path)
-
-
-def _spawn_intent_enrichment(transcript_path: str) -> None:
-    """Fire-and-forget the Intent-enrichment subprocess.
-
-    Never blocks: uses Popen with a new session so Claude Code's hook
-    returns immediately. Swallows every error; a hook that fails loudly
-    would break the user's session.
-    """
-    binary = shutil.which("opentraces")
-    if binary is None:
-        return
-    try:
-        devnull = subprocess.DEVNULL
-        subprocess.Popen(
-            [binary, "_enrich-transcript", transcript_path],
-            stdin=devnull,
-            stdout=devnull,
-            stderr=devnull,
-            start_new_session=True,
-            close_fds=True,
-        )
-    except Exception:
-        return
-
-
-if __name__ == "__main__":
-    main()
+# Alias this module to the real one so monkeypatching "this" module is
+# equivalent to monkeypatching the target, and all attrs (including
+# underscore-prefixed helpers) are visible.
+sys.modules[__name__] = _target

@@ -1,7 +1,17 @@
-"""Claude Code hook installer.
+"""Compatibility shim. Moved to :mod:`opentraces.capture.claude_code.hooks`."""
 
-Ships the ``on_stop`` and ``on_compact`` Python scripts that the CLI
-copies into ``~/.claude/hooks/`` on ``opentraces hooks install``. Also
-exposes :mod:`intent_adapter`, imported directly from the summarization
-subsystem without being copied anywhere.
-"""
+import warnings
+
+warnings.warn(
+    "opentraces.installers.claude_code_hooks is deprecated; "
+    "use opentraces.capture.claude_code.hooks",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
+from ...capture.claude_code.hooks import (  # noqa: F401,E402
+    on_compact,
+    on_stop,
+    on_tool_use,
+    intent_adapter,
+)

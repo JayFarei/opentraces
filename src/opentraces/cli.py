@@ -599,7 +599,7 @@ def _current_project_session_dir(project_dir: Path, cfg=None) -> Path | None:
 def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=None) -> tuple[int, int]:
     """Import existing session files into the project's local inbox."""
     from .config import load_project_config, get_project_staging_dir, get_project_state_path
-    from .agents.claude_code import ClaudeCodeParser
+    from .capture.claude_code import ClaudeCodeParser
     from .pipeline import process_trace
     from .state import StateManager, TraceStatus, ProcessedFile
 
@@ -2533,7 +2533,7 @@ def _enrich_transcript(transcript_path: Path) -> None:
     try:
         if not transcript_path.exists():
             return
-        from .installers.claude_code_hooks.intent_adapter import (
+        from .capture.claude_code.hooks.intent_adapter import (
             enrich_from_hook_payload,
         )
         from .enrichment.intent_backends import claude_cli_client
@@ -2560,7 +2560,7 @@ def _enrich_transcript(transcript_path: Path) -> None:
 def parse(auto: bool, limit: int) -> None:
     """Parse agent sessions into enriched JSONL traces."""
     from .config import get_projects_path, is_project_excluded
-    from .agents.claude_code import ClaudeCodeParser
+    from .capture.claude_code import ClaudeCodeParser
     from .pipeline import process_trace
     from .state import StateManager, TraceStatus, ProcessedFile, STAGING_DIR
 
@@ -2661,7 +2661,7 @@ def import_hf(
 ) -> None:
     """Import traces from a HuggingFace dataset."""
     from .config import get_project_staging_dir, get_project_state_path
-    from .parsers import get_importers
+    from .capture import get_importers
     from .pipeline import process_imported_trace
     from .state import StateManager, TraceStatus
 
@@ -3836,7 +3836,7 @@ def hooks_install(hooks_dir: str | None, settings_file: str | None, dry_run: boo
     target_settings = Path(settings_file) if settings_file else claude_dir / "settings.json"
 
     # Source hook scripts are shipped with the package
-    src_hooks_dir = Path(__file__).parent / "installers" / "claude_code_hooks"
+    src_hooks_dir = Path(__file__).parent / "capture" / "claude_code" / "hooks"
     hook_scripts = {
         "Stop": src_hooks_dir / "on_stop.py",
         "PostCompact": src_hooks_dir / "on_compact.py",
@@ -3985,7 +3985,7 @@ def run_post_commit_hook(repo_path: str) -> None:
         from datetime import datetime, timedelta, timezone
 
         from .config import get_project_staging_dir
-        from .enrichment.git import post_commit
+        from .capture.git import post_commit
         from .inbox import load_trace_records
 
         repo = Path(repo_path).resolve()
@@ -4059,7 +4059,7 @@ def blame_cmd(target: str, json_out: bool) -> None:
 @click.option("--uninstall", is_flag=True, help="Remove the hook instead of installing.")
 def setup_git(uninstall: bool) -> None:
     """Install/remove the opentraces post-commit hook (plan 041 R21)."""
-    from .installers import git_hook
+    from .capture.git import install as git_hook
     if uninstall:
         git_hook.remove(Path.cwd())
         human_echo("opentraces post-commit hook removed.")

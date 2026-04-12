@@ -115,6 +115,61 @@ Use the [HuggingFace `datasets` library](https://huggingface.co/docs/datasets/en
 
 Use hf-mount for free-form exploration or when the consumer reads files with standard tool calls. Use the datasets library for notebooks or training pipelines.
 
+## Local lookup: trace → commit, line → trace
+
+Once the post-commit hook is installed (`opentraces setup git`), two local commands close the loop between commits and traces.
+
+### Traces grouped by commit
+
+```bash
+opentraces session list --by-commit
+opentraces --json session list --by-commit
+```
+
+Groups every staged/committed/pushed trace by its `git_links[].revision`. Useful for finding every session that contributed to a specific commit (cherry-picks, squashes, and multi-session commits all surface here).
+
+### Line-level blame
+
+```bash
+opentraces blame src/auth.py:42
+opentraces --json blame src/auth.py:42
+```
+
+Resolves `path:line` to the trace(s) that authored it, walking `git_links` and attribution ranges locally. Each hit reports the originating `trace_id`, `step`, `revision`, and whether the content is still `alive` at `HEAD`.
+
+## Filtering by evidence tier (training subsets)
+
+Every record carries two orthogonal quality signals added in schema 0.3.0:
+
+- `lifecycle` — `"provisional"` if the session hasn't been pinned to a commit yet, `"final"` once the post-commit correlator has pinned it.
+- `git_links[].tier` — one of `tool_emitted`, `tool_emitted_with_divergence`, `overlapping`, or `orphan`.
+
+For SFT or RL training, start from the strongest tier and widen as needed:
+
+```python
+import json, pathlib
+
+WANT = {"tool_emitted"}  # widen to add "tool_emitted_with_divergence", etc.
+
+for path in pathlib.Path("/mnt/traces/data").glob("traces_*.jsonl"):
+    for line in open(path):
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        if r.get("lifecycle") != "final":
+            continue
+        if not any(link.get("tier") in WANT for link in r.get("git_links") or []):
+            continue
+        yield r
+```
+
+Rule of thumb:
+
+- `tool_emitted` — gold standard, safe for SFT and RL reward shaping.
+- `tool_emitted_with_divergence` — still high value; pair with `AttributionRange.original` if you need the pre-format bytes the agent actually emitted.
+- `overlapping` — weakly linked, prefer for analytics over training.
+- `orphan` — keep the trajectory, don't claim authorship.
+
 ## Schema reference
 
-Each JSONL line is a `TraceRecord`. See the [schema overview](/docs/schema/overview) for field definitions, and [outcome & attribution](/docs/schema/outcome-attribution) for RL reward signals.
+Each JSONL line is a `TraceRecord`. See the [schema overview](/docs/schema/overview) for field definitions, and [outcome & attribution](/docs/schema/outcome-attribution) for RL reward signals and the evidence-tier taxonomy.

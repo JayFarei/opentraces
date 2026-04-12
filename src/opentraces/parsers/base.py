@@ -1,101 +1,12 @@
-"""Adapter contracts for agent session parsers and file-based importers.
+"""Compatibility shim. Moved to :mod:`opentraces.capture._base`."""
 
-Uses typing.Protocol (structural typing, not inheritance) so new adapters
-only need to implement the interface without importing this module.
-"""
+import warnings
 
-from __future__ import annotations
+warnings.warn(
+    "opentraces.parsers.base is deprecated; use opentraces.capture._base",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Iterator, Protocol, runtime_checkable
-
-from opentraces_schema import TraceRecord
-
-
-@dataclass
-class ParseOutcome:
-    """Result of a parse attempt, carrying both record and any errors.
-
-    A parser that encounters errors mid-parse still populates ``errors``
-    even when a partial ``record`` was produced. Any non-empty ``errors``
-    blocks the trace from upload via the state machine — parse errors
-    are a hard block, never a warning.
-    """
-
-    record: object | None = None
-    errors: list[str] = field(default_factory=list)
-
-    def is_blocked(self) -> bool:
-        """Return True if this outcome must block upload."""
-        return bool(self.errors)
-
-    def block_reason(self) -> str:
-        """Canonical block reason string for the state machine."""
-        return "parse_error"
-
-
-@runtime_checkable
-class SessionParser(Protocol):
-    """Protocol that all agent parsers must satisfy.
-
-    For live discovery and incremental parsing of agent session files on disk.
-    """
-
-    agent_name: str
-
-    def discover_sessions(self, projects_path: Path) -> Iterator[Path]:
-        """Yield paths to session files for this agent."""
-        ...
-
-    def parse_session(self, session_path: Path, byte_offset: int = 0) -> TraceRecord | None:
-        """Parse a session file into a TraceRecord.
-
-        Args:
-            session_path: Path to the session JSONL file.
-            byte_offset: Resume from this byte offset for incremental processing.
-
-        Returns:
-            TraceRecord if session meets quality thresholds, None otherwise.
-        """
-        ...
-
-
-@runtime_checkable
-class FormatImporter(Protocol):
-    """Protocol for file-based trace importers.
-
-    For importing traces from external file formats (e.g. ADP trajectories,
-    HuggingFace datasets) into TraceRecord format.
-    """
-
-    format_name: str
-    file_extensions: list[str]
-
-    def import_traces(self, input_path: Path, max_records: int = 0) -> list[TraceRecord]:
-        """Read a file and produce TraceRecords.
-
-        Args:
-            input_path: Path to the source file.
-            max_records: Maximum records to import (0 = unlimited).
-
-        Returns:
-            List of TraceRecords. May be empty if file has no valid records.
-        """
-        ...
-
-    def map_record(self, row: dict, index: int, source_info: dict | None = None) -> TraceRecord | None:
-        """Convert one dataset row to a TraceRecord.
-
-        Used by CLI commands that stream rows from external sources
-        (e.g. HuggingFace datasets) and need per-row conversion.
-
-        Args:
-            row: Raw dataset row as a dict.
-            index: Row index in the source dataset.
-            source_info: Provenance metadata (dataset_id, revision, etc.).
-
-        Returns:
-            TraceRecord if row is valid, None to skip invalid rows.
-        """
-        ...
+from ..capture._base import *  # noqa: F401,F403,E402
+from ..capture._base import FormatImporter, ParseOutcome, SessionParser  # noqa: F401,E402

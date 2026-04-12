@@ -247,7 +247,7 @@ const v030: SchemaVersion = {
     "AttributionRange.change_type: addition | modification | deletion; per-range contributor override",
     "AttributionConversation.ids (provider-native msg ids) and .related (plan / issue / pr links)",
     "Task.repository_url: canonical remote URL alongside owner/repo",
-    "Content-hash format now murmur3:<32-hex> (replaces md5-truncated-8)",
+    "AttributionRange.content_hash format now murmur3:<32-hex> (replaces md5-truncated-8) for cross-tool line-range matching; top-level TraceRecord.content_hash remains SHA-256 for dedup",
     "Post-commit hook correlates trace to revision; PostToolUse hook captures diff as it happens",
     "opentraces notes <ref>, opentraces blame <file>:<line>, opentraces setup git, session list --by-commit",
     "opentraces export --format agent-trace; session show --markdown (prompt-injection-safe)",
@@ -262,7 +262,7 @@ const v030: SchemaVersion = {
             f.name === "schema_version"
               ? { ...f, description: 'e.g. "0.3.0"' }
               : f.name === "content_hash"
-                ? { ...f, description: "murmur3:<32-hex> for deduplication (was SHA-256 pre-0.3.0)" }
+                ? { ...f, description: "SHA-256 hex of the serialized record, used for cross-contributor dedup at upload time. Unchanged by 0.3.0." }
                 : f
           ),
           { name: "intent", type: "Intent | null", required: false, description: "LLM- or user-supplied session summary. Excluded from content_hash." },

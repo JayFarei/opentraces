@@ -40,7 +40,7 @@ STAGE_PRESENTATIONS = {
 
 def discover_supported_agents() -> tuple[str, ...]:
     try:
-        from .parsers import get_parsers
+        from .capture import get_parsers
 
         parser_agents = tuple(get_parsers().keys())
     except Exception:
