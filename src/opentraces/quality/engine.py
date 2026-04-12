@@ -625,7 +625,9 @@ def assess_multi_project(
                     record.steps, project_name=proj_basename,
                 )
                 record.dependencies = sorted(set(step_deps + import_deps))
-                record.attribution = build_attribution(record.steps)
+                record.attribution = build_attribution(
+                    record.steps, trace_id=record.trace_id
+                )
                 # Detect commits from Bash tool calls in the session itself
                 step_outcome = detect_commits_from_steps(record.steps)
                 if step_outcome.committed:

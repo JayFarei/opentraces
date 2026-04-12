@@ -384,6 +384,9 @@ class TestBuildAttribution:
         assert result is None
 
     def test_single_edit(self):
+        # With no prior Read/Write the edit's line range is unresolvable,
+        # so plan 041 R4/R5 degrade it to low confidence and flag the
+        # attribution block experimental.
         tc = _make_edit_tc("/src/app.py", "old code", "new code")
         steps = [_make_step(0, tool_calls=[tc])]
         attr = build_attribution(steps)
@@ -392,9 +395,8 @@ class TestBuildAttribution:
         assert attr.experimental is True
         assert len(attr.files) == 1
         assert attr.files[0].path == "/src/app.py"
-        # Single edit -> high confidence
         conv = attr.files[0].conversations[0]
-        assert conv.ranges[0].confidence == "high"
+        assert conv.ranges[0].confidence == "low"
 
     def test_write_new_file(self):
         content = "line1\nline2\nline3\n"
@@ -456,7 +458,9 @@ class TestBuildAttribution:
         assert attr is not None
         r = attr.files[0].conversations[0].ranges[0]
         assert r.content_hash is not None
-        assert len(r.content_hash) == 8  # md5 truncated to 8 hex
+        # Plan 041 R1: hashes are now murmur3 with a `murmur3:` prefix.
+        assert r.content_hash.startswith("murmur3:")
+        assert len(r.content_hash) == len("murmur3:") + 32
 
     def test_with_outcome_patch(self):
         tc = _make_edit_tc("/src/app.py", "old", "new")

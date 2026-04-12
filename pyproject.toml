@@ -13,6 +13,7 @@ dependencies = [
     "opentraces-schema>=0.1.0",
     "click>=8.0",
     "huggingface_hub>=0.20.0",
+    "mmh3>=4.0",
     "pyclack-cli>=0.4.0",
     "requests>=2.31.0",
 ]

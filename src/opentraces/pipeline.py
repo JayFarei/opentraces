@@ -59,7 +59,9 @@ def _enrich_from_steps(
         record.dependencies = sorted(set(step_deps + import_deps))
     if not record.attribution:
         patch = record.outcome.patch if record.outcome else None
-        record.attribution = build_attribution(record.steps, patch)
+        record.attribution = build_attribution(
+            record.steps, patch, trace_id=record.trace_id
+        )
     if not record.outcome.committed:
         step_outcome = detect_commits_from_steps(record.steps)
         if step_outcome.committed:

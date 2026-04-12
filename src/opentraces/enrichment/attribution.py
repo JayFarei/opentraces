@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections import defaultdict
+
+import mmh3
 
 from opentraces_schema.models import (
     Attribution,
@@ -17,8 +18,14 @@ from .snippets import extract_edited_lines
 
 
 def _content_hash(text: str) -> str:
-    """Compute a short content hash (md5 truncated to 8 hex chars, murmur3 stand-in)."""
-    return hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()[:8]
+    """Compute a content hash as `murmur3:<hex>` for cross-tool comparability.
+
+    128-bit MurmurHash3 rendered as 32 hex chars, prefixed with `murmur3:` so
+    consumers can validate the algorithm without guessing. Matches the Agent
+    Trace v0.1.0 content-hash convention.
+    """
+    h = mmh3.hash128(text.encode("utf-8"), signed=False)
+    return f"murmur3:{h:032x}"
 
 
 def _parse_diff_files(patch: str) -> dict[str, list[tuple[int, int]]]:
@@ -36,7 +43,6 @@ def _parse_diff_files(patch: str) -> dict[str, list[tuple[int, int]]]:
             if current_file not in files:
                 files[current_file] = []
         elif line.startswith("@@ "):
-            # Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
             parts = line.split(" ")
             for part in parts:
                 if part.startswith("+") and "," in part:
@@ -63,24 +69,36 @@ def _parse_diff_files(patch: str) -> dict[str, list[tuple[int, int]]]:
 def build_attribution(
     steps: list[Step],
     outcome_patch: str | None = None,
+    *,
+    trace_id: str | None = None,
 ) -> Attribution | None:
     """Derive attribution from Edit and Write tool calls in the steps.
 
     Logic:
-    1. Each Edit tool call maps to line ranges based on its input parameters.
-    2. Write tool calls (new files) attribute the entire file to that step.
-    3. If outcome_patch is provided, cross-reference against actual diff.
-    4. Multi-edit same file: track cumulative line shifts, later edits take precedence.
-    5. Confidence: "high" for single-edit files, "medium" for multi-edit no overlap,
-       "low" for overlapping edits.
+    1. Each Edit maps to a line range. Priority order for resolution:
+       - cumulative in-memory `str.find()` against prior Reads/Writes/Edits
+       - fallback to (1, new_string line count) when no prior content known
+    2. Write calls attribute the entire file to that step.
+    3. Confidence: "high" for single-edit files with known content,
+       "medium" for multi-edit no overlap, "low" for overlapping edits or
+       fallback-resolved ranges.
+    4. `experimental` is True iff any range is low-confidence or any edit
+       used the fallback resolution (R4).
+    5. `trace_id` threads into the attribution URL as
+       `opentraces://<trace_id>/step_<N>` (R19); defaults to "trace" when
+       omitted so imported data from older pipelines still validates.
 
     Returns None if no Edit/Write tool calls are found.
     """
-    # Collect all edit and write operations per file
-    # file_path -> list of (step_index, start_line, end_line, content_hash, is_overlap)
-    file_edits: dict[str, list[dict]] = defaultdict(list)
-    file_contents: dict[str, str] = {}  # Track cumulative file state for line shifts
+    trace_slug = trace_id or "trace"
 
+    # step_index -> model string (from Step.model). Used to stamp
+    # contributor.model_id per conversation (R2).
+    step_models: dict[int, str | None] = {s.step_index: s.model for s in steps}
+
+    file_edits: dict[str, list[dict]] = defaultdict(list)
+    file_contents: dict[str, str] = {}
+    fallback_used = False
     found_any = False
 
     for step in steps:
@@ -96,28 +114,29 @@ def build_attribution(
                 if not file_path or not new_string:
                     continue
 
-                # Try to determine line range
                 current_content = file_contents.get(file_path)
                 start_line, end_line = extract_edited_lines(
                     old_string, new_string, current_content
                 )
 
-                # Update tracked content if we can
                 if current_content and old_string in current_content:
                     file_contents[file_path] = current_content.replace(
                         old_string, new_string, 1
                     )
 
-                # If we couldn't determine lines, use placeholder
+                used_fallback = False
                 if start_line is None:
                     start_line = 1
                     end_line = max(1, new_string.count("\n") + 1)
+                    used_fallback = True
+                    fallback_used = True
 
                 file_edits[file_path].append({
                     "step_index": step.step_index,
                     "start_line": start_line,
                     "end_line": end_line,
                     "content_hash": _content_hash(new_string),
+                    "used_fallback": used_fallback,
                 })
 
             elif tool_name == "write":
@@ -128,22 +147,21 @@ def build_attribution(
                 if not file_path:
                     continue
 
-                # Track file content for future edit lookups
                 file_contents[file_path] = content
-
-                line_count = max(1, content.count("\n") + (1 if content and not content.endswith("\n") else 0))
-
+                line_count = max(
+                    1,
+                    content.count("\n") + (1 if content and not content.endswith("\n") else 0),
+                )
                 file_edits[file_path].append({
                     "step_index": step.step_index,
                     "start_line": 1,
                     "end_line": line_count,
                     "content_hash": _content_hash(content),
+                    "used_fallback": False,
                 })
 
             elif tool_name == "read":
-                # Track file content for line range calculation in future edits
                 file_path = tc.input.get("file_path", "")
-                # Look for content in observations
                 for obs in step.observations:
                     if obs.source_call_id == tc.tool_call_id and obs.content:
                         file_contents[file_path] = obs.content
@@ -151,20 +169,13 @@ def build_attribution(
     if not found_any:
         return None
 
-    # Build attribution files with confidence scoring
     attribution_files: list[AttributionFile] = []
-    unaccounted_hunks: list[str] = []
-
-    # Parse the outcome patch for cross-referencing
-    patch_files: dict[str, list[tuple[int, int]]] = {}
-    if outcome_patch:
-        patch_files = _parse_diff_files(outcome_patch)
+    any_low_confidence = False
 
     for file_path, edits in sorted(file_edits.items()):
-        # Determine confidence based on edit count and overlap
+        # Overlap + multi-edit detection drives confidence.
         has_overlap = False
         if len(edits) > 1:
-            # Check for overlapping ranges
             sorted_edits = sorted(edits, key=lambda e: e["start_line"])
             for i in range(1, len(sorted_edits)):
                 if sorted_edits[i]["start_line"] <= sorted_edits[i - 1]["end_line"]:
@@ -178,17 +189,19 @@ def build_attribution(
         else:
             confidence = "medium"
 
-        # Build ranges, with later edits taking precedence for overlaps
+        # Ranges that used fallback line resolution degrade to low regardless.
         ranges: list[AttributionRange] = []
         for edit in edits:
+            eff_conf = "low" if edit["used_fallback"] else confidence
+            if eff_conf == "low":
+                any_low_confidence = True
             ranges.append(AttributionRange(
                 start_line=edit["start_line"],
                 end_line=edit["end_line"],
                 content_hash=edit["content_hash"],
-                confidence=confidence,
+                confidence=eff_conf,
             ))
 
-        # Build conversation entries (one per unique step)
         step_indices = sorted(set(e["step_index"] for e in edits))
         conversations: list[AttributionConversation] = []
 
@@ -196,9 +209,13 @@ def build_attribution(
             step_ranges = [
                 r for r, e in zip(ranges, edits) if e["step_index"] == si
             ]
+            contributor: dict[str, str] = {"type": "ai"}
+            model_id = step_models.get(si)
+            if model_id:
+                contributor["model_id"] = model_id
             conversations.append(AttributionConversation(
-                contributor={"type": "ai"},
-                url=f"opentraces://trace/step_{si}",
+                contributor=contributor,
+                url=f"opentraces://{trace_slug}/step_{si}",
                 ranges=step_ranges,
             ))
 
@@ -207,14 +224,10 @@ def build_attribution(
             conversations=conversations,
         ))
 
-    # Cross-reference with patch if provided
-    if patch_files:
-        attributed_paths = {f.path for f in attribution_files}
-        for pf in patch_files:
-            if pf not in attributed_paths:
-                unaccounted_hunks.append(pf)
+    # R4: experimental iff any low-confidence range or any fallback.
+    experimental = any_low_confidence or fallback_used
 
     return Attribution(
-        experimental=True,
+        experimental=experimental,
         files=attribution_files,
     )
