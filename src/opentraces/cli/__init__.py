@@ -95,6 +95,34 @@ def _stage_c(label: str, stage_key: str) -> str:
     return click.style(label, fg=color) if color else label
 
 
+def _describe_trace(record) -> str:
+    """Pick the best short label for a trace.
+
+    Priority:
+      1. intent.title     (plan 038 curated title)
+      2. task.description (parser-provided)
+      3. first non-empty step content (trimmed)
+      4. "untitled"
+    """
+    intent = getattr(record, "intent", None)
+    if intent is not None:
+        title = getattr(intent, "title", None)
+        if title:
+            return title.strip()
+    task = getattr(record, "task", None)
+    desc = getattr(task, "description", None) if task else None
+    if desc:
+        return desc.strip()
+    for step in getattr(record, "steps", []) or []:
+        content = getattr(step, "content", None)
+        if content:
+            # Collapse whitespace; first line or so is usually the task prompt.
+            flat = " ".join(content.split())
+            if flat:
+                return flat
+    return "untitled"
+
+
 def print_banner(*, tagline: str | None = OPENTRACES_TAGLINE, file=None) -> None:
     """Print the OT ASCII banner plus an optional tagline.
 
@@ -1538,7 +1566,8 @@ def status(limit: int) -> None:
                     except (ValueError, TypeError, AttributeError):
                         pass
 
-                task_desc = (record.task.description or "untitled")[:40]
+                _raw = _describe_trace(record)
+                task_desc = (_raw[:57] + "…") if len(_raw) > 58 else _raw
                 n_steps = len(record.steps)
                 n_tools = sum(len(s.tool_calls) for s in record.steps)
                 n_flags = record.security.flags_reviewed or 0
