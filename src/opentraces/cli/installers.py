@@ -177,8 +177,8 @@ def setup_git(uninstall: bool) -> None:
     st = git_hook.status(Path.cwd())
     if ok and st["installed"]:
         human_echo("")
-        print_banner(tagline="git hook installed")
-        human_echo(f"  owned hook: {st['hook_dir']}/{git_hook.HOOK_FILENAME}")
+        print_banner(tagline=_cli._ok("git hook installed"))
+        human_echo(f"  {_cli._dim('owned hook:')} {st['hook_dir']}/{git_hook.HOOK_FILENAME}")
     else:
         human_echo("install failed: not a git repo or insufficient permissions.")
     emit_json({"status": "ok" if ok else "error", "action": "install", "state": st})
@@ -272,8 +272,8 @@ def setup_trufflehog_cmd(disable: bool, verify: bool) -> None:
     cfg.security.trufflehog.enabled = True
     save_config(cfg)
     human_echo("")
-    print_banner(tagline=f"trufflehog ready ({version})")
-    human_echo("  Tier 1.5 enabled — scans and pushes will run TruffleHog.")
+    print_banner(tagline=_cli._ok(f"trufflehog ready ({version})"))
+    human_echo(f"  {_cli._dim('Tier 1.5 enabled — scans and pushes will run TruffleHog.')}")
     emit_json({"status": "ok", "action": "install",
                "trufflehog_version": version, "trufflehog_enabled": True})
 

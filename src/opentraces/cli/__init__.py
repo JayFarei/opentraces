@@ -55,6 +55,46 @@ COMMAND_SECTIONS = [
 ]
 
 
+# -- Color helpers ------------------------------------------------------------
+#
+# Thin wrappers around click.style. click.echo auto-strips ANSI when stdout is
+# not a TTY, and respects the NO_COLOR env var, so these are safe to sprinkle
+# through human output without guarding every call.
+
+_STAGE_COLORS = {
+    "inbox": "yellow",
+    "committed": "cyan",
+    "pushed": "green",
+    "rejected": "red",
+    "blocked": "red",
+}
+
+
+def _bold(text: str) -> str:
+    return click.style(text, bold=True)
+
+
+def _dim(text: str) -> str:
+    return click.style(text, dim=True)
+
+
+def _ok(text: str) -> str:
+    return click.style(text, fg="green", bold=True)
+
+
+def _warn(text: str) -> str:
+    return click.style(text, fg="yellow")
+
+
+def _err(text: str) -> str:
+    return click.style(text, fg="red", bold=True)
+
+
+def _stage_c(label: str, stage_key: str) -> str:
+    color = _STAGE_COLORS.get(stage_key.lower())
+    return click.style(label, fg=color) if color else label
+
+
 def print_banner(*, tagline: str | None = OPENTRACES_TAGLINE, file=None) -> None:
     """Print the OT ASCII banner plus an optional tagline.
 
@@ -63,9 +103,9 @@ def print_banner(*, tagline: str | None = OPENTRACES_TAGLINE, file=None) -> None
     """
     if _json_mode:
         return
-    click.echo(OPENTRACES_ASCII, file=file)
+    click.echo(click.style(OPENTRACES_ASCII, fg="cyan", bold=True), file=file)
     if tagline:
-        click.echo(f"\n  {tagline}\n", file=file)
+        click.echo(f"\n  {_dim(tagline)}\n", file=file)
 
 
 class GroupedGroup(click.Group):
@@ -122,7 +162,7 @@ def human_echo(message: str = "", **kwargs) -> None:
 def human_hint(hint: str | None) -> None:
     """Echo a Hint: line to human output when a hint is available."""
     if hint and not _json_mode:
-        click.echo(f"Hint: {hint}")
+        click.echo(f"{_warn('Hint:')} {hint}")
 
 
 def error_response(code: str, kind: str, message: str, hint: str | None = None, retryable: bool = False) -> dict[str, object]:
@@ -1016,12 +1056,12 @@ def init(
         imported_existing, import_errors = _capture_sessions_into_project(existing_session_dir, project_dir, cfg=cfg)
 
     click.echo()
-    print_banner(tagline="initialized")
-    click.echo(f"Project:  {project_dir.name}  ({review_policy} policy)")
+    print_banner(tagline=_ok("initialized"))
+    click.echo(f"{_dim('Project: ')} {_bold(project_dir.name)}  {_dim(f'({review_policy} policy)')}")
     if remote:
-        click.echo(f"  Remote:  {remote}")
+        click.echo(f"  {_dim('Remote: ')} {remote}")
     else:
-        click.echo(f"  Remote:  not set (run 'opentraces remote set <owner>/<repo>')")
+        click.echo(f"  {_dim('Remote: ')} {_warn('not set')} {_dim('(run')} opentraces remote set <owner>/<repo>{_dim(')')}")
     click.echo(f"  Config:  {config_json}")
     click.echo(f"  Staging: {staging_dir}")
     if hook_installed:
@@ -1425,14 +1465,14 @@ def status(limit: int) -> None:
     counts["inbox"] += max(0, total_files - tracked)
 
     # Project header
-    click.echo(f"{project_name} inbox")
-    click.echo(f"mode:    {proj_config.get('review_policy', 'review')}")
-    click.echo(f"agents:  {', '.join(proj_config['agents'])}")
+    click.echo(f"{_bold(project_name)} {_dim('inbox')}")
+    click.echo(f"{_dim('mode:   ')} {proj_config.get('review_policy', 'review')}")
+    click.echo(f"{_dim('agents: ')} {', '.join(proj_config['agents'])}")
     visibility = proj_config.get("visibility", "private")
     if remote:
-        click.echo(f"remote:  {remote} ({visibility})")
+        click.echo(f"{_dim('remote: ')} {remote} {_dim(f'({visibility})')}")
     else:
-        click.echo("remote:  not set")
+        click.echo(f"{_dim('remote: ')} {_warn('not set')}")
     click.echo()
 
     # Session list (only the top N by mtime)
@@ -1459,11 +1499,11 @@ def status(limit: int) -> None:
         if shown < total_files:
             pages = (total_files + shown - 1) // shown if shown else 1
             click.echo(
-                f"showing {shown} of {total_files} sessions  "
-                f"(page 1 of ~{pages}; use --limit N or --limit 0 for more)"
+                f"{_bold(f'showing {shown} of {total_files}')} sessions  "
+                f"{_dim(f'(page 1 of ~{pages}; use --limit N or --limit 0 for more)')}"
             )
         else:
-            click.echo(f"{total_files} session{'s' if total_files != 1 else ''}")
+            click.echo(f"{_bold(str(total_files))} session{'s' if total_files != 1 else ''}")
         click.echo()
 
         from opentraces_schema import TraceRecord
@@ -1502,19 +1542,23 @@ def status(limit: int) -> None:
                 n_steps = len(record.steps)
                 n_tools = sum(len(s.tool_calls) for s in record.steps)
                 n_flags = record.security.flags_reviewed or 0
+                stage_col = _stage_c(f"{stage_label(visible_stage):<10}", visible_stage)
+                flags_str = f"{n_flags} flags"
+                if n_flags > 0:
+                    flags_str = _warn(flags_str)
                 click.echo(
-                    f"{prefix}{stage_label(visible_stage):<10} {rel_time:<12} "
-                    f"\"{task_desc}\"  {n_steps} steps  {n_tools} tools  {n_flags} flags"
+                    f"{_dim(prefix)}{stage_col} {_dim(f'{rel_time:<12}')} "
+                    f"\"{task_desc}\"  {n_steps} steps  {n_tools} tools  {flags_str}"
                 )
             except Exception:
                 click.echo(f"{prefix}{sf.name}")
 
     click.echo()
     click.echo(
-        f"inbox {counts['inbox']}  "
-        f"committed {counts['committed']}  "
-        f"pushed {counts['pushed']}  "
-        f"rejected {counts['rejected']}"
+        f"{_stage_c('inbox', 'inbox')} {_bold(str(counts['inbox']))}  "
+        f"{_stage_c('committed', 'committed')} {_bold(str(counts['committed']))}  "
+        f"{_stage_c('pushed', 'pushed')} {_bold(str(counts['pushed']))}  "
+        f"{_stage_c('rejected', 'rejected')} {_bold(str(counts['rejected']))}"
     )
 
     emit_json({
