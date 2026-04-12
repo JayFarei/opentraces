@@ -35,6 +35,7 @@ class TraceStatus(str, Enum):
     UPLOADED = "uploaded"
     REJECTED = "rejected"
     FAILED = "failed"
+    BLOCKED = "blocked"
 
 
 @dataclass
@@ -68,6 +69,7 @@ class TraceStagingEntry:
     error: str | None = None
     uploaded_at: str | None = None
     created_at: float = field(default_factory=time.time)
+    block_reason: str | None = None
 
 
 class StateManager:
@@ -159,12 +161,31 @@ class StateManager:
         ]
 
     def get_pending_upload_traces(self) -> list[TraceStagingEntry]:
-        """Get traces ready for upload (committed or previously failed)."""
+        """Get traces ready for upload (committed or previously failed).
+
+        BLOCKED traces are excluded — parse errors and security findings
+        must never reach upload.
+        """
         return [
             TraceStagingEntry(**v)
             for v in self._state["traces"].values()
             if v.get("status") in (TraceStatus.COMMITTED.value, TraceStatus.FAILED.value)
         ]
+
+    def block_trace(self, trace_id: str, reason: str, **kwargs: Any) -> None:
+        """Move a trace to BLOCKED state with an explanatory reason.
+
+        Used for parse errors, TruffleHog findings, and other hard-block
+        conditions that must prevent upload. Idempotent — blocking an
+        already-blocked trace updates the reason.
+        """
+        self.set_trace_status(
+            trace_id, TraceStatus.BLOCKED, block_reason=reason, **kwargs
+        )
+
+    def get_blocked_traces(self) -> list[TraceStagingEntry]:
+        """Return all traces currently in BLOCKED state."""
+        return self.get_traces_by_status(TraceStatus.BLOCKED)
 
     # --- Commit groups ---
 

@@ -6,10 +6,33 @@ only need to implement the interface without importing this module.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, Protocol, runtime_checkable
 
 from opentraces_schema import TraceRecord
+
+
+@dataclass
+class ParseOutcome:
+    """Result of a parse attempt, carrying both record and any errors.
+
+    A parser that encounters errors mid-parse still populates ``errors``
+    even when a partial ``record`` was produced. Any non-empty ``errors``
+    blocks the trace from upload via the state machine — parse errors
+    are a hard block, never a warning.
+    """
+
+    record: object | None = None
+    errors: list[str] = field(default_factory=list)
+
+    def is_blocked(self) -> bool:
+        """Return True if this outcome must block upload."""
+        return bool(self.errors)
+
+    def block_reason(self) -> str:
+        """Canonical block reason string for the state machine."""
+        return "parse_error"
 
 
 @runtime_checkable
