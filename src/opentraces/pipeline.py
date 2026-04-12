@@ -59,8 +59,13 @@ def _enrich_from_steps(
         record.dependencies = sorted(set(step_deps + import_deps))
     if not record.attribution:
         patch = record.outcome.patch if record.outcome else None
+        hook_git = (record.metadata or {}).get("hook_git_final") or {}
+        end_state_changed = hook_git.get("changed_paths") or None
         record.attribution = build_attribution(
-            record.steps, patch, trace_id=record.trace_id
+            record.steps,
+            patch,
+            trace_id=record.trace_id,
+            end_state_changed_files=end_state_changed,
         )
     if not record.outcome.committed:
         step_outcome = detect_commits_from_steps(record.steps)

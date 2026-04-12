@@ -14,7 +14,13 @@ from datetime import datetime, timezone
 
 
 def _git_info(cwd: str) -> dict:
-    """Return git state dict, empty on any failure."""
+    """Return git state dict, empty on any failure.
+
+    Captures the file list at `git diff HEAD` (tracked mods + staged +
+    committed-but-dirty) so build_attribution can compute
+    Attribution.unaccounted_files from the hook side even for
+    uncommitted sessions. Plan 041 R8.
+    """
     if not cwd:
         return {}
     try:
@@ -30,11 +36,25 @@ def _git_info(cwd: str) -> dict:
             stderr=subprocess.DEVNULL,
             timeout=5,
         )
-        changed_files = [l[:2].strip() for l in status_out.splitlines() if l.strip()]
+        status_lines = [l for l in status_out.splitlines() if l.strip()]
+        # `git diff HEAD --name-only` is the authoritative list for R8:
+        # it includes tracked changes vs HEAD (staged + unstaged) and
+        # excludes untracked files we didn't mean to claim attribution for.
+        try:
+            diff_names = subprocess.check_output(
+                ["git", "diff", "HEAD", "--name-only"],
+                cwd=cwd, text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            changed_paths = [p for p in diff_names.splitlines() if p.strip()]
+        except Exception:
+            changed_paths = []
         return {
             "sha": sha,
-            "dirty": bool(changed_files),
-            "files_changed": len(changed_files),
+            "dirty": bool(status_lines),
+            "files_changed": len(status_lines),
+            "changed_paths": changed_paths,
         }
     except Exception:
         return {}

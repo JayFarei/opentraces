@@ -163,6 +163,7 @@ def build_attribution(
     outcome_patch: str | None = None,
     *,
     trace_id: str | None = None,
+    end_state_changed_files: list[str] | None = None,
 ) -> Attribution | None:
     """Derive attribution from Edit and Write tool calls in the steps.
 
@@ -359,7 +360,46 @@ def build_attribution(
     # R4: experimental iff any low-confidence range or any fallback.
     experimental = any_low_confidence or fallback_used
 
+    # R8 / R15: surface files changed on disk or in the commit that no
+    # Edit/Write tool call attributed — typically Bash-applied edits
+    # (sed -i, codemods). Inputs:
+    #   - outcome_patch: per-file paths from the commit diff.
+    #   - end_state_changed_files: paths from a Stop hook `git diff HEAD`.
+    # Matching against attributed paths is suffix-aware because Edit
+    # tool calls frequently pass absolute paths while patch/hook
+    # output is repo-relative.
+    attributed_paths = [f.path for f in attribution_files]
+
+    def _is_attributed(path: str) -> bool:
+        for ap in attributed_paths:
+            if ap == path:
+                return True
+            if ap.endswith("/" + path) or path.endswith("/" + ap):
+                return True
+        return False
+
+    candidate_paths: list[str] = []
+    if outcome_patch:
+        for pf in _parse_diff_hunks_with_content(outcome_patch).keys():
+            if pf not in candidate_paths:
+                candidate_paths.append(pf)
+    if end_state_changed_files:
+        for pf in end_state_changed_files:
+            if pf and pf not in candidate_paths:
+                candidate_paths.append(pf)
+
+    unaccounted = [p for p in candidate_paths if not _is_attributed(p)]
+    unaccounted_files: list[str] | None
+    if outcome_patch is None and not end_state_changed_files:
+        # No signal at all → leave the field unset so consumers don't
+        # misread "empty list" as "we checked and nothing was
+        # unaccounted."
+        unaccounted_files = None
+    else:
+        unaccounted_files = unaccounted or None
+
     return Attribution(
         experimental=experimental,
         files=attribution_files,
+        unaccounted_files=unaccounted_files,
     )
