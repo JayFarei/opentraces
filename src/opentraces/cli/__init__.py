@@ -99,7 +99,7 @@ def _describe_trace(record) -> tuple[str, str]:
     """Pick the best short label for a trace.
 
     Returns (label, source) where source is one of
-    "intent" | "task" | "step" | "none".
+    "intent" | "task" | "step" | "tool" | "none".
     """
     intent = getattr(record, "intent", None)
     if intent is not None:
@@ -116,6 +116,31 @@ def _describe_trace(record) -> tuple[str, str]:
             flat = " ".join(content.split())
             if flat:
                 return flat, "step"
+    # Tool-only trace — synthesize a label from the first meaningful tool call.
+    for step in getattr(record, "steps", []) or []:
+        for tc in getattr(step, "tool_calls", []) or []:
+            tool = getattr(tc, "tool_name", None)
+            if not tool:
+                continue
+            raw_input = getattr(tc, "input", None)
+            # input may be a dict OR a JSON string (parser-dependent).
+            inp = None
+            if isinstance(raw_input, dict):
+                inp = raw_input
+            elif isinstance(raw_input, str):
+                try:
+                    import json as _json
+                    inp = _json.loads(raw_input)
+                except Exception:
+                    inp = None
+            if isinstance(inp, dict):
+                if tool == "Bash" and inp.get("command"):
+                    return f"$ {inp['command']}", "tool"
+                for key in ("description", "prompt", "file_path", "path", "query", "pattern"):
+                    v = inp.get(key)
+                    if v:
+                        return f"{tool}: {v}", "tool"
+            return f"{tool} call", "tool"
     return "untitled", "none"
 
 
@@ -1569,7 +1594,7 @@ def status(limit: int) -> None:
         )
         table.add_column("Stage", no_wrap=True)
         table.add_column("Age", no_wrap=True, justify="right")
-        table.add_column("Title", overflow="ellipsis", no_wrap=True)
+        table.add_column("Intent", overflow="ellipsis", no_wrap=True)
         table.add_column("Meta", no_wrap=True)
         table.add_column("Commit", no_wrap=True)
         table.add_column("", no_wrap=True)  # intent-source dot
@@ -1636,7 +1661,8 @@ def status(limit: int) -> None:
                     "intent": "[green]●[/]",          # curated intent title
                     "task": "[cyan]●[/]",             # parser-provided
                     "step": "[dim]○[/]",              # first step content
-                    "none": "[red]○[/]",              # fallback
+                    "tool": "[magenta]○[/]",          # tool-call summary (no narrative)
+                    "none": "[red]○[/]",              # nothing usable
                 }.get(source, "")
 
                 table.add_row(
@@ -1660,7 +1686,8 @@ def status(limit: int) -> None:
         console.print(table)
         console.print(
             "  [dim]intent:[/] [green]●[/][dim] curated[/]  "
-            "[cyan]●[/][dim] task[/]  [dim]○ step  [red]○[/] none[/]"
+            "[cyan]●[/][dim] task[/]  [dim]○ step[/]  "
+            "[magenta]○[/][dim] tool[/]  [red]○[/][dim] none[/]"
             "    [dim]commit:[/] [green]✓[/][dim] emitted[/]  "
             "[yellow]~[/][dim] diverged[/]  [dim]? overlap  · orphan[/]",
             highlight=False,
