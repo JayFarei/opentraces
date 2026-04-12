@@ -27,6 +27,8 @@ from .security import SECURITY_VERSION
 from .security.anonymizer import anonymize_paths
 from .security.classifier import classify_trace_record
 from .security.scanner import apply_redactions, two_pass_scan
+from .security.scanner_trufflehog import maybe_run_trufflehog
+from .security.trufflehog import TruffleHogReport
 
 
 @dataclass
@@ -36,6 +38,46 @@ class ProcessedTrace:
     record: TraceRecord
     needs_review: bool
     redaction_count: int
+    trufflehog_report: TruffleHogReport | None = None
+
+    @property
+    def trufflehog_blocked(self) -> bool:
+        """True iff Tier 1.5 ran and flagged any secret (Plan 032 Part A)."""
+        return self.trufflehog_report is not None and self.trufflehog_report.blocked
+
+
+def _run_trufflehog_on_record(
+    record: TraceRecord,
+    cfg: Config,
+    skip: bool,
+) -> TruffleHogReport | None:
+    """Tier 1.5 pass: scan the serialized record via TruffleHog.
+
+    Honors both the persistent ``security.trufflehog.enabled`` config
+    flag and a per-invocation ``skip`` override so callers like
+    ``push --no-trufflehog`` can suppress the tier without mutating
+    config.
+    """
+    if skip:
+        return None
+    if not cfg.security.trufflehog.enabled:
+        return None
+
+    # trufflehog needs a file path; serialize the record to a temp file.
+    import tempfile
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".jsonl", encoding="utf-8", delete=False,
+    ) as fh:
+        fh.write(record.to_jsonl_line() + "\n")
+        tmp_path = Path(fh.name)
+    try:
+        return maybe_run_trufflehog(tmp_path, cfg.security.trufflehog)
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
 
 
 def _enrich_from_steps(
@@ -89,6 +131,7 @@ def process_trace(
     record: TraceRecord,
     project_dir: Path,
     cfg: Config,
+    skip_trufflehog: bool = False,
 ) -> ProcessedTrace:
     """Run the full enrichment + security pipeline on a parsed trace.
 
@@ -132,6 +175,12 @@ def process_trace(
     record.security.redactions_applied = redaction_count
     needs_review = bool(pass1.matches or pass2.matches or redaction_count)
 
+    # 5b. Tier 1.5 — TruffleHog. Plan 032 Part A: opt-in via config,
+    # suppressible per-invocation via skip_trufflehog=True.
+    trufflehog_report = _run_trufflehog_on_record(record, cfg, skip_trufflehog)
+    if trufflehog_report is not None and trufflehog_report.blocked:
+        needs_review = True
+
     # 6. Classifier
     classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
     record.security.flags_reviewed = len(classifier_result.flags)
@@ -144,12 +193,14 @@ def process_trace(
         record=record,
         needs_review=needs_review,
         redaction_count=redaction_count,
+        trufflehog_report=trufflehog_report,
     )
 
 
 def process_imported_trace(
     record: TraceRecord,
     cfg: Config,
+    skip_trufflehog: bool = False,
 ) -> ProcessedTrace:
     """Enrichment + security pipeline for imported traces (no project dir).
 
@@ -173,6 +224,11 @@ def process_imported_trace(
     # security matches (secrets, credentials), not just redaction counts.
     needs_review = bool(pass1.matches or pass2.matches)
 
+    # 3b. Tier 1.5 — TruffleHog (Plan 032 Part A).
+    trufflehog_report = _run_trufflehog_on_record(record, cfg, skip_trufflehog)
+    if trufflehog_report is not None and trufflehog_report.blocked:
+        needs_review = True
+
     # 4. Classifier (FIX-10: set flags_reviewed)
     classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
     record.security.flags_reviewed = len(classifier_result.flags)
@@ -188,6 +244,7 @@ def process_imported_trace(
         record=record,
         needs_review=needs_review,
         redaction_count=redaction_count,
+        trufflehog_report=trufflehog_report,
     )
 
 
