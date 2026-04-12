@@ -123,6 +123,27 @@ def run(
         )
         if not links or links[0].tier == "orphan":
             continue
+        # Attach the link for evidence regardless of tier. Deduplicate
+        # against existing git_links by (revision, tier).
+        existing = {(l.revision, l.tier) for l in trace.git_links}
+        for link in links:
+            if (link.revision, link.tier) not in existing:
+                trace.git_links.append(link)
+
+        # Tool-emitted and divergence pin the revision + promote
+        # lifecycle. Overlapping is only evidence of coincidence and
+        # stays provisional (R35).
+        tier = links[0].tier
+        if tier in ("tool_emitted", "tool_emitted_with_divergence"):
+            trace.lifecycle = "final"
+            if trace.attribution is not None:
+                trace.attribution.revision = {
+                    "vcs_type": links[0].vcs_type,
+                    "revision": sha,
+                }
+        if tier == "tool_emitted_with_divergence":
+            _stamp_divergence(trace)
+
         results.append((trace.trace_id, links))
         lines_to_append.append(notes_store.format_link(trace.trace_id))
 
@@ -132,3 +153,25 @@ def run(
         except Exception:
             pass  # notes append is best-effort; never block
     return results
+
+
+def _stamp_divergence(trace) -> None:
+    """Stamp every attribution range with contributor=mixed and
+    record the agent's pre-divergence state into range.original
+    (plan 041 R3, R10)."""
+    if trace.attribution is None:
+        return
+    for f in trace.attribution.files:
+        for conv in f.conversations:
+            for rng in conv.ranges:
+                # Per-range contributor override to mixed. Preserves
+                # the conversation-level ai contributor intact.
+                rng.contributor = {"type": "mixed"}
+                # Record what the agent wrote before the commit
+                # diverged from it.
+                if rng.original is None:
+                    rng.original = {
+                        "start_line": rng.start_line,
+                        "end_line": rng.end_line,
+                        "content_hash": rng.content_hash,
+                    }

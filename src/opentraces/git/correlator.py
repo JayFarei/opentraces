@@ -74,13 +74,25 @@ def correlate(
 ) -> list[GitLink]:
     """Return a list of GitLinks for the given (trace, commit) pair.
 
-    Phase 3 implementation returns exactly one GitLink per call,
-    tier `tool_emitted` when any Edit/Write's new_string appears in
-    the commit's hunk added region for the same file, else `orphan`.
+    Tier precedence (plan 041 R25, strongest first):
+        tool_emitted > tool_emitted_with_divergence > overlapping > orphan
+
+    - tool_emitted: some Edit/Write's novel content appears in a hunk
+      for the same file.
+    - tool_emitted_with_divergence: the agent edited a file the commit
+      touched, but committed bytes don't match — a formatter or human
+      rewrote the output.
+    - overlapping: the agent made edits but none touched files the
+      commit changed (weak coincidence during the time window).
+    - orphan: the agent made no edits, or the commit has no hunks.
     """
     hunks = _parse_diff_hunks_with_content(commit_diff)
+    hunk_paths = list(hunks.keys())
 
+    agent_edited_any = False
     matched = False
+    file_overlap = False
+
     for step in trace.steps:
         if matched:
             break
@@ -97,16 +109,26 @@ def correlate(
                 new_text = tc.input.get("content") or ""
             if not file_path or not new_text.strip():
                 continue
+            agent_edited_any = True
             for hunk_path, file_hunks in hunks.items():
                 if not _path_matches(file_path, hunk_path):
                     continue
+                file_overlap = True
                 if _edit_touches_hunks(old_text, new_text, file_hunks):
                     matched = True
                     break
             if matched:
                 break
 
-    tier = "tool_emitted" if matched else "orphan"
+    if matched:
+        tier = "tool_emitted"
+    elif file_overlap:
+        tier = "tool_emitted_with_divergence"
+    elif agent_edited_any and hunk_paths:
+        tier = "overlapping"
+    else:
+        tier = "orphan"
+
     return [GitLink(
         vcs_type=vcs_type,
         revision=revision,

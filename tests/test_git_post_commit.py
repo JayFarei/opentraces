@@ -98,19 +98,36 @@ class TestPostCommit:
         assert notes_store.read(sha, repo) == []
 
     def test_orphan_trace_not_noted(self, repo):
+        # Truly empty trace (no edits at all) → tier orphan → no note.
         (repo / "src" / "app.py").write_text("hello\nGREETING\n")
         _sh(["git", "add", "-A"], repo)
         _sh(["git", "commit", "-qm", "unrelated commit"], repo)
 
-        trace = _trace(
-            "trace-gamma",
-            [("src/other.py", "x", "y")],
-            datetime.now(timezone.utc),
+        trace = TraceRecord(
+            trace_id="trace-gamma", session_id="s",
+            agent=Agent(name="claude-code"), steps=[],
+            timestamp_end=datetime.now(timezone.utc).isoformat(),
         )
         results = post_commit.run(repo, [trace])
         assert results == []
         sha = post_commit.head_sha(repo)
         assert notes_store.read(sha, repo) == []
+
+    def test_overlapping_trace_is_noted(self, repo):
+        # Agent edited src/other.py but commit was on src/app.py —
+        # time-window coincidence + honest overlapping tier. Still
+        # worth surfacing as evidence.
+        (repo / "src" / "app.py").write_text("hello\nAPP_LINE\n")
+        _sh(["git", "add", "-A"], repo)
+        _sh(["git", "commit", "-qm", "app change"], repo)
+
+        trace = _trace(
+            "trace-overlap", [("src/other.py", "x", "y")],
+            datetime.now(timezone.utc),
+        )
+        results = post_commit.run(repo, [trace])
+        assert len(results) == 1
+        assert results[0][1][0].tier == "overlapping"
 
     def test_window_excludes_old_traces(self, repo):
         (repo / "src" / "app.py").write_text("hello\nGREETING\n")

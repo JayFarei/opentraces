@@ -57,10 +57,14 @@ class TestTierAssignment:
         assert links[0].revision == "abc123"
         assert links[0].vcs_type == "git"
 
-    def test_no_matching_edit_is_orphan(self):
+    def test_no_matching_edit_is_overlapping(self):
+        # Phase 4 taxonomy: agent touched the repo (edits exist) and
+        # commit has hunks (on src/app.py), but no file overlap → the
+        # honest tier is overlapping, not orphan. Orphan is reserved
+        # for "no edits at all" or "no commit hunks at all."
         trace = _trace(("src/other.py", "x", "y"))
         links = correlate(trace, "abc123", COMMIT_APP_DIFF)
-        assert links[0].tier == "orphan"
+        assert links[0].tier == "overlapping"
 
     def test_absolute_edit_path_matches_repo_relative_hunk(self):
         trace = _trace((
