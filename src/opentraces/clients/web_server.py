@@ -344,14 +344,26 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
     def _invalidate_cache() -> None:
         _trace_cache[0] = None
 
-    def _traces() -> list[dict[str, Any]]:
-        if _trace_cache[0] is not None:
+    # Default cap keeps /api/sessions responsive on big inboxes (thousands
+    # of staged files). Power users can request more via ?limit=N.
+    _default_trace_limit = 500
+
+    def _traces(*, limit: int | None = None) -> list[dict[str, Any]]:
+        effective = limit if limit is not None else _default_trace_limit
+        if limit is None and _trace_cache[0] is not None:
             return _trace_cache[0]
-        traces = load_traces(staging_path)
+        traces = load_traces(staging_path, limit=effective if effective > 0 else None)
         if not traces:
             traces = _generate_sample_traces()
-        _trace_cache[0] = traces
+        if limit is None:
+            _trace_cache[0] = traces
         return traces
+
+    def _total_staged() -> int:
+        """Count staged files without reading them — directory entry only."""
+        if not staging_path.exists():
+            return 0
+        return sum(1 for _ in staging_path.glob("*.jsonl"))
 
     def _get_review_status(trace_id: str) -> str:
         return get_stage(_get_state(), trace_id)
@@ -402,8 +414,13 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
 
     @app.route("/api/sessions")
     def api_sessions():
-        """JSON API for session list."""
-        traces = _traces()
+        """JSON API for session list. Accepts ?limit=N to override the default 500-trace cap."""
+        try:
+            limit_param = request.args.get("limit", type=int)
+        except (TypeError, ValueError):
+            limit_param = None
+        traces = _traces(limit=limit_param) if limit_param is not None else _traces()
+        total = _total_staged()
         state = _get_state()
         sessions = []
         for t in traces:
@@ -437,7 +454,10 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
                 # can see at a glance whether a session has been reviewed.
                 "llm_review": (t.get("metadata", {}) or {}).get("llm_review") or {"status": "not_run"},
             })
-        return jsonify(sessions)
+        response = jsonify(sessions)
+        response.headers["X-Total-Staged"] = str(total)
+        response.headers["X-Returned"] = str(len(sessions))
+        return response
 
     @app.route("/api/context")
     def api_context():

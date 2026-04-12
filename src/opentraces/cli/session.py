@@ -97,7 +97,13 @@ def session_list(stage: str | None, model: str | None, agent: str | None, limit:
     from opentraces_schema import TraceRecord
 
     state, staging_dir = _load_project_state()
-    staged_files = sorted(staging_dir.glob("*.jsonl")) if staging_dir.exists() else []
+    # Walk newest-first so --limit stops early with the most recent sessions,
+    # not the alphabetically-first ones (UUID names are not time-ordered).
+    staged_files = (
+        sorted(staging_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if staging_dir.exists()
+        else []
+    )
 
     sessions = []
     now = _time.time()

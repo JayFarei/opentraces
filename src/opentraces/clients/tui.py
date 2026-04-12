@@ -709,12 +709,13 @@ class OpenTracesApp(App):
         Binding("x", "redact_step", "Redact step", show=False, priority=True),
     )
 
-    def __init__(self, staging_dir: Path, fullscreen: bool = False) -> None:
+    def __init__(self, staging_dir: Path, fullscreen: bool = False, *, limit: int | None = 500) -> None:
         super().__init__(ansi_color=True)
         self.theme = "textual-ansi"
         self.staging_dir = staging_dir
         self.project_dir = _project_dir_from_staging(staging_dir)
         self.traces: list[dict[str, Any]] = []
+        self.trace_limit = limit  # cap on sessions loaded into the list view
         state_path = get_project_state_path(self.project_dir)
         self.state = StateManager(state_path=state_path if state_path.parent.exists() else None)
         self._in_step_view = False
@@ -784,7 +785,10 @@ class OpenTracesApp(App):
         detail.write("[dim]OpenTraces will capture sessions here after setup.[/dim]")
 
     def _reload_traces(self, selected_trace_id: str | None = None) -> None:
-        self.traces = sorted(load_traces(self.staging_dir), key=lambda trace: _sort_key(trace, self.state))
+        self.traces = sorted(
+            load_traces(self.staging_dir, limit=self.trace_limit),
+            key=lambda trace: _sort_key(trace, self.state),
+        )
         session_list = self.query_one("#session-list", ListView)
         session_list.clear()
 

@@ -11,6 +11,7 @@ import click
 from opentraces import cli as _cli
 from . import main
 from .. import __version__  # noqa: F401
+from ..core.workflow import resolve_visible_stage
 
 logger = logging.getLogger("opentraces.cli.inspect")
 
@@ -150,18 +151,18 @@ def context() -> None:
     state_path = get_project_state_path(project_dir)
     state = StateManager(state_path=state_path if state_path.parent.exists() else None)
 
-    staged_files = list(staging_dir.glob("*.jsonl")) if staging_dir.exists() else []
+    # Count stages from state.json directly — reading every staged JSONL
+    # here costs seconds on big inboxes and yields the same result.
     counts = {stage: 0 for stage in ("inbox", "committed", "pushed", "rejected")}
-    for sf in staged_files:
-        try:
-            data = sf.read_text().strip()
-            from opentraces_schema import TraceRecord
-            record = TraceRecord.model_validate_json(data.splitlines()[0])
-            entry = state.get_trace(record.trace_id)
-            visible_stage = resolve_visible_stage(entry.status if entry else None)
-            counts[visible_stage] += 1
-        except Exception:
-            counts["inbox"] += 1
+    for entry in state._state.get("traces", {}).values():  # noqa: SLF001
+        visible_stage = resolve_visible_stage(entry.get("status"))
+        counts[visible_stage] = counts.get(visible_stage, 0) + 1
+    # Sessions that exist on disk but aren't tracked in state fall under "inbox".
+    tracked_count = sum(counts.values())
+    if staging_dir.exists():
+        staged_file_count = sum(1 for _ in staging_dir.glob("*.jsonl"))
+        untracked = max(0, staged_file_count - tracked_count)
+        counts["inbox"] += untracked
 
     # Auth status
     cfg = load_config()
@@ -210,7 +211,14 @@ def context() -> None:
 
 
 @main.command()
-def log() -> None:
+@click.option(
+    "--limit",
+    type=int,
+    default=30,
+    show_default=True,
+    help="Show at most N days of history. Use 0 for no limit.",
+)
+def log(limit: int) -> None:
     """List uploaded traces grouped by date."""
     from ..core.state import StateManager, TraceStatus
     from datetime import datetime
@@ -235,9 +243,17 @@ def log() -> None:
             date_str = datetime.fromtimestamp(entry.created_at).strftime("%Y-%m-%d")
         by_date[date_str] = by_date.get(date_str, 0) + 1
 
-    for date_str in sorted(by_date.keys(), reverse=True):
+    dates = sorted(by_date.keys(), reverse=True)
+    total_days = len(dates)
+    if limit > 0 and total_days > limit:
+        dates = dates[:limit]
+
+    for date_str in dates:
         count = by_date[date_str]
         click.echo(f"{date_str}  pushed {count} sessions")
+
+    if limit > 0 and total_days > limit:
+        click.echo(f"\n... {total_days - limit} older day(s) hidden. Use --limit 0 to show all.")
 
 
 @main.command(hidden=True)

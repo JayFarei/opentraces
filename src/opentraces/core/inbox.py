@@ -17,12 +17,23 @@ logger = logging.getLogger(__name__)
 from .workflow import resolve_visible_stage
 
 
-def load_traces(staging_dir: Path) -> list[dict[str, Any]]:
-    """Load all staged traces from JSONL files in the staging directory."""
+def load_traces(staging_dir: Path, *, limit: int | None = None) -> list[dict[str, Any]]:
+    """Load staged traces from JSONL files in the staging directory.
+
+    With ``limit`` set, only the most recent ``limit`` files (by mtime) are
+    read. This keeps clients responsive on large inboxes — big staging
+    dirs (thousands of files) are common in long-running projects and
+    loading them all up-front blocks startup for seconds.
+    """
     traces: list[dict[str, Any]] = []
     if not staging_dir.exists():
         return traces
-    for jsonl_file in sorted(staging_dir.glob("*.jsonl")):
+    files = list(staging_dir.glob("*.jsonl"))
+    if limit is not None and len(files) > limit:
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        files = files[:limit]
+    files.sort()  # deterministic order for downstream sorting
+    for jsonl_file in files:
         try:
             text = jsonl_file.read_text().strip()
             for line in text.splitlines():

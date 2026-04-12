@@ -166,12 +166,12 @@ def _default_repo(identity: dict | None) -> str:
     return DEFAULT_REMOTE_NAME
 
 
-def _launch_tui_ui(fullscreen: bool = False) -> None:
+def _launch_tui_ui(fullscreen: bool = False, limit: int | None = 500) -> None:
     from ..core.config import get_project_staging_dir
     from ..clients.tui import OpenTracesApp
 
     project_staging = get_project_staging_dir(Path.cwd())
-    app = OpenTracesApp(staging_dir=project_staging, fullscreen=fullscreen)
+    app = OpenTracesApp(staging_dir=project_staging, fullscreen=fullscreen, limit=limit)
     app.run()
 
 
@@ -1360,8 +1360,11 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
         human_echo(f"  Could not install skill: {e}")
         return False
 @main.command()
-def status() -> None:
+@click.option("--no-pager", is_flag=True, help="Print inline instead of paging long output.")
+@click.option("--limit", type=int, default=None, help="Show only the most recent N sessions.")
+def status(no_pager: bool, limit: int | None) -> None:
     """Show status of the current opentraces project."""
+    import shutil as _shutil
     import time as _time
     from ..core.config import load_project_config, get_project_staging_dir, get_project_state_path
     from ..core.state import StateManager
@@ -1377,15 +1380,16 @@ def status() -> None:
     remote = proj_config.get("remote", None)
     project_name = project_dir.name
 
-    click.echo(f"{project_name} inbox")
-    click.echo(f"mode:    {proj_config.get('review_policy', 'review')}")
-    click.echo(f"agents:  {', '.join(proj_config['agents'])}")
+    lines: list[str] = []
+    lines.append(f"{project_name} inbox")
+    lines.append(f"mode:    {proj_config.get('review_policy', 'review')}")
+    lines.append(f"agents:  {', '.join(proj_config['agents'])}")
     visibility = proj_config.get("visibility", "private")
     if remote:
-        click.echo(f"remote:  {remote} ({visibility})")
+        lines.append(f"remote:  {remote} ({visibility})")
     else:
-        click.echo("remote:  not set")
-    click.echo()
+        lines.append("remote:  not set")
+    lines.append("")
 
     staging_dir = get_project_staging_dir(project_dir)
     staged_files = list(staging_dir.glob("*.jsonl")) if staging_dir.exists() else []
@@ -1395,14 +1399,21 @@ def status() -> None:
     counts = {stage: 0 for stage in ("inbox", "committed", "pushed", "rejected")}
 
     if not staged_files:
-        click.echo("0 sessions in inbox")
+        lines.append("0 sessions in inbox")
     else:
-        click.echo(f"{len(staged_files)} session files tracked\n")
+        sorted_files = sorted(staged_files)
+        visible_files = sorted_files[-limit:] if limit and limit > 0 else sorted_files
+        hidden = len(sorted_files) - len(visible_files)
+        header = f"{len(sorted_files)} session files tracked"
+        if hidden > 0:
+            header += f" (showing last {len(visible_files)}; {hidden} older hidden)"
+        lines.append(header)
+        lines.append("")
 
         from opentraces_schema import TraceRecord
         now = _time.time()
-        for i, sf in enumerate(sorted(staged_files)):
-            is_last = (i == len(staged_files) - 1)
+        for i, sf in enumerate(visible_files):
+            is_last = (i == len(visible_files) - 1)
             prefix = "└── " if is_last else "├── "
             try:
                 data = sf.read_text().strip()
@@ -1429,20 +1440,45 @@ def status() -> None:
                 n_steps = len(record.steps)
                 n_tools = sum(len(s.tool_calls) for s in record.steps)
                 n_flags = record.security.flags_reviewed or 0
-                click.echo(
+                lines.append(
                     f"{prefix}{stage_label(visible_stage):<10} {rel_time:<12} "
                     f"\"{task_desc}\"  {n_steps} steps  {n_tools} tools  {n_flags} flags"
                 )
             except Exception:
-                click.echo(f"{prefix}{sf.name}")
+                lines.append(f"{prefix}{sf.name}")
 
-    click.echo(
-        "\n"
+        # Count hidden files too, so summary reflects the whole inbox.
+        if hidden > 0:
+            for sf in sorted_files[:-len(visible_files) or None]:
+                try:
+                    data = sf.read_text().strip()
+                    record = TraceRecord.model_validate_json(data)
+                    entry = state.get_trace(record.trace_id)
+                    counts[resolve_visible_stage(entry.status if entry else None)] += 1
+                except Exception:
+                    pass
+
+    lines.append("")
+    lines.append(
         f"inbox {counts['inbox']}  "
         f"committed {counts['committed']}  "
         f"pushed {counts['pushed']}  "
         f"rejected {counts['rejected']}"
     )
+
+    # Paginate when human output is long and stdout is a TTY.
+    output = "\n".join(lines)
+    rows = _shutil.get_terminal_size(fallback=(80, 24)).lines
+    should_page = (
+        not no_pager
+        and not _json_mode
+        and sys.stdout.isatty()
+        and len(lines) > max(rows - 4, 10)
+    )
+    if should_page:
+        click.echo_via_pager(output)
+    else:
+        click.echo(output)
 
     emit_json({
         "status": "ok",
@@ -1748,10 +1784,17 @@ def web(port: int, no_open: bool) -> None:
 
 @main.command()
 @click.option("--fullscreen", is_flag=True, help="Open directly into fullscreen inspect mode")
-def tui(fullscreen: bool) -> None:
+@click.option(
+    "--limit",
+    type=int,
+    default=500,
+    show_default=True,
+    help="Maximum number of sessions to load (most recent first). Use 0 for no limit.",
+)
+def tui(fullscreen: bool, limit: int) -> None:
     """Open the terminal inbox UI."""
     try:
-        _launch_tui_ui(fullscreen=fullscreen)
+        _launch_tui_ui(fullscreen=fullscreen, limit=limit if limit > 0 else None)
     except ImportError:
         click.echo("Textual not installed. Run: pip install opentraces[tui]")
         sys.exit(2)
