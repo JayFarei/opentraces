@@ -31,39 +31,131 @@ def _content_hash(text: str) -> str:
 def _parse_diff_files(patch: str) -> dict[str, list[tuple[int, int]]]:
     """Parse a unified diff and extract (start_line, end_line) hunks per file.
 
-    Returns a dict mapping file paths to lists of (start, end) line ranges
-    representing added/modified lines.
+    Thin view used by legacy callers. For richer hunk data (added-line
+    content, + ranges) see `_parse_diff_hunks_with_content`.
     """
-    files: dict[str, list[tuple[int, int]]] = {}
-    current_file = None
+    rich = _parse_diff_hunks_with_content(patch)
+    return {path: [(h["start_line"], h["end_line"]) for h in hunks] for path, hunks in rich.items()}
+
+
+def _parse_diff_hunks_with_content(patch: str) -> dict[str, list[dict]]:
+    """Parse a unified diff into per-file hunks with added-line content.
+
+    Each hunk entry has:
+      - start_line, end_line: 1-indexed range of the new-file hunk span
+        (from `@@ -X,Y +start,count @@`).
+      - added_start, added_end: 1-indexed range covering only the `+`
+        lines within the hunk (excludes unchanged context).
+      - added_text: the concatenated `+` line content (leading `+` stripped,
+        trailing newline included).
+
+    Used by build_attribution to match Edit tool calls against actual
+    committed hunks and pin diff-sourced ranges at high confidence.
+    """
+    files: dict[str, list[dict]] = {}
+    current_file: str | None = None
+    current_hunk: dict | None = None
+    new_line_cursor = 0  # 1-indexed position in the new file, within the current hunk.
+    added_lines: list[tuple[int, str]] = []  # (line_number, content)
+
+    def _flush_hunk() -> None:
+        nonlocal current_hunk, added_lines
+        if current_hunk is None or current_file is None:
+            return
+        if added_lines:
+            current_hunk["added_start"] = added_lines[0][0]
+            current_hunk["added_end"] = added_lines[-1][0]
+            current_hunk["added_text"] = "\n".join(content for _, content in added_lines)
+        else:
+            # Pure deletion hunk: no `+` lines. Skip — attribution cares
+            # about additions and modifications.
+            files[current_file].pop()
+        current_hunk = None
+        added_lines = []
 
     for line in patch.split("\n"):
         if line.startswith("+++ b/"):
+            _flush_hunk()
             current_file = line[6:]
-            if current_file not in files:
-                files[current_file] = []
+            files.setdefault(current_file, [])
         elif line.startswith("@@ "):
-            parts = line.split(" ")
-            for part in parts:
-                if part.startswith("+") and "," in part:
-                    try:
-                        start = int(part.split(",")[0][1:])
-                        count = int(part.split(",")[1])
-                        if current_file and count > 0:
-                            files[current_file].append((start, start + count - 1))
-                    except (ValueError, IndexError):
-                        pass
+            _flush_hunk()
+            if current_file is None:
+                continue
+            # Parse new-file range: `@@ -X,Y +A,B @@` or `@@ -X +A @@`.
+            plus_token = None
+            for part in line.split(" "):
+                if part.startswith("+"):
+                    plus_token = part[1:]
                     break
-                elif part.startswith("+") and part[1:].isdigit():
-                    try:
-                        start = int(part[1:])
-                        if current_file:
-                            files[current_file].append((start, start))
-                    except ValueError:
-                        pass
-                    break
+            if not plus_token:
+                continue
+            try:
+                if "," in plus_token:
+                    start_str, count_str = plus_token.split(",", 1)
+                    start = int(start_str)
+                    count = int(count_str)
+                else:
+                    start = int(plus_token)
+                    count = 1
+            except ValueError:
+                continue
+            if count <= 0:
+                continue
+            current_hunk = {
+                "start_line": start,
+                "end_line": start + count - 1,
+                "added_start": None,
+                "added_end": None,
+                "added_text": "",
+            }
+            files[current_file].append(current_hunk)
+            new_line_cursor = start
+        elif current_hunk is not None:
+            # Inside a hunk body. `+` = added (belongs in new file),
+            # ` ` = context (belongs in new file), `-` = deletion (skip).
+            if line.startswith("+") and not line.startswith("+++"):
+                added_lines.append((new_line_cursor, line[1:]))
+                new_line_cursor += 1
+            elif line.startswith(" "):
+                new_line_cursor += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                # Deletion: no new-file line produced.
+                pass
+            # `\ No newline at end of file` and others: ignore.
 
+    _flush_hunk()
     return files
+
+
+def _norm(text: str) -> str:
+    """Normalize whitespace for content matching: strip trailing newlines
+    and collapse runs of whitespace so indent differences don't prevent
+    a diff hunk from claiming an Edit's new_string."""
+    return " ".join(text.split())
+
+
+def _match_edit_to_hunk(
+    new_string: str, hunks: list[dict]
+) -> dict | None:
+    """Find the hunk whose added-line content contains the Edit's new_string.
+
+    Returns the hunk dict (with added_start/added_end) or None.
+    Matching is whitespace-normalized; a hunk's `added_text` must contain
+    the Edit's whitespace-normalized `new_string` as a substring.
+    """
+    if not new_string.strip():
+        return None
+    needle = _norm(new_string)
+    if not needle:
+        return None
+    for hunk in hunks:
+        haystack = _norm(hunk.get("added_text") or "")
+        if not haystack:
+            continue
+        if needle in haystack:
+            return hunk
+    return None
 
 
 def build_attribution(
@@ -96,6 +188,25 @@ def build_attribution(
     # contributor.model_id per conversation (R2).
     step_models: dict[int, str | None] = {s.step_index: s.model for s in steps}
 
+    # Diff hunks indexed by file path. The patch's +++ headers use
+    # repo-relative paths; Edit tool calls often pass absolute paths,
+    # so we index by both the full path and its basename for matching.
+    patch_hunks: dict[str, list[dict]] = {}
+    if outcome_patch:
+        patch_hunks = _parse_diff_hunks_with_content(outcome_patch)
+
+    def _hunks_for(file_path: str) -> list[dict]:
+        if not patch_hunks:
+            return []
+        if file_path in patch_hunks:
+            return patch_hunks[file_path]
+        # Try suffix match: Edit may pass /abs/path/src/app.py while
+        # the patch header is src/app.py.
+        for path, hunks in patch_hunks.items():
+            if file_path.endswith("/" + path) or path.endswith("/" + file_path):
+                return hunks
+        return []
+
     file_edits: dict[str, list[dict]] = defaultdict(list)
     file_contents: dict[str, str] = {}
     fallback_used = False
@@ -125,6 +236,18 @@ def build_attribution(
                     )
 
                 used_fallback = False
+                diff_matched = False
+
+                # R5: diff hunk is the primary line-range source for
+                # committed changes. If the Edit's new_string appears
+                # in a hunk's + region for this file, use the hunk's
+                # actual lines and stamp diff-sourced (high confidence).
+                hunk = _match_edit_to_hunk(new_string, _hunks_for(file_path))
+                if hunk is not None and hunk.get("added_start") is not None:
+                    start_line = hunk["added_start"]
+                    end_line = hunk["added_end"]
+                    diff_matched = True
+
                 if start_line is None:
                     start_line = 1
                     end_line = max(1, new_string.count("\n") + 1)
@@ -137,6 +260,7 @@ def build_attribution(
                     "end_line": end_line,
                     "content_hash": _content_hash(new_string),
                     "used_fallback": used_fallback,
+                    "diff_matched": diff_matched,
                 })
 
             elif tool_name == "write":
@@ -189,10 +313,18 @@ def build_attribution(
         else:
             confidence = "medium"
 
-        # Ranges that used fallback line resolution degrade to low regardless.
+        # Confidence precedence:
+        #   diff_matched → high (diff is authoritative post-commit)
+        #   used_fallback → low (we don't actually know where the edit landed)
+        #   else → the overlap/multi-edit bucket computed above
         ranges: list[AttributionRange] = []
         for edit in edits:
-            eff_conf = "low" if edit["used_fallback"] else confidence
+            if edit.get("diff_matched"):
+                eff_conf = "high"
+            elif edit["used_fallback"]:
+                eff_conf = "low"
+            else:
+                eff_conf = confidence
             if eff_conf == "low":
                 any_low_confidence = True
             ranges.append(AttributionRange(
