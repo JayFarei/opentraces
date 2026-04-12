@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
+## [0.3.0] - 2026-04-12
+
+### Added
+- `Intent` model — session-level summary block, parallel to `Task` and `Outcome`.
+  Optional fields: `title`, `summary`, `source` (closed enum: `llm_hook` /
+  `post_processor` / `user`), `model`. See `RATIONALE-0.3.0.md` for the Task
+  vs Intent split.
+- `TraceRecord.intent: Intent | None` — absent on traces captured before
+  Intent enrichment ran or when `intent.mode=off`.
+
+### Changed
+- `TraceRecord.compute_content_hash()` now excludes `intent` alongside
+  `content_hash` and `trace_id`, so re-running summarization does not change
+  the identity of an otherwise-unchanged trace.
+
+### Compatibility
+- Additive: traces written against 0.2.x load cleanly with `intent=None`.
+- Unknown extra fields remain silently ignored (Pydantic v2 default), matching
+  prior behavior.
+
 ## [0.1.1] - 2026-03-29
 
 ### Changed
