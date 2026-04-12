@@ -45,7 +45,7 @@ _json_mode = False
 COMMAND_SECTIONS = [
     ("Getting Started", ["login", "init", "status"]),
     ("Import", ["import-hf"]),
-    ("Review & Publish", ["session", "commit", "push", "log"]),
+    ("Review & Publish", ["session", "commit", "enrich", "push", "log"]),
     ("Inspect", ["stats", "web", "tui"]),
     ("Settings", ["auth", "config", "remote", "whoami", "logout", "remove", "upgrade"]),
     ("Integrations", ["hooks"]),
@@ -2476,6 +2476,66 @@ def discover() -> None:
     })
 
 
+@main.command()
+@click.argument("trace_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--intent/--no-intent", "run_intent", default=None,
+              help="Enable or disable Intent summarization. Default: follow config intent.mode.")
+@click.option("--force", is_flag=True, help="Overwrite an existing machine-sourced Intent. Never overwrites source='user'.")
+@click.option("--strict", is_flag=True, help="Promote post-processor failures (missing binary, non-zero exit, invalid output) to hard errors.")
+@click.option("-o", "--output", type=click.Path(dir_okay=False, path_type=Path), default=None,
+              help="Write enriched trace here. Default: overwrite the input file in place.")
+@click.option("--model", type=str, default=None, help="Model id override for Intent (default: trace's agent.model).")
+def enrich(trace_path: Path, run_intent: bool | None, force: bool, strict: bool, output: Path | None, model: str | None) -> None:
+    """Enrich a trace with Intent summary and any configured post-processors.
+
+    Reads a single trace JSON file, optionally summarizes (Intent), then pipes
+    it through the ordered post-processor chain declared in project config.
+    Writes the enriched trace back to ``trace_path`` by default, or to
+    ``--output`` if given.
+    """
+    from .config import ProjectConfig, load_project_config
+    from .enrichment.intent import enrich_intent
+    from .enrichment.intent_backends import claude_cli_client
+    from .processors import run_chain
+    from opentraces_schema import TraceRecord
+
+    cfg = load_config()
+    proj_raw = load_project_config(Path.cwd())
+    try:
+        proj_cfg = ProjectConfig.model_validate(proj_raw) if proj_raw else None
+    except Exception:
+        proj_cfg = None
+
+    try:
+        record = TraceRecord.model_validate_json(trace_path.read_text())
+    except Exception as exc:
+        raise click.ClickException(f"Could not parse trace: {exc}")
+
+    # Decide whether to run intent. Precedence: CLI flag > project.intent > global.intent.
+    intent_mode = (
+        "on" if run_intent is True
+        else "off" if run_intent is False
+        else (proj_cfg.intent.mode if (proj_cfg and proj_cfg.intent) else cfg.intent.mode)
+    )
+    if intent_mode == "on":
+        try:
+            record = enrich_intent(record, claude_cli_client, model_id=model, force=force)
+        except Exception as exc:
+            click.echo(f"warning: intent enrichment failed: {exc}", err=True)
+
+    # Run configured post-processor chain (enrich-stage).
+    specs = proj_cfg.post_processors if proj_cfg else []
+    if specs:
+        result = run_chain(record, specs, strict=strict, when="enrich")
+        record = result.record
+        for r in result.results:
+            click.echo(f"processor {r.name}: {r.status}" + (f" ({r.message})" if r.message else ""), err=True)
+
+    out_path = output or trace_path
+    out_path.write_text(record.model_dump_json(indent=2))
+    click.echo(f"wrote {out_path}")
+
+
 @main.command(hidden=True)
 @click.option("--auto", is_flag=True, help="Auto-approve (skip review)")
 @click.option("--limit", type=int, default=0, help="Max sessions to parse (0=all)")
@@ -3241,8 +3301,10 @@ def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
               help="Require a non-blocking LLM review verdict on every committed trace before upload (Plan 032 Tier 2).")
 @click.option("--no-trufflehog", "no_trufflehog", is_flag=True,
               help="One-shot override: skip Tier 1.5 TruffleHog scanning for this push only.")
+@click.option("--no-intent", "no_intent", is_flag=True,
+              help="One-shot override: skip Intent enrichment for this push only (plan 038).")
 def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None,
-         run_assess: bool, llm_review: bool, no_trufflehog: bool) -> None:
+         run_assess: bool, llm_review: bool, no_trufflehog: bool, no_intent: bool) -> None:
     """Upload committed traces to HuggingFace Hub."""
     from .config import get_project_staging_dir, load_project_config, save_project_config
     from .inbox import load_traces
@@ -3400,6 +3462,40 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     if not records:
         click.echo("No valid traces to upload.")
         return
+
+    # Intent enrichment (plan 038) + post-processor chain — one pre-upload pass.
+    # Precedence: CLI flag (--no-intent) > project intent.mode > global intent.mode.
+    from .config import ProjectConfig as _ProjectConfig
+    try:
+        _raw = load_project_config(Path.cwd())
+        proj_cfg_obj = _ProjectConfig.model_validate(_raw) if _raw else None
+    except Exception:
+        proj_cfg_obj = None
+    effective_intent_mode = (
+        "off" if no_intent
+        else (proj_cfg_obj.intent.mode if (proj_cfg_obj and proj_cfg_obj.intent) else cfg.intent.mode)
+    )
+    if effective_intent_mode == "on":
+        from .enrichment.intent import enrich_intent
+        from .enrichment.intent_backends import claude_cli_client
+        enriched = []
+        for rec in records:
+            try:
+                enriched.append(enrich_intent(rec, claude_cli_client))
+            except Exception as exc:  # pragma: no cover - defensive
+                click.echo(f"  intent enrichment failed for {rec.trace_id}: {exc}", err=True)
+                enriched.append(rec)
+        records = enriched
+
+    processor_specs = proj_cfg_obj.post_processors if proj_cfg_obj else []
+    push_processors = [s for s in processor_specs if s.when == "push"]
+    if push_processors:
+        from .processors import run_chain
+        processed_records = []
+        for rec in records:
+            res = run_chain(rec, push_processors, when="push")
+            processed_records.append(res.record)
+        records = processed_records
 
     # Determine visibility: --public/--private flags > project config > global config
     if public:
@@ -3571,10 +3667,10 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
 def export(output_format: str, output_path: str | None) -> None:
     """Export staged traces to another format (plan 041 R31)."""
     from .config import get_project_staging_dir
-    from .inbox import load_traces
+    from .inbox import load_trace_records
     staging = get_project_staging_dir(Path.cwd())
-    raw = load_traces(staging)
-    if not raw:
+    records = load_trace_records(staging)
+    if not records:
         human_echo("no staged traces to export")
         emit_json({"status": "ok", "count": 0})
         return
@@ -3583,13 +3679,6 @@ def export(output_format: str, output_path: str | None) -> None:
 
     if output_format == "agent-trace":
         from .exporters.agent_trace import export_to_jsonl
-        from opentraces_schema import TraceRecord
-        records = []
-        for r in raw:
-            try:
-                records.append(TraceRecord.model_validate(r))
-            except Exception:
-                continue
         n = export_to_jsonl(records, out)
         human_echo(f"exported {n} traces to {out} (agent-trace/v0.1.0)")
         emit_json({"status": "ok", "format": output_format, "count": n, "output": str(out)})
@@ -3870,22 +3959,21 @@ def run_post_commit_hook(repo_path: str) -> None:
     log = logging.getLogger("opentraces.post_commit")
 
     try:
+        from datetime import datetime, timedelta, timezone
+
         from .config import get_project_staging_dir
         from .enrichment.git import post_commit
-        from .inbox import load_traces
-        from opentraces_schema import TraceRecord
+        from .inbox import load_trace_records
 
         repo = Path(repo_path).resolve()
         staging = get_project_staging_dir(repo)
         if not staging.exists():
             return
-        raw = load_traces(staging)
-        records: list[TraceRecord] = []
-        for r in raw:
-            try:
-                records.append(TraceRecord.model_validate(r))
-            except Exception as e:
-                log.debug("skipping invalid trace in staging: %s", e)
+        # Prune by timestamp_end before Pydantic validation — a staging
+        # dir of hundreds of historical rows would otherwise parse on
+        # every commit.
+        since = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        records = load_trace_records(staging, since_iso=since)
         post_commit.run(repo, records)
     except Exception as e:
         log.debug("post-commit hook suppressed error: %s", e)
@@ -3906,8 +3994,7 @@ def blame_cmd(target: str, json_out: bool) -> None:
     """
     from .config import get_project_staging_dir
     from .enrichment.git import blame as git_blame
-    from .inbox import load_traces
-    from opentraces_schema import TraceRecord
+    from .inbox import load_trace_records
 
     if ":" not in target:
         raise click.BadParameter("expected <path>:<line>")
@@ -3918,14 +4005,7 @@ def blame_cmd(target: str, json_out: bool) -> None:
         raise click.BadParameter(f"bad line number: {line_str}") from e
 
     staging = get_project_staging_dir(Path.cwd())
-    raw = load_traces(staging) if staging.exists() else []
-    traces: dict[str, TraceRecord] = {}
-    for r in raw:
-        try:
-            rec = TraceRecord.model_validate(r)
-            traces[rec.trace_id] = rec
-        except Exception:
-            continue
+    traces = {rec.trace_id: rec for rec in load_trace_records(staging)}
 
     hits = git_blame.blame(file_path, line, traces, Path.cwd())
     if json_out:
@@ -4092,12 +4172,42 @@ def doctor_cmd() -> None:
     except Exception:
         pass
 
+    # Intent mode (plan 038)
+    report["intent"] = {"mode": cfg.intent.mode}
+
+    # Post-processors — enumerate + probe (plan 038 phase 4)
+    from .config import ProjectConfig, load_project_config
+    from .processors import probe_processors
+    try:
+        raw = load_project_config(Path.cwd())
+        proj_cfg = ProjectConfig.model_validate(raw) if raw else None
+        specs = proj_cfg.post_processors if proj_cfg else []
+    except Exception:
+        specs = []
+    processors_report: list[dict[str, object]] = []
+    for spec, resolved in probe_processors(specs):
+        processors_report.append({
+            "name": spec.name,
+            "command": spec.command,
+            "when": spec.when,
+            "resolved_path": resolved,
+            "status": "detected" if resolved else "missing",
+        })
+    report["post_processors"] = processors_report
+
     human_echo("opentraces doctor")
     human_echo(f"  security version: {SECURITY_VERSION}")
     if report["schema_version"]:
         human_echo(f"  schema version:   {report['schema_version']}")
     human_echo(f"  trufflehog:       {report['trufflehog']['status']}")
     human_echo(f"  hf auth:          {report['hf_auth']}")
+    human_echo(f"  intent mode:      {report['intent']['mode']}")
+    if processors_report:
+        human_echo("  post-processors:")
+        for p in processors_report:
+            human_echo(f"    - {p['name']} ({p['when']}): {p['status']}")
+    else:
+        human_echo("  post-processors:  (none configured)")
     emit_json({"status": "ok", "doctor": report})
     if th_enabled and th_version is None:
         sys.exit(3)

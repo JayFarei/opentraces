@@ -1,30 +1,30 @@
 """Correlate a TraceRecord to a git commit and return GitLinks with tiers.
 
-Plan 041 R25 evidence tiers:
+Evidence tiers:
 - tool_emitted: a session's Edit-derived content appears in the commit's
-  staged diff hunks (exact-match via hunk-added-region substring
-  comparison after whitespace normalization).
-- tool_emitted_with_divergence: files match but bytes don't (phase 4).
-- overlapping: file + time-window overlap with no hash match (phase 4).
-- orphan: no viable commit link.
-
-Phase 3 covers tool_emitted and orphan only. Divergence + overlapping
-arrive in phase 4.
+  staged diff hunks (whitespace-normalized substring match against a
+  hunk's added region).
+- tool_emitted_with_divergence: files overlap but content doesn't — a
+  formatter or human rewrote the agent's output before commit.
+- overlapping: agent edited the repo but touched no files the commit
+  changed; time-window coincidence.
+- orphan: no viable link.
 """
 
 from __future__ import annotations
 
-from opentraces.enrichment.attribution import _norm, _parse_diff_hunks_with_content
 from opentraces_schema import GitLink, TraceRecord
+
+from .._shared import path_matches as _path_matches
+from ..attribution import _norm, _parse_diff_hunks_with_content
 
 
 def _novel_lines(old_string: str, new_string: str) -> list[str]:
-    """Return lines in new_string that are not also in old_string.
+    """Return lines in new_string that aren't also in old_string.
 
     Context lines shared between old and new are preserved in the
-    committed file, so they're not what the Edit "contributed" to the
-    commit. We want to match only the lines the Edit actually added
-    or changed against the hunk's added region.
+    committed file, so they're not what the Edit "contributed." Only
+    the novel lines should match against the hunk's added region.
     """
     old_lines = {ln.strip() for ln in old_string.splitlines() if ln.strip()}
     novel = [ln for ln in new_string.splitlines() if ln.strip() and ln.strip() not in old_lines]
@@ -48,16 +48,6 @@ def _edit_touches_hunks(
             if needle in haystack:
                 return True
     return False
-
-
-def _path_matches(edit_path: str, hunk_path: str) -> bool:
-    """Return True if an Edit's file_path is the same file as a hunk
-    header's path. Edit paths are often absolute; hunk paths are
-    repo-relative."""
-    if edit_path == hunk_path:
-        return True
-    if edit_path.endswith("/" + hunk_path):
-        return True
     if hunk_path.endswith("/" + edit_path):
         return True
     return False
@@ -71,22 +61,19 @@ def correlate(
     repo_url: str | None = None,
     branch: str | None = None,
     vcs_type: str = "git",
+    hunks: dict[str, list[dict]] | None = None,
 ) -> list[GitLink]:
     """Return a list of GitLinks for the given (trace, commit) pair.
 
-    Tier precedence (plan 041 R25, strongest first):
+    Tier precedence (strongest first):
         tool_emitted > tool_emitted_with_divergence > overlapping > orphan
 
-    - tool_emitted: some Edit/Write's novel content appears in a hunk
-      for the same file.
-    - tool_emitted_with_divergence: the agent edited a file the commit
-      touched, but committed bytes don't match — a formatter or human
-      rewrote the output.
-    - overlapping: the agent made edits but none touched files the
-      commit changed (weak coincidence during the time window).
-    - orphan: the agent made no edits, or the commit has no hunks.
+    `hunks` may be pre-parsed and passed in when the caller correlates
+    many traces against the same commit (callers paying the parse cost
+    once in `post_commit.run`). When None the diff is parsed here.
     """
-    hunks = _parse_diff_hunks_with_content(commit_diff)
+    if hunks is None:
+        hunks = _parse_diff_hunks_with_content(commit_diff)
     hunk_paths = list(hunks.keys())
 
     agent_edited_any = False

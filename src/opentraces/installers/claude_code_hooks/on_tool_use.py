@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Code PostToolUse hook for opentraces (plan 041 phase 2).
+"""Claude Code PostToolUse hook for opentraces.
 
 Fires after the Edit and Write tools run, reads the target file from
 disk, and appends an opentraces_hook/PostToolUse line to the session

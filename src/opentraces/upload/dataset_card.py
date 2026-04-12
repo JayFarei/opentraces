@@ -65,6 +65,15 @@ def _compute_stats(traces: list[TraceRecord]) -> dict:
         for dep in (t.dependencies or []):
             dep_counts[dep] += 1
 
+    # Intent coverage (plan 038)
+    intent_total = 0
+    intent_by_source: Counter[str] = Counter()
+    for t in traces:
+        if t.intent and t.intent.title:
+            intent_total += 1
+            if t.intent.source:
+                intent_by_source[t.intent.source] += 1
+
     date_range = "N/A"
     if timestamps:
         sorted_ts = sorted(timestamps)
@@ -89,6 +98,11 @@ def _compute_stats(traces: list[TraceRecord]) -> dict:
         "model_counts": dict(model_counts),
         "agent_counts": dict(agent_counts),
         "date_range": date_range,
+        "intent_coverage": {
+            "rows_with_intent": intent_total,
+            "coverage_pct": round(100 * intent_total / n, 1) if n else 0.0,
+            "by_source": dict(intent_by_source),
+        },
     }
 
 
@@ -229,6 +243,26 @@ def _render_stats_section(stats: dict, quality_summary: dict | None = None) -> s
         lines.append("|-------|-------|")
         for agent, count in sorted(stats["agent_counts"].items(), key=lambda x: -x[1]):
             lines.append(f"| {agent} | {count:,} |")
+        lines.append("")
+
+    # Intent coverage (plan 038).
+    ic = stats.get("intent_coverage") or {}
+    if ic:
+        lines.append("### Intent Coverage")
+        lines.append("")
+        lines.append(
+            "Per-row summary produced by LLM hook, a configured post-processor, "
+            "or a human editor. Filter with e.g. "
+            "`dataset.filter(lambda r: r['intent']['source'] == 'llm_hook')`."
+        )
+        lines.append("")
+        lines.append("| Metric | Value |")
+        lines.append("|--------|-------|")
+        lines.append(f"| Rows with `intent.title` | {ic.get('rows_with_intent', 0):,} |")
+        lines.append(f"| Coverage | {ic.get('coverage_pct', 0.0)}% |")
+        by_source = ic.get("by_source") or {}
+        for source, count in sorted(by_source.items(), key=lambda x: -x[1]):
+            lines.append(f"| source=`{source}` | {count:,} |")
         lines.append("")
 
     lines.append(AUTO_END)

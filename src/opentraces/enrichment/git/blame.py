@@ -1,4 +1,4 @@
-"""`opentraces blame` implementation (plan 041 R30).
+"""`opentraces blame` implementation.
 
 Walks `git blame` → revision → `refs/notes/opentraces` for that
 revision → load each linked trace → find the attribution range

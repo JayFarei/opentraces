@@ -1,4 +1,4 @@
-"""Agent Trace v0.1.0 exporter (plan 041 R31).
+"""Agent Trace v0.1.0 exporter.
 
 Converts TraceRecord into a spec-compliant Agent Trace JSON record.
 Focuses on the attribution subset — the part the v0.1.0 spec stabilized

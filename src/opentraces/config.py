@@ -10,7 +10,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,40 @@ class SecurityConfig(BaseModel):
     trufflehog: TruffleHogConfig = Field(default_factory=TruffleHogConfig)
 
 
+class IntentConfig(BaseModel):
+    """Session-intent summarization settings (plan 038).
+
+    ``mode=on`` enables automatic Intent enrichment anywhere the pipeline
+    surfaces it (CLI ``enrich --intent``, hook-path summarization, push
+    pipeline). ``mode=off`` suppresses automatic enrichment across all
+    entry points; explicit ``opentraces enrich --intent <trace>`` still
+    runs on demand.
+    """
+
+    mode: Literal["on", "off"] = "on"
+
+
+class PostProcessorConfig(BaseModel):
+    """One post-processor entry (plan 038 phase 4).
+
+    Declared as an ordered list under the project config's
+    ``post_processors`` key. See ``opentraces.processors`` for runtime
+    semantics (stdin/stdout JSON contract, exit codes, ``--strict``).
+    """
+
+    name: str
+    command: str = Field(description="Executable on PATH, or an absolute path")
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    when: Literal["enrich", "push"] = Field(
+        "enrich",
+        description=(
+            "'enrich': run during opentraces enrich (default, local-only). "
+            "'push': run just before upload as well."
+        ),
+    )
+
+
 class ProjectConfig(BaseModel):
     """Per-project configuration override."""
 
@@ -83,6 +117,14 @@ class ProjectConfig(BaseModel):
     remote: str | None = None
     visibility: str = "private"
     agents: list[str] = Field(default_factory=lambda: [DEFAULT_AGENT])
+    intent: IntentConfig | None = Field(
+        None,
+        description="Project-level override of Config.intent. None = inherit global.",
+    )
+    post_processors: list[PostProcessorConfig] = Field(
+        default_factory=list,
+        description="Ordered list of post-processor subprocesses (plan 038 phase 4).",
+    )
 
 
 class Config(BaseModel):
@@ -101,6 +143,7 @@ class Config(BaseModel):
     classifier_sensitivity: str = Field("medium", pattern="^(low|medium|high)$")
     dataset_visibility: str = Field("private", pattern="^(public|private)$")
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+    intent: IntentConfig = Field(default_factory=IntentConfig)
 
 
 def ensure_dirs() -> None:

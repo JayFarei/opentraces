@@ -1,4 +1,4 @@
-"""Lazy liveness checks for GitLinks (plan 041 R32, R33).
+"""Lazy liveness checks for GitLinks.
 
 Liveness is computed at read time, not stamped at commit time, because
 the tree evolves: a commit can be dropped by force-push; an agent's
@@ -8,22 +8,16 @@ commit time would lie.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
-import mmh3
-
+from .._shared import content_hash, run_git
 from opentraces_schema import Attribution
 
 
-def _run(cmd: list[str], cwd: Path | None) -> tuple[int, str]:
+def _run(args: list[str], cwd: Path | None) -> tuple[int, str]:
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(cwd) if cwd else None,
-            capture_output=True, text=True, timeout=10,
-        )
-        return proc.returncode, proc.stdout
+        code, out, _ = run_git(args, cwd)
+        return code, out
     except Exception:
         return (-1, "")
 
@@ -36,21 +30,15 @@ def commit_reachable(revision: str, cwd: Path | None = None) -> bool:
     moved so the commit is no longer on a reachable branch.
     """
     # Existence check first: a commit we don't have at all is not reachable.
-    code, _ = _run(["git", "cat-file", "-e", revision], cwd)
+    code, _ = _run(["cat-file", "-e", revision], cwd)
     if code != 0:
         return False
-    code, _ = _run(
-        ["git", "merge-base", "--is-ancestor", revision, "HEAD"], cwd,
-    )
+    code, _ = _run(["merge-base", "--is-ancestor", revision, "HEAD"], cwd)
     return code == 0
 
 
-def _hash_lines(text: str) -> str:
-    return f"murmur3:{mmh3.hash128(text.encode('utf-8'), signed=False):032x}"
-
-
 def _file_at(revision: str, path: str, cwd: Path | None) -> str | None:
-    code, out = _run(["git", "show", f"{revision}:{path}"], cwd)
+    code, out = _run(["show", f"{revision}:{path}"], cwd)
     return out if code == 0 else None
 
 
@@ -90,7 +78,7 @@ def content_alive(
                 if e > len(lines):
                     continue
                 text = "\n".join(lines[s - 1:e])
-                if _hash_lines(text) == rng.content_hash:
+                if content_hash(text) == rng.content_hash:
                     return True
     return False
 

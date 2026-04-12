@@ -1,4 +1,4 @@
-"""Jujutsu (`jj`) support (plan 041 R36).
+"""Jujutsu (`jj`) support.
 
 When a repo is jj-managed, change_id is a stable identifier that
 survives rebase + amend. Using it as GitLink.revision with

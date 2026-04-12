@@ -15,10 +15,12 @@ import stat
 import subprocess
 from pathlib import Path
 
+from ..enrichment.git.notes_store import NOTES_REF
+
 HOOK_FILENAME = "opentraces-post-commit"
 CHAIN_BEGIN = "# >>> opentraces post-commit chain >>>"
 CHAIN_END = "# <<< opentraces post-commit chain <<<"
-NOTES_REFSPEC = "+refs/notes/opentraces:refs/notes/opentraces"
+NOTES_REFSPEC = f"+{NOTES_REF}:{NOTES_REF}"
 
 OWNED_HOOK_CONTENT = """\
 #!/usr/bin/env sh

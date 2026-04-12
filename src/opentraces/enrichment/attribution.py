@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-import mmh3
-
 from opentraces_schema.models import (
     Attribution,
     AttributionConversation,
@@ -14,28 +12,9 @@ from opentraces_schema.models import (
     Step,
 )
 
+from ._shared import content_hash as _content_hash
+from ._shared import line_count, path_matches
 from .snippets import extract_edited_lines
-
-
-def _content_hash(text: str) -> str:
-    """Compute a content hash as `murmur3:<hex>` for cross-tool comparability.
-
-    128-bit MurmurHash3 rendered as 32 hex chars, prefixed with `murmur3:` so
-    consumers can validate the algorithm without guessing. Matches the Agent
-    Trace v0.1.0 content-hash convention.
-    """
-    h = mmh3.hash128(text.encode("utf-8"), signed=False)
-    return f"murmur3:{h:032x}"
-
-
-def _parse_diff_files(patch: str) -> dict[str, list[tuple[int, int]]]:
-    """Parse a unified diff and extract (start_line, end_line) hunks per file.
-
-    Thin view used by legacy callers. For richer hunk data (added-line
-    content, + ranges) see `_parse_diff_hunks_with_content`.
-    """
-    rich = _parse_diff_hunks_with_content(patch)
-    return {path: [(h["start_line"], h["end_line"]) for h in hunks] for path, hunks in rich.items()}
 
 
 def _parse_diff_hunks_with_content(patch: str) -> dict[str, list[dict]]:
@@ -177,9 +156,9 @@ def build_attribution(
        "medium" for multi-edit no overlap, "low" for overlapping edits or
        fallback-resolved ranges.
     4. `experimental` is True iff any range is low-confidence or any edit
-       used the fallback resolution (R4).
+       used the fallback resolution.
     5. `trace_id` threads into the attribution URL as
-       `opentraces://<trace_id>/step_<N>` (R19); defaults to "trace" when
+       `opentraces://<trace_id>/step_<N>`; defaults to "trace" when
        omitted so imported data from older pipelines still validates.
 
     Returns None if no Edit/Write tool calls are found.
@@ -187,7 +166,7 @@ def build_attribution(
     trace_slug = trace_id or "trace"
 
     # step_index -> model string (from Step.model). Used to stamp
-    # contributor.model_id per conversation (R2).
+    # contributor.model_id per conversation.
     step_models: dict[int, str | None] = {s.step_index: s.model for s in steps}
 
     # Diff hunks indexed by file path. The patch's +++ headers use
@@ -202,10 +181,8 @@ def build_attribution(
             return []
         if file_path in patch_hunks:
             return patch_hunks[file_path]
-        # Try suffix match: Edit may pass /abs/path/src/app.py while
-        # the patch header is src/app.py.
         for path, hunks in patch_hunks.items():
-            if file_path.endswith("/" + path) or path.endswith("/" + file_path):
+            if path_matches(file_path, path):
                 return hunks
         return []
 
@@ -242,7 +219,7 @@ def build_attribution(
                 hook_matched = False
                 hook_confidence: str | None = None
 
-                # R6/R7: hook-captured PostToolUse data is the primary
+                # hook-captured PostToolUse data is the primary
                 # source. When present for this tool_use_id, it is
                 # authoritative — it was read from disk at the exact
                 # moment the tool call completed.
@@ -255,7 +232,7 @@ def build_attribution(
                     hook_matched = True
                     hook_confidence = hook_entry.get("confidence") or "high"
                 else:
-                    # R5: diff hunk is the second-priority source for
+                    # diff hunk is the second-priority source for
                     # committed changes. If the Edit's new_string appears
                     # in a hunk's + region for this file, use the hunk's
                     # actual lines and stamp diff-sourced (high confidence).
@@ -267,7 +244,7 @@ def build_attribution(
 
                 if start_line is None:
                     start_line = 1
-                    end_line = max(1, new_string.count("\n") + 1)
+                    end_line = line_count(new_string)
                     used_fallback = True
                     fallback_used = True
 
@@ -291,14 +268,10 @@ def build_attribution(
                     continue
 
                 file_contents[file_path] = content
-                line_count = max(
-                    1,
-                    content.count("\n") + (1 if content and not content.endswith("\n") else 0),
-                )
                 file_edits[file_path].append({
                     "step_index": step.step_index,
                     "start_line": 1,
-                    "end_line": line_count,
+                    "end_line": line_count(content),
                     "content_hash": _content_hash(content),
                     "used_fallback": False,
                 })
@@ -378,10 +351,10 @@ def build_attribution(
             conversations=conversations,
         ))
 
-    # R4: experimental iff any low-confidence range or any fallback.
+    # experimental iff any low-confidence range or any fallback.
     experimental = any_low_confidence or fallback_used
 
-    # R8 / R15: surface files changed on disk or in the commit that no
+    # surface files changed on disk or in the commit that no
     # Edit/Write tool call attributed — typically Bash-applied edits
     # (sed -i, codemods). Inputs:
     #   - outcome_patch: per-file paths from the commit diff.
@@ -392,12 +365,7 @@ def build_attribution(
     attributed_paths = [f.path for f in attribution_files]
 
     def _is_attributed(path: str) -> bool:
-        for ap in attributed_paths:
-            if ap == path:
-                return True
-            if ap.endswith("/" + path) or path.endswith("/" + ap):
-                return True
-        return False
+        return any(path_matches(ap, path) for ap in attributed_paths)
 
     candidate_paths: list[str] = []
     if outcome_patch:

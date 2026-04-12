@@ -9,30 +9,25 @@ append their own links to the same commit and all survive.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
-NOTES_REF = "refs/notes/opentraces"
-_NOTES_REF_SHORT = "opentraces"
+from .._shared import run_git
+
+NOTES_REF_NAME = "opentraces"
+NOTES_REF = f"refs/notes/{NOTES_REF_NAME}"
 
 
-def _run(cmd: list[str], cwd: Path | None) -> tuple[int, str, str]:
-    proc = subprocess.run(
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    return proc.returncode, proc.stdout, proc.stderr
+def _git(args: list[str], cwd: Path | None) -> tuple[int, str]:
+    try:
+        code, out, _ = run_git(args, cwd)
+        return code, out
+    except Exception:
+        return (-1, "")
 
 
 def read(revision: str, cwd: Path | None = None) -> list[str]:
     """Return the existing note lines on `revision`, or [] if none."""
-    code, out, _ = _run(
-        ["git", "notes", "--ref=" + _NOTES_REF_SHORT, "show", revision],
-        cwd=cwd,
-    )
+    code, out = _git(["notes", f"--ref={NOTES_REF_NAME}", "show", revision], cwd)
     if code != 0:
         return []
     return [line for line in out.splitlines() if line.strip()]
@@ -41,26 +36,24 @@ def read(revision: str, cwd: Path | None = None) -> list[str]:
 def append(revision: str, new_lines: list[str], cwd: Path | None = None) -> int:
     """Append `new_lines` to `revision`'s note, skipping duplicates.
 
-    Returns the count of lines actually written.
+    Dedups against the existing note then writes all surviving lines
+    in a single `git notes append` invocation (one subprocess per
+    call instead of one per line). Returns the count written.
     """
     existing = set(read(revision, cwd))
-    added = 0
+    to_write = []
     for line in new_lines:
         line = line.strip()
-        if not line or line in existing:
-            continue
-        code, _, err = _run(
-            ["git", "notes", "--ref=" + _NOTES_REF_SHORT, "append", "-m", line, revision],
-            cwd=cwd,
-        )
-        if code == 0:
-            existing.add(line)
-            added += 1
-        else:
-            # Don't raise: note addition is best-effort and never
-            # blocks the post-commit hook.
-            pass
-    return added
+        if line and line not in existing and line not in to_write:
+            to_write.append(line)
+    if not to_write:
+        return 0
+    code, _ = _git(
+        ["notes", f"--ref={NOTES_REF_NAME}", "append",
+         "-m", "\n".join(to_write), revision],
+        cwd,
+    )
+    return len(to_write) if code == 0 else 0
 
 
 def format_link(trace_id: str, shared_url: str | None = None) -> str:

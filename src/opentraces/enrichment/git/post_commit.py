@@ -12,32 +12,33 @@ falls within `window_hours` of now."
 
 from __future__ import annotations
 
-import subprocess
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from opentraces_schema import GitLink, TraceRecord
 
+from .._shared import run_git
 from . import jj_support, notes_store
 from .correlator import correlate
 
 
-def _run(cmd: list[str], cwd: Path) -> tuple[int, str]:
-    proc = subprocess.run(
-        cmd, cwd=str(cwd), capture_output=True, text=True, timeout=10,
-    )
-    return proc.returncode, proc.stdout
+def _git(args: list[str], cwd: Path) -> tuple[int, str]:
+    try:
+        code, out, _ = run_git(args, cwd)
+        return code, out
+    except Exception:
+        return (-1, "")
 
 
 def head_sha(cwd: Path) -> str | None:
-    code, out = _run(["git", "rev-parse", "HEAD"], cwd)
+    code, out = _git(["rev-parse", "HEAD"], cwd)
     return out.strip() if code == 0 else None
 
 
 def is_merge_commit(cwd: Path, sha: str) -> bool:
     """True iff `sha` has more than one parent."""
-    code, out = _run(["git", "rev-list", "--parents", "-n", "1", sha], cwd)
+    code, out = _git(["rev-list", "--parents", "-n", "1", sha], cwd)
     if code != 0:
         return False
     parts = out.strip().split()
@@ -45,20 +46,17 @@ def is_merge_commit(cwd: Path, sha: str) -> bool:
 
 
 def commit_diff(cwd: Path, sha: str) -> str | None:
-    code, out = _run(
-        ["git", "show", "--format=", "--no-color", "-U3", sha],
-        cwd,
-    )
+    code, out = _git(["show", "--format=", "--no-color", "-U3", sha], cwd)
     return out if code == 0 else None
 
 
 def remote_url(cwd: Path) -> str | None:
-    code, out = _run(["git", "remote", "get-url", "origin"], cwd)
+    code, out = _git(["remote", "get-url", "origin"], cwd)
     return out.strip() or None if code == 0 else None
 
 
 def current_branch(cwd: Path) -> str | None:
-    code, out = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd)
+    code, out = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
     b = out.strip()
     if code != 0 or not b or b == "HEAD":
         return None
@@ -112,12 +110,16 @@ def run(
     diff = commit_diff(cwd, sha)
     if diff is None:
         return []
+    # Parse the unified diff once and reuse across candidates; inside
+    # correlate() this would run N times for an N-candidate window.
+    from ..attribution import _parse_diff_hunks_with_content
+    hunks = _parse_diff_hunks_with_content(diff)
     repo_url = remote_url(cwd)
     branch = current_branch(cwd)
 
-    # R36: prefer jj change_id when available. change_id is rebase +
-    # amend invariant, so a GitLink pinned to it survives history
-    # rewrites that would otherwise orphan a sha-based pin.
+    # Prefer jj change_id when available: it's rebase+amend invariant,
+    # so a GitLink pinned to it survives history rewrites that would
+    # orphan a sha-based pin.
     vcs_type = "git"
     revision = sha
     if jj_support.is_jj_repo(cwd):
@@ -132,7 +134,7 @@ def run(
     for trace in candidates:
         links = correlate(
             trace, revision, diff, repo_url=repo_url, branch=branch,
-            vcs_type=vcs_type,
+            vcs_type=vcs_type, hunks=hunks,
         )
         if not links or links[0].tier == "orphan":
             continue
@@ -145,7 +147,7 @@ def run(
 
         # Tool-emitted and divergence pin the revision + promote
         # lifecycle. Overlapping is only evidence of coincidence and
-        # stays provisional (R35).
+        # stays provisional.
         tier = links[0].tier
         if tier in ("tool_emitted", "tool_emitted_with_divergence"):
             trace.lifecycle = "final"
@@ -176,7 +178,7 @@ def run(
 
 
 def kick_background_share(cwd: Path) -> None:
-    """Fire-and-forget `opentraces share` in the background (R35).
+    """Fire-and-forget `opentraces share` in the background.
 
     Uses `subprocess.Popen` with detached stdio. Any failure is logged
     by opentraces itself; this call must never raise. Skipped when the
@@ -203,8 +205,7 @@ def kick_background_share(cwd: Path) -> None:
 
 def _stamp_divergence(trace) -> None:
     """Stamp every attribution range with contributor=mixed and
-    record the agent's pre-divergence state into range.original
-    (plan 041 R3, R10)."""
+    record the agent's pre-divergence state into range.original."""
     if trace.attribution is None:
         return
     for f in trace.attribution.files:

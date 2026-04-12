@@ -324,7 +324,6 @@ class ClaudeCodeParser:
                         "messages_kept": data.get("messages_kept"),
                     })
                 elif event == "PostToolUse":
-                    # Plan 041 R6: post-tool-use hook events become the
                     # primary source for attribution line ranges. Keyed
                     # by tool_use_id so build_attribution can look up
                     # the exact post-edit coordinates per Edit/Write.
