@@ -34,10 +34,11 @@ pytest tests/ -v
   - `installers/` - One-off installers for integrations we wire into external tools. `installers/claude_code_hooks/` ships the `on_stop` / `on_compact` / `on_tool_use` scripts that `opentraces hooks install` copies to `~/.claude/hooks/`, plus `intent_adapter.py`. `installers/git_hook.py` installs the post-commit correlator.
   - `parsers/` - Cross-agent parser infrastructure: base protocol, quality gate, lazy registry.
   - `security/` - Secret scanning, anonymization, classification (independently versioned via `SECURITY_VERSION`)
-  - `enrichment/` - Git signals, attribution, dependencies, metrics
+  - `enrichment/` - Git signals, attribution, dependencies, metrics, and session intent summarization (`intent.py` + `intent_backends.py`, plan 038)
+  - `processors.py` - Generic post-processor subprocess runner (stdin/stdout JSON contract, plan 038 phase 4)
   - `quality/` - Trace quality assessment, persona rubrics, upload gates
   - `exporters/` - ATIF export
-  - `upload/` - HF Hub sharded upload, dataset card generation
+  - `upload/` - HF Hub sharded upload, dataset card generation (includes Intent coverage stats)
   - `inbox.py` - Shared data access for all review clients
   - `clients/` - Presentation layers (CLI, TUI, web backend)
 - `web/` - Web frontends
@@ -57,6 +58,8 @@ pytest tests/ -v
 - Per-project review policy (auto/review) controlling whether traces need manual approval
 - Zero required annotation, all enrichment is deterministic
 - Security pipeline has its own `SECURITY_VERSION` in `security/version.py`, bump it when changing detection logic (regex patterns, entropy thresholds, classifier heuristics, anonymization rules)
+- Session `Intent` block (schema 0.3.0, plan 038) is written by LLM hook, post-processor, or user; `source` is a closed enum (`llm_hook` / `post_processor` / `user`). Security pipeline always runs before Intent or any post-processor — enforced by the ordering-invariant test.
+- Post-processors are declared per-project as an ordered list (`post_processors: [{name, command, args, env, when}]`). Contract: stdin = trace JSON, stdout = trace JSON, exit 0. Non-zero exit / missing binary / invalid output are non-fatal by default, promoted to hard errors under `--strict`. Byte-identical output = no-op. `opentraces doctor` probes configured processors.
 
 ## Testing
 

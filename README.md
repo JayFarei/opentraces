@@ -94,7 +94,12 @@ that backlog into the inbox immediately, or `--start-fresh` to begin from now on
 After setup, the workflow is:
 - `opentraces web` to inspect traces before sharing
 - `opentraces commit --all` to commit inbox traces
+- `opentraces enrich <trace.json>` to add an Intent summary (and run any
+  configured post-processors) — optional; `push` does this automatically
+  unless `--no-intent` is passed or `intent.mode=off` is set
 - `opentraces push` to publish committed traces to HuggingFace
+- `opentraces doctor` to check installed integrations, Intent mode, and
+  any configured post-processors
 ~~~
 
 ---
