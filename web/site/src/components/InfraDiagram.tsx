@@ -20,7 +20,7 @@ const runTimeAgents: Agent[] = [
   { name: "DeepAgents", ready: false },
 ];
 
-const pipelineSteps = ["init", "capture", "parse", "enrich", "sanitise"];
+const pipelineSteps = ["init", "capture", "parse", "enrich", "correlate", "sanitise"];
 const pushModes = [
   { name: "auto", label: "capture, commit, push automatically" },
   { name: "review", label: "human inbox, commit, push (default)" },

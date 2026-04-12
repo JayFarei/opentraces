@@ -56,6 +56,7 @@ nav:
   - Integration:
       - CI/CD & Automation: integration/ci-cd.md
       - Agent Setup: integration/agent-setup.md
+      - Post-Processor Contract: integration/post-processor-contract.md
   - Contributing:
       - Development: contributing/development.md
       - Schema Changes: contributing/schema-changes.md

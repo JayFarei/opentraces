@@ -14,8 +14,11 @@ Every coding session with an AI agent produces action trajectories, tool-use seq
 2. **Scan** every field for secrets, API keys, paths, and PII
 3. **Redact** detected secrets with `[REDACTED]` or hashed path segments
 4. **Enrich** with git signals, attribution, cost estimates, dependency metadata
-5. **Review** in the browser or terminal before anything leaves your machine
-6. **Push** approved traces as sharded JSONL to a Hugging Face dataset
+5. **Correlate** traces to commits via an optional post-commit hook (`opentraces setup git`), writing `refs/notes/opentraces` and evidence-graded `GitLink`s (`tool_emitted` / `tool_emitted_with_divergence` / `overlapping` / `orphan`)
+6. **Review** in the browser or terminal before anything leaves your machine
+7. **Push** approved traces as sharded JSONL to a Hugging Face dataset
+8. **Inspect** commit-anchored history with `opentraces notes <ref>`, `opentraces blame <file>:<line>`, and `opentraces session list --by-commit`
+9. **Export** to [Agent Trace v0.1.0](https://github.com/nichochar/agent-trace) via `opentraces export --format agent-trace`
 
 ---
 

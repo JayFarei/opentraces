@@ -30,22 +30,37 @@ opentraces status                      # show inbox tree with stage counts
 ### Review & Publish
 ```
 opentraces session list                # list staged sessions (default: all stages)
+opentraces session list --by-commit    # group staged traces by git_links[].revision
 opentraces session show <ID>           # full trace detail
+opentraces session show <ID> --markdown # prompt-injection-safe render wrapped in random-token boundaries
 opentraces session commit <ID>         # commit a trace for push
 opentraces session reject <ID>         # mark as rejected (never pushed)
 opentraces session reset <ID>          # undo commit/reject, back to inbox
 opentraces session redact <ID> --step N  # scrub a specific step
 opentraces session discard <ID> --yes  # permanently delete a trace
 opentraces commit --all                # bulk commit all inbox traces
+opentraces enrich <TRACE>              # enrich a single trace file (Intent + configured post-processors)
+opentraces enrich <TRACE> --no-intent  # skip Intent summarization (run only post-processors)
+opentraces enrich <TRACE> --force      # overwrite an existing machine-sourced Intent (source=user is never overwritten)
+opentraces enrich <TRACE> --strict     # promote post-processor failures to hard errors
 opentraces push                        # upload committed traces to HF Hub
 opentraces push --assess               # upload + run quality assessment after push
 opentraces push --llm-review           # block push unless every committed trace has a clean Tier 2 verdict
 opentraces push --no-trufflehog        # one-shot: skip Tier 1.5 TruffleHog for this push
+opentraces push --no-intent            # one-shot: skip Intent enrichment for this push
 opentraces assess                      # score committed traces (local quality.json)
 opentraces assess --dataset owner/name # refresh quality.json on remote HF dataset
 opentraces review-llm                  # Tier 2 LLM semantic review over staged sessions
-opentraces doctor                      # report security pipeline health + SECURITY_VERSION
+opentraces doctor                      # report security pipeline health, SECURITY_VERSION, intent.mode, configured post-processors
 opentraces setup trufflehog            # install + enable Tier 1.5 TruffleHog scanning
+opentraces setup git                   # install the post-commit hook that correlates traces to commits
+opentraces setup git --uninstall       # remove the post-commit hook
+opentraces export --format agent-trace # export staged traces to Agent Trace v0.1.0 JSONL
+opentraces export --format agent-trace --output ./agent-trace.jsonl
+opentraces notes <ref>                 # print opentraces notes attached to a commit (refs/notes/opentraces)
+opentraces notes <ref> --json          # JSON form: {ref, traces:[{trace_id, url}]}
+opentraces blame <path>:<line>         # resolve a file:line to the trace that authored it
+opentraces blame <path>:<line> --json  # JSON form: {target, hits:[{trace_id, step, revision, content_alive}]}
 ```
 
 ### Inspect

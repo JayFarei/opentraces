@@ -22,6 +22,7 @@ opentraces push --repo user/custom-dataset
 | `--assess` | off | Run quality assessment after upload and embed scores in dataset card |
 | `--llm-review` | off | Require a clean Tier 2 LLM verdict on every committed trace before upload |
 | `--no-trufflehog` | off | One-shot override: skip Tier 1.5 TruffleHog for this push only |
+| `--no-intent` | off | One-shot override: skip Intent enrichment for this push only |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
 
 `--approved-only` is not part of the current CLI. The supported path is `commit -> push`.

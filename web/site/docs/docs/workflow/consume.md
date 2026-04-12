@@ -30,7 +30,7 @@ Which returns a `TraceRecord` — a representative subset of fields looks like:
 
 ```json
 {
-  "schema_version": "0.2.0",
+  "schema_version": "0.3.0",
   "trace_id": "tr_01abc...",
   "session_id": "sess_xyz...",
   "execution_context": "devtime",

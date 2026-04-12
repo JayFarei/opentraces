@@ -35,7 +35,11 @@ const features = [
   },
   {
     title: "content-hash dedup",
-    desc: "Reset your state, switch machines, re-push safely. Content hashing prevents duplicates on the remote.",
+    desc: "Reset your state, switch machines, re-push safely. murmur3 content hashing prevents duplicates on the remote.",
+  },
+  {
+    title: "commit-anchored",
+    desc: "Optional post-commit hook links each trace to the commit(s) it produced. Evidence tiers (tool_emitted, divergence, overlapping, orphan) let you filter by how tightly a session maps to shipped code. Blame any line back to its originating session.",
   },
   {
     title: "agent-native cli",

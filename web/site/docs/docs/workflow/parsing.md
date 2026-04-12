@@ -19,12 +19,22 @@ Every parsed trace is enriched before staging:
 | Step | What it does | Example output |
 |------|-------------|----------------|
 | Git signals | Detects repo state, extracts commit info | `committed: true`, `commit_sha: "a3f9..."`, `branch: "main"` |
-| Attribution | Maps Edit and Write tool calls to file/line ranges | `auth.py L42-67` attributed to step 4 |
+| Attribution | Maps Edit and Write tool calls to file/line ranges (three-layer pipeline, see below) | `auth.py L42-67` attributed to step 4, `murmur3:...` content hash |
 | Dependencies | Extracts from manifests and install commands | `["flask", "pydantic"]` from `pyproject.toml` |
 | Metrics | Aggregates token counts, cost, cache rates | `cache_hit_rate: 0.91`, `estimated_cost_usd: 3.21` |
 | Security scan | Regex + entropy scan, tiered redaction | API key in Bash output replaced with `[REDACTED]` |
 | Classification | Tier 2 heuristic flagging for review | Internal hostname `*.corp` flagged for manual review |
 | Anonymization | Strips usernames and home paths | `/Users/alice/project/` becomes `/~/project/` |
+
+## Attribution: the three-layer pipeline
+
+Attribution is built by three resolvers tried in priority order. The strongest available signal wins per range.
+
+1. **PostToolUse hook** (`installers/claude_code_hooks/on_tool_use.py`). Fires after every Edit/Write, reads the file from disk, and emits a transcript event with the exact post-edit lines plus a `murmur3:<32-hex>` content hash. This is the authoritative signal — `experimental` stays `false`.
+2. **Unified diff.** When no hook event covers a range, the session's unified diff is parsed to recover line numbers and content. Medium confidence.
+3. **`str.find` fallback.** Last-resort textual match of tool output back to the current file content. Low confidence; the resulting `attribution.experimental` is `true`.
+
+The PostToolUse hook is installed alongside the session-end hook by `opentraces init` (and can be reinstalled with `opentraces hooks install`). Its events are consumed at parse time, so the post-edit hashes travel with the trace even if the file is later reformatted. This lets the post-commit correlator match ranges across formatter churn and classify the resulting `GitLink` tier.
 
 ## Review Policy Interaction
 

@@ -26,6 +26,23 @@ A code attribution spec (CC BY 4.0) that records which lines of code came from w
 
 **Relationship:** opentraces embeds Agent Trace attribution blocks directly in the trace record. Agent Trace focuses on _output_ (code attribution), opentraces bridges that with _process_ (trajectory).
 
+### Agent Trace RFCs adopted (schema 0.3.0)
+
+| RFC | Topic | Where it lands |
+|-----|-------|----------------|
+| #5  | `original` pre-processing snapshot on divergent ranges | `AttributionRange.original` |
+| #9  | Provider-native conversation IDs | `AttributionConversation.ids` |
+| #11 | `change_type` on ranges | `AttributionRange.change_type` |
+| #16 | Baseline `related` resource vocabulary | `AttributionConversation.related` |
+| #22 | Canonical `repository_url` | `Task.repository_url` |
+| #25 | Lifecycle / revision-pinning | `TraceRecord.lifecycle`, `Attribution.revision` |
+| #26 | `unaccounted_files` for non-tool edits | `Attribution.unaccounted_files` |
+| #27 | Evidence-graded commit linking | `TraceRecord.git_links[]`, `GitLink.tier` |
+
+Adoption is additive — pre-0.3.0 traces validate unchanged.
+
+`opentraces export --format agent-trace` emits Agent Trace v0.1.0 JSONL based on these fields.
+
 ## OTel GenAI Semantic Conventions
 
 [opentelemetry.io/docs/specs/semconv/gen-ai](https://opentelemetry.io/docs/specs/semconv/gen-ai/)

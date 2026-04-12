@@ -30,8 +30,12 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces log` | List uploaded traces grouped by date |
 | `opentraces upgrade` | Upgrade CLI and refresh project skill file |
 | `opentraces setup trufflehog` | Install or toggle the optional Tier 1.5 TruffleHog scanner |
+| `opentraces setup git` | Install or remove the opentraces post-commit hook for commit linking |
 | `opentraces doctor` | Report the health of the security pipeline (tiers, versions, auth), the current `intent.mode`, and any configured post-processors |
 | `opentraces review-llm` | Run optional Tier 2 LLM semantic review over staged traces |
+| `opentraces notes` | Print opentraces notes attached to a commit (trace IDs and viewer URLs) |
+| `opentraces blame` | Resolve `path:line` to the trace/step that authored it |
+| `opentraces export` | Export staged traces to another format (`atif` stub, `agent-trace`) |
 
 ## Authentication
 
@@ -162,8 +166,10 @@ Fine-grained review commands for staged traces.
 
 ```bash
 opentraces session list
+opentraces session list --by-commit
 opentraces session show <trace-id>
 opentraces session show <trace-id> --verbose
+opentraces session show <trace-id> --markdown
 opentraces session commit <trace-id>
 opentraces session reject <trace-id>
 opentraces session reset <trace-id>
@@ -171,9 +177,22 @@ opentraces session redact <trace-id> --step 3
 opentraces session discard <trace-id> --yes
 ```
 
-`session list` accepts `--stage inbox|committed|pushed|rejected`, `--model`, `--agent`, and `--limit`.
+`session list` accepts `--stage inbox|committed|pushed|rejected`, `--model`, `--agent`, `--limit`, and `--by-commit`.
+
+| `session list` flag | Default | Description |
+|---------------------|---------|-------------|
+| `--stage` | all | Filter by `inbox`, `committed`, `pushed`, or `rejected` |
+| `--model` | all | Substring filter over `agent.model` |
+| `--agent` | all | Filter by agent name |
+| `--limit` | `50` | Max sessions returned |
+| `--by-commit` | off | Group traces by `git_links[].revision` (plan 041 R29). Useful for finding every session that contributed to a given commit. |
 
 `session show` truncates step content to 500 chars in human output by default to protect context windows. Pass `--verbose` to see full content, or use `opentraces --json session show <id>` to get the complete record as JSON (never truncated).
+
+| `session show` flag | Default | Description |
+|---------------------|---------|-------------|
+| `--verbose` | off | Print full step content instead of the 500-char truncation |
+| `--markdown` | off | Render the session as injection-safe Markdown (fenced code, escaped prompts). Safer for piping into another agent. |
 
 ## Upload
 
@@ -217,6 +236,46 @@ opentraces push --repo user/custom-dataset
 `--approved-only` is not part of the current CLI. The public path is `commit -> push`.
 
 When `--llm-review` aborts, the hint points you at `opentraces review-llm` (see below) to produce verdicts.
+
+### `opentraces enrich`
+
+Enrich a single trace file in place with an Intent block (title, summary, source, model) and run any post-processors declared in project config.
+
+```bash
+opentraces enrich path/to/trace.json
+opentraces enrich path/to/trace.json --no-intent        # only run post-processors
+opentraces enrich path/to/trace.json --force            # overwrite existing machine-sourced Intent
+opentraces enrich path/to/trace.json --strict           # fail on any processor error
+opentraces enrich path/to/trace.json -o out.json        # write to a separate path
+opentraces enrich path/to/trace.json --model anthropic/claude-sonnet-4-5
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--intent` / `--no-intent` | follow config `intent.mode` | Enable or disable Intent summarization. |
+| `--force` | off | Overwrite an existing machine-sourced Intent. `source="user"` is never overwritten. |
+| `--strict` | off | Promote post-processor failures (missing binary, non-zero exit, invalid output) to hard errors. |
+| `-o`, `--output` | overwrite input | Write enriched trace to this path. |
+| `--model` | `trace.agent.model` | Override the model id used for Intent. |
+
+Push runs the same Intent enrichment pre-upload when `intent.mode=on`, so running `enrich` yourself is only needed for imported traces or ad-hoc processing.
+
+### `opentraces doctor`
+
+Report the end-to-end health of the pipeline: security tiers, schema version, HuggingFace auth, the current `intent.mode`, and any configured post-processors (probed against `PATH`).
+
+```bash
+opentraces doctor
+opentraces --json doctor
+```
+
+The machine-readable JSON output includes:
+
+- `security_version`, `schema_version`
+- `trufflehog.{enabled,binary_version,status}`
+- `hf_auth` — `ok` or `missing`
+- `intent.mode` — `on` or `off`
+- `post_processors` — array of `{name, command, when, resolved_path, status}`. `status` is `detected` when the binary resolves on `PATH`, `missing` otherwise.
 
 ### `opentraces assess`
 
@@ -367,6 +426,73 @@ Installation tries `brew` then `go install`. If both fail, the command prints th
 
 TruffleHog runs locally in `--verify_secrets=false` mode, so no secrets are probed against third-party APIs.
 
+### `opentraces setup git`
+
+Install (or remove) the opentraces post-commit hook in the current repo. The hook runs after every `git commit`, correlates the new revision against provisional traces in the local staging, promotes matched traces to `lifecycle = "final"`, and attaches `opentraces://` notes to the commit via `git notes`.
+
+```bash
+opentraces setup git              # install the hook
+opentraces setup git --uninstall  # remove the hook
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--uninstall` | off | Remove the hook instead of installing it |
+
+The hook is a thin shim that calls `opentraces _run-post-commit-hook` (hidden). Failures in the hook never block the commit.
+
+## Commit Linking and Attribution
+
+### `opentraces notes`
+
+Print the opentraces notes attached to a commit. These are populated by the post-commit hook (see `setup git`) and list every trace that contributed to the revision, with a viewer URL when the trace has been pushed.
+
+```bash
+opentraces notes                  # defaults to HEAD
+opentraces notes abc1234
+opentraces notes HEAD~3 --json
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `REF` | `HEAD` | Commit-ish to read notes from |
+| `--json` | off | Emit machine-readable JSON (`{ref, traces: [{trace_id, url}]}`) |
+
+### `opentraces blame`
+
+Resolve `path:line` to the opentraces session(s) that authored that line. Walks `git_links[]` and attribution ranges across local staged traces to find matches, and reports whether the original content is still alive at HEAD.
+
+```bash
+opentraces blame src/auth.py:42
+opentraces blame src/auth.py:42 --json
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `TARGET` | required | `<path>:<line>` (e.g. `src/parser.ts:120`) |
+| `--json` | off | Emit machine-readable JSON (`{target, hits: [{trace_id, step, revision, content_alive}]}`) |
+
+Human output per hit: `trace_id  step_N  <revision-prefix>  [alive|dead]`.
+
+## Export
+
+### `opentraces export`
+
+Export staged traces into another interchange format.
+
+```bash
+opentraces export --format agent-trace
+opentraces export --format agent-trace --output ./my-export.jsonl
+opentraces export --format atif
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--format` | required | `atif` or `agent-trace`. `atif` is still a stub; `agent-trace` emits Agent Trace v0.1.0 JSONL. |
+| `--output` | `./opentraces-export.jsonl` | JSONL output path |
+
+`agent-trace` is the spec published by the Cursor/community Agent Trace RFCs. See [Export](/docs/workflow/export) for the full mapping.
+
 ### `opentraces doctor`
 
 Report the health of the opentraces security pipeline. Exits `3` when Tier 1.5 is enabled in config but the binary is missing.
@@ -434,7 +560,6 @@ These commands exist for automation, compatibility, or diagnostics and are hidde
 | `opentraces discover` | List available agent sessions across all projects |
 | `opentraces parse` | Parse agent sessions into enriched JSONL traces (global mode) |
 | `opentraces review` | Legacy alias for `web`/`tui`/`session` |
-| `opentraces export` | Export traces to other formats (e.g., `--format atif`) |
 | `opentraces migrate` | Check schema version and run migrations |
 | `opentraces capabilities --json` | Machine-discoverable feature list, supported agents, versions |
 | `opentraces introspect` | Full API schema and TraceRecord JSON schema for automation |

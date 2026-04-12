@@ -41,6 +41,7 @@ export const DOC_NAV: DocEntry[] = [
   // Integration
   { slug: "integration/ci-cd", title: "CI/CD & Automation", group: "Integration" },
   { slug: "integration/agent-setup", title: "Agent Setup", group: "Integration" },
+  { slug: "integration/post-processor-contract", title: "Post-Processor Contract", group: "Integration" },
 
   // Contributing
   { slug: "contributing/schema-changes", title: "Schema Changes", group: "Contributing" },

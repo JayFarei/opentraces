@@ -16,10 +16,26 @@ The opentraces schema follows semantic versioning. The version lives in `package
 ## Current Version
 
 ```text
-0.2.0
+0.3.0
 ```
 
 The `0.x` series means breaking changes may still land between minor versions until `1.0.0`.
+
+### 0.3.0 — additive changes
+
+All new fields are optional; pre-0.3.0 traces deserialize unchanged.
+
+- `TraceRecord.lifecycle` — `"provisional"` | `"final"` (RFC #25).
+- `TraceRecord.git_links[]` — new `GitLink` model with `vcs_type`, `revision`, `repo_url`, `branch`, `tier`, `commit_reachable`, `content_alive`. Four evidence tiers: `tool_emitted`, `tool_emitted_with_divergence`, `overlapping`, `orphan`.
+- `Attribution.revision` — `{vcs_type, revision}` pin (RFC #5/#25).
+- `Attribution.unaccounted_files` — files changed at commit time without a tracked Edit/Write source (RFC #26).
+- `AttributionRange.change_type` — `"addition"` | `"modification"` | `"deletion"` (RFC #11).
+- `AttributionRange.original` — pre-processing snapshot for divergent ranges (RFC #5).
+- `AttributionRange.contributor` — per-range contributor override.
+- `AttributionConversation.ids` — provider-native conversation IDs (RFC #9).
+- `AttributionConversation.related` — baseline related-resource vocabulary (RFC #16).
+- `Task.repository_url` — canonical remote URL (RFC #22).
+- Hash format migrated to `murmur3:<32-hex>` across all `content_hash` fields (top-level and range-level).
 
 ## Version Checks
 
@@ -27,7 +43,7 @@ There is no public migration workflow today. Version checks happen when configs 
 
 ## Rationale Documents
 
-Each schema version ships with a rationale document and a changelog entry in the schema package. See [`VERSION-POLICY.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/VERSION-POLICY.md) for the full versioning policy and [`CHANGELOG.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/CHANGELOG.md) for the release history.
+Each schema version ships with a rationale document and a changelog entry in the schema package. See [`VERSION-POLICY.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/VERSION-POLICY.md) for the full versioning policy and [`CHANGELOG.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/CHANGELOG.md) for the release history. The current release is documented in [`RATIONALE-0.3.0.md`](https://github.com/JayFarei/opentraces/blob/main/packages/opentraces-schema/RATIONALE-0.3.0.md) (Intent block, commit-linked evidence tiers, richer Attribution).
 
 ## Security Pipeline Version
 

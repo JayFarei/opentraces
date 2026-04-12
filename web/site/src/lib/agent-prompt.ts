@@ -28,4 +28,15 @@ Run \`opentraces doctor\` to verify environment and security pipeline.
 For extra coverage, \`opentraces setup trufflehog\` enables TruffleHog
 scanning (800+ detectors, opt-in, requires the binary), and
 \`opentraces review-llm\` runs a local LLM session-level privacy pass.
-To gate uploads on that review, push with \`opentraces push --llm-review\`.`;
+To gate uploads on that review, push with \`opentraces push --llm-review\`.
+
+Optional commit anchoring (schema 0.3.0+):
+Run \`opentraces setup git\` to install a post-commit hook that links
+each commit to the trace(s) that produced it, tagging the link with an
+evidence tier (tool_emitted, tool_emitted_with_divergence, overlapping,
+or orphan). Once installed:
+- \`opentraces notes <ref>\` prints the notes attached to a commit
+- \`opentraces blame <file>:<line>\` resolves a line to its originating trace
+- \`opentraces session list --by-commit\` groups traces by commit
+- \`opentraces session show --markdown\` renders a prompt-injection-safe view
+- \`opentraces export --format agent-trace\` exports to the Agent Trace spec`;

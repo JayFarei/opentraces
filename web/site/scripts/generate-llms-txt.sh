@@ -46,6 +46,7 @@ for f in \
   "$DOCS_DIR/security/scanning.md" \
   "$DOCS_DIR/integration/agent-setup.md" \
   "$DOCS_DIR/integration/ci-cd.md" \
+  "$DOCS_DIR/integration/post-processor-contract.md" \
   "$DOCS_DIR/contributing/development.md" \
   "$DOCS_DIR/contributing/schema-changes.md"; do
   if [ -f "$f" ]; then

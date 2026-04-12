@@ -34,10 +34,10 @@ pytest tests/ -v
   - `installers/` - One-off installers for integrations we wire into external tools. `installers/claude_code_hooks/` ships the `on_stop` / `on_compact` / `on_tool_use` scripts that `opentraces hooks install` copies to `~/.claude/hooks/`, plus `intent_adapter.py`. `installers/git_hook.py` installs the post-commit correlator.
   - `parsers/` - Cross-agent parser infrastructure: base protocol, quality gate, lazy registry.
   - `security/` - Secret scanning, anonymization, classification (independently versioned via `SECURITY_VERSION`)
-  - `enrichment/` - Git signals, attribution, dependencies, metrics, and session intent summarization (`intent.py` + `intent_backends.py`, plan 038)
+  - `enrichment/` - Git signals, attribution, dependencies, metrics, and session intent summarization (`intent.py` + `intent_backends.py`, plan 038). `enrichment/git/` holds the plan-041 commit-correlation stack: `post_commit.py` (tier assignment), `correlator.py`, `notes_store.py` (`refs/notes/opentraces` read/write), `blame.py` (file:line to trace), `liveness.py` (lazy `commit_reachable` / `content_alive`), `jj_support.py` (Jujutsu change-id fallback).
   - `processors.py` - Generic post-processor subprocess runner (stdin/stdout JSON contract, plan 038 phase 4)
   - `quality/` - Trace quality assessment, persona rubrics, upload gates
-  - `exporters/` - ATIF export
+  - `exporters/` - ATIF export and Agent Trace v0.1.0 export (`agent_trace.py`, plan 041)
   - `upload/` - HF Hub sharded upload, dataset card generation (includes Intent coverage stats)
   - `inbox.py` - Shared data access for all review clients
   - `clients/` - Presentation layers (CLI, TUI, web backend)

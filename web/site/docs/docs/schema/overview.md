@@ -13,10 +13,10 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
 
 ```json
 {
-  "schema_version": "0.2.0",
+  "schema_version": "0.3.0",
   "trace_id": "uuid",
   "session_id": "uuid",
-  "content_hash": "sha256-hex",
+  "content_hash": "murmur3:<32-hex>",
   "timestamp_start": "ISO8601",
   "timestamp_end": "ISO8601",
   "execution_context": "devtime",
@@ -27,10 +27,13 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
   "tool_definitions": [ ],
   "steps": [ ],
   "outcome": { },
+  "intent": { },
   "dependencies": [ ],
   "metrics": { },
   "security": { },
   "attribution": { },
+  "lifecycle": "provisional",
+  "git_links": [ ],
   "metadata": { }
 }
 ```
@@ -44,7 +47,7 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
 | Tool calls separated from observations | Preserves call/result separation training pipelines depend on. |
 | System prompt dedup | Hash-based lookup table. A 20K-token prompt repeated across steps would be wasteful. |
 | `parent_step` per step | Precise parent-child tree for sub-agents, not a flat session-level array. |
-| `content_hash` | SHA-256 for dedup at upload time. |
+| `content_hash` | `murmur3:<32-hex>` for dedup at upload time and for attribution-range tracking. Added 0.3.0 — replaces the prior md5-truncated form. All hash fields (top-level `content_hash`, `AttributionRange.content_hash`, etc.) share this prefix scheme. |
 | `reasoning_content` | Explicit chain-of-thought field. Improved SWE-Bench by ~3 pts (Cognition data). |
 | `outcome.committed` | Did the session's changes get committed? Cheap, deterministic quality signal. |
 | `attribution` | Embedded Agent Trace block. Bridges trajectory (process) with code attribution (output). |
