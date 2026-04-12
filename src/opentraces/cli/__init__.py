@@ -95,32 +95,55 @@ def _stage_c(label: str, stage_key: str) -> str:
     return click.style(label, fg=color) if color else label
 
 
-def _describe_trace(record) -> str:
+def _describe_trace(record) -> tuple[str, str]:
     """Pick the best short label for a trace.
 
-    Priority:
-      1. intent.title     (plan 038 curated title)
-      2. task.description (parser-provided)
-      3. first non-empty step content (trimmed)
-      4. "untitled"
+    Returns (label, source) where source is one of
+    "intent" | "task" | "step" | "none".
     """
     intent = getattr(record, "intent", None)
     if intent is not None:
         title = getattr(intent, "title", None)
         if title:
-            return title.strip()
+            return title.strip(), "intent"
     task = getattr(record, "task", None)
     desc = getattr(task, "description", None) if task else None
     if desc:
-        return desc.strip()
+        return desc.strip(), "task"
     for step in getattr(record, "steps", []) or []:
         content = getattr(step, "content", None)
         if content:
-            # Collapse whitespace; first line or so is usually the task prompt.
             flat = " ".join(content.split())
             if flat:
-                return flat
-    return "untitled"
+                return flat, "step"
+    return "untitled", "none"
+
+
+# Plan 041 tier priority for picking the "best" git_link to display.
+_TIER_PRIORITY = {
+    "tool_emitted": 0,
+    "tool_emitted_with_divergence": 1,
+    "overlapping": 2,
+    "orphan": 3,
+}
+
+_TIER_GLYPH = {
+    "tool_emitted": ("✓", "green"),
+    "tool_emitted_with_divergence": ("~", "yellow"),
+    "overlapping": ("?", "bright_black"),
+    "orphan": ("·", "bright_black"),
+}
+
+
+def _git_chip(record) -> tuple[str, str] | None:
+    """Return (glyph, short_sha, color) for the best git_link, or None."""
+    links = getattr(record, "git_links", None) or []
+    if not links:
+        return None
+    best = min(links, key=lambda l: _TIER_PRIORITY.get(getattr(l, "tier", "orphan"), 99))
+    sha = (getattr(best, "revision", "") or "")[:7]
+    glyph, color = _TIER_GLYPH.get(best.tier, ("·", "bright_black"))
+    return (glyph, sha, color)
 
 
 def print_banner(*, tagline: str | None = OPENTRACES_TAGLINE, file=None) -> None:
@@ -1519,9 +1542,6 @@ def status(limit: int) -> None:
                 key=lambda p: p.stat().st_mtime,
                 reverse=True,
             )
-            if limit == 0:
-                # Unbounded: still mtime-desc, full list
-                pass
 
         shown = len(staged_files)
         if shown < total_files:
@@ -1535,15 +1555,33 @@ def status(limit: int) -> None:
         click.echo()
 
         from opentraces_schema import TraceRecord
+        from rich.console import Console as _Console
+        from rich.table import Table as _Table
+        from rich import box as _box
+
         now = _time.time()
-        for i, sf in enumerate(staged_files):
-            is_last = (i == len(staged_files) - 1)
-            prefix = "└── " if is_last else "├── "
+        console = _Console()
+        table = _Table(
+            box=_box.SIMPLE_HEAD,
+            show_edge=False,
+            padding=(0, 1),
+            header_style="dim",
+        )
+        table.add_column("Stage", no_wrap=True)
+        table.add_column("Age", no_wrap=True, justify="right")
+        table.add_column("Title", overflow="ellipsis", no_wrap=True)
+        table.add_column("Meta", no_wrap=True)
+        table.add_column("Commit", no_wrap=True)
+        table.add_column("", no_wrap=True)  # intent-source dot
+
+        for sf in staged_files:
             try:
                 data = sf.read_text().strip()
                 record = TraceRecord.model_validate_json(data)
                 entry = state.get_trace(record.trace_id)
                 visible_stage = resolve_visible_stage(entry.status if entry else None)
+
+                # Relative time
                 rel_time = "unknown"
                 if record.timestamp_end:
                     try:
@@ -1566,21 +1604,57 @@ def status(limit: int) -> None:
                     except (ValueError, TypeError, AttributeError):
                         pass
 
-                _raw = _describe_trace(record)
-                task_desc = (_raw[:57] + "…") if len(_raw) > 58 else _raw
+                title, source = _describe_trace(record)
+                # Cap title so Rich can size the Title column predictably.
+                # Terminal widths of 120+ cols comfortably fit 60 chars here.
+                if len(title) > 60:
+                    title = title[:59] + "…"
                 n_steps = len(record.steps)
                 n_tools = sum(len(s.tool_calls) for s in record.steps)
                 n_flags = record.security.flags_reviewed or 0
-                stage_col = _stage_c(f"{stage_label(visible_stage):<10}", visible_stage)
-                flags_str = f"{n_flags} flags"
-                if n_flags > 0:
-                    flags_str = _warn(flags_str)
-                click.echo(
-                    f"{_dim(prefix)}{stage_col} {_dim(f'{rel_time:<12}')} "
-                    f"\"{task_desc}\"  {n_steps} steps  {n_tools} tools  {flags_str}"
+
+                stage_color = _STAGE_COLORS.get(visible_stage, "white")
+                stage_cell = f"[{stage_color}]{stage_label(visible_stage)}[/]"
+                meta_cell = (
+                    f"[dim]{n_steps}s·{n_tools}t·[/]"
+                    + (f"[yellow]{n_flags}f[/]" if n_flags > 0 else f"[dim]{n_flags}f[/]")
+                )
+
+                chip = _git_chip(record)
+                if chip is not None:
+                    glyph, sha, color = chip
+                    commit_cell = f"[{color}]{glyph}[/] [dim]{sha}[/]"
+                else:
+                    commit_cell = ""
+
+                intent_cell = {
+                    "intent": "[green]●[/]",          # curated intent title
+                    "task": "[cyan]●[/]",             # parser-provided
+                    "step": "[dim]○[/]",              # first step content
+                    "none": "[red]○[/]",              # fallback
+                }.get(source, "")
+
+                table.add_row(
+                    stage_cell,
+                    f"[dim]{rel_time}[/]",
+                    title,
+                    meta_cell,
+                    commit_cell,
+                    intent_cell,
                 )
             except Exception:
-                click.echo(f"{prefix}{sf.name}")
+                table.add_row(
+                    "[red]?[/]", "", f"[dim]{sf.name}[/]", "", "", "",
+                )
+
+        console.print(table)
+        console.print(
+            "  [dim]intent:[/] [green]●[/][dim] curated[/]  "
+            "[cyan]●[/][dim] task[/]  [dim]○ step  [red]○[/] none[/]"
+            "    [dim]commit:[/] [green]✓[/][dim] emitted[/]  "
+            "[yellow]~[/][dim] diverged[/]  [dim]? overlap  · orphan[/]",
+            highlight=False,
+        )
 
     click.echo()
     click.echo(
