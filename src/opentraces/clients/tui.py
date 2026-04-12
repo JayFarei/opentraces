@@ -67,8 +67,17 @@ def _relative_time(ts: str | None) -> str:
         return str(ts)[:16]
 
 
+def _session_label(trace: dict[str, Any], fallback: str = "No description", cap: int = 40) -> str:
+    """Intent.title when present, otherwise task.description. Plan 038 phase 3."""
+    intent = trace.get("intent") or {}
+    title = intent.get("title") if isinstance(intent, dict) else None
+    if title:
+        return title[:cap]
+    return (trace.get("task", {}).get("description") or fallback)[:cap]
+
+
 def _trace_summary(trace: dict[str, Any], status: str) -> str:
-    task = (trace.get("task", {}).get("description") or "No description")[:40]
+    task = _session_label(trace)
     steps = trace.get("metrics", {}).get("total_steps", len(trace.get("steps", [])))
     tool_calls = sum(len(s.get("tool_calls", [])) for s in trace.get("steps", []))
     flags = len(trace.get("_security_flags", []))
@@ -232,7 +241,7 @@ class SessionListItem(ListItem):
         yield Static(self._render_row(), markup=True, classes="session-row")
 
     def _render_row(self) -> str:
-        task = _truncate(self.trace.get("task", {}).get("description") or "No description", 30)
+        task = _truncate(_session_label(self.trace, cap=200), 30)
         agent = self.trace.get("agent", {}).get("name", "unknown")
         model = self.trace.get("agent", {}).get("model") or "unknown"
         model = model.split("/")[-1]
@@ -870,7 +879,7 @@ class OpenTracesApp(App):
 
     def _update_summary(self, trace: dict[str, Any], status: str) -> None:
         summary = self.query_one("#summary-body", Static)
-        task = trace.get("task", {}).get("description") or "No description"
+        task = _session_label(trace)
         agent = trace.get("agent", {}).get("name", "unknown")
         model = trace.get("agent", {}).get("model", "unknown")
         steps = trace.get("steps", [])
@@ -938,7 +947,7 @@ class OpenTracesApp(App):
         trace_id = trace["trace_id"]
         status = get_stage(self.state, trace_id)
         self._update_summary(trace, status)
-        task = trace.get("task", {}).get("description") or "No description"
+        task = _session_label(trace)
         agent = trace.get("agent", {}).get("name", "unknown")
         model = trace.get("agent", {}).get("model", "unknown")
         steps = trace.get("steps", [])

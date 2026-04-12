@@ -19,7 +19,11 @@ export function SessionRow({ session }: SessionRowProps) {
   const isSelected = selectedSessionId === session.trace_id;
 
   const shortId = session.trace_id.slice(0, 8);
-  const taskName = cleanSessionName(session.task_description, session.timestamp);
+  // Plan 038: prefer Intent.title for the row label; fall back to task_description.
+  const intentTitle = (session as unknown as { intent_title?: string | null }).intent_title;
+  const taskName = intentTitle
+    ? intentTitle
+    : cleanSessionName(session.task_description, session.timestamp);
   const model = shortModel(session.model);
 
   return (
