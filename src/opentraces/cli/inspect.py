@@ -215,14 +215,6 @@ def context() -> None:
 # ---------------------------------------------------------------------------
 
 
-_TIER_PRESENT = {
-    "tool_emitted": ("✓", "green"),
-    "tool_emitted_with_divergence": ("~", "yellow"),
-    "overlapping": ("?", "bright_black"),
-    "orphan": ("·", "bright_black"),
-}
-
-
 def _git_log_commits(limit: int, cwd: Path) -> list[tuple[str, str, str]]:
     """Return [(sha, subject, relative_date)] for the last `limit` commits
     on the current branch. Empty list if not a git repo."""
@@ -245,14 +237,67 @@ def _git_log_commits(limit: int, cwd: Path) -> list[tuple[str, str, str]]:
     return out
 
 
-def _render_graph(mode: str, limit: int, cwd: Path) -> str:
-    """Render the graph to a styled string via Rich Console capture."""
+_TIER_LABELS = {
+    "tool_emitted":                  ("✓", "tier.emitted",  "emitted"),
+    "tool_emitted_with_divergence":  ("~", "tier.diverged", "diverged"),
+    "overlapping":                   ("?", "tier.overlap",  "overlap"),
+    "orphan":                        ("·", "tier.orphan",   "orphan"),
+}
+
+
+def _truncate(text: str, width: int) -> str:
+    """UTF-aware ellipsize (safe for the column cap)."""
+    if len(text) <= width:
+        return text
+    return text[: width - 1] + "…"
+
+
+def _render_stack(console, head: str, body: list[str], last: bool = False) -> None:
+    """Render one GitButler-style stack block.
+
+    Head line gets ``╭┄`` prefix; body lines get ``┊  ``. An empty trailing
+    ``┊`` line provides vertical breathing room between stacks unless ``last``.
+    """
+    console.print(f"[stack.head]╭┄[/] {head}", highlight=False)
+    for line in body:
+        console.print(f"[stack.body]┊[/]  {line}", highlight=False)
+    if not last:
+        console.print("[stack.body]┊[/]", highlight=False)
+
+
+def _render_base(console, head: str) -> None:
+    """Render the common-base footer with ``┴`` glyph."""
+    console.print(f"[stack.base]┴[/] {head}", highlight=False)
+
+
+def _git_head_info(cwd: Path) -> tuple[str, str, str] | None:
+    """Resolve the common base (origin/HEAD or main) for the footer.
+
+    Returns (sha, branch_label, short_subject) or None.
+    """
+    import subprocess
+    for ref in ("origin/HEAD", "origin/main", "origin/master", "main", "master"):
+        try:
+            res = subprocess.run(
+                ["git", "log", "-1", "--format=%H%x01%s%x01%cr", ref],
+                cwd=cwd, capture_output=True, text=True, check=False,
+            )
+        except FileNotFoundError:
+            return None
+        if res.returncode == 0 and res.stdout.strip():
+            parts = res.stdout.strip().split("\x01")
+            if len(parts) == 3:
+                return parts[0], ref, parts[1]
+    return None
+
+
+def _render_graph(mode: str, limit: int, cwd: Path, theme: str | None = None) -> str:
+    """Render the graph to a styled string via a themed Rich Console capture."""
     from io import StringIO
-    from rich.console import Console
-    from rich.tree import Tree
 
     from ..core.config import get_project_staging_dir
     from ..core.inbox import load_trace_records
+    from ..core.theme import get_console, resolve_theme
     from ..enrichment.git import notes_store
 
     staging = get_project_staging_dir(cwd)
@@ -260,37 +305,48 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
     records_by_id = {r.trace_id: r for r in records}
 
     buf = StringIO()
-    # force_terminal + truecolor so captured output keeps ANSI when we pipe
-    # it through the pager; plain consumers strip it naturally.
-    console = Console(
-        file=buf, force_terminal=True, color_system="truecolor", width=140
+    console = get_console(
+        name=theme, file=buf, force_terminal=True, width=140,
     )
+    active_theme = resolve_theme(theme)
+
+    # Header line (above the stack block)
+    mode_label = "commit graph" if mode == "commit" else "session graph"
+    console.print()
+    console.print(
+        f"  [strong]{mode_label}[/]  "
+        f"[muted](theme: {active_theme}; {len(records)} staged traces)[/]",
+        highlight=False,
+    )
+    console.print()
 
     if mode == "commit":
-        tree = Tree(
-            f"[bold]commit graph[/] [dim](last {limit} commits · "
-            f"{len(records)} staged traces)[/]"
-        )
         commits = _git_log_commits(limit, cwd)
         linked_trace_ids: set[str] = set()
-
         if not commits:
-            tree.add("[yellow]no git history here[/] [dim](not a git repo?)[/]")
-        else:
-            for sha, subject, when in commits:
-                subject_short = subject if len(subject) <= 60 else subject[:59] + "…"
-                commit_node = tree.add(
-                    f"[green bold]●[/] [green]{sha[:8]}[/]  "
-                    f"{subject_short}  [dim]({when})[/]"
-                )
-                try:
-                    note_lines = notes_store.read(sha, cwd)
-                except Exception:
-                    note_lines = []
-                links = [p for p in (notes_store.parse_link(l) for l in note_lines) if p]
-                if not links:
-                    commit_node.add("[dim]· no opentraces link[/]")
-                    continue
+            console.print("  [warning]no git history here[/] [muted](not a git repo?)[/]",
+                          highlight=False)
+            return buf.getvalue()
+
+        # One stack per commit
+        n = len(commits)
+        for idx, (sha, subject, when) in enumerate(commits):
+            subject_short = _truncate(subject, 60)
+            head = (
+                f"[commit.sha]{sha[:8]}[/]  "
+                f"{subject_short}  "
+                f"[stack.label][{when}][/]"
+            )
+            try:
+                note_lines = notes_store.read(sha, cwd)
+            except Exception:
+                note_lines = []
+            links = [p for p in (notes_store.parse_link(l) for l in note_lines) if p]
+
+            body: list[str] = []
+            if not links:
+                body.append("[muted]· no opentraces link[/]")
+            else:
                 for (tid, _url) in links:
                     linked_trace_ids.add(tid)
                     rec = records_by_id.get(tid)
@@ -306,85 +362,105 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
                                 if (gl.revision or "").startswith(sha[:10]):
                                     tier = gl.tier
                                     break
-                    glyph, color = _TIER_PRESENT.get(tier, ("·", "bright_black"))
-                    intent_str = intent or "[dim](unknown — trace not staged)[/]"
-                    if intent and len(intent) > 70:
-                        intent_str = intent[:69] + "…"
-                    commit_node.add(
-                        f"[{color}]{glyph}[/] [cyan]{tid[:8]}[/]  {intent_str}"
+                    glyph, style, _word = _TIER_LABELS.get(
+                        tier, ("·", "tier.orphan", "orphan")
+                    )
+                    intent_str = _truncate(intent or "(unknown — trace not staged)", 70)
+                    body.append(
+                        f"[{style}]{glyph}[/] [trace.id]{tid[:8]}[/]  {intent_str}"
                     )
 
-        # Orphans — staged traces not linked to any visible commit.
-        orphans = [r for r in records if r.trace_id not in linked_trace_ids and not r.git_links]
+            _render_stack(console, head, body, last=(idx == n - 1))
+
+        # Orphan inbox bucket — its own stack head
+        orphans = [r for r in records
+                   if r.trace_id not in linked_trace_ids and not r.git_links]
         if orphans:
-            n = len(orphans)
-            # Cap orphan list to `limit` to keep output bounded.
-            shown = orphans[-limit:] if n > limit else orphans
-            orphan_node = tree.add(
-                f"[yellow]● inbox[/]  [dim]({n} uncorrelated"
-                + (f"; showing {len(shown)} most recent" if n > limit else "")
-                + ")[/]"
+            def _ts(r):
+                v = getattr(r, "timestamp_end", None)
+                return str(v) if v else ""
+            orphans.sort(key=_ts, reverse=True)
+            shown = orphans[:limit]
+            console.print("[stack.body]┊[/]", highlight=False)
+            tail = (
+                f"[warning]inbox[/]  "
+                f"[muted][{len(orphans)} uncorrelated"
+                + (f"; showing {len(shown)} most recent" if len(orphans) > limit else "")
+                + "][/]"
             )
-            # newest first: sort by timestamp_end desc if available
-            def _sort_k(r):
-                ts = getattr(r, "timestamp_end", None)
-                return str(ts) if ts else ""
-            shown = sorted(shown, key=_sort_k, reverse=True)
+            body = []
             for rec in shown:
                 try:
                     intent, _ = _cli._describe_trace(rec)
                 except Exception:
                     intent = "(untitled)"
-                if intent and len(intent) > 70:
-                    intent = intent[:69] + "…"
-                orphan_node.add(
-                    f"[bright_black]○[/] [cyan]{rec.trace_id[:8]}[/]  {intent}"
+                body.append(
+                    f"[tier.orphan]○[/] [trace.id]{rec.trace_id[:8]}[/]  "
+                    f"{_truncate(intent, 70)}"
                 )
+            _render_stack(console, tail, body, last=True)
 
-    else:  # mode == "session"
-        # Most recent N sessions by timestamp_end, with each session's commits.
+        # Footer base — origin/HEAD or similar
+        base = _git_head_info(cwd)
+        if base is not None:
+            base_sha, ref, subject = base
+            _render_base(
+                console,
+                f"[commit.sha]{base_sha[:8]}[/]  "
+                f"[stack.label][{ref}][/]  "
+                f"{_truncate(subject, 60)}",
+            )
+
+    else:  # session mode
         def _ts(r):
             v = getattr(r, "timestamp_end", None)
             return str(v) if v else ""
         sessions = sorted(records, key=_ts, reverse=True)[:limit]
-        tree = Tree(
-            f"[bold]session graph[/] [dim](last {len(sessions)} of "
-            f"{len(records)} staged traces)[/]"
-        )
+        if not sessions:
+            console.print("  [muted]no staged sessions.[/]", highlight=False)
+            return buf.getvalue()
 
-        for rec in sessions:
+        for idx, rec in enumerate(sessions):
             try:
                 intent, _src = _cli._describe_trace(rec)
             except Exception:
                 intent = "(untitled)"
-            if intent and len(intent) > 60:
-                intent = intent[:59] + "…"
             steps = len(rec.steps) if rec.steps else 0
-            cost = ""
+            cost_part = ""
             if rec.metrics and rec.metrics.estimated_cost_usd:
-                cost = f" · ${rec.metrics.estimated_cost_usd:.2f}"
-            sess_node = tree.add(
-                f"[cyan bold]●[/] [cyan]{rec.trace_id[:8]}[/]  "
-                f"{intent}  [dim]({steps}s{cost})[/]"
+                cost_part = f" · ${rec.metrics.estimated_cost_usd:.2f}"
+            head = (
+                f"[trace.id]{rec.trace_id[:8]}[/]  "
+                f"{_truncate(intent, 60)}  "
+                f"[stack.label][{steps}s{cost_part}][/]"
             )
+
+            body: list[str] = []
             if rec.git_links:
                 for gl in rec.git_links:
-                    glyph, color = _TIER_PRESENT.get(gl.tier, ("·", "bright_black"))
+                    glyph, style, word = _TIER_LABELS.get(
+                        gl.tier, ("·", "tier.orphan", "orphan")
+                    )
                     sha = (gl.revision or "")[:10]
-                    sess_node.add(
-                        f"[{color}]{glyph} {gl.tier}[/]  → [green]{sha}[/]"
+                    body.append(
+                        f"[{style}]{glyph} {word}[/]  → "
+                        f"[commit.sha]{sha}[/]"
                     )
             else:
-                sess_node.add(f"[dim](provisional — no commit yet)[/]")
+                body.append("[muted]· provisional (no commit yet)[/]")
 
-    console.print(tree)
+            _render_stack(console, head, body, last=(idx == len(sessions) - 1))
+
     # Legend
     console.print()
     console.print(
-        "  [dim]tier:[/] [green]✓[/][dim] emitted[/]  "
-        "[yellow]~[/][dim] diverged[/]  [dim]? overlap  · orphan[/]",
+        "  [muted]tier:[/]  "
+        "[tier.emitted]✓[/][muted] emitted[/]  "
+        "[tier.diverged]~[/][muted] diverged[/]  "
+        "[muted]? overlap  · orphan[/]",
         highlight=False,
     )
+    console.print()
     return buf.getvalue()
 
 
@@ -395,18 +471,23 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
               help="Session spine: each session with the commits it produced.")
 @click.option("--limit", type=int, default=20, show_default=True,
               help="Max rows on the spine.")
+@click.option("--theme", type=click.Choice(["dark", "light", "auto"]), default=None,
+              help="Color palette. Overrides $OT_THEME. Default: auto.")
 @click.option("--no-pager", is_flag=True,
               help="Print inline instead of paging long output.")
-def graph_cmd(mode: str, limit: int, no_pager: bool) -> None:
-    """Hierarchical view of the trace ↔ commit graph.
-
-    Two symmetric modes:
+def graph_cmd(mode: str, limit: int, theme: str | None, no_pager: bool) -> None:
+    """GitButler-style stack view of the trace ↔ commit graph.
 
     \b
       --commit   (default) commit spine → sessions under each commit.
                  Answers: "who authored what in this commit?"
       --session  session spine → commits under each session.
                  Answers: "what did this session actually ship?"
+
+    \b
+      --theme    dark | light | auto  (also honors $OT_THEME)
+      --limit N  cap the number of stacks shown
+      --no-pager force inline output (otherwise long output routes to $PAGER)
     """
     import shutil as _sh
 
@@ -416,7 +497,7 @@ def graph_cmd(mode: str, limit: int, no_pager: bool) -> None:
         click.echo("Not an opentraces project. Run 'opentraces init' first.")
         sys.exit(3)
 
-    output = _render_graph(mode, limit, cwd)
+    output = _render_graph(mode, limit, cwd, theme=theme)
     rows = _sh.get_terminal_size(fallback=(80, 24)).lines
     line_count = output.count("\n")
 
@@ -426,15 +507,16 @@ def graph_cmd(mode: str, limit: int, no_pager: bool) -> None:
         and line_count > max(rows - 4, 10)
     )
     if should_page:
-        # color=True keeps ANSI through less/pagers that honor it (e.g. 'less -R').
         click.echo_via_pager(output, color=True)
     else:
         click.echo(output, nl=False)
 
+    from ..core.theme import resolve_theme
     emit_json({
         "status": "ok",
         "mode": mode,
         "limit": limit,
+        "theme": resolve_theme(theme),
     })
 
 
