@@ -160,7 +160,7 @@ _TIER_GLYPH = {
 }
 
 
-def _git_chip(record) -> tuple[str, str] | None:
+def _git_chip(record) -> tuple[str, str, str] | None:
     """Return (glyph, short_sha, color) for the best git_link, or None."""
     links = getattr(record, "git_links", None) or []
     if not links:
@@ -169,6 +169,33 @@ def _git_chip(record) -> tuple[str, str] | None:
     sha = (getattr(best, "revision", "") or "")[:7]
     glyph, color = _TIER_GLYPH.get(best.tier, ("·", "bright_black"))
     return (glyph, sha, color)
+
+
+def _status_cell(entry, record) -> str:
+    """One-word Git-log-style status combining workflow stage + outcome.
+
+    Returns a Rich-markup string.
+    """
+    visible = resolve_visible_stage(entry.status if entry else None)
+    if visible == "pushed":
+        return "[green bold]✓ pushed[/]"
+    if visible == "rejected":
+        return "[red]✗ rejected[/]"
+    if visible == "committed":
+        return "[green]✓ committed[/]"
+
+    # inbox — differentiate by outcome signals
+    outcome = getattr(record, "outcome", None)
+    if outcome:
+        terminal = getattr(outcome, "terminal_state", None)
+        success = getattr(outcome, "success", None)
+        if success is False or terminal == "error":
+            return "[red]✗ failed[/]"
+        if terminal == "compacted":
+            return "[yellow]~ compacted[/]"
+        if getattr(outcome, "committed", False):
+            return "[green]✓ done[/]"
+    return "[dim]○ open[/]"
 
 
 def print_banner(*, tagline: str | None = OPENTRACES_TAGLINE, file=None) -> None:
@@ -1592,10 +1619,9 @@ def status(limit: int) -> None:
             padding=(0, 1),
             header_style="dim",
         )
-        table.add_column("Stage", no_wrap=True)
         table.add_column("Age", no_wrap=True, justify="right")
+        table.add_column("Status", no_wrap=True)
         table.add_column("Intent", overflow="ellipsis", no_wrap=True)
-        table.add_column("Meta", no_wrap=True)
         table.add_column("Commit", no_wrap=True)
         table.add_column("", no_wrap=True)  # intent-source dot
 
@@ -1635,20 +1661,11 @@ def status(limit: int) -> None:
                         pass
 
                 title, source = _describe_trace(record)
-                # Cap title so Rich can size the Title column predictably.
-                # Terminal widths of 120+ cols comfortably fit 60 chars here.
+                # Cap title so Rich can size the Intent column predictably.
                 if len(title) > 60:
                     title = title[:59] + "…"
-                n_steps = len(record.steps)
-                n_tools = sum(len(s.tool_calls) for s in record.steps)
-                n_flags = record.security.flags_reviewed or 0
 
-                stage_color = _STAGE_COLORS.get(visible_stage, "white")
-                stage_cell = f"[{stage_color}]{stage_label(visible_stage)}[/]"
-                meta_cell = (
-                    f"[dim]{n_steps}s·{n_tools}t·[/]"
-                    + (f"[yellow]{n_flags}f[/]" if n_flags > 0 else f"[dim]{n_flags}f[/]")
-                )
+                status_cell = _status_cell(entry, record)
 
                 chip = _git_chip(record)
                 if chip is not None:
@@ -1666,10 +1683,9 @@ def status(limit: int) -> None:
                 }.get(source, "")
 
                 table.add_row(
-                    stage_cell,
                     f"[dim]{rel_time}[/]",
+                    status_cell,
                     title,
-                    meta_cell,
                     commit_cell,
                     intent_cell,
                 )
@@ -1680,12 +1696,20 @@ def status(limit: int) -> None:
                     git_link_hits += 1
             except Exception:
                 table.add_row(
-                    "[red]?[/]", "", f"[dim]{sf.name}[/]", "", "", "",
+                    "", "[red]? error[/]", f"[dim]{sf.name}[/]", "", "",
                 )
 
         console.print(table)
         console.print(
-            "  [dim]intent:[/] [green]●[/][dim] curated[/]  "
+            "  [dim]status:[/] [green bold]✓[/][dim] pushed[/]  "
+            "[green]✓[/][dim] committed / done[/]  "
+            "[yellow]~[/][dim] compacted[/]  "
+            "[red]✗[/][dim] failed / rejected[/]  "
+            "[dim]○ open[/]",
+            highlight=False,
+        )
+        console.print(
+            "  [dim]intent src:[/] [green]●[/][dim] curated[/]  "
             "[cyan]●[/][dim] task[/]  [dim]○ step[/]  "
             "[magenta]○[/][dim] tool[/]  [red]○[/][dim] none[/]"
             "    [dim]commit:[/] [green]✓[/][dim] emitted[/]  "
