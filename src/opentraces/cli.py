@@ -2536,6 +2536,42 @@ def enrich(trace_path: Path, run_intent: bool | None, force: bool, strict: bool,
     click.echo(f"wrote {out_path}")
 
 
+@main.command("_enrich-transcript", hidden=True)
+@click.argument("transcript_path", type=click.Path(path_type=Path))
+def _enrich_transcript(transcript_path: Path) -> None:
+    """Parse one Claude Code transcript and stage an Intent-enriched trace.
+
+    Invoked by the ``on_stop`` hook in a detached background process so the
+    hook itself returns immediately. Writes the enriched trace to the
+    per-session staging path ``~/.opentraces/intent-cache/<session_id>.json``
+    so later ``opentraces parse`` / ``push`` can pick it up without
+    redoing the LLM call. Fails silently — a background process must not
+    surface errors to the user.
+    """
+    try:
+        if not transcript_path.exists():
+            return
+        from .installers.claude_code_hooks.intent_adapter import (
+            enrich_from_hook_payload,
+        )
+        from .enrichment.intent_backends import claude_cli_client
+        cfg = load_config()
+        if cfg.intent.mode != "on":
+            return
+        payload = {"transcript_path": str(transcript_path)}
+        trace = enrich_from_hook_payload(payload, claude_cli_client)
+        if trace is None or trace.intent is None:
+            return
+        from .paths import OPENTRACES_DIR
+        cache_dir = OPENTRACES_DIR / "intent-cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        out = cache_dir / f"{trace.session_id}.json"
+        out.write_text(trace.model_dump_json(indent=2))
+    except Exception:
+        # Background task — never raise.
+        return
+
+
 @main.command(hidden=True)
 @click.option("--auto", is_flag=True, help="Auto-approve (skip review)")
 @click.option("--limit", type=int, default=0, help="Max sessions to parse (0=all)")

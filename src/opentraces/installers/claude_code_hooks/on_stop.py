@@ -5,9 +5,17 @@ Appends a single opentraces_hook line to the session transcript capturing
 git state at the exact moment the session ends. This data is not otherwise
 present in the JSONL and enriches commit/outcome signals in the parser.
 
+Also fire-and-forget triggers an Intent-enrichment subprocess
+(``opentraces _enrich-transcript``) so a summary is ready for the next
+``opentraces push`` / ``enrich`` / viewer load without the user having
+to do anything. Backgrounded with ``start_new_session=True`` so Claude
+Code never waits on the LLM call.
+
 Install via: opentraces hooks install
 """
 import json
+import os
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -89,6 +97,32 @@ def main() -> None:
             f.write(line + "\n")
     except Exception:
         pass  # Never break Claude Code on our account
+
+    _spawn_intent_enrichment(transcript_path)
+
+
+def _spawn_intent_enrichment(transcript_path: str) -> None:
+    """Fire-and-forget the Intent-enrichment subprocess.
+
+    Never blocks: uses Popen with a new session so Claude Code's hook
+    returns immediately. Swallows every error; a hook that fails loudly
+    would break the user's session.
+    """
+    binary = shutil.which("opentraces")
+    if binary is None:
+        return
+    try:
+        devnull = subprocess.DEVNULL
+        subprocess.Popen(
+            [binary, "_enrich-transcript", transcript_path],
+            stdin=devnull,
+            stdout=devnull,
+            stderr=devnull,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except Exception:
+        return
 
 
 if __name__ == "__main__":
