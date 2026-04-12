@@ -161,6 +161,19 @@ HF_FEATURES: dict = {
             }
         ],
     },
+    # Plan 041 R34: evidence-graded commit link surface per row.
+    "lifecycle": _V("string"),
+    "git_links": [
+        {
+            "vcs_type": _V("string"),
+            "revision": _V("string"),
+            "repo_url": _V("string"),
+            "branch": _V("string"),
+            "tier": _V("string"),
+            "commit_reachable": _V("bool"),
+            "content_alive": _V("bool"),
+        }
+    ],
     "metadata": _JSON,
 }
 

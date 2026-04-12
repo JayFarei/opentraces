@@ -97,6 +97,7 @@ def run(
     traces: Iterable[TraceRecord],
     *,
     window_hours: float = 1.0,
+    background_share: bool = False,
 ) -> list[tuple[str, list[GitLink]]]:
     """Run the post-commit correlation + notes append.
 
@@ -152,7 +153,35 @@ def run(
             notes_store.append(sha, lines_to_append, cwd)
         except Exception:
             pass  # notes append is best-effort; never block
+    if background_share and results:
+        kick_background_share(cwd)
     return results
+
+
+def kick_background_share(cwd: Path) -> None:
+    """Fire-and-forget `opentraces share` in the background (R35).
+
+    Uses `subprocess.Popen` with detached stdio. Any failure is logged
+    by opentraces itself; this call must never raise. Skipped when the
+    opentraces CLI isn't on PATH (e.g. during tests).
+    """
+    import shutil
+    import subprocess
+
+    bin_path = shutil.which("opentraces")
+    if not bin_path:
+        return
+    try:
+        subprocess.Popen(
+            [bin_path, "push", "--auto", "--quiet"],
+            cwd=str(cwd),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        pass
 
 
 def _stamp_divergence(trace) -> None:

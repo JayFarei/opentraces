@@ -308,7 +308,37 @@ Each JSONL line is a `TraceRecord` containing:
 - **outcome**: Session outcome signals
 - **metrics**: Aggregated token usage and cost estimates
 - **environment**: Runtime environment metadata
-- **attribution**: Code attribution data (experimental)
+- **attribution**: Code attribution data (experimental flag computed
+  per record — False iff every range is high-confidence and no
+  fallback line resolution was used)
+- **lifecycle**: `provisional` (session ended, not yet tied to a commit)
+  or `final` (post-commit hook pinned a revision)
+- **git_links**: evidence-graded links from the trace to one or more
+  commits. Each link carries `tier` (see below) and lazy-computed
+  `commit_reachable` / `content_alive` booleans
+
+### Evidence tiers (`git_links[].tier`)
+
+| Tier | Meaning |
+|---|---|
+| `tool_emitted` | Edit/Write content appears in the commit's hunks. Strongest signal. |
+| `tool_emitted_with_divergence` | Files overlap but committed bytes don't match what the agent wrote (formatter rewrote, or human fixed) — `attribution.files[].conversations[].ranges[].original` records the agent's pre-divergence state. |
+| `overlapping` | Agent made edits but none touched the commit's files. Weak coincidence over the time window. |
+| `orphan` | No viable commit link. |
+
+Tiers describe evidence, not ownership. Filter to `tier == "tool_emitted"`
+for the highest-signal training subset. See the [opentraces plan 041
+document](https://opentraces.ai/plans/041) for the full decision table.
+
+### Privacy stance
+
+Every trace passes through a redaction + classification pipeline before
+leaving the contributor's machine (secrets regex + entropy, Trufflehog,
+and classifier review). Content hashes use murmur3 (not cryptographic)
+and are designed for cross-tool comparison, not confidentiality.
+Contributors review each trace before publishing. If you recognize
+content in this dataset that should not be public, open an issue and
+we will take it down.
 
 Schema version: `{SCHEMA_VERSION}`
 
