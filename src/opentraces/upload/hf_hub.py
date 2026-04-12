@@ -16,11 +16,59 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+import os
+
 from huggingface_hub import HfApi
 
 logger = logging.getLogger(__name__)
 
 from opentraces_schema.models import TraceRecord
+
+
+# ---------------------------------------------------------------------------
+# Part B: HF token resolution (3 sources, mirrors pi-share-hf DX)
+# ---------------------------------------------------------------------------
+
+# Exposed as module-level so tests can monkeypatch a tmp_path.
+_HF_CACHE_TOKEN_PATH: Path = Path.home() / ".cache" / "huggingface" / "token"
+
+_LOGIN_HINT = (
+    "No HuggingFace token found. Run 'opentraces login' or "
+    "'huggingface-cli login' to authenticate, "
+    "or set HF_TOKEN / HUGGINGFACE_TOKEN in your environment."
+)
+
+
+def verify_hf_token() -> tuple[str | None, str]:
+    """Resolve a HuggingFace token from the 3 standard locations.
+
+    Checks in order:
+      1. ``HF_TOKEN`` environment variable
+      2. ``HUGGINGFACE_TOKEN`` environment variable
+      3. ``~/.cache/huggingface/token`` file
+
+    Returns:
+        ``(token, source_description)`` on success.
+        ``(None, diagnostic_message)`` when no token is available.
+        The diagnostic always mentions how the user can log in.
+    """
+    env_token = os.environ.get("HF_TOKEN", "").strip()
+    if env_token:
+        return env_token, "HF_TOKEN environment variable"
+
+    env_token = os.environ.get("HUGGINGFACE_TOKEN", "").strip()
+    if env_token:
+        return env_token, "HUGGINGFACE_TOKEN environment variable"
+
+    try:
+        if _HF_CACHE_TOKEN_PATH.exists():
+            file_token = _HF_CACHE_TOKEN_PATH.read_text().strip()
+            if file_token:
+                return file_token, f"cache file {_HF_CACHE_TOKEN_PATH}"
+    except OSError as exc:
+        logger.debug("Could not read HF token cache: %s", exc)
+
+    return None, _LOGIN_HINT
 
 
 class RemoteShardError(RuntimeError):
