@@ -49,6 +49,31 @@ from .paths import (
 CONFIG_VERSION = "0.1.0"
 
 
+class TruffleHogConfig(BaseModel):
+    """Tier 1.5 TruffleHog secret-scanning settings (Plan 032 Part A).
+
+    Default off. Enable via ``opentraces setup trufflehog`` (writes
+    ``enabled = true`` here). Once enabled, a missing binary is a hard
+    error on scan/push — silent skips are how security regressions ship.
+    """
+
+    enabled: bool = False
+    verify_secrets: bool = Field(
+        False,
+        description=(
+            "Live API probing. Off = offline scan, no outbound calls. "
+            "Default off: we never assume consent for vendor-detector "
+            "network activity on every scan."
+        ),
+    )
+
+
+class SecurityConfig(BaseModel):
+    """Root security-module config tree (Plan 032)."""
+
+    trufflehog: TruffleHogConfig = Field(default_factory=TruffleHogConfig)
+
+
 class ProjectConfig(BaseModel):
     """Per-project configuration override."""
 
@@ -75,6 +100,7 @@ class Config(BaseModel):
     )
     classifier_sensitivity: str = Field("medium", pattern="^(low|medium|high)$")
     dataset_visibility: str = Field("private", pattern="^(public|private)$")
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
 
 
 def ensure_dirs() -> None:
