@@ -3694,3 +3694,97 @@ def hooks_install(hooks_dir: str | None, settings_file: str | None, dry_run: boo
             "Re-run 'opentraces push' after sessions to include enriched data.",
         ],
     })
+
+
+# ---------------------------------------------------------------------------
+# Plan 041: git-commit-anchored traces
+# ---------------------------------------------------------------------------
+
+@main.command("notes")
+@click.argument("ref", default="HEAD")
+@click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON")
+def notes_cmd(ref: str, json_out: bool) -> None:
+    """Print opentraces notes attached to a commit (plan 041 R27)."""
+    from .git import notes_store
+
+    cwd = Path.cwd()
+    lines = notes_store.read(ref, cwd)
+    parsed = [p for p in (notes_store.parse_link(l) for l in lines) if p]
+
+    if json_out:
+        emit_json({
+            "ref": ref,
+            "traces": [
+                {"trace_id": tid, "url": url}
+                for (tid, url) in parsed
+            ],
+        })
+        return
+
+    if not parsed:
+        human_echo(f"no opentraces notes on {ref}")
+        return
+    human_echo(f"opentraces notes on {ref}:")
+    for tid, url in parsed:
+        if url:
+            human_echo(f"  {tid}  {url}")
+        else:
+            human_echo(f"  {tid}")
+
+
+@main.command("_run-post-commit-hook", hidden=True)
+@click.argument("repo_path", type=click.Path(exists=True, file_okay=False), default=".")
+def run_post_commit_hook(repo_path: str) -> None:
+    """Invoked by .git/hooks/opentraces-post-commit after each commit.
+
+    Never raises to the shell: any failure exits 0.
+    """
+    import logging
+    log = logging.getLogger("opentraces.post_commit")
+
+    try:
+        from .config import get_project_staging_dir
+        from .git import post_commit
+        from .inbox import load_traces
+        from opentraces_schema import TraceRecord
+
+        repo = Path(repo_path).resolve()
+        staging = get_project_staging_dir(repo)
+        if not staging.exists():
+            return
+        raw = load_traces(staging)
+        records: list[TraceRecord] = []
+        for r in raw:
+            try:
+                records.append(TraceRecord.model_validate(r))
+            except Exception as e:
+                log.debug("skipping invalid trace in staging: %s", e)
+        post_commit.run(repo, records)
+    except Exception as e:
+        log.debug("post-commit hook suppressed error: %s", e)
+
+
+@main.group("setup")
+def setup_group() -> None:
+    """Install opentraces integrations (git hook, etc.)."""
+
+
+@setup_group.command("git")
+@click.option("--uninstall", is_flag=True, help="Remove the hook instead of installing.")
+def setup_git(uninstall: bool) -> None:
+    """Install/remove the opentraces post-commit hook (plan 041 R21)."""
+    from .installers import git_hook
+    if uninstall:
+        git_hook.remove(Path.cwd())
+        human_echo("opentraces post-commit hook removed.")
+        emit_json({"status": "ok", "action": "remove",
+                   "state": git_hook.status(Path.cwd())})
+        return
+    ok = git_hook.install(Path.cwd())
+    st = git_hook.status(Path.cwd())
+    if ok and st["installed"]:
+        human_echo("opentraces post-commit hook installed.")
+        human_echo(f"  owned hook: {st['hook_dir']}/{git_hook.HOOK_FILENAME}")
+    else:
+        human_echo("install failed: not a git repo or insufficient permissions.")
+    emit_json({"status": "ok" if ok else "error", "action": "install", "state": st})
