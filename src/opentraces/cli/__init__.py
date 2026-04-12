@@ -1575,16 +1575,24 @@ def status(limit: int) -> None:
     tracked = sum(counts.values())
     counts["inbox"] += max(0, total_files - tracked)
 
-    # Project header
-    click.echo(f"{_bold(project_name)} {_dim('inbox')}")
-    click.echo(f"{_dim('mode:   ')} {proj_config.get('review_policy', 'review')}")
-    click.echo(f"{_dim('agents: ')} {', '.join(proj_config['agents'])}")
+    # Project header — compact single-line banner + details, set off by a rule.
+    from rich.console import Console as _HdrConsole
+    from rich.rule import Rule as _HdrRule
+    _hdr = _HdrConsole()
+    _hdr.print()
+    _hdr.print(
+        f"  [bold]{project_name}[/]  "
+        f"[dim]inbox · {proj_config.get('review_policy', 'review')} · "
+        f"{', '.join(proj_config['agents'])}[/]",
+        highlight=False,
+    )
     visibility = proj_config.get("visibility", "private")
     if remote:
-        click.echo(f"{_dim('remote: ')} {remote} {_dim(f'({visibility})')}")
+        _hdr.print(f"  [dim]remote:[/] {remote} [dim]({visibility})[/]", highlight=False)
     else:
-        click.echo(f"{_dim('remote: ')} {_warn('not set')}")
-    click.echo()
+        _hdr.print(f"  [dim]remote:[/] [yellow]not set[/]", highlight=False)
+    _hdr.print(_HdrRule(style="dim"))
+    _hdr.print()
 
     # Machine-readable mirror of visible rows for --json consumers.
     session_summary: list[dict] = []
@@ -1730,19 +1738,20 @@ def status(limit: int) -> None:
                 )
 
         console.print(table)
+        console.print()  # breathing room between table and legend
         console.print(
-            "  [dim]status:[/] [green bold]✓[/][dim] pushed[/]  "
-            "[green]✓[/][dim] committed / done[/]  "
-            "[yellow]~[/][dim] compacted[/]  "
-            "[red]✗[/][dim] failed / rejected[/]  "
+            "  [dim]status:[/]    [green bold]✓[/][dim] pushed[/]    "
+            "[green]✓[/][dim] committed / done[/]    "
+            "[yellow]~[/][dim] compacted[/]    "
+            "[red]✗[/][dim] failed / rejected[/]    "
             "[dim]○ open[/]",
             highlight=False,
         )
         console.print(
-            "  [dim]intent src:[/] [green]●[/][dim] curated[/]  "
+            "  [dim]intent:[/]    [green]●[/][dim] curated[/]  "
             "[cyan]●[/][dim] task[/]  [dim]○ step[/]  "
-            "[magenta]○[/][dim] tool[/]  [red]○[/][dim] none[/]"
-            "    [dim]commit:[/] [green]✓[/][dim] emitted[/]  "
+            "[magenta]○[/][dim] tool[/]  [red]○[/][dim] none[/]    "
+            "[dim]commit:[/]  [green]✓[/][dim] emitted[/]  "
             "[yellow]~[/][dim] diverged[/]  [dim]? overlap  · orphan[/]",
             highlight=False,
         )
@@ -1808,13 +1817,23 @@ def status(limit: int) -> None:
                 for h in hints:
                     console.print(f"  {_warn('hint:')} {h}", highlight=False)
 
-    click.echo()
+    # Footer summary — set apart with a dim rule so the eye finds it last.
+    try:
+        from rich.console import Console as _Console
+        from rich.rule import Rule as _Rule
+        _footer_console = _Console()
+        _footer_console.print()
+        _footer_console.print(_Rule(style="dim"))
+    except Exception:
+        click.echo()
+        click.echo(_dim("─" * 60))
     click.echo(
-        f"{_stage_c('inbox', 'inbox')} {_bold(str(counts['inbox']))}  "
-        f"{_stage_c('committed', 'committed')} {_bold(str(counts['committed']))}  "
-        f"{_stage_c('pushed', 'pushed')} {_bold(str(counts['pushed']))}  "
+        f"  {_stage_c('inbox', 'inbox')} {_bold(str(counts['inbox']))}    "
+        f"{_stage_c('committed', 'committed')} {_bold(str(counts['committed']))}    "
+        f"{_stage_c('pushed', 'pushed')} {_bold(str(counts['pushed']))}    "
         f"{_stage_c('rejected', 'rejected')} {_bold(str(counts['rejected']))}"
     )
+    click.echo()
 
     emit_json({
         "status": "ok",
