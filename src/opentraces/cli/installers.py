@@ -40,6 +40,10 @@ def human_hint(*a, **k):
     return _cli.human_hint(*a, **k)
 
 
+def print_banner(*a, **k):
+    return _cli.print_banner(*a, **k)
+
+
 
 
 @main.command("notes")
@@ -172,7 +176,8 @@ def setup_git(uninstall: bool) -> None:
     ok = git_hook.install(Path.cwd())
     st = git_hook.status(Path.cwd())
     if ok and st["installed"]:
-        human_echo("opentraces post-commit hook installed.")
+        human_echo("")
+        print_banner(tagline="git hook installed")
         human_echo(f"  owned hook: {st['hook_dir']}/{git_hook.HOOK_FILENAME}")
     else:
         human_echo("install failed: not a git repo or insufficient permissions.")
@@ -266,7 +271,9 @@ def setup_trufflehog_cmd(disable: bool, verify: bool) -> None:
 
     cfg.security.trufflehog.enabled = True
     save_config(cfg)
-    human_echo("Tier 1.5 enabled in config. Scans and pushes will now run TruffleHog.")
+    human_echo("")
+    print_banner(tagline=f"trufflehog ready ({version})")
+    human_echo("  Tier 1.5 enabled — scans and pushes will run TruffleHog.")
     emit_json({"status": "ok", "action": "install",
                "trufflehog_version": version, "trufflehog_enabled": True})
 

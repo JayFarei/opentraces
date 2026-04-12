@@ -14,13 +14,18 @@ DEFAULT_AGENT = "claude-code"
 VISIBLE_STAGE_ORDER = ("inbox", "committed", "pushed", "rejected")
 
 OPENTRACES_ASCII = r"""
-  ___  _____
- / _ \|_   _|
-| | | | | |
-| |_| | | |
- \___/  |_|
- OPENTRACES
+ ________  _________
+|\   __  \|\___   ___\
+\ \  \|\  \|___ \  \_|
+ \ \  \\\  \   \ \  \
+  \ \  \\\  \   \ \  \
+   \ \_______\   \ \__\
+    \|_______|    \|__|
 """.strip("\n")
+
+
+# One-line tagline printed under the banner in CLI surfaces.
+OPENTRACES_TAGLINE = "share agent traces to open datasets"
 
 
 @dataclass(frozen=True)

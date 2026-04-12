@@ -26,6 +26,8 @@ from ..core.workflow import (
     DEFAULT_PUSH_POLICY,
     DEFAULT_REMOTE_NAME,
     DEFAULT_REVIEW_POLICY,
+    OPENTRACES_ASCII,
+    OPENTRACES_TAGLINE,
     SUPPORTED_AGENTS,
     normalize_agents,
     normalize_push_policy,
@@ -44,16 +46,36 @@ _json_mode = False
 
 COMMAND_SECTIONS = [
     ("Getting Started", ["login", "init", "status"]),
-    ("Import", ["import-hf"]),
     ("Review & Publish", ["session", "commit", "enrich", "push", "log"]),
-    ("Inspect", ["stats", "web", "tui"]),
-    ("Settings", ["auth", "config", "remote", "whoami", "logout", "remove", "upgrade"]),
-    ("Integrations", ["hooks"]),
+    ("Inspect", ["tui", "web", "stats", "context"]),
+    ("Import", ["import-hf"]),
+    ("Integrations", ["hooks", "setup"]),
+    ("Project", ["remote", "config", "remove", "upgrade"]),
+    ("Auth", ["auth", "whoami", "logout"]),
 ]
 
 
+def print_banner(*, tagline: str | None = OPENTRACES_TAGLINE, file=None) -> None:
+    """Print the OT ASCII banner plus an optional tagline.
+
+    Used at welcoming moments: ``--help``, the end of ``init``, and the end
+    of ``setup`` subcommands. Respects ``--json`` mode (suppressed there).
+    """
+    if _json_mode:
+        return
+    click.echo(OPENTRACES_ASCII, file=file)
+    if tagline:
+        click.echo(f"\n  {tagline}\n", file=file)
+
+
 class GroupedGroup(click.Group):
-    """Click group that renders commands in named sections."""
+    """Click group that renders commands in named sections, with a banner."""
+
+    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
+        # Banner first, then the usual help sections.
+        formatter.write(OPENTRACES_ASCII + "\n")
+        formatter.write(f"\n  {OPENTRACES_TAGLINE}\n\n")
+        super().format_help(ctx, formatter)
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         placed = set()
@@ -993,11 +1015,13 @@ def init(
     if existing_session_count and import_existing:
         imported_existing, import_errors = _capture_sessions_into_project(existing_session_dir, project_dir, cfg=cfg)
 
-    click.echo(f"\nInitialized opentraces ({review_policy} policy) in {ot_dir}")
+    click.echo()
+    print_banner(tagline="initialized")
+    click.echo(f"Project:  {project_dir.name}  ({review_policy} policy)")
     if remote:
         click.echo(f"  Remote:  {remote}")
     else:
-        click.echo(f"  Remote:  not set (will be configured on first push)")
+        click.echo(f"  Remote:  not set (run 'opentraces remote set <owner>/<repo>')")
     click.echo(f"  Config:  {config_json}")
     click.echo(f"  Staging: {staging_dir}")
     if hook_installed:
