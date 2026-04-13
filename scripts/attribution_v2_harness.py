@@ -207,6 +207,18 @@ class ClaudeContext:
             print(f"  [{self.name}] → {short}", file=sys.stderr)
         _run([TMUX, "send-keys", "-t", self.name, "-l", text])
         _run([TMUX, "send-keys", "-t", self.name, "Enter"])
+        # Slash commands (/clear, /compact, etc.) are local UI actions that
+        # don't produce assistant turns, so JSONL-growth detection never
+        # triggers. Use a short fixed pause. For /clear specifically, the
+        # current session may be retired and a new JSONL opened on the next
+        # real prompt — reset jsonl_path so discovery re-runs.
+        if text.lstrip().startswith("/"):
+            time.sleep(3.0)
+            if text.lstrip().startswith("/clear"):
+                if self.jsonl_path:
+                    self._existing_jsonls.add(self.jsonl_path.name)
+                self.jsonl_path = None
+            return
         # Discover the JSONL the first time. Claude writes it on first prompt
         # submission, so this only has to happen once per session.
         if not self.jsonl_path:

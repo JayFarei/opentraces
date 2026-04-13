@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T00:20Z
-Last iteration agent: claude-opus-4-6 (loop iter 1)
+Last update: 2026-04-14T00:45Z
+Last iteration agent: claude-opus-4-6 (loop iter 2)
 
 ---
 
@@ -19,7 +19,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | bash_creates_files           | pass | 2026-04-13 | — |
 | bash_deletes                 | pass | 2026-04-14 | was failing; fixed by graceful-no-audit fallback |
 | bash_overwrites              | pass | 2026-04-13 | — |
-| clear_mid_session            | fail | 2026-04-13 | prompt timeout >240s after /clear. Likely auto-accept/quiesce issue post-/clear |
+| clear_mid_session            | fail | 2026-04-14 | timeout fixed (harness slash-command handling); now fails on attribution — `/clear` drops file-history blobs for the cleared session, so early.md has no snapshots. Deeper spike question (see Open questions) |
 | close_without_exit           | pass | 2026-04-13 | — |
 | crash_during_prompt          | pass | 2026-04-13 | — |
 | exit_without_done            | pass | 2026-04-13 | — |
@@ -39,7 +39,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 20/22 passing (was 18/22).**
+**Current: 20/22 passing.** (clear_mid_session fail mode shifted from timeout → attribution gap; still a fail, but a better-understood one.)
 
 ---
 
@@ -49,38 +49,72 @@ Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
 **Remaining fails** (next-iteration candidates):
 
-1. **clear_mid_session** — prompt timeout >240s. Hypothesis: after `/clear`,
-   claude's UI state doesn't emit the same quiesce signals the harness
-   watches for, so the prompt-complete detector never fires. Needs pane
-   inspection under `-v --keep`. Could be a harness bump (quiesce param)
-   or genuine /clear regression.
+1. **clear_mid_session** — timeout fixed this iteration. Now fails because
+   `/clear` wipes the cleared session's file-history directory, so no
+   snapshots exist for the pre-clear trace. Session 1's JSONL still
+   records 5 `Write` tool_use calls, but `~/.claude/file-history/<sid1>/`
+   does not exist. See Open questions for design choice.
 
 2. **file_create_then_delete** — "README.md missing from attribution".
    The commit is `allow_empty = true` (net-zero create+delete), so
-   `diff-tree` returns no files. The assertion expects README.md/pre-audit
-   ≥1, but attribution only operates on commit-changed files. Either the
-   assertion needs to shift to a file that IS in the commit (but there
-   are none), or `attribute_commit` should include non-changed files from
-   HEAD — which is a meaningful scope expansion. Flag for human decision.
+   `diff-tree` returns no files. Assertion expects README.md/pre-audit
+   ≥1, but attribution only operates on commit-changed files. See Open
+   questions.
 
-**Next step**: investigate `clear_mid_session` first (lower-risk, likely a
-harness timeout/quiesce tweak). Use `-v --keep clear_mid_session` then
-inspect tmux pane.
+**Next step**: neither remaining fail can be fixed without a human
+decision. Next iteration should either (a) pick up one of the human
+answers if provided, or (b) author a new scenario covering an uncovered
+edge case (suggestions: Edit-tool vs Write-tool distinction; rename
+detection; binary-file touch; very-large-file blame; symlink file).
 
 ---
 
 ## Open questions for the human
 
-- `file_create_then_delete`: the scenario author wrote "no strong assertion
-  to make — just ensure no crash" but then added `README.md pre-audit ≥1`,
-  which can never match on an empty commit. Three options: (a) weaken to
-  check `status = missing_from_audit` on a temp-ish file, (b) drop the
-  assertion entirely (test becomes "did harness not crash"), (c) expand
-  `attribute_commit` to blame unchanged HEAD files too. Which do you want?
+- **`clear_mid_session` — attribution across /clear.** Observed: `/clear`
+  retires the current session (new JSONL opens), and the cleared
+  session's `~/.claude/file-history/<sid>/` directory is deleted by
+  Claude Code. Session 1's JSONL still exists and records 5 `Write`
+  tool_use calls, but with no backup blobs, the spike has nothing to
+  snapshot. Options:
+    (a) Fall back to mining `Write`/`Edit` tool_use `content` fields
+        directly from the JSONL when file-history blobs are absent.
+        Biggest correctness win; moderate implementation (need to
+        reconstruct per-turn file state from Edit old→new string
+        replacements).
+    (b) Accept the gap; mark `clear_mid_session` as
+        expected-attribution-loss and assert early.md lines go to
+        pre-audit instead of trace `a`.
+    (c) Change the scenario to avoid `/clear` entirely (but that
+        sidesteps the case entirely; we still don't know how to
+        attribute across it in real traces).
+  Which direction? (a) is the honest answer but is a real feature.
+
+- **`file_create_then_delete` — assertion mismatch.** The scenario
+  author wrote "no strong assertion to make — just ensure no crash"
+  but then added `README.md pre-audit ≥1`, which can never match on an
+  empty commit (diff-tree returns no files). Options:
+    (a) weaken to check `status = missing_from_audit` on the
+        ephemeral file,
+    (b) drop the assertion (test becomes "did harness not crash"),
+    (c) expand `attribute_commit` to blame unchanged HEAD files too
+        (bigger scope).
 
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 2 (opus 4.6): Tackled `clear_mid_session`. Root cause of
+  the 240s timeout: prompts starting with `/` are local UI actions that
+  produce no JSONL growth, so the quiesce-on-growth detector never fires.
+  Fixed in harness: slash-command prompts get a 3s fixed pause and skip the
+  growth wait; `/clear` additionally resets `jsonl_path` so the next real
+  prompt re-discovers the new session's JSONL. Scenario still fails at the
+  attribution stage — `/clear` destroys the cleared session's file-history
+  blobs, so session 1's Writes leave no snapshot trail. Flagged as an open
+  design question; did not attempt a spike-side fix (would require mining
+  Write/Edit tool_use content directly from JSONL). No regressions across
+  baseline/small_tweak/bash_deletes/zero_file_history_session.
 
 - 2026-04-14 — iter 1 (opus 4.6): Ran full suite: 18/22. Fixed the
   "No trace snapshots" RuntimeError by making `build` exit 0 when no
