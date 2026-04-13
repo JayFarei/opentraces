@@ -45,12 +45,12 @@ _json_mode = False
 # -- Grouped help formatting --------------------------------------------------
 
 COMMAND_SECTIONS = [
-    ("Getting Started", ["setup", "init", "login", "doctor", "status"]),
+    ("Getting Started", ["setup", "init", "doctor", "status"]),
     ("Review", ["tui", "web", "graph", "resume"]),
     ("Discover", ["stats", "log", "pull", "blame"]),
     ("Publish", ["trace", "commit", "push", "export"]),
     ("Project", ["remote", "config", "remove", "upgrade"]),
-    ("Auth", ["auth", "logout"]),
+    ("Auth", ["login", "logout", "auth"]),
     ("Operations", ["review-llm", "assess"]),
 ]
 
