@@ -559,7 +559,6 @@ These commands exist for automation, compatibility, or diagnostics and are hidde
 |---------|---------|
 | `opentraces discover` | List available agent sessions across all projects |
 | `opentraces parse` | Parse agent sessions into enriched JSONL traces (global mode) |
-| `opentraces review` | Legacy alias for `web`/`tui`/`session` |
 | `opentraces migrate` | Check schema version and run migrations |
 | `opentraces capabilities --json` | Machine-discoverable feature list, supported agents, versions |
 | `opentraces introspect` | Full API schema and TraceRecord JSON schema for automation |

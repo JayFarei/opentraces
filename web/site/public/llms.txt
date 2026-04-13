@@ -838,7 +838,6 @@ These commands exist for automation, compatibility, or diagnostics and are hidde
 |---------|---------|
 | `opentraces discover` | List available agent sessions across all projects |
 | `opentraces parse` | Parse agent sessions into enriched JSONL traces (global mode) |
-| `opentraces review` | Legacy alias for `web`/`tui`/`session` |
 | `opentraces migrate` | Check schema version and run migrations |
 | `opentraces capabilities --json` | Machine-discoverable feature list, supported agents, versions |
 | `opentraces introspect` | Full API schema and TraceRecord JSON schema for automation |
@@ -1129,8 +1128,6 @@ opentraces session commit <trace-id>
 opentraces commit --all
 opentraces push
 ```
-
-If you need the old compatibility entry point, `opentraces review` still exists as a hidden alias, but `web`, `tui`, and `session` are the current surfaces.
 
 ---
 

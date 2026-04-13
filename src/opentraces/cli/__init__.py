@@ -2123,9 +2123,9 @@ def parse(auto: bool, limit: int) -> None:
         "skipped": skipped_count,
         "errors": error_count,
         "next_steps": [
-            "Run 'opentraces review' to review staged traces" if not auto else "Run 'opentraces push' to upload",
+            "Run 'opentraces tui' to review staged traces" if not auto else "Run 'opentraces push' to upload",
         ],
-        "next_command": "opentraces review" if not auto else "opentraces push",
+        "next_command": "opentraces tui" if not auto else "opentraces push",
     })
 @main.command()
 @click.option("--port", type=int, default=5050, help="Port for the local web inbox")
@@ -2155,22 +2155,6 @@ def tui(fullscreen: bool, limit: int) -> None:
     except ImportError:
         click.echo("Textual not installed. Run: pip install opentraces[tui]")
         sys.exit(2)
-
-
-@main.command(hidden=True)
-@click.option("--web", is_flag=True, help="Launch local web inbox interface")
-@click.option("--port", type=int, default=5050, help="Port for web review server")
-@click.option("--tui", is_flag=True, help="Launch TUI inbox interface")
-def review(web: bool, port: int, tui: bool) -> None:
-    """Backward-compatible alias for the inbox UI."""
-    if web:
-        _launch_web_ui(port=port)
-        return
-    if tui or _is_interactive_terminal():
-        _launch_tui_ui()
-        return
-
-    click.echo("Use 'opentraces tui' for the terminal inbox or 'opentraces web' for the browser UI.")
 
 
 def _assess_dataset(repo_id: str, judge: bool = False, judge_model: str = "haiku", limit: int = 0) -> None:

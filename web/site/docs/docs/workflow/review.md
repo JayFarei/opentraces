@@ -65,5 +65,3 @@ opentraces session commit <trace-id>
 opentraces commit --all
 opentraces push
 ```
-
-If you need the old compatibility entry point, `opentraces review` still exists as a hidden alias, but `web`, `tui`, and `session` are the current surfaces.
