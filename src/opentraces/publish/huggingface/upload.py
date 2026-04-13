@@ -137,7 +137,7 @@ class HFUploader:
             infos = build_dataset_infos(repo_name)
             data = json.dumps(infos, indent=2).encode("utf-8")
             self.api.upload_file(
-                path_or_fileobj=io.BytesIO(data),
+                path_or_fileobj=data,
                 path_in_repo="dataset_infos.json",
                 repo_id=self.repo_id,
                 repo_type="dataset",
@@ -184,7 +184,7 @@ class HFUploader:
         for attempt in range(self.MAX_RETRIES):
             try:
                 self.api.upload_file(
-                    path_or_fileobj=io.BytesIO(data),
+                    path_or_fileobj=data,
                     path_in_repo=f"data/{shard_name}",
                     repo_id=self.repo_id,
                     repo_type="dataset",
@@ -281,7 +281,7 @@ class HFUploader:
         try:
             data = json.dumps(summary_dict, indent=2).encode("utf-8")
             self.api.upload_file(
-                path_or_fileobj=io.BytesIO(data),
+                path_or_fileobj=data,
                 path_in_repo="quality.json",
                 repo_id=self.repo_id,
                 repo_type="dataset",
@@ -354,6 +354,128 @@ class HFUploader:
         Returns an empty list if the repo has no shards or on total failure.
         """
         return list(self.iter_remote_traces())
+
+    def detect_outdated_shards(self, target_version: str) -> dict:
+        """Inspect remote shards and report which contain records with a
+        schema_version != target_version.
+
+        Returns a dict:
+          {
+            "shards": [{"path": str, "outdated_records": int, "versions": {ver: count}}],
+            "version_counts": {ver: total_records_across_repo},
+            "total_outdated": int,
+          }
+        Raises RemoteShardError on shard fetch failure.
+        """
+        shards = self.get_existing_shards()
+        report: dict = {"shards": [], "version_counts": {}, "total_outdated": 0}
+        if not shards:
+            return report
+
+        for shard_path in shards:
+            try:
+                local_path = self.api.hf_hub_download(
+                    repo_id=self.repo_id,
+                    filename=shard_path,
+                    repo_type="dataset",
+                )
+            except Exception as e:
+                raise RemoteShardError(
+                    f"Cannot inspect shard {shard_path}: {e}"
+                ) from e
+
+            per_shard: dict[str, int] = {}
+            outdated = 0
+            for line in Path(local_path).read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                ver = str(rec.get("schema_version") or "unknown")
+                per_shard[ver] = per_shard.get(ver, 0) + 1
+                report["version_counts"][ver] = report["version_counts"].get(ver, 0) + 1
+                if ver != target_version:
+                    outdated += 1
+
+            if outdated:
+                report["shards"].append({
+                    "path": shard_path,
+                    "outdated_records": outdated,
+                    "versions": per_shard,
+                })
+                report["total_outdated"] += outdated
+
+        return report
+
+    def migrate_outdated_shards(self, target_version: str) -> dict:
+        """Re-parse and re-upload shards containing records with schema_version
+        != target_version. Pydantic fills in any newly-added fields with their
+        defaults; the resulting record is then stamped with target_version.
+
+        Returns:
+          {
+            "migrated_shards": [shard_path, ...],
+            "migrated_records": int,
+            "skipped_shards": int,
+            "errors": [{"shard": ..., "error": ...}],
+          }
+        """
+        result: dict = {
+            "migrated_shards": [],
+            "migrated_records": 0,
+            "skipped_shards": 0,
+            "errors": [],
+        }
+        report = self.detect_outdated_shards(target_version)
+        for entry in report["shards"]:
+            shard_path = entry["path"]
+            try:
+                local_path = self.api.hf_hub_download(
+                    repo_id=self.repo_id,
+                    filename=shard_path,
+                    repo_type="dataset",
+                )
+                migrated_lines: list[str] = []
+                migrated_count = 0
+                for line in Path(local_path).read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = TraceRecord.model_validate_json(line)
+                    except Exception as e:
+                        # Unparseable record: keep the original line verbatim
+                        # so we never destroy data we don't understand.
+                        logger.warning(
+                            "Skipping unparseable record in %s: %s", shard_path, e
+                        )
+                        migrated_lines.append(line)
+                        continue
+                    if record.schema_version != target_version:
+                        record = record.model_copy(update={"schema_version": target_version})
+                        migrated_count += 1
+                    migrated_lines.append(record.to_jsonl_line())
+
+                if migrated_count == 0:
+                    result["skipped_shards"] += 1
+                    continue
+
+                content = ("\n".join(migrated_lines) + "\n").encode("utf-8")
+                self.api.upload_file(
+                    path_or_fileobj=content,
+                    path_in_repo=shard_path,
+                    repo_id=self.repo_id,
+                    repo_type="dataset",
+                    commit_message=f"chore: migrate {migrated_count} record(s) to schema {target_version}",
+                )
+                result["migrated_shards"].append(shard_path)
+                result["migrated_records"] += migrated_count
+            except Exception as e:
+                result["errors"].append({"shard": shard_path, "error": str(e)})
+        return result
 
     def fetch_remote_content_hashes(self) -> set[str]:
         """Fetch content_hash values from all existing remote shards.

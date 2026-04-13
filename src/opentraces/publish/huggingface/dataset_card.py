@@ -384,6 +384,19 @@ def generate_dataset_card(
             s_end = card_body.index(STATS_SENTINEL_END, s_start) + len(STATS_SENTINEL_END)
             card_body = card_body[:s_start] + card_body[s_end:]
 
+        # Refresh the static "Schema version: `X.Y.Z`" line that sits in the
+        # body. Without this, an old card written when SCHEMA_VERSION was 0.1.0
+        # would forever advertise 0.1.0 even after every record on the remote
+        # has been migrated to the current schema. Apply to card_body before
+        # the body is sliced so the substitution survives the frontmatter
+        # rewrite below (which re-reads from card_body).
+        import re as _re
+        card_body = _re.sub(
+            r"Schema version: `[^`]*`",
+            f"Schema version: `{SCHEMA_VERSION}`",
+            card_body,
+        )
+
         before = card_body[: card_body.index(AUTO_START)]
         after = card_body[card_body.index(AUTO_END) + len(AUTO_END) :]
 
