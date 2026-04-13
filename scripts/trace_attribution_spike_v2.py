@@ -617,8 +617,7 @@ def _parse_porcelain_blame(blame_output: str):
 def attribute_commit(project_cwd: Path, commit_ref: str,
                      verbose: bool = False) -> dict:
     ref = project_audit_ref(project_cwd)
-    if not git_ok("-C", str(project_cwd), "rev-parse", "--verify", ref):
-        raise RuntimeError(f"audit ref not found: {ref} — run `build` first")
+    have_audit = git_ok("-C", str(project_cwd), "rev-parse", "--verify", ref)
 
     commit_sha = git("-C", str(project_cwd), "rev-parse", commit_ref).strip()
     subject = git("-C", str(project_cwd), "show", "-s",
@@ -628,7 +627,12 @@ def attribute_commit(project_cwd: Path, commit_ref: str,
     files = git("-C", str(project_cwd), "diff-tree", "--no-commit-id",
                 "--name-only", "-r", commit_sha).strip().splitlines()
 
-    audit_tip = git("-C", str(project_cwd), "rev-parse", ref).strip()
+    # When no audit history exists (common: session did only Read/Grep, or
+    # produced no file-history snapshots), fall back to blaming against the
+    # commit itself. Every line will attribute to pre-audit:<sha> via
+    # _audit_commit_metadata (which returns trace_id=None for non-audit commits).
+    audit_tip = (git("-C", str(project_cwd), "rev-parse", ref).strip()
+                 if have_audit else commit_sha)
 
     per_file: dict[str, dict] = {}
     trace_summary: dict[str, dict] = {}
@@ -792,7 +796,9 @@ def main() -> int:
         if ref:
             print(f"audit ref: {ref}")
             print(git("-C", str(project_cwd), "log", "--oneline", ref))
-        return 0 if ref else 1
+        else:
+            print("(no audit history built — no snapshots for this project)")
+        return 0
 
     if args.cmd == "watch":
         watch(project_cwd, poll_interval=args.interval)
