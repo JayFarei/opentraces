@@ -46,11 +46,11 @@ _json_mode = False
 
 COMMAND_SECTIONS = [
     ("Getting Started", ["setup", "init", "doctor", "status"]),
-    ("Review", ["tui", "web", "graph", "resume"]),
-    ("Discover", ["stats", "log", "pull", "blame"]),
+    ("Review", ["tui", "web", "graph", "resume", "blame"]),
+    ("Discover", ["projects", "stats", "log", "pull"]),
     ("Publish", ["trace", "commit", "push", "export"]),
-    ("Project", ["remote", "config", "remove", "upgrade"]),
-    ("Auth", ["login", "logout", "auth"]),
+    ("Manage", ["remote", "config", "remove", "upgrade"]),
+    ("Auth", ["login", "logout", "whoami"]),
     ("Operations", ["review-llm", "assess"]),
 ]
 
@@ -220,7 +220,14 @@ class GroupedGroup(OpentracesGroup):
     """
 
     def _style_rows(self, rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
-        return [(click.style(n, fg="cyan", bold=True), h) for n, h in rows]
+        # Prefix every command with a dim-magenta "ot" shorthand — same
+        # short name shells can alias to, surfaced in the help so users
+        # discover the muscle-memory form without reading docs.
+        prefix = click.style("ot", fg="magenta", bold=True)
+        return [
+            (f"{prefix} {click.style(n, fg='cyan', bold=True)}", h)
+            for n, h in rows
+        ]
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         placed: set[str] = set()
@@ -338,10 +345,29 @@ def _default_repo(identity: dict | None) -> str:
     return DEFAULT_REMOTE_NAME
 
 
+def _require_project_opted_in(action: str) -> None:
+    """Hard gate: exit 2 if cwd has not run ``opentraces init``.
+
+    Used by TUI / web / push — surfaces a clear error rather than
+    silently acting on an uninitialized project.
+    """
+    from ..core.config import project_is_opted_in
+
+    if not project_is_opted_in(Path.cwd()):
+        click.echo(
+            f"opentraces: this project has not opted in to {action}.\n"
+            "Run 'opentraces init' here first — only initialized "
+            "projects appear in the UI or get pushed upstream.",
+            err=True,
+        )
+        sys.exit(2)
+
+
 def _launch_tui_ui(fullscreen: bool = False, limit: int | None = 500) -> None:
     from ..core.config import get_project_staging_dir
     from ..clients.tui import OpenTracesApp
 
+    _require_project_opted_in("review")
     project_staging = get_project_staging_dir(Path.cwd())
     app = OpenTracesApp(staging_dir=project_staging, fullscreen=fullscreen, limit=limit)
     app.run()
@@ -351,6 +377,7 @@ def _launch_web_ui(port: int = 5050, open_browser: bool = False) -> None:
     from ..core.config import get_project_staging_dir, get_project_state_path
     from ..clients.web_server import create_app
 
+    _require_project_opted_in("review")
     project_staging = get_project_staging_dir(Path.cwd())
     project_state = get_project_state_path(Path.cwd())
     # Installed wheel: <site-packages>/opentraces/static/viewer
@@ -771,10 +798,18 @@ def _current_project_session_dir(project_dir: Path, cfg=None) -> Path | None:
 
 def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=None) -> tuple[int, int]:
     """Import existing session files into the project's local inbox."""
-    from ..core.config import load_project_config, get_project_staging_dir, get_project_state_path
+    from ..core.config import (
+        load_project_config, get_project_staging_dir, get_project_state_path,
+        project_is_opted_in,
+    )
     from ..capture.claude_code import ClaudeCodeParser
     from ..core.pipeline import process_trace
     from ..core.state import StateManager, TraceStatus, ProcessedFile
+
+    # Defence in depth: even if an entry-point forgot to gate, refuse to
+    # create staging dirs or write traces into an uninitialized project.
+    if not project_is_opted_in(project_dir):
+        return 0, 0
 
     if cfg is None:
         cfg = load_config()
@@ -852,7 +887,7 @@ def logout() -> None:
 
 
 @main.command()
-def auth() -> None:
+def whoami() -> None:
     """Show the active HuggingFace identity."""
     _auth_status_impl()
 
@@ -974,6 +1009,14 @@ def init(
     if config_json.exists() or config_yml.exists():
         proj_config = load_project_config(project_dir)
         current_remote = proj_config.get("remote", "not set")
+        # Backfill the global registry — projects that were initialized
+        # before the registry existed (or before they got pruned) won't
+        # appear in `opentraces projects list` until we re-add them.
+        from ..core.config import register_project as _register_project
+        _cfg_for_register = load_config()
+        if _register_project(_cfg_for_register, project_dir):
+            save_config(_cfg_for_register)
+            click.echo("(added to global opted-in registry)")
         click.echo(
             "Already initialized "
             f"(mode: {proj_config.get('review_policy', 'review')}, remote: {current_remote})"
@@ -1099,6 +1142,15 @@ def init(
         proj_config["remote"] = remote
     save_project_config(project_dir, proj_config)
 
+    # Register this project in the global opted-in list. This is the
+    # user-visible consent record: `opentraces projects list` reads it,
+    # and every capture/TUI/web/push path cross-checks `.opentraces/
+    # config.json` against it before doing anything.
+    from ..core.config import register_project as _register_project
+    _cfg_for_register = load_config()
+    if _register_project(_cfg_for_register, project_dir):
+        save_config(_cfg_for_register)
+
     gitignore_path = project_dir / ".gitignore"
     gitignore_line = ".opentraces/staging/"
     if gitignore_path.exists():
@@ -1210,6 +1262,8 @@ def init(
 @main.command()
 def remove() -> None:
     """Remove opentraces from the current project."""
+    from ..core.config import unregister_project as _unregister_project
+
     project_dir = Path.cwd()
     ot_dir = project_dir / ".opentraces"
 
@@ -1218,6 +1272,12 @@ def remove() -> None:
     if ot_dir.exists():
         shutil.rmtree(ot_dir)
         removed_local = True
+
+    # Drop this project from the global opted-in registry so it no
+    # longer appears in `opentraces projects list`.
+    cfg_for_unregister = load_config()
+    if _unregister_project(cfg_for_unregister, project_dir):
+        save_config(cfg_for_unregister)
 
     if removed_local:
         click.echo(f"Removed local inbox: {ot_dir}")
@@ -1236,6 +1296,45 @@ def remove() -> None:
         "next_steps": ["Run 'opentraces init' to set this project up again"],
         "next_command": "opentraces init",
     })
+
+
+@main.group("projects", invoke_without_command=True)
+@click.pass_context
+def projects_group(ctx: click.Context) -> None:
+    """Inspect the list of projects that have opted in to opentraces."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(projects_list_cmd)
+
+
+@projects_group.command("list")
+def projects_list_cmd() -> None:
+    """List every project that has run ``opentraces init``.
+
+    Reads from the global registry in ~/.opentraces/config.json. Each
+    entry is cross-checked against on-disk ``.opentraces/config.json``
+    presence so the list never lies about the real state.
+    """
+    from ..core.config import opted_in_projects, project_is_opted_in
+
+    cfg = load_config()
+    registered = opted_in_projects(cfg)
+
+    if not registered:
+        click.echo("No projects have opted in yet.")
+        click.echo("Run 'opentraces init' inside a project to add it.")
+        emit_json({"status": "ok", "projects": [], "count": 0})
+        return
+
+    rows: list[dict] = []
+    click.echo(f"Opted-in projects ({len(registered)}):")
+    for path_str in registered:
+        exists = project_is_opted_in(Path(path_str))
+        marker = "✓" if exists else "⚠"
+        suffix = "" if exists else "  (registered but .opentraces/ missing — run 'opentraces remove' or re-init)"
+        click.echo(f"  {marker} {path_str}{suffix}")
+        rows.append({"path": path_str, "on_disk": exists})
+
+    emit_json({"status": "ok", "projects": rows, "count": len(rows)})
 
 
 def _detect_install_method() -> str:
@@ -1535,13 +1634,15 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
 def status(limit: int) -> None:
     """Show status of the current opentraces project."""
     import time as _time
-    from ..core.config import load_project_config, get_project_staging_dir, get_project_state_path
+    from ..core.config import (
+        load_project_config, get_project_staging_dir, get_project_state_path,
+        project_is_opted_in,
+    )
     from ..core.state import StateManager
 
     project_dir = Path.cwd()
-    ot_dir = project_dir / ".opentraces"
 
-    if not ot_dir.exists():
+    if not project_is_opted_in(project_dir):
         click.echo("Not an opentraces project. Run 'opentraces init' first.")
         sys.exit(3)
 
@@ -2309,6 +2410,9 @@ def commit_traces(message: str | None, commit_all: bool) -> None:
     """Commit inbox traces for push."""
     from ..core.state import StateManager, TraceStatus
     from ..core.config import get_project_state_path
+
+    _require_project_opted_in("commit")
+
     from opentraces_schema import TraceRecord
 
     project_dir = Path.cwd()
@@ -2405,6 +2509,9 @@ def export(output_format: str, output_path: str | None) -> None:
     """Export staged traces to another format."""
     from ..core.config import get_project_staging_dir
     from ..core.inbox import load_trace_records
+
+    _require_project_opted_in("export")
+
     staging = get_project_staging_dir(Path.cwd())
     records = load_trace_records(staging)
     if not records:

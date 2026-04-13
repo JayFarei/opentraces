@@ -233,8 +233,12 @@ def resume_cmd(trace_id: str, do_exec: bool) -> None:
     to re-open the session behind a given commit.
     """
     from ..capture.claude_code.resume import ResumeError, resolve
-    from ..core.config import get_project_staging_dir
+    from ..core.config import get_project_staging_dir, project_is_opted_in
     from opentraces import cli as _cli
+
+    if not project_is_opted_in(Path.cwd()):
+        human_echo("Not an opentraces project. Run 'opentraces init' first.")
+        sys.exit(3)
 
     staging = get_project_staging_dir(Path.cwd())
     try:
@@ -1313,24 +1317,34 @@ def _skill_row(h: dict) -> None:
     iv = h.get("installed_version")
     pv = h.get("package_version")
     broken = h.get("broken_harnesses") or []
+    canonical_path = h.get("canonical")
     if not installed:
         _row("off", "skill", "not installed", detail="run 'opentraces setup skill'")
     else:
         kind = "warn" if h.get("drift") or broken else "ok"
         value = iv or "installed"
-        detail = None
+        # Always surface the canonical path so users see the one global
+        # copy their harness symlinks point at.
+        detail = canonical_path
         if h.get("drift"):
             detail = f"drift: package is {pv}, run 'opentraces setup skill'"
         _row(kind, "skill", value, detail=detail)
-    # Per-harness detail — this is the "which agents are we in" view.
+    # Per-harness detail — shows the symlink location in the agent's
+    # own skills namespace and what it resolves to, so the global-vs-
+    # per-agent split is explicit.
     harnesses = h.get("harnesses") or {}
     for hname, st in harnesses.items():
+        symlink_path = st.get("symlink_path") or ""
         if not st.get("present"):
-            sub_kind, sub_val, sub_detail = "off", "not linked", None
+            sub_kind, sub_val = "off", "not linked"
+            sub_detail: str | None = symlink_path or None
         elif st.get("canonical"):
-            sub_kind, sub_val, sub_detail = "ok", "linked", st.get("target")
+            sub_kind, sub_val = "ok", "linked"
+            target = st.get("target") or ""
+            sub_detail = f"{symlink_path} → {target}" if symlink_path else target
         else:
-            sub_kind, sub_val, sub_detail = "warn", "non-canonical dir", st.get("kind")
+            sub_kind, sub_val = "warn", "non-canonical dir"
+            sub_detail = f"{symlink_path} ({st.get('kind')})" if symlink_path else st.get("kind")
         _row(sub_kind, f"  ↳ {hname}", sub_val, detail=sub_detail)
 
 
@@ -1349,6 +1363,21 @@ def _git_row(h: dict) -> None:
     _row("ok", "git", "post-commit hook active")
 
 
+def _opted_in_section(info: dict) -> None:
+    _section("Opted-in projects")
+    count = info.get("count", 0)
+    paths = info.get("paths") or []
+    if not count:
+        human_echo(f"  {_cli._dim('(none — run opentraces init in a project to opt in)')}")
+        return
+    human_echo(f"  {_cli._dim(f'{count} project(s) registered — list with: opentraces projects list')}")
+    # Show at most 3 to keep doctor compact; full list via the command.
+    for p in paths[:3]:
+        human_echo(f"    {_cli._dim(p)}")
+    if len(paths) > 3:
+        human_echo(f"    {_cli._dim(f'... and {len(paths) - 3} more')}")
+
+
 def _versions_section(report: dict) -> None:
     _section("Versions")
     _row("ok", "security", report["security_version"])
@@ -1361,6 +1390,7 @@ def _render_doctor_human(report: dict) -> None:
 
     _versions_section(report)
     _security_section(report["security"])
+    _opted_in_section(report.get("opted_in_projects") or {})
 
     _section("Authentication")
     hf = report.get("hf_auth")

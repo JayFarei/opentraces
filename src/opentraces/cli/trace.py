@@ -50,9 +50,20 @@ def error_response(*a, **k):
 # ---------------------------------------------------------------------------
 
 @main.group("trace")
-def trace() -> None:
+@click.pass_context
+def trace(ctx: click.Context) -> None:
     """Manage individual traces (list, show, commit, reject, redact)."""
-    pass
+    # Every subcommand here operates on the current project's staging —
+    # refuse globally if the project hasn't opted in. The `--help` path
+    # bypasses the group callback, so this is only hit on real invocations.
+    from ..core.config import project_is_opted_in
+    if not project_is_opted_in(Path.cwd()):
+        click.echo(
+            "opentraces: this project has not opted in. "
+            "Run 'opentraces init' here first.",
+            err=True,
+        )
+        ctx.exit(2)
 
 
 def _load_project_state():

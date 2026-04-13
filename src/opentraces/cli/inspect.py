@@ -53,13 +53,14 @@ def _auth_identity(*a, **k):
 @main.command()
 def stats() -> None:
     """Show aggregate statistics for the current project inbox."""
-    from ..core.config import get_project_staging_dir, get_project_state_path
+    from ..core.config import (
+        get_project_staging_dir, get_project_state_path, project_is_opted_in,
+    )
     from ..core.state import StateManager
     from opentraces_schema import TraceRecord
 
     project_dir = Path.cwd()
-    ot_dir = project_dir / ".opentraces"
-    if not ot_dir.exists():
+    if not project_is_opted_in(project_dir):
         click.echo("Not an opentraces project. Run 'opentraces init' first.")
         sys.exit(3)
 
@@ -505,10 +506,10 @@ def graph_cmd(mode: str, limit: int, no_pager: bool) -> None:
                  Answers: "what did this trace actually ship?"
     """
     import shutil as _sh
+    from ..core.config import project_is_opted_in
 
     cwd = Path.cwd()
-    ot_dir = cwd / ".opentraces"
-    if not ot_dir.exists():
+    if not project_is_opted_in(cwd):
         click.echo("Not an opentraces project. Run 'opentraces init' first.")
         sys.exit(3)
 
@@ -540,7 +541,12 @@ def graph_cmd(mode: str, limit: int, no_pager: bool) -> None:
 def log(limit: int) -> None:
     """List uploaded traces grouped by date."""
     from ..core.state import StateManager, TraceStatus
+    from ..core.config import project_is_opted_in
     from datetime import datetime
+
+    if not project_is_opted_in(Path.cwd()):
+        click.echo("Not an opentraces project. Run 'opentraces init' first.")
+        sys.exit(3)
 
     state = StateManager()
     uploaded = state.get_traces_by_status(TraceStatus.UPLOADED)

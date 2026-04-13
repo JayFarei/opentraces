@@ -89,12 +89,27 @@ def _resolve_repo_id(*a, **k):
 def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None,
          run_assess: bool, llm_review: bool, no_trufflehog: bool) -> None:
     """Upload committed traces to HuggingFace Hub."""
-    from ..core.config import get_project_staging_dir, load_project_config, save_project_config
+    from ..core.config import (
+        get_project_staging_dir, load_project_config, save_project_config,
+        project_is_opted_in,
+    )
     from ..core.inbox import load_traces
     from ..core.state import StateManager, TraceStatus, StagingLock
     from ..publish.huggingface.upload import HFUploader
     from ..publish.huggingface.dataset_card import generate_dataset_card
     from opentraces_schema import TraceRecord
+
+    # Hard opt-in gate: refuse to push from any directory that has not
+    # run `opentraces init`. This is the last line of defence against
+    # accidentally uploading traces from an unconsented project.
+    if not project_is_opted_in(Path.cwd()):
+        click.echo(
+            "opentraces: cannot push — this project has not opted in.\n"
+            "Run 'opentraces init' here first. Push only operates on "
+            "projects that have been explicitly initialized.",
+            err=True,
+        )
+        sys.exit(2)
 
     # Plan 032: --llm-review gate — abort before touching the uploader if any
     # committed trace lacks a verdict or has a blocking one.

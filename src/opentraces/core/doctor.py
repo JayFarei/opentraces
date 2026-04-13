@@ -317,9 +317,15 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
     review_llm = _review_llm_status(cfg.security.review_llm)
     review_policy = _project_review_policy(cwd)
 
+    opted_in = sorted(getattr(cfg, "projects", {}).keys())
+
     return {
         "security_version": SECURITY_VERSION,
         "schema_version": _schema_version(),
+        "opted_in_projects": {
+            "count": len(opted_in),
+            "paths": opted_in,
+        },
         "security": {
             "version": SECURITY_VERSION,
             "tiers": _security_tiers(cfg, th_version, review_llm, review_policy),

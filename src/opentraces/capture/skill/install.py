@@ -69,20 +69,28 @@ def _link_harness(harness: str, dest: Path) -> tuple[bool, str | None]:
 
 
 def _harness_status(dest: Path) -> dict:
+    """Report the symlink path and what it points to (or doesn't).
+
+    ``symlink_path`` is the location in the agent's own skills namespace
+    (e.g. ``~/.claude/skills/opentraces``). ``target`` is where that
+    symlink resolves to (the canonical copy, ideally).
+    """
+    base = {"symlink_path": str(dest)}
     if dest.is_symlink():
         try:
             points_to = dest.resolve()
         except OSError:
             points_to = None
         return {
+            **base,
             "present": True,
             "kind": "symlink",
             "target": str(points_to) if points_to else None,
             "canonical": points_to == CANONICAL.resolve() if points_to else False,
         }
     if dest.exists():
-        return {"present": True, "kind": "directory", "canonical": False}
-    return {"present": False, "kind": None, "canonical": False}
+        return {**base, "present": True, "kind": "directory", "target": None, "canonical": False}
+    return {**base, "present": False, "kind": None, "target": None, "canonical": False}
 
 
 def _installed_version() -> str | None:

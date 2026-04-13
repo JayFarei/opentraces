@@ -25,7 +25,7 @@ OPENTRACES_ASCII = r"""
 
 
 # One-line tagline printed under the banner in CLI surfaces.
-OPENTRACES_TAGLINE = "Unlock trapped coding-agent traces for safe sharing, analysis, and model training"
+OPENTRACES_TAGLINE = "Unlock trapped agent traces"
 
 
 @dataclass(frozen=True)

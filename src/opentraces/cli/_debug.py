@@ -51,7 +51,16 @@ def _current_project_session_dir(*a, **k):
 @click.option("--project-dir", required=True, type=click.Path(exists=True), help="Path to project root")
 def capture(session_dir: str | None, project_dir: str) -> None:
     """Capture a Claude Code session (hidden, for automation)."""
+    from ..core.config import project_is_opted_in
+
     proj_path = Path(project_dir)
+
+    # Per-project opt-in gate: refuse silently for any project that has
+    # not run `opentraces init`. Silent because this runs from a
+    # SessionEnd hook — noise in uninitialized projects would be
+    # surprising and spammy.
+    if not project_is_opted_in(proj_path):
+        return
 
     if session_dir:
         session_path = Path(session_dir)

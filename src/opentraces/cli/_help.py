@@ -61,10 +61,13 @@ def _render_header(ctx: click.Context, formatter: click.HelpFormatter) -> None:
     """Write the shared banner + title bar at the top of every help screen."""
     # Lazy import: avoid a circular import during package initialization.
     from ..core.workflow import OPENTRACES_ASCII, OPENTRACES_TAGLINE
+    from .. import __version__
 
     formatter.write(click.style(OPENTRACES_ASCII, dim=True) + "\n")
     formatter.write(
-        "\n  " + click.style(OPENTRACES_TAGLINE, bold=True) + "\n\n"
+        "\n  " + click.style(OPENTRACES_TAGLINE, bold=True)
+        + click.style(f"   v{__version__}", dim=True)
+        + "\n\n"
     )
     path = _command_path(ctx)
     # Filled menu-title: reverse-video cyan bar. Click strips ANSI when

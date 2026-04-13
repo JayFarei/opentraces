@@ -277,6 +277,44 @@ def is_project_excluded(config: Config, project_path: str) -> bool:
     return bool(proj and proj.excluded)
 
 
+def project_is_opted_in(project_dir: Path) -> bool:
+    """Single source of truth: has this directory run `opentraces init`?
+
+    The presence of ``.opentraces/config.json`` is the ground truth.
+    Every capture / TUI / web / push entry point MUST gate on this —
+    it is the user's per-project consent signal.
+    """
+    return (project_dir / ".opentraces" / "config.json").is_file()
+
+
+def register_project(config: Config, project_dir: Path) -> bool:
+    """Add ``project_dir`` to the global opted-in registry.
+
+    Returns True if the registry changed. Idempotent. The caller is
+    responsible for ``save_config()``. Path is stored as absolute so
+    ``~/foo`` and ``/home/me/foo`` don't register twice.
+    """
+    key = str(project_dir.resolve())
+    if key in config.projects:
+        return False
+    config.projects[key] = ProjectConfig()
+    return True
+
+
+def unregister_project(config: Config, project_dir: Path) -> bool:
+    """Remove ``project_dir`` from the registry. Returns True if changed."""
+    key = str(project_dir.resolve())
+    if key not in config.projects:
+        return False
+    del config.projects[key]
+    return True
+
+
+def opted_in_projects(config: Config) -> list[str]:
+    """Return absolute paths of all registered projects, sorted."""
+    return sorted(config.projects.keys())
+
+
 def _parse_yaml_config(text: str) -> dict:
     """Hand-parse a simple key: value YAML file into a dict."""
     result: dict = {}
