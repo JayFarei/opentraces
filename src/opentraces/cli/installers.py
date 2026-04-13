@@ -58,10 +58,23 @@ def run_post_commit_hook(repo_path: str) -> None:
 @main.group("setup", invoke_without_command=True)
 @click.pass_context
 def setup_group(ctx: click.Context) -> None:
-    """Wire opentraces into external tools (Claude Code, git, trufflehog).
+    """Wire opentraces into your agent, git, and security stack.
+
+    Each subcommand installs one integration:
+
+    \b
+      claude-code   Stop/PostCompact hooks that capture every Claude Code
+                    session transcript so `opentraces push` can parse it.
+      git           post-commit hook that correlates each commit to the
+                    trace that produced it (via refs/notes/opentraces),
+                    powering `opentraces blame` and git-linked uploads.
+      trufflehog    Tier 1.5 secret scanner, any finding blocks upload
+                    until resolved.
+      review-llm    Tier 2 third-party LLM reviewer for staged traces,
+                    used by `opentraces review-llm` and `push --llm-review`.
 
     Run bare ``opentraces setup`` for an interactive wizard that walks every
-    integration; use subcommands to target one directly.
+    integration, or call a subcommand to target one directly.
     """
     if ctx.invoked_subcommand is not None:
         return
@@ -277,11 +290,18 @@ def resume_cmd(trace_id: str, do_exec: bool) -> None:
 def setup_claude_code(
     hooks_dir: str | None, settings_file: str | None, dry_run: bool, remove: bool,
 ) -> None:
-    """Install opentraces hooks into Claude Code (~/.claude/settings.json).
+    """Install the Claude Code session-capture hooks.
 
-    The Stop hook appends a git-state snapshot to each session transcript.
-    The PostCompact hook records explicit compaction events. Both are picked
-    up automatically by the opentraces parser.
+    Registers two hooks in ~/.claude/settings.json so every Claude Code
+    session is enriched in place, ready for `opentraces push` to parse:
+
+    \b
+      Stop         appends a git-state snapshot (branch, HEAD, dirty files)
+                   to the session transcript when the agent stops.
+      PostCompact  records explicit compaction events so collapsed context
+                   is still attributable.
+
+    Use --dry-run to preview the changes, --remove to uninstall.
     """
     from ..capture.claude_code.install import (
         InstallError,
@@ -365,7 +385,21 @@ def setup_claude_code(
 )
 @click.option("--remove", is_flag=True, help="Uninstall the hook instead of installing")
 def setup_git(remove: bool) -> None:
-    """Install/remove the opentraces post-commit hook."""
+    """Install the post-commit hook that correlates commits to traces.
+
+    After install, every `git commit` attaches a note under
+    refs/notes/opentraces linking the commit sha to the trace(s) whose
+    Edit/Write tool calls produced its changes. This powers:
+
+    \b
+      opentraces blame <commit>   resolve a commit back to contributing
+                                  traces and the agent context behind them.
+      opentraces push             uploads carry git-link metadata so
+                                  consumers can trace a line to its session.
+
+    Old commits cannot be backfilled, correlation starts from the first
+    commit after install. Use --remove to uninstall.
+    """
     from ..capture.git import install as git_hook
     if remove:
         git_hook.remove(Path.cwd())
@@ -443,10 +477,12 @@ def _pick_install_method_interactive() -> str | None:
 @click.option("--verify", is_flag=True, hidden=True,
               help="Legacy alias for --enable")
 def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool) -> None:
-    """Install or configure TruffleHog (Tier 1.5).
+    """Enable Tier 1.5 secret scanning via TruffleHog.
 
-    Once enabled, every staged and pushed trace is scanned and any
-    finding blocks upload.
+    Tier 1.5 runs the TruffleHog verified-secret scanner on every staged
+    and pushed trace. Any finding moves the trace to BLOCKED locally and
+    stops the upload, traces with verified secrets never leave the
+    machine. Complements the always-on Tier 1a regex + 1b entropy scans.
 
     \b
     Flows:
@@ -841,10 +877,16 @@ def setup_review_llm_cmd(
     disable: bool, enable: bool, test_only: bool, print_only: bool,
     no_interactive: bool,
 ) -> None:
-    """Configure the third-party LLM used by `opentraces review-llm`.
+    """Configure the Tier 2 LLM reviewer for staged traces.
+
+    Points opentraces at an OpenAI-compatible, Ollama, Anthropic, or
+    fake backend that reads each staged trace and flags residual
+    sensitive content the regex/entropy/TruffleHog tiers could miss
+    (semantic PII, proprietary context, policy concerns). Used by
+    `opentraces review-llm` and `opentraces push --llm-review`.
 
     Stored globally in ~/.opentraces/config.json under
-    security.review_llm. One config per machine — projects inherit it.
+    security.review_llm. One config per machine, projects inherit it.
 
     Interactive picker when run with no flags. Non-interactive for agents:
 
