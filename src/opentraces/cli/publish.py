@@ -29,6 +29,114 @@ def emit_json(data):
     return _cli.emit_json(data)
 
 
+def _refresh_dataset_card(uploader, repo_id: str, *, run_assess: bool = False,
+                          fallback_traces=None) -> None:
+    """Regenerate and upload the dataset README.md from current remote shards.
+
+    Best-effort: any failure is logged as a warning but never raises.
+    """
+    from ..publish.huggingface.dataset_card import generate_dataset_card
+    try:
+        existing_card = None
+        try:
+            local = uploader.api.hf_hub_download(repo_id, "README.md", repo_type="dataset")
+            existing_card = Path(local).read_text()
+        except Exception as e:
+            logger.debug("Could not fetch existing dataset card: %s", e)
+
+        all_remote_traces = uploader.fetch_all_remote_traces()
+        card_traces = all_remote_traces or (fallback_traces or [])
+        if not card_traces:
+            return
+
+        quality_summary = None
+        if run_assess:
+            try:
+                from ..quality.engine import assess_batch
+                from ..quality.gates import check_gate
+                from ..quality.summary import build_summary
+                click.echo(f"  Assessing {len(card_traces)} traces...")
+                batch = assess_batch(card_traces)
+                gate = check_gate(batch)
+                summary = build_summary(batch, gate, mode="deterministic")
+                quality_summary = summary.to_dict()
+                if uploader.upload_quality_json(quality_summary):
+                    click.echo(
+                        f"  Overall utility: {summary.overall_utility:.1f}% | "
+                        f"Gate: {'PASS' if summary.gate_passed else 'FAIL'}"
+                    )
+                else:
+                    click.echo("  Warning: quality.json upload failed -- quality scores excluded from README", err=True)
+                    quality_summary = None
+            except Exception as e:
+                click.echo(f"  Warning: quality assessment failed: {e}", err=True)
+
+        card = generate_dataset_card(repo_id, card_traces, existing_card, quality_summary=quality_summary)
+        uploader.api.upload_file(
+            path_or_fileobj=card.encode("utf-8"),
+            path_in_repo="README.md",
+            repo_id=repo_id,
+            repo_type="dataset",
+        )
+    except Exception as e:
+        click.echo(f"  Warning: dataset card update failed: {e}", err=True)
+
+
+def _maybe_migrate_remote(uploader, target_version: str,
+                          migrate_remote: bool | None, assume_yes: bool) -> bool:
+    """Detect outdated remote shards and migrate them in-place after consent.
+
+    Behavior:
+      - migrate_remote=True  → migrate without prompting
+      - migrate_remote=False → skip without prompting
+      - migrate_remote=None and assume_yes → migrate without prompting
+      - migrate_remote=None and interactive → prompt
+    Detection failures are logged at debug and treated as no-op.
+    """
+    try:
+        report = uploader.detect_outdated_shards(target_version)
+    except Exception as e:
+        logger.debug("Could not inspect remote shards for schema drift: %s", e)
+        return False
+    if not report["total_outdated"]:
+        return False
+
+    version_summary = ", ".join(f"{v}={n}" for v, n in sorted(report["version_counts"].items()))
+    click.echo(
+        f"Remote has {report['total_outdated']} record(s) on older schema "
+        f"(distribution: {version_summary}; target: {target_version})."
+    )
+    if migrate_remote is True:
+        do_migrate = True
+    elif migrate_remote is False:
+        do_migrate = False
+    elif assume_yes:
+        do_migrate = True
+    else:
+        do_migrate = click.confirm(
+            f"Migrate {len(report['shards'])} shard(s) to schema "
+            f"{target_version}? This rewrites the affected JSONL files in place.",
+            default=True,
+        )
+    if not do_migrate:
+        click.echo(
+            "  Skipping migration. Mixed schema versions may cause the HF "
+            "dataset viewer to render inconsistent columns.",
+            err=True,
+        )
+        return False
+
+    click.echo(f"Migrating {len(report['shards'])} shard(s)...")
+    mig = uploader.migrate_outdated_shards(target_version)
+    click.echo(
+        f"  Migrated {mig['migrated_records']} record(s) "
+        f"across {len(mig['migrated_shards'])} shard(s)."
+    )
+    for err in mig["errors"]:
+        click.echo(f"  Warning: shard {err['shard']} migration failed: {err['error']}", err=True)
+    return mig["migrated_records"] > 0
+
+
 def error_response(*a, **k):
     return _cli.error_response(*a, **k)
 
@@ -74,6 +182,7 @@ def _resolve_repo_id(*a, **k):
         ("Destination", ["repo"]),
         ("Quality gates", ["run_assess", "llm_review"]),
         ("Pipeline overrides", ["no_trufflehog"]),
+        ("Schema migration", ["migrate_remote", "assume_yes"]),
     ],
 )
 @click.option("--private", is_flag=True, help="Force private visibility (overrides config)")
@@ -81,20 +190,25 @@ def _resolve_repo_id(*a, **k):
 @click.option("--publish", is_flag=True, help="Change an existing private dataset to public (no upload)")
 @click.option("--gated", is_flag=True, help="Enable gated access (auto-approve) on the dataset")
 @click.option("--repo", default=None, help="HF dataset repo (default: username/opentraces)")
-@click.option("--assess", "run_assess", is_flag=True, help="Score traces after upload and include in dataset card")
+@click.option("--assess", "run_assess", is_flag=True, help="Run quality scoring and include badges in the dataset card (card itself always refreshes)")
 @click.option("--llm-review", "llm_review", is_flag=True,
               help="Require a clean Tier 2 verdict on every committed trace before upload")
 @click.option("--no-trufflehog", "no_trufflehog", is_flag=True,
               help="Skip Tier 1.5 TruffleHog scanning for this push only")
+@click.option("--migrate-remote/--no-migrate-remote", "migrate_remote", default=None,
+              help="Auto-migrate older-schema shards on the remote. Default: prompt.")
+@click.option("--yes", "-y", "assume_yes", is_flag=True,
+              help="Skip interactive prompts (e.g. assume yes to schema migration).")
 def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None,
-         run_assess: bool, llm_review: bool, no_trufflehog: bool) -> None:
+         run_assess: bool, llm_review: bool, no_trufflehog: bool,
+         migrate_remote: bool | None, assume_yes: bool) -> None:
     """Upload committed traces to HuggingFace Hub."""
     from ..core.config import (
-        get_project_staging_dir, load_project_config, save_project_config,
+        get_project_traces_dir, load_project_config, save_project_config,
         project_is_opted_in,
     )
     from ..core.inbox import load_traces
-    from ..core.state import StateManager, TraceStatus, StagingLock
+    from ..core.state import StateManager, TraceStatus, TraceLock
     from ..publish.huggingface.upload import HFUploader
     from ..publish.huggingface.dataset_card import generate_dataset_card
     from opentraces_schema import TraceRecord
@@ -114,7 +228,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     # Plan 032: --llm-review gate — abort before touching the uploader if any
     # committed trace lacks a verdict or has a blocking one.
     if llm_review:
-        staging = get_project_staging_dir(Path.cwd())
+        staging = get_project_traces_dir(Path.cwd())
         pending_block: list[str] = []
         if staging.exists():
             for rec in load_traces(staging):
@@ -200,9 +314,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                 proj_config = load_project_config(Path.cwd())
                 proj_config["remote"] = repo_id
                 proj_config["visibility"] = "public"
-                ot_dir = Path.cwd() / ".opentraces"
-                if ot_dir.exists():
-                    save_project_config(Path.cwd(), proj_config)
+                save_project_config(Path.cwd(), proj_config)
             except OSError as e:
                 logger.debug("Could not save visibility config: %s", e)
 
@@ -217,14 +329,25 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
             sys.exit(4)
         return
 
-    # Use project-local state if available, fall back to global
     from ..core.config import get_project_state_path
     proj_state_path = get_project_state_path(Path.cwd())
-    state = StateManager(
-        state_path=proj_state_path if proj_state_path.parent.exists() else None
-    )
+    state = StateManager(state_path=proj_state_path)
     # Get committed traces
     traces_to_upload = state.get_traces_by_status(TraceStatus.COMMITTED)
+
+    # Run remote schema migration regardless of whether we have new traces to
+    # upload. A repo can drift between schema versions across contributors,
+    # and the user should be able to clean it up by just running 'push' even
+    # when their inbox is empty.
+    try:
+        from opentraces_schema import SCHEMA_VERSION as _TARGET_SCHEMA
+        _mig_uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
+        if _maybe_migrate_remote(_mig_uploader, _TARGET_SCHEMA, migrate_remote, assume_yes):
+            # Migration changed remote shards. Refresh the README so the card
+            # reflects the now-uniform schema even on migration-only runs.
+            _refresh_dataset_card(_mig_uploader, repo_id, run_assess=run_assess)
+    except Exception as e:
+        logger.debug("Pre-upload migration check skipped: %s", e)
 
     if not traces_to_upload:
         # If --gated was passed standalone, apply it even without uploading
@@ -290,7 +413,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     visibility_label = "private" if is_private else "public"
 
     try:
-        with StagingLock():
+        with TraceLock(Path.cwd()):
             uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
             try:
                 uploader.ensure_repo_exists(private=is_private)
@@ -346,48 +469,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
 
             # Generate and upload dataset card from the full remote dataset
             if result.success:
-                try:
-                    existing_card = None
-                    try:
-                        from huggingface_hub import HfApi as _HfApi
-                        _api = _HfApi(token=cfg.hf_token)
-                        existing_card = _api.hf_hub_download(repo_id, "README.md", repo_type="dataset")
-                        existing_card = Path(existing_card).read_text()
-                    except Exception as e:
-                        logger.debug("Could not fetch existing dataset card: %s", e)
-                    # Aggregate stats from ALL remote shards (not just this batch)
-                    # so the card reflects the full dataset after each push.
-                    all_remote_traces = uploader.fetch_all_remote_traces()
-                    card_traces = all_remote_traces if all_remote_traces else records
-
-                    quality_summary = None
-                    if run_assess:
-                        try:
-                            from ..quality.engine import assess_batch
-                            from ..quality.gates import check_gate
-                            from ..quality.summary import build_summary
-                            click.echo(f"  Assessing {len(card_traces)} traces...")
-                            batch = assess_batch(card_traces)
-                            gate = check_gate(batch)
-                            summary = build_summary(batch, gate, mode="deterministic")
-                            quality_summary = summary.to_dict()
-                            if uploader.upload_quality_json(quality_summary):
-                                click.echo(f"  Overall utility: {summary.overall_utility:.1f}% | Gate: {'PASS' if summary.gate_passed else 'FAIL'}")
-                            else:
-                                click.echo("  Warning: quality.json upload failed -- quality scores excluded from README", err=True)
-                                quality_summary = None
-                        except Exception as e:
-                            click.echo(f"  Warning: quality assessment failed: {e}", err=True)
-
-                    card = generate_dataset_card(repo_id, card_traces, existing_card, quality_summary=quality_summary)
-                    uploader.api.upload_file(
-                        path_or_fileobj=io.BytesIO(card.encode("utf-8")),
-                        path_in_repo="README.md",
-                        repo_id=repo_id,
-                        repo_type="dataset",
-                    )
-                except Exception as e:
-                    click.echo(f"  Warning: dataset card update failed: {e}", err=True)
+                _refresh_dataset_card(uploader, repo_id, run_assess=run_assess, fallback_traces=records)
 
             if result.success:
                 # Apply gated access if requested
@@ -416,9 +498,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                     proj_config = load_project_config(Path.cwd())
                     proj_config["remote"] = repo_id
                     proj_config["visibility"] = visibility_label
-                    ot_dir = Path.cwd() / ".opentraces"
-                    if ot_dir.exists():
-                        save_project_config(Path.cwd(), proj_config)
+                    save_project_config(Path.cwd(), proj_config)
                 except OSError as e:
                     logger.debug("Could not save post-upload config: %s", e)
 

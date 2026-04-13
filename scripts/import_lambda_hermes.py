@@ -60,7 +60,7 @@ def main(limit: int, dry_run: bool, auto: bool) -> None:
         click.echo("Not an opentraces project. Run 'opentraces init' first.", err=True)
         sys.exit(3)
 
-    from opentraces.core.config import get_project_staging_dir, get_project_state_path, load_config
+    from opentraces.core.config import get_project_traces_dir, get_project_state_path, load_config
     from opentraces.capture.hermes import HermesParser
     from opentraces.core.pipeline import process_imported_trace
     from opentraces.core.state import StateManager, TraceStatus
@@ -94,7 +94,7 @@ def main(limit: int, dry_run: bool, auto: bool) -> None:
     click.echo(f"Processing {rows_to_process} of {total} rows...")
 
     # Setup staging + state (mirrors cli.py:2574-2578)
-    staging_dir = get_project_staging_dir(project_dir)
+    staging_dir = get_project_traces_dir(project_dir)
     staging_dir.mkdir(parents=True, exist_ok=True)
     state_path = get_project_state_path(project_dir)
     state = StateManager(state_path=state_path if state_path.parent.exists() else None)

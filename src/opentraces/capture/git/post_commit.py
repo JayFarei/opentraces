@@ -186,11 +186,11 @@ def run_for_repo(repo: Path, *, window_hours: int = 2) -> None:
     import logging
     log = logging.getLogger("opentraces.post_commit")
     try:
-        from ...core.config import get_project_staging_dir
+        from ...core.config import get_project_traces_dir
         from ...core.inbox import load_trace_records
 
         repo = Path(repo).resolve()
-        staging = get_project_staging_dir(repo)
+        staging = get_project_traces_dir(repo)
         if not staging.exists():
             return
         since = (

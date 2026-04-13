@@ -62,20 +62,22 @@ class TestInit:
     """Test the init command."""
 
     def test_init_creates_config_and_staging(self, runner, project_dir):
-        """init with --mode review creates .opentraces/config.json and staging/."""
+        """init with --mode review creates .opentraces.json marker and global traces dir."""
+        from opentraces.core.config import get_project_traces_dir
+
         os.chdir(str(project_dir))
         result = runner.invoke(main, ["init", "--mode", "review", "--remote", "test/repo", "--no-hook"])
 
         assert result.exit_code == 0
-        config_file = project_dir / ".opentraces" / "config.json"
-        staging_dir = project_dir / ".opentraces" / "staging"
-        assert config_file.exists(), "config.json not created"
-        assert staging_dir.exists(), "staging/ not created"
+        marker = project_dir / ".opentraces.json"
+        assert marker.exists(), ".opentraces.json marker not created"
+        traces_dir = get_project_traces_dir(project_dir)
+        assert traces_dir.exists(), "global traces dir not created"
 
-        # Verify config content
         import json
-        content = json.loads(config_file.read_text())
-        assert content["mode"] == "review"
+        content = json.loads(marker.read_text())
+        assert content["review_policy"] == "review"
+        assert "project_id" in content
 
     def test_init_idempotent(self, runner, project_dir):
         """Running init twice does not error."""
@@ -111,7 +113,8 @@ class TestCapture:
         )
 
         # _capture prints to stderr, check staging dir
-        staging = initialized_project / ".opentraces" / "staging"
+        from opentraces.core.config import get_project_traces_dir
+        staging = get_project_traces_dir(initialized_project)
         staged_files = list(staging.glob("*.jsonl"))
         assert len(staged_files) >= 1, (
             f"Expected at least 1 staged trace, got {len(staged_files)}. "
@@ -166,7 +169,8 @@ class TestReview:
             ],
         )
 
-        staging = initialized_project / ".opentraces" / "staging"
+        from opentraces.core.config import get_project_traces_dir
+        staging = get_project_traces_dir(initialized_project)
         staged_files = list(staging.glob("*.jsonl"))
         if not staged_files:
             pytest.skip("No traces staged")

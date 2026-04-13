@@ -34,20 +34,15 @@ def isolated_config(tmp_path, monkeypatch):
 
     opentraces_dir = home / ".opentraces"
     opentraces_dir.mkdir()
-    monkeypatch.setattr(_paths, "OPENTRACES_DIR", opentraces_dir)
-    monkeypatch.setattr(_paths, "CONFIG_PATH", opentraces_dir / "config.json")
-    monkeypatch.setattr(_paths, "CREDENTIALS_PATH", opentraces_dir / "credentials")
-    monkeypatch.setattr(_paths, "STAGING_DIR", opentraces_dir / "staging")
-    monkeypatch.setattr(_paths, "STATE_PATH", opentraces_dir / "state.json")
-    monkeypatch.setattr(_paths, "UPLOADED_DIR", opentraces_dir / "uploaded")
+    projects_dir = opentraces_dir / "projects"
+    projects_dir.mkdir()
 
     from opentraces.core import config as _config
-    monkeypatch.setattr(_config, "CONFIG_PATH", opentraces_dir / "config.json")
-    monkeypatch.setattr(_config, "CREDENTIALS_PATH", opentraces_dir / "credentials")
-    monkeypatch.setattr(_config, "OPENTRACES_DIR", opentraces_dir)
-    monkeypatch.setattr(_config, "STAGING_DIR", opentraces_dir / "staging")
-    monkeypatch.setattr(_config, "STATE_PATH", opentraces_dir / "state.json")
-    monkeypatch.setattr(_config, "UPLOADED_DIR", opentraces_dir / "uploaded")
+    for mod in (_paths, _config):
+        monkeypatch.setattr(mod, "OPENTRACES_DIR", opentraces_dir)
+        monkeypatch.setattr(mod, "CONFIG_PATH", opentraces_dir / "config.json")
+        monkeypatch.setattr(mod, "CREDENTIALS_PATH", opentraces_dir / "credentials")
+        monkeypatch.setattr(mod, "PROJECTS_DIR", projects_dir)
     return opentraces_dir
 
 
@@ -288,7 +283,7 @@ class TestPushLLMReviewGate:
         staging = isolated_config / "staging"
         staging.mkdir()
         monkeypatch.setattr(
-            "opentraces.core.config.get_project_staging_dir", lambda _: staging
+            "opentraces.core.config.get_project_traces_dir", lambda _: staging
         )
         monkeypatch.setattr(
             "opentraces.core.inbox.load_traces",
@@ -312,7 +307,7 @@ class TestPushLLMReviewGate:
         staging = isolated_config / "staging"
         staging.mkdir()
         monkeypatch.setattr(
-            "opentraces.core.config.get_project_staging_dir", lambda _: staging
+            "opentraces.core.config.get_project_traces_dir", lambda _: staging
         )
         monkeypatch.setattr(
             "opentraces.core.inbox.load_traces",
@@ -360,7 +355,7 @@ class TestReviewLLMFilters:
         monkeypatch.setattr("opentraces.core.state.StateManager",
                             lambda _p: _FakeState())
         monkeypatch.setattr(
-            "opentraces.core.config.get_project_staging_dir",
+            "opentraces.core.config.get_project_traces_dir",
             lambda _: isolated_config / "staging",
         )
         (isolated_config / "staging").mkdir(exist_ok=True)
@@ -388,7 +383,7 @@ class TestReviewLLMFilters:
         monkeypatch.setattr("opentraces.core.inbox.load_traces",
                             lambda _p: records)
         monkeypatch.setattr(
-            "opentraces.core.config.get_project_staging_dir",
+            "opentraces.core.config.get_project_traces_dir",
             lambda _: isolated_config / "staging",
         )
         (isolated_config / "staging").mkdir(exist_ok=True)
@@ -410,7 +405,7 @@ class TestReviewLLMDryRun:
         staging.mkdir(exist_ok=True)
         # Patch the project-local staging lookup to this path.
         monkeypatch.setattr(
-            "opentraces.core.config.get_project_staging_dir",
+            "opentraces.core.config.get_project_traces_dir",
             lambda _: staging,
         )
         monkeypatch.setattr(

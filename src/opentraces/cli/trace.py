@@ -68,18 +68,17 @@ def trace(ctx: click.Context) -> None:
 
 def _load_project_state():
     """Shared helper: load project-local StateManager and staging dir."""
-    from ..core.config import get_project_staging_dir, get_project_state_path
+    from ..core.config import get_project_traces_dir, get_project_state_path, project_is_opted_in
     from ..core.state import StateManager
 
     project_dir = Path.cwd()
-    ot_dir = project_dir / ".opentraces"
-    if not ot_dir.exists():
+    if not project_is_opted_in(project_dir):
         click.echo("Not an opentraces project. Run 'opentraces init' first.")
         sys.exit(3)
 
     state_path = get_project_state_path(project_dir)
-    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
-    staging_dir = get_project_staging_dir(project_dir)
+    state = StateManager(state_path=state_path)
+    staging_dir = get_project_traces_dir(project_dir)
     return state, staging_dir
 
 

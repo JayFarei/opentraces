@@ -47,10 +47,10 @@ def project_with_traces(initialized_project):
     project_dir, runner = initialized_project
 
     from opentraces.core.state import StateManager, TraceStatus
-    from opentraces.core.config import get_project_state_path, get_project_staging_dir
+    from opentraces.core.config import get_project_state_path, get_project_traces_dir
     from opentraces_schema import TraceRecord
 
-    staging_dir = get_project_staging_dir(project_dir)
+    staging_dir = get_project_traces_dir(project_dir)
     state_path = get_project_state_path(project_dir)
     state = StateManager(state_path=state_path)
 
@@ -217,7 +217,7 @@ class TestPostInitCommands:
         project_dir, runner = initialized_project
         result = runner.invoke(main, ["remove"])
         assert result.exit_code == 0
-        assert not (project_dir / ".opentraces").exists()
+        assert not (project_dir / ".opentraces.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -379,8 +379,8 @@ class TestSessionShowTruncation:
         """Human output should truncate step content > 500 chars."""
         project_dir, runner, trace_id = project_with_traces
         # Inject a long step content into the staging file
-        from opentraces.core.config import get_project_staging_dir
-        staging_dir = get_project_staging_dir(project_dir)
+        from opentraces.core.config import get_project_traces_dir
+        staging_dir = get_project_traces_dir(project_dir)
         staging_file = next(staging_dir.glob("*.jsonl"))
         import json as _json
         data = _json.loads(staging_file.read_text().strip().splitlines()[0])
@@ -399,8 +399,8 @@ class TestSessionShowTruncation:
     def test_session_show_verbose_shows_full_content(self, project_with_traces):
         """--verbose should show full step content without truncation."""
         project_dir, runner, trace_id = project_with_traces
-        from opentraces.core.config import get_project_staging_dir
-        staging_dir = get_project_staging_dir(project_dir)
+        from opentraces.core.config import get_project_traces_dir
+        staging_dir = get_project_traces_dir(project_dir)
         staging_file = next(staging_dir.glob("*.jsonl"))
         import json as _json
         data = _json.loads(staging_file.read_text().strip().splitlines()[0])
@@ -417,8 +417,8 @@ class TestSessionShowTruncation:
     def test_session_show_json_never_truncated(self, project_with_traces):
         """--json mode must return the full record regardless of content length."""
         project_dir, runner, trace_id = project_with_traces
-        from opentraces.core.config import get_project_staging_dir
-        staging_dir = get_project_staging_dir(project_dir)
+        from opentraces.core.config import get_project_traces_dir
+        staging_dir = get_project_traces_dir(project_dir)
         staging_file = next(staging_dir.glob("*.jsonl"))
         import json as _json
         data = _json.loads(staging_file.read_text().strip().splitlines()[0])
@@ -563,7 +563,7 @@ class TestInitFlags:
             "--no-hook", "--start-fresh",
         ])
         assert result.exit_code == 0
-        config = json.loads((tmp_path / ".opentraces" / "config.json").read_text())
+        config = json.loads((tmp_path / ".opentraces.json").read_text())
         assert config.get("visibility") == "private"
 
     def test_init_public(self, tmp_path, monkeypatch):
@@ -575,7 +575,7 @@ class TestInitFlags:
             "--no-hook", "--start-fresh",
         ])
         assert result.exit_code == 0
-        config = json.loads((tmp_path / ".opentraces" / "config.json").read_text())
+        config = json.loads((tmp_path / ".opentraces.json").read_text())
         assert config.get("visibility") == "public"
 
 
@@ -760,7 +760,7 @@ class TestUpgrade:
             "--remote", "test/opentraces", "--no-hook", "--start-fresh",
         ])
         # Corrupt config: remove agents key
-        config_path = tmp_path / ".opentraces" / "config.json"
+        config_path = tmp_path / ".opentraces.json"
         cfg = json.loads(config_path.read_text())
         cfg.pop("agents", None)
         config_path.write_text(json.dumps(cfg))

@@ -54,7 +54,7 @@ def _auth_identity(*a, **k):
 def stats() -> None:
     """Show aggregate statistics for the current project inbox."""
     from ..core.config import (
-        get_project_staging_dir, get_project_state_path, project_is_opted_in,
+        get_project_traces_dir, get_project_state_path, project_is_opted_in,
     )
     from ..core.state import StateManager
     from opentraces_schema import TraceRecord
@@ -64,9 +64,9 @@ def stats() -> None:
         click.echo("Not an opentraces project. Run 'opentraces init' first.")
         sys.exit(3)
 
-    staging_dir = get_project_staging_dir(project_dir)
+    staging_dir = get_project_traces_dir(project_dir)
     state_path = get_project_state_path(project_dir)
-    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
+    state = StateManager(state_path=state_path)
 
     staged_files = sorted(staging_dir.glob("*.jsonl")) if staging_dir.exists() else []
 
@@ -139,22 +139,21 @@ def context() -> None:
     Hidden surface used by the opentraces skill and other automation. Humans
     should use ``opentraces status`` instead.
     """
-    from ..core.config import get_project_staging_dir, get_project_state_path
+    from ..core.config import get_project_traces_dir, get_project_state_path, project_is_opted_in
     from ..core.state import StateManager
     from opentraces_schema import SCHEMA_VERSION
 
     project_dir = Path.cwd()
-    ot_dir = project_dir / ".opentraces"
-    if not ot_dir.exists():
+    if not project_is_opted_in(project_dir):
         click.echo("Not an opentraces project.")
         human_hint("Run: opentraces init")
-        emit_json(error_response("NOT_INITIALIZED", "project", "No .opentraces directory", "Run: opentraces init"))
+        emit_json(error_response("NOT_INITIALIZED", "project", "No .opentraces.json marker", "Run: opentraces init"))
         sys.exit(3)
 
     proj_config = load_project_config(project_dir)
-    staging_dir = get_project_staging_dir(project_dir)
+    staging_dir = get_project_traces_dir(project_dir)
     state_path = get_project_state_path(project_dir)
-    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
+    state = StateManager(state_path=state_path)
 
     # Count stages from state.json directly — reading every staged JSONL
     # here costs seconds on big inboxes and yields the same result.
@@ -309,12 +308,12 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
     """Render the graph to a styled string via a themed Rich Console capture."""
     from io import StringIO
 
-    from ..core.config import get_project_staging_dir
+    from ..core.config import get_project_traces_dir
     from ..core.inbox import load_trace_records
     from ..core.theme import get_console
     from ..enrichment.git import notes_store
 
-    staging = get_project_staging_dir(cwd)
+    staging = get_project_traces_dir(cwd)
     records = load_trace_records(staging)
     records_by_id = {r.trace_id: r for r in records}
 

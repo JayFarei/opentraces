@@ -21,7 +21,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .paths import STATE_PATH, STAGING_DIR
+# NOTE: config.py imports workflow.py which imports state.py — to avoid the
+# import cycle we defer the config import inside TraceLock.
 
 
 class TraceStatus(str, Enum):
@@ -76,7 +77,12 @@ class StateManager:
     """Manages persistent state for incremental processing and upload tracking."""
 
     def __init__(self, state_path: Path | None = None) -> None:
-        self._state_path = state_path or STATE_PATH
+        if state_path is None:
+            raise ValueError(
+                "StateManager requires an explicit state_path; "
+                "use get_project_state_path(project_dir)"
+            )
+        self._state_path = state_path
         self._state: dict[str, Any] = {"processed_files": {}, "traces": {}, "commit_groups": {}}
         self._load()
 
@@ -223,12 +229,14 @@ class StateManager:
         return [CommitGroup(**v) for v in self._state["commit_groups"].values()]
 
 
-class StagingLock:
-    """File lock on the staging directory to prevent concurrent uploads."""
+class TraceLock:
+    """File lock on a project's traces dir to prevent concurrent uploads."""
 
-    def __init__(self) -> None:
-        STAGING_DIR.mkdir(parents=True, exist_ok=True)
-        self._lock_path = STAGING_DIR / ".lock"
+    def __init__(self, project_dir: Path) -> None:
+        from .config import get_project_dir
+        global_dir = get_project_dir(project_dir)
+        global_dir.mkdir(parents=True, exist_ok=True)
+        self._lock_path = global_dir / ".lock"
         self._lock_fd: int | None = None
 
     def acquire(self) -> bool:
@@ -249,12 +257,16 @@ class StagingLock:
             os.close(self._lock_fd)
             self._lock_fd = None
 
-    def __enter__(self) -> StagingLock:
+    def __enter__(self) -> TraceLock:
         if not self.acquire():
             raise RuntimeError(
-                "Could not acquire staging lock. Another opentraces process may be uploading."
+                "Could not acquire trace lock. Another opentraces process may be uploading."
             )
         return self
 
     def __exit__(self, *args: Any) -> None:
         self.release()
+
+
+# Back-compat alias for any external importers; new code should use TraceLock.
+StagingLock = TraceLock

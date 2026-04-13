@@ -160,7 +160,7 @@ def blame_cmd(commit: str, json_out: bool) -> None:
     Traces are linked via `refs/notes/opentraces` written by the post-commit
     hook (install with ``opentraces setup git``).
     """
-    from ..core.config import get_project_staging_dir
+    from ..core.config import get_project_traces_dir
     from ..core.inbox import load_trace_records
     from ..enrichment.git import blame as git_blame
     from opentraces import cli as _cli
@@ -179,7 +179,7 @@ def blame_cmd(commit: str, json_out: bool) -> None:
         )
         return
 
-    staging = get_project_staging_dir(cwd)
+    staging = get_project_traces_dir(cwd)
     traces_by_id = {r.trace_id: r for r in load_trace_records(staging)}
 
     if json_out:
@@ -233,14 +233,14 @@ def resume_cmd(trace_id: str, do_exec: bool) -> None:
     to re-open the session behind a given commit.
     """
     from ..capture.claude_code.resume import ResumeError, resolve
-    from ..core.config import get_project_staging_dir, project_is_opted_in
+    from ..core.config import get_project_traces_dir, project_is_opted_in
     from opentraces import cli as _cli
 
     if not project_is_opted_in(Path.cwd()):
         human_echo("Not an opentraces project. Run 'opentraces init' first.")
         sys.exit(3)
 
-    staging = get_project_staging_dir(Path.cwd())
+    staging = get_project_traces_dir(Path.cwd())
     try:
         target = resolve(trace_id, staging)
     except ResumeError as e:
@@ -1090,15 +1090,14 @@ def setup_review_policy_cmd(
     from ..core.config import (
         ProjectConfig,
         load_project_config,
+        project_is_opted_in,
         save_project_config,
     )
 
     cwd = Path.cwd()
-    # load_project_config() returns defaults rather than None; check the
-    # actual file so we can steer uninitialized projects to `init`.
-    if not (cwd / ".opentraces" / "config.json").exists():
+    if not project_is_opted_in(cwd):
         human_hint(
-            "no .opentraces/config.json here — run 'opentraces init' first"
+            "no .opentraces.json marker here — run 'opentraces init' first"
         )
         emit_json({"status": "error", "error": "not-initialized"})
         sys.exit(2)
@@ -1527,7 +1526,7 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
     ids), and cap with --limit. The typical "second line of defence"
     flow is 'review-llm --scope committed' right before 'push --llm-review'.
     """
-    from ..core.config import get_project_staging_dir, get_project_state_path
+    from ..core.config import get_project_traces_dir, get_project_state_path
     from ..core.inbox import load_traces
     from ..core.review import estimate_llm_review, run_llm_review
     from ..core.state import StateManager
@@ -1546,7 +1545,7 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
             "once, or pass --provider/--model explicitly."
         )
 
-    staging = get_project_staging_dir(Path.cwd())
+    staging = get_project_traces_dir(Path.cwd())
     if not staging.exists():
         human_echo("No staging directory found. Run opentraces init first.")
         emit_json(error_response(

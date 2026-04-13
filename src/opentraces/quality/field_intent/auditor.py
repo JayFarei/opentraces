@@ -271,7 +271,8 @@ def audit_run(
         traces = _load_traces_from_dataset(dataset, sample)
     else:
         if staging_dir is None:
-            staging_dir = Path.cwd() / ".opentraces" / "staging"
+            from ...core.config import get_project_traces_dir
+            staging_dir = get_project_traces_dir(Path.cwd())
         traces = _load_traces_from_staging(staging_dir, sample, seed=seed)
 
     findings: list[FieldFinding] = []

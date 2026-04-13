@@ -345,11 +345,10 @@ class TestLivePushIntegration:
     def test_push_cli_uploads_to_private_hf_repo(self, tmp_path, monkeypatch):
         token, repo_id = _require_live_push_env()
 
+        from opentraces.core.config import get_project_traces_dir
+
         project_dir = tmp_path / "push-project"
         project_dir.mkdir()
-        ot_dir = project_dir / ".opentraces"
-        staging_dir = ot_dir / "staging"
-        staging_dir.mkdir(parents=True)
 
         save_project_config(
             project_dir,
@@ -362,6 +361,8 @@ class TestLivePushIntegration:
                 "remote": repo_id,
             },
         )
+        staging_dir = get_project_traces_dir(project_dir)
+        staging_dir.mkdir(parents=True, exist_ok=True)
 
         trace = _make_trace(trace_id=f"live-{uuid.uuid4().hex[:12]}")
         trace.content_hash = trace.compute_content_hash()
@@ -389,8 +390,6 @@ class TestLivePushIntegration:
             "opentraces.cli.load_config",
             lambda: Config(hf_token=token, dataset_visibility="private"),
         )
-        monkeypatch.setattr("opentraces.core.state.STAGING_DIR", staging_dir)
-
         runner = CliRunner()
         result = runner.invoke(main, ["push", "--private", "--repo", repo_id])
 

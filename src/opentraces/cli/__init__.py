@@ -364,21 +364,21 @@ def _require_project_opted_in(action: str) -> None:
 
 
 def _launch_tui_ui(fullscreen: bool = False, limit: int | None = 500) -> None:
-    from ..core.config import get_project_staging_dir
+    from ..core.config import get_project_traces_dir
     from ..clients.tui import OpenTracesApp
 
     _require_project_opted_in("review")
-    project_staging = get_project_staging_dir(Path.cwd())
+    project_staging = get_project_traces_dir(Path.cwd())
     app = OpenTracesApp(staging_dir=project_staging, fullscreen=fullscreen, limit=limit)
     app.run()
 
 
 def _launch_web_ui(port: int = 5050, open_browser: bool = False) -> None:
-    from ..core.config import get_project_staging_dir, get_project_state_path
+    from ..core.config import get_project_traces_dir, get_project_state_path
     from ..clients.web_server import create_app
 
     _require_project_opted_in("review")
-    project_staging = get_project_staging_dir(Path.cwd())
+    project_staging = get_project_traces_dir(Path.cwd())
     project_state = get_project_state_path(Path.cwd())
     # Installed wheel: <site-packages>/opentraces/static/viewer
     pkg_path = Path(__file__).parent.parent / "static" / "viewer"
@@ -799,7 +799,7 @@ def _current_project_session_dir(project_dir: Path, cfg=None) -> Path | None:
 def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=None) -> tuple[int, int]:
     """Import existing session files into the project's local inbox."""
     from ..core.config import (
-        load_project_config, get_project_staging_dir, get_project_state_path,
+        load_project_config, get_project_traces_dir, get_project_state_path,
         project_is_opted_in,
     )
     from ..capture.claude_code import ClaudeCodeParser
@@ -817,13 +817,13 @@ def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=Non
     proj_config = load_project_config(project_dir)
     review_policy = normalize_review_policy(proj_config.get("review_policy"))
 
-    staging = get_project_staging_dir(project_dir)
+    staging = get_project_traces_dir(project_dir)
     staging.mkdir(parents=True, exist_ok=True)
 
     parser = ClaudeCodeParser()
 
     state_path = get_project_state_path(project_dir)
-    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
+    state = StateManager(state_path=state_path)
 
     parsed_count = 0
     error_count = 0
@@ -997,16 +997,16 @@ def init(
 
     Sets up the repo-local inbox, agent hooks, policies, and optional remote.
     """
-    from ..core.config import load_project_config, save_project_config
+    from ..core.config import _marker_path, load_project_config, save_project_config
 
     project_dir = Path.cwd()
-    ot_dir = project_dir / ".opentraces"
-    staging_dir = ot_dir / "staging"
-    config_json = ot_dir / "config.json"
-    config_yml = ot_dir / "config.yml"
+    marker_file = _marker_path(project_dir)
+    legacy_ot_dir = project_dir / ".opentraces"
+    legacy_config_json = legacy_ot_dir / "config.json"
+    legacy_config_yml = legacy_ot_dir / "config.yml"
 
-    # Check if already initialized
-    if config_json.exists() or config_yml.exists():
+    # Check if already initialized (new marker, or legacy in-repo dir).
+    if marker_file.exists() or legacy_config_json.exists() or legacy_config_yml.exists():
         proj_config = load_project_config(project_dir)
         current_remote = proj_config.get("remote", "not set")
         # Backfill the global registry — projects that were initialized
@@ -1124,9 +1124,6 @@ def init(
                     remote, visibility = _choose_remote_interactively(_default_repo(identity))
                     visibility = visibility or "private"
 
-    ot_dir.mkdir(parents=True, exist_ok=True)
-    staging_dir.mkdir(parents=True, exist_ok=True)
-
     # visibility may be set by interactive selector or --private/--public flags
     if not isinstance(visibility, str) or visibility not in ("private", "public"):
         visibility = "private"
@@ -1151,20 +1148,9 @@ def init(
     if _register_project(_cfg_for_register, project_dir):
         save_config(_cfg_for_register)
 
-    gitignore_path = project_dir / ".gitignore"
-    gitignore_line = ".opentraces/staging/"
-    if gitignore_path.exists():
-        existing_gi = gitignore_path.read_text()
-        if gitignore_line not in existing_gi.splitlines():
-            with open(gitignore_path, "a") as f:
-                if not existing_gi.endswith("\n"):
-                    f.write("\n")
-                f.write(f"{gitignore_line}\n")
-    if gitignore_path.exists():
-        existing_gi = gitignore_path.read_text()
-        if ".opentraces/config.json" not in existing_gi.splitlines():
-            with open(gitignore_path, "a") as f:
-                f.write(".opentraces/config.json\n")
+    # Note: traces and runtime state now live in ~/.opentraces/projects/<slug>/,
+    # so the only opentraces artifact in the repo is the .opentraces.json marker —
+    # which is meant to be committed. No .gitignore changes needed.
 
     hook_installed = False
     if not no_hook:
@@ -1207,8 +1193,10 @@ def init(
         click.echo(f"  {_dim('Remote: ')} {remote}")
     else:
         click.echo(f"  {_dim('Remote: ')} {_warn('not set')} {_dim('(run')} opentraces remote set <owner>/<repo>{_dim(')')}")
-    click.echo(f"  Config:  {config_json}")
-    click.echo(f"  Staging: {staging_dir}")
+    from ..core.config import get_project_traces_dir
+    traces_dir = get_project_traces_dir(project_dir)
+    click.echo(f"  Marker:  {marker_file}")
+    click.echo(f"  Traces:  {traces_dir}")
     if hook_installed:
         click.echo(f"  Hook:    .claude/settings.json (SessionEnd)")
     if skill_installed:
@@ -1246,8 +1234,8 @@ def init(
         "import_existing": import_existing,
         "imported_existing": imported_existing,
         "import_errors": import_errors,
-        "config_path": str(config_json),
-        "staging_path": str(staging_dir),
+        "config_path": str(marker_file),
+        "staging_path": str(traces_dir),
         "next_steps": [
             "Review imported traces with opentraces web" if imported_existing else (
                 "Import past traces or start a connected agent; future traces will be captured automatically"
@@ -1262,16 +1250,38 @@ def init(
 @main.command()
 def remove() -> None:
     """Remove opentraces from the current project."""
-    from ..core.config import unregister_project as _unregister_project
+    from ..core.config import (
+        _marker_path,
+        get_project_dir,
+        unregister_project as _unregister_project,
+    )
 
     project_dir = Path.cwd()
-    ot_dir = project_dir / ".opentraces"
+    marker_file = _marker_path(project_dir)
+    legacy_ot_dir = project_dir / ".opentraces"
 
     removed_hook = _remove_capture_hook(project_dir)
+
+    # Resolve the global per-project dir BEFORE deleting the marker
+    # (slug derivation needs the marker's project_id).
+    global_dir = None
+    try:
+        global_dir = get_project_dir(project_dir)
+    except RuntimeError:
+        pass
+
     removed_local = False
-    if ot_dir.exists():
-        shutil.rmtree(ot_dir)
+    if marker_file.exists():
+        marker_file.unlink()
         removed_local = True
+    if legacy_ot_dir.exists():
+        shutil.rmtree(legacy_ot_dir)
+        removed_local = True
+
+    removed_global = False
+    if global_dir is not None and global_dir.exists():
+        shutil.rmtree(global_dir)
+        removed_global = True
 
     # Drop this project from the global opted-in registry so it no
     # longer appears in `opentraces projects list`.
@@ -1280,9 +1290,11 @@ def remove() -> None:
         save_config(cfg_for_unregister)
 
     if removed_local:
-        click.echo(f"Removed local inbox: {ot_dir}")
-    else:
-        click.echo("No local .opentraces directory found.")
+        click.echo(f"Removed project marker: {marker_file}")
+    if removed_global:
+        click.echo(f"Removed local trace state: {global_dir}")
+    if not (removed_local or removed_global):
+        click.echo("No opentraces marker or local state found.")
 
     if removed_hook:
         click.echo("Removed Claude Code SessionEnd hook.")
@@ -1330,7 +1342,7 @@ def projects_list_cmd() -> None:
     for path_str in registered:
         exists = project_is_opted_in(Path(path_str))
         marker = "✓" if exists else "⚠"
-        suffix = "" if exists else "  (registered but .opentraces/ missing — run 'opentraces remove' or re-init)"
+        suffix = "" if exists else "  (registered but .opentraces.json missing — run 'opentraces remove' or re-init)"
         click.echo(f"  {marker} {path_str}{suffix}")
         rows.append({"path": path_str, "on_disk": exists})
 
@@ -1418,10 +1430,11 @@ def upgrade(skill_only: bool) -> None:
             )
 
     # Refresh skill and hook in current project
-    project_dir = Path.cwd()
-    ot_dir = project_dir / ".opentraces"
+    from ..core.config import project_is_opted_in
 
-    if not ot_dir.exists():
+    project_dir = Path.cwd()
+
+    if not project_is_opted_in(project_dir):
         if skill_only:
             human_echo("Not an opentraces project. Run 'opentraces init' first.")
             sys.exit(3)
@@ -1635,7 +1648,7 @@ def status(limit: int) -> None:
     """Show status of the current opentraces project."""
     import time as _time
     from ..core.config import (
-        load_project_config, get_project_staging_dir, get_project_state_path,
+        load_project_config, get_project_traces_dir, get_project_state_path,
         project_is_opted_in,
     )
     from ..core.state import StateManager
@@ -1650,9 +1663,9 @@ def status(limit: int) -> None:
     remote = proj_config.get("remote", None)
     project_name = project_dir.name
 
-    staging_dir = get_project_staging_dir(project_dir)
+    staging_dir = get_project_traces_dir(project_dir)
     state_path = get_project_state_path(project_dir)
-    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
+    state = StateManager(state_path=state_path)
 
     # Stage counts come from state.json directly — O(entries) in memory,
     # no file I/O. Reading every staged JSONL here used to take seconds
@@ -2000,18 +2013,24 @@ def remote_remove() -> None:
 @click.option("--auto", is_flag=True, help="Auto-approve (skip review)")
 @click.option("--limit", type=int, default=0, help="Max traces to parse (0=all)")
 def parse(auto: bool, limit: int) -> None:
-    """Parse raw agent logs into enriched JSONL traces."""
-    from ..core.config import get_projects_path, is_project_excluded
+    """Deprecated: use ``opentraces scan`` from inside an opted-in project."""
+    click.echo(
+        "opentraces parse is deprecated — staging is per-project now.\n"
+        "Run `opentraces init` then `opentraces scan` inside a project.",
+        err=True,
+    )
+    sys.exit(2)
+    # The remainder is dead code retained so import-time references don't
+    # break; structurally rewritten under the per-project layout.
+    from ..core.config import get_projects_path, is_project_excluded, get_project_traces_dir
     from ..capture.claude_code import ClaudeCodeParser
     from ..core.pipeline import process_trace
-    from ..core.state import StateManager, TraceStatus, ProcessedFile, STAGING_DIR
+    from ..core.state import StateManager, TraceStatus, ProcessedFile
 
     cfg = load_config()
     projects_path = get_projects_path(cfg)
     parser = ClaudeCodeParser()
-    state = StateManager()
-
-    STAGING_DIR.mkdir(parents=True, exist_ok=True)
+    state = StateManager(state_path=Path("/tmp/opentraces-parse-state.json"))
 
     parsed_count = 0
     skipped_count = 0
@@ -2045,7 +2064,8 @@ def parse(auto: bool, limit: int) -> None:
 
             # Stage the trace
             jsonl_line = result.record.to_jsonl_line()
-            staging_file = STAGING_DIR / f"{result.record.trace_id}.jsonl"
+            staging_file = get_project_traces_dir(project_dir) / f"{result.record.trace_id}.jsonl"
+            staging_file.parent.mkdir(parents=True, exist_ok=True)
             staging_file.write_text(jsonl_line + "\n")
 
             state.set_trace_status(
@@ -2234,17 +2254,24 @@ def assess(judge: bool, judge_model: str, limit: int, compare_remote: bool, all_
     from ..quality.engine import assess_batch, generate_report
     from ..quality.gates import check_gate
     from ..quality.summary import build_summary, QualitySummary
+    from ..core.config import get_project_traces_dir, project_is_opted_in
 
     # Full dataset assessment via huggingface_hub (no hf-mount required)
     if dataset_repo:
         _assess_dataset(dataset_repo, judge=judge, judge_model=judge_model, limit=limit)
         return
 
+    # Local assess requires an opted-in project (it reads from per-project state).
+    if not project_is_opted_in(Path.cwd()):
+        click.echo("No staged traces found. Run 'opentraces init' first.")
+        emit_json(error_response("NOT_INITIALIZED", "assessment", "Project not opted in", hint="Run opentraces init"))
+        return
+
     traces = []
 
     if all_staged:
         # Legacy behavior: read all staging files
-        staging = Path(".opentraces/staging")
+        staging = get_project_traces_dir(Path.cwd())
         if not staging.exists():
             click.echo("No staged traces found. Run 'opentraces parse' first.")
             emit_json(error_response("NO_TRACES", "assessment", "No staged traces", hint="Run opentraces parse first"))
@@ -2265,12 +2292,12 @@ def assess(judge: bool, judge_model: str, limit: int, compare_remote: bool, all_
 
         project_dir = Path.cwd()
         state_path = get_project_state_path(project_dir)
-        state = StateManager(state_path=state_path if state_path.parent.exists() else None)
+        state = StateManager(state_path=state_path)
         committed = state.get_committed_traces()
 
         if not committed:
             # Fall back to all staged if nothing committed
-            staging = Path(".opentraces/staging")
+            staging = get_project_traces_dir(Path.cwd())
             if staging.exists():
                 for f in sorted(staging.glob("*.jsonl")):
                     for line in f.read_text().splitlines():
@@ -2284,7 +2311,7 @@ def assess(judge: bool, judge_model: str, limit: int, compare_remote: bool, all_
                 if traces:
                     click.echo("No committed traces found, assessing all staged traces instead.")
         else:
-            staging = Path(".opentraces/staging")
+            staging = get_project_traces_dir(Path.cwd())
             for trace_id, info in committed.items():
                 trace_file = staging / f"{trace_id}.jsonl"
                 if trace_file.exists():
@@ -2417,7 +2444,7 @@ def commit_traces(message: str | None, commit_all: bool) -> None:
 
     project_dir = Path.cwd()
     state_path = get_project_state_path(project_dir)
-    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
+    state = StateManager(state_path=state_path)
 
     inbox = state.get_traces_by_status(TraceStatus.STAGED)
     if not inbox:
@@ -2507,12 +2534,12 @@ def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
               help="Output JSONL path (default: ./opentraces-export.jsonl)")
 def export(output_format: str, output_path: str | None) -> None:
     """Export staged traces to another format."""
-    from ..core.config import get_project_staging_dir
+    from ..core.config import get_project_traces_dir
     from ..core.inbox import load_trace_records
 
     _require_project_opted_in("export")
 
-    staging = get_project_staging_dir(Path.cwd())
+    staging = get_project_traces_dir(Path.cwd())
     records = load_trace_records(staging)
     if not records:
         human_echo("no staged traces to export")

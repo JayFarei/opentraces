@@ -1,0 +1,11 @@
+{
+  "marker_version": "1",
+  "project_id": "3de3d721f6824fa2a8225f7a66ba1007",
+  "review_policy": "review",
+  "push_policy": "manual",
+  "remote": "opentraces/test",
+  "visibility": "private",
+  "agents": [
+    "claude-code"
+  ]
+}

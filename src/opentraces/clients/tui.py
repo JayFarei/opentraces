@@ -20,7 +20,7 @@ from textual.containers import Horizontal, Vertical
 from textual.events import Key
 from textual.widgets import ListItem, ListView, RichLog, Static
 
-from ..core.config import STAGING_DIR, get_project_state_path, load_project_config
+from ..core.config import get_project_state_path, get_project_traces_dir, load_project_config, project_is_opted_in
 from ..core.inbox import get_stage, load_traces
 from ..core.state import StateManager, TraceStatus
 from ..core.workflow import OPENTRACES_ASCII, VISIBLE_STAGE_ORDER, resolve_visible_stage, stage_label
@@ -95,8 +95,9 @@ def _sort_key(trace: dict[str, Any], state: StateManager) -> tuple[int, str]:
 
 
 def _project_dir_from_staging(staging_dir: Path) -> Path:
-    if staging_dir.name == "staging" and staging_dir.parent.name == ".opentraces":
-        return staging_dir.parent.parent
+    # Traces now live under ~/.opentraces/projects/<slug>/traces/, which
+    # doesn't carry the original project path. The TUI is always invoked
+    # from inside the project, so cwd is the source of truth.
     return Path.cwd()
 
 
@@ -713,7 +714,7 @@ class OpenTracesApp(App):
         self.traces: list[dict[str, Any]] = []
         self.trace_limit = limit  # cap on sessions loaded into the list view
         state_path = get_project_state_path(self.project_dir)
-        self.state = StateManager(state_path=state_path if state_path.parent.exists() else None)
+        self.state = StateManager(state_path=state_path)
         self._in_step_view = False
         self._detail_fullscreen = False
         self._launch_fullscreen = fullscreen
@@ -1340,7 +1341,11 @@ class OpenTracesApp(App):
 
 def main() -> None:
     """Entry point for the terminal inbox console script."""
-    staging_dir = STAGING_DIR
+    cwd = Path.cwd()
+    if project_is_opted_in(cwd):
+        staging_dir = get_project_traces_dir(cwd)
+    else:
+        staging_dir = cwd  # will surface the not-opted-in error downstream
     fullscreen = False
 
     # Parse --staging-dir from sys.argv

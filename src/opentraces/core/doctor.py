@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ..capture import get_hook_installers
-from ..core.config import ProjectConfig, load_project_config
+from ..core.config import ProjectConfig, load_project_config, project_is_opted_in
 from ..core.processors import probe_processors
 from ..security.trufflehog import find_trufflehog
 from ..security.version import SECURITY_VERSION
@@ -282,7 +282,7 @@ def _project_review_policy(cwd: Path) -> str | None:
     actual file to distinguish "initialized with default" from "never
     initialized here."
     """
-    if not (cwd / ".opentraces" / "config.json").exists():
+    if not project_is_opted_in(cwd):
         return None
     try:
         raw = load_project_config(cwd)

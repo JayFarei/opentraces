@@ -19,7 +19,15 @@ from typing import Any
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from ..core.config import STAGING_DIR, auth_identity, load_config, load_project_config, save_project_config
+from ..core.config import (
+    auth_identity,
+    get_project_state_path,
+    get_project_traces_dir,
+    load_config,
+    load_project_config,
+    project_is_opted_in,
+    save_project_config,
+)
 from ..security import SECURITY_VERSION
 from opentraces_schema import SCHEMA_VERSION
 from ..core.inbox import get_stage, load_traces, redact_step
@@ -327,18 +335,35 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
     app = Flask(__name__)
     app.secret_key = "opentraces-review-" + uuid.uuid4().hex[:8]
 
-    staging_path = Path(staging_dir) if staging_dir else STAGING_DIR
+    # The web server is always invoked from inside an opted-in project,
+    # so cwd is the source of truth for project_dir. Caller may override
+    # via the staging_dir/state_path kwargs (used by tests).
+    project_dir = Path.cwd()
+    if staging_dir:
+        staging_path = Path(staging_dir)
+    elif project_is_opted_in(project_dir):
+        staging_path = get_project_traces_dir(project_dir)
+    else:
+        staging_path = project_dir
     viewer_dist_path = Path(viewer_dist) if viewer_dist else None
-    project_dir = staging_path.parent.parent if staging_path.parent.name == ".opentraces" else Path.cwd()
 
     # All mutable state is closure-local, so each app instance is independent
     _state_mgr: list[StateManager | None] = [None]
-    _state_path = Path(state_path) if state_path else None
+    if state_path:
+        _state_path: Path | None = Path(state_path)
+    elif project_is_opted_in(project_dir):
+        _state_path = get_project_state_path(project_dir)
+    else:
+        _state_path = None
     _trace_cache: list[list[dict[str, Any]] | None] = [None]
 
     def _get_state() -> StateManager:
         if _state_mgr[0] is None:
-            _state_mgr[0] = StateManager(state_path=_state_path) if _state_path else StateManager()
+            if _state_path is None:
+                raise RuntimeError(
+                    "web server has no state_path; project must be opted in"
+                )
+            _state_mgr[0] = StateManager(state_path=_state_path)
         return _state_mgr[0]
 
     def _invalidate_cache() -> None:

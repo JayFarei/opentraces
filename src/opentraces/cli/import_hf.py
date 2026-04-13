@@ -69,15 +69,14 @@ def import_hf(
     dry_run: bool,
 ) -> None:
     """Import traces from a HuggingFace dataset."""
-    from ..core.config import get_project_staging_dir, get_project_state_path
+    from ..core.config import get_project_traces_dir, get_project_state_path, project_is_opted_in
     from ..capture import get_importers
     from ..core.pipeline import process_imported_trace
     from ..core.state import StateManager, TraceStatus
 
     # 1. Project guard
     project_dir = Path.cwd()
-    ot_dir = project_dir / ".opentraces"
-    if not ot_dir.exists():
+    if not project_is_opted_in(project_dir):
         human_echo("Not an opentraces project. Run 'opentraces init' first.")
         emit_json(error_response(
             "NOT_INITIALIZED", "setup", "Not an opentraces project",
@@ -182,10 +181,10 @@ def import_hf(
     }
 
     # 7. Setup staging
-    staging_dir = get_project_staging_dir(project_dir)
+    staging_dir = get_project_traces_dir(project_dir)
     staging_dir.mkdir(parents=True, exist_ok=True)
     state_path = get_project_state_path(project_dir)
-    state = StateManager(state_path=state_path if state_path.parent.exists() else None)
+    state = StateManager(state_path=state_path)
 
     # 8. Process rows
     parsed_count = 0

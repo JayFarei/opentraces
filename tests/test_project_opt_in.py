@@ -33,13 +33,13 @@ def isolated_home(tmp_path, monkeypatch):
 
     opentraces_dir = home / ".opentraces"
     opentraces_dir.mkdir()
+    projects_dir = opentraces_dir / "projects"
+    projects_dir.mkdir()
     for mod in (_paths, _config):
         monkeypatch.setattr(mod, "OPENTRACES_DIR", opentraces_dir)
         monkeypatch.setattr(mod, "CONFIG_PATH", opentraces_dir / "config.json")
         monkeypatch.setattr(mod, "CREDENTIALS_PATH", opentraces_dir / "credentials")
-        monkeypatch.setattr(mod, "STAGING_DIR", opentraces_dir / "staging")
-        monkeypatch.setattr(mod, "STATE_PATH", opentraces_dir / "state.json")
-        monkeypatch.setattr(mod, "UPLOADED_DIR", opentraces_dir / "uploaded")
+        monkeypatch.setattr(mod, "PROJECTS_DIR", projects_dir)
     return opentraces_dir
 
 
@@ -79,6 +79,7 @@ class TestCaptureGate:
         )
         assert result.exit_code == 0, result.output
         # Gate short-circuits before anything writes to disk.
+        assert not (project / ".opentraces.json").exists()
         assert not (project / ".opentraces").exists()
 
 
@@ -152,7 +153,7 @@ class TestProjectsList:
     def test_flags_stale_registry_entries(
         self, runner, isolated_home, tmp_path
     ) -> None:
-        """Path registered but ``.opentraces/`` missing → visible warning."""
+        """Registered but marker file deleted → visible warning."""
         from opentraces.core.config import load_config, save_config
 
         project = tmp_path / "ghost"
@@ -160,8 +161,9 @@ class TestProjectsList:
         cfg = load_config()
         register_project(cfg, project)
         save_config(cfg)
-        # No save_project_config — so on-disk state is missing.
+        # Simulate marker deletion (e.g. user removed it manually).
+        (project / ".opentraces.json").unlink()
 
         result = runner.invoke(main, ["projects", "list"])
         assert result.exit_code == 0
-        assert "registered but .opentraces/ missing" in result.output
+        assert "registered but .opentraces.json missing" in result.output

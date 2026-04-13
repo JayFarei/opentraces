@@ -21,6 +21,8 @@ def _isolate_opentraces_global_state(tmp_path_factory, monkeypatch):
 
     opentraces_dir = home / ".opentraces"
     opentraces_dir.mkdir()
+    projects_dir = opentraces_dir / "projects"
+    projects_dir.mkdir()
 
     from opentraces.core import paths as _paths
     from opentraces.core import config as _config
@@ -29,7 +31,5 @@ def _isolate_opentraces_global_state(tmp_path_factory, monkeypatch):
         monkeypatch.setattr(mod, "OPENTRACES_DIR", opentraces_dir)
         monkeypatch.setattr(mod, "CONFIG_PATH", opentraces_dir / "config.json")
         monkeypatch.setattr(mod, "CREDENTIALS_PATH", opentraces_dir / "credentials")
-        monkeypatch.setattr(mod, "STAGING_DIR", opentraces_dir / "staging")
-        monkeypatch.setattr(mod, "STATE_PATH", opentraces_dir / "state.json")
-        monkeypatch.setattr(mod, "UPLOADED_DIR", opentraces_dir / "uploaded")
+        monkeypatch.setattr(mod, "PROJECTS_DIR", projects_dir)
     yield opentraces_dir
