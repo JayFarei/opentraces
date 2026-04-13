@@ -88,6 +88,57 @@ class TestSetupTruffleHogVerify:
         assert "3.94.3" in payload["trufflehog_version"]
 
 
+class TestSetupReviewLLM:
+    def test_non_interactive_writes_global_config(
+        self, runner, isolated_config, monkeypatch,
+    ) -> None:
+        # Stub the reachability probe so tests don't touch the network.
+        import opentraces.cli.installers as _inst
+        monkeypatch.setattr(
+            _inst, "_test_review_llm",
+            lambda *a, **k: (True, "stubbed: reachable"),
+        )
+
+        result = runner.invoke(main, [
+            "setup", "review-llm",
+            "--provider", "openai",
+            "--base-url", "http://localhost:11434/v1",
+            "--model", "gemma3n:e4b",
+            "--no-interactive",
+        ])
+        assert result.exit_code == 0, result.output
+        payload = _extract_json(result.output)
+        assert payload["status"] == "ok"
+        assert payload["review_llm"]["enabled"] is True
+        assert payload["review_llm"]["provider"] == "openai"
+        assert payload["review_llm"]["model"] == "gemma3n:e4b"
+
+        # Round-trips to disk.
+        from opentraces.core.config import load_config
+        cfg = load_config()
+        assert cfg.security.review_llm.enabled is True
+        assert cfg.security.review_llm.model == "gemma3n:e4b"
+
+    def test_print_dumps_current_config(self, runner, isolated_config) -> None:
+        result = runner.invoke(main, ["setup", "review-llm", "--print"])
+        assert result.exit_code == 0, result.output
+        payload = _extract_json(result.output)
+        # Default shipped config has review_llm present but disabled.
+        assert payload["review_llm"]["enabled"] is False
+        assert payload["review_llm"]["provider"] == "openai"
+
+    def test_disable_flips_config_off(self, runner, isolated_config) -> None:
+        from opentraces.core.config import Config, save_config
+        cfg = Config()
+        cfg.security.review_llm.enabled = True
+        save_config(cfg)
+
+        result = runner.invoke(main, ["setup", "review-llm", "--disable"])
+        assert result.exit_code == 0, result.output
+        payload = _extract_json(result.output)
+        assert payload["review_llm"]["enabled"] is False
+
+
 class TestSetupTruffleHogDisable:
     def test_disable_flips_config_off(self, runner, isolated_config) -> None:
         # Write a config that has it enabled so --disable has something to flip.
@@ -185,6 +236,76 @@ class TestPushLLMReviewGate:
         assert result.exit_code == 3
         payload = _extract_json(result.output)
         assert payload["error"]["code"] == "LLM_REVIEW_BLOCKED"
+
+
+class TestReviewLLMFilters:
+    """--scope and --trace narrow the slow review to a subset."""
+
+    def test_scope_committed_skips_staged_only_traces(
+        self, runner, isolated_config, monkeypatch,
+    ) -> None:
+        from opentraces.cli import installers as _inst
+
+        # Three fake records with distinct ids; state says only one is COMMITTED.
+        records = [
+            {"trace_id": "aaa1", "content_hash": "h1", "steps": []},
+            {"trace_id": "bbb2", "content_hash": "h2", "steps": []},
+            {"trace_id": "ccc3", "content_hash": "h3", "steps": []},
+        ]
+
+        class _FakeState:
+            def get_trace(self, tid):
+                return {"ccc3": {"status": "committed"},
+                        "aaa1": {"status": "staged"},
+                        "bbb2": {"status": "staged"}}.get(tid)
+
+        monkeypatch.setattr(_inst, "load_traces", lambda _p: records, raising=False)
+        monkeypatch.setattr("opentraces.core.inbox.load_traces",
+                            lambda _p: records)
+        monkeypatch.setattr("opentraces.core.state.StateManager",
+                            lambda _p: _FakeState())
+        monkeypatch.setattr(
+            "opentraces.core.config.get_project_staging_dir",
+            lambda _: isolated_config / "staging",
+        )
+        (isolated_config / "staging").mkdir(exist_ok=True)
+
+        result = runner.invoke(
+            main, ["review-llm", "--dry-run", "--provider", "fake",
+                   "--scope", "committed"],
+        )
+        assert result.exit_code == 0, result.output
+        payload = _extract_json(result.output)
+        assert payload["scope"] == "committed"
+        assert payload["matched"] == 1
+        assert payload["total_available"] == 3
+
+    def test_trace_prefix_selects_single_record(
+        self, runner, isolated_config, monkeypatch,
+    ) -> None:
+        from opentraces.cli import installers as _inst
+
+        records = [
+            {"trace_id": "8a3f1c2d", "content_hash": "h", "steps": []},
+            {"trace_id": "b4c90011", "content_hash": "h", "steps": []},
+        ]
+        monkeypatch.setattr(_inst, "load_traces", lambda _p: records, raising=False)
+        monkeypatch.setattr("opentraces.core.inbox.load_traces",
+                            lambda _p: records)
+        monkeypatch.setattr(
+            "opentraces.core.config.get_project_staging_dir",
+            lambda _: isolated_config / "staging",
+        )
+        (isolated_config / "staging").mkdir(exist_ok=True)
+
+        result = runner.invoke(
+            main, ["review-llm", "--dry-run", "--provider", "fake",
+                   "--trace", "8a3f"],
+        )
+        assert result.exit_code == 0, result.output
+        payload = _extract_json(result.output)
+        assert payload["matched"] == 1
+        assert payload["trace_ids"] == ["8a3f"]
 
 
 class TestReviewLLMDryRun:

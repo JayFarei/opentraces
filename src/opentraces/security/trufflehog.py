@@ -95,6 +95,59 @@ def require_trufflehog() -> str:
     return version
 
 
+def available_installers() -> list[str]:
+    """Names of installers present on PATH, in preference order."""
+    out: list[str] = []
+    if shutil.which("brew"):
+        out.append("brew")
+    if shutil.which("go"):
+        out.append("go")
+    return out
+
+
+def _install_via(method: str) -> bool:
+    if method == "brew":
+        try:
+            subprocess.run(["brew", "install", "trufflehog"], check=True)
+            return True
+        except subprocess.CalledProcessError:
+            return False
+    if method == "go":
+        try:
+            subprocess.run(
+                ["go", "install",
+                 "github.com/trufflesecurity/trufflehog/v3@latest"],
+                check=True,
+            )
+            return True
+        except subprocess.CalledProcessError:
+            return False
+    return False
+
+
+def install_binary(method: str = "auto") -> tuple[bool, str]:
+    """Install the trufflehog binary.
+
+    ``method`` controls which installer is used:
+      - ``"auto"`` (default): try brew, then go install.
+      - ``"brew"`` / ``"go"``: use that installer only.
+
+    Returns ``(ok, method_used)``. ``method_used`` is the installer that
+    succeeded, or ``"none"`` if no installer ran to completion.
+    """
+    if method == "auto":
+        for candidate in available_installers():
+            if _install_via(candidate):
+                return True, candidate
+        return False, "none"
+    if method in ("brew", "go"):
+        if shutil.which(method) is None:
+            return False, "none"
+        ok = _install_via(method)
+        return (True, method) if ok else (False, "none")
+    return False, "none"
+
+
 # ---------------------------------------------------------------------------
 # Scanning
 # ---------------------------------------------------------------------------
