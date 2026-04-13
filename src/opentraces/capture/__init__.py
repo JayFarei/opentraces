@@ -40,11 +40,13 @@ def _register_defaults() -> None:
     from .claude_code.install import ClaudeCodeHookInstaller
     from .git.install import GitHookInstaller
     from .hermes import HermesParser
+    from .skill.install import SkillInstaller
 
     PARSERS["claude-code"] = ClaudeCodeParser
     IMPORTERS["hermes"] = HermesParser
     HOOK_INSTALLERS["claude-code"] = ClaudeCodeHookInstaller
     HOOK_INSTALLERS["git"] = GitHookInstaller
+    HOOK_INSTALLERS["skill"] = SkillInstaller
 
 
 _registered = False

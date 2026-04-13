@@ -153,6 +153,44 @@ class TestSetupTruffleHogDisable:
         assert payload["trufflehog_enabled"] is False
 
 
+class TestSetupReviewPolicy:
+    def test_errors_without_init(self, runner, isolated_config, tmp_path) -> None:
+        with runner.isolated_filesystem(temp_dir=tmp_path):
+            result = runner.invoke(main, ["setup", "review-policy", "--auto"])
+            assert result.exit_code == 2, result.output
+            payload = _extract_json(result.output)
+            assert payload["error"] == "not-initialized"
+
+    def test_flips_review_to_auto(self, runner, isolated_config, tmp_path) -> None:
+        from opentraces.core.config import save_project_config, load_project_config
+        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+            save_project_config(Path(td), {"review_policy": "review"})
+            result = runner.invoke(main, ["setup", "review-policy", "--auto"])
+            assert result.exit_code == 0, result.output
+            payload = _extract_json(result.output)
+            assert payload["review_policy"] == "auto"
+            assert payload["previous"] == "review"
+            assert load_project_config(Path(td))["review_policy"] == "auto"
+
+    def test_conflicting_flags_rejected(self, runner, isolated_config, tmp_path) -> None:
+        from opentraces.core.config import save_project_config
+        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+            save_project_config(Path(td), {"review_policy": "review"})
+            result = runner.invoke(
+                main, ["setup", "review-policy", "--auto", "--review"]
+            )
+            assert result.exit_code == 2
+
+    def test_print_shows_current(self, runner, isolated_config, tmp_path) -> None:
+        from opentraces.core.config import save_project_config
+        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
+            save_project_config(Path(td), {"review_policy": "auto"})
+            result = runner.invoke(main, ["setup", "review-policy", "--print"])
+            assert result.exit_code == 0, result.output
+            payload = _extract_json(result.output)
+            assert payload["review_policy"] == "auto"
+
+
 class TestDoctor:
     def test_reports_security_version(self, runner, isolated_config) -> None:
         result = runner.invoke(main, ["doctor"])
@@ -177,6 +215,63 @@ class TestDoctor:
         assert result.exit_code == 3
         payload = _extract_json(result.output)
         assert "ENABLED-BUT-MISSING" in payload["doctor"]["trufflehog"]["status"]
+
+    def test_reports_tier_list(self, runner, isolated_config) -> None:
+        result = runner.invoke(main, ["doctor"])
+        assert result.exit_code == 0, result.output
+        payload = _extract_json(result.output)
+        tiers = payload["doctor"]["security"]["tiers"]
+        names = [t["name"] for t in tiers]
+        assert names == [
+            "Regex patterns",
+            "Shannon entropy",
+            "TruffleHog",
+            "LLM trace review",
+            "Human review",
+        ]
+        by_name = {t["name"]: t for t in tiers}
+        assert by_name["Regex patterns"]["state"] == "always-on"
+        assert by_name["Shannon entropy"]["state"] == "always-on"
+        assert by_name["TruffleHog"]["state"] == "disabled"
+        assert by_name["LLM trace review"]["state"] == "disabled"
+        # Human review state is project-policy-driven.
+        assert by_name["Human review"]["state"] in {
+            "required", "not-required", "not-initialized",
+        }
+        # Each toggleable tier surfaces its own command.
+        assert by_name["TruffleHog"]["enable_cmd"]
+        assert by_name["TruffleHog"]["disable_cmd"]
+        assert by_name["Regex patterns"]["enable_cmd"] is None
+
+    def test_security_flag_trims_output(self, runner, isolated_config) -> None:
+        result = runner.invoke(main, ["doctor", "--security"])
+        assert result.exit_code == 0, result.output
+        payload = _extract_json(result.output)
+        doc = payload["doctor"]
+        assert "security" in doc
+        # Focused subview omits installer-level checks.
+        assert "hooks" not in doc
+        assert "post_processors" not in doc
+        assert "hf_auth" not in doc
+
+    def test_security_flag_still_exits_nonzero_on_missing_binary(
+        self, runner, isolated_config, monkeypatch
+    ) -> None:
+        from opentraces.core.config import Config, save_config
+        cfg = Config()
+        cfg.security.trufflehog.enabled = True
+        save_config(cfg)
+        monkeypatch.setattr(
+            "opentraces.security.trufflehog.shutil.which", lambda _: None
+        )
+        result = runner.invoke(main, ["doctor", "--security"])
+        assert result.exit_code == 3
+        payload = _extract_json(result.output)
+        th = next(
+            t for t in payload["doctor"]["security"]["tiers"]
+            if t["name"] == "TruffleHog"
+        )
+        assert th["state"] == "missing"
 
 
 class TestPushLLMReviewGate:

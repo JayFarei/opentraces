@@ -17,6 +17,117 @@ from ..security.trufflehog import find_trufflehog
 from ..security.version import SECURITY_VERSION
 
 
+def _regex_pattern_count() -> int:
+    try:
+        from ..security.secrets import _PATTERNS  # type: ignore
+
+        return len(_PATTERNS)
+    except Exception:
+        return 0
+
+
+def _security_tiers(
+    cfg,
+    trufflehog_version: str | None,
+    review_llm: dict,
+    review_policy: str | None,
+) -> list[dict[str, Any]]:
+    """Build the ordered tier list shown in `opentraces doctor`.
+
+    Each entry has:
+    - ``name``: user-facing label (no numeric IDs — those confuse users)
+    - ``state``: machine-readable label (always-on / enabled / disabled /
+      missing / unreachable / required / not-required)
+    - ``detail``: one-line status
+    - ``enable_cmd`` / ``disable_cmd``: what the user can type to flip it
+      (``None`` when not applicable, e.g. always-on tiers)
+    - ``blocks``: does this tier block upload on finding
+    """
+    # TruffleHog
+    th_enabled = cfg.security.trufflehog.enabled
+    if not th_enabled:
+        th_state, th_detail = "disabled", None
+    elif trufflehog_version is None:
+        th_state = "missing"
+        th_detail = "binary not found; run 'opentraces setup trufflehog --verify'"
+    else:
+        th_state = "enabled"
+        th_detail = f"{trufflehog_version} — blocks on finding"
+
+    # LLM trace review
+    rl_enabled = bool(review_llm.get("enabled"))
+    rl_reachable = review_llm.get("reachable")
+    if not rl_enabled:
+        rl_state, rl_detail = "disabled", None
+    elif rl_reachable is False:
+        rl_state = "unreachable"
+        rl_detail = review_llm.get("status") or "endpoint unreachable"
+    else:
+        rl_state = "enabled"
+        backend = review_llm.get("backend") or review_llm.get("provider") or "?"
+        rl_detail = f"{backend} / {review_llm.get('model') or '?'}"
+
+    # Human review — gated by project review policy, not a global toggle.
+    if review_policy == "auto":
+        hr_state = "not-required"
+        hr_detail = "project policy: auto (safe traces auto-approve)"
+    elif review_policy == "review":
+        hr_state = "required"
+        hr_detail = "project policy: review (every trace needs approval)"
+    else:
+        hr_state = "not-initialized"
+        hr_detail = "run 'opentraces init' to set a project policy"
+
+    return [
+        {
+            "name": "Regex patterns",
+            "state": "always-on",
+            "detail": f"{_regex_pattern_count()} built-in detectors",
+            "enable_cmd": None,
+            "disable_cmd": None,
+            "blocks": False,
+        },
+        {
+            "name": "Shannon entropy",
+            "state": "always-on",
+            "detail": "high-entropy strings flagged",
+            "enable_cmd": None,
+            "disable_cmd": None,
+            "blocks": False,
+        },
+        {
+            "name": "TruffleHog",
+            "state": th_state,
+            "detail": th_detail,
+            "enable_cmd": "opentraces setup trufflehog",
+            "disable_cmd": "opentraces setup trufflehog --disable",
+            "blocks": True,
+            "binary_version": trufflehog_version,
+        },
+        {
+            "name": "LLM trace review",
+            "state": rl_state,
+            "detail": rl_detail,
+            "enable_cmd": "opentraces setup review-llm",
+            "disable_cmd": "opentraces setup review-llm --disable",
+            "blocks": False,
+            "provider": review_llm.get("provider"),
+            "backend": review_llm.get("backend"),
+            "model": review_llm.get("model"),
+            "reachable": rl_reachable,
+        },
+        {
+            "name": "Human review",
+            "state": hr_state,
+            "detail": hr_detail,
+            "enable_cmd": "opentraces setup review-policy --review",
+            "disable_cmd": "opentraces setup review-policy --auto",
+            "blocks": False,
+            "review_policy": review_policy,
+        },
+    ]
+
+
 def _trufflehog_status(enabled: bool, version: str | None) -> str:
     if not enabled:
         return "disabled (opt in via 'opentraces setup trufflehog')"
@@ -164,6 +275,23 @@ def _post_processors(cwd: Path) -> list[dict[str, Any]]:
     return out
 
 
+def _project_review_policy(cwd: Path) -> str | None:
+    """Return the project's review_policy ("review"/"auto"), or None if no project.
+
+    load_project_config() returns defaults rather than None, so check the
+    actual file to distinguish "initialized with default" from "never
+    initialized here."
+    """
+    if not (cwd / ".opentraces" / "config.json").exists():
+        return None
+    try:
+        raw = load_project_config(cwd)
+        proj = ProjectConfig.model_validate(raw)
+        return proj.review_policy
+    except Exception:
+        return None
+
+
 def _hook_installers() -> list[dict[str, Any]]:
     """Call .status() on every registered HookInstaller."""
     out: list[dict[str, Any]] = []
@@ -186,16 +314,27 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
     cwd = cwd or Path.cwd()
     th_version = find_trufflehog()
     th_enabled = cfg.security.trufflehog.enabled
+    review_llm = _review_llm_status(cfg.security.review_llm)
+    review_policy = _project_review_policy(cwd)
 
     return {
         "security_version": SECURITY_VERSION,
         "schema_version": _schema_version(),
+        "security": {
+            "version": SECURITY_VERSION,
+            "tiers": _security_tiers(cfg, th_version, review_llm, review_policy),
+            "classifier_sensitivity": getattr(cfg, "classifier_sensitivity", "medium"),
+            "review_policy": review_policy,
+            "blocked_reasons": ["parse_error", "trufflehog_finding"],
+        },
+        # Legacy flat keys — kept for backward compatibility with the
+        # existing doctor JSON consumers. Prefer ``security.tiers``.
         "trufflehog": {
             "enabled": th_enabled,
             "binary_version": th_version,
             "status": _trufflehog_status(th_enabled, th_version),
         },
-        "review_llm": _review_llm_status(cfg.security.review_llm),
+        "review_llm": review_llm,
         "hf_auth": "ok" if cfg.hf_token else "missing",
         "post_processors": _post_processors(cwd),
         "hooks": _hook_installers(),
@@ -204,10 +343,14 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
 
 def exit_code(report_data: dict[str, Any]) -> int:
     """Non-zero when a configured integration is broken."""
-    th = report_data.get("trufflehog") or {}
-    if th.get("enabled") and th.get("binary_version") is None:
-        return 3
-    rl = report_data.get("review_llm") or {}
-    if rl.get("enabled") and rl.get("reachable") is False:
-        return 3
+    tiers = (report_data.get("security") or {}).get("tiers") or []
+    for t in tiers:
+        state = t.get("state")
+        if state in ("missing", "unreachable"):
+            return 3
+    for h in report_data.get("hooks") or []:
+        if h.get("installer") == "skill" and h.get("installed") and (
+            h.get("drift") or h.get("broken_harnesses")
+        ):
+            return 3
     return 0

@@ -1060,16 +1060,109 @@ def setup_review_llm_cmd(
     })
 
 
+@setup_group.command("review-policy")
+@click.option("--auto", "set_auto", is_flag=True,
+              help="Skip human review for safe traces (auto-approve).")
+@click.option("--review", "set_review", is_flag=True,
+              help="Require human review on every trace.")
+@click.option("--print", "print_only", is_flag=True,
+              help="Print the current project review policy and exit.")
+def setup_review_policy_cmd(
+    set_auto: bool, set_review: bool, print_only: bool,
+) -> None:
+    """Set this project's review policy.
+
+    Flips the ``review_policy`` field in ``.opentraces/config.json``:
+
+    \b
+        opentraces setup review-policy --review   require manual approval
+        opentraces setup review-policy --auto     auto-approve safe traces
+        opentraces setup review-policy --print    show current value
+
+    Equivalent to re-running ``opentraces init --review-policy ...`` but
+    without touching the rest of the project config. Must be run from a
+    directory that has already been initialized.
+    """
+    from ..core.config import (
+        ProjectConfig,
+        load_project_config,
+        save_project_config,
+    )
+
+    cwd = Path.cwd()
+    # load_project_config() returns defaults rather than None; check the
+    # actual file so we can steer uninitialized projects to `init`.
+    if not (cwd / ".opentraces" / "config.json").exists():
+        human_hint(
+            "no .opentraces/config.json here — run 'opentraces init' first"
+        )
+        emit_json({"status": "error", "error": "not-initialized"})
+        sys.exit(2)
+
+    raw = load_project_config(cwd)
+    current = raw.get("review_policy", "review")
+
+    if print_only or (not set_auto and not set_review):
+        human_echo(f"review policy: {_cli._bold(current)}")
+        emit_json({"status": "ok", "review_policy": current})
+        return
+
+    if set_auto and set_review:
+        human_hint("pass only one of --auto / --review")
+        emit_json({"status": "error", "error": "conflicting-flags"})
+        sys.exit(2)
+
+    new_value = "auto" if set_auto else "review"
+    if new_value == current:
+        human_echo(f"review policy already {_cli._bold(current)}")
+        emit_json({"status": "ok", "action": "noop", "review_policy": current})
+        return
+
+    raw["review_policy"] = new_value
+    # Validate before writing so we never persist a bad config.
+    ProjectConfig.model_validate(raw)
+    save_project_config(cwd, raw)
+
+    human_echo(
+        f"review policy: {_cli._dim(current)} → {_cli._bold(new_value)}"
+    )
+    if new_value == "auto":
+        human_echo(f"  {_cli._dim('safe traces will auto-approve; push straight through')}")
+    else:
+        human_echo(f"  {_cli._dim('every trace needs manual approval before push')}")
+    emit_json({
+        "status": "ok", "action": "update",
+        "review_policy": new_value, "previous": current,
+    })
+
+
 @main.command("doctor")
-def doctor_cmd() -> None:
+@click.option(
+    "--security", "security_only", is_flag=True,
+    help="Show only the security pipeline subview (versions + tiers).",
+)
+def doctor_cmd(security_only: bool) -> None:
     """Report security pipeline and integration health."""
     from ..core import doctor
 
     cfg = load_config()
     report = doctor.report(cfg, Path.cwd())
-    _render_doctor_human(report)
 
-    emit_json({"status": "ok", "doctor": report})
+    if security_only:
+        _render_doctor_security(report)
+        # Exit-code signal still needs the full tier data, but trim the
+        # JSON payload so piping consumers don't get stuff they asked to
+        # hide.
+        trimmed = {
+            "security_version": report["security_version"],
+            "schema_version": report.get("schema_version"),
+            "security": report["security"],
+        }
+        emit_json({"status": "ok", "doctor": trimmed})
+    else:
+        _render_doctor_human(report)
+        emit_json({"status": "ok", "doctor": report})
+
     code = doctor.exit_code(report)
     if code:
         sys.exit(code)
@@ -1107,33 +1200,82 @@ def _row(mark_kind: str, label: str, value: str, *, detail: str | None = None) -
     human_echo(line)
 
 
-def _trufflehog_row(th: dict) -> None:
-    if not th.get("enabled"):
-        _row("off", "trufflehog", "disabled", detail="opt in via 'opentraces setup trufflehog'")
-        return
-    ver = th.get("binary_version")
-    if ver is None:
-        _row("err", "trufflehog", "missing binary", detail="run 'opentraces setup trufflehog --verify'")
-    else:
-        _row("ok", "trufflehog", ver)
+_TIER_STATE_MARK = {
+    "always-on": "ok",
+    "enabled": "ok",
+    "required": "ok",
+    "disabled": "off",
+    "not-required": "off",
+    "not-initialized": "off",
+    "missing": "err",
+    "unreachable": "err",
+}
+
+_TIER_STATE_LABEL = {
+    "always-on": "always on",
+    "enabled": "enabled",
+    "required": "required",
+    "disabled": "disabled",
+    "not-required": "not required",
+    "not-initialized": "no project",
+    "missing": "missing binary",
+    "unreachable": "unreachable",
+}
 
 
-def _review_llm_row(rl: dict) -> None:
-    if not rl.get("enabled"):
-        _row("off", "review-llm", "disabled", detail="opt in via 'opentraces setup review-llm'")
-        return
-    backend = rl.get("backend") or rl.get("provider") or "?"
-    model = rl.get("model") or "?"
-    reachable = rl.get("reachable")
-    if reachable is False:
-        _row("err", "review-llm", f"{backend} / {model}", detail=rl.get("status", "unreachable"))
-        return
-    # Try to pull the trailing "— N models available" off the status string.
-    note = None
-    status = rl.get("status") or ""
-    if "—" in status:
-        note = status.rsplit("—", 1)[1].strip()
-    _row("ok", "review-llm", f"{backend} / {model}", detail=note)
+def _tier_row(tier: dict) -> None:
+    """Render one tier: name, state label, detail, and a toggle-hint line."""
+    state = tier.get("state", "")
+    mark = _mark_for(_TIER_STATE_MARK.get(state, "off"))
+    name = tier.get("name", "?")
+    value = _TIER_STATE_LABEL.get(state, state)
+    detail = tier.get("detail")
+    # Fixed name column so state values line up.
+    head = f"{name:<22}"
+    line = f"  {mark} {head} {value}"
+    if detail:
+        line += f"  {_cli._dim(detail)}"
+    human_echo(line)
+
+    # Second line: actionable toggle hint, only where applicable.
+    hint = _tier_toggle_hint(state, tier)
+    if hint:
+        pad = " " * (4 + 22 + 1)  # align under the state column
+        human_echo(f"{pad}{_cli._dim(hint)}")
+
+
+def _tier_toggle_hint(state: str, tier: dict) -> str | None:
+    """Return the command the user can run to flip this tier's state."""
+    enable = tier.get("enable_cmd")
+    disable = tier.get("disable_cmd")
+    # Always-on tiers have no toggle — skip the hint line entirely to
+    # keep the report compact.
+    if state == "always-on":
+        return None
+    # Human review is policy-driven, not an on/off toggle.
+    if "review_policy" in tier:
+        other = "auto" if tier.get("review_policy") == "review" else "review"
+        cmd = disable if other == "auto" else enable
+        return f"switch to {other}: {cmd}" if cmd else None
+    if state in ("disabled", "not-initialized"):
+        return f"enable: {enable}" if enable else None
+    if state == "enabled":
+        return f"disable: {disable}" if disable else None
+    if state == "missing":
+        return f"fix: {enable} --verify"
+    if state == "unreachable":
+        return f"reconfigure: {enable}"
+    return None
+
+
+def _security_section(sec: dict) -> None:
+    _section("Security pipeline")
+    for tier in sec.get("tiers", []):
+        _tier_row(tier)
+    sensitivity = sec.get("classifier_sensitivity")
+    if sensitivity:
+        human_echo("")
+        human_echo(f"  {_cli._dim(f'classifier sensitivity: {sensitivity}')}")
 
 
 def _processors_section(specs: list[dict]) -> None:
@@ -1207,17 +1349,18 @@ def _git_row(h: dict) -> None:
     _row("ok", "git", "post-commit hook active")
 
 
-def _render_doctor_human(report: dict) -> None:
-    human_echo(_cli._bold("opentraces doctor"))
-
+def _versions_section(report: dict) -> None:
     _section("Versions")
     _row("ok", "security", report["security_version"])
     if report.get("schema_version"):
         _row("ok", "schema", report["schema_version"])
 
-    _section("Security pipeline")
-    _trufflehog_row(report["trufflehog"])
-    _review_llm_row(report["review_llm"])
+
+def _render_doctor_human(report: dict) -> None:
+    human_echo(_cli._bold("opentraces doctor"))
+
+    _versions_section(report)
+    _security_section(report["security"])
 
     _section("Authentication")
     hf = report.get("hf_auth")
@@ -1228,6 +1371,14 @@ def _render_doctor_human(report: dict) -> None:
 
     _processors_section(report["post_processors"])
     _hooks_section(report["hooks"])
+    human_echo("")
+
+
+def _render_doctor_security(report: dict) -> None:
+    """Focused subview: versions + security pipeline only."""
+    human_echo(_cli._bold("opentraces doctor — security"))
+    _versions_section(report)
+    _security_section(report["security"])
     human_echo("")
 
 
