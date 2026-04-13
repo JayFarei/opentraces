@@ -6,7 +6,7 @@ The compact_boundary JSONL entry captures the pre-compaction state; this hook
 adds the post-compaction state (messages_kept, messages_removed) which is
 otherwise unavailable in the native JSONL.
 
-Install via: opentraces hooks install
+Install via: opentraces setup claude-code
 """
 import json
 import sys

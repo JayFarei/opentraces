@@ -11,7 +11,7 @@ Also fire-and-forget triggers an Intent-enrichment subprocess
 to do anything. Backgrounded with ``start_new_session=True`` so Claude
 Code never waits on the LLM call.
 
-Install via: opentraces hooks install
+Install via: opentraces setup claude-code
 """
 import json
 import os

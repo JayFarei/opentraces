@@ -177,6 +177,31 @@ def run(
     return results
 
 
+def run_for_repo(repo: Path, *, window_hours: int = 2) -> None:
+    """Entrypoint for the installed post-commit shim.
+
+    Loads recent inbox traces, calls ``run()`` to correlate + write notes,
+    and swallows all failures (the shell hook must never block a commit).
+    """
+    import logging
+    log = logging.getLogger("opentraces.post_commit")
+    try:
+        from ...core.config import get_project_staging_dir
+        from ...core.inbox import load_trace_records
+
+        repo = Path(repo).resolve()
+        staging = get_project_staging_dir(repo)
+        if not staging.exists():
+            return
+        since = (
+            datetime.now(timezone.utc) - timedelta(hours=window_hours)
+        ).isoformat()
+        records = load_trace_records(staging, since_iso=since)
+        run(repo, records)
+    except Exception as e:
+        log.debug("post-commit hook suppressed error: %s", e)
+
+
 def kick_background_share(cwd: Path) -> None:
     """Fire-and-forget `opentraces share` in the background.
 

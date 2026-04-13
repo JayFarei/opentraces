@@ -99,3 +99,66 @@ class FormatImporter(Protocol):
             TraceRecord if row is valid, None to skip invalid rows.
         """
         ...
+
+
+# ---------------------------------------------------------------------------
+# HookInstaller protocol — unified contract for wiring opentraces into an
+# external tool's hook system (Claude Code settings.json, git post-commit,
+# and future adapters: Codex, Cursor, etc.).
+#
+# Each adapter implements this by binding to a target at construction (e.g.
+# the claude_dir for Claude Code, the repo root for git). The CLI, `doctor`,
+# and test harnesses then treat every installer uniformly.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class HookInstallResult:
+    """Outcome of install() / remove()."""
+
+    ok: bool = True
+    installed: dict[str, str] = field(default_factory=dict)
+    added: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+    config_files: list[Path] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+
+class HookInstallError(Exception):
+    """Typed failure from a HookInstaller. Code is stable for CLI/JSON output."""
+
+    def __init__(self, code: str, message: str, hint: str = "") -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.hint = hint
+
+
+@runtime_checkable
+class HookInstaller(Protocol):
+    """Contract for installing/removing opentraces integration points.
+
+    Implementations should be idempotent and should never leave partial
+    state on failure (validate first, then write). Raise HookInstallError
+    for user-actionable failures; reserve exceptions for programmer errors.
+    """
+
+    installer_name: str  # stable id, e.g. "claude-code", "git"
+
+    def plan(self) -> list[dict]:
+        """Return a list of {event, source, dest} dicts describing install()."""
+        ...
+
+    def install(self) -> HookInstallResult:
+        """Install hooks. Idempotent."""
+        ...
+
+    def remove(self) -> HookInstallResult:
+        """Remove hooks. Idempotent."""
+        ...
+
+    def status(self) -> dict:
+        """Report current install state (for `opentraces doctor`)."""
+        ...
+
+

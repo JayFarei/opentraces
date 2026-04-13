@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING
 from . import claude_code, hermes
 
 if TYPE_CHECKING:
-    from ._base import FormatImporter, SessionParser  # noqa: F401
+    from ._base import (  # noqa: F401
+        FormatImporter,
+        HookInstaller,
+        SessionParser,
+    )
 
 REGISTRY = {
     "claude_code": claude_code,
@@ -24,16 +28,23 @@ PARSERS: dict[str, type] = {}
 # File-based importers: format_name -> importer class
 IMPORTERS: dict[str, type] = {}
 
+# Hook installers: installer_name -> installer class (HookInstaller protocol)
+HOOK_INSTALLERS: dict[str, type] = {}
+
 # Accepted aliases for format names (old_name -> canonical_name)
 _IMPORT_ALIASES: dict[str, str] = {}
 
 
 def _register_defaults() -> None:
     from .claude_code import ClaudeCodeParser
+    from .claude_code.install import ClaudeCodeHookInstaller
+    from .git.install import GitHookInstaller
     from .hermes import HermesParser
 
     PARSERS["claude-code"] = ClaudeCodeParser
     IMPORTERS["hermes"] = HermesParser
+    HOOK_INSTALLERS["claude-code"] = ClaudeCodeHookInstaller
+    HOOK_INSTALLERS["git"] = GitHookInstaller
 
 
 _registered = False
@@ -55,6 +66,14 @@ def get_importers() -> dict[str, type]:
     return IMPORTERS
 
 
+def get_hook_installers() -> dict[str, type]:
+    global _registered
+    if not _registered:
+        _register_defaults()
+        _registered = True
+    return HOOK_INSTALLERS
+
+
 def resolve_import_format(name: str) -> str | None:
     importers = get_importers()
     if name in importers:
@@ -68,9 +87,11 @@ __all__ = [
     "REGISTRY",
     "PARSERS",
     "IMPORTERS",
+    "HOOK_INSTALLERS",
     "claude_code",
     "hermes",
     "get_parsers",
     "get_importers",
+    "get_hook_installers",
     "resolve_import_format",
 ]

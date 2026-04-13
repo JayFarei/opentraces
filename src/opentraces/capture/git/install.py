@@ -13,9 +13,11 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from ...enrichment.git.notes_store import NOTES_REF
+from .._base import HookInstallResult
 
 HOOK_FILENAME = "opentraces-post-commit"
 CHAIN_BEGIN = "# >>> opentraces post-commit chain >>>"
@@ -135,15 +137,55 @@ def status(repo: Path) -> dict:
     """Return a dict describing installation state."""
     gdir = _git_dir(repo)
     if gdir is None:
-        return {"installed": False, "reason": "not a git repo"}
+        return {"installer": "git", "installed": False, "reason": "not a git repo"}
     hooks_dir = gdir / "hooks"
     owned = hooks_dir / HOOK_FILENAME
     pc = hooks_dir / "post-commit"
     has_owned = owned.exists()
     has_chain = pc.exists() and CHAIN_BEGIN in pc.read_text()
     return {
+        "installer": "git",
         "installed": has_owned and has_chain,
         "owned_hook_present": has_owned,
         "chain_present": has_chain,
         "hook_dir": str(hooks_dir),
     }
+
+
+@dataclass
+class GitHookInstaller:
+    """HookInstaller protocol adapter for git post-commit."""
+
+    installer_name: str = "git"
+    repo: Path | None = None
+
+    def _target(self) -> Path:
+        return self.repo or Path.cwd()
+
+    def plan(self) -> list[dict]:
+        gdir = _git_dir(self._target())
+        hook_dir = str(gdir / "hooks") if gdir else "<no-git-repo>"
+        return [
+            {
+                "event": "post-commit",
+                "source": "<generated>",
+                "dest": f"{hook_dir}/{HOOK_FILENAME}",
+            }
+        ]
+
+    def install(self) -> HookInstallResult:
+        ok = install(self._target())
+        st = status(self._target())
+        return HookInstallResult(
+            ok=ok,
+            installed={"post-commit": st.get("hook_dir", "")} if ok else {},
+            added=["post-commit"] if ok and st.get("installed") else [],
+            notes=[] if ok else ["not a git repo or insufficient permissions"],
+        )
+
+    def remove(self) -> HookInstallResult:
+        ok = remove(self._target())
+        return HookInstallResult(ok=ok, removed=["post-commit"] if ok else [])
+
+    def status(self) -> dict:
+        return status(self._target())
