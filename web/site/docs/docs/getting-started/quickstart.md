@@ -22,9 +22,9 @@ Paste a HuggingFace access token with **write** scope from [huggingface.co/setti
 opentraces init --review-policy review --start-fresh
 ```
 
-This creates `.opentraces/config.json`, `.opentraces/staging/`, the agent session hook, and installs the opentraces skill into `.agents/skills/opentraces/`. If you omit the flags, `opentraces init` will prompt for the same choices interactively.
+This creates `.opentraces/config.json`, `.opentraces/staging/`, the agent capture hook, and installs the opentraces skill into `.agents/skills/opentraces/`. If you omit the flags, `opentraces init` will prompt for the same choices interactively.
 
-If your agent already has session logs for this repo, pass `--import-existing` to pull that backlog into the inbox now. Use `--start-fresh` if you only want capture from your next connected session onward.
+If your agent already has trace logs for this repo, pass `--import-existing` to pull that backlog into the inbox now. Use `--start-fresh` if you only want capture from your next connected agent run onward.
 
 ## 4. Open the Inbox
 
@@ -34,7 +34,7 @@ If your agent already has session logs for this repo, pass `--import-existing` t
 opentraces web
 ```
 
-The browser inbox shows a timeline of each session's steps, tool calls, and reasoning. Switch to the review view to see context items grouped by source.
+The browser inbox shows a timeline of each trace's steps, tool calls, and reasoning. Switch to the review view to see context items grouped by source.
 
 ![Web inbox - timeline view](/docs/assets/web-timeline.png)
 
@@ -46,11 +46,11 @@ The browser inbox shows a timeline of each session's steps, tool calls, and reas
 opentraces tui
 ```
 
-The TUI shows sessions, summary, and detail in a three-panel layout. Use keyboard shortcuts to navigate, commit, reject, or discard traces.
+The TUI shows traces, summary, and detail in a three-panel layout. Use keyboard shortcuts to navigate, commit, reject, or discard traces.
 
 ![Terminal inbox](/docs/assets/tui.png)
 
-Use `session list`, `session commit`, `session reject`, and `session redact` if you prefer direct CLI control.
+Use `trace list`, `trace commit`, `trace reject`, and `trace redact` if you prefer direct CLI control.
 
 ## 5. Commit and Push
 

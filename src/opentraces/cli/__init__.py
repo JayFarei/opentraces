@@ -914,7 +914,7 @@ def config_set(
     save_config(cfg)
     emit_json({
         "status": "ok",
-        "next_steps": ["Run 'opentraces discover' to find sessions"],
+        "next_steps": ["Run 'opentraces discover' to find traces"],
         "next_command": "opentraces discover",
     })
 
@@ -926,7 +926,7 @@ def config_set(
         "opentraces init --remote owner/my-traces --public",
     ],
     see_also=[
-        ("opentraces setup claude-code", "install session capture hooks"),
+        ("opentraces setup claude-code", "install Claude Code capture hooks"),
         ("opentraces login", "authenticate with HuggingFace"),
     ],
     option_groups=[
@@ -936,13 +936,13 @@ def config_set(
     ],
 )
 @click.option("--agent", "agents", multiple=True, type=click.Choice(list(SUPPORTED_AGENTS)), help="Agent runtime to connect")
-@click.option("--review-policy", type=click.Choice(["review", "auto"]), default=None, help="Whether safe sessions require review")
+@click.option("--review-policy", type=click.Choice(["review", "auto"]), default=None, help="Whether safe traces require review")
 @click.option("--push-policy", type=click.Choice(["manual", "auto-push"]), default=None, hidden=True, help="Legacy: derived from review policy")
 @click.option(
     "--import-existing/--start-fresh",
     "import_existing",
     default=None,
-    help="Import existing Claude Code sessions for this repo",
+    help="Import existing Claude Code traces for this repo",
 )
 @click.option("--mode", type=click.Choice(["auto", "review"]), default=None, hidden=True, help="Legacy alias for --review-policy")
 @click.option("--remote", type=str, default=None, help="HF dataset repo (owner/name)")
@@ -1038,7 +1038,7 @@ def init(
                 chosen_review = await select(
                     "Which review policy should this inbox use?",
                     [
-                        Option(value="review", label="Review every session", hint="Sessions land in Inbox for you to review"),
+                        Option(value="review", label="Review every trace", hint="Traces land in Inbox for you to review"),
                         Option(value="auto", label="Fully automatic", hint="Capture, sanitize, commit, and push automatically"),
                     ],
                     initial_value=review_policy,
@@ -1133,7 +1133,7 @@ def init(
 
             import_existing = asyncio.run(
                 confirm(
-                    f"Import {existing_session_count} existing Claude Code session(s) for this repo now?",
+                    f"Import {existing_session_count} existing Claude Code trace(s) for this repo now?",
                     initial_value=True,
                     active="Import now",
                     inactive="Start fresh",
@@ -1141,7 +1141,7 @@ def init(
             )
         except ImportError:
             import_existing = click.confirm(
-                f"Import {existing_session_count} existing Claude Code session(s) for this repo now?",
+                f"Import {existing_session_count} existing Claude Code trace(s) for this repo now?",
                 default=True,
             )
 
@@ -1165,19 +1165,19 @@ def init(
     click.echo(f"  Policy:  {review_policy}")
     click.echo(f"  Push:    {push_policy}")
     if existing_session_count:
-        click.echo(f"  Existing Claude sessions: {existing_session_count}")
+        click.echo(f"  Existing Claude traces: {existing_session_count}")
         if imported_existing or import_errors:
             click.echo(f"  Imported existing: {imported_existing} ({import_errors} errors)")
         else:
-            click.echo("  Existing sessions were left untouched; new sessions will capture automatically.")
+            click.echo("  Existing traces were left untouched; new traces will capture automatically.")
     click.echo("\nRecommended flow:")
     if existing_session_count and imported_existing:
         click.echo("  1. Review the imported inbox with 'opentraces web' or 'opentraces tui'")
     elif existing_session_count:
-        click.echo("  1. Decide whether to import past sessions or just start from now on")
+        click.echo("  1. Decide whether to import past traces or just start from now on")
         click.echo(f"     Session dir: {existing_session_dir}")
     else:
-        click.echo("  1. Start a connected agent session; capture is automatic from now on")
+        click.echo("  1. Start a connected agent; capture is automatic from now on")
     click.echo("  2. Review and commit inbox traces with 'opentraces commit --all'")
     click.echo("  3. Publish committed traces with 'opentraces push'")
 
@@ -1198,9 +1198,9 @@ def init(
         "staging_path": str(staging_dir),
         "next_steps": [
             "Review imported traces with opentraces web" if imported_existing else (
-                "Import past sessions or start a connected agent session; future traces will be captured automatically"
+                "Import past traces or start a connected agent; future traces will be captured automatically"
                 if existing_session_count
-                else "Start a connected agent session, traces will be captured automatically"
+                else "Start a connected agent, traces will be captured automatically"
             ),
         ],
         "next_command": "opentraces web" if imported_existing else "opentraces",
@@ -1342,6 +1342,14 @@ def upgrade(skill_only: bool) -> None:
     skill_refreshed = _install_skill(project_dir, agents)
     if not skill_refreshed:
         human_echo("Warning: could not find skill source to install.")
+
+    try:
+        from ..capture.skill.install import SkillInstaller
+        global_skill = SkillInstaller().install()
+        if global_skill.ok:
+            human_echo("  Refreshed global skill: ~/.agents/skills/opentraces/")
+    except Exception as e:
+        human_echo(f"  Could not refresh global skill: {e}")
 
     hook_refreshed = _install_capture_hook(project_dir, agents) if not proj_config.get("no_hook") else False
 
@@ -1522,7 +1530,7 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
     type=int,
     default=10,
     show_default=True,
-    help="Show N most-recent sessions. Use 0 to list all.",
+    help="Show N most-recent traces. Use 0 to list all.",
 )
 def status(limit: int) -> None:
     """Show status of the current opentraces project."""
@@ -1581,7 +1589,7 @@ def status(limit: int) -> None:
 
     # Session list (only the top N by mtime)
     if total_files == 0:
-        click.echo("0 sessions in inbox")
+        click.echo("0 traces in inbox")
     else:
         if limit and limit > 0 and total_files > limit:
             staged_files = sorted(
@@ -1600,11 +1608,11 @@ def status(limit: int) -> None:
         if shown < total_files:
             pages = (total_files + shown - 1) // shown if shown else 1
             click.echo(
-                f"{_bold(f'showing {shown} of {total_files}')} sessions  "
+                f"{_bold(f'showing {shown} of {total_files}')} traces  "
                 f"{_dim(f'(page 1 of ~{pages}; use --limit N or --limit 0 for more)')}"
             )
         else:
-            click.echo(f"{_bold(str(total_files))} session{'s' if total_files != 1 else ''}")
+            click.echo(f"{_bold(str(total_files))} trace{'s' if total_files != 1 else ''}")
         click.echo()
 
         from opentraces_schema import TraceRecord
@@ -1790,7 +1798,7 @@ def status(limit: int) -> None:
 
 
 # Register subcommand modules (side-effect: @main.command() bindings)
-from . import session as _session_module  # noqa: F401,E402
+from . import trace as _trace_module  # noqa: F401,E402
 from . import installers as _installers_module  # noqa: F401,E402
 from . import publish as _publish_module  # noqa: F401,E402
 from . import import_hf as _import_hf_module  # noqa: F401,E402
@@ -1889,9 +1897,9 @@ def remote_remove() -> None:
 
 @main.command(hidden=True)
 @click.option("--auto", is_flag=True, help="Auto-approve (skip review)")
-@click.option("--limit", type=int, default=0, help="Max sessions to parse (0=all)")
+@click.option("--limit", type=int, default=0, help="Max traces to parse (0=all)")
 def parse(auto: bool, limit: int) -> None:
-    """Parse agent sessions into enriched JSONL traces."""
+    """Parse raw agent logs into enriched JSONL traces."""
     from ..core.config import get_projects_path, is_project_excluded
     from ..capture.claude_code import ClaudeCodeParser
     from ..core.pipeline import process_trace
@@ -1908,7 +1916,7 @@ def parse(auto: bool, limit: int) -> None:
     skipped_count = 0
     error_count = 0
 
-    click.echo(f"Scanning sessions in {projects_path}...")
+    click.echo(f"Scanning traces in {projects_path}...")
 
     for session_path in parser.discover_sessions(projects_path):
         if limit > 0 and parsed_count >= limit:
@@ -1992,7 +2000,7 @@ def web(port: int, no_open: bool) -> None:
     type=int,
     default=500,
     show_default=True,
-    help="Maximum number of sessions to load (most recent first). Use 0 for no limit.",
+    help="Maximum number of traces to load (most recent first). Use 0 for no limit.",
 )
 def tui(fullscreen: bool, limit: int) -> None:
     """Open the terminal inbox UI."""
@@ -2309,7 +2317,7 @@ def commit_traces(message: str | None, commit_all: bool) -> None:
 
     inbox = state.get_traces_by_status(TraceStatus.STAGED)
     if not inbox:
-        click.echo("No inbox traces to commit. Run 'opentraces' or 'opentraces web' to review sessions.")
+        click.echo("No inbox traces to commit. Run 'opentraces' or 'opentraces web' to review traces.")
         emit_json({"status": "ok", "committed": 0, "hint": "Open the inbox to review traces"})
         return
 
@@ -2484,7 +2492,7 @@ def introspect() -> None:
             "tui": {"description": "Open the terminal inbox"},
             "commit": {"description": "Commit inbox traces for push", "options": ["-m", "--all"]},
             "push": {"description": "Upload committed traces to HuggingFace Hub", "options": ["--private", "--public"]},
-            "session": {"description": "Manage individual trace sessions", "subcommands": ["list", "show", "commit", "reject", "reset", "redact", "discard"]},
+            "trace": {"description": "Manage individual traces", "subcommands": ["list", "show", "commit", "reject", "reset", "redact", "discard"]},
             "remote": {"description": "Manage dataset remote", "subcommands": ["current", "list", "use", "remove"]},
             "status": {"description": "Show repo inbox status"},
             "stats": {"description": "Aggregate statistics (traces, tokens, cost, models)"},

@@ -2,7 +2,7 @@
 
 ## Outcome
 
-The `outcome` object captures the session-level result and the confidence of the signal that set it:
+The `outcome` object captures the trace-level result and the confidence of the signal that set it:
 
 Outcome fields are split by `execution_context`. Devtime agents (code-editing) use `committed`
 as the primary reward proxy. Runtime agents (action-trajectory / RL) use `terminal_state` and `reward`.
@@ -53,13 +53,13 @@ as the primary reward proxy. Runtime agents (action-trajectory / RL) use `termin
 
 ### Committed as a Quality Signal
 
-For devtime agents, a session that results in a commit is higher-signal than one abandoned or reverted. The commit hash gives a deterministic anchor for replaying the patch and comparing later revisions.
+For devtime agents, a trace that results in a commit is higher-signal than one abandoned or reverted. The commit hash gives a deterministic anchor for replaying the patch and comparing later revisions.
 
 For runtime agents, `terminal_state` and `reward` serve the equivalent role — ground truth from the environment.
 
 ## Attribution
 
-The `attribution` block records which files and line ranges were produced by the agent session.
+The `attribution` block records which files and line ranges were produced by the agent trace.
 
 ```json
 {
@@ -146,7 +146,7 @@ The `attribution` block records which files and line ranges were produced by the
 Attribution is built deterministically by a three-layer pipeline (plan 041):
 
 1. **PostToolUse hook** — fires after each Edit/Write, reads the file from disk, and records the exact post-edit lines plus a `murmur3:` hash. Highest confidence.
-2. **Unified diff** — when no hook event is present, the session's diff is parsed to recover ranges. Medium confidence.
+2. **Unified diff**, when no hook event is present, the trace's diff is parsed to recover ranges. Medium confidence.
 3. **`str.find` fallback** — last-resort textual match of tool output back to the file. Low confidence, always marked `experimental: true`.
 
 These feed a common resolver that emits Agent Trace-compatible `attribution` records and, where possible, pins them to a specific commit via `attribution.revision` and the trace's `git_links`.
@@ -196,7 +196,7 @@ Consumers filter by tier to build training subsets of the desired signal quality
 
 `TraceRecord.lifecycle` gates when a trace is safe to treat as revision-anchored:
 
-- `"provisional"` — captured at session end. `git_links` may be empty or speculative.
+- `"provisional"`, captured at trace end. `git_links` may be empty or speculative.
 - `"final"` — the `opentraces setup git` post-commit hook has correlated this trace to at least one commit and pinned `attribution.revision`. Promoted exactly once; never downgraded.
 
 Dataset consumers that want only revision-anchored traces should filter on `lifecycle == "final"` and then on `git_links[].tier`.
@@ -207,7 +207,7 @@ This field bridges trajectory (process) and attribution (output):
 
 - `conversation.url` links each attributed range back to the step that produced it
 - `content_hash` is a short stable hash for tracking attribution across refactors
-- Sessions that produce no code changes have `attribution: null`
+- Traces that produce no code changes have `attribution: null`
 
 ### Why Embed, Not Link
 

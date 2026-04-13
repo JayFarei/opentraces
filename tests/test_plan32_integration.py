@@ -20,7 +20,7 @@ from opentraces.core.config import Config, TruffleHogConfig
 from opentraces.capture._base import ParseOutcome
 from opentraces.security.anonymizer import EntityMap, normalize_user_paths
 from opentraces.security.llm_provider import FakeProvider
-from opentraces.security.llm_review import review_session
+from opentraces.security.llm_review import review_trace
 from opentraces.security.pii_detector import LLMPIIDetector
 from opentraces.security.scanner import is_base64_blob, is_safe_field_path
 from opentraces.security.scanner_trufflehog import maybe_run_trufflehog
@@ -101,7 +101,7 @@ def test_full_stack_integration(monkeypatch, tmp_path) -> None:
             "summary": "uncertain",
         },
     ])
-    verdict = review_session(
+    verdict = review_trace(
         steps=["a" * 300_000, "b" * 300_000],
         provider=review_provider,
         max_chars_per_chunk=400_000,

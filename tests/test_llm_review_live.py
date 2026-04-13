@@ -13,7 +13,7 @@ import subprocess
 import pytest
 
 from opentraces.security.llm_provider import OllamaProvider
-from opentraces.security.llm_review import review_session
+from opentraces.security.llm_review import review_trace
 
 
 def _ollama_has_model(base: str) -> bool:
@@ -37,7 +37,7 @@ def _ollama_has_model(base: str) -> bool:
 )
 def test_live_review_clean_session_returns_verdict() -> None:
     provider = OllamaProvider(model="gemma4:e4b", timeout=300.0)
-    verdict = review_session(
+    verdict = review_trace(
         steps=[
             "user: please list files in the current directory",
             "assistant: here are the files: README.md, src/, tests/",
@@ -57,7 +57,7 @@ def test_live_review_clean_session_returns_verdict() -> None:
 )
 def test_live_review_leaked_secret_flagged() -> None:
     provider = OllamaProvider(model="gemma4:e4b", timeout=300.0)
-    verdict = review_session(
+    verdict = review_trace(
         steps=[
             "user: run the deploy script",
             "assistant: setting AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/"

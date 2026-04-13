@@ -1,10 +1,10 @@
 import { useState, useCallback } from "react";
 import { useSelection } from "../../contexts/SelectionContext";
-import { useSessionList } from "../../hooks/useSessionList";
+import { useTraceList } from "../../hooks/useTraceList";
 import { useReviewActions } from "../../hooks/useReviewActions";
 import { CommitDialog } from "../review/CommitDialog";
 import { RedactionWand } from "../review/RedactionWand";
-import type { SessionStage } from "../../types/trace";
+import type { TraceStage } from "../../types/trace";
 
 function ActionButton({
   label,
@@ -30,25 +30,25 @@ function ActionButton({
 }
 
 export function ReviewBar() {
-  const { selectedSessionId } = useSelection();
-  const { data: sessions } = useSessionList();
-  const { commit: commitSession, reject, push } = useReviewActions();
+  const { selectedTraceId } = useSelection();
+  const { data: traces } = useTraceList();
+  const { commit: commitTrace, reject, push } = useReviewActions();
   const [showCommitDialog, setShowCommitDialog] = useState(false);
 
   const handleWandRedact = useCallback((text: string) => {
     // For now, log the redaction. Full API integration when backend supports text-based redaction.
     console.log("[redaction-wand] User selected for redaction:", text);
-    // TODO: POST /api/session/<id>/redact-text { text, trace_id }
+    // TODO: POST /api/trace/<id>/redact-text { text, trace_id }
     alert(`Marked for redaction: "${text.length > 50 ? text.slice(0, 49) + "\u2026" : text}"`);
   }, []);
 
-  const session = sessions?.find((s) => s.trace_id === selectedSessionId);
-  if (!session) return null;
+  const trace = traces?.find((s) => s.trace_id === selectedTraceId);
+  if (!trace) return null;
 
-  const currentStage: SessionStage = session.stage;
-  const traceId = session.trace_id;
+  const currentStage: TraceStage = trace.stage;
+  const traceId = trace.trace_id;
   const isBusy =
-    commitSession.isPending || reject.isPending || push.isPending;
+    commitTrace.isPending || reject.isPending || push.isPending;
 
   return (
     <>
@@ -99,7 +99,7 @@ export function ReviewBar() {
 
       {showCommitDialog && (
         <CommitDialog
-          sessions={sessions?.filter((s) => s.stage === "inbox") ?? []}
+          traces={traces?.filter((s) => s.stage === "inbox") ?? []}
           onClose={() => setShowCommitDialog(false)}
         />
       )}

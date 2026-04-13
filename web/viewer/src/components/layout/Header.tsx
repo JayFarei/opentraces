@@ -1,25 +1,25 @@
 import { useState } from "react";
-import { useSessionList } from "../../hooks/useSessionList";
+import { useTraceList } from "../../hooks/useTraceList";
 import { useAppContext } from "../../hooks/useAppContext";
 import { useViewPreferences } from "../../contexts/ViewPreferencesContext";
 import { RemoteSetForm } from "../RemoteSetForm";
-import type { SessionStage } from "../../types/trace";
+import type { TraceStage } from "../../types/trace";
 
 export function Header() {
-  const { data: sessions } = useSessionList();
+  const { data: traces } = useTraceList();
   const { data: appContext } = useAppContext();
   const { theme, toggleTheme } = useViewPreferences();
   const [showRemoteForm, setShowRemoteForm] = useState(false);
 
-  const counts: Record<SessionStage, number> = {
+  const counts: Record<TraceStage, number> = {
     inbox: 0,
     committed: 0,
     pushed: 0,
     rejected: 0,
   };
 
-  if (sessions) {
-    for (const s of sessions) {
+  if (traces) {
+    for (const s of traces) {
       counts[s.stage]++;
     }
   }

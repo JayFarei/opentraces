@@ -1,6 +1,6 @@
 # Inbox
 
-The inbox is where you inspect and edit staged traces before committing. Use the web inbox, the terminal inbox, or the `session` CLI subcommands.
+The inbox is where you inspect and edit staged traces before committing. Use the web inbox, the terminal inbox, or the `trace` CLI subcommands.
 
 ## Web Inbox
 
@@ -22,7 +22,7 @@ opentraces tui
 opentraces tui --fullscreen
 ```
 
-Three-panel layout: sessions list, summary, and detail. Keyboard shortcuts for navigation, commit, reject, and discard.
+Three-panel layout: traces list, summary, and detail. Keyboard shortcuts for navigation, commit, reject, and discard.
 
 ![Terminal inbox](/docs/assets/tui.png)
 
@@ -39,7 +39,7 @@ opentraces trace redact <trace-id> --step 3
 opentraces trace discard <trace-id> --yes
 ```
 
-`commit` moves a trace directly to `Committed`, `reject` keeps it local only, `reset` sends it back to `Inbox`, and `redact` rewrites the staged JSONL in place. `session show --verbose` prints the full step-level detail including raw tool inputs and outputs.
+`commit` moves a trace directly to `Committed`, `reject` keeps it local only, `reset` sends it back to `Inbox`, and `redact` rewrites the staged JSONL in place. `trace show --verbose` prints the full step-level detail including raw tool inputs and outputs.
 
 ## Stage Vocabulary
 

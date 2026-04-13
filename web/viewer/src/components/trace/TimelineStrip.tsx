@@ -19,8 +19,8 @@ const TYPE_COLORS: Record<TreeNode["type"], string> = {
 };
 
 export function TimelineStrip() {
-  const { selectedSessionId, selectedNodeId, setSelectedNodeId } = useSelection();
-  const { data: trace, tree } = useTraceData(selectedSessionId);
+  const { selectedTraceId, selectedNodeId, setSelectedNodeId } = useSelection();
+  const { data: trace, tree } = useTraceData(selectedTraceId);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const flatNodes = useMemo(() => flattenTree(tree), [tree]);
@@ -60,10 +60,10 @@ export function TimelineStrip() {
     return { totalDuration: effectiveTotal, timeScale: scale, nodeOffsets: offsets };
   }, [trace, flatNodes]);
 
-  if (!selectedSessionId) {
+  if (!selectedTraceId) {
     return (
       <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)]">
-        select a session
+        select a trace
       </div>
     );
   }

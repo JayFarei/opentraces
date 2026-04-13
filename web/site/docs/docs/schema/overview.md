@@ -1,6 +1,6 @@
 # Schema Overview
 
-opentraces uses a training-first JSONL schema where each line is one complete agent session. The schema is a superset of ATIF v1.6, informed by ADP and field patterns from existing HF datasets.
+opentraces uses a training-first JSONL schema where each line is one complete agent trace. The schema is a superset of ATIF v1.6, informed by ADP and field patterns from existing HF datasets.
 
 ## Design Principles
 
@@ -45,10 +45,10 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
 | `role: "agent"` not `"assistant"` | Follows ATIF convention (`system`, `user`, `agent`). |
 | Tool calls separated from observations | Preserves call/result separation training pipelines depend on. |
 | System prompt dedup | Hash-based lookup table. A 20K-token prompt repeated across steps would be wasteful. |
-| `parent_step` per step | Precise parent-child tree for sub-agents, not a flat session-level array. |
+| `parent_step` per step | Precise parent-child tree for sub-agents, not a flat trace-level array. |
 | `content_hash` | Two scopes, two algorithms by design. Top-level `TraceRecord.content_hash` is SHA-256 of the serialized record — cryptographic collision resistance for cross-contributor dedup at upload time. `AttributionRange.content_hash` is `murmur3:<32-hex>` — fast cross-tool matching of specific line ranges, per Agent Trace v0.1.0. The murmur3 prefix (added 0.3.0) replaces the prior md5-truncated form and only applies to attribution-range hashes. |
 | `reasoning_content` | Explicit chain-of-thought field. Improved SWE-Bench by ~3 pts (Cognition data). |
-| `outcome.committed` | Did the session's changes get committed? Cheap, deterministic quality signal. |
+| `outcome.committed` | Did the trace's changes get committed? Cheap, deterministic quality signal. |
 | `attribution` | Embedded Agent Trace block. Bridges trajectory (process) with code attribution (output). |
 
 ## Schema Package

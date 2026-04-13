@@ -1,23 +1,23 @@
 import { useState } from "react";
 import { useReviewActions } from "../../hooks/useReviewActions";
-import type { SessionListItem } from "../../types/trace";
+import type { TraceListItem } from "../../types/trace";
 
 interface CommitDialogProps {
-  sessions: SessionListItem[];
+  traces: TraceListItem[];
   onClose: () => void;
 }
 
-export function CommitDialog({ sessions, onClose }: CommitDialogProps) {
+export function CommitDialog({ traces, onClose }: CommitDialogProps) {
   const { commit } = useReviewActions();
   const [selected, setSelected] = useState<Set<string>>(
-    new Set(sessions.map((s) => s.trace_id)),
+    new Set(traces.map((s) => s.trace_id)),
   );
   const [message, setMessage] = useState(() => {
-    const descs = sessions
+    const descs = traces
       .slice(0, 3)
       .map((s) => s.task_description || "untitled")
       .join(", ");
-    return `Add ${sessions.length} traces: ${descs}`;
+    return `Add ${traces.length} traces: ${descs}`;
   });
 
   const toggle = (id: string) => {
@@ -32,7 +32,7 @@ export function CommitDialog({ sessions, onClose }: CommitDialogProps) {
   const handleCommit = () => {
     if (selected.size === 0) return;
     commit.mutate(
-      { sessionIds: Array.from(selected), message },
+      { traceIds: Array.from(selected), message },
       { onSuccess: () => onClose() },
     );
   };
@@ -53,9 +53,9 @@ export function CommitDialog({ sessions, onClose }: CommitDialogProps) {
           </span>
         </div>
 
-        {/* Session list */}
+        {/* Trace list */}
         <div className="px-4 py-2 max-h-[200px] overflow-y-auto">
-          {sessions.map((s) => (
+          {traces.map((s) => (
             <label
               key={s.trace_id}
               className="flex items-center gap-2 py-1 cursor-pointer"

@@ -1,19 +1,19 @@
 import { useSelection } from "../../contexts/SelectionContext";
 import { useTraceData } from "../../hooks/useTraceData";
 import { useViewPreferences } from "../../contexts/ViewPreferencesContext";
-import { cleanSessionName, formatTokens, formatDuration } from "../../lib/format";
+import { cleanTraceName, formatTokens, formatDuration } from "../../lib/format";
 
 
-export function SessionHeader() {
-  const { selectedSessionId } = useSelection();
-  const { data: trace } = useTraceData(selectedSessionId);
+export function TraceHeader() {
+  const { selectedTraceId } = useSelection();
+  const { data: trace } = useTraceData(selectedTraceId);
   const { traceViewMode, setTraceViewMode } = useViewPreferences();
 
-  if (!selectedSessionId || !trace) {
+  if (!selectedTraceId || !trace) {
     return null;
   }
 
-  const sessionName = cleanSessionName(trace.task.description ?? "", trace.timestamp_start);
+  const traceName = cleanTraceName(trace.task.description ?? "", trace.timestamp_start);
 
   // Date formatting
   let dateStr = "";
@@ -66,10 +66,10 @@ export function SessionHeader() {
 
   return (
     <div className="flex-none border-b border-[var(--border)] bg-[var(--surface)] px-3 py-1.5">
-      {/* Line 1: session name + date + duration + step count */}
+      {/* Line 1: trace name + date + duration + step count */}
       <div className="flex items-center gap-3 text-[11px] font-[family-name:var(--font-mono)]">
         <span className="text-[var(--text)] font-semibold truncate max-w-[50%]">
-          {sessionName}
+          {traceName}
         </span>
         {dateStr && (
           <span className="text-[var(--text-muted)] flex-none">{dateStr}</span>

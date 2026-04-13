@@ -316,7 +316,7 @@ def run_llm_review(
     from ..security.llm_review import (
         LLMReviewVerdict,
         review_key as _review_key,
-        review_session,
+        review_trace,
     )
     from ..security.verdict_display import verdict_badge, verdict_to_payload
 
@@ -377,7 +377,7 @@ def run_llm_review(
             )
             continue
 
-        verdict = review_session(
+        verdict = review_trace(
             steps=_steps_text(rec), provider=llm, context=context,
         )
         payload = _payload(verdict, key)

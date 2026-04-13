@@ -25,7 +25,7 @@ make test                         # or: ./.venv/bin/pytest -q
 make lint                         # ruff check
 ```
 
-Some tests require real Claude Code session data and are skipped by default. To run them, set the env var pointing to your project's sessions directory:
+Some tests require real Claude Code trace data and are skipped by default. To run them, set the env var pointing to your project's Claude Code sessions directory:
 
 ```bash
 export OPENTRACES_TEST_PROJECT_DIR=~/.claude/projects/<your-project-slug>
@@ -53,7 +53,7 @@ packages/opentraces-schema/   Schema package (Pydantic v2 models)
 src/opentraces/               CLI package
   cli.py                      Click-based CLI entry point
   clients/                    TUI and Flask inbox clients
-  parsers/                    Agent session parsers
+  parsers/                    Agent trace parsers
   security/                   Secret scanning and anonymization
   enrichment/                 Git signals, attribution, metrics
   quality/                    Trace quality assessment and rubrics
@@ -83,6 +83,6 @@ Formula/                      Homebrew formula template
 ## Notes
 
 - The current shipped parser is Claude Code
-- The inbox workflow is `web/tui/session -> commit/reject/redact -> push`
-- Hidden commands still exist for compatibility and automation, but the public docs should use `web`, `tui`, `session`, `commit`, and `push`
+- The inbox workflow is `web/tui/trace -> commit/reject/redact -> push`
+- Hidden commands still exist for compatibility and automation, but the public docs should use `web`, `tui`, `trace`, `commit`, and `push`
 - The React viewer (`web/viewer/dist`) is bundled into the pip package via `force-include` in `pyproject.toml`

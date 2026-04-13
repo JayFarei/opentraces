@@ -79,7 +79,7 @@ def redact_step(step: dict[str, Any]) -> None:
     """Redact a single step dict in-place, clearing all sensitive fields.
 
     Used by both the CLI ``session redact`` command and the web server
-    ``/api/session/<id>/step/<idx>/redact`` endpoint.
+    ``/api/trace/<id>/step/<idx>/redact`` endpoint.
     """
     step["content"] = "[REDACTED]"
     step["reasoning_content"] = None

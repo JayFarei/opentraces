@@ -391,10 +391,10 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
 
                 # Print visibility-aware success message
                 if is_private:
-                    click.echo(f"Pushed {result.trace_count} sessions (private) -- only you can see this dataset")
+                    click.echo(f"Pushed {result.trace_count} traces (private) -- only you can see this dataset")
                     click.echo("  Run 'opentraces push --publish' when ready to share")
                 else:
-                    click.echo(f"Pushed {result.trace_count} sessions (public) -- visible to everyone")
+                    click.echo(f"Pushed {result.trace_count} traces (public) -- visible to everyone")
 
                 # Save remote URL and visibility to project config
                 try:

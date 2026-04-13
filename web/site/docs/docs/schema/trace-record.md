@@ -1,6 +1,6 @@
 # TraceRecord
 
-The top-level record. One per JSONL line, one per agent session.
+The top-level record. One per JSONL line, one per agent trace.
 
 ## Identification
 
@@ -81,11 +81,11 @@ Deduplicated into a top-level lookup table. Steps reference prompts by hash.
 
 ## Tool Definitions
 
-The session-level tool schema list.
+The trace-level tool schema list.
 
 ## Dependencies
 
-Package names referenced during the session. Extracted from manifest files or tool calls.
+Package names referenced during the trace. Extracted from manifest files or tool calls.
 
 ```json
 {

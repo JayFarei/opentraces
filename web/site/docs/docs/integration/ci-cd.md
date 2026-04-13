@@ -22,8 +22,8 @@ If you are running opentraces in automation, keep the steps explicit:
 
 ```bash
 opentraces init --review-policy review --remote my-org/opentraces --no-hook
-opentraces session list
-opentraces session commit <trace-id>
+opentraces trace list
+opentraces trace commit <trace-id>
 opentraces commit --all
 opentraces push --private
 ```
@@ -53,4 +53,4 @@ Your CI script should call `commit` and `push` directly.
 
 - Use `--private` for proprietary codebases
 - Use `--repo owner/dataset` if you want a shared team dataset
-- If you need to capture a specific session directory yourself, wire the hidden `_capture` command into your own hook or runner
+- If you need to capture a specific Claude Code session directory yourself, wire the hidden `_capture` command into your own hook or runner

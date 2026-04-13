@@ -6,8 +6,8 @@ import { TraceTree } from "./TraceTree";
 import { ContextReview } from "../detail/ContextReview";
 
 export function TraceView() {
-  const { selectedSessionId } = useSelection();
-  const { data: trace, tree, isLoading, error } = useTraceData(selectedSessionId);
+  const { selectedTraceId } = useSelection();
+  const { data: trace, tree, isLoading, error } = useTraceData(selectedTraceId);
   const { traceViewMode } = useViewPreferences();
 
   const traceStartMs = useMemo(() => {
@@ -19,10 +19,10 @@ export function TraceView() {
     }
   }, [trace?.timestamp_start]);
 
-  if (!selectedSessionId) {
+  if (!selectedTraceId) {
     return (
       <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)]">
-        select a session
+        select a trace
       </div>
     );
   }

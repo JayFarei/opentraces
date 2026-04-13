@@ -69,7 +69,7 @@ Checks the reward proxy signal appropriate to the agent's execution context:
 
 Observability checks that differentiate opentraces from trace-level-only sources.
 Checks that require per-step data are automatically skipped for `conversation_turn`
-fidelity sources (e.g. Hermes imports), which only have session-level timestamps:
+fidelity sources (e.g. Hermes imports), which only have trace-level timestamps:
 
 | Check | Description |
 |-------|-------------|
@@ -78,7 +78,7 @@ fidelity sources (e.g. Hermes imports), which only have session-level timestamps
 | A3: total_duration | `total_duration_s > 0` (skipped for runtime) |
 | A4: step timestamps | Timestamps on >80% of steps (skipped for conversation_turn) |
 | A5: token breakdown | Per-step `input_tokens` and `output_tokens` present |
-| A6: token consistency | Step-sum ≈ session total (within 10%) |
+| A6: token consistency | Step-sum ≈ trace total (within 10%) |
 
 ### Domain
 

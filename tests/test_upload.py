@@ -395,7 +395,7 @@ class TestLivePushIntegration:
         result = runner.invoke(main, ["push", "--private", "--repo", repo_id])
 
         assert result.exit_code == 0, result.output
-        assert "Pushed 1 sessions (private)" in result.output
+        assert "Pushed 1 traces (private)" in result.output
 
         uploaded_entry = StateManager(state_path=get_project_state_path(project_dir)).get_trace(trace.trace_id)
         assert uploaded_entry is not None

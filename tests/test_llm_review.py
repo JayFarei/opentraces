@@ -16,7 +16,7 @@ from opentraces.security.llm_review import (
     aggregate_verdicts,
     chunk_transcript,
     estimate_cost,
-    review_session,
+    review_trace,
     review_key as compute_review_key,
 )
 
@@ -129,7 +129,7 @@ class TestReviewSession:
                 "summary": "Looks clean",
             }]
         )
-        verdict = review_session(
+        verdict = review_trace(
             steps=["user: hello", "assistant: hi"],
             provider=p,
         )
@@ -148,7 +148,7 @@ class TestReviewSession:
                 "summary": "Found unredacted key",
             }]
         )
-        verdict = review_session(
+        verdict = review_trace(
             steps=["leaked sk_live_abc in the output"],
             provider=p,
         )
@@ -173,7 +173,7 @@ class TestReviewSession:
                 },
             ]
         )
-        verdict = review_session(
+        verdict = review_trace(
             steps=["a" * 300_000, "b" * 300_000],
             provider=p,
             max_chars_per_chunk=400_000,

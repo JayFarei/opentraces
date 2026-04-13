@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from "react";
-import { SessionSidebar } from "../sessions/SessionSidebar";
-import { SessionHeader } from "./SessionHeader";
+import { TraceSidebar } from "../sessions/SessionSidebar";
+import { TraceHeader } from "./SessionHeader";
 import { TraceView } from "../trace/TraceView";
 import { DetailPanel } from "../detail/DetailPanel";
 
@@ -43,12 +43,12 @@ export function AppLayout() {
 
   return (
     <div className="flex-1 overflow-hidden flex">
-      {/* Session sidebar */}
+      {/* Trace sidebar */}
       <div
         className="h-full flex-none overflow-hidden border-r border-[var(--border)]"
         style={{ width: `${String(sidebarWidth)}px` }}
       >
-        <SessionSidebar />
+        <TraceSidebar />
       </div>
 
       {/* Sidebar resize handle */}
@@ -59,7 +59,7 @@ export function AppLayout() {
 
       {/* Main content: header + trace + detail */}
       <div ref={mainRef} className="flex-1 flex flex-col overflow-hidden min-w-0">
-        <SessionHeader />
+        <TraceHeader />
 
         {/* Trace view: takes remaining space minus detail */}
         <div className="flex-1 overflow-hidden min-h-0">

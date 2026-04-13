@@ -252,7 +252,7 @@ def _parse_verdict(response: dict[str, Any]) -> LLMReviewVerdict:
     )
 
 
-def review_session(
+def review_trace(
     steps: list[str],
     provider: LLMProvider,
     context: str = "",

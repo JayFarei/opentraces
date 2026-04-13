@@ -178,7 +178,7 @@ def context() -> None:
     if not authenticated:
         suggested_next = "opentraces login"
     elif counts["inbox"] > 0:
-        suggested_next = "opentraces session list --stage inbox"
+        suggested_next = "opentraces trace list --stage inbox"
     elif counts["committed"] > 0:
         suggested_next = "opentraces push"
     else:
@@ -320,7 +320,7 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
     buf = StringIO()
     console = get_console(file=buf, force_terminal=True, width=140)
 
-    mode_label = "commit graph" if mode == "commit" else "session graph"
+    mode_label = "commit graph" if mode == "commit" else "trace graph"
     console.print()
     console.print(
         f"  [strong]{mode_label}[/]  [muted]({len(records)} staged traces)[/]",
@@ -419,16 +419,16 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
                 f"{_truncate(subject, 60)}"
             )
 
-    else:  # session mode
+    else:  # trace-spine mode
         def _ts(r):
             v = getattr(r, "timestamp_end", None)
             return str(v) if v else ""
-        sessions = sorted(records, key=_ts, reverse=True)[:limit]
-        if not sessions:
-            console.print("  [muted]no staged sessions.[/]", highlight=False)
+        traces = sorted(records, key=_ts, reverse=True)[:limit]
+        if not traces:
+            console.print("  [muted]no staged traces.[/]", highlight=False)
             return buf.getvalue()
 
-        for rec in sessions:
+        for rec in traces:
             try:
                 label, _src = _cli._describe_trace(rec)
             except Exception:
@@ -457,7 +457,7 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
                 body.append("[muted]· provisional (no commit yet)[/]")
             stacks.append((head, body))
 
-        base_head = None  # session mode has no commit ancestor footer
+        base_head = None  # trace mode has no commit ancestor footer
 
     # Emit the stacks around one continuous spine.
     # Lead with a ┊ so the very first ╭┄ reads as "branching off a spine"
@@ -486,9 +486,11 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
 
 @main.command("graph")
 @click.option("--commit", "mode", flag_value="commit", default=True,
-              help="Commit spine: each commit with the sessions that produced it. (default)")
-@click.option("--session", "mode", flag_value="session",
-              help="Session spine: each session with the commits it produced.")
+              help="Commit spine: each commit with the traces that produced it. (default)")
+@click.option("--trace", "mode", flag_value="trace",
+              help="Trace spine: each trace with the commits it produced.")
+@click.option("--session", "mode", flag_value="trace", hidden=True,
+              help="Deprecated alias for --trace.")
 @click.option("--limit", type=int, default=20, show_default=True,
               help="Max rows on the spine.")
 @click.option("--no-pager", is_flag=True,
@@ -497,10 +499,10 @@ def graph_cmd(mode: str, limit: int, no_pager: bool) -> None:
     """Stack view of the trace ↔ commit graph.
 
     \b
-      --commit   (default) commit spine → sessions under each commit.
+      --commit   (default) commit spine → traces under each commit.
                  Answers: "who authored what in this commit?"
-      --session  session spine → commits under each session.
-                 Answers: "what did this session actually ship?"
+      --trace    trace spine → commits under each trace.
+                 Answers: "what did this trace actually ship?"
     """
     import shutil as _sh
 

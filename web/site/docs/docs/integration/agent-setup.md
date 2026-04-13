@@ -8,7 +8,7 @@ Most commands emit structured JSON with `next_steps` and `next_command`, so an a
 
 ## Setup by Agent
 
-`opentraces init` installs the session hook for your agent and copies the bundled skill into `.agents/skills/opentraces/`. Pass `--agent` to specify which harness to connect.
+`opentraces init` installs the capture hook for your agent and copies the bundled skill into `.agents/skills/opentraces/`. Pass `--agent` to specify which harness to connect.
 
 ### Claude Code
 
@@ -17,11 +17,11 @@ opentraces login
 opentraces init --agent claude-code --review-policy review --start-fresh
 ```
 
-If the repo already has existing session logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.
+If the repo already has existing trace logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.
 
 ### Hook Enrichment
 
-For richer trace metadata, install the Claude Code session hooks:
+For richer trace metadata, install the Claude Code capture hooks:
 
 ```bash
 opentraces setup claude-code
@@ -30,10 +30,10 @@ opentraces setup claude-code
 Or run `opentraces setup` with no arguments for an interactive wizard that walks every integration (Claude Code, git, trufflehog).
 
 This registers two hooks in `~/.claude/settings.json`:
-- **`on_stop`** — runs at session end, captures context window state, token usage, and project metadata
-- **`on_compact`** (PostCompact event) — captures context compaction events for long sessions
+- **`on_stop`**, runs at trace end, captures context window state, token usage, and project metadata
+- **`on_compact`** (PostCompact event), captures context compaction events for long traces
 
-Hooks fire automatically on every session — no further action needed after `setup claude-code`.
+Hooks fire automatically on every agent run, no further action needed after `setup claude-code`.
 
 ### Hermes
 
@@ -46,13 +46,13 @@ After setup, the current surfaces are:
 
 - `opentraces web` for the browser inbox
 - `opentraces tui` for the terminal inbox
-- `opentraces session list` for machine-readable review
+- `opentraces trace list` for machine-readable review
 - `opentraces status` for the current inbox summary
 - `opentraces context` for a compact project snapshot
 
 ## Hidden Capture Command
 
-The hook calls the hidden `_capture` command with a specific session directory:
+The hook calls the hidden `_capture` command with a specific Claude Code session directory:
 
 ```bash
 opentraces _capture --session-dir /path/to/session --project-dir /path/to/project

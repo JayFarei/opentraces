@@ -123,10 +123,10 @@ Once the post-commit hook is installed (`opentraces setup git`), two local comma
 
 ```bash
 opentraces trace list --by-commit
-opentraces --json session list --by-commit
+opentraces --json trace list --by-commit
 ```
 
-Groups every staged/committed/pushed trace by its `git_links[].revision`. Useful for finding every session that contributed to a specific commit (cherry-picks, squashes, and multi-session commits all surface here).
+Groups every staged/committed/pushed trace by its `git_links[].revision`. Useful for finding every trace that contributed to a specific commit (cherry-picks, squashes, and multi-trace commits all surface here).
 
 ### Line-level blame
 
@@ -141,7 +141,7 @@ Resolves `path:line` to the trace(s) that authored it, walking `git_links` and a
 
 Every record carries two orthogonal quality signals added in schema 0.3.0:
 
-- `lifecycle` — `"provisional"` if the session hasn't been pinned to a commit yet, `"final"` once the post-commit correlator has pinned it.
+- `lifecycle`, `"provisional"` if the trace hasn't been pinned to a commit yet, `"final"` once the post-commit correlator has pinned it.
 - `git_links[].tier` — one of `tool_emitted`, `tool_emitted_with_divergence`, `overlapping`, or `orphan`.
 
 For SFT or RL training, start from the strongest tier and widen as needed:

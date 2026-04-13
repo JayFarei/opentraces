@@ -5,8 +5,8 @@ import { StepDetail } from "./StepDetail";
 import { ToolCallDetail } from "./ToolCallDetail";
 
 export function DetailPanel() {
-  const { selectedSessionId, selectedNodeId } = useSelection();
-  const { tree, data: trace } = useTraceData(selectedSessionId);
+  const { selectedTraceId, selectedNodeId } = useSelection();
+  const { tree, data: trace } = useTraceData(selectedTraceId);
 
   const node = selectedNodeId ? findNode(tree, selectedNodeId) : null;
   const showToolDetail = node?.toolCall !== undefined;
@@ -24,7 +24,7 @@ export function DetailPanel() {
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         <div className="h-full overflow-y-auto p-3">
-          {!selectedSessionId || !node ? (
+          {!selectedTraceId || !node ? (
             <div className="h-full flex flex-col items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)] gap-1">
               <span>click a step in the tree to view details</span>
               <span className="text-[9px] text-[var(--text-dim)]">j/k to navigate, ? for shortcuts</span>

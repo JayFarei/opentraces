@@ -89,7 +89,7 @@ export function ContextFlow({ tree }: ContextFlowProps) {
   if (totalNodes === 0) {
     return (
       <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)]">
-        select a session
+        select a trace
       </div>
     );
   }

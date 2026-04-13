@@ -52,11 +52,8 @@ function mapTrace(raw: RawTrace): TraceListItem {
   };
 }
 
-// NOTE: HTTP paths below (/api/sessions, /api/session/...) are the Python
-// backend's URL contract; they are intentionally left as-is to avoid
-// breaking the Flask API. Only the JS-side identifiers are renamed.
 export async function fetchTraces(): Promise<TraceListItem[]> {
-  const raw = await request<RawTrace[]>("/api/sessions");
+  const raw = await request<RawTrace[]>("/api/traces");
   return raw.map(mapTrace);
 }
 
@@ -65,15 +62,15 @@ export async function fetchAppContext(): Promise<AppContext> {
 }
 
 export async function fetchTrace(traceId: string): Promise<TraceRecord> {
-  return request<TraceRecord>(`/api/session/${traceId}/detail`);
+  return request<TraceRecord>(`/api/trace/${traceId}/detail`);
 }
 
 export async function commitTrace(traceId: string): Promise<void> {
-  await request<unknown>(`/api/session/${traceId}/commit`, { method: "POST" });
+  await request<unknown>(`/api/trace/${traceId}/commit`, { method: "POST" });
 }
 
 export async function rejectTrace(traceId: string): Promise<void> {
-  await request<unknown>(`/api/session/${traceId}/reject`, { method: "POST" });
+  await request<unknown>(`/api/trace/${traceId}/reject`, { method: "POST" });
 }
 
 export async function redactStep(
@@ -81,7 +78,7 @@ export async function redactStep(
   stepIndex: number,
 ): Promise<void> {
   await request<unknown>(
-    `/api/session/${traceId}/step/${String(stepIndex)}/redact`,
+    `/api/trace/${traceId}/step/${String(stepIndex)}/redact`,
     { method: "POST" },
   );
 }
@@ -92,8 +89,7 @@ export async function commitTraces(
 ): Promise<{ commit_id: string }> {
   return request<{ commit_id: string }>("/api/commit", {
     method: "POST",
-    // Body key "session_ids" is the backend API contract — do not rename.
-    body: JSON.stringify({ session_ids: traceIds, message }),
+    body: JSON.stringify({ trace_ids: traceIds, message }),
   });
 }
 
@@ -120,6 +116,6 @@ export async function fetchRedactionPreview(
   tier: number,
 ): Promise<RedactionPreview> {
   return request<RedactionPreview>(
-    `/api/session/${traceId}/redaction-preview?tier=${String(tier)}`,
+    `/api/trace/${traceId}/redaction-preview?tier=${String(tier)}`,
   );
 }

@@ -15,8 +15,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 let renderLog: string[] = [];
 
 // Mock the session list hook to simulate API behavior
-vi.mock("../hooks/useSessionList", () => ({
-  useSessionList: vi.fn(),
+vi.mock("../hooks/useTraceList", () => ({
+  useTraceList: vi.fn(),
 }));
 
 // Mock app context hook
@@ -38,9 +38,9 @@ vi.mock("../hooks/useKeyboardNav", () => ({
   useKeyboardNav: () => ({ showHelp: false, setShowHelp: vi.fn() }),
 }));
 
-import { useSessionList } from "../hooks/useSessionList";
+import { useTraceList } from "../hooks/useTraceList";
 
-type SessionState = {
+type TraceState = {
   data: { trace_id: string }[] | undefined;
   isLoading: boolean;
   isError: boolean;
@@ -56,10 +56,10 @@ describe("Onboarding stability", () => {
   });
 
   it("shows onboarding consistently when API is unreachable (no flicker to empty app)", () => {
-    const mock = vi.mocked(useSessionList);
+    const mock = vi.mocked(useTraceList);
 
     // Simulate the sequence of states React Query goes through:
-    const states: SessionState[] = [
+    const states: TraceState[] = [
       // 1. Initial load
       { data: undefined, isLoading: true, isError: false },
       // 2. First fetch fails (API not running)
@@ -75,15 +75,15 @@ describe("Onboarding stability", () => {
     ];
 
     for (const state of states) {
-      mock.mockReturnValue(state as ReturnType<typeof useSessionList>);
+      mock.mockReturnValue(state as ReturnType<typeof useTraceList>);
 
       // Evaluate the isEmpty/showOnboarding logic directly
-      const sessions = state.data;
+      const traces = state.data;
       const { isLoading, isError } = state;
       const sampleMode = false;
 
-      const hasSessions = sampleMode || (sessions != null && sessions.length > 0);
-      const showOnboarding = !hasSessions && (isLoading || isError || sessions?.length === 0);
+      const hasTraces = sampleMode || (traces != null && traces.length > 0);
+      const showOnboarding = !hasTraces && (isLoading || isError || traces?.length === 0);
 
       renderLog.push(showOnboarding ? "onboarding" : "app");
     }
@@ -99,10 +99,10 @@ describe("Onboarding stability", () => {
     ]);
   });
 
-  it("shows onboarding when API returns empty sessions", () => {
-    const mock = vi.mocked(useSessionList);
+  it("shows onboarding when API returns empty traces", () => {
+    const mock = vi.mocked(useTraceList);
 
-    const states: SessionState[] = [
+    const states: TraceState[] = [
       { data: undefined, isLoading: true, isError: false },
       { data: [], isLoading: false, isError: false },
       // Refetch keeps returning empty
@@ -110,14 +110,14 @@ describe("Onboarding stability", () => {
     ];
 
     for (const state of states) {
-      mock.mockReturnValue(state as ReturnType<typeof useSessionList>);
+      mock.mockReturnValue(state as ReturnType<typeof useTraceList>);
 
-      const sessions = state.data;
+      const traces = state.data;
       const { isLoading, isError } = state;
       const sampleMode = false;
 
-      const hasSessions = sampleMode || (sessions != null && sessions.length > 0);
-      const showOnboarding = !hasSessions && (isLoading || isError || sessions?.length === 0);
+      const hasTraces = sampleMode || (traces != null && traces.length > 0);
+      const showOnboarding = !hasTraces && (isLoading || isError || traces?.length === 0);
 
       renderLog.push(showOnboarding ? "onboarding" : "app");
     }
@@ -125,10 +125,10 @@ describe("Onboarding stability", () => {
     expect(renderLog).toEqual(["onboarding", "onboarding", "onboarding"]);
   });
 
-  it("transitions to app when sessions arrive, and stays there", () => {
-    const mock = vi.mocked(useSessionList);
+  it("transitions to app when traces arrive, and stays there", () => {
+    const mock = vi.mocked(useTraceList);
 
-    const states: SessionState[] = [
+    const states: TraceState[] = [
       { data: undefined, isLoading: true, isError: false },
       { data: [{ trace_id: "abc" }], isLoading: false, isError: false },
       // Refetch returns same data
@@ -136,14 +136,14 @@ describe("Onboarding stability", () => {
     ];
 
     for (const state of states) {
-      mock.mockReturnValue(state as ReturnType<typeof useSessionList>);
+      mock.mockReturnValue(state as ReturnType<typeof useTraceList>);
 
-      const sessions = state.data;
+      const traces = state.data;
       const { isLoading, isError } = state;
       const sampleMode = false;
 
-      const hasSessions = sampleMode || (sessions != null && sessions.length > 0);
-      const showOnboarding = !hasSessions && (isLoading || isError || sessions?.length === 0);
+      const hasTraces = sampleMode || (traces != null && traces.length > 0);
+      const showOnboarding = !hasTraces && (isLoading || isError || traces?.length === 0);
 
       renderLog.push(showOnboarding ? "onboarding" : "app");
     }
@@ -152,22 +152,22 @@ describe("Onboarding stability", () => {
   });
 
   it("sampleMode locks to app view regardless of API state", () => {
-    const mock = vi.mocked(useSessionList);
+    const mock = vi.mocked(useTraceList);
 
-    const states: SessionState[] = [
+    const states: TraceState[] = [
       { data: undefined, isLoading: false, isError: true },
       { data: undefined, isLoading: true, isError: false },
     ];
 
     for (const state of states) {
-      mock.mockReturnValue(state as ReturnType<typeof useSessionList>);
+      mock.mockReturnValue(state as ReturnType<typeof useTraceList>);
 
-      const sessions = state.data;
+      const traces = state.data;
       const { isLoading, isError } = state;
       const sampleMode = true; // user clicked "load sample data"
 
-      const hasSessions = sampleMode || (sessions != null && sessions.length > 0);
-      const showOnboarding = !hasSessions && (isLoading || isError || sessions?.length === 0);
+      const hasTraces = sampleMode || (traces != null && traces.length > 0);
+      const showOnboarding = !hasTraces && (isLoading || isError || traces?.length === 0);
 
       renderLog.push(showOnboarding ? "onboarding" : "app");
     }

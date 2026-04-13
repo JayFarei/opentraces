@@ -8,8 +8,8 @@ type Tab = "tree" | "context" | "search";
 
 /** @deprecated Use TraceView instead. Kept for backward compatibility. */
 export function TracePanel() {
-  const { selectedSessionId } = useSelection();
-  const { data: trace, tree, isLoading, error } = useTraceData(selectedSessionId);
+  const { selectedTraceId } = useSelection();
+  const { data: trace, tree, isLoading, error } = useTraceData(selectedTraceId);
 
   const traceStartMs = useMemo(() => {
     if (!trace?.timestamp_start) return null;
@@ -21,10 +21,10 @@ export function TracePanel() {
   }, [trace?.timestamp_start]);
   const [activeTab, setActiveTab] = useState<Tab>("tree");
 
-  if (!selectedSessionId) {
+  if (!selectedTraceId) {
     return (
       <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)]">
-        select a session
+        select a trace
       </div>
     );
   }

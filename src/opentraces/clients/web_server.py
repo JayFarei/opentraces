@@ -344,7 +344,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
     def _invalidate_cache() -> None:
         _trace_cache[0] = None
 
-    # Default cap keeps /api/sessions responsive on big inboxes (thousands
+    # Default cap keeps /api/traces responsive on big inboxes (thousands
     # of staged files). Power users can request more via ?limit=N.
     _default_trace_limit = 500
 
@@ -412,9 +412,9 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
 
     # --- API routes ---
 
-    @app.route("/api/sessions")
-    def api_sessions():
-        """JSON API for session list. Accepts ?limit=N to override the default 500-trace cap."""
+    @app.route("/api/traces")
+    def api_traces():
+        """JSON API for trace list. Accepts ?limit=N to override the default 500-trace cap."""
         try:
             limit_param = request.args.get("limit", type=int)
         except (TypeError, ValueError):
@@ -486,9 +486,9 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         traces = _traces()
         return jsonify(_compute_stats(traces))
 
-    @app.route("/api/session/<trace_id>/commit", methods=["POST"])
-    @app.route("/api/session/<trace_id>/approve", methods=["POST"])
-    def api_commit_session(trace_id: str):
+    @app.route("/api/trace/<trace_id>/commit", methods=["POST"])
+    @app.route("/api/trace/<trace_id>/approve", methods=["POST"])
+    def api_commit_trace(trace_id: str):
         """Commit a session for push."""
         state = _get_state()
         task_desc = trace_id[:12]
@@ -504,7 +504,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         _invalidate_cache()
         return jsonify({"status": "committed", "trace_id": trace_id})
 
-    @app.route("/api/session/<trace_id>/reject", methods=["POST"])
+    @app.route("/api/trace/<trace_id>/reject", methods=["POST"])
     def api_reject(trace_id: str):
         """Reject a session, persisting to StateManager."""
         from ..core.review import reject_trace
@@ -513,7 +513,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         _invalidate_cache()
         return jsonify({"status": "rejected", "trace_id": trace_id})
 
-    @app.route("/api/session/<trace_id>/step/<int:step_index>/redact", methods=["POST"])
+    @app.route("/api/trace/<trace_id>/step/<int:step_index>/redact", methods=["POST"])
     def api_redact_step(trace_id: str, step_index: int):
         """Redact a step's content, persisting to the staging JSONL on disk."""
         # Validate trace_id to prevent path traversal
@@ -534,8 +534,8 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             "step_index": step_index,
         })
 
-    @app.route("/api/session/<trace_id>/detail")
-    def api_session_detail(trace_id: str):
+    @app.route("/api/trace/<trace_id>/detail")
+    def api_trace_detail(trace_id: str):
         """Return full trace JSON for a single session."""
         traces = _traces()
         trace = None
@@ -554,7 +554,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         result["_stage"] = resolve_visible_stage(status_enum)
         return jsonify(result)
 
-    @app.route("/api/session/<trace_id>/stage", methods=["POST"])
+    @app.route("/api/trace/<trace_id>/stage", methods=["POST"])
     def api_stage(trace_id: str):
         """Transition a session to STAGED status."""
         from ..core.review import stage_trace
@@ -562,7 +562,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         stage_trace(state, trace_id)
         return jsonify({"status": "inbox"})
 
-    @app.route("/api/session/<trace_id>/unstage", methods=["POST"])
+    @app.route("/api/trace/<trace_id>/unstage", methods=["POST"])
     def api_unstage(trace_id: str):
         """Revert a session to PARSED status."""
         from ..core.review import unstage_trace
@@ -574,8 +574,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
     def api_commit():
         """Create a commit group from staged sessions."""
         data = request.get_json(silent=True) or {}
-        # Accept both "trace_ids" (preferred) and "session_ids" (legacy)
-        ids = data.get("trace_ids") or data.get("session_ids", [])
+        ids = data.get("trace_ids", [])
         message = data.get("message", "")
 
         if not ids:
@@ -606,7 +605,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             "created_at": group.created_at if group else "",
         })
 
-    @app.route("/api/session/<trace_id>/redaction-preview")
+    @app.route("/api/trace/<trace_id>/redaction-preview")
     def api_redaction_preview(trace_id: str):
         """Preview redaction results for a trace."""
         traces = _traces()

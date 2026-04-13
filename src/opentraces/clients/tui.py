@@ -355,14 +355,14 @@ class KeyBar(Static):
         fullscreen_hint = "[bold]f[/bold] windowed   " if fullscreen else "[bold]f[/bold] fullscreen   "
         if in_step_view:
             text = (
-                "[bold]1[/bold] sessions   [bold]2[/bold] summary   [bold]3[/bold] detail   "
+                "[bold]1[/bold] traces   [bold]2[/bold] summary   [bold]3[/bold] detail   "
                 f"{fullscreen_hint}"
                 "[bold]esc[/bold] back   [bold]x[/bold] redact hint   "
                 "[bold]?[/bold] help   [bold]q[/bold] quit"
             )
         else:
             text = (
-                "[bold]1[/bold] sessions   [bold]2[/bold] summary   [bold]3[/bold] detail   "
+                "[bold]1[/bold] traces   [bold]2[/bold] summary   [bold]3[/bold] detail   "
                 f"{fullscreen_hint}"
                 "[bold]j/k[/bold] move   [bold]enter[/bold] inspect   "
                 "[bold]c[/bold] commit   [bold]r[/bold] reject   "
@@ -385,9 +385,9 @@ class HelpOverlay(Static):
 
     HELP_TEXT = (
         "[bold]Keybindings[/bold]\n\n"
-        "  [bold]j / k[/bold]  or  [bold]up / down[/bold]   Navigate sessions\n"
-        "  [bold]c[/bold]                        Commit selected session for push\n"
-        "  [bold]r[/bold]                        Reject selected session\n"
+        "  [bold]j / k[/bold]  or  [bold]up / down[/bold]   Navigate traces\n"
+        "  [bold]c[/bold]                        Commit selected trace for push\n"
+        "  [bold]r[/bold]                        Reject selected trace\n"
         "  [bold]d[/bold]                        Discard (delete staging file + state)\n"
         "  [bold]p[/bold]                        Push committed traces from the CLI\n"
         "  [bold]Enter[/bold]                    Expand step-by-step detail view\n"
@@ -690,7 +690,7 @@ class OpenTracesApp(App):
     BINDINGS = (
         Binding("q", "quit", "Quit"),
         Binding("question_mark", "toggle_help", "Help", key_display="?"),
-        Binding("1", "focus_sessions", "Sessions", show=False, priority=True),
+        Binding("1", "focus_sessions", "Traces", show=False, priority=True),
         Binding("2", "focus_summary", "Summary", show=False, priority=True),
         Binding("3", "focus_detail", "Detail", show=False, priority=True),
         Binding("f", "toggle_fullscreen", "Fullscreen", show=False, priority=True),
@@ -728,7 +728,7 @@ class OpenTracesApp(App):
             yield TopBar(id="topbar")
             with Horizontal(id="workspace"):
                 with Vertical(id="sidebar-panel", classes="panel"):
-                    yield Static("[1] Sessions", id="sessions-title", classes="panel-title")
+                    yield Static("[1] Traces", id="sessions-title", classes="panel-title")
                     yield Static("", id="sidebar-meta", markup=True)
                     yield ListView(id="session-list")
                 with Vertical(id="main-column"):
@@ -771,14 +771,14 @@ class OpenTracesApp(App):
         self.query_one("#inspect-workspace", Horizontal).styles.display = "none"
         self.query_one("#detail-view", RichLog).styles.display = "block"
         summary.update(
-            "[bold]No sessions in this inbox[/bold]\n"
-            "[dim]Run opentraces init in this repo and finish a connected agent session.[/dim]"
+            "[bold]No traces in this inbox[/bold]\n"
+            "[dim]Run opentraces init in this repo and finish a connected agent run.[/dim]"
         )
         detail.clear()
         detail.write(f"[bold ansi_bright_blue]{OPENTRACES_ASCII}[/bold ansi_bright_blue]")
         detail.write("")
         detail.write("[dim]This repo inbox is empty.[/dim]")
-        detail.write("[dim]OpenTraces will capture sessions here after setup.[/dim]")
+        detail.write("[dim]OpenTraces will capture traces here after setup.[/dim]")
 
     def _reload_traces(self, selected_trace_id: str | None = None) -> None:
         self.traces = sorted(
@@ -830,7 +830,7 @@ class OpenTracesApp(App):
             f"[dim]project[/dim]\n"
             f"{self.project_name}\n"
             f"[dim]remote[/dim] [ansi_bright_blue]{_truncate(self.remote_name, 22)}[/ansi_bright_blue]   "
-            f"[dim]sessions[/dim] {total}   "
+            f"[dim]traces[/dim] {total}   "
             f"[ansi_yellow]{counts['inbox']} inbox[/ansi_yellow]   "
             f"[ansi_bright_blue]{counts['committed']} committed[/ansi_bright_blue]"
         )

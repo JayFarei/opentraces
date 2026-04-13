@@ -4,6 +4,10 @@ opentraces runs a layered security pipeline on every trace. Tiers 1a and 1b are 
 
 The pipeline's internal version is exposed as `SECURITY_VERSION` (currently `0.4.0`, bumped when detection logic changes).
 
+:::tip Check what's active for *your* install
+Run `opentraces doctor --security` for a focused view of every tier's current state on this machine, with versions and gating. Use `opentraces doctor` for the full health check (security + auth + post-processors + integrations).
+:::
+
 ## Tier Model
 
 | Tier | Name | Status | What it does |
@@ -12,8 +16,8 @@ The pipeline's internal version is exposed as `SECURITY_VERSION` (currently `0.4
 | 1b | Shannon entropy | always on, in-process | Flags high-entropy strings that look like secrets without matching a known pattern |
 | 1.5 | TruffleHog | optional, opt-in | 800+ third-party detectors, run locally with `--verify_secrets=false` (no outbound probes) |
 | 1.8 | LLM PII detection | optional | Per-field entity detection (PERSON, EMAIL, API_KEY, INTERNAL_URL, IP_ADDR, USER_PATH, CREDENTIAL, ORG_NAME, EMPLOYEE_ID, PHONE, SENSITIVE_DATA), SHA-256 cached |
-| 2 | LLM session review | optional | Whole-session semantic verdict across all tiers (see below) |
-| 3 | Human review | always available | TUI / web inbox / `opentraces session` |
+| 2 | LLM trace review | optional | Whole-trace semantic verdict across all tiers (see below) |
+| 3 | Human review | always available | TUI / web inbox / `opentraces trace` |
 
 ### Tier 1.5 — TruffleHog
 
@@ -39,9 +43,9 @@ Verification of detected secrets against third-party APIs is forced off (`--veri
 
 Optional per-field PII detector. Entities must appear verbatim in the input; hallucinated entities are rejected. Redactions produce named placeholders via the EntityMap (see below) rather than opaque `[REDACTED]` markers.
 
-### Tier 2 — LLM session review
+### Tier 2, LLM trace review
 
-Runs over the whole session transcript after all field-level tiers. Transcript is chunked at 400k chars; per-chunk verdicts are aggregated pessimistically (`shareable`: `no` > `manual_review` > `yes`; `missed_sensitive_data`: `yes` > `maybe` > `no`). Cached on `sha256(content + model + prompt_version + context)`.
+Runs over the whole trace transcript after all field-level tiers. Transcript is chunked at 400k chars; per-chunk verdicts are aggregated pessimistically (`shareable`: `no` > `manual_review` > `yes`; `missed_sensitive_data`: `yes` > `maybe` > `no`). Cached on `sha256(content + model + prompt_version + context)`.
 
 Verdict shape:
 
@@ -72,11 +76,11 @@ opentraces push --llm-review
 
 ### Tier 3 — Human review
 
-Unchanged. Use `opentraces web`, `opentraces tui`, or `opentraces session` to inspect and edit staged traces. Traces can also enter the `BLOCKED` state (`block_reason = parse_error | trufflehog_finding | ...`) and require human action.
+Unchanged. Use `opentraces web`, `opentraces tui`, or `opentraces trace` to inspect and edit staged traces. Traces can also enter the `BLOCKED` state (`block_reason = parse_error | trufflehog_finding | ...`) and require human action.
 
 ## EntityMap — named placeholders
 
-Instead of `[REDACTED]`, the Tier 1.8 PII detector registers each hit into an `EntityMap` that emits stable named placeholders — `[PERSON_1]`, `[EMAIL_2]`, `[API_KEY_3]` — so the same entity always renders identically within a session. `USER_PATH` entities normalize paths in place (`/Users/rlamers/` → `/Users/user/`) rather than producing a numbered placeholder, preserving structure for trace analysis.
+Instead of `[REDACTED]`, the Tier 1.8 PII detector registers each hit into an `EntityMap` that emits stable named placeholders — `[PERSON_1]`, `[EMAIL_2]`, `[API_KEY_3]` — so the same entity always renders identically within a trace. `USER_PATH` entities normalize paths in place (`/Users/rlamers/` → `/Users/user/`) rather than producing a numbered placeholder, preserving structure for trace analysis.
 
 `EntityMap` supports `save(path)` / `load(path)` round-tripping via JSON; a persistent file is not yet exposed as a CLI flag, but reviewers see named placeholders in TUI and web today whenever Tier 1.8 runs.
 
@@ -104,9 +108,9 @@ Trace captured
   -> Tier 1a (regex) + Tier 1b (entropy) — always on
   -> Tier 1.5 TruffleHog — if enabled
   -> Tier 1.8 LLM PII — if enabled
-  -> Tier 2 LLM session review — if enabled (or run later via review-llm)
+  -> Tier 2 LLM trace review, if enabled (or run later via review-llm)
   -> Inbox (review mode) or auto-committed (auto mode)
-  -> session commit / reject / redact
+  -> trace commit / reject / redact
   -> opentraces push [--llm-review]
 ```
 

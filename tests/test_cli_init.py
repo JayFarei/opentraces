@@ -163,4 +163,4 @@ def test_init_start_fresh_skips_backlog_import(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls == []
-    assert "Existing sessions were left untouched" in result.output
+    assert "Existing traces were left untouched" in result.output

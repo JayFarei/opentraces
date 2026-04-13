@@ -68,8 +68,8 @@ interface ContextReviewProps {
 }
 
 export function ContextReview({ fullView = false }: ContextReviewProps) {
-  const { selectedSessionId, setSelectedNodeId } = useSelection();
-  const { tree } = useTraceData(selectedSessionId);
+  const { selectedTraceId, setSelectedNodeId } = useSelection();
+  const { tree } = useTraceData(selectedTraceId);
   const [expandedSources, setExpandedSources] = useState<Record<ContextSource, boolean>>({
     user: true,
     project: false,
@@ -107,7 +107,7 @@ export function ContextReview({ fullView = false }: ContextReviewProps) {
   if (tree.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)]">
-        select a session to review context
+        select a trace to review context
       </div>
     );
   }

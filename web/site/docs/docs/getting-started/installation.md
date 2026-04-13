@@ -65,7 +65,7 @@ The preferred in-project upgrade path is:
 opentraces upgrade
 ```
 
-Auto-detects whether you installed via pipx, brew, or pip and upgrades accordingly. Also refreshes the skill file and session hook in the current project.
+Auto-detects whether you installed via pipx, brew, or pip and upgrades accordingly. Also refreshes the skill file and capture hook in the current project.
 
 If you are outside a project context, use the direct package manager command instead:
 
