@@ -359,13 +359,13 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
                 for tid, _url in links:
                     linked_trace_ids.add(tid)
                     rec = records_by_id.get(tid)
-                    intent = None
+                    label = None
                     tier = "tool_emitted"
                     if rec is not None:
                         try:
-                            intent, _ = _cli._describe_trace(rec)
+                            label, _ = _cli._describe_trace(rec)
                         except Exception:
-                            intent = None
+                            label = None
                         if rec.git_links:
                             for gl in rec.git_links:
                                 if (gl.revision or "").startswith(sha[:10]):
@@ -374,9 +374,9 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
                     glyph, style, _w = _TIER_LABELS.get(
                         tier, ("·", "tier.orphan", "orphan")
                     )
-                    intent_str = _truncate(intent or "(unknown — trace not staged)", 70)
+                    label_str = _truncate(label or "(unknown — trace not staged)", 70)
                     body.append(
-                        f"[{style}]{glyph}[/] [trace.id]{tid[:8]}[/]  {intent_str}"
+                        f"[{style}]{glyph}[/] [trace.id]{tid[:8]}[/]  {label_str}"
                     )
             stacks.append((head, body))
 
@@ -400,12 +400,12 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
             body = []
             for rec in shown:
                 try:
-                    intent, _ = _cli._describe_trace(rec)
+                    label, _ = _cli._describe_trace(rec)
                 except Exception:
-                    intent = "(untitled)"
+                    label = "(untitled)"
                 body.append(
                     f"[tier.orphan]○[/] [trace.id]{rec.trace_id[:8]}[/]  "
-                    f"{_truncate(intent, 70)}"
+                    f"{_truncate(label, 70)}"
                 )
             stacks.append((head, body))
 
@@ -430,16 +430,16 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
 
         for rec in sessions:
             try:
-                intent, _src = _cli._describe_trace(rec)
+                label, _src = _cli._describe_trace(rec)
             except Exception:
-                intent = "(untitled)"
+                label = "(untitled)"
             steps = len(rec.steps) if rec.steps else 0
             cost_part = ""
             if rec.metrics and rec.metrics.estimated_cost_usd:
                 cost_part = f" · ${rec.metrics.estimated_cost_usd:.2f}"
             head = (
                 f"[trace.id]{rec.trace_id[:8]}[/]  "
-                f"{_truncate(intent, 60)}  "
+                f"{_truncate(label, 60)}  "
                 f"[stack.label][{steps}s{cost_part}][/]"
             )
 

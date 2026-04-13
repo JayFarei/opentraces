@@ -1,15 +1,15 @@
 import { useState } from "react";
-import { SessionRow } from "./SessionRow";
-import type { SessionStage, SessionListItem } from "../../types/trace";
+import { TraceRow } from "./SessionRow";
+import type { TraceStage, TraceListItem } from "../../types/trace";
 
-const STAGE_COLORS: Record<SessionStage, string> = {
+const STAGE_COLORS: Record<TraceStage, string> = {
   inbox: "var(--yellow)",
   committed: "var(--green)",
   pushed: "var(--cyan)",
   rejected: "var(--red)",
 };
 
-const STAGE_LABELS: Record<SessionStage, string> = {
+const STAGE_LABELS: Record<TraceStage, string> = {
   inbox: "Inbox",
   committed: "Committed",
   pushed: "Pushed",
@@ -17,11 +17,11 @@ const STAGE_LABELS: Record<SessionStage, string> = {
 };
 
 interface StageGroupProps {
-  stage: SessionStage;
-  sessions: SessionListItem[];
+  stage: TraceStage;
+  traces: TraceListItem[];
 }
 
-export function StageGroup({ stage, sessions }: StageGroupProps) {
+export function StageGroup({ stage, traces }: StageGroupProps) {
   const [collapsed, setCollapsed] = useState(false);
   const color = STAGE_COLORS[stage];
 
@@ -41,11 +41,11 @@ export function StageGroup({ stage, sessions }: StageGroupProps) {
           className="text-[9px] font-[family-name:var(--font-mono)] px-1.5 py-0 border"
           style={{ color, borderColor: color }}
         >
-          {sessions.length}
+          {traces.length}
         </span>
       </button>
       {!collapsed &&
-        sessions.map((s) => <SessionRow key={s.trace_id} session={s} />)}
+        traces.map((t) => <TraceRow key={t.trace_id} trace={t} />)}
     </div>
   );
 }

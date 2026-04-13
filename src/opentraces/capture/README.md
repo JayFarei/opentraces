@@ -9,7 +9,7 @@ This module collapses the former top-level `agents/`, `parsers/`, and `installer
 - `_base.py` — cross-agent protocols: `SessionParser`, `FormatImporter`, `ParseOutcome`.
 - `claude_code/` — Claude Code adapter.
   - `parse.py` — `ClaudeCodeParser` (live session parser).
-  - `hooks/` — `on_stop`, `on_compact`, `on_tool_use`, `intent_adapter`. Copied to `~/.claude/hooks/` by `opentraces setup claude-code`.
+  - `hooks/` — `on_stop`, `on_compact`, `on_tool_use`. Copied to `~/.claude/hooks/` by `opentraces setup claude-code`.
   - `install.py` — `ClaudeCodeHookInstaller` (HookInstaller protocol adapter).
 - `hermes.py` — Hermes (Lambda) file importer: `HermesParser`.
 - `git/` — VCS integration.

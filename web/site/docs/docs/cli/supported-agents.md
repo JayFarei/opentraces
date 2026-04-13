@@ -28,7 +28,7 @@ supported = list(get_parsers().keys())
 
 ## What Parsers Extract
 
-All parsers normalize agent sessions into the opentraces schema with:
+All parsers normalize agent traces into the opentraces schema with:
 
 - user / agent / system steps
 - tool calls and observations

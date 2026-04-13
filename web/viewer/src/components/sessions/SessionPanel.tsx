@@ -1,16 +1,16 @@
-import { useSessionList } from "../../hooks/useSessionList";
+import { useTraceList } from "../../hooks/useTraceList";
 import { StageGroup } from "./StageGroup";
-import type { SessionStage, SessionListItem } from "../../types/trace";
+import type { TraceStage, TraceListItem } from "../../types/trace";
 
-const STAGE_ORDER: SessionStage[] = ["inbox", "committed", "pushed", "rejected"];
+const STAGE_ORDER: TraceStage[] = ["inbox", "committed", "pushed", "rejected"];
 
-export function SessionPanel() {
-  const { data: sessions, isLoading, error } = useSessionList();
+export function TraceListPanel() {
+  const { data: traces, isLoading, error } = useTraceList();
 
   if (isLoading) {
     return (
       <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)]">
-        loading sessions...
+        loading traces...
       </div>
     );
   }
@@ -23,24 +23,24 @@ export function SessionPanel() {
     );
   }
 
-  if (!sessions || sessions.length === 0) {
+  if (!traces || traces.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-[var(--text-muted)] text-[11px] font-[family-name:var(--font-mono)] px-4 text-center">
-        no sessions found.
+        no traces found.
         <br />
         run opentraces init to create this repo inbox.
       </div>
     );
   }
 
-  const grouped: Record<SessionStage, SessionListItem[]> = {
+  const grouped: Record<TraceStage, TraceListItem[]> = {
     inbox: [],
     committed: [],
     pushed: [],
     rejected: [],
   };
 
-  for (const s of sessions) {
+  for (const s of traces) {
     const bucket = grouped[s.stage];
     if (bucket) {
       bucket.push(s);
@@ -53,12 +53,12 @@ export function SessionPanel() {
     <div className="h-full overflow-y-auto bg-[var(--bg)]">
       <div className="px-3 py-2 border-b border-[var(--border)]">
         <span className="text-[10px] uppercase tracking-wider text-[var(--text-muted)] font-[family-name:var(--font-mono)]">
-          sessions ({sessions.length})
+          traces ({traces.length})
         </span>
       </div>
       {STAGE_ORDER.map((stage) =>
         grouped[stage].length > 0 ? (
-          <StageGroup key={stage} stage={stage} sessions={grouped[stage]} />
+          <StageGroup key={stage} stage={stage} traces={grouped[stage]} />
         ) : null,
       )}
     </div>

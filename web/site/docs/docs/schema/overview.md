@@ -27,7 +27,6 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
   "tool_definitions": [ ],
   "steps": [ ],
   "outcome": { },
-  "intent": { },
   "dependencies": [ ],
   "metrics": { },
   "security": { },

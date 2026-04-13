@@ -2,20 +2,20 @@ import { createContext, useContext, useState, useCallback } from "react";
 import type { ReactNode } from "react";
 
 interface SelectionState {
-  selectedSessionId: string | null;
+  selectedTraceId: string | null;
   selectedNodeId: string | null;
-  setSelectedSessionId: (id: string | null) => void;
+  setSelectedTraceId: (id: string | null) => void;
   setSelectedNodeId: (id: string | null) => void;
 }
 
 const SelectionContext = createContext<SelectionState | null>(null);
 
 export function SelectionProvider({ children }: { children: ReactNode }) {
-  const [selectedSessionId, setSessionId] = useState<string | null>(null);
+  const [selectedTraceId, setTraceId] = useState<string | null>(null);
   const [selectedNodeId, setNodeId] = useState<string | null>(null);
 
-  const setSelectedSessionId = useCallback((id: string | null) => {
-    setSessionId(id);
+  const setSelectedTraceId = useCallback((id: string | null) => {
+    setTraceId(id);
     setNodeId(null);
   }, []);
 
@@ -26,9 +26,9 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
   return (
     <SelectionContext.Provider
       value={{
-        selectedSessionId,
+        selectedTraceId,
         selectedNodeId,
-        setSelectedSessionId,
+        setSelectedTraceId,
         setSelectedNodeId,
       }}
     >

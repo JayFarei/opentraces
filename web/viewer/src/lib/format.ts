@@ -26,8 +26,8 @@ export function cleanContent(text: string): string {
   return clean;
 }
 
-/** Clean a session task description for display as a session name. */
-export function cleanSessionName(task: string, timestamp: string | null): string {
+/** Clean a trace task description for display as a trace name. */
+export function cleanTraceName(task: string, timestamp: string | null): string {
   const cleaned = cleanContent(task);
 
   // If after cleaning we have a meaningful name (>5 chars, not just noise)
@@ -43,12 +43,12 @@ export function cleanSessionName(task: string, timestamp: string | null): string
       const month = d.toLocaleString("en-US", { month: "short" });
       const day = d.getDate();
       const time = d.toLocaleString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
-      return `session ${month} ${String(day)} ${time}`;
+      return `trace ${month} ${String(day)} ${time}`;
     } catch {
-      return "untitled session";
+      return "untitled trace";
     }
   }
-  return "untitled session";
+  return "untitled trace";
 }
 
 /** Extract a human-readable summary from step content. */

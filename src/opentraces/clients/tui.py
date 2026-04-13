@@ -68,11 +68,7 @@ def _relative_time(ts: str | None) -> str:
 
 
 def _session_label(trace: dict[str, Any], fallback: str = "No description", cap: int = 40) -> str:
-    """Intent.title when present, otherwise task.description. Plan 038 phase 3."""
-    intent = trace.get("intent") or {}
-    title = intent.get("title") if isinstance(intent, dict) else None
-    if title:
-        return title[:cap]
+    """task.description truncated to ``cap`` characters."""
     return (trace.get("task", {}).get("description") or fallback)[:cap]
 
 

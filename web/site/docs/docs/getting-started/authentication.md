@@ -36,7 +36,7 @@ The CLI checks for `HF_TOKEN` automatically. Useful in CI pipelines where intera
 ## Verify
 
 ```bash
-opentraces whoami
+opentraces auth
 ```
 
 Shows your authenticated HuggingFace username.
@@ -44,7 +44,7 @@ Shows your authenticated HuggingFace username.
 ## Logout
 
 ```bash
-opentraces logout
+opentraces auth logout
 ```
 
 Clears stored credentials from `~/.opentraces/credentials.json`.

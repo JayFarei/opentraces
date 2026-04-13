@@ -1,24 +1,24 @@
 import { useEffect, useState, useCallback } from "react";
 import { useSelection } from "../contexts/SelectionContext";
-import { useSessionList } from "./useSessionList";
+import { useTraceList } from "./useTraceList";
 import { useTraceData } from "./useTraceData";
-export type FocusedPanel = "sessions" | "tree" | "detail";
+export type FocusedPanel = "traces" | "tree" | "detail";
 
 export function useKeyboardNav() {
-  const { selectedSessionId, setSelectedSessionId, selectedNodeId, setSelectedNodeId } =
+  const { selectedTraceId, setSelectedTraceId, selectedNodeId, setSelectedNodeId } =
     useSelection();
-  const { data: sessions } = useSessionList();
-  const { tree } = useTraceData(selectedSessionId);
+  const { data: traces } = useTraceList();
+  const { tree } = useTraceData(selectedTraceId);
 
-  const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("sessions");
+  const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("traces");
   const [showHelp, setShowHelp] = useState(false);
   const [showCommitDialog, setShowCommitDialog] = useState(false);
 
   const cyclePanelForward = useCallback(() => {
     setFocusedPanel((p) => {
-      if (p === "sessions") return "tree";
+      if (p === "traces") return "tree";
       if (p === "tree") return "detail";
-      return "sessions";
+      return "traces";
     });
   }, []);
 
@@ -36,11 +36,11 @@ export function useKeyboardNav() {
         case "j": {
           // Navigate down in current panel
           e.preventDefault();
-          if (focusedPanel === "sessions" && sessions && sessions.length > 0) {
-            const idx = sessions.findIndex((s) => s.trace_id === selectedSessionId);
-            const next = idx < sessions.length - 1 ? idx + 1 : 0;
-            const target = sessions[next];
-            if (target) setSelectedSessionId(target.trace_id);
+          if (focusedPanel === "traces" && traces && traces.length > 0) {
+            const idx = traces.findIndex((s) => s.trace_id === selectedTraceId);
+            const next = idx < traces.length - 1 ? idx + 1 : 0;
+            const target = traces[next];
+            if (target) setSelectedTraceId(target.trace_id);
           } else if (focusedPanel === "tree" && tree.length > 0) {
             const flat = flattenTree(tree);
             const idx = flat.findIndex((n) => n.id === selectedNodeId);
@@ -54,11 +54,11 @@ export function useKeyboardNav() {
         case "k": {
           // Navigate up in current panel
           e.preventDefault();
-          if (focusedPanel === "sessions" && sessions && sessions.length > 0) {
-            const idx = sessions.findIndex((s) => s.trace_id === selectedSessionId);
-            const prev = idx > 0 ? idx - 1 : sessions.length - 1;
-            const target = sessions[prev];
-            if (target) setSelectedSessionId(target.trace_id);
+          if (focusedPanel === "traces" && traces && traces.length > 0) {
+            const idx = traces.findIndex((s) => s.trace_id === selectedTraceId);
+            const prev = idx > 0 ? idx - 1 : traces.length - 1;
+            const target = traces[prev];
+            if (target) setSelectedTraceId(target.trace_id);
           } else if (focusedPanel === "tree" && tree.length > 0) {
             const flat = flattenTree(tree);
             const idx = flat.findIndex((n) => n.id === selectedNodeId);
@@ -71,7 +71,7 @@ export function useKeyboardNav() {
 
         case "Enter": {
           // Select/expand current item
-          if (focusedPanel === "sessions" && selectedSessionId) {
+          if (focusedPanel === "traces" && selectedTraceId) {
             setFocusedPanel("tree");
           }
           break;
@@ -114,13 +114,13 @@ export function useKeyboardNav() {
     return () => window.removeEventListener("keydown", handler);
   }, [
     focusedPanel,
-    sessions,
-    selectedSessionId,
+    traces,
+    selectedTraceId,
     selectedNodeId,
     tree,
     showHelp,
     showCommitDialog,
-    setSelectedSessionId,
+    setSelectedTraceId,
     setSelectedNodeId,
     cyclePanelForward,
   ]);

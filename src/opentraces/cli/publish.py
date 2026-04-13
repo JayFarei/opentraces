@@ -73,7 +73,7 @@ def _resolve_repo_id(*a, **k):
         ("Visibility", ["private", "public", "publish", "gated"]),
         ("Destination", ["repo"]),
         ("Quality gates", ["run_assess", "llm_review"]),
-        ("Pipeline overrides", ["no_trufflehog", "no_intent"]),
+        ("Pipeline overrides", ["no_trufflehog"]),
     ],
 )
 @click.option("--private", is_flag=True, help="Force private visibility (overrides config)")
@@ -86,10 +86,8 @@ def _resolve_repo_id(*a, **k):
               help="Require a clean Tier 2 verdict on every committed trace before upload")
 @click.option("--no-trufflehog", "no_trufflehog", is_flag=True,
               help="Skip Tier 1.5 TruffleHog scanning for this push only")
-@click.option("--no-intent", "no_intent", is_flag=True,
-              help="Skip Intent enrichment for this push only")
 def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None,
-         run_assess: bool, llm_review: bool, no_trufflehog: bool, no_intent: bool) -> None:
+         run_assess: bool, llm_review: bool, no_trufflehog: bool) -> None:
     """Upload committed traces to HuggingFace Hub."""
     from ..core.config import get_project_staging_dir, load_project_config, save_project_config
     from ..core.inbox import load_traces
@@ -248,37 +246,20 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
         click.echo("No valid traces to upload.")
         return
 
-    # Intent enrichment (plan 038) + post-processor chain — one pre-upload pass.
-    # Precedence: CLI flag (--no-intent) > project intent.mode > global intent.mode.
+    # Run configured post-processor chain — one pre-upload pass.
     from ..core.config import ProjectConfig as _ProjectConfig
     try:
         _raw = load_project_config(Path.cwd())
         proj_cfg_obj = _ProjectConfig.model_validate(_raw) if _raw else None
     except Exception:
         proj_cfg_obj = None
-    effective_intent_mode = (
-        "off" if no_intent
-        else (proj_cfg_obj.intent.mode if (proj_cfg_obj and proj_cfg_obj.intent) else cfg.intent.mode)
-    )
-    if effective_intent_mode == "on":
-        from ..enrichment.intent import enrich_intent
-        from ..enrichment.intent_backends import claude_cli_client
-        enriched = []
-        for rec in records:
-            try:
-                enriched.append(enrich_intent(rec, claude_cli_client))
-            except Exception as exc:  # pragma: no cover - defensive
-                click.echo(f"  intent enrichment failed for {rec.trace_id}: {exc}", err=True)
-                enriched.append(rec)
-        records = enriched
 
     processor_specs = proj_cfg_obj.post_processors if proj_cfg_obj else []
-    push_processors = [s for s in processor_specs if s.when == "push"]
-    if push_processors:
+    if processor_specs:
         from ..core.processors import run_chain
         processed_records = []
         for rec in records:
-            res = run_chain(rec, push_processors, when="push")
+            res = run_chain(rec, processor_specs)
             processed_records.append(res.record)
         records = processed_records
 

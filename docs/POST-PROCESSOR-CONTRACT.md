@@ -1,7 +1,7 @@
 # Post-processor contract
 
 opentraces can pipe any trace through an ordered chain of external
-commands before saving, enriching, or uploading. A post-processor is any
+commands pre-upload (during `opentraces push`). A post-processor is any
 executable on `PATH` (or an absolute path) that speaks this small
 contract.
 
@@ -32,11 +32,10 @@ Declared as an ordered list under a project's `.opentraces/config.json`:
 {
   "post_processors": [
     {
-      "name": "my-intent-writer",
-      "command": "/usr/local/bin/my-intent-writer",
+      "name": "my-tagger",
+      "command": "/usr/local/bin/my-tagger",
       "args": ["--some-flag"],
-      "env": {"LOG_LEVEL": "debug"},
-      "when": "enrich"
+      "env": {"LOG_LEVEL": "debug"}
     }
   ]
 }
@@ -50,16 +49,12 @@ Fields:
 | `command` | string                        | (required) | Executable on `PATH` or absolute path.     |
 | `args`    | `list[str]`                   | `[]`       | argv passed through.                       |
 | `env`     | `dict[str, str]`              | `{}`       | Extra env vars layered on the inherited env.|
-| `when`    | `"enrich"` \| `"push"`        | `"enrich"` | Stage at which to run.                     |
 
 ## Invariants
 
 - **Redaction ordering** — processors always see a post-redaction trace.
   `opentraces.pipeline` runs the security scrubber first; the ordering
   is covered by a test that fails if anyone reorders the pipeline.
-- **Intent provenance** — a processor that writes an Intent block should
-  set `intent.source = "post_processor"`. User-edited intents
-  (`source == "user"`) are never overwritten by the runner's wrappers.
 - **Schema validation** — stdout is parsed as `TraceRecord`. Invalid
   output is rejected; under `--strict` it raises, otherwise it's
   recorded as `status=invalid_output` and the pre-invocation trace is

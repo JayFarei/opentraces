@@ -8,15 +8,13 @@ Complete reference for the current opentraces CLI surface.
 |---------|-------------|
 | `opentraces login` | Authenticate with Hugging Face Hub |
 | `opentraces logout` | Clear stored credentials |
-| `opentraces whoami` | Print the active Hugging Face identity |
-| `opentraces auth` | Authentication subcommands (`login`, `logout`, `status`) |
+| `opentraces auth` | Show the active Hugging Face identity |
 | `opentraces init` | Initialize the current project inbox |
 | `opentraces remove` | Remove the local inbox from the current project |
 | `opentraces status` | Show inbox status and counts |
 | `opentraces remote` | Manage the configured dataset remote |
-| `opentraces session` | Inspect and edit staged traces |
+| `opentraces trace` | Inspect and edit staged traces |
 | `opentraces commit` | Commit inbox traces for upload |
-| `opentraces enrich` | Enrich a trace file with an Intent summary and any configured post-processors |
 | `opentraces push` | Upload committed traces to Hugging Face Hub |
 | `opentraces assess` | Run quality assessment on committed traces or a remote dataset |
 | `opentraces web` | Open the browser inbox UI |
@@ -28,13 +26,13 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces log` | List uploaded traces grouped by date |
 | `opentraces upgrade` | Upgrade CLI and refresh project skill file |
 | `opentraces setup` | Interactive wizard: walks every integration (Claude Code, git, trufflehog, review-llm) |
-| `opentraces setup claude-code` | Install Claude Code session capture hooks |
+| `opentraces setup claude-code` | Install Claude Code capture hooks |
 | `opentraces setup git` | Install or remove the opentraces post-commit hook for commit linking |
 | `opentraces setup trufflehog` | Install or toggle the optional Tier 1.5 TruffleHog scanner |
 | `opentraces setup review-llm` | Configure the third-party LLM used by `review-llm` (global config) |
-| `opentraces doctor` | Report the health of the security pipeline (tiers, versions, auth), the current `intent.mode`, and any configured post-processors |
+| `opentraces doctor` | Report the health of the security pipeline (tiers, versions, auth) and any configured post-processors |
 | `opentraces review-llm` | Run optional Tier 2 LLM semantic review over staged traces |
-| `opentraces blame` | Resolve a commit to the opentraces session(s) behind it |
+| `opentraces blame` | Resolve a commit to the opentraces trace(s) behind it |
 | `opentraces export` | Export staged traces to another format (`atif` stub, `agent-trace`) |
 
 ## Authentication
@@ -73,7 +71,7 @@ opentraces auth logout
 ### `opentraces init`
 
 Initialize opentraces in the current project directory. Creates `.opentraces/config.json`, `.opentraces/staging/`, and the Claude Code hook.
-If Claude Code already has session files for this repo, the interactive flow can import that backlog into the inbox immediately.
+If Claude Code already has trace logs for this repo, the interactive flow can import that backlog into the inbox immediately.
 
 ```bash
 opentraces init
@@ -86,7 +84,7 @@ opentraces init --review-policy review --remote your-name/opentraces --start-fre
 |------|---------|-------------|
 | `--agent` | detected interactively | Agent runtime to connect |
 | `--review-policy` | prompt | `review` or `auto` |
-| `--import-existing / --start-fresh` | prompt when backlog exists | Whether to import existing Claude Code sessions for this repo during init |
+| `--import-existing / --start-fresh` | prompt when backlog exists | Whether to import existing Claude Code traces for this repo during init |
 | `--remote` | unset | HF dataset repo (`owner/name`) |
 | `--no-hook` | off | Skip Claude Code hook installation |
 | `--private / --public` | private | Dataset visibility when creating the remote repo |
@@ -101,7 +99,7 @@ Remove the local `.opentraces/` inbox and Claude Code hook from the current proj
 
 ### `opentraces upgrade`
 
-Upgrade the CLI and refresh the skill file and session hook in the current project.
+Upgrade the CLI and refresh the skill file and capture hook in the current project.
 
 ```bash
 opentraces upgrade              # upgrade CLI + refresh skill and hook
@@ -112,7 +110,7 @@ opentraces upgrade --skill-only # just refresh the skill file and hook
 |------|---------|-------------|
 | `--skill-only` | off | Skip CLI upgrade, only refresh the skill file and hook |
 
-Detects the install method (pipx, brew, pip, source) and runs the appropriate upgrade command. Then re-copies the latest skill file into `.agents/skills/opentraces/` and updates the session hook.
+Detects the install method (pipx, brew, pip, source) and runs the appropriate upgrade command. Then re-copies the latest skill file into `.agents/skills/opentraces/` and updates the capture hook.
 
 ### `opentraces config show`
 
@@ -160,7 +158,7 @@ opentraces tui
 opentraces tui --fullscreen
 ```
 
-### `opentraces session`
+### `opentraces trace`
 
 Fine-grained review commands for staged traces.
 
@@ -177,22 +175,22 @@ opentraces trace redact <trace-id> --step 3
 opentraces trace discard <trace-id> --yes
 ```
 
-`session list` accepts `--stage inbox|committed|pushed|rejected`, `--model`, `--agent`, `--limit`, and `--by-commit`.
+`trace list` accepts `--stage inbox|committed|pushed|rejected`, `--model`, `--agent`, `--limit`, and `--by-commit`.
 
-| `session list` flag | Default | Description |
+| `trace list` flag | Default | Description |
 |---------------------|---------|-------------|
 | `--stage` | all | Filter by `inbox`, `committed`, `pushed`, or `rejected` |
 | `--model` | all | Substring filter over `agent.model` |
 | `--agent` | all | Filter by agent name |
-| `--limit` | `50` | Max sessions returned |
-| `--by-commit` | off | Group traces by `git_links[].revision` (plan 041 R29). Useful for finding every session that contributed to a given commit. |
+| `--limit` | `50` | Max traces returned |
+| `--by-commit` | off | Group traces by `git_links[].revision` (plan 041 R29). Useful for finding every trace that contributed to a given commit. |
 
-`session show` truncates step content to 500 chars in human output by default to protect context windows. Pass `--verbose` to see full content, or use `opentraces --json session show <id>` to get the complete record as JSON (never truncated).
+`trace show` truncates step content to 500 chars in human output by default to protect context windows. Pass `--verbose` to see full content, or use `opentraces --json trace show <id>` to get the complete record as JSON (never truncated).
 
-| `session show` flag | Default | Description |
+| `trace show` flag | Default | Description |
 |---------------------|---------|-------------|
 | `--verbose` | off | Print full step content instead of the 500-char truncation |
-| `--markdown` | off | Render the session as injection-safe Markdown (fenced code, escaped prompts). Safer for piping into another agent. |
+| `--markdown` | off | Render the trace as injection-safe Markdown (fenced code, escaped prompts). Safer for piping into another agent. |
 
 ## Upload
 
@@ -230,39 +228,15 @@ opentraces push --repo user/custom-dataset
 | `--assess` | off | Run quality assessment after upload and embed scores in dataset card |
 | `--llm-review` | off | Require every committed trace to carry a clean Tier 2 LLM verdict before uploading. Aborts with exit code 3 if any trace lacks a `"status":"complete"` verdict, or has `shareable == "no"`, or has `missed_sensitive_data == "yes"`. |
 | `--no-trufflehog` | off | One-shot override: skip Tier 1.5 TruffleHog scanning for this push only. Does not change the config. |
-| `--no-intent` | off | One-shot override: skip Intent enrichment for this push only. |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
 
 `--approved-only` is not part of the current CLI. The public path is `commit -> push`.
 
 When `--llm-review` aborts, the hint points you at `opentraces review-llm` (see below) to produce verdicts.
 
-### `opentraces enrich`
-
-Enrich a single trace file in place with an Intent block (title, summary, source, model) and run any post-processors declared in project config.
-
-```bash
-opentraces enrich path/to/trace.json
-opentraces enrich path/to/trace.json --no-intent        # only run post-processors
-opentraces enrich path/to/trace.json --force            # overwrite existing machine-sourced Intent
-opentraces enrich path/to/trace.json --strict           # fail on any processor error
-opentraces enrich path/to/trace.json -o out.json        # write to a separate path
-opentraces enrich path/to/trace.json --model anthropic/claude-sonnet-4-5
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--intent` / `--no-intent` | follow config `intent.mode` | Enable or disable Intent summarization. |
-| `--force` | off | Overwrite an existing machine-sourced Intent. `source="user"` is never overwritten. |
-| `--strict` | off | Promote post-processor failures (missing binary, non-zero exit, invalid output) to hard errors. |
-| `-o`, `--output` | overwrite input | Write enriched trace to this path. |
-| `--model` | `trace.agent.model` | Override the model id used for Intent. |
-
-Push runs the same Intent enrichment pre-upload when `intent.mode=on`, so running `enrich` yourself is only needed for imported traces or ad-hoc processing.
-
 ### `opentraces doctor`
 
-Report the end-to-end health of the pipeline: security tiers, schema version, HuggingFace auth, the current `intent.mode`, and any configured post-processors (probed against `PATH`).
+Report the end-to-end health of the pipeline: security tiers, schema version, HuggingFace auth, and any configured post-processors (probed against `PATH`).
 
 ```bash
 opentraces doctor
@@ -274,8 +248,7 @@ The machine-readable JSON output includes:
 - `security_version`, `schema_version`
 - `trufflehog.{enabled,binary_version,status}`
 - `hf_auth` — `ok` or `missing`
-- `intent.mode` — `on` or `off`
-- `post_processors` — array of `{name, command, when, resolved_path, status}`. `status` is `detected` when the binary resolves on `PATH`, `missing` otherwise.
+- `post_processors` — array of `{name, command, resolved_path, status}`. `status` is `detected` when the binary resolves on `PATH`, `missing` otherwise.
 
 ### `opentraces assess`
 
@@ -330,7 +303,7 @@ Wire opentraces into external tools — one subcommand per integration, or run b
 
 ```bash
 opentraces setup                       # interactive wizard
-opentraces setup claude-code           # Claude Code session hooks (~/.claude/settings.json)
+opentraces setup claude-code           # Claude Code capture hooks (~/.claude/settings.json)
 opentraces setup claude-code --remove  # uninstall
 opentraces setup claude-code --dry-run # preview without writing
 opentraces setup git                   # git post-commit hook (trace ↔ commit correlation)
@@ -342,7 +315,7 @@ opentraces setup review-llm            # Tier 2 LLM review (interactive preset p
 opentraces setup review-llm --disable  # turn the Tier 2 LLM review off
 ```
 
-Claude Code hooks run at session end (`Stop`) and after context compaction (`PostCompact`) to enrich traces with session metadata. They write into `~/.claude/settings.json` using the matcher-envelope shape Claude Code expects.
+Claude Code hooks run at trace end (`Stop`) and after context compaction (`PostCompact`) to enrich traces with trace metadata. They write into `~/.claude/settings.json` using the matcher-envelope shape Claude Code expects.
 
 The git integration writes an owned `opentraces-post-commit` script plus a fenced chain block into `.git/hooks/post-commit`, so existing hooks are preserved. It also adds a `refs/notes/opentraces` refspec so commit notes travel with `git fetch`.
 
@@ -395,7 +368,7 @@ Add `--json` to any command to suppress human-readable text and get structured J
 
 ```bash
 opentraces --json context
-opentraces --json session list --stage inbox
+opentraces --json trace list --stage inbox
 opentraces --json push
 ```
 
@@ -459,7 +432,7 @@ The hook is a thin shim that calls `opentraces _run-post-commit-hook` (hidden). 
 
 ### `opentraces blame`
 
-Resolve a commit to the opentraces session(s) behind it. Traces are linked via `refs/notes/opentraces` written by the post-commit hook (install with `setup git`); each hit joins with local staging records to show the intent summary, originating Claude session, and the command to resume it.
+Resolve a commit to the opentraces trace(s) behind it. Traces are linked via `refs/notes/opentraces` written by the post-commit hook (install with `setup git`); each hit joins with local staging records to show the task label, originating Claude Code session, and the command to resume it.
 
 ```bash
 opentraces blame                  # defaults to HEAD
@@ -517,7 +490,6 @@ The JSON payload under `doctor` contains:
 | `review_llm.reachable` | `true` when a cheap `/v1/models` ping succeeds (or the `anthropic` SDK is importable); `false` otherwise |
 | `review_llm.status` | Human-readable status (`disabled …`, `UNREACHABLE …`, or `enabled (<backend> / <model>) — N models available`) |
 | `hf_auth` | `"ok"` when a token is loaded, `"missing"` otherwise |
-| `intent.mode` | Intent enrichment mode (`on`/`off`) |
 | `post_processors[]` | Configured post-processors with their resolved path and status |
 
 Exits `3` when either Tier 1.5 or the review-LLM tier is enabled in config but unreachable (missing binary / unreachable endpoint / missing API-key env var).
@@ -562,7 +534,7 @@ Built-in presets (shown in the picker): `ollama`, `lm-studio`, `llama-cpp`, `vll
 
 Run the Tier 2 LLM semantic review over the staged traces using the LLM configured via `opentraces setup review-llm` (overridable per-invocation with `--provider` / `--model` / `--base-url` / `--api-key-env`). Each session's transcript is chunked (400k chars per chunk) and sent to the chosen backend; per-chunk verdicts are aggregated pessimistically (`shareable`: `no` > `manual_review` > `yes`; `missed_sensitive_data`: `yes` > `maybe` > `no`). Results are cached on `sha256(content + provider + base_url + model + prompt_version + context)`.
 
-If Tier 1 / TruffleHog already blocked a trace, the LLM call is skipped and a synthetic `shareable="no"` verdict is recorded with `denied_before_llm: true` — no tokens spent on confirmed-bad sessions.
+If Tier 1 / TruffleHog already blocked a trace, the LLM call is skipped and a synthetic `shareable="no"` verdict is recorded with `denied_before_llm: true` — no tokens spent on confirmed-bad traces.
 
 ```bash
 opentraces review-llm                                # every trace in staging (current default)
@@ -587,7 +559,7 @@ review-llm is slow. Narrow what you run with `--scope` or `--trace`, and cap wit
 | `--trace` | (none) | Target trace by id (full or short prefix). Repeatable. Overrides `--scope`. |
 | `--dry-run` | off | Estimate token usage and cost without calling the provider. |
 | `--limit` | `0` (no cap) | Cap the final batch at N traces, applied after `--scope` / `--trace` filtering. |
-| `--force` | off | Re-review sessions that already have a cached verdict. |
+| `--force` | off | Re-review traces that already have a cached verdict. |
 | `--context-file` | unset | Path to a README/AGENTS.md passed as project context (first 10k chars used). |
 
 Each result carries a verdict shaped like:
@@ -612,7 +584,7 @@ Verdicts are written back to the staged trace's `metadata.llm_review` so `opentr
 
 Deny-before-LLM verdicts additionally carry `denied_before_llm: true`.
 
-`--dry-run` emits a `sessions / chars / estimate {tokens, cost_usd} / model / provider / base_url` summary and does not contact any provider.
+`--dry-run` emits a `traces / chars / estimate {tokens, cost_usd} / model / provider / base_url` summary and does not contact any provider.
 
 ## Hidden and Internal Commands
 
@@ -620,12 +592,12 @@ These commands exist for automation, compatibility, or diagnostics and are hidde
 
 | Command | Purpose |
 |---------|---------|
-| `opentraces discover` | List available agent sessions across all projects |
-| `opentraces parse` | Parse agent sessions into enriched JSONL traces (global mode) |
+| `opentraces discover` | List available agent traces across all projects |
+| `opentraces parse` | Parse raw agent logs into enriched JSONL traces (global mode) |
 | `opentraces migrate` | Check schema version and run migrations |
 | `opentraces capabilities --json` | Machine-discoverable feature list, supported agents, versions |
 | `opentraces introspect` | Full API schema and TraceRecord JSON schema for automation |
-| `opentraces _capture` | Invoked by the Claude Code SessionEnd hook to auto-capture sessions |
+| `opentraces _capture` | Invoked by the Claude Code SessionEnd hook to auto-capture traces |
 | `opentraces _assess-remote` | Force quality assessment on a remote dataset via hf-mount (automation only) |
 
 ## Exit Codes

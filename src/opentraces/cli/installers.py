@@ -191,14 +191,14 @@ def blame_cmd(commit: str, json_out: bool) -> None:
     for h in hits:
         rec = traces_by_id.get(h.trace_id)
         session_id = getattr(rec, "session_id", None) if rec else None
-        intent = None
+        label = None
         if rec is not None:
-            intent, _src = _cli._describe_trace(rec)
-            if intent and len(intent) > 70:
-                intent = intent[:69] + "…"
+            label, _src = _cli._describe_trace(rec)
+            if label and len(label) > 70:
+                label = label[:69] + "…"
         human_echo(f"  {_cli._dim('trace:  ')} {h.trace_id}")
-        if intent:
-            human_echo(f"  {_cli._dim('intent: ')} {intent}")
+        if label:
+            human_echo(f"  {_cli._dim('task:   ')} {label}")
         if session_id:
             human_echo(
                 f"  {_cli._dim('resume: ')} opentraces resume {h.trace_id}  "
@@ -955,13 +955,12 @@ def doctor_cmd() -> None:
     human_echo(f"  trufflehog:       {report['trufflehog']['status']}")
     human_echo(f"  review-llm:       {report['review_llm']['status']}")
     human_echo(f"  hf auth:          {report['hf_auth']}")
-    human_echo(f"  intent mode:      {report['intent']['mode']}")
 
     processors_report = report["post_processors"]
     if processors_report:
         human_echo("  post-processors:")
         for p in processors_report:
-            human_echo(f"    - {p['name']} ({p['when']}): {p['status']}")
+            human_echo(f"    - {p['name']}: {p['status']}")
     else:
         human_echo("  post-processors:  (none configured)")
 

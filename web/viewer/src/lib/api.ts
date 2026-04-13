@@ -1,6 +1,6 @@
 import type {
   AppContext,
-  SessionListItem,
+  TraceListItem,
   TraceRecord,
   RedactionPreview,
 } from "../types/trace";
@@ -22,7 +22,7 @@ async function request<T>(
   return res.json() as Promise<T>;
 }
 
-interface RawSession {
+interface RawTrace {
   trace_id: string;
   task: string;
   agent: string;
@@ -38,7 +38,7 @@ interface RawSession {
 
 const VALID_STAGES = new Set(["inbox", "committed", "pushed", "rejected"]);
 
-function mapSession(raw: RawSession): SessionListItem {
+function mapTrace(raw: RawTrace): TraceListItem {
   const rawStage = raw._stage ?? "inbox";
   return {
     trace_id: raw.trace_id,
@@ -47,14 +47,17 @@ function mapSession(raw: RawSession): SessionListItem {
     model: raw.model ?? "unknown",
     step_count: raw.steps ?? 0,
     flag_count: raw.security_flags ?? 0,
-    stage: (VALID_STAGES.has(rawStage) ? rawStage : "inbox") as SessionListItem["stage"],
+    stage: (VALID_STAGES.has(rawStage) ? rawStage : "inbox") as TraceListItem["stage"],
     timestamp: raw.timestamp ?? "",
   };
 }
 
-export async function fetchSessions(): Promise<SessionListItem[]> {
-  const raw = await request<RawSession[]>("/api/sessions");
-  return raw.map(mapSession);
+// NOTE: HTTP paths below (/api/sessions, /api/session/...) are the Python
+// backend's URL contract; they are intentionally left as-is to avoid
+// breaking the Flask API. Only the JS-side identifiers are renamed.
+export async function fetchTraces(): Promise<TraceListItem[]> {
+  const raw = await request<RawTrace[]>("/api/sessions");
+  return raw.map(mapTrace);
 }
 
 export async function fetchAppContext(): Promise<AppContext> {
@@ -65,11 +68,11 @@ export async function fetchTrace(traceId: string): Promise<TraceRecord> {
   return request<TraceRecord>(`/api/session/${traceId}/detail`);
 }
 
-export async function commitSession(traceId: string): Promise<void> {
+export async function commitTrace(traceId: string): Promise<void> {
   await request<unknown>(`/api/session/${traceId}/commit`, { method: "POST" });
 }
 
-export async function rejectSession(traceId: string): Promise<void> {
+export async function rejectTrace(traceId: string): Promise<void> {
   await request<unknown>(`/api/session/${traceId}/reject`, { method: "POST" });
 }
 
@@ -83,13 +86,14 @@ export async function redactStep(
   );
 }
 
-export async function commitSessions(
-  sessionIds: string[],
+export async function commitTraces(
+  traceIds: string[],
   message: string,
 ): Promise<{ commit_id: string }> {
   return request<{ commit_id: string }>("/api/commit", {
     method: "POST",
-    body: JSON.stringify({ session_ids: sessionIds, message }),
+    // Body key "session_ids" is the backend API contract — do not rename.
+    body: JSON.stringify({ session_ids: traceIds, message }),
   });
 }
 

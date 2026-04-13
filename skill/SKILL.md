@@ -2,18 +2,18 @@
 name: opentraces
 description: >
   Share agent traces to open datasets on HuggingFace Hub. Use this skill
-  whenever the user mentions sharing, publishing, or uploading traces,
-  sessions, or agent activity to HuggingFace. Also use when user says
-  "opentraces", "share this session", "publish traces", "upload traces",
-  "contribute traces", "donate sessions", or asks about trace review,
+  whenever the user mentions sharing, publishing, or uploading traces
+  or agent activity to HuggingFace. Also use when user says
+  "opentraces", "share this trace", "publish traces", "upload traces",
+  "contribute traces", "donate traces", or asks about trace review,
   redaction, commit, or push workflows. Proactively suggest this skill
-  after completing significant coding sessions where valuable work was done.
+  after completing significant agent traces where valuable work was done.
 ---
 
 # opentraces - Share Agent Traces to HuggingFace Hub
 
 Open protocol + CLI for repo-local agent trace capture, review, and upload.
-After each coding session, opentraces automatically captures your trace,
+After each agent trace, opentraces automatically captures your trace,
 runs security scanning, and stages it for review. You review, commit, and
 push to a HuggingFace dataset.
 
@@ -39,21 +39,16 @@ opentraces trace reset <ID>          # undo commit/reject, back to inbox
 opentraces trace redact <ID> --step N  # scrub a specific step
 opentraces trace discard <ID> --yes  # permanently delete a trace
 opentraces commit --all                # bulk commit all inbox traces
-opentraces enrich <TRACE>              # enrich a single trace file (Intent + configured post-processors)
-opentraces enrich <TRACE> --no-intent  # skip Intent summarization (run only post-processors)
-opentraces enrich <TRACE> --force      # overwrite an existing machine-sourced Intent (source=user is never overwritten)
-opentraces enrich <TRACE> --strict     # promote post-processor failures to hard errors
-opentraces push                        # upload committed traces to HF Hub
+opentraces push                        # upload committed traces to HF Hub (runs configured post-processors pre-upload)
 opentraces push --assess               # upload + run quality assessment after push
 opentraces push --llm-review           # block push unless every committed trace has a clean Tier 2 verdict
 opentraces push --no-trufflehog        # one-shot: skip Tier 1.5 TruffleHog for this push
-opentraces push --no-intent            # one-shot: skip Intent enrichment for this push
 opentraces assess                      # score committed traces (local quality.json)
 opentraces assess --dataset owner/name # refresh quality.json on remote HF dataset
-opentraces review-llm                  # Tier 2 LLM semantic review over staged sessions
-opentraces doctor                      # report security pipeline health, SECURITY_VERSION, intent.mode, configured post-processors
+opentraces review-llm                  # Tier 2 LLM semantic review over staged traces
+opentraces doctor                      # report security pipeline health, SECURITY_VERSION, configured post-processors
 opentraces setup                       # interactive wizard: walks every integration
-opentraces setup claude-code           # install Claude Code session capture hooks
+opentraces setup claude-code           # install Claude Code capture hooks
 opentraces setup claude-code --remove  # uninstall Claude Code hooks
 opentraces setup git                   # install the post-commit hook that correlates traces to commits
 opentraces setup git --remove          # remove the post-commit hook
@@ -74,7 +69,7 @@ opentraces tui                         # open terminal inbox UI
 
 ### Settings
 ```
-opentraces whoami                      # print HF username
+opentraces auth                        # show active HF identity
 opentraces logout                      # clear stored credentials
 opentraces config show                 # display current config
 opentraces config set [OPTIONS]        # update config values
@@ -97,7 +92,7 @@ Look for `.opentraces/config.json` in the project root. If it exists, run
 ### Step 2: Check authentication
 
 ```bash
-opentraces whoami
+opentraces auth
 ```
 
 If not authenticated: `opentraces login` opens a browser for OAuth device-code
@@ -109,10 +104,10 @@ and takes highest priority.
 
 Ask the user for these three choices:
 
-1. **Review policy**: `review` (you review each session before push) or `auto`
-   (safe sessions skip the inbox and commit automatically, then auto-push)
+1. **Review policy**: `review` (you review each trace before push) or `auto`
+   (safe traces skip the inbox and commit automatically, then auto-push)
 2. **Remote**: a HuggingFace dataset repo in `owner/name` format, or skip
-3. **Existing sessions**: if Claude Code sessions already exist for this repo,
+3. **Existing traces**: if Claude Code trace logs already exist for this repo,
    ask whether to import them now (`--import-existing`) or start fresh
    (`--start-fresh`)
 
@@ -123,7 +118,7 @@ Standard setup:
 opentraces init --agent claude-code --review-policy review --start-fresh
 ```
 
-With remote and existing session import:
+With remote and existing trace import:
 ```bash
 opentraces init --agent claude-code --review-policy review --import-existing --remote owner/dataset-name --private
 ```
@@ -141,10 +136,11 @@ SessionEnd hook in `.claude/settings.json`, and copies this skill into
 ### 1. Capture (automatic)
 
 After `init`, a Claude Code `SessionEnd` hook runs `opentraces _capture`
-automatically when each session ends. The capture pipeline parses the session,
-runs enrichment (git signals, attribution, dependencies, metrics), applies
-security scanning and redaction, and stages the result as JSONL. Sessions
-with fewer than 2 steps or zero tool calls are silently filtered out.
+automatically when each Claude Code session ends. The capture pipeline
+parses the trace, runs enrichment (git signals, attribution, dependencies,
+metrics), applies security scanning and redaction, and stages the result
+as JSONL. Traces with fewer than 2 steps or zero tool calls are silently
+filtered out.
 
 ### 2. Review
 
@@ -176,7 +172,7 @@ Each push creates a new JSONL shard on the remote (never appends to existing
 files). Content-hash deduplication skips traces already present on the remote.
 A dataset card (README.md) is auto-generated with CC-BY-4.0 license.
 
-## Session Review
+## Trace Review
 
 ### Listing and filtering
 
@@ -195,7 +191,7 @@ Valid stages: `inbox`, `committed`, `pushed`, `rejected`.
 ```bash
 opentraces trace show <TRACE_ID>           # summary + truncated step content
 opentraces trace show <TRACE_ID> --verbose # full step content (can be large)
-opentraces --json session show <TRACE_ID>    # full record as JSON (never truncated)
+opentraces --json trace show <TRACE_ID>    # full record as JSON (never truncated)
 ```
 
 Human output truncates step content to 500 chars by default to protect context
@@ -324,7 +320,7 @@ opentraces doctor
 ```
 
 Reports `security_version`, `schema_version`, TruffleHog binary + enabled
-state, HF auth status, intent mode, and configured post-processors. JSON
+state, HF auth status, and configured post-processors. JSON
 payload is emitted under `doctor` with the same fields plus a nested
 `trufflehog: {enabled, binary_version, status}` and `review_llm: {enabled, backend, model, reachable, status}`.
 
@@ -389,7 +385,7 @@ opentraces review-llm --scope committed              # COMMITTED only — 2nd li
 opentraces review-llm --trace 8a3f1c                 # one trace (short prefix ok); repeatable
 opentraces review-llm --provider fake                # offline stub, for tests
 opentraces review-llm --dry-run                      # estimate tokens + cost only
-opentraces review-llm --limit 5                      # cap sessions reviewed
+opentraces review-llm --limit 5                      # cap traces reviewed
 opentraces review-llm --force                        # re-review cached verdicts
 opentraces review-llm --context-file AGENTS.md       # pass project README as context
 ```
@@ -405,8 +401,8 @@ cache and re-reviews on next run. `--force` ignores the cache entirely.
 
 If Tier 1 / TruffleHog already blocked the trace, `review-llm` skips
 the LLM call and records a synthetic `shareable=no` verdict
-(`denied_before_llm: true`) — no tokens spent on confirmed-bad
-sessions.
+(`denied_before_llm: true`), no tokens spent on confirmed-bad
+traces.
 
 ### Enforcing Tier 2 at push
 
@@ -456,7 +452,7 @@ structured JSON:
 
 ```bash
 opentraces --json context
-opentraces --json session list --stage inbox
+opentraces --json trace list --stage inbox
 opentraces --json push
 ```
 
@@ -541,12 +537,12 @@ If no `/` in the name, the authenticated username is prepended automatically.
 |-------|-----|
 | "Not authenticated" / "No HF token found" | `opentraces login` |
 | "Not an opentraces project" / "Not initialized" | `opentraces init` in the project directory |
-| "No sessions found" | Check that `~/.claude/projects/` has session files |
+| "No traces found" | Check that `~/.claude/projects/` has Claude Code session files |
 | Push fails with 403 | HF token lacks write scope, regenerate at huggingface.co/settings/tokens |
 | Lock contention (exit 7) | Another process is pushing, wait and retry |
 | "No traces ready for upload" | Run `opentraces commit --all` first |
 | "All traces already exist on remote" | Content-hash dedup, nothing new to push |
-| Traces not appearing after session | Hook may not be installed, run `opentraces init` again |
+| Traces not appearing after agent run | Hook may not be installed, run `opentraces init` again |
 
 Start debugging with `opentraces context` for a full project state snapshot.
 
@@ -575,7 +571,7 @@ opentraces upgrade --skill-only # just refresh the skill file and hook
 
 `upgrade` detects how opentraces was installed (pipx, brew, pip, source)
 and runs the appropriate upgrade command, then refreshes the skill file
-and session hook in the current project.
+and capture hook in the current project.
 
 ## Further Context
 

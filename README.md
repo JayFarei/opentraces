@@ -2,15 +2,15 @@
 
 Open schema + CLI for crowdsourcing agent traces to Hugging Face Hub.
 
-Every coding session with an AI agent produces action trajectories, tool-use sequences, and reasoning chains. These are the most valuable dataset nobody is collecting in the open. opentraces captures them automatically, scans for secrets, and publishes structured JSONL datasets to HuggingFace Hub. Private by default. You control what leaves your machine.
+Every agent run produces action trajectories, tool-use sequences, and reasoning chains. These are the most valuable dataset nobody is collecting in the open. opentraces captures them automatically, scans for secrets, and publishes structured JSONL datasets to HuggingFace Hub. Private by default. You control what leaves your machine.
 
-> **Sharing coding agent sessions risks leaking secrets and PII.** opentraces applies context-aware scanning and redaction, but no redaction is perfect. Read the [security docs](https://opentraces.ai/docs/security/tiers) before use.
+> **Sharing agent traces risks leaking secrets and PII.** opentraces applies context-aware scanning and redaction, but no redaction is perfect. Read the [security docs](https://opentraces.ai/docs/security/tiers) before use.
 
 ---
 
 ## What it does
 
-1. **Parse** agent sessions (Claude Code, Cursor, Cline, Codex, Hermes)
+1. **Parse** agent traces (Claude Code, Cursor, Cline, Codex, Hermes)
 2. **Scan** every field for secrets, API keys, paths, and PII
 3. **Redact** detected secrets with `[REDACTED]` or hashed path segments
 4. **Enrich** with git signals, attribution, cost estimates, dependency metadata
@@ -22,11 +22,11 @@ Every coding session with an AI agent produces action trajectories, tool-use seq
 
 ---
 
-## Share your coding agent sessions
+## Share your coding agent traces
 
-If you use coding agents for open source work, please share your sessions.
+If you use coding agents for open source work, please share your traces.
 
-Public session data helps improve coding agents with real-world tasks, tool use, failures, and fixes instead of toy benchmarks. For the full explanation, see [opentraces.ai](https://opentraces.ai).
+Public trace data helps improve coding agents with real-world tasks, tool use, failures, and fixes instead of toy benchmarks. For the full explanation, see [opentraces.ai](https://opentraces.ai).
 
 Published datasets are tagged `opentraces` and `agent-traces`, findable via:
 - https://huggingface.co/datasets?other=opentraces
@@ -90,19 +90,17 @@ opentraces init --agent <chosen-agent> --review-policy review --start-fresh
 This sets up automatic trace collection with manual review before
 anything is shared, and installs the opentraces agent skill into
 .agents/skills/opentraces/ (plus a symlink in .<agent>/skills/)
-so you have the full CLI reference for future sessions. If your agent
-already has past sessions for this repo, use `--import-existing` to bring
+so you have the full CLI reference for future traces. If your agent
+already has past traces for this repo, use `--import-existing` to bring
 that backlog into the inbox immediately, or `--start-fresh` to begin from now on.
 
 After setup, the workflow is:
 - `opentraces web` to inspect traces before sharing
 - `opentraces commit --all` to commit inbox traces
-- `opentraces enrich <trace.json>` to add an Intent summary (and run any
-  configured post-processors) — optional; `push` does this automatically
-  unless `--no-intent` is passed or `intent.mode=off` is set
-- `opentraces push` to publish committed traces to HuggingFace
-- `opentraces doctor` to check installed integrations, Intent mode, any
-  configured post-processors, and the security pipeline (SECURITY_VERSION,
+- `opentraces push` to publish committed traces to HuggingFace (runs any
+  configured post-processors pre-upload)
+- `opentraces doctor` to check installed integrations, any configured
+  post-processors, and the security pipeline (SECURITY_VERSION,
   TruffleHog status)
 - `opentraces setup trufflehog` to opt into Tier 1.5 verified-secret scanning
 - `opentraces setup review-llm` to configure a third-party LLM (local Ollama,
@@ -160,7 +158,7 @@ See the full [scanning docs](https://opentraces.ai/docs/security/scanning) and [
 
 ## Schema
 
-The trace format is defined in [`packages/opentraces-schema/`](packages/opentraces-schema/). Each JSONL line is a self-contained `TraceRecord` covering one complete agent session: steps (TAO loops), tool calls, outcome signals, attribution, and security metadata.
+The trace format is defined in [`packages/opentraces-schema/`](packages/opentraces-schema/). Each JSONL line is a self-contained `TraceRecord` covering one complete agent trace: steps (TAO loops), tool calls, outcome signals, attribution, and security metadata.
 
 Designed for the people who consume traces, not just the tools that produce them:
 

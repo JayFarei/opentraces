@@ -50,8 +50,8 @@ COMMAND_SECTIONS = [
     ("Discover", ["stats", "log", "pull", "blame"]),
     ("Publish", ["trace", "commit", "push", "export"]),
     ("Project", ["remote", "config", "remove", "upgrade"]),
-    ("Auth", ["auth", "whoami", "logout"]),
-    ("Operations", ["enrich", "review-llm", "assess"]),
+    ("Auth", ["auth", "logout"]),
+    ("Operations", ["review-llm", "assess"]),
 ]
 
 
@@ -99,13 +99,8 @@ def _describe_trace(record) -> tuple[str, str]:
     """Pick the best short label for a trace.
 
     Returns (label, source) where source is one of
-    "intent" | "task" | "step" | "tool" | "none".
+    "task" | "step" | "tool" | "none".
     """
-    intent = getattr(record, "intent", None)
-    if intent is not None:
-        title = getattr(intent, "title", None)
-        if title:
-            return title.strip(), "intent"
     task = getattr(record, "task", None)
     desc = getattr(task, "description", None) if task else None
     if desc:
@@ -856,43 +851,10 @@ def logout() -> None:
     _logout_impl()
 
 
-@main.group(invoke_without_command=True)
-@click.pass_context
-def auth(ctx: click.Context) -> None:
-    """Manage HuggingFace authentication."""
-    if ctx.invoked_subcommand is None:
-        _auth_status_impl()
-
-
-@auth.command("login")
-@click.option("--token", is_flag=True, help="Paste a personal access token (required for pushing traces)")
-def auth_login(token: bool) -> None:
-    _login_impl(token)
-
-
-@auth.command("logout")
-def auth_logout() -> None:
-    _logout_impl()
-
-
-@auth.command("status")
-def auth_status() -> None:
-    _auth_status_impl()
-
-
 @main.command()
-def whoami() -> None:
+def auth() -> None:
     """Show the active HuggingFace identity."""
-    cfg = load_config()
-    identity = _auth_identity(cfg.hf_token)
-    if identity is None:
-        click.echo("Not authenticated.")
-        emit_json(error_response("NOT_AUTHENTICATED", "auth", "No active HuggingFace identity"))
-        sys.exit(3)
-
-    username = identity.get("name", "unknown")
-    click.echo(username)
-    emit_json({"status": "ok", "username": username})
+    _auth_status_impl()
 
 
 @main.group()
@@ -1661,12 +1623,11 @@ def status(limit: int) -> None:
         table.add_column("ID", no_wrap=True)
         table.add_column("Age", no_wrap=True, justify="right")
         table.add_column("Status", no_wrap=True)
-        table.add_column("Intent", overflow="ellipsis", no_wrap=True)
+        table.add_column("Task", overflow="ellipsis", no_wrap=True)
         table.add_column("Commit", no_wrap=True)
-        table.add_column("", no_wrap=True)  # intent-source dot
+        table.add_column("", no_wrap=True)  # task-source dot
 
         # Coverage counters drive the "setup hint" block below the legend.
-        intent_hits = 0  # rows whose title came from intent.title
         git_link_hits = 0  # rows with at least one git_link populated
         rows_rendered = 0
 
@@ -1701,7 +1662,7 @@ def status(limit: int) -> None:
                         pass
 
                 title, source = _describe_trace(record)
-                # Cap title so Rich can size the Intent column predictably.
+                # Cap title so Rich can size the Task column predictably.
                 if len(title) > 60:
                     title = title[:59] + "…"
 
@@ -1714,8 +1675,7 @@ def status(limit: int) -> None:
                 else:
                     commit_cell = ""
 
-                intent_cell = {
-                    "intent": "[green]●[/]",          # curated intent title
+                source_cell = {
                     "task": "[cyan]●[/]",             # parser-provided
                     "step": "[dim]○[/]",              # first step content
                     "tool": "[magenta]○[/]",          # tool-call summary (no narrative)
@@ -1729,11 +1689,9 @@ def status(limit: int) -> None:
                     status_cell,
                     title,
                     commit_cell,
-                    intent_cell,
+                    source_cell,
                 )
                 rows_rendered += 1
-                if source == "intent":
-                    intent_hits += 1
                 if chip is not None:
                     git_link_hits += 1
                 tier = (
@@ -1746,8 +1704,8 @@ def status(limit: int) -> None:
                     "short_id": short_id,
                     "stage": visible_stage,
                     "status": status_plain,
-                    "intent": title,
-                    "intent_source": source,
+                    "task": title,
+                    "task_source": source,
                     "commit": chip[1] if chip else None,
                     "commit_tier": tier,
                     "age": rel_time,
@@ -1768,7 +1726,7 @@ def status(limit: int) -> None:
             highlight=False,
         )
         console.print(
-            "  [dim]intent:[/]    [green]●[/][dim] curated[/]  "
+            "  [dim]label:[/]     "
             "[cyan]●[/][dim] task[/]  [dim]○ step[/]  "
             "[magenta]○[/][dim] tool[/]  [red]○[/][dim] none[/]    "
             "[dim]commit:[/]  [green]✓[/][dim] emitted[/]  "
@@ -1781,28 +1739,6 @@ def status(limit: int) -> None:
         if rows_rendered > 0:
             hints = []
             git_hook_installed = (project_dir / ".git" / "hooks" / "post-commit").exists()
-            cc_settings = Path.home() / ".claude" / "settings.json"
-            cc_hook_stop = False
-            if cc_settings.exists():
-                try:
-                    import json as _json
-                    data = _json.loads(cc_settings.read_text())
-                    stop_blocks = data.get("hooks", {}).get("Stop", []) or []
-                    for block in stop_blocks:
-                        if not isinstance(block, dict):
-                            continue
-                        # Two legal shapes: {"hooks": [{command,...}]} and
-                        # {"type": "command", "command": "..."} at top level.
-                        for h in block.get("hooks", []) or []:
-                            if "opentraces_on_stop" in (h.get("command") or ""):
-                                cc_hook_stop = True
-                                break
-                        if "opentraces_on_stop" in (block.get("command") or ""):
-                            cc_hook_stop = True
-                        if cc_hook_stop:
-                            break
-                except Exception:
-                    pass
 
             if git_link_hits == 0:
                 if git_hook_installed:
@@ -1815,21 +1751,6 @@ def status(limit: int) -> None:
                         "no commit links  "
                         f"{_dim('— run')} opentraces setup git "
                         f"{_dim('to install the post-commit hook')}"
-                    )
-
-            if intent_hits == 0:
-                if cc_hook_stop:
-                    hints.append(
-                        "no intent summaries yet  "
-                        f"{_dim('— new sessions auto-enrich; for existing traces run')} "
-                        f"opentraces enrich <trace_path>"
-                    )
-                else:
-                    hints.append(
-                        "no intent summaries  "
-                        f"{_dim('— run')} opentraces setup claude-code "
-                        f"{_dim('for new sessions, or')} opentraces enrich <trace_path> "
-                        f"{_dim('for existing')}"
                     )
 
             if hints:
@@ -1964,100 +1885,6 @@ def remote_remove() -> None:
     save_project_config(project_dir, proj_config)
     click.echo("Remote removed.")
     emit_json({"status": "ok", "remote": None})
-@click.option("--model", type=str, default=None, help="Model id override for Intent (default: trace's agent.model).")
-@main.command()
-@click.argument("trace_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.option("--intent/--no-intent", "run_intent", default=None,
-              help="Enable or disable Intent summarization. Default: follow config intent.mode.")
-@click.option("--force", is_flag=True, help="Overwrite an existing machine-sourced Intent. Never overwrites source='user'.")
-@click.option("--strict", is_flag=True, help="Promote post-processor failures (missing binary, non-zero exit, invalid output) to hard errors.")
-@click.option("-o", "--output", type=click.Path(dir_okay=False, path_type=Path), default=None,
-              help="Write enriched trace here. Default: overwrite the input file in place.")
-def enrich(trace_path: Path, run_intent: bool | None, force: bool, strict: bool, output: Path | None, model: str | None) -> None:
-    """Enrich a trace with Intent summary and post-processors.
-
-    Reads a single trace JSON file, optionally summarizes (Intent), then pipes
-    it through the ordered post-processor chain declared in project config.
-    Writes the enriched trace back to ``trace_path`` by default, or to
-    ``--output`` if given.
-    """
-    from ..core.config import ProjectConfig, load_project_config
-    from ..enrichment.intent import enrich_intent
-    from ..enrichment.intent_backends import claude_cli_client
-    from ..core.processors import run_chain
-    from opentraces_schema import TraceRecord
-
-    cfg = load_config()
-    proj_raw = load_project_config(Path.cwd())
-    try:
-        proj_cfg = ProjectConfig.model_validate(proj_raw) if proj_raw else None
-    except Exception:
-        proj_cfg = None
-
-    try:
-        record = TraceRecord.model_validate_json(trace_path.read_text())
-    except Exception as exc:
-        raise click.ClickException(f"Could not parse trace: {exc}")
-
-    # Decide whether to run intent. Precedence: CLI flag > project.intent > global.intent.
-    intent_mode = (
-        "on" if run_intent is True
-        else "off" if run_intent is False
-        else (proj_cfg.intent.mode if (proj_cfg and proj_cfg.intent) else cfg.intent.mode)
-    )
-    if intent_mode == "on":
-        try:
-            record = enrich_intent(record, claude_cli_client, model_id=model, force=force)
-        except Exception as exc:
-            click.echo(f"warning: intent enrichment failed: {exc}", err=True)
-
-    # Run configured post-processor chain (enrich-stage).
-    specs = proj_cfg.post_processors if proj_cfg else []
-    if specs:
-        result = run_chain(record, specs, strict=strict, when="enrich")
-        record = result.record
-        for r in result.results:
-            click.echo(f"processor {r.name}: {r.status}" + (f" ({r.message})" if r.message else ""), err=True)
-
-    out_path = output or trace_path
-    out_path.write_text(record.model_dump_json(indent=2))
-    click.echo(f"wrote {out_path}")
-
-
-@main.command("_enrich-transcript", hidden=True)
-@click.argument("transcript_path", type=click.Path(path_type=Path))
-def _enrich_transcript(transcript_path: Path) -> None:
-    """Parse one Claude Code transcript and stage an Intent-enriched trace.
-
-    Invoked by the ``on_stop`` hook in a detached background process so the
-    hook itself returns immediately. Writes the enriched trace to the
-    per-session staging path ``~/.opentraces/intent-cache/<session_id>.json``
-    so later ``opentraces parse`` / ``push`` can pick it up without
-    redoing the LLM call. Fails silently — a background process must not
-    surface errors to the user.
-    """
-    try:
-        if not transcript_path.exists():
-            return
-        from ..capture.claude_code.hooks.intent_adapter import (
-            enrich_from_hook_payload,
-        )
-        from ..enrichment.intent_backends import claude_cli_client
-        cfg = load_config()
-        if cfg.intent.mode != "on":
-            return
-        payload = {"transcript_path": str(transcript_path)}
-        trace = enrich_from_hook_payload(payload, claude_cli_client)
-        if trace is None or trace.intent is None:
-            return
-        from ..core.paths import OPENTRACES_DIR
-        cache_dir = OPENTRACES_DIR / "intent-cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        out = cache_dir / f"{trace.session_id}.json"
-        out.write_text(trace.model_dump_json(indent=2))
-    except Exception:
-        # Background task — never raise.
-        return
 
 
 @main.command(hidden=True)
@@ -2651,8 +2478,8 @@ def introspect() -> None:
         "commands": {
             "init": {"description": "One-stop setup for the repo inbox", "options": ["--agent", "--review-policy", "--remote", "--private", "--public", "--no-hook"]},
             "login": {"description": "Authenticate with HuggingFace Hub"},
-            "auth": {"description": "Manage HuggingFace authentication", "subcommands": ["login", "logout", "status"]},
-            "whoami": {"description": "Show the active HuggingFace identity"},
+            "auth": {"description": "Show the active HuggingFace identity"},
+            "logout": {"description": "Log out from HuggingFace Hub"},
             "web": {"description": "Open the browser inbox", "options": ["--port"]},
             "tui": {"description": "Open the terminal inbox"},
             "commit": {"description": "Commit inbox traces for push", "options": ["-m", "--all"]},

@@ -13,15 +13,7 @@ export function SessionHeader() {
     return null;
   }
 
-  // Plan 038: prefer Intent.title when present; fall back to task.description.
-  const intent = (trace as unknown as {
-    intent?: { title?: string | null; summary?: string | null; source?: string | null };
-  }).intent;
-  const intentTitle = intent?.title ?? null;
-  const intentSummary = intent?.summary ?? null;
-  const sessionName = intentTitle
-    ? intentTitle
-    : cleanSessionName(trace.task.description ?? "", trace.timestamp_start);
+  const sessionName = cleanSessionName(trace.task.description ?? "", trace.timestamp_start);
 
   // Date formatting
   let dateStr = "";
@@ -89,13 +81,6 @@ export function SessionHeader() {
           {trace.steps.length} steps
         </span>
       </div>
-
-      {/* Plan 038: one-line Intent summary under the title when present. */}
-      {intentSummary && (
-        <div className="text-[10px] font-[family-name:var(--font-mono)] text-[var(--text-muted)] truncate mt-0.5">
-          {intentSummary}
-        </div>
-      )}
 
       {/* Line 2: model + tokens + cache + tier + view toggle */}
       <div className="flex items-center gap-3 text-[10px] font-[family-name:var(--font-mono)] mt-0.5">

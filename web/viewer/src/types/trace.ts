@@ -172,7 +172,7 @@ export interface TreeNode {
   hasRedaction: boolean;
 }
 
-export type SessionStage =
+export type TraceStage =
   | "inbox"
   | "committed"
   | "pushed"
@@ -192,14 +192,14 @@ export interface LLMReviewSummary {
   badge?: string;
 }
 
-export interface SessionListItem {
+export interface TraceListItem {
   trace_id: string;
   task_description: string;
   agent_name: string;
   model: string;
   step_count: number;
   flag_count: number;
-  stage: SessionStage;
+  stage: TraceStage;
   timestamp: string;
   // Plan 032: optional LLM review verdict for reviewer UI.
   llm_review?: LLMReviewSummary;

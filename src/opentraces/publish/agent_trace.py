@@ -12,7 +12,7 @@ The JSONL emitted here is compatible with cursor/agent-trace readers:
   optional original, optional contributor override)
 - optional ids, related, revision.
 
-Non-attribution trajectory data (steps, metrics, intent, tool_definitions)
+Non-attribution trajectory data (steps, metrics, tool_definitions)
 is intentionally NOT included because the Agent Trace v0.1 spec scope is
 attribution; round-tripping trajectory data would require a superset
 spec, which is what the opentraces schema already does.

@@ -1,4 +1,4 @@
-"""Tests for the post-processor runner (plan 038 phase 4)."""
+"""Tests for the post-processor runner."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from opentraces_schema import Agent, Intent, Task, TraceRecord
+from opentraces_schema import Agent, Task, TraceRecord
 
 from opentraces.core.config import PostProcessorConfig
 from opentraces.core.processors import (
@@ -46,15 +46,10 @@ def _trace(**overrides) -> TraceRecord:
     return TraceRecord(**d)
 
 
-_INTENT_WRITER = r"""
+_TAG_WRITER = r"""
 import json, sys
 data = json.loads(sys.stdin.read())
-data['intent'] = {
-    'title': 'from processor',
-    'summary': 'set by stub',
-    'source': 'post_processor',
-    'model': 'ollama/stub',
-}
+data.setdefault('metadata', {})['tagged_by'] = 'stub'
 sys.stdout.write(json.dumps(data))
 """
 
@@ -97,13 +92,11 @@ def _spec(path: Path, **kwargs) -> PostProcessorConfig:
 
 class TestHappyPath:
     def test_processor_rewrites_trace(self, tmp_path):
-        stub = _make_stub(tmp_path, "intent_writer.py", _INTENT_WRITER)
+        stub = _make_stub(tmp_path, "tagger.py", _TAG_WRITER)
         trace = _trace()
         new, res = run_processor(trace, _spec(stub))
         assert res.status == "ok"
-        assert new.intent is not None
-        assert new.intent.source == "post_processor"
-        assert new.intent.title == "from processor"
+        assert new.metadata.get("tagged_by") == "stub"
 
     def test_processor_receives_env_and_args(self, tmp_path):
         stub = _make_stub(tmp_path, "emit_env.py", _EMIT_ENV)
@@ -141,7 +134,7 @@ class TestFailureModes:
         assert res.status == "nonzero_exit"
         assert res.exit_code == 3
         # Trace preserved on failure
-        assert new.intent is None
+        assert new.metadata == {}
 
     def test_nonzero_exit_strict_raises(self, tmp_path):
         stub = _make_stub(tmp_path, "nonzero.py", _NONZERO)
@@ -152,7 +145,7 @@ class TestFailureModes:
         stub = _make_stub(tmp_path, "bad.py", _INVALID_OUTPUT)
         new, res = run_processor(_trace(), _spec(stub))
         assert res.status == "invalid_output"
-        assert new.intent is None  # unchanged
+        assert new.metadata == {}
 
     def test_invalid_output_strict_raises(self, tmp_path):
         stub = _make_stub(tmp_path, "bad.py", _INVALID_OUTPUT)
@@ -162,36 +155,28 @@ class TestFailureModes:
 
 class TestChaining:
     def test_ordered_pipeline(self, tmp_path):
-        first = _make_stub(tmp_path, "first.py", _INTENT_WRITER)
-        # Second reads the first's output, overrides the title.
+        first = _make_stub(tmp_path, "first.py", _TAG_WRITER)
+        # Second reads the first's output and appends another tag.
         second_body = r"""
 import json, sys
 data = json.loads(sys.stdin.read())
-data['intent']['title'] = 'override'
+data['metadata']['tagged_by'] = data['metadata'].get('tagged_by', '') + '+second'
 sys.stdout.write(json.dumps(data))
 """
         second = _make_stub(tmp_path, "second.py", second_body)
         trace = _trace()
         result = run_chain(trace, [_spec(first), _spec(second)])
         assert [r.status for r in result.results] == ["ok", "ok"]
-        assert result.record.intent.title == "override"
+        assert result.record.metadata["tagged_by"] == "stub+second"
 
     def test_one_failure_continues_non_fatal(self, tmp_path):
         nonzero = _make_stub(tmp_path, "nonzero.py", _NONZERO)
-        writer = _make_stub(tmp_path, "intent_writer.py", _INTENT_WRITER)
+        writer = _make_stub(tmp_path, "tagger.py", _TAG_WRITER)
         result = run_chain(_trace(), [_spec(nonzero), _spec(writer)])
         statuses = [r.status for r in result.results]
         assert statuses == ["nonzero_exit", "ok"]
         assert result.failed is True
-        assert result.record.intent is not None  # second still ran
-
-    def test_when_filter(self, tmp_path):
-        stub = _make_stub(tmp_path, "w.py", _INTENT_WRITER)
-        push_spec = _spec(stub, when="push")
-        enrich_spec = _spec(stub, name="e", when="enrich")
-        # Ask only for 'push'-stage processors
-        result = run_chain(_trace(), [push_spec, enrich_spec], when="push")
-        assert [r.name for r in result.results] == ["w"]
+        assert result.record.metadata.get("tagged_by") == "stub"  # second still ran
 
 
 class TestRedactionOrderingInvariant:

@@ -121,30 +121,6 @@ Package names referenced during the session. Extracted from manifest files or to
 }
 ```
 
-## Intent
-
-Optional session-level summary, parallel in placement to `task` and `outcome`. Populated by the `on_stop` hook, `opentraces enrich`, a configured post-processor, or hand-edited by the user. All fields are optional — traces captured before enrichment ran load with `intent` absent.
-
-```json
-{
-  "intent": {
-    "title": "Refactor the login validator",
-    "summary": "Inspected the email validator and replaced the regex with a standards-compliant check; added regression tests.",
-    "source": "llm_hook",
-    "model": "anthropic/claude-sonnet-4-5"
-  }
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `title` | string | no | Short session label, ~12 words |
-| `summary` | string | no | One- to three-sentence description of the session |
-| `source` | `"llm_hook"` \| `"post_processor"` \| `"user"` | no | How the block was produced. Closed enum — filter on this to keep or discard machine-generated intent. |
-| `model` | string | no | Model id that produced this intent (empty when `source == "user"`) |
-
-`compute_content_hash()` excludes `intent`, so running or re-running Intent summarization never changes a trace's identity. `source == "user"` is never overwritten by enrichment, even with `--force`.
-
 ## Metadata
 
 Open-ended object for future extensions.

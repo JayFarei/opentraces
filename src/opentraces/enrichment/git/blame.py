@@ -2,8 +2,8 @@
 
 `opentraces blame <commit>` resolves a git ref to the opentraces traces
 attached via `refs/notes/opentraces`. The CLI wrapper joins each hit with
-staging records to display intent, session_id, and the resume command;
-everything trace-scoped happens here.
+staging records to display the task label, session_id, and the resume
+command; everything trace-scoped happens here.
 """
 
 from __future__ import annotations

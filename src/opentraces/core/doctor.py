@@ -157,7 +157,6 @@ def _post_processors(cwd: Path) -> list[dict[str, Any]]:
             {
                 "name": spec.name,
                 "command": spec.command,
-                "when": spec.when,
                 "resolved_path": resolved,
                 "status": "detected" if resolved else "missing",
             }
@@ -181,7 +180,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
     """Build the doctor payload.
 
     Args:
-        cfg: loaded global config (has security.trufflehog.enabled, hf_token, intent.mode)
+        cfg: loaded global config (has security.trufflehog.enabled, hf_token)
         cwd: project directory for post-processor probing (defaults to CWD)
     """
     cwd = cwd or Path.cwd()
@@ -198,7 +197,6 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         },
         "review_llm": _review_llm_status(cfg.security.review_llm),
         "hf_auth": "ok" if cfg.hf_token else "missing",
-        "intent": {"mode": cfg.intent.mode},
         "post_processors": _post_processors(cwd),
         "hooks": _hook_installers(),
     }

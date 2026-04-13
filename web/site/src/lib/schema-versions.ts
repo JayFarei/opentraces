@@ -342,8 +342,37 @@ const v030: SchemaVersion = {
   ]),
 };
 
+const v040: SchemaVersion = {
+  version: "0.4.0",
+  date: "2026-04-13",
+  summary: "Removes the Intent block (and the `ot enrich` command that drove it). Existing traces with a populated intent field still load (silently dropped).",
+  highlights: [
+    "Intent model and TraceRecord.intent field removed",
+    "`opentraces enrich` command removed; post-processors now run pre-upload during `opentraces push`",
+    "compute_content_hash no longer excludes intent (field is gone)",
+    "On-disk traces with populated intent blocks still load — Pydantic extra='ignore' drops the unknown field",
+  ],
+  models: v030.models
+    .filter((m) => m.id !== "intent")
+    .map((m) => {
+      if (m.id === "trace-record") {
+        return {
+          ...m,
+          fields: m.fields
+            .filter((f) => f.name !== "intent")
+            .map((f) =>
+              f.name === "schema_version"
+                ? { ...f, description: 'e.g. "0.4.0"' }
+                : f
+            ),
+        };
+      }
+      return m;
+    }),
+};
+
 /* All versions, newest first. Add new versions here. */
-export const versions: SchemaVersion[] = [v030, v020, v011, v010];
+export const versions: SchemaVersion[] = [v040, v030, v020, v011, v010];
 
 export const latestVersion = versions[0].version;
 

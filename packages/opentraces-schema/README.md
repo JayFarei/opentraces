@@ -23,20 +23,24 @@ line = record.to_jsonl_line()
 
 ## Version
 
-The schema version (`0.3.0`) lives in `src/opentraces_schema/version.py` as the
+The schema version (`0.4.0`) lives in `src/opentraces_schema/version.py` as the
 single source of truth. See [VERSION-POLICY.md](VERSION-POLICY.md) for semver
 semantics and the bump checklist.
 
-`0.3.0` adds the `Intent` block (session-level summary) and the commit-correlation
-surface: `GitLink` (evidence-graded trace→commit links), `TraceRecord.lifecycle`
-(`provisional` / `final`), `TraceRecord.git_links`, `Task.repository_url`,
+`0.4.0` removes the `Intent` block and `TraceRecord.intent` field added in
+0.3.0. Existing on-disk traces with populated `intent` still load (Pydantic's
+`extra="ignore"` drops the unknown field).
+
+`0.3.0` added the commit-correlation surface (retained in 0.4.0): `GitLink`
+(evidence-graded trace→commit links), `TraceRecord.lifecycle` (`provisional` /
+`final`), `TraceRecord.git_links`, `Task.repository_url`,
 `Attribution.revision`, `Attribution.unaccounted_files`,
 `AttributionRange.original`, `AttributionRange.change_type`,
 `AttributionRange.contributor`, and `AttributionConversation.ids` / `.related`.
-`AttributionRange.content_hash` now uses the `murmur3:<32-hex>` format for
+`AttributionRange.content_hash` uses the `murmur3:<32-hex>` format for
 cross-tool line-range matching (per Agent Trace v0.1.0). The top-level
 `TraceRecord.content_hash` remains SHA-256 for cross-contributor dedup at
-upload time. All additive; 0.2.x traces load cleanly.
+upload time.
 
 ## Schema Rationale
 
@@ -65,6 +69,6 @@ for details.
 
 - [CHANGELOG.md](CHANGELOG.md) - What changed in each version
 - [VERSION-POLICY.md](VERSION-POLICY.md) - What version numbers mean for a schema package
-- [RATIONALE-0.3.0.md](RATIONALE-0.3.0.md) - Design rationale for v0.3.0 (Intent block + commit-linked evidence tiers)
+- [RATIONALE-0.3.0.md](RATIONALE-0.3.0.md) - Historical rationale for v0.3.0 (Intent block, removed in 0.4.0; commit-linked evidence tiers)
 - [RATIONALE-0.2.0.md](RATIONALE-0.2.0.md) - Design rationale for v0.2.0
 - [RATIONALE-0.1.0.md](RATIONALE-0.1.0.md) - Design rationale for v0.1.0

@@ -292,8 +292,6 @@ def session_show(trace_id: str, verbose: bool, markdown: bool) -> None:
     human_echo(f"{_cli._dim('Steps: ')}    {len(record.steps)}")
     if record.metrics and record.metrics.estimated_cost_usd:
         human_echo(f"{_cli._dim('Cost:  ')}    ${record.metrics.estimated_cost_usd:.4f}")
-    if record.intent and record.intent.title:
-        human_echo(f"{_cli._dim('Intent:')}    {record.intent.title}")
     if record.session_id:
         human_echo(
             f"{_cli._dim('Session:')}   {record.session_id[:18]}…  "

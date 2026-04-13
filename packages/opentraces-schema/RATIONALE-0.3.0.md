@@ -1,5 +1,9 @@
 # Rationale: opentraces-schema 0.3.0
 
+> **Deprecated in 0.4.0.** The `Intent` model and `TraceRecord.intent` field
+> were removed in 0.4.0. This document is retained for historical context
+> only. See `CHANGELOG.md` for the removal note.
+
 Released: 2026-04-12
 
 ## Summary

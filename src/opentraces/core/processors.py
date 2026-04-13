@@ -1,4 +1,4 @@
-"""Post-processor subprocess runner (plan 038 phase 4).
+"""Post-processor subprocess runner.
 
 A generic, agent-agnostic primitive for running any external command
 over a trace. Opentraces never inspects a processor's internals; it
@@ -20,8 +20,8 @@ Failure modes:
       pre-invocation trace.
 
 Redaction ordering is the caller's responsibility (see
-:mod:`opentraces.pipeline`). Processors, like summarizers, must only see
-post-redaction traces.
+:mod:`opentraces.pipeline`). Processors must only see post-redaction
+traces.
 """
 
 from __future__ import annotations
@@ -199,18 +199,11 @@ def run_chain(
     *,
     strict: bool = False,
     timeout_s: int = DEFAULT_TIMEOUT_S,
-    when: str | None = None,
 ) -> RunResult:
-    """Run an ordered chain of processors, piping each output to the next.
-
-    ``when`` filters the chain by :attr:`PostProcessorConfig.when`. Leave
-    ``None`` to run every processor regardless of stage.
-    """
+    """Run an ordered chain of processors, piping each output to the next."""
     result = RunResult(record=record)
     current = record
     for spec in specs:
-        if when is not None and spec.when != when:
-            continue
         current, one = run_processor(current, spec, strict=strict, timeout_s=timeout_s)
         result.results.append(one)
         if one.status not in ("ok", "noop"):

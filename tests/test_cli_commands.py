@@ -111,12 +111,6 @@ class TestPreInitCommands:
         result = runner.invoke(main, ["logout"])
         assert result.exit_code == 0
 
-    def test_whoami_unauthenticated(self, runner, monkeypatch):
-        monkeypatch.setattr("opentraces.cli._auth_identity", lambda *a: None)
-        monkeypatch.setattr("opentraces.cli.load_config", lambda: type("C", (), {"hf_token": None})())
-        result = runner.invoke(main, ["whoami"])
-        assert result.exit_code == 3
-
     def test_auth_status_unauthenticated(self, runner, monkeypatch):
         monkeypatch.setattr("opentraces.cli._auth_identity", lambda *a: None)
         monkeypatch.setattr("opentraces.cli.load_config", lambda: type("C", (), {"hf_token": None})())
@@ -485,6 +479,72 @@ class TestExitCodes:
         project_dir, runner = initialized_project
         result = runner.invoke(main, ["trace", "reset", "nonexistent-trace-id"])
         assert result.exit_code == 6
+
+
+# ---------------------------------------------------------------------------
+# Deprecated `session` alias — must continue working and warn.
+# ---------------------------------------------------------------------------
+
+class TestSessionAliasDeprecation:
+    """`opentraces session <sub>` should still work but emit a stderr
+    deprecation warning pointing users at `opentraces trace`."""
+
+    def test_session_list_alias_works(self, initialized_project):
+        project_dir, runner = initialized_project
+        sep_runner = CliRunner()
+        result = sep_runner.invoke(main, ["session", "list"])
+        assert result.exit_code == 0
+
+    def test_session_list_alias_emits_deprecation_warning(self, initialized_project):
+        project_dir, runner = initialized_project
+        sep_runner = CliRunner()
+        result = sep_runner.invoke(main, ["session", "list"])
+        assert result.exit_code == 0
+        # Deprecation notice must go to stderr and mention 'trace'.
+        stderr = result.stderr
+        assert "deprecat" in stderr.lower()
+        assert "trace" in stderr.lower()
+
+    def test_session_show_alias_delegates(self, project_with_traces):
+        project_dir, runner, trace_id = project_with_traces
+        result = runner.invoke(main, ["session", "show", trace_id])
+        assert result.exit_code == 0
+        assert "deprecat" in result.stderr.lower()
+
+    def test_session_commit_alias_delegates(self, project_with_traces):
+        project_dir, runner, trace_id = project_with_traces
+        result = runner.invoke(main, ["session", "commit", trace_id])
+        assert result.exit_code == 0
+
+    def test_trace_command_does_not_emit_deprecation(self, initialized_project):
+        """The primary `trace` command should NOT emit a deprecation warning."""
+        project_dir, runner = initialized_project
+        result = runner.invoke(main, ["trace", "list"])
+        assert result.exit_code == 0
+        assert "deprecat" not in result.stderr.lower()
+
+
+class TestTraceHelpText:
+    """User-facing help text for our concept must say 'trace', not 'session'."""
+
+    def test_trace_group_help_uses_trace(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["trace", "--help"])
+        assert result.exit_code == 0
+        # Help text should refer to traces, not "trace sessions".
+        assert "trace" in result.output.lower()
+        # The legacy phrase "trace sessions" (plural noun-noun) is what we're
+        # removing. Also forbid "Manage individual trace sessions".
+        assert "trace sessions" not in result.output.lower()
+
+    def test_trace_list_help_uses_trace_not_session(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["trace", "list", "--help"])
+        assert result.exit_code == 0
+        lower = result.output.lower()
+        # The --limit help used to say "Max sessions to return".
+        assert "max sessions" not in lower
+        assert "max traces" in lower
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@
 
 Parses this project's Claude Code sessions through the full pipeline,
 then scores each output trace against a conformance rubric derived
-from the opentraces schema spec (resources/intent.md).
+from the opentraces schema spec.
 
 This is the ultimate test: if opentraces can't correctly parse and
 enrich the sessions that built opentraces, something is wrong.

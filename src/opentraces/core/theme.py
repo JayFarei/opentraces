@@ -39,7 +39,6 @@ DARK_STYLES: dict[str, str] = {
     "commit.sha":     "green bold",
     "commit.subject": "white",
     "trace.id":       "cyan bold",
-    "trace.intent":   "default",
     # plan-041 tiers
     "tier.emitted":   "green",
     "tier.diverged":  "yellow",
@@ -67,7 +66,6 @@ LIGHT_STYLES: dict[str, str] = {
     "commit.sha":     "dark_green bold",
     "commit.subject": "black",
     "trace.id":       "blue bold",
-    "trace.intent":   "default",
     "tier.emitted":   "dark_green",
     "tier.diverged":  "dark_orange3",
     "tier.overlap":   "grey50",

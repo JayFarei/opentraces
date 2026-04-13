@@ -1,16 +1,16 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  rejectSession,
+  rejectTrace,
   redactStep,
-  commitSessions,
+  commitTraces,
   pushCommit,
 } from "../lib/api";
 
 export function useReviewActions() {
   const qc = useQueryClient();
 
-  const invalidateSessions = () => {
-    void qc.invalidateQueries({ queryKey: ["sessions"] });
+  const invalidateTraces = () => {
+    void qc.invalidateQueries({ queryKey: ["traces"] });
   };
 
   const invalidateTrace = (traceId: string) => {
@@ -18,14 +18,14 @@ export function useReviewActions() {
   };
 
   const commit = useMutation({
-    mutationFn: ({ sessionIds, message }: { sessionIds: string[]; message: string }) =>
-      commitSessions(sessionIds, message),
-    onSuccess: () => invalidateSessions(),
+    mutationFn: ({ traceIds, message }: { traceIds: string[]; message: string }) =>
+      commitTraces(traceIds, message),
+    onSuccess: () => invalidateTraces(),
   });
 
   const reject = useMutation({
-    mutationFn: (traceId: string) => rejectSession(traceId),
-    onSuccess: () => invalidateSessions(),
+    mutationFn: (traceId: string) => rejectTrace(traceId),
+    onSuccess: () => invalidateTraces(),
   });
 
   const redact = useMutation({
@@ -38,7 +38,7 @@ export function useReviewActions() {
 
   const push = useMutation({
     mutationFn: (commitId?: string) => pushCommit(commitId),
-    onSuccess: () => invalidateSessions(),
+    onSuccess: () => invalidateTraces(),
     onError: (err: Error) => {
       console.error("[push] failed:", err.message);
     },

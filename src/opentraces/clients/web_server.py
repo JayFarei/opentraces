@@ -427,13 +427,9 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             trace_id = t["trace_id"]
             entry = state.get_trace(trace_id)
             status_enum = _coerce_status(entry.status if entry else None)
-            intent = t.get("intent") or {}
             sessions.append({
                 "trace_id": trace_id,
                 "task": (t.get("task", {}).get("description") or "")[:100],
-                "intent_title": (intent.get("title") or None) if isinstance(intent, dict) else None,
-                "intent_summary": (intent.get("summary") or None) if isinstance(intent, dict) else None,
-                "intent_source": (intent.get("source") or None) if isinstance(intent, dict) else None,
                 "model": t.get("agent", {}).get("model") or ", ".join(
                     sorted(set(
                         s.get("model") for s in t.get("steps", [])

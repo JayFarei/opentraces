@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Open schema + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses coding agent sessions, applies security scanning and redaction, enriches with attribution/git signals, and publishes as structured JSONL datasets.
+Open schema + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses coding agent traces, applies security scanning and redaction, enriches with attribution/git signals, and publishes as structured JSONL datasets.
 
 ## Stack
 
@@ -34,7 +34,7 @@ pytest tests/ -v
   - `core/` - Domain glue: config, paths, state, workflow, inbox, pipeline, processors, review, publish_flow
   - `capture/` - Inbound boundary: parsers + hooks + installers per external system. `capture/claude_code/` (parse + hooks), `capture/hermes.py`, `capture/git/` (post-commit correlator + install).
   - `publish/` - Outbound boundary: format serializers (`atif.py`, `agent_trace.py`) and destination publishers (`huggingface/` — sharded upload, dataset card, HF schema).
-  - `enrichment/` - Read-only enrichers: git signals, attribution, dependencies, metrics, and session intent summarization (`intent.py` + `intent_backends.py`, plan 038). `enrichment/git/` holds the plan-041 commit-correlation stack — `correlator.py`, `notes_store.py` (`refs/notes/opentraces` read/write), `blame.py` (file:line to trace), `liveness.py` (lazy `commit_reachable` / `content_alive`), `jj_support.py` (Jujutsu change-id fallback). Note: post-commit tier assignment lives in `capture/git/post_commit.py`.
+  - `enrichment/` - Read-only enrichers: git signals, attribution, dependencies, metrics. `enrichment/git/` holds the plan-041 commit-correlation stack — `correlator.py`, `notes_store.py` (`refs/notes/opentraces` read/write), `blame.py` (file:line to trace), `liveness.py` (lazy `commit_reachable` / `content_alive`), `jj_support.py` (Jujutsu change-id fallback). Note: post-commit tier assignment lives in `capture/git/post_commit.py`.
   - `quality/` - Trace quality assessment, persona rubrics, upload gates, parse gate
   - `security/` - Secret scanning, anonymization, classification (independently versioned via `SECURITY_VERSION`)
   - `clients/` - Presentation layers (TUI, web backend) — business logic lives in `core/`
@@ -55,8 +55,7 @@ pytest tests/ -v
 - Per-project review policy (auto/review) controlling whether traces need manual approval
 - Zero required annotation, all enrichment is deterministic
 - Security pipeline has its own `SECURITY_VERSION` in `security/version.py` (currently `0.4.0`), bump it when changing detection logic (regex patterns, entropy thresholds, classifier heuristics, anonymization rules). Tiers: 1a regex, 1b entropy (always on); 1.5 TruffleHog, 1.8 LLM PII, 2 LLM semantic review (opt-in); 3 human inbox. Tier 1.5 findings move traces to the CLI-local `TraceStatus.BLOCKED` state and never reach upload. Opt-in commands: `opentraces setup trufflehog`, `opentraces review-llm`, `opentraces push --llm-review`, and `opentraces doctor` for pipeline health.
-- Session `Intent` block (schema 0.3.0, plan 038) is written by LLM hook, post-processor, or user; `source` is a closed enum (`llm_hook` / `post_processor` / `user`). Security pipeline always runs before Intent or any post-processor — enforced by the ordering-invariant test.
-- Post-processors are declared per-project as an ordered list (`post_processors: [{name, command, args, env, when}]`). Contract: stdin = trace JSON, stdout = trace JSON, exit 0. Non-zero exit / missing binary / invalid output are non-fatal by default, promoted to hard errors under `--strict`. Byte-identical output = no-op. `opentraces doctor` probes configured processors.
+- Post-processors are declared per-project as an ordered list (`post_processors: [{name, command, args, env}]`). They run pre-upload during `opentraces push`, after security redaction. Contract: stdin = trace JSON, stdout = trace JSON, exit 0. Non-zero exit / missing binary / invalid output are non-fatal by default, promoted to hard errors under `--strict`. Byte-identical output = no-op. `opentraces doctor` probes configured processors.
 
 ## Testing
 

@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
+## [0.4.0] - 2026-04-13
+
+### Removed
+- `Intent` model and `TraceRecord.intent` field. The session-level summary
+  mechanism added in 0.3.0 is retired; in-repo use was judged flawed and no
+  replacement is planned at this layer.
+- `intent` from the `TraceRecord.compute_content_hash()` exclude set (the
+  field is gone, so the exclusion is moot). Re-hashing a trace whose
+  source JSON on disk still carries a populated `intent` block will now
+  produce a different content hash than 0.3.0 would have, since the
+  excluded field no longer exists to be stripped. For traces that never
+  had Intent populated, hashes are unchanged.
+
+### Compatibility
+- Traces on disk with populated `intent` blocks still load — Pydantic's
+  default `extra="ignore"` silently drops the unknown field.
+- Consumers reading `record.intent` must be updated; the attribute no
+  longer exists on `TraceRecord`.
+
 ## [0.3.0] - 2026-04-12
 
 ### Added

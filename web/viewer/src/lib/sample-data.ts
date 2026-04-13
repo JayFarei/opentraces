@@ -3,10 +3,10 @@
  * Used when "Load Sample Data" is clicked, works without a backend.
  */
 
-import type { SessionListItem, TraceRecord, AppContext } from "../types/trace";
+import type { TraceListItem, TraceRecord, AppContext } from "../types/trace";
 
 // ---------------------------------------------------------------------------
-// Sample sessions (what the sidebar shows)
+// Sample traces (what the sidebar shows)
 // ---------------------------------------------------------------------------
 
 const TASKS = [
@@ -36,7 +36,7 @@ function pick<T>(arr: T[], i: number): T {
   return arr[i % arr.length]!;
 }
 
-export const SAMPLE_SESSIONS: SessionListItem[] = Array.from({ length: 12 }, (_, i) => ({
+export const SAMPLE_TRACES: TraceListItem[] = Array.from({ length: 12 }, (_, i) => ({
   trace_id: makeId(i),
   task_description: pick(TASKS, i),
   agent_name: pick(AGENTS, i),
@@ -48,7 +48,7 @@ export const SAMPLE_SESSIONS: SessionListItem[] = Array.from({ length: 12 }, (_,
 }));
 
 // ---------------------------------------------------------------------------
-// Sample trace detail (what the main panel shows when a session is selected)
+// Sample trace detail (what the main panel shows when a trace is selected)
 // ---------------------------------------------------------------------------
 
 const TOOL_NAMES = ["Read", "Edit", "Bash", "Grep", "Glob", "Write"];
@@ -100,8 +100,8 @@ function sampleContent(role: string, task: string, stepIndex: number): string {
   return pick(responses, stepIndex);
 }
 
-export function buildSampleTrace(session: SessionListItem): TraceRecord {
-  const numSteps = session.step_count;
+export function buildSampleTrace(trace: TraceListItem): TraceRecord {
+  const numSteps = trace.step_count;
   const steps = Array.from({ length: numSteps }, (_, s) => {
     let role: "user" | "agent" | "system" = s === 0 ? "user" : s % 3 === 0 ? "system" : "agent";
 
@@ -128,11 +128,11 @@ export function buildSampleTrace(session: SessionListItem): TraceRecord {
     return {
       step_index: s,
       role,
-      content: sampleContent(role, session.task_description, s),
+      content: sampleContent(role, trace.task_description, s),
       reasoning_content: role === "agent" && s % 3 === 1
         ? "Let me think about how to approach this. I need to first understand the current structure, then identify the specific changes needed."
         : null,
-      model: role === "agent" ? session.model : null,
+      model: role === "agent" ? trace.model : null,
       system_prompt_hash: s === 0 ? "abc123" : null,
       agent_role: "main",
       parent_step: null,
@@ -165,22 +165,22 @@ export function buildSampleTrace(session: SessionListItem): TraceRecord {
 
   return {
     schema_version: "0.2.0",
-    trace_id: session.trace_id,
-    session_id: `session-${session.trace_id.slice(0, 8)}`,
+    trace_id: trace.trace_id,
+    session_id: `session-${trace.trace_id.slice(0, 8)}`,
     content_hash: null,
     execution_context: null,
-    timestamp_start: session.timestamp,
+    timestamp_start: trace.timestamp,
     timestamp_end: `2026-03-27T10:${String(5 + numSteps).padStart(2, "0")}:00Z`,
     task: {
-      description: session.task_description,
+      description: trace.task_description,
       source: "user_prompt",
-      repository: `org/project-${session.trace_id.slice(-1)}`,
+      repository: `org/project-${trace.trace_id.slice(-1)}`,
       base_commit: null,
     },
     agent: {
-      name: session.agent_name,
+      name: trace.agent_name,
       version: "1.0.0",
-      model: session.model,
+      model: trace.model,
     },
     environment: {
       os: "darwin",
