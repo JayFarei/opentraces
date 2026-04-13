@@ -30,3 +30,4 @@ skills-lock.json
 .coverage
 .context/
 tmp/
+.spec
