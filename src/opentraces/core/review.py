@@ -201,3 +201,190 @@ def unstage_trace(state: StateManager, trace_id: str) -> None:
 def reset_to_staged(state: StateManager, trace_id: str) -> None:
     """CLI reset flow: transition to STAGED (no session_id kwarg)."""
     state.set_trace_status(trace_id, TraceStatus.STAGED)
+
+
+# ---------------------------------------------------------------------------
+# Plan 032 Tier 2 — LLM semantic review orchestration.
+#
+# Extracted from cli/installers.py:review_llm_cmd. The CLI wraps this with
+# flag parsing and human-readable output; everything else — dry-run estimation,
+# cached-verdict detection, provider iteration — lives here.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LLMReviewEstimate:
+    sessions: int
+    chars: int
+    tokens: int
+    cost_usd: float
+    model: str
+    provider: str
+
+
+@dataclass
+class LLMReviewOutcome:
+    provider: str
+    model: str
+    results: list[dict]
+
+
+def _collect_session_chars(records: list[dict]) -> int:
+    total = 0
+    for rec in records:
+        for step in rec.get("steps", []) or []:
+            total += len(step.get("content") or "")
+            total += len(step.get("reasoning_content") or "")
+    return total
+
+
+def _steps_text(rec: dict) -> list[str]:
+    out: list[str] = []
+    for step in rec.get("steps", []) or []:
+        content = step.get("content") or ""
+        reasoning = step.get("reasoning_content") or ""
+        if content or reasoning:
+            out.append("\n".join(filter(None, [content, reasoning])))
+    return out
+
+
+def estimate_llm_review(
+    records: list[dict], *, provider: str, model: str,
+) -> LLMReviewEstimate:
+    """Dry-run token/cost estimate for an LLM review run."""
+    from ..security.llm_review import estimate_cost
+
+    chars = _collect_session_chars(records)
+    est = estimate_cost(chars, model=model)
+    return LLMReviewEstimate(
+        sessions=len(records),
+        chars=chars,
+        tokens=int(est["tokens"]),
+        cost_usd=float(est["cost_usd"]),
+        model=model,
+        provider=provider,
+    )
+
+
+def _trace_pre_blocked(rec: dict) -> str | None:
+    """Return a short reason if deterministic security already blocked this trace.
+
+    Deny-before-LLM (pattern borrowed from pi-share-hf): if Tier 1 /
+    TruffleHog already marked the trace as blocked, never spend LLM
+    tokens — synthesize a ``shareable=no`` verdict instead. Safer and
+    prevents the LLM from accidentally approving a confirmed secret.
+
+    Returns a reason string on hit, ``None`` otherwise.
+    """
+    meta = rec.get("metadata") or {}
+    sec = meta.get("security") or {}
+    if sec.get("blocked") is True:
+        return str(sec.get("blocked_reason") or "security pipeline blocked trace")
+    findings = sec.get("trufflehog_findings") or sec.get("tier_1_5_findings")
+    if findings:
+        return f"trufflehog findings: {len(findings)}"
+    return None
+
+
+def run_llm_review(
+    records: list[dict],
+    *,
+    provider: str,
+    model: str,
+    base_url: str = "",
+    api_key_env: str = "",
+    timeout: float = 120.0,
+    prompt_version: str = "1",
+    context: str = "",
+    force: bool = False,
+    on_progress=None,
+) -> LLMReviewOutcome:
+    """Run Tier 2 LLM semantic review across ``records``.
+
+    Cached verdicts (same content_hash, provider, base_url, model,
+    prompt_version, context) are returned untouched unless ``force=True``.
+    ``on_progress`` is called with (trace_id, status_str) for each record
+    so the CLI can stream output.
+
+    When a trace has already been blocked by deterministic security
+    (Tier 1 / TruffleHog), the LLM is skipped and a synthetic
+    ``shareable=no`` verdict is recorded instead (deny-before-LLM).
+    """
+    from datetime import datetime, timezone
+
+    from ..security.llm_provider import build_provider
+    from ..security.llm_review import (
+        LLMReviewVerdict,
+        review_key as _review_key,
+        review_session,
+    )
+    from ..security.verdict_display import verdict_badge, verdict_to_payload
+
+    provider_kwargs: dict = {"timeout": timeout}
+    if provider == "openai":
+        if base_url:
+            provider_kwargs["base_url"] = base_url
+        if api_key_env:
+            provider_kwargs["api_key_env"] = api_key_env
+    llm = build_provider(provider, model=model, **provider_kwargs)
+    results: list[dict] = []
+
+    def _payload(verdict, key) -> dict:
+        payload = verdict_to_payload(
+            verdict,
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            reviewed_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            prompt_version=prompt_version,
+        )
+        payload["review_key"] = key
+        return payload
+
+    for rec in records:
+        trace_id = rec.get("trace_id", "?")
+        content_hash = rec.get("content_hash", "")
+        key = _review_key(
+            content_hash, model, prompt_version, context,
+            provider=provider, base_url=base_url,
+        )
+
+        existing = (rec.get("metadata") or {}).get("llm_review", {}) or {}
+        if not force and existing.get("review_key") == key:
+            badge = existing.get("badge") or "(cached)"
+            if on_progress:
+                on_progress(trace_id, f"[cached] {badge}")
+            results.append(
+                {"trace_id": trace_id, "cached": True, "verdict": existing}
+            )
+            continue
+
+        # Deny-before-LLM: skip the call if deterministic security already
+        # blocked this trace. Spend no tokens on confirmed-bad sessions.
+        blocked_reason = _trace_pre_blocked(rec)
+        if blocked_reason is not None:
+            denied = LLMReviewVerdict(
+                shareable="no",
+                missed_sensitive_data="yes",
+                summary=f"deny-before-LLM: {blocked_reason}",
+            )
+            payload = _payload(denied, key)
+            payload["denied_before_llm"] = True
+            if on_progress:
+                on_progress(trace_id, f"[deny-before-llm] {blocked_reason}")
+            results.append(
+                {"trace_id": trace_id, "cached": False, "verdict": payload}
+            )
+            continue
+
+        verdict = review_session(
+            steps=_steps_text(rec), provider=llm, context=context,
+        )
+        payload = _payload(verdict, key)
+        if on_progress:
+            on_progress(trace_id, verdict_badge(verdict))
+        results.append(
+            {"trace_id": trace_id, "cached": False, "verdict": payload}
+        )
+
+    return LLMReviewOutcome(provider=provider, model=model, results=results)

@@ -81,15 +81,41 @@ def entity_summary_line(entity_map: EntityMap | None) -> str:
     return ", ".join(parts)
 
 
-def verdict_to_payload(verdict: LLMReviewVerdict | None) -> dict:
-    """JSON-safe payload for the web review client."""
+def verdict_to_payload(
+    verdict: LLMReviewVerdict | None,
+    *,
+    provider: str = "",
+    model: str = "",
+    base_url: str = "",
+    reviewed_at: str = "",
+    prompt_version: str = "",
+) -> dict:
+    """JSON-safe payload for the web review client.
+
+    Provenance kwargs (``provider``, ``model``, ``base_url``,
+    ``reviewed_at``, ``prompt_version``) are included when provided so
+    downstream surfaces (TUI, web viewer, HF dataset metadata) can tell
+    users *which* LLM issued the verdict, not just *a* verdict.
+    """
     if verdict is None:
-        return {"status": "not_run"}
-    return {
-        "status": "complete",
-        "shareable": verdict.shareable,
-        "missed_sensitive_data": verdict.missed_sensitive_data,
-        "summary": verdict.summary,
-        "flagged_parts": list(verdict.flagged_parts),
-        "badge": verdict_badge(verdict),
-    }
+        out: dict = {"status": "not_run"}
+    else:
+        out = {
+            "status": "complete",
+            "shareable": verdict.shareable,
+            "missed_sensitive_data": verdict.missed_sensitive_data,
+            "summary": verdict.summary,
+            "flagged_parts": list(verdict.flagged_parts),
+            "badge": verdict_badge(verdict),
+        }
+    if provider:
+        out["provider"] = provider
+    if model:
+        out["model"] = model
+    if base_url:
+        out["base_url"] = base_url
+    if reviewed_at:
+        out["reviewed_at"] = reviewed_at
+    if prompt_version:
+        out["prompt_version"] = prompt_version
+    return out

@@ -68,10 +68,40 @@ class TruffleHogConfig(BaseModel):
     )
 
 
+class ReviewLLMConfig(BaseModel):
+    """Global settings for the opt-in third-party LLM review step.
+
+    This is the LLM that independently reviews staged traces for
+    shareability before they leave the machine (Tier 2 LLM review). It is
+    a *global*, not per-project, setting: which LLM to use is a machine
+    concern (local Ollama, hosted API key, etc.), not a project concern.
+
+    Configured via ``opentraces setup review-llm``. When ``enabled`` is
+    False, ``opentraces review-llm`` still runs if the user passes
+    explicit flags, but push gates won't auto-require it.
+    """
+
+    enabled: bool = False
+    provider: Literal["openai", "ollama", "anthropic", "fake"] = "openai"
+    base_url: str = "http://localhost:11434/v1"
+    model: str = "gemma3n:e4b"
+    api_key_env: str = Field(
+        "",
+        description=(
+            "Environment variable name holding the API key (e.g. "
+            "'OPENAI_API_KEY', 'GROQ_API_KEY'). Empty for local servers "
+            "that don't require auth (Ollama, LM Studio)."
+        ),
+    )
+    timeout: float = 120.0
+    prompt_version: str = "1"
+
+
 class SecurityConfig(BaseModel):
     """Root security-module config tree (Plan 032)."""
 
     trufflehog: TruffleHogConfig = Field(default_factory=TruffleHogConfig)
+    review_llm: ReviewLLMConfig = Field(default_factory=ReviewLLMConfig)
 
 
 class IntentConfig(BaseModel):

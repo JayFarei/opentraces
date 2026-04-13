@@ -18,6 +18,7 @@ from opentraces.security.llm_provider import (
     FakeProvider,
     LLMProvider,
     OllamaProvider,
+    OpenAICompatProvider,
     build_provider,
 )
 
@@ -60,9 +61,113 @@ class TestBuildProvider:
         assert isinstance(p, OllamaProvider)
         assert p.model == "gemma4:e4b"
 
+    def test_build_openai_compat(self) -> None:
+        p = build_provider(
+            "openai", model="gpt-4o-mini",
+            base_url="https://api.groq.com/openai/v1",
+            api_key_env="GROQ_API_KEY",
+        )
+        assert isinstance(p, OpenAICompatProvider)
+        assert p.model == "gpt-4o-mini"
+        assert p.base_url == "https://api.groq.com/openai/v1"
+        assert p.api_key_env == "GROQ_API_KEY"
+
     def test_unknown_provider_raises(self) -> None:
         with pytest.raises(ValueError):
             build_provider("not-a-provider", model="x")
+
+
+class TestOpenAICompatProvider:
+    """Exercises the HTTP shape via a stubbed urllib.urlopen."""
+
+    def _install_fake_urlopen(self, monkeypatch, responses: list[bytes],
+                              capture: list[tuple[str, bytes, dict]]) -> None:
+        import urllib.request
+
+        class _FakeResp:
+            def __init__(self, body: bytes) -> None:
+                self._body = body
+            def read(self) -> bytes:
+                return self._body
+            def __enter__(self):  # noqa: D401
+                return self
+            def __exit__(self, *a) -> None:
+                return None
+
+        queue = list(responses)
+
+        def fake_urlopen(req, timeout=None):
+            url = req.full_url
+            data = req.data or b""
+            headers = dict(req.header_items())
+            capture.append((url, data, headers))
+            if not queue:
+                raise AssertionError("no more fake responses queued")
+            return _FakeResp(queue.pop(0))
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    def test_complete_json_roundtrip(self, monkeypatch) -> None:
+        body = json.dumps({
+            "choices": [{"message": {"content": '{"shareable": "yes"}'}}],
+        }).encode("utf-8")
+        capture: list = []
+        self._install_fake_urlopen(monkeypatch, [body], capture)
+
+        p = OpenAICompatProvider(
+            model="gpt-4o-mini",
+            base_url="https://example.test/v1",
+            api_key_env="",
+        )
+        result = p.complete_json("hello")
+        assert result == {"shareable": "yes"}
+        url, data, headers = capture[0]
+        assert url == "https://example.test/v1/chat/completions"
+        payload = json.loads(data.decode("utf-8"))
+        assert payload["model"] == "gpt-4o-mini"
+        assert payload["response_format"] == {"type": "json_object"}
+        # No API key configured => no Authorization header.
+        assert "Authorization" not in headers
+
+    def test_uses_api_key_env(self, monkeypatch) -> None:
+        body = json.dumps({
+            "choices": [{"message": {"content": '{"ok": 1}'}}],
+        }).encode("utf-8")
+        capture: list = []
+        self._install_fake_urlopen(monkeypatch, [body], capture)
+        monkeypatch.setenv("MY_TEST_KEY", "secret-token")
+
+        p = OpenAICompatProvider(
+            model="x", base_url="https://api.example/v1",
+            api_key_env="MY_TEST_KEY",
+        )
+        p.complete_json("ping")
+        _, _, headers = capture[0]
+        # urllib's Request lowercases header names when surfacing them via header_items.
+        assert headers.get("Authorization") == "Bearer secret-token"
+
+    def test_missing_env_var_raises(self, monkeypatch) -> None:
+        monkeypatch.delenv("MY_MISSING_KEY", raising=False)
+        p = OpenAICompatProvider(
+            model="x", base_url="https://api.example/v1",
+            api_key_env="MY_MISSING_KEY",
+        )
+        with pytest.raises(RuntimeError, match="MY_MISSING_KEY"):
+            p.complete_json("ping")
+
+    def test_ping_parses_models(self, monkeypatch) -> None:
+        body = json.dumps({
+            "data": [{"id": "gpt-4o-mini"}, {"id": "gemma3n:e4b"}],
+        }).encode("utf-8")
+        capture: list = []
+        self._install_fake_urlopen(monkeypatch, [body], capture)
+        p = OpenAICompatProvider(
+            model="gpt-4o-mini", base_url="https://api.example/v1",
+        )
+        result = p.ping()
+        assert result["ok"] is True
+        assert "gpt-4o-mini" in result["models"]
+        assert capture[0][0] == "https://api.example/v1/models"
 
 
 # ---------------------------------------------------------------------------

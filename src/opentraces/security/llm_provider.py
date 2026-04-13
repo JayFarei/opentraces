@@ -7,7 +7,11 @@ provider and opt in explicitly.
 
 Shipped providers:
   - :class:`FakeProvider` — deterministic for tests.
-  - :class:`OllamaProvider` — local inference via http://localhost:11434.
+  - :class:`OpenAICompatProvider` — any OpenAI-compatible endpoint
+    (Ollama at ``/v1``, LM Studio, vLLM, OpenAI, Groq, OpenRouter,
+    Together, …). Preferred entry point for new setups.
+  - :class:`OllamaProvider` — native Ollama ``/api/generate`` path,
+    kept for backwards compatibility.
   - :class:`AnthropicProvider` — hosted API via the ``anthropic`` SDK.
 
 All implementations satisfy the :class:`LLMProvider` runtime protocol —
@@ -156,6 +160,131 @@ class OllamaProvider:
 
 
 # ---------------------------------------------------------------------------
+# OpenAICompatProvider — one provider covers most of the ecosystem
+# ---------------------------------------------------------------------------
+
+
+class OpenAICompatProvider:
+    """Call any OpenAI-compatible ``/chat/completions`` endpoint.
+
+    One shape handles Ollama (``http://localhost:11434/v1``), LM Studio,
+    vLLM, OpenAI, Groq, OpenRouter, Together, Fireworks, Anyscale, etc.
+    ``base_url`` must include the ``/v1`` suffix so the same string works
+    across all of these.
+
+    Authentication is opt-in: when ``api_key_env`` is set we read the env
+    var and send ``Authorization: Bearer <token>``. Local servers that
+    don't require auth just leave it empty.
+    """
+
+    def __init__(
+        self,
+        model: str,
+        base_url: str = "http://localhost:11434/v1",
+        api_key_env: str = "",
+        timeout: float = 120.0,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
+        self.model = model
+        self.base_url = base_url.rstrip("/")
+        self.api_key_env = api_key_env
+        self.timeout = timeout
+        self.extra_headers = dict(extra_headers or {})
+
+    def _resolve_api_key(self) -> str | None:
+        if not self.api_key_env:
+            return None
+        value = os.environ.get(self.api_key_env)
+        if not value:
+            raise RuntimeError(
+                f"OpenAICompatProvider: env var {self.api_key_env!r} is not set"
+            )
+        return value
+
+    def complete_json(
+        self,
+        prompt: str,
+        schema_hint: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        import urllib.error
+        import urllib.request
+
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "response_format": {"type": "json_object"},
+            "stream": False,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json", **self.extra_headers}
+        api_key = self._resolve_api_key()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        url = f"{self.base_url}/chat/completions"
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                body = resp.read().decode("utf-8")
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(f"OpenAI-compat request failed ({url}): {exc}") from exc
+
+        try:
+            envelope = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"OpenAI-compat non-JSON envelope: {exc}") from exc
+
+        choices = envelope.get("choices") or []
+        if not choices:
+            raise RuntimeError(f"OpenAI-compat: no choices in response: {envelope!r}")
+        message = choices[0].get("message") or {}
+        content = message.get("content") or ""
+        if isinstance(content, list):
+            # Some providers return a list of content blocks; concatenate text parts.
+            content = "".join(
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        if not isinstance(content, str):
+            raise RuntimeError(
+                f"OpenAI-compat: unexpected content type {type(content)!r}"
+            )
+        return _extract_first_json_object(content)
+
+    def ping(self) -> dict[str, Any]:
+        """Lightweight reachability check used by ``opentraces doctor``.
+
+        Hits ``{base_url}/models`` — supported by Ollama, OpenAI, LM
+        Studio, vLLM, Groq, and most other OpenAI-compat servers. Returns
+        ``{"ok": True, "models": [...]}`` on success; raises RuntimeError
+        on failure (caller renders as unreachable).
+        """
+        import urllib.error
+        import urllib.request
+
+        headers = {"Accept": "application/json", **self.extra_headers}
+        api_key = self._resolve_api_key()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        url = f"{self.base_url}/models"
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=min(10.0, self.timeout)) as resp:
+                body = resp.read().decode("utf-8")
+        except (urllib.error.URLError, TimeoutError) as exc:
+            raise RuntimeError(f"ping {url} failed: {exc}") from exc
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"ping {url} non-JSON: {exc}") from exc
+        models = payload.get("data") or payload.get("models") or []
+        names = [m.get("id") or m.get("name") for m in models if isinstance(m, dict)]
+        return {"ok": True, "models": [n for n in names if n]}
+
+
+# ---------------------------------------------------------------------------
 # AnthropicProvider
 # ---------------------------------------------------------------------------
 
@@ -218,12 +347,29 @@ def build_provider(
     model: str,
     **kwargs: Any,
 ) -> LLMProvider:
-    """Build a provider by string name (``fake``, ``ollama``, ``anthropic``)."""
+    """Build a provider by string name.
+
+    Known names: ``fake``, ``openai``, ``ollama``, ``anthropic``.
+
+    ``openai`` is the preferred entry point for both hosted APIs
+    (OpenAI, Groq, OpenRouter, Together) and local servers exposing an
+    OpenAI-compatible endpoint (Ollama at ``/v1``, LM Studio, vLLM).
+    ``ollama`` is kept for backwards compatibility with the native
+    ``/api/generate`` path.
+    """
     normalized = name.strip().lower()
     if normalized == "fake":
         return FakeProvider(
             responses=kwargs.get("responses", [{}]),
             model=model,
+        )
+    if normalized == "openai":
+        return OpenAICompatProvider(
+            model=model,
+            base_url=kwargs.get("base_url", "http://localhost:11434/v1"),
+            api_key_env=kwargs.get("api_key_env", ""),
+            timeout=kwargs.get("timeout", 120.0),
+            extra_headers=kwargs.get("extra_headers"),
         )
     if normalized == "ollama":
         return OllamaProvider(
