@@ -17,7 +17,7 @@ Every coding session with an AI agent produces action trajectories, tool-use seq
 5. **Correlate** traces to commits via an optional post-commit hook (`opentraces setup git`), writing `refs/notes/opentraces` and evidence-graded `GitLink`s (`tool_emitted` / `tool_emitted_with_divergence` / `overlapping` / `orphan`)
 6. **Review** in the browser or terminal before anything leaves your machine
 7. **Push** approved traces as sharded JSONL to a Hugging Face dataset
-8. **Inspect** commit-anchored history with `opentraces notes <ref>`, `opentraces blame <file>:<line>`, and `opentraces session list --by-commit`
+8. **Inspect** commit-anchored history with `opentraces blame <commit>` and `opentraces trace list --by-commit`
 9. **Export** to [Agent Trace v0.1.0](https://github.com/nichochar/agent-trace) via `opentraces export --format agent-trace`
 
 ---
@@ -105,8 +105,10 @@ After setup, the workflow is:
   configured post-processors, and the security pipeline (SECURITY_VERSION,
   TruffleHog status)
 - `opentraces setup trufflehog` to opt into Tier 1.5 verified-secret scanning
-- `opentraces review-llm` then `opentraces push --llm-review` to gate pushes
-  on a Tier 2 LLM shareability verdict per trace
+- `opentraces setup review-llm` to configure a third-party LLM (local Ollama,
+  LM Studio, llama.cpp, vLLM, or any hosted OpenAI-compat API) as an
+  independent Tier 2 reviewer; then `opentraces review-llm` over staged
+  traces, and `opentraces push --llm-review` to gate pushes on a clean verdict
 ~~~
 
 ---

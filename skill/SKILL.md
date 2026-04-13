@@ -29,15 +29,15 @@ opentraces status                      # show inbox tree with stage counts
 
 ### Review & Publish
 ```
-opentraces session list                # list staged sessions (default: all stages)
-opentraces session list --by-commit    # group staged traces by git_links[].revision
-opentraces session show <ID>           # full trace detail
-opentraces session show <ID> --markdown # prompt-injection-safe render wrapped in random-token boundaries
-opentraces session commit <ID>         # commit a trace for push
-opentraces session reject <ID>         # mark as rejected (never pushed)
-opentraces session reset <ID>          # undo commit/reject, back to inbox
-opentraces session redact <ID> --step N  # scrub a specific step
-opentraces session discard <ID> --yes  # permanently delete a trace
+opentraces trace list                # list staged traces (default: all stages)
+opentraces trace list --by-commit    # group staged traces by git_links[].revision
+opentraces trace show <ID>           # full trace detail
+opentraces trace show <ID> --markdown # prompt-injection-safe render wrapped in random-token boundaries
+opentraces trace commit <ID>         # commit a trace for push
+opentraces trace reject <ID>         # mark as rejected (never pushed)
+opentraces trace reset <ID>          # undo commit/reject, back to inbox
+opentraces trace redact <ID> --step N  # scrub a specific step
+opentraces trace discard <ID> --yes  # permanently delete a trace
 opentraces commit --all                # bulk commit all inbox traces
 opentraces enrich <TRACE>              # enrich a single trace file (Intent + configured post-processors)
 opentraces enrich <TRACE> --no-intent  # skip Intent summarization (run only post-processors)
@@ -52,15 +52,17 @@ opentraces assess                      # score committed traces (local quality.j
 opentraces assess --dataset owner/name # refresh quality.json on remote HF dataset
 opentraces review-llm                  # Tier 2 LLM semantic review over staged sessions
 opentraces doctor                      # report security pipeline health, SECURITY_VERSION, intent.mode, configured post-processors
-opentraces setup trufflehog            # install + enable Tier 1.5 TruffleHog scanning
+opentraces setup                       # interactive wizard: walks every integration
+opentraces setup claude-code           # install Claude Code session capture hooks
+opentraces setup claude-code --remove  # uninstall Claude Code hooks
 opentraces setup git                   # install the post-commit hook that correlates traces to commits
-opentraces setup git --uninstall       # remove the post-commit hook
+opentraces setup git --remove          # remove the post-commit hook
+opentraces setup trufflehog            # install + enable Tier 1.5 TruffleHog scanning
 opentraces export --format agent-trace # export staged traces to Agent Trace v0.1.0 JSONL
 opentraces export --format agent-trace --output ./agent-trace.jsonl
-opentraces notes <ref>                 # print opentraces notes attached to a commit (refs/notes/opentraces)
-opentraces notes <ref> --json          # JSON form: {ref, traces:[{trace_id, url}]}
-opentraces blame <path>:<line>         # resolve a file:line to the trace that authored it
-opentraces blame <path>:<line> --json  # JSON form: {target, hits:[{trace_id, step, revision, content_alive}]}
+opentraces blame <commit>              # resolve a commit to the opentraces trace(s) behind it
+opentraces blame <commit> --json       # JSON form: {commit, traces:[{trace_id, session_id, url}]}
+opentraces pull <dataset_id> --parser <name>   # import traces from a HuggingFace dataset
 ```
 
 ### Inspect
@@ -149,8 +151,8 @@ with fewer than 2 steps or zero tool calls are silently filtered out.
 Check what landed in the inbox:
 ```bash
 opentraces context                          # project state + suggested next action
-opentraces session list --stage inbox       # list inbox sessions
-opentraces session show <TRACE_ID>          # inspect a specific trace
+opentraces trace list --stage inbox       # list inbox traces
+opentraces trace show <TRACE_ID>          # inspect a specific trace
 ```
 
 For each trace, decide: commit (commit for push), reject (keep local), or
@@ -159,7 +161,7 @@ redact specific steps before committing.
 ### 3. Commit
 
 ```bash
-opentraces session commit <TRACE_ID>        # commit one trace
+opentraces trace commit <TRACE_ID>        # commit one trace
 opentraces commit --all                     # commit all inbox traces
 opentraces commit --all -m "description"    # with custom commit message
 ```
@@ -179,11 +181,11 @@ A dataset card (README.md) is auto-generated with CC-BY-4.0 license.
 ### Listing and filtering
 
 ```bash
-opentraces session list                                 # all stages
-opentraces session list --stage inbox                   # inbox only
-opentraces session list --stage committed               # committed only
-opentraces session list --model opus                    # filter by model substring
-opentraces session list --agent claude-code --limit 10  # filter by agent, cap results
+opentraces trace list                                 # all stages
+opentraces trace list --stage inbox                   # inbox only
+opentraces trace list --stage committed               # committed only
+opentraces trace list --model opus                    # filter by model substring
+opentraces trace list --agent claude-code --limit 10  # filter by agent, cap results
 ```
 
 Valid stages: `inbox`, `committed`, `pushed`, `rejected`.
@@ -191,8 +193,8 @@ Valid stages: `inbox`, `committed`, `pushed`, `rejected`.
 ### Inspecting a trace
 
 ```bash
-opentraces session show <TRACE_ID>           # summary + truncated step content
-opentraces session show <TRACE_ID> --verbose # full step content (can be large)
+opentraces trace show <TRACE_ID>           # summary + truncated step content
+opentraces trace show <TRACE_ID> --verbose # full step content (can be large)
 opentraces --json session show <TRACE_ID>    # full record as JSON (never truncated)
 ```
 
@@ -203,12 +205,12 @@ parse the complete record programmatically.
 ### Actions
 
 ```bash
-opentraces session commit <ID>       # commit for push
-opentraces session reject <ID>       # mark rejected, kept local only
-opentraces session reset <ID>        # undo commit or reject, back to inbox
-opentraces session redact <ID> --step 3   # clear step 3's content, reasoning,
+opentraces trace commit <ID>       # commit for push
+opentraces trace reject <ID>       # mark rejected, kept local only
+opentraces trace reset <ID>        # undo commit or reject, back to inbox
+opentraces trace redact <ID> --step 3   # clear step 3's content, reasoning,
                                           # tool_calls, observations, and snippets
-opentraces session discard <ID> --yes     # permanently delete (--yes skips confirm)
+opentraces trace discard <ID> --yes     # permanently delete (--yes skips confirm)
 ```
 
 `reset` works from committed or rejected states but cannot undo a pushed trace.
@@ -324,7 +326,7 @@ opentraces doctor
 Reports `security_version`, `schema_version`, TruffleHog binary + enabled
 state, HF auth status, intent mode, and configured post-processors. JSON
 payload is emitted under `doctor` with the same fields plus a nested
-`trufflehog: {enabled, binary_version, status}`.
+`trufflehog: {enabled, binary_version, status}` and `review_llm: {enabled, backend, model, reachable, status}`.
 
 **Exit codes**: returns `3` when TruffleHog is enabled in config but the
 binary is not on PATH. Always safe to run non-destructively.
@@ -332,8 +334,8 @@ binary is not on PATH. Always safe to run non-destructively.
 ### Tier 1.5 — TruffleHog
 
 ```bash
-opentraces setup trufflehog            # install (brew or go install) + enable
-opentraces setup trufflehog --verify   # assume installed; verify + enable
+opentraces setup trufflehog            # interactive: install (brew/go) + enable
+opentraces setup trufflehog --enable   # agent/CI: flip on; fails TRUFFLEHOG_MISSING if binary absent
 opentraces setup trufflehog --disable  # turn the tier off (keeps binary)
 ```
 
@@ -347,9 +349,44 @@ Errors:
 
 ### Tier 2 — LLM semantic review
 
+A third-party LLM (local Ollama, LM Studio, or a hosted API) independently
+reviews staged traces for shareability before push. Config is **global**
+(one LLM per machine, shared across projects) and lives under
+`security.review_llm` in `~/.opentraces/config.json`.
+
+**Configure once (agent-friendly, non-interactive):**
+
 ```bash
-opentraces review-llm                                # default: ollama + gemma4:e4b
-opentraces review-llm --provider anthropic --model claude-haiku-4-5-20251001
+# Local Ollama (zero-auth, recommended default):
+opentraces setup review-llm --provider openai \
+    --base-url http://localhost:11434/v1 --model gemma3n:e4b
+
+# Hosted via any OpenAI-compatible gateway (Groq shown):
+opentraces setup review-llm --provider openai \
+    --base-url https://api.groq.com/openai/v1 \
+    --model llama-3.3-70b-versatile --api-key-env GROQ_API_KEY
+
+# Native Anthropic SDK:
+opentraces setup review-llm --provider anthropic \
+    --model claude-haiku-4-5-20251001 --api-key-env ANTHROPIC_API_KEY
+
+# Test without writing, or dump current config as JSON:
+opentraces setup review-llm --test
+opentraces setup review-llm --print
+opentraces setup review-llm --disable
+```
+
+Run `opentraces setup review-llm` with no flags for an interactive
+preset picker (Ollama / LM Studio / vLLM / OpenAI / Groq / OpenRouter /
+Together / Anthropic / custom).
+
+**Run review over staged traces:**
+
+```bash
+opentraces review-llm                                # uses the configured LLM, every trace in staging
+opentraces review-llm --scope staged                 # STAGED only (pre-commit)
+opentraces review-llm --scope committed              # COMMITTED only — 2nd line of defence before push
+opentraces review-llm --trace 8a3f1c                 # one trace (short prefix ok); repeatable
 opentraces review-llm --provider fake                # offline stub, for tests
 opentraces review-llm --dry-run                      # estimate tokens + cost only
 opentraces review-llm --limit 5                      # cap sessions reviewed
@@ -357,10 +394,19 @@ opentraces review-llm --force                        # re-review cached verdicts
 opentraces review-llm --context-file AGENTS.md       # pass project README as context
 ```
 
+**review-llm is slow.** Narrow what you run with `--scope` or `--trace`, cap with `--limit`. The typical 2nd-line-of-defence flow is `review-llm --scope committed` right before `push --llm-review`.
+
 Writes each verdict under `metadata.llm_review` on the staged trace:
-`{status, shareable, missed_sensitive_data, review_key, ...}`. The
-`review_key` binds verdict to `content_hash + model + prompt-version + context`
-so unchanged traces reuse the verdict on re-runs unless `--force` is set.
+`{status, shareable, missed_sensitive_data, provider, model, base_url,
+reviewed_at, prompt_version, review_key, ...}`. The `review_key` binds
+the verdict to `content_hash + provider + base_url + model +
+prompt_version + context` so changing any of those invalidates the
+cache and re-reviews on next run. `--force` ignores the cache entirely.
+
+If Tier 1 / TruffleHog already blocked the trace, `review-llm` skips
+the LLM call and records a synthetic `shareable=no` verdict
+(`denied_before_llm: true`) — no tokens spent on confirmed-bad
+sessions.
 
 ### Enforcing Tier 2 at push
 
@@ -453,7 +499,7 @@ opentraces capabilities --json         # feature flags + supported env vars
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
-| 1 | Needs review / quality gate not passed (import-hf partial failures) |
+| 1 | Needs review / quality gate not passed (pull partial failures) |
 | 2 | Usage error (bad flags, conflicting options) |
 | 3 | Auth/config error, blocked push (e.g. `LLM_REVIEW_BLOCKED`, `TRUFFLEHOG_MISSING`) |
 | 4 | Network or upload error |

@@ -22,19 +22,19 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces web` | Open the browser inbox UI |
 | `opentraces tui` | Open the terminal inbox UI |
 | `opentraces stats` | Show aggregate inbox statistics |
-| `opentraces context` | Return machine-readable project context |
 | `opentraces config show` | Display current config |
 | `opentraces config set` | Update config values |
-| `opentraces import-hf` | Import traces from a HuggingFace dataset |
-| `opentraces hooks install` | Install Claude Code session capture hooks |
+| `opentraces pull` | Import traces from a HuggingFace dataset |
 | `opentraces log` | List uploaded traces grouped by date |
 | `opentraces upgrade` | Upgrade CLI and refresh project skill file |
-| `opentraces setup trufflehog` | Install or toggle the optional Tier 1.5 TruffleHog scanner |
+| `opentraces setup` | Interactive wizard: walks every integration (Claude Code, git, trufflehog, review-llm) |
+| `opentraces setup claude-code` | Install Claude Code session capture hooks |
 | `opentraces setup git` | Install or remove the opentraces post-commit hook for commit linking |
+| `opentraces setup trufflehog` | Install or toggle the optional Tier 1.5 TruffleHog scanner |
+| `opentraces setup review-llm` | Configure the third-party LLM used by `review-llm` (global config) |
 | `opentraces doctor` | Report the health of the security pipeline (tiers, versions, auth), the current `intent.mode`, and any configured post-processors |
 | `opentraces review-llm` | Run optional Tier 2 LLM semantic review over staged traces |
-| `opentraces notes` | Print opentraces notes attached to a commit (trace IDs and viewer URLs) |
-| `opentraces blame` | Resolve `path:line` to the trace/step that authored it |
+| `opentraces blame` | Resolve a commit to the opentraces session(s) behind it |
 | `opentraces export` | Export staged traces to another format (`atif` stub, `agent-trace`) |
 
 ## Authentication
@@ -165,16 +165,16 @@ opentraces tui --fullscreen
 Fine-grained review commands for staged traces.
 
 ```bash
-opentraces session list
-opentraces session list --by-commit
-opentraces session show <trace-id>
-opentraces session show <trace-id> --verbose
-opentraces session show <trace-id> --markdown
-opentraces session commit <trace-id>
-opentraces session reject <trace-id>
-opentraces session reset <trace-id>
-opentraces session redact <trace-id> --step 3
-opentraces session discard <trace-id> --yes
+opentraces trace list
+opentraces trace list --by-commit
+opentraces trace show <trace-id>
+opentraces trace show <trace-id> --verbose
+opentraces trace show <trace-id> --markdown
+opentraces trace commit <trace-id>
+opentraces trace reject <trace-id>
+opentraces trace reset <trace-id>
+opentraces trace redact <trace-id> --step 3
+opentraces trace discard <trace-id> --yes
 ```
 
 `session list` accepts `--stage inbox|committed|pushed|rejected`, `--model`, `--agent`, `--limit`, and `--by-commit`.
@@ -304,12 +304,12 @@ By default, `assess` targets only **committed** traces, matching the population 
 
 `--dataset` is independent of the local inbox. It downloads shards from the specified HF dataset repo and updates that repo's dataset card and `quality.json` sidecar in place, without requiring a new push.
 
-### opentraces import-hf
+### opentraces pull
 
-Import traces from a HuggingFace dataset into your local inbox.
+Import traces from a HuggingFace dataset into your local inbox. The inverse of `push`.
 
 ```bash
-opentraces import-hf DATASET_ID [OPTIONS]
+opentraces pull DATASET_ID [OPTIONS]
 ```
 
 | Flag | Description |
@@ -324,15 +324,29 @@ opentraces import-hf DATASET_ID [OPTIONS]
 
 Exit codes: `0` success, `1` partial failure (some traces rejected by quality gate).
 
-### opentraces hooks install
+### `opentraces setup`
 
-Install Claude Code session capture hooks into the current project. Hooks run automatically at session end (`on_stop`) and after context compaction (`on_compact`) to enrich traces with session metadata.
+Wire opentraces into external tools — one subcommand per integration, or run bare `opentraces setup` for an interactive wizard that walks all of them.
 
 ```bash
-opentraces hooks install
+opentraces setup                       # interactive wizard
+opentraces setup claude-code           # Claude Code session hooks (~/.claude/settings.json)
+opentraces setup claude-code --remove  # uninstall
+opentraces setup claude-code --dry-run # preview without writing
+opentraces setup git                   # git post-commit hook (trace ↔ commit correlation)
+opentraces setup git --remove
+opentraces setup trufflehog            # Tier 1.5 TruffleHog scanning (interactive install wizard)
+opentraces setup trufflehog --enable   # agent/CI: flip on; fails TRUFFLEHOG_MISSING if binary absent
+opentraces setup trufflehog --disable  # turn the tier off without uninstalling
+opentraces setup review-llm            # Tier 2 LLM review (interactive preset picker)
+opentraces setup review-llm --disable  # turn the Tier 2 LLM review off
 ```
 
-Run this once per project after `opentraces init`.
+Claude Code hooks run at session end (`Stop`) and after context compaction (`PostCompact`) to enrich traces with session metadata. They write into `~/.claude/settings.json` using the matcher-envelope shape Claude Code expects.
+
+The git integration writes an owned `opentraces-post-commit` script plus a fenced chain block into `.git/hooks/post-commit`, so existing hooks are preserved. It also adds a `refs/notes/opentraces` refspec so commit notes travel with `git fetch`.
+
+Use `opentraces doctor` to check integration status at any time.
 
 ### `opentraces remote`
 
@@ -412,17 +426,17 @@ OPENTRACES_NO_TUI=1 opentraces    # always prints help, never opens TUI
 Install or toggle the optional Tier 1.5 TruffleHog scanner. TruffleHog is **off by default**; once you opt in, a missing binary becomes a hard error on subsequent scans and pushes, not a silent skip.
 
 ```bash
-opentraces setup trufflehog            # install (or detect) and enable
-opentraces setup trufflehog --verify   # skip install, verify binary, enable
+opentraces setup trufflehog            # interactive wizard; offers to install via brew or go if missing
+opentraces setup trufflehog --enable   # agent/CI: flip the tier on. Fails TRUFFLEHOG_MISSING if binary not installed.
 opentraces setup trufflehog --disable  # disable the tier, leave binary in place
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--enable` | off | Flip the Tier 1.5 switch on. Never installs anything — binary must already be on PATH, otherwise exits `3` with `TRUFFLEHOG_MISSING`. |
 | `--disable` | off | Turn the Tier 1.5 tier off without uninstalling the binary |
-| `--verify` | off | Skip install; verify the binary is present and enable the tier |
 
-Installation tries `brew` then `go install`. If both fail, the command prints the upstream install URL and exits `4` so you can install manually and re-run with `--verify`.
+The bare `opentraces setup trufflehog` is the **human flow**: when the binary is missing it shows a picker over the installers it can find (`brew`, `go`) plus a `skip` option, then installs via the chosen method. Agents should use `--enable` instead and never shell out to install binaries — if that fails, surface the `TRUFFLEHOG_MISSING` error to the user and let them run the interactive wizard or install manually.
 
 TruffleHog runs locally in `--verify_secrets=false` mode, so no secrets are probed against third-party APIs.
 
@@ -432,7 +446,7 @@ Install (or remove) the opentraces post-commit hook in the current repo. The hoo
 
 ```bash
 opentraces setup git              # install the hook
-opentraces setup git --uninstall  # remove the hook
+opentraces setup git --remove     # remove the hook
 ```
 
 | Flag | Default | Description |
@@ -443,36 +457,22 @@ The hook is a thin shim that calls `opentraces _run-post-commit-hook` (hidden). 
 
 ## Commit Linking and Attribution
 
-### `opentraces notes`
-
-Print the opentraces notes attached to a commit. These are populated by the post-commit hook (see `setup git`) and list every trace that contributed to the revision, with a viewer URL when the trace has been pushed.
-
-```bash
-opentraces notes                  # defaults to HEAD
-opentraces notes abc1234
-opentraces notes HEAD~3 --json
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `REF` | `HEAD` | Commit-ish to read notes from |
-| `--json` | off | Emit machine-readable JSON (`{ref, traces: [{trace_id, url}]}`) |
-
 ### `opentraces blame`
 
-Resolve `path:line` to the opentraces session(s) that authored that line. Walks `git_links[]` and attribution ranges across local staged traces to find matches, and reports whether the original content is still alive at HEAD.
+Resolve a commit to the opentraces session(s) behind it. Traces are linked via `refs/notes/opentraces` written by the post-commit hook (install with `setup git`); each hit joins with local staging records to show the intent summary, originating Claude session, and the command to resume it.
 
 ```bash
-opentraces blame src/auth.py:42
-opentraces blame src/auth.py:42 --json
+opentraces blame                  # defaults to HEAD
+opentraces blame abc1234
+opentraces blame HEAD~3 --json
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `TARGET` | required | `<path>:<line>` (e.g. `src/parser.ts:120`) |
-| `--json` | off | Emit machine-readable JSON (`{target, hits: [{trace_id, step, revision, content_alive}]}`) |
+| `COMMIT` | `HEAD` | Commit-ish (sha, branch, `HEAD~N`) |
+| `--json` | off | Emit machine-readable JSON (`{commit, traces: [{trace_id, session_id, url}]}`) |
 
-Human output per hit: `trace_id  step_N  <revision-prefix>  [alive|dead]`.
+Old commits can't be backfilled — only commits made after `setup git` ran carry opentraces notes.
 
 ## Export
 
@@ -511,45 +511,108 @@ The JSON payload under `doctor` contains:
 | `trufflehog.enabled` | Whether Tier 1.5 is enabled in config |
 | `trufflehog.binary_version` | Output of `trufflehog --version`, or `null` |
 | `trufflehog.status` | Human-readable status (`disabled ...`, `ENABLED-BUT-MISSING ...`, or `enabled (<version>)`) |
+| `review_llm.enabled` | Whether the Tier 2 LLM review is configured |
+| `review_llm.backend` | Inferred backend name from `base_url` (`ollama`, `lm-studio`, `llama.cpp`, `vllm`, `groq`, `openrouter`, `together`, `openai`, `anthropic`, …) |
+| `review_llm.model` | Configured model identifier |
+| `review_llm.reachable` | `true` when a cheap `/v1/models` ping succeeds (or the `anthropic` SDK is importable); `false` otherwise |
+| `review_llm.status` | Human-readable status (`disabled …`, `UNREACHABLE …`, or `enabled (<backend> / <model>) — N models available`) |
 | `hf_auth` | `"ok"` when a token is loaded, `"missing"` otherwise |
 | `intent.mode` | Intent enrichment mode (`on`/`off`) |
 | `post_processors[]` | Configured post-processors with their resolved path and status |
 
-### `opentraces review-llm`
+Exits `3` when either Tier 1.5 or the review-LLM tier is enabled in config but unreachable (missing binary / unreachable endpoint / missing API-key env var).
 
-Run the optional Tier 2 LLM semantic review over the staged traces. Each session's transcript is chunked (400k chars per chunk) and sent to the chosen provider; per-chunk verdicts are aggregated pessimistically (`shareable`: `no` > `manual_review` > `yes`; `missed_sensitive_data`: `yes` > `maybe` > `no`). Results are cached on `sha256(content + model + prompt_version + context)`.
+### `opentraces setup review-llm`
+
+Configure the third-party LLM that `opentraces review-llm` uses to independently review staged traces. Config is **global** (one LLM per machine, shared across projects) and lives under `security.review_llm` in `~/.opentraces/config.json`.
 
 ```bash
-opentraces review-llm
-opentraces review-llm --provider anthropic --model claude-haiku-4-5-20251001
-opentraces review-llm --dry-run
-opentraces review-llm --context-file AGENTS.md --limit 10
-opentraces review-llm --force
+opentraces setup review-llm            # interactive preset picker (9 options, incl. Ollama model picker + pull)
+
+# Agent / non-interactive:
+opentraces setup review-llm --provider openai \
+    --base-url http://localhost:11434/v1 --model gemma3n:e4b
+opentraces setup review-llm --provider openai \
+    --base-url https://api.groq.com/openai/v1 \
+    --model llama-3.3-70b-versatile --api-key-env GROQ_API_KEY
+opentraces setup review-llm --provider anthropic \
+    --model claude-haiku-4-5-20251001 --api-key-env ANTHROPIC_API_KEY
+
+opentraces setup review-llm --test     # ping the endpoint; do not write
+opentraces setup review-llm --print    # dump current config as JSON
+opentraces setup review-llm --disable  # turn off
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--provider` | `ollama` | LLM provider: `ollama`, `anthropic`, or `fake` |
-| `--model` | `gemma4:e4b` | Model name. `claude-haiku-4-5-20251001` recommended for `anthropic` |
-| `--dry-run` | off | Estimate token usage and cost without calling the provider |
-| `--limit` | `0` (all) | Max staged sessions to review this invocation |
-| `--force` | off | Re-review sessions that already have a cached verdict |
-| `--context-file` | unset | Path to a README/AGENTS.md passed as project context (first 10k chars used) |
+| `--provider` | (from config) | `openai` (default, covers OpenAI-compat servers incl. Ollama at `/v1`, LM Studio, vLLM, llama.cpp, OpenAI, Groq, OpenRouter, Together), `ollama` (native `/api/generate`), `anthropic`, `fake` |
+| `--base-url` | (from config) | Base URL including `/v1` for OpenAI-compat servers. Ignored for `anthropic`. |
+| `--model` | (from config) | Model identifier. |
+| `--api-key-env` | `""` | Env var holding the API key. Empty for local servers that don't require auth. |
+| `--timeout` | `120` | Request timeout in seconds. |
+| `--enable` | off | Turn review-llm on using current config. |
+| `--disable` | off | Turn review-llm off without changing other fields. |
+| `--test` | off | Ping `{base_url}/models` and report reachability without writing. |
+| `--print` | off | Print effective config as JSON and exit. |
+| `--no-interactive` | off | Skip the preset picker when no flags are given. |
+
+Built-in presets (shown in the picker): `ollama`, `lm-studio`, `llama-cpp`, `vllm`, `openai`, `groq`, `openrouter`, `together`, `anthropic-direct`, and a free-form `custom` option. When a local preset is chosen and the endpoint is reachable, the picker lists available models and offers `custom` to enter a tag manually; for Ollama specifically, an unknown tag triggers an offer to run `ollama pull <tag>` right there.
+
+### `opentraces review-llm`
+
+Run the Tier 2 LLM semantic review over the staged traces using the LLM configured via `opentraces setup review-llm` (overridable per-invocation with `--provider` / `--model` / `--base-url` / `--api-key-env`). Each session's transcript is chunked (400k chars per chunk) and sent to the chosen backend; per-chunk verdicts are aggregated pessimistically (`shareable`: `no` > `manual_review` > `yes`; `missed_sensitive_data`: `yes` > `maybe` > `no`). Results are cached on `sha256(content + provider + base_url + model + prompt_version + context)`.
+
+If Tier 1 / TruffleHog already blocked a trace, the LLM call is skipped and a synthetic `shareable="no"` verdict is recorded with `denied_before_llm: true` — no tokens spent on confirmed-bad sessions.
+
+```bash
+opentraces review-llm                                # every trace in staging (current default)
+opentraces review-llm --scope staged                 # STAGED status only (pre-commit)
+opentraces review-llm --scope committed              # COMMITTED only — second line of defence before push
+opentraces review-llm --trace 8a3f1c                 # one trace (short prefix ok)
+opentraces review-llm --trace 8a3f --trace b4c9 --force
+opentraces review-llm --limit 5 --dry-run            # cost estimate for the next 5
+opentraces review-llm --provider fake                # offline stub, for tests
+opentraces review-llm --context-file AGENTS.md
+```
+
+review-llm is slow. Narrow what you run with `--scope` or `--trace`, and cap with `--limit`. The typical "second line of defence" flow is `review-llm --scope committed` right before `push --llm-review`.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--provider` | (from config) | Override provider for this run. |
+| `--model` | (from config) | Override model for this run. |
+| `--base-url` | (from config) | Override base URL for this run. |
+| `--api-key-env` | (from config) | Override env var holding the API key for this run. |
+| `--scope` | `all` | `all` / `staged` / `committed`. `staged` = only pre-commit traces; `committed` = only post-commit (ready-to-push) traces. |
+| `--trace` | (none) | Target trace by id (full or short prefix). Repeatable. Overrides `--scope`. |
+| `--dry-run` | off | Estimate token usage and cost without calling the provider. |
+| `--limit` | `0` (no cap) | Cap the final batch at N traces, applied after `--scope` / `--trace` filtering. |
+| `--force` | off | Re-review sessions that already have a cached verdict. |
+| `--context-file` | unset | Path to a README/AGENTS.md passed as project context (first 10k chars used). |
 
 Each result carries a verdict shaped like:
 
 ```json
 {
+  "status": "complete",
   "shareable": "yes",
   "missed_sensitive_data": "no",
   "flagged_parts": [{"reason": "...", "evidence": "..."}],
-  "summary": "..."
+  "summary": "...",
+  "provider": "openai",
+  "model": "gemma3n:e4b",
+  "base_url": "http://localhost:11434/v1",
+  "reviewed_at": "2026-04-13T12:34:56+00:00",
+  "prompt_version": "1",
+  "review_key": "sha256:…"
 }
 ```
 
-Verdicts are written back to the staged trace's `metadata.llm_review` so `opentraces push --llm-review` can gate on them.
+Verdicts are written back to the staged trace's `metadata.llm_review` so `opentraces push --llm-review` can gate on them. The provenance fields (`provider`, `model`, `base_url`, `reviewed_at`, `prompt_version`) surface in the TUI/web reviewer so you can see *which* LLM issued each verdict; they also feed `review_key` so the cache invalidates on any backend change.
 
-`--dry-run` emits a `sessions / chars / estimate {tokens, cost_usd} / model / provider` summary and does not contact any provider.
+Deny-before-LLM verdicts additionally carry `denied_before_llm: true`.
+
+`--dry-run` emits a `sessions / chars / estimate {tokens, cost_usd} / model / provider / base_url` summary and does not contact any provider.
 
 ## Hidden and Internal Commands
 
