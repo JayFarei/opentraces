@@ -1,0 +1,35 @@
+name = "clear_mid_session"
+description = """
+Agent edits, user runs /clear (wipes context but keeps the session JSONL),
+then agent edits more. Tests that attribution still works across the
+context-clear boundary. Note: /clear may close the current trace and
+start a new one — TBD what we observe.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+# /clear is a Claude Code slash command sent through the prompt input
+prompts = [
+    "Use the Write tool to create early.md with the line: before clear",
+    "/clear",
+    "Use the Write tool to create later.md with the line: after clear",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "clear-mid-session"
+
+[[assertions]]
+file = "early.md"
+trace = "a"
+lines = 1
+
+[[assertions]]
+file = "later.md"
+trace = "a"
+lines = 1

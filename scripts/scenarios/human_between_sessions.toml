@@ -1,0 +1,93 @@
+name = "human_between_sessions"
+description = """
+Trace A writes a config. The user manually edits one line (simulated via
+write_file step) without invoking any agent. Trace B adds another line via
+Edit. All three contributions land in one commit.
+
+Expected attribution:
+  - Lines untouched by either trace OR the human edit → trace A
+  - The human-edited line → pre-audit (no trace owns it; the watcher
+    captured it during the gap between sessions, attributed to whichever
+    JSONL was most recently active = trace A by default — a known caveat)
+  - Lines added by trace B → trace B
+
+This exercises: claude, write_file (manual edit), commit, plus the watcher
+running across a multi-actor workflow.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    """Use the Write tool to create app.conf with these 5 lines exactly:
+host = localhost
+port = 8080
+debug = false
+log_level = info
+timeout = 30""",
+    "done",
+]
+
+# simulate a human editing the file between agent sessions
+[[steps]]
+type = "wait"
+seconds = 1
+
+[[steps]]
+type = "write_file"
+path = "app.conf"
+content = """host = localhost
+port = 8080
+debug = true
+log_level = info
+timeout = 30
+"""
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "claude"
+label = "b"
+prompts = [
+    """Use the Edit tool on app.conf to append a new last line that reads exactly: max_connections = 100""",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "app config + human tweak + extension"
+
+# Trace A wrote 5 lines; one was modified by the human, one untouched lines remain.
+# Trace B added 1 line. We assert with broad tolerances since "who owns the
+# human-edited line" depends on watcher attribution heuristics and the
+# specific session that was active at edit time.
+
+[[assertions]]
+file = "app.conf"
+trace = "a"
+lines = 4
+tolerance = 1
+
+[[assertions]]
+file = "app.conf"
+trace = "b"
+lines = 1
+
+[[assertions]]
+file = "app.conf"
+total_lines = 6

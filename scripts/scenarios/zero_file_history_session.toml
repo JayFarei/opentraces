@@ -1,0 +1,53 @@
+name = "zero_file_history_session"
+description = """
+Agent does only Read/Grep/Bash-without-mutation in its session — no Edit,
+no Write, no NotebookEdit. file-history is empty. The COMMIT then captures
+a separate human-made change. All committed lines should attribute to
+pre-audit (no agent contributed). 78% of real sessions (2570/3287) have
+zero file-history-snapshot entries — this is the dominant case.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "data.txt"
+content = "preexisting line\n"
+
+[[steps]]
+type = "git"
+args = ["add", "data.txt"]
+
+[[steps]]
+type = "git"
+args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "preexisting"]
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Read tool to read data.txt and tell me what it contains.",
+    "done",
+]
+
+# Human appends a line outside of any agent session
+[[steps]]
+type = "write_file"
+path = "data.txt"
+content = "preexisting line\nadded by human\n"
+
+[[steps]]
+type = "commit"
+message = "human-appended; no agent edit"
+
+# All lines should attribute to pre-audit (no agent contribution)
+# Trace a should have ZERO lines (no Edit/Write happened)
+[[assertions]]
+file = "data.txt"
+trace = "a"
+lines = 0
+
+[[assertions]]
+file = "data.txt"
+total_lines = 2

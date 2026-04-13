@@ -1,0 +1,43 @@
+name = "crash_during_prompt"
+description = """
+Agent edits a file. The session is killed (SIGKILL via tmux kill-session)
+without any chance to flush or finalize. Tests that the watcher's
+working-tree capture is the safety net for hard-crash scenarios.
+
+Same mechanic as close_without_exit but distinguished semantically: this
+is 'the process died' vs 'the user closed the terminal'. From the spike's
+perspective they look identical (no /exit sent) — included here for
+documentary completeness and to regression-prove behavior under abrupt
+termination.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+cleanup = "kill"
+prompts = [
+    "Use the Write tool to create critical.log with the line: needs to survive crash",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "post-crash recovery"
+
+[[assertions]]
+file = "critical.log"
+trace = "a"
+lines = 1

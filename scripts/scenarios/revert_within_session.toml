@@ -1,0 +1,34 @@
+name = "revert_within_session"
+description = """
+Agent adds 5 lines to a file, then in a later turn removes 2 of those
+lines. Final file: 3 lines. All 3 should attribute to trace a (the
+agent owns the surviving lines, regardless of which turn within the
+session added them).
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    """Use the Write tool to create plan.md with exactly these 5 lines:
+todo 1
+todo 2
+todo 3
+todo 4
+todo 5""",
+    """Now use the Edit tool to remove lines 'todo 2' and 'todo 4' from plan.md, leaving only 3 lines.""",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "revert within session"
+
+[[assertions]]
+file = "plan.md"
+trace = "a"
+lines = 3
+tolerance = 1

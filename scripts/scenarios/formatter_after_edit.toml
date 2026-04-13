@@ -1,0 +1,59 @@
+name = "formatter_after_edit"
+description = """
+Agent edits a file. An EXTERNAL process (simulating a formatter / linter
+on save) rewrites part of the file before commit. Tests inverse-attribution:
+the formatter's changes shouldn't be attributed to any agent (they should
+ideally be 'external', currently attributed to most-recently-active session
+which is a known limitation we're explicitly probing here).
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    """Use the Write tool to create style.css with exactly these lines:
+.btn{color:red;}
+.btn:hover{color:blue;}""",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 1
+
+# Simulate prettier-like reformat
+[[steps]]
+type = "write_file"
+path = "style.css"
+content = """.btn {
+  color: red;
+}
+
+.btn:hover {
+  color: blue;
+}
+"""
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "edit + format"
+
+# We don't yet have an `external` virtual trace; the watcher will attribute
+# the formatter's changes to most-recently-active session (trace a). Document
+# this as the current behavior to track when we add inverse-attribution.
+[[assertions]]
+file = "style.css"
+total_lines = 7

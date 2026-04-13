@@ -1,0 +1,28 @@
+name = "multiple_edits_one_turn"
+description = """
+Agent makes N Edit calls to the same file in a single turn (then 'done'
+flushes the snapshot). file-history captures the FINAL state; intermediate
+states aren't snapshotted. Validates that the final attribution is correct
+even when the agent iterated multiple times within one prompt boundary.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    """Use the Write tool to create steps.md with the line: step 1. Then use the Edit tool to add a second line: step 2. Then use Edit again to add a third line: step 3. Then use Edit again to add a fourth line: step 4. Each step a separate tool call.""",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "multi-edit one turn"
+
+[[assertions]]
+file = "steps.md"
+trace = "a"
+lines = 4
+tolerance = 1

@@ -1,0 +1,44 @@
+name = "bash_appends"
+description = """
+Agent uses Bash with >> append redirect to grow an existing file. Watcher
+must capture the new content. 315 real-world instances of >> in mined data.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "write_file"
+path = "log.txt"
+content = "initial line\n"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    """Use the Bash tool to run: printf 'appended by agent\\n' >> log.txt""",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "bash append"
+
+[[assertions]]
+file = "log.txt"
+trace = "a"
+lines_min = 1
+
+[[assertions]]
+file = "log.txt"
+total_lines = 2

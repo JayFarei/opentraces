@@ -1,0 +1,40 @@
+name = "small_tweak"
+description = """
+Trace A writes 20 lines, trace B tweaks 2 of them, single commit.
+This is the case patch-id approach fundamentally cannot decompose.
+Validates per-line ownership via blame against synthetic audit history.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    """Use the Write tool to create config/server.py with exactly 20 lines, each line containing literally 'line N' where N is the number 1 through 20, no other content.""",
+    "done",
+]
+
+[[steps]]
+type = "claude"
+label = "b"
+prompts = [
+    """Use the Edit tool to change 'line 5' to 'line 5 (modified by B)' and use Edit again to change 'line 15' to 'line 15 (modified by B)' in config/server.py. Do not modify any other lines.""",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "small tweak"
+
+[[assertions]]
+file = "config/server.py"
+trace = "a"
+lines = 18
+tolerance = 1
+
+[[assertions]]
+file = "config/server.py"
+trace = "b"
+lines = 2

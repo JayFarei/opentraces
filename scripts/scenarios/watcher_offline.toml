@@ -1,0 +1,29 @@
+name = "watcher_offline"
+description = """
+Agent runs an Edit while the watcher is OFFLINE. Common case: most users
+won't keep the watcher running. Should still attribute via file-history
+alone (the snapshot blobs land on disk regardless of whether the watcher
+is observing).
+"""
+
+[[steps]]
+type = "reset"
+
+# Note: NO start_watcher step. Watcher is offline.
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Write tool to create offline.md with exactly the line: written without watcher",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "watcher offline"
+
+[[assertions]]
+file = "offline.md"
+trace = "a"
+lines = 1

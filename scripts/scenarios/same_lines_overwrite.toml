@@ -1,0 +1,49 @@
+name = "same_lines_overwrite"
+description = """
+Trace A writes 5 lines. Trace B replaces the entire file with 5 different
+lines (zero overlap). Expect 100% B, 0% A — A's work was completely
+overwritten. Tests blame's behavior under full content replacement.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    """Use the Write tool to create draft.md with exactly these 5 lines:
+alpha
+bravo
+charlie
+delta
+echo""",
+    "done",
+]
+
+[[steps]]
+type = "claude"
+label = "b"
+prompts = [
+    """Use the Write tool to overwrite draft.md with exactly these 5 different lines (no overlap with the previous content):
+foxtrot
+golf
+hotel
+india
+juliet""",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "same-lines-overwrite"
+
+[[assertions]]
+file = "draft.md"
+trace = "b"
+lines = 5
+
+[[assertions]]
+file = "draft.md"
+trace = "a"
+lines = 0
