@@ -418,6 +418,84 @@ def setup_git(remove: bool) -> None:
     emit_json({"status": "ok" if ok else "error", "action": "install", "state": st})
 
 
+@setup_group.command(
+    "skill",
+    examples=[
+        "opentraces setup skill",
+        "opentraces setup skill --remove",
+        "opentraces setup skill --harness claude-code",
+    ],
+    see_also=[
+        ("opentraces upgrade", "refresh the skill after a CLI update"),
+        ("opentraces doctor", "verify skill install + per-harness symlinks"),
+    ],
+)
+@click.option("--remove", is_flag=True, help="Uninstall instead of installing")
+@click.option(
+    "--harness", "harnesses", multiple=True,
+    help="Limit to specific agent harness (repeatable). Defaults to all supported.",
+)
+def setup_skill(remove: bool, harnesses: tuple[str, ...]) -> None:
+    """Install the opentraces skill globally and link it into each agent harness.
+
+    Canonical copy is written to ~/.agents/skills/opentraces/ (vendor-neutral
+    staging dir). Each supported harness gets a symlink, e.g.
+    ~/.claude/skills/opentraces -> ~/.agents/skills/opentraces.
+
+    Re-running is an idempotent refresh: canonical is wiped and repopulated
+    from the packaged skill/, the version stamp is rewritten, and broken
+    symlinks are repaired. Pre-existing non-symlink harness directories are
+    moved aside to opentraces.bak.<timestamp> before the symlink is created.
+    """
+    from ..capture.skill.install import HARNESS_DIRS, SkillInstaller
+    from opentraces import cli as _cli
+
+    targets = list(harnesses) if harnesses else list(HARNESS_DIRS.keys())
+    unknown = [h for h in targets if h not in HARNESS_DIRS]
+    if unknown:
+        human_echo(
+            f"unknown harness(es): {', '.join(unknown)}. "
+            f"supported: {', '.join(HARNESS_DIRS.keys())}"
+        )
+        emit_json(error_response("UNKNOWN_HARNESS", "setup",
+                                 f"unknown harness: {unknown}"))
+        raise click.exceptions.Exit(2)
+
+    inst = SkillInstaller(harnesses=targets)
+    if remove:
+        result = inst.remove()
+        human_echo("opentraces skill removed.")
+        emit_json({"status": "ok", "action": "remove",
+                   "removed": result.removed, "state": inst.status()})
+        return
+
+    result = inst.install()
+    st = inst.status()
+    if not result.ok:
+        for note in result.notes:
+            human_echo(f"  {_cli._err('error')}: {note}")
+        emit_json({"status": "error", "action": "install",
+                   "notes": result.notes, "state": st})
+        raise click.exceptions.Exit(3)
+
+    human_echo("")
+    print_banner(tagline=_cli._ok("skill installed"))
+    human_echo(f"  {_cli._dim('canonical:')} {st['canonical']} ({st['installed_version']})")
+    for h, hs in st["harnesses"].items():
+        if h not in targets:
+            continue
+        if hs.get("canonical"):
+            human_echo(f"  {_cli._dim('linked:'):<14} ~/.{h.replace('-', '/')}/skills/opentraces")
+        elif hs.get("present"):
+            human_echo(f"  {_cli._dim(h+':')} present but not canonical ({hs.get('kind')})")
+        else:
+            human_echo(f"  {_cli._dim(h+':')} not linked")
+    for note in result.notes:
+        human_echo(f"  {_cli._dim('note:')} {note}")
+    emit_json({"status": "ok", "action": "install",
+               "added": result.added, "notes": result.notes, "state": st})
+
+
 # ---------------------------------------------------------------------------
 # Plan 032 Phase 1 — security-module CLI surfaces.
 # ---------------------------------------------------------------------------
@@ -989,34 +1067,168 @@ def doctor_cmd() -> None:
 
     cfg = load_config()
     report = doctor.report(cfg, Path.cwd())
-
-    human_echo("opentraces doctor")
-    human_echo(f"  security version: {report['security_version']}")
-    if report["schema_version"]:
-        human_echo(f"  schema version:   {report['schema_version']}")
-    human_echo(f"  trufflehog:       {report['trufflehog']['status']}")
-    human_echo(f"  review-llm:       {report['review_llm']['status']}")
-    human_echo(f"  hf auth:          {report['hf_auth']}")
-
-    processors_report = report["post_processors"]
-    if processors_report:
-        human_echo("  post-processors:")
-        for p in processors_report:
-            human_echo(f"    - {p['name']}: {p['status']}")
-    else:
-        human_echo("  post-processors:  (none configured)")
-
-    hooks_report = report["hooks"]
-    if hooks_report:
-        human_echo("  hook installers:")
-        for h in hooks_report:
-            state = "installed" if h.get("installed") else "not installed"
-            human_echo(f"    - {h['installer']}: {state}")
+    _render_doctor_human(report)
 
     emit_json({"status": "ok", "doctor": report})
     code = doctor.exit_code(report)
     if code:
         sys.exit(code)
+
+
+# Marker glyphs. click.echo strips ANSI on non-TTY and respects NO_COLOR, so
+# raw unicode + click.style is safe for both humans and pipes.
+_MARK_OK = click.style("✓", fg="green", bold=True)
+_MARK_WARN = click.style("⚠", fg="yellow", bold=True)
+_MARK_ERR = click.style("✗", fg="red", bold=True)
+_MARK_OFF = click.style("·", dim=True)
+
+
+def _mark_for(kind: str) -> str:
+    return {
+        "ok": _MARK_OK,
+        "warn": _MARK_WARN,
+        "err": _MARK_ERR,
+        "off": _MARK_OFF,
+    }.get(kind, _MARK_OFF)
+
+
+def _section(title: str) -> None:
+    human_echo("")
+    human_echo(_cli._bold(title))
+
+
+def _row(mark_kind: str, label: str, value: str, *, detail: str | None = None) -> None:
+    """Fixed-width label column so colons line up across sections."""
+    mark = _mark_for(mark_kind)
+    padded = f"{label:<16}"
+    line = f"  {mark} {padded} {value}"
+    if detail:
+        line += f"  {_cli._dim(detail)}"
+    human_echo(line)
+
+
+def _trufflehog_row(th: dict) -> None:
+    if not th.get("enabled"):
+        _row("off", "trufflehog", "disabled", detail="opt in via 'opentraces setup trufflehog'")
+        return
+    ver = th.get("binary_version")
+    if ver is None:
+        _row("err", "trufflehog", "missing binary", detail="run 'opentraces setup trufflehog --verify'")
+    else:
+        _row("ok", "trufflehog", ver)
+
+
+def _review_llm_row(rl: dict) -> None:
+    if not rl.get("enabled"):
+        _row("off", "review-llm", "disabled", detail="opt in via 'opentraces setup review-llm'")
+        return
+    backend = rl.get("backend") or rl.get("provider") or "?"
+    model = rl.get("model") or "?"
+    reachable = rl.get("reachable")
+    if reachable is False:
+        _row("err", "review-llm", f"{backend} / {model}", detail=rl.get("status", "unreachable"))
+        return
+    # Try to pull the trailing "— N models available" off the status string.
+    note = None
+    status = rl.get("status") or ""
+    if "—" in status:
+        note = status.rsplit("—", 1)[1].strip()
+    _row("ok", "review-llm", f"{backend} / {model}", detail=note)
+
+
+def _processors_section(specs: list[dict]) -> None:
+    _section("Post-processors")
+    if not specs:
+        human_echo(f"  {_cli._dim('(none configured)')}")
+        return
+    for p in specs:
+        status = p.get("status")
+        kind = "ok" if status == "detected" else "err"
+        detail = p.get("resolved_path") or p.get("command")
+        _row(kind, p["name"], status or "?", detail=detail)
+
+
+def _hooks_section(hooks: list[dict]) -> None:
+    _section("Agent integrations")
+    if not hooks:
+        human_echo(f"  {_cli._dim('(no installers registered)')}")
+        return
+    for h in hooks:
+        name = h.get("installer", "?")
+        if name == "skill":
+            _skill_row(h)
+        elif name == "claude-code":
+            _claude_code_row(h)
+        elif name == "git":
+            _git_row(h)
+        else:
+            kind = "ok" if h.get("installed") else "off"
+            _row(kind, name, "installed" if h.get("installed") else "not installed")
+
+
+def _skill_row(h: dict) -> None:
+    installed = h.get("installed")
+    iv = h.get("installed_version")
+    pv = h.get("package_version")
+    broken = h.get("broken_harnesses") or []
+    if not installed:
+        _row("off", "skill", "not installed", detail="run 'opentraces setup skill'")
+    else:
+        kind = "warn" if h.get("drift") or broken else "ok"
+        value = iv or "installed"
+        detail = None
+        if h.get("drift"):
+            detail = f"drift: package is {pv}, run 'opentraces setup skill'"
+        _row(kind, "skill", value, detail=detail)
+    # Per-harness detail — this is the "which agents are we in" view.
+    harnesses = h.get("harnesses") or {}
+    for hname, st in harnesses.items():
+        if not st.get("present"):
+            sub_kind, sub_val, sub_detail = "off", "not linked", None
+        elif st.get("canonical"):
+            sub_kind, sub_val, sub_detail = "ok", "linked", st.get("target")
+        else:
+            sub_kind, sub_val, sub_detail = "warn", "non-canonical dir", st.get("kind")
+        _row(sub_kind, f"  ↳ {hname}", sub_val, detail=sub_detail)
+
+
+def _claude_code_row(h: dict) -> None:
+    if not h.get("installed"):
+        _row("off", "claude-code", "not installed", detail="run 'opentraces setup claude-code'")
+        return
+    _row("ok", "claude-code", "installed")
+
+
+def _git_row(h: dict) -> None:
+    if not h.get("installed"):
+        reason = h.get("reason") or "not installed"
+        _row("off", "git", reason, detail="run 'opentraces setup git'")
+        return
+    _row("ok", "git", "post-commit hook active")
+
+
+def _render_doctor_human(report: dict) -> None:
+    human_echo(_cli._bold("opentraces doctor"))
+
+    _section("Versions")
+    _row("ok", "security", report["security_version"])
+    if report.get("schema_version"):
+        _row("ok", "schema", report["schema_version"])
+
+    _section("Security pipeline")
+    _trufflehog_row(report["trufflehog"])
+    _review_llm_row(report["review_llm"])
+
+    _section("Authentication")
+    hf = report.get("hf_auth")
+    if hf == "ok":
+        _row("ok", "huggingface", "authenticated")
+    else:
+        _row("err", "huggingface", "missing", detail="run 'huggingface-cli login'")
+
+    _processors_section(report["post_processors"])
+    _hooks_section(report["hooks"])
+    human_echo("")
 
 
 def _filter_by_scope(records: list[dict], scope: str, state) -> list[dict]:
