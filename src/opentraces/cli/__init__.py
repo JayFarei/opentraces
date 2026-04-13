@@ -2132,17 +2132,55 @@ def tui(fullscreen: bool, limit: int) -> None:
         sys.exit(2)
 
 
-def _assess_dataset(repo_id: str, judge: bool = False, judge_model: str = "haiku", limit: int = 0) -> None:
-    """Assess a full HF dataset and update its quality card.
+def _reports_dir(project_dir: Path | None = None) -> Path:
+    """Resolve where assess writes its local markdown report.
 
-    Downloads all shards via huggingface_hub (cached locally after first fetch).
-    Does not require hf-mount.
+    Per-project reports land alongside the rest of the project's
+    machine-local state under ``~/.opentraces/projects/<slug>/reports/``.
+    Dataset assessments fall back to a global ``~/.opentraces/reports/``.
     """
+    from ..core.config import OPENTRACES_DIR, get_project_dir, project_is_opted_in
+
+    if project_dir and project_is_opted_in(project_dir):
+        return get_project_dir(project_dir) / "reports"
+    return OPENTRACES_DIR / "reports"
+
+
+def _fetch_existing_card(uploader, repo_id: str) -> str | None:
+    """Best-effort fetch of the remote README so user-edited prose
+    survives an ``assess --dataset`` write. Returns None on any failure.
+    """
+    try:
+        local_path = uploader.api.hf_hub_download(
+            repo_id=repo_id,
+            filename="README.md",
+            repo_type="dataset",
+        )
+        return Path(local_path).read_text()
+    except Exception:
+        return None
+
+
+def _assess_dataset(
+    repo_id: str,
+    judge: bool = False,
+    judge_model: str = "haiku",
+    limit: int = 0,
+    dry_run: bool = False,
+) -> None:
+    """Assess a full HF dataset; optionally update its quality card.
+
+    Downloads all shards via huggingface_hub (cached locally after first
+    fetch). With ``dry_run`` set, prints the report and exits — no
+    quality.json upload, no README rewrite, no local report written.
+    """
+    import time
     from datetime import datetime
 
     from ..quality.engine import assess_batch, generate_report
     from ..quality.gates import check_gate
     from ..quality.summary import build_summary
+    from ..quality.display import format_assessment
     from ..publish.huggingface.upload import HFUploader, RemoteShardError
     from ..publish.huggingface.dataset_card import generate_dataset_card
     from ..core.config import load_config
@@ -2168,59 +2206,58 @@ def _assess_dataset(repo_id: str, judge: bool = False, judge_model: str = "haiku
     if limit > 0:
         traces = traces[:limit]
 
-    click.echo(f"Assessing {len(traces)} traces...")
+    started = time.time()
     batch = assess_batch(traces, enable_judge=judge, judge_model=judge_model)
     gate = check_gate(batch)
     mode = "hybrid" if judge else "deterministic"
     summary = build_summary(batch, gate, mode=mode, judge_model=judge_model if judge else None)
+    elapsed = time.time() - started
 
-    # Display results
-    click.echo(f"\nDataset: {repo_id}")
-    click.echo(f"Traces assessed: {len(traces)}")
-    for name, ps in summary.persona_scores.items():
-        status = "PASS" if ps.average >= 80 else ("WARN" if ps.average >= 60 else "FAIL")
-        click.echo(f"  {name}: {ps.average:.1f}%  [{status}]  min={ps.min:.1f}% max={ps.max:.1f}%")
-    click.echo(f"\nOverall utility: {summary.overall_utility:.1f}%")
-    click.echo(f"Gate: {'PASS' if summary.gate_passed else 'FAIL'}")
+    click.echo("")
+    click.echo(format_assessment(summary, batch, header=repo_id, elapsed_seconds=elapsed))
 
-    # Upload quality.json and update README
-    if not token:
-        click.echo("\nWarning: No HF token — scores calculated but dataset card not updated.")
-        click.echo("Run 'huggingface-cli login' or set HF_TOKEN to enable card updates.")
+    report_path: Path | None = None
+    if dry_run:
+        click.echo("\n[dry-run] skipping quality.json + README + local report.")
     else:
-        click.echo("\nUpdating dataset card...")
-        summary_dict = summary.to_dict()
-
-        if uploader.upload_quality_json(summary_dict):
-            click.echo("  quality.json uploaded")
+        if not token:
+            click.echo("\nNo HF token — skipping dataset card update.")
+            click.echo("Run 'huggingface-cli login' or set HF_TOKEN to enable.")
         else:
-            click.echo("  Warning: failed to upload quality.json")
+            click.echo("\nUpdating dataset card...")
+            summary_dict = summary.to_dict()
 
-        new_card = generate_dataset_card(
-            repo_id=repo_id, traces=traces,
-            existing_card=None,
-            quality_summary=summary_dict,
-        )
-        try:
-            uploader.api.upload_file(
-                path_or_fileobj=io.BytesIO(new_card.encode("utf-8")),
-                path_in_repo="README.md",
-                repo_id=repo_id, repo_type="dataset",
-                commit_message="chore: update quality scores",
+            if uploader.upload_quality_json(summary_dict):
+                click.echo("  quality.json uploaded")
+            else:
+                click.echo("  Warning: failed to upload quality.json")
+
+            existing_card = _fetch_existing_card(uploader, repo_id)
+            new_card = generate_dataset_card(
+                repo_id=repo_id, traces=traces,
+                existing_card=existing_card,
+                quality_summary=summary_dict,
             )
-            click.echo("  README.md updated")
-        except Exception as e:
-            click.echo(f"  Warning: could not update README.md: {e}")
+            try:
+                uploader.api.upload_file(
+                    path_or_fileobj=io.BytesIO(new_card.encode("utf-8")),
+                    path_in_repo="README.md",
+                    repo_id=repo_id, repo_type="dataset",
+                    commit_message="chore: update quality scores",
+                )
+                preserved = " (preserved hand-edited prose)" if existing_card else ""
+                click.echo(f"  README.md updated{preserved}")
+            except Exception as e:
+                click.echo(f"  Warning: could not update README.md: {e}")
 
-    # Write local report
-    slug = repo_id.replace("/", "-")
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    report = generate_report(batch)
-    report_dir = Path(".opentraces/reports")
-    report_dir.mkdir(parents=True, exist_ok=True)
-    report_path = report_dir / f"assess-dataset-{slug}-{ts}.md"
-    report_path.write_text(report)
-    click.echo(f"\nLocal report: {report_path}")
+        slug = repo_id.replace("/", "-")
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        report = generate_report(batch)
+        report_dir = _reports_dir()
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / f"assess-dataset-{slug}-{ts}.md"
+        report_path.write_text(report)
+        click.echo(f"\nLocal report: {report_path}")
 
     emit_json({
         "status": "ok",
@@ -2228,9 +2265,68 @@ def _assess_dataset(repo_id: str, judge: bool = False, judge_model: str = "haiku
         "mode": "dataset",
         "repo_id": repo_id,
         "traces_assessed": len(traces),
-        "report_path": str(report_path),
+        "dry_run": dry_run,
+        "report_path": str(report_path) if report_path else None,
         "quality_summary": summary.to_dict(),
     })
+
+
+def _load_local_traces() -> list:
+    """Load traces for local assess: committed first, fall back to all staged."""
+    from opentraces_schema import TraceRecord
+    from ..core.state import StateManager
+    from ..core.config import get_project_state_path, get_project_traces_dir
+
+    project_dir = Path.cwd()
+    staging = get_project_traces_dir(project_dir)
+    state = StateManager(state_path=get_project_state_path(project_dir))
+    committed = state.get_committed_traces()
+
+    def _load(path: Path) -> list:
+        out = []
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                out.append(TraceRecord.model_validate_json(line))
+            except Exception:
+                continue
+        return out
+
+    traces: list = []
+    if committed:
+        for trace_id in committed:
+            f = staging / f"{trace_id}.jsonl"
+            if f.exists():
+                traces.extend(_load(f))
+    elif staging.exists():
+        for f in sorted(staging.glob("*.jsonl")):
+            traces.extend(_load(f))
+    return traces
+
+
+def _remote_delta(repo_id: str, local_summary) -> dict[str, float] | None:
+    """Pull remote quality.json and return {persona: local_avg - remote_avg}."""
+    try:
+        from huggingface_hub import HfApi
+        from ..quality.summary import QualitySummary
+
+        api = HfApi()
+        content = api.hf_hub_download(
+            repo_id=repo_id, filename="quality.json", repo_type="dataset"
+        )
+        with open(content) as f:
+            remote_data = json.load(f)
+        remote = QualitySummary.from_dict(remote_data)
+        delta: dict[str, float] = {}
+        for name, remote_ps in remote.persona_scores.items():
+            local_ps = local_summary.persona_scores.get(name)
+            if local_ps:
+                delta[name] = round(local_ps.average - remote_ps.average, 1)
+        return delta
+    except Exception:
+        return None
 
 
 @main.command()
@@ -2238,195 +2334,108 @@ def _assess_dataset(repo_id: str, judge: bool = False, judge_model: str = "haiku
 @click.option("--judge-model", default="haiku", type=click.Choice(["haiku", "sonnet", "opus"]),
               help="Model for LLM judge")
 @click.option("--limit", type=int, default=0, help="Max traces to assess (0=all)")
-@click.option("--compare-remote", is_flag=True, help="Compare local scores against remote dataset quality.json")
-@click.option("--all-staged", is_flag=True, help="Assess all staged traces (default: COMMITTED only)")
 @click.option("--dataset", "dataset_repo", type=str, default=None,
-              help="Assess a remote HF dataset (e.g. user/my-traces). Downloads shards, updates README and quality.json.")
-def assess(judge: bool, judge_model: str, limit: int, compare_remote: bool, all_staged: bool, dataset_repo: str | None) -> None:
-    """Run quality assessment on committed traces or a full HF dataset.
+              help="Assess a remote HF dataset (e.g. user/my-traces).")
+@click.option("--dry-run", is_flag=True,
+              help="Print the assessment only — no remote writes, no local report.")
+@click.option("--explain", is_flag=True,
+              help="Show the glossary and exit.")
+def assess(judge: bool, judge_model: str, limit: int,
+           dataset_repo: str | None, dry_run: bool, explain: bool) -> None:
+    """Score trace quality and (in dataset mode) update the dataset card.
 
-    By default, assesses only COMMITTED traces (matching the push population).
-    Use --all-staged to assess everything in staging.
-    Use --compare-remote to fetch the remote dataset's quality.json and show score deltas.
-    Use --dataset user/repo to assess a full HF dataset and update its card.
+    Local mode (default) assesses committed traces, falling back to all
+    staged traces if nothing has been committed yet. Use --dataset
+    user/repo to assess a remote HF dataset.
+
+    Dimensions: Schema (safety), Conversation (SFT), Outcome (RL signal),
+    Metrics (cost/cache), Metadata (search context). Run with --explain
+    for the full glossary.
     """
-    from opentraces_schema import TraceRecord
+    import time
+    from datetime import datetime
+
     from ..quality.engine import assess_batch, generate_report
     from ..quality.gates import check_gate
-    from ..quality.summary import build_summary, QualitySummary
-    from ..core.config import get_project_traces_dir, project_is_opted_in
+    from ..quality.summary import build_summary
+    from ..quality.display import format_assessment, format_glossary
+    from ..core.config import (
+        get_project_traces_dir, load_project_config, project_is_opted_in,
+    )
 
-    # Full dataset assessment via huggingface_hub (no hf-mount required)
-    if dataset_repo:
-        _assess_dataset(dataset_repo, judge=judge, judge_model=judge_model, limit=limit)
+    if explain:
+        click.echo(format_glossary())
         return
 
-    # Local assess requires an opted-in project (it reads from per-project state).
-    if not project_is_opted_in(Path.cwd()):
-        click.echo("No staged traces found. Run 'opentraces init' first.")
+    if dataset_repo:
+        _assess_dataset(
+            dataset_repo,
+            judge=judge,
+            judge_model=judge_model,
+            limit=limit,
+            dry_run=dry_run,
+        )
+        return
+
+    project_dir = Path.cwd()
+    if not project_is_opted_in(project_dir):
+        click.echo("Not an opentraces project. Run 'opentraces init' first.")
         emit_json(error_response("NOT_INITIALIZED", "assessment", "Project not opted in", hint="Run opentraces init"))
         return
 
-    traces = []
-
-    if all_staged:
-        # Legacy behavior: read all staging files
-        staging = get_project_traces_dir(Path.cwd())
-        if not staging.exists():
-            click.echo("No staged traces found. Run 'opentraces parse' first.")
-            emit_json(error_response("NO_TRACES", "assessment", "No staged traces", hint="Run opentraces parse first"))
-            return
-        for f in sorted(staging.glob("*.jsonl")):
-            for line in f.read_text().splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    traces.append(TraceRecord.model_validate_json(line))
-                except Exception:
-                    continue
-    else:
-        # Default: read only COMMITTED traces (matches push population)
-        from ..core.state import StateManager
-        from ..core.config import get_project_state_path
-
-        project_dir = Path.cwd()
-        state_path = get_project_state_path(project_dir)
-        state = StateManager(state_path=state_path)
-        committed = state.get_committed_traces()
-
-        if not committed:
-            # Fall back to all staged if nothing committed
-            staging = get_project_traces_dir(Path.cwd())
-            if staging.exists():
-                for f in sorted(staging.glob("*.jsonl")):
-                    for line in f.read_text().splitlines():
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            traces.append(TraceRecord.model_validate_json(line))
-                        except Exception:
-                            continue
-                if traces:
-                    click.echo("No committed traces found, assessing all staged traces instead.")
-        else:
-            staging = get_project_traces_dir(Path.cwd())
-            for trace_id, info in committed.items():
-                trace_file = staging / f"{trace_id}.jsonl"
-                if trace_file.exists():
-                    for line in trace_file.read_text().splitlines():
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            traces.append(TraceRecord.model_validate_json(line))
-                        except Exception:
-                            continue
-
+    traces = _load_local_traces()
     if limit > 0:
         traces = traces[:limit]
-
     if not traces:
-        click.echo("No valid traces found.")
+        click.echo("No traces to assess. Capture some with a connected agent first.")
         emit_json(error_response("NO_TRACES", "assessment", "No valid traces"))
         return
 
-    click.echo(f"Assessing {len(traces)} traces...")
+    started = time.time()
     if judge:
-        click.echo(f"LLM judge enabled (model: {judge_model})")
-
+        click.echo(f"Scoring {len(traces)} traces (LLM judge: {judge_model})...")
     batch = assess_batch(traces, enable_judge=judge, judge_model=judge_model)
     gate = check_gate(batch)
     mode = "hybrid" if judge else "deterministic"
     summary = build_summary(batch, gate, mode=mode, judge_model=judge_model if judge else None)
+    elapsed = time.time() - started
 
-    report = generate_report(batch)
+    # Auto-include remote delta when a remote is configured.
+    remote_delta = None
+    proj_config = load_project_config(project_dir)
+    repo_id = proj_config.get("remote")
+    if repo_id:
+        remote_delta = _remote_delta(repo_id, summary)
 
-    # Write markdown report
-    from datetime import datetime
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    report_dir = Path(".opentraces/reports")
-    report_dir.mkdir(parents=True, exist_ok=True)
-    report_path = report_dir / f"assess-{ts}.md"
-    report_path.write_text(report)
-
-    # Display results with gate status
-    click.echo(f"\nReport written to {report_path}")
-    click.echo(f"Traces assessed: {len(traces)}")
-    click.echo(f"Scoring mode: {summary.scoring_mode}")
-    click.echo(f"Scorer version: {summary.scorer_version}")
     click.echo("")
+    click.echo(format_assessment(
+        summary, batch,
+        header=project_dir.name,
+        elapsed_seconds=elapsed,
+        remote_delta=remote_delta,
+    ))
 
-    # Per-persona scores with gate pass/fail
-    from ..quality.gates import DEFAULT_THRESHOLDS
-    threshold_map = {t.persona: t for t in DEFAULT_THRESHOLDS}
-    for name, ps in summary.persona_scores.items():
-        threshold = threshold_map.get(name)
-        gate_str = ""
-        if threshold:
-            passed = ps.average >= threshold.min_average
-            gate_str = f"  {'PASS' if passed else 'FAIL'} (gate: {threshold.min_average}%)"
-        click.echo(f"  {name}: avg={ps.average:.1f}% min={ps.min:.1f}% max={ps.max:.1f}%{gate_str}")
-
-    click.echo(f"\nOverall utility: {summary.overall_utility:.1f}%")
-    click.echo(f"Gate: {'PASS' if summary.gate_passed else 'FAIL'}")
-    if not summary.gate_passed:
-        for failure in summary.gate_failures:
-            click.echo(f"  - {failure}")
-
-    # Compare with remote if requested
-    if compare_remote:
-        click.echo("\nFetching remote quality scores...")
-        try:
-            from ..core.config import load_config, get_project_state_path
-            config = load_config()
-            project_dir = Path.cwd()
-            project_name = project_dir.name
-            project_config = config.get_project(project_name)
-            repo_id = project_config.remote if project_config and project_config.remote else None
-
-            if not repo_id:
-                click.echo("No remote repo configured. Use 'opentraces init' to set one.")
-            else:
-                from huggingface_hub import HfApi
-                api = HfApi()
-                try:
-                    content = api.hf_hub_download(repo_id=repo_id, filename="quality.json", repo_type="dataset")
-                    with open(content) as f:
-                        remote_data = json.load(f)
-                    remote_summary = QualitySummary.from_dict(remote_data)
-
-                    # Warn if scoring modes differ
-                    if remote_summary.scoring_mode != summary.scoring_mode:
-                        click.echo(f"  Warning: remote scored with '{remote_summary.scoring_mode}', local with '{summary.scoring_mode}'")
-
-                    click.echo(f"\nRemote scores (assessed {remote_summary.assessed_at}):")
-                    click.echo(f"  Traces: {remote_summary.trace_count}")
-                    for name, remote_ps in remote_summary.persona_scores.items():
-                        local_ps = summary.persona_scores.get(name)
-                        if local_ps:
-                            delta = local_ps.average - remote_ps.average
-                            arrow = "+" if delta > 0 else ""
-                            click.echo(f"  {name}: remote={remote_ps.average:.1f}% local={local_ps.average:.1f}% ({arrow}{delta:.1f}%)")
-                        else:
-                            click.echo(f"  {name}: remote={remote_ps.average:.1f}% (no local score)")
-                except Exception as e:
-                    click.echo(f"  Could not fetch remote quality.json: {e}")
-        except Exception as e:
-            click.echo(f"  Error comparing with remote: {e}")
+    report_path: Path | None = None
+    if dry_run:
+        click.echo("\n[dry-run] skipping local report write.")
+    else:
+        report_dir = _reports_dir(project_dir)
+        report_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        report_path = report_dir / f"assess-{ts}.md"
+        report_path.write_text(generate_report(batch))
+        click.echo(f"\nFull report: {report_path}")
 
     emit_json({
         "status": "ok",
         "command": "assess",
         "traces_assessed": len(traces),
-        "report_path": str(report_path),
+        "dry_run": dry_run,
+        "report_path": str(report_path) if report_path else None,
         "persona_averages": batch.persona_averages,
         "judge_enabled": judge,
-        "gate_passed": summary.gate_passed,
         "quality_summary": summary.to_dict(),
-        "next_steps": ["Review the report", "Run opentraces push to upload"],
-        "next_command": "opentraces push",
+        "remote_delta": remote_delta,
     })
 
 

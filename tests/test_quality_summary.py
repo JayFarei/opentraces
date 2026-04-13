@@ -484,15 +484,15 @@ class TestAssessCLI:
         assert "assess" in result.output
 
     def test_assess_has_dataset_option(self):
-        """assess command has --dataset option."""
+        """assess command has --dataset and --dry-run options."""
         from opentraces.cli import main
         from click.testing import CliRunner
 
         runner = CliRunner()
         result = runner.invoke(main, ["assess", "--help"])
         assert "--dataset" in result.output
-        assert "--compare-remote" in result.output
-        assert "--all-staged" in result.output
+        assert "--dry-run" in result.output
+        assert "--explain" in result.output
 
     def test_assess_no_traces(self):
         """assess with no staged traces shows helpful message."""
