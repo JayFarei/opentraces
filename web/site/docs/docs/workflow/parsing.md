@@ -34,7 +34,7 @@ Attribution is built by three resolvers tried in priority order. The strongest a
 2. **Unified diff.** When no hook event covers a range, the session's unified diff is parsed to recover line numbers and content. Medium confidence.
 3. **`str.find` fallback.** Last-resort textual match of tool output back to the current file content. Low confidence; the resulting `attribution.experimental` is `true`.
 
-The PostToolUse hook is installed alongside the session-end hook by `opentraces init` (and can be reinstalled with `opentraces hooks install`). Its events are consumed at parse time, so the post-edit hashes travel with the trace even if the file is later reformatted. This lets the post-commit correlator match ranges across formatter churn and classify the resulting `GitLink` tier.
+The PostToolUse hook is installed alongside the session-end hook by `opentraces init` (and can be reinstalled with `opentraces setup claude-code`). Its events are consumed at parse time, so the post-edit hashes travel with the trace even if the file is later reformatted. This lets the post-commit correlator match ranges across formatter churn and classify the resulting `GitLink` tier.
 
 ## Review Policy Interaction
 

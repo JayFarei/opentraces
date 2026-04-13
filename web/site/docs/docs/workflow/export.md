@@ -39,6 +39,6 @@ A public round-trip ATIF converter is tracked on the roadmap.
 
 ## What Is Not Ready Yet
 
-- A public `opentraces import` workflow (use `opentraces import-hf` for HuggingFace sources)
+- A public `opentraces import` workflow (use `opentraces pull` for HuggingFace sources)
 - A full ATIF exporter
 - A round-trip converter between opentraces and ATIF

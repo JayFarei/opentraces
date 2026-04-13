@@ -33,8 +33,10 @@ surface: `GitLink` (evidence-graded trace→commit links), `TraceRecord.lifecycl
 `Attribution.revision`, `Attribution.unaccounted_files`,
 `AttributionRange.original`, `AttributionRange.change_type`,
 `AttributionRange.contributor`, and `AttributionConversation.ids` / `.related`.
-Content hashes may now use the `murmur3:<hex>` format. All additive; 0.2.x
-traces load cleanly.
+`AttributionRange.content_hash` now uses the `murmur3:<32-hex>` format for
+cross-tool line-range matching (per Agent Trace v0.1.0). The top-level
+`TraceRecord.content_hash` remains SHA-256 for cross-contributor dedup at
+upload time. All additive; 0.2.x traces load cleanly.
 
 ## Schema Rationale
 

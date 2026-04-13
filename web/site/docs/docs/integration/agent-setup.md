@@ -24,14 +24,16 @@ If the repo already has existing session logs and you want them in the inbox imm
 For richer trace metadata, install the Claude Code session hooks:
 
 ```bash
-opentraces hooks install
+opentraces setup claude-code
 ```
 
-This registers two hooks in `.claude/settings.json`:
+Or run `opentraces setup` with no arguments for an interactive wizard that walks every integration (Claude Code, git, trufflehog).
+
+This registers two hooks in `~/.claude/settings.json`:
 - **`on_stop`** — runs at session end, captures context window state, token usage, and project metadata
 - **`on_compact`** (PostCompact event) — captures context compaction events for long sessions
 
-Hooks fire automatically on every session — no further action needed after `hooks install`.
+Hooks fire automatically on every session — no further action needed after `setup claude-code`.
 
 ### Hermes
 
