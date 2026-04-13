@@ -48,9 +48,14 @@ def error_response(*a, **k):
 # session subgroup: CRUD for trace review actions
 # ---------------------------------------------------------------------------
 
-@main.group()
+@main.group("trace")
 def session() -> None:
-    """Manage individual trace sessions (list, show, commit, reject, reset, redact, discard)."""
+    """Manage individual traces (list, show, commit, reject, redact).
+
+    The in-code name ``session`` is retained; the user-facing command is
+    ``opentraces trace`` — a trace is the parsed record, a session is the
+    upstream raw log the trace was built from.
+    """
     pass
 
 
@@ -105,7 +110,7 @@ def _load_trace_record(staging_dir: Path, trace_id: str):
 @click.option("--model", type=str, default=None, help="Filter by model name (substring)")
 @click.option("--agent", type=str, default=None, help="Filter by agent name")
 @click.option("--limit", type=int, default=50, help="Max sessions to return")
-@click.option("--by-commit", is_flag=True, help="Group traces by git_links[].revision (plan 041 R29)")
+@click.option("--by-commit", is_flag=True, help="Group traces by git_links[].revision")
 def session_list(stage: str | None, model: str | None, agent: str | None, limit: int, by_commit: bool) -> None:
     """List trace sessions with optional filters."""
     import time as _time
@@ -226,7 +231,7 @@ def session_list(stage: str | None, model: str | None, agent: str | None, limit:
 @click.option("--verbose", is_flag=True, default=False, help="Show full step content (default: truncated to 500 chars)")
 @click.option("--markdown", is_flag=True, default=False,
               help="Emit the trace wrapped in random-token boundaries with "
-                   "a historical-context preamble (plan 041 R28).")
+                   "a historical-context preamble.")
 def session_show(trace_id: str, verbose: bool, markdown: bool) -> None:
     """Show full detail for a trace session."""
     state, staging_dir = _load_project_state()

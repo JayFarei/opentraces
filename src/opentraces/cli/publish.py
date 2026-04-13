@@ -59,19 +59,35 @@ def _resolve_repo_id(*a, **k):
 
 
 
-@main.command()
+@main.command(
+    examples=[
+        "opentraces push",
+        "opentraces push --private",
+        "opentraces push --llm-review   # gate upload on Tier 2 verdict",
+    ],
+    see_also=[
+        ("opentraces assess", "score traces before upload"),
+        ("opentraces setup review-llm", "configure the Tier 2 reviewer"),
+    ],
+    option_groups=[
+        ("Visibility", ["private", "public", "publish", "gated"]),
+        ("Destination", ["repo"]),
+        ("Quality gates", ["run_assess", "llm_review"]),
+        ("Pipeline overrides", ["no_trufflehog", "no_intent"]),
+    ],
+)
 @click.option("--private", is_flag=True, help="Force private visibility (overrides config)")
 @click.option("--public", is_flag=True, help="Force public visibility (overrides config)")
 @click.option("--publish", is_flag=True, help="Change an existing private dataset to public (no upload)")
 @click.option("--gated", is_flag=True, help="Enable gated access (auto-approve) on the dataset")
 @click.option("--repo", default=None, help="HF dataset repo (default: username/opentraces)")
-@click.option("--assess", "run_assess", is_flag=True, help="Run quality assessment after upload and include scores in dataset card")
+@click.option("--assess", "run_assess", is_flag=True, help="Score traces after upload and include in dataset card")
 @click.option("--llm-review", "llm_review", is_flag=True,
-              help="Require a non-blocking LLM review verdict on every committed trace before upload (Plan 032 Tier 2).")
+              help="Require a clean Tier 2 verdict on every committed trace before upload")
 @click.option("--no-trufflehog", "no_trufflehog", is_flag=True,
-              help="One-shot override: skip Tier 1.5 TruffleHog scanning for this push only.")
+              help="Skip Tier 1.5 TruffleHog scanning for this push only")
 @click.option("--no-intent", "no_intent", is_flag=True,
-              help="One-shot override: skip Intent enrichment for this push only (plan 038).")
+              help="Skip Intent enrichment for this push only")
 def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None,
          run_assess: bool, llm_review: bool, no_trufflehog: bool, no_intent: bool) -> None:
     """Upload committed traces to HuggingFace Hub."""

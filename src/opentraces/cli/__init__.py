@@ -45,13 +45,13 @@ _json_mode = False
 # -- Grouped help formatting --------------------------------------------------
 
 COMMAND_SECTIONS = [
-    ("Getting Started", ["login", "init", "status"]),
-    ("Review & Publish", ["session", "commit", "enrich", "push", "log"]),
-    ("Inspect", ["tui", "web", "stats", "context"]),
-    ("Import", ["import-hf"]),
-    ("Integrations", ["hooks", "setup"]),
+    ("Getting Started", ["setup", "init", "login", "doctor", "status"]),
+    ("Review", ["tui", "web", "graph", "resume"]),
+    ("Discover", ["stats", "log", "pull", "blame"]),
+    ("Publish", ["trace", "commit", "push", "export"]),
     ("Project", ["remote", "config", "remove", "upgrade"]),
     ("Auth", ["auth", "whoami", "logout"]),
+    ("Operations", ["enrich", "review-llm", "assess"]),
 ]
 
 
@@ -212,43 +212,47 @@ def print_banner(*, tagline: str | None = OPENTRACES_TAGLINE, file=None) -> None
         click.echo(f"\n  {_dim(tagline)}\n", file=file)
 
 
-class GroupedGroup(click.Group):
-    """Click group that renders commands in named sections, with a banner."""
+from ._help import OpentracesGroup
 
-    def format_help(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        # Banner first, then the usual help sections.
-        formatter.write(OPENTRACES_ASCII + "\n")
-        formatter.write(f"\n  {OPENTRACES_TAGLINE}\n\n")
-        super().format_help(ctx, formatter)
+
+class GroupedGroup(OpentracesGroup):
+    """Root group: ``COMMAND_SECTIONS``-based command listing.
+
+    The banner + tagline + command-title bar are rendered by
+    ``OpentracesGroup.format_help`` for every command and group; this
+    subclass only overrides ``format_commands`` to swap the flat listing
+    for the curated sections defined in ``COMMAND_SECTIONS``.
+    """
+
+    def _style_rows(self, rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        return [(click.style(n, fg="cyan", bold=True), h) for n, h in rows]
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        placed = set()
+        placed: set[str] = set()
         for section_name, cmd_names in COMMAND_SECTIONS:
             rows: list[tuple[str, str]] = []
             for name in cmd_names:
                 cmd = self.commands.get(name)
                 if cmd is None or cmd.hidden:
                     continue
-                help_text = cmd.get_short_help_str(limit=formatter.width)
-                rows.append((name, help_text))
+                rows.append((name, cmd.get_short_help_str(limit=formatter.width)))
                 placed.add(name)
             if rows:
-                with formatter.section(section_name):
-                    formatter.write_dl(rows)
+                with self._section(formatter, section_name):
+                    formatter.write_dl(self._style_rows(rows))
 
-        # Anything not in a section goes under "Other"
-        other: list[tuple[str, str]] = []
+        # Anything unclassified falls into "More".
+        extras: list[tuple[str, str]] = []
         for name in self.list_commands(ctx):
             if name in placed:
                 continue
             cmd = self.commands.get(name)
             if cmd is None or cmd.hidden:
                 continue
-            help_text = cmd.get_short_help_str(limit=formatter.width)
-            other.append((name, help_text))
-        if other:
-            with formatter.section("Other"):
-                formatter.write_dl(other)
+            extras.append((name, cmd.get_short_help_str(limit=formatter.width)))
+        if extras:
+            with self._section(formatter, "More"):
+                formatter.write_dl(self._style_rows(extras))
 
 
 def emit_json(data: dict) -> None:
@@ -418,7 +422,8 @@ def _schedule_browser_open(url: str) -> None:
 @click.option("--json", "json_mode", is_flag=True, help="Emit only machine-readable JSON output")
 @click.pass_context
 def main(ctx: click.Context, json_mode: bool) -> None:
-    """opentraces - crowdsource agent traces to HuggingFace Hub."""
+    # Intentionally no docstring: the tagline under the banner is the
+    # description, so a Click ``help`` string here would duplicate it.
     global _json_mode
     _json_mode = json_mode
     ctx.ensure_object(dict)
@@ -952,7 +957,22 @@ def config_set(
     })
 
 
-@main.command()
+@main.command(
+    examples=[
+        "opentraces init",
+        "opentraces init --agent claude-code --review-policy auto",
+        "opentraces init --remote owner/my-traces --public",
+    ],
+    see_also=[
+        ("opentraces setup claude-code", "install session capture hooks"),
+        ("opentraces login", "authenticate with HuggingFace"),
+    ],
+    option_groups=[
+        ("Agents", ["agents", "no_hook", "import_existing"]),
+        ("Policy", ["review_policy"]),
+        ("Remote", ["remote", "is_private"]),
+    ],
+)
 @click.option("--agent", "agents", multiple=True, type=click.Choice(list(SUPPORTED_AGENTS)), help="Agent runtime to connect")
 @click.option("--review-policy", type=click.Choice(["review", "auto"]), default=None, help="Whether safe sessions require review")
 @click.option("--push-policy", type=click.Choice(["manual", "auto-push"]), default=None, hidden=True, help="Legacy: derived from review policy")
@@ -960,7 +980,7 @@ def config_set(
     "--import-existing/--start-fresh",
     "import_existing",
     default=None,
-    help="Whether to import existing Claude Code sessions for this repo during init",
+    help="Import existing Claude Code sessions for this repo",
 )
 @click.option("--mode", type=click.Choice(["auto", "review"]), default=None, hidden=True, help="Legacy alias for --review-policy")
 @click.option("--remote", type=str, default=None, help="HF dataset repo (owner/name)")
@@ -1807,7 +1827,7 @@ def status(limit: int) -> None:
                 else:
                     hints.append(
                         "no intent summaries  "
-                        f"{_dim('— run')} opentraces hooks install "
+                        f"{_dim('— run')} opentraces setup claude-code "
                         f"{_dim('for new sessions, or')} opentraces enrich <trace_path> "
                         f"{_dim('for existing')}"
                     )
@@ -1850,7 +1870,6 @@ def status(limit: int) -> None:
 
 # Register subcommand modules (side-effect: @main.command() bindings)
 from . import session as _session_module  # noqa: F401,E402
-from . import hooks as _hooks_module  # noqa: F401,E402
 from . import installers as _installers_module  # noqa: F401,E402
 from . import publish as _publish_module  # noqa: F401,E402
 from . import import_hf as _import_hf_module  # noqa: F401,E402
@@ -1955,7 +1974,7 @@ def remote_remove() -> None:
 @click.option("-o", "--output", type=click.Path(dir_okay=False, path_type=Path), default=None,
               help="Write enriched trace here. Default: overwrite the input file in place.")
 def enrich(trace_path: Path, run_intent: bool | None, force: bool, strict: bool, output: Path | None, model: str | None) -> None:
-    """Enrich a trace with Intent summary and any configured post-processors.
+    """Enrich a trace with Intent summary and post-processors.
 
     Reads a single trace JSON file, optionally summarizes (Intent), then pipes
     it through the ordered post-processor chain declared in project config.
@@ -2548,7 +2567,7 @@ def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
 @click.option("--output", "output_path", type=click.Path(),
               help="Output JSONL path (default: ./opentraces-export.jsonl)")
 def export(output_format: str, output_path: str | None) -> None:
-    """Export staged traces to another format (plan 041 R31)."""
+    """Export staged traces to another format."""
     from ..core.config import get_project_staging_dir
     from ..core.inbox import load_trace_records
     staging = get_project_staging_dir(Path.cwd())

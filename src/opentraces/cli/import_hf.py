@@ -36,12 +36,27 @@ def _auth_identity(*a, **k):
 
 
 
-@main.command("import-hf")
+@main.command(
+    "pull",
+    examples=[
+        "opentraces pull owner/dataset --parser hermes",
+        "opentraces pull owner/dataset --parser hermes --limit 10 --dry-run",
+        "opentraces pull owner/dataset --parser hermes --auto",
+    ],
+    see_also=[
+        ("opentraces push", "upload committed traces to HuggingFace"),
+        ("opentraces status", "inspect the inbox after import"),
+    ],
+    option_groups=[
+        ("Source", ["parser_name", "subset", "split", "limit"]),
+        ("Staging", ["auto", "dry_run"]),
+    ],
+)
 @click.argument("dataset_id")
-@click.option("--parser", "parser_name", required=True, help="Format parser name (e.g. hermes)")
+@click.option("--parser", "parser_name", required=True, help="Format parser (e.g. hermes)")
 @click.option("--subset", default=None, help="Dataset subset/config name")
-@click.option("--split", default="train", help="Dataset split")
-@click.option("--limit", type=int, default=0, help="Max rows to import (0=all)")
+@click.option("--split", default="train", show_default=True, help="Dataset split")
+@click.option("--limit", type=int, default=0, help="Max rows to import (0 = all)")
 @click.option("--auto", is_flag=True, help="Auto-commit imported traces (skip review)")
 @click.option("--dry-run", is_flag=True, help="Parse and report without writing to staging")
 def import_hf(
@@ -272,7 +287,7 @@ def import_hf(
         ) if not dry_run else ["Re-run without --dry-run to stage traces"],
         "next_command": (
             "opentraces status" if not auto else "opentraces push"
-        ) if not dry_run else f"opentraces import-hf {dataset_id} --parser {parser_name}",
+        ) if not dry_run else f"opentraces pull {dataset_id} --parser {parser_name}",
     })
 
 

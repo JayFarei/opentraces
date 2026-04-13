@@ -131,9 +131,13 @@ def stats() -> None:
     emit_json(result)
 
 
-@main.command()
+@main.command(hidden=True)
 def context() -> None:
-    """Show full project context for agent consumption."""
+    """Show full project context for agent consumption.
+
+    Hidden surface used by the opentraces skill and other automation. Humans
+    should use ``opentraces status`` instead.
+    """
     from ..core.config import get_project_staging_dir, get_project_state_path
     from ..core.state import StateManager
     from opentraces_schema import SCHEMA_VERSION

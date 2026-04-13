@@ -235,54 +235,54 @@ class TestSessionCommands:
 
     def test_session_list(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["session", "list"])
+        result = runner.invoke(main, ["trace", "list"])
         assert result.exit_code == 0
 
     def test_session_list_stage_filter(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["session", "list", "--stage", "inbox"])
+        result = runner.invoke(main, ["trace", "list", "--stage", "inbox"])
         assert result.exit_code == 0
 
     def test_session_show(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["session", "show", trace_id])
+        result = runner.invoke(main, ["trace", "show", trace_id])
         assert result.exit_code == 0
 
     def test_session_show_not_found(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["session", "show", "nonexistent-trace-id"])
+        result = runner.invoke(main, ["trace", "show", "nonexistent-trace-id"])
         assert result.exit_code == 6
 
     def test_session_commit(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["session", "commit", trace_id])
+        result = runner.invoke(main, ["trace", "commit", trace_id])
         assert result.exit_code == 0
 
     def test_session_reject(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["session", "reject", trace_id])
+        result = runner.invoke(main, ["trace", "reject", trace_id])
         assert result.exit_code == 0
 
     def test_session_reset_after_commit(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        runner.invoke(main, ["session", "commit", trace_id])
-        result = runner.invoke(main, ["session", "reset", trace_id])
+        runner.invoke(main, ["trace", "commit", trace_id])
+        result = runner.invoke(main, ["trace", "reset", trace_id])
         assert result.exit_code == 0
 
     def test_session_redact(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["session", "redact", trace_id, "--step", "0"])
+        result = runner.invoke(main, ["trace", "redact", trace_id, "--step", "0"])
         # May be 0 (success) or 2 (step out of range depending on 0-vs-1 indexing)
         assert result.exit_code in (0, 2)
 
     def test_session_discard(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["session", "discard", trace_id, "--yes"])
+        result = runner.invoke(main, ["trace", "discard", trace_id, "--yes"])
         assert result.exit_code == 0
 
     def test_session_discard_not_found(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["session", "discard", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "--yes"])
+        result = runner.invoke(main, ["trace", "discard", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "--yes"])
         assert result.exit_code == 6
 
 
@@ -328,7 +328,7 @@ class TestJsonMode:
 
     def test_json_session_list(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["--json", "session", "list"])
+        result = runner.invoke(main, ["--json", "trace", "list"])
         assert result.exit_code == 0
         assert "---OPENTRACES_JSON---" in result.output
 
@@ -395,7 +395,7 @@ class TestSessionShowTruncation:
             data["steps"][0]["content"] = long_content
         staging_file.write_text(_json.dumps(data) + "\n")
 
-        result = runner.invoke(main, ["session", "show", trace_id])
+        result = runner.invoke(main, ["trace", "show", trace_id])
         assert result.exit_code == 0
         # Only check the human output portion (before the JSON sentinel)
         human_output = result.output.split("---OPENTRACES_JSON---")[0]
@@ -415,7 +415,7 @@ class TestSessionShowTruncation:
             data["steps"][0]["content"] = long_content
         staging_file.write_text(_json.dumps(data) + "\n")
 
-        result = runner.invoke(main, ["session", "show", trace_id, "--verbose"])
+        result = runner.invoke(main, ["trace", "show", trace_id, "--verbose"])
         assert result.exit_code == 0
         assert "truncated" not in result.output
         assert long_content in result.output
@@ -433,7 +433,7 @@ class TestSessionShowTruncation:
             data["steps"][0]["content"] = long_content
         staging_file.write_text(_json.dumps(data) + "\n")
 
-        result = runner.invoke(main, ["--json", "session", "show", trace_id])
+        result = runner.invoke(main, ["--json", "trace", "show", trace_id])
         assert result.exit_code == 0
         sentinel = "---OPENTRACES_JSON---"
         assert sentinel in result.output
@@ -473,17 +473,17 @@ class TestExitCodes:
 
     def test_session_commit_not_found_exits_6(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["session", "commit", "nonexistent-trace-id"])
+        result = runner.invoke(main, ["trace", "commit", "nonexistent-trace-id"])
         assert result.exit_code == 6
 
     def test_session_reject_not_found_exits_6(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["session", "reject", "nonexistent-trace-id"])
+        result = runner.invoke(main, ["trace", "reject", "nonexistent-trace-id"])
         assert result.exit_code == 6
 
     def test_session_reset_not_found_exits_6(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["session", "reset", "nonexistent-trace-id"])
+        result = runner.invoke(main, ["trace", "reset", "nonexistent-trace-id"])
         assert result.exit_code == 6
 
 
@@ -804,15 +804,16 @@ class TestDetectInstallMethod:
 # ---------------------------------------------------------------------------
 
 class TestHooksCommands:
-    """Tests for opentraces hooks install."""
+    """Tests for opentraces setup claude-code."""
 
-    def test_hooks_help(self, runner):
-        result = runner.invoke(main, ["hooks", "--help"])
+    def test_setup_help(self, runner):
+        result = runner.invoke(main, ["setup", "--help"])
         assert result.exit_code == 0
-        assert "install" in result.output
+        assert "claude-code" in result.output
+        assert "git" in result.output
 
     def test_hooks_install_help(self, runner):
-        result = runner.invoke(main, ["hooks", "install", "--help"])
+        result = runner.invoke(main, ["setup", "claude-code", "--help"])
         assert result.exit_code == 0
         assert "--dry-run" in result.output
         assert "--hooks-dir" in result.output
@@ -822,7 +823,7 @@ class TestHooksCommands:
         hooks_dir = tmp_path / "hooks"
         settings_file = tmp_path / "settings.json"
         result = runner.invoke(main, [
-            "hooks", "install", "--dry-run",
+            "setup", "claude-code", "--dry-run",
             "--hooks-dir", str(hooks_dir),
             "--settings-file", str(settings_file),
         ])
@@ -835,7 +836,7 @@ class TestHooksCommands:
         hooks_dir = tmp_path / "hooks"
         settings_file = tmp_path / "settings.json"
         result = runner.invoke(main, [
-            "hooks", "install",
+            "setup", "claude-code",
             "--hooks-dir", str(hooks_dir),
             "--settings-file", str(settings_file),
         ])
@@ -847,7 +848,7 @@ class TestHooksCommands:
         hooks_dir = tmp_path / "hooks"
         settings_file = tmp_path / "settings.json"
         result = runner.invoke(main, [
-            "hooks", "install",
+            "setup", "claude-code",
             "--hooks-dir", str(hooks_dir),
             "--settings-file", str(settings_file),
         ])
@@ -863,7 +864,7 @@ class TestHooksCommands:
         hooks_dir = tmp_path / "hooks"
         settings_file = tmp_path / "settings.json"
         args = [
-            "hooks", "install",
+            "setup", "claude-code",
             "--hooks-dir", str(hooks_dir),
             "--settings-file", str(settings_file),
         ]
@@ -885,23 +886,35 @@ class TestHooksCommands:
             }
         }))
         result = runner.invoke(main, [
-            "hooks", "install",
+            "setup", "claude-code",
             "--hooks-dir", str(hooks_dir),
             "--settings-file", str(settings_file),
         ])
         assert result.exit_code == 0
         settings = json.loads(settings_file.read_text())
-        # Existing hook preserved
-        assert any(h["command"] == "echo existing" for h in settings["hooks"]["Stop"])
-        # Our hook also added
-        assert any("opentraces_on_stop" in h["command"] for h in settings["hooks"]["Stop"])
+
+        def _commands(entries):
+            out = []
+            for entry in entries:
+                inner = entry.get("hooks")
+                if isinstance(inner, list):
+                    out.extend(h.get("command", "") for h in inner)
+                elif "command" in entry:
+                    out.append(entry["command"])
+            return out
+
+        commands = _commands(settings["hooks"]["Stop"])
+        # Existing hook preserved (legacy bare shape is tolerated)
+        assert "echo existing" in commands
+        # Our hook added in the matcher-envelope shape
+        assert any("opentraces_on_stop" in c for c in commands)
 
     def test_hooks_install_scripts_are_executable(self, tmp_path, runner):
         import stat as stat_mod
         hooks_dir = tmp_path / "hooks"
         settings_file = tmp_path / "settings.json"
         runner.invoke(main, [
-            "hooks", "install",
+            "setup", "claude-code",
             "--hooks-dir", str(hooks_dir),
             "--settings-file", str(settings_file),
         ])
@@ -913,7 +926,7 @@ class TestHooksCommands:
         hooks_dir = tmp_path / "hooks"
         settings_file = tmp_path / "settings.json"
         result = runner.invoke(main, [
-            "--json", "hooks", "install",
+            "--json", "setup", "claude-code",
             "--hooks-dir", str(hooks_dir),
             "--settings-file", str(settings_file),
         ])
@@ -932,7 +945,7 @@ class TestHooksCommands:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text("not valid json {{{")
         result = runner.invoke(main, [
-            "hooks", "install",
+            "setup", "claude-code",
             "--hooks-dir", str(hooks_dir),
             "--settings-file", str(settings_file),
         ])
@@ -946,7 +959,7 @@ class TestHooksCommands:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text("[1, 2, 3]")
         result = runner.invoke(main, [
-            "hooks", "install",
+            "setup", "claude-code",
             "--hooks-dir", str(hooks_dir),
             "--settings-file", str(settings_file),
         ])
@@ -959,23 +972,32 @@ class TestHooksCommands:
         hooks_dir = tmp_path / "hooks with spaces"
         settings_file = tmp_path / "settings.json"
         runner.invoke(main, [
-            "hooks", "install",
+            "setup", "claude-code",
             "--hooks-dir", str(hooks_dir),
             "--settings-file", str(settings_file),
         ])
         settings = json.loads(settings_file.read_text())
+        found = False
         for entry in settings["hooks"]["Stop"]:
-            command = entry["command"]
-            # shlex.split must parse it back to exactly 2 tokens (python3 + path)
-            tokens = shlex.split(command)
-            assert len(tokens) == 2, f"Expected 2 tokens, got: {tokens}"
+            inner = entry.get("hooks")
+            commands = (
+                [h["command"] for h in inner if "command" in h]
+                if isinstance(inner, list)
+                else ([entry["command"]] if "command" in entry else [])
+            )
+            for command in commands:
+                # shlex.split must parse it back to exactly 2 tokens (python3 + path)
+                tokens = shlex.split(command)
+                assert len(tokens) == 2, f"Expected 2 tokens, got: {tokens}"
+                found = True
+        assert found, "no hook commands found under Stop"
 
     def test_hooks_install_dry_run_emits_json(self, tmp_path, runner):
         """--dry-run should still emit machine-readable JSON."""
         hooks_dir = tmp_path / "hooks"
         settings_file = tmp_path / "settings.json"
         result = runner.invoke(main, [
-            "--json", "hooks", "install", "--dry-run",
+            "--json", "setup", "claude-code", "--dry-run",
             "--hooks-dir", str(hooks_dir),
             "--settings-file", str(settings_file),
         ])
