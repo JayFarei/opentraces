@@ -1,0 +1,77 @@
+{
+  "changes": [
+    {
+      "changeType": "added",
+      "entityType": "struct",
+      "entityName": "CatalogEntryRow",
+      "entityId": "apps/gateway/src/db.rs::struct::CatalogEntryRow",
+      "filePath": "apps/gateway/src/db.rs",
+      "oldEntityName": null,
+      "oldFilePath": null,
+      "commitSha": null,
+      "author": null,
+      "afterContent": "pub(crate) struct CatalogEntryRow {}",
+      "beforeContent": null
+    },
+    {
+      "changeType": "added",
+      "entityType": "function",
+      "entityName": "find_catalog_entries",
+      "entityId": "apps/gateway/src/db.rs::function::find_catalog_entries",
+      "filePath": "apps/gateway/src/db.rs",
+      "oldEntityName": null,
+      "oldFilePath": null,
+      "commitSha": null,
+      "author": null,
+      "afterContent": "pub(crate) async fn find_catalog_entries() {}",
+      "beforeContent": null
+    },
+    {
+      "changeType": "modified",
+      "entityType": "impl",
+      "entityName": "GatewayServer",
+      "entityId": "apps/gateway/src/gateway.rs::impl::GatewayServer",
+      "filePath": "apps/gateway/src/gateway.rs",
+      "oldEntityName": null,
+      "oldFilePath": null,
+      "commitSha": null,
+      "author": null,
+      "afterContent": "impl GatewayServer { /* ... */ }",
+      "beforeContent": "impl GatewayServer { /* old */ }"
+    },
+    {
+      "changeType": "renamed",
+      "entityType": "function",
+      "entityName": "regenerate_token_v2",
+      "entityId": "apps/dashboard/src/route.ts::function::regenerate_token_v2",
+      "filePath": "apps/dashboard/src/route.ts",
+      "oldEntityName": "regenerate_token",
+      "oldFilePath": "apps/dashboard/src/route.ts",
+      "commitSha": null,
+      "author": null,
+      "afterContent": null,
+      "beforeContent": null
+    },
+    {
+      "changeType": "modified",
+      "entityType": "chunk",
+      "entityName": "lines 261-280",
+      "entityId": null,
+      "filePath": "schema.prisma",
+      "oldEntityName": null,
+      "oldFilePath": null,
+      "commitSha": null,
+      "author": null,
+      "afterContent": null,
+      "beforeContent": null
+    }
+  ],
+  "entities": [],
+  "summary": {
+    "total": 5,
+    "added": 2,
+    "modified": 2,
+    "renamed": 1,
+    "deleted": 0
+  }
+}
