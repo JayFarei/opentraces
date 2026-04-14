@@ -1,4 +1,4 @@
-"""CLI installers/admin group: setup, blame, resume, doctor, review-llm."""
+"""CLI installers/admin group: setup, blame, resume, doctor, llm-review."""
 from __future__ import annotations
 
 import json
@@ -70,7 +70,7 @@ def setup_group(ctx: click.Context) -> None:
                     powering `opentraces blame` and git-linked uploads.
       trufflehog    Tier 1.5 secret scanner, any finding blocks upload
                     until resolved.
-      review-llm    Tier 2 third-party LLM reviewer for staged traces,
+      llm-review    Tier 2 third-party LLM reviewer for staged traces,
                     used by `opentraces llm-review` and `push --llm-review`.
 
     Run bare ``opentraces setup`` for an interactive wizard that walks every
@@ -869,7 +869,7 @@ def _test_review_llm(api_format: str, base_url: str, model: str, api_key_env: st
 
 
 def _review_llm_config_from_cfg(cfg) -> dict:
-    rc = cfg.security.review_llm
+    rc = cfg.security.llm_review
     return {
         "enabled": rc.enabled,
         "api_format": rc.api_format,
@@ -939,7 +939,7 @@ def _setup_review_llm_interactive() -> tuple[str, str, str, str, float]:
     return api_format, base_url, model, api_key_env, timeout
 
 
-@setup_group.command("review-llm")
+@setup_group.command("llm-review")
 @click.option("--api-format", "api_format", default=None,
               type=click.Choice(["openai-compat", "ollama", "anthropic", "fake"], case_sensitive=False),
               help="Wire protocol the local client speaks: openai-compat "
@@ -952,8 +952,8 @@ def _setup_review_llm_interactive() -> tuple[str, str, str, str, float]:
 @click.option("--api-key-env", default=None,
               help="Env var holding the API key. Empty for local servers.")
 @click.option("--timeout", default=None, type=float, help="Request timeout (s).")
-@click.option("--disable", is_flag=True, help="Turn review-llm off without changing other fields.")
-@click.option("--enable", is_flag=True, help="Turn review-llm on using current config.")
+@click.option("--disable", is_flag=True, help="Turn llm-review off without changing other fields.")
+@click.option("--enable", is_flag=True, help="Turn llm-review on using current config.")
 @click.option("--test", "test_only", is_flag=True,
               help="Ping the endpoint; do not write config.")
 @click.option("--print", "print_only", is_flag=True,
@@ -978,32 +978,32 @@ def setup_review_llm_cmd(
     `opentraces llm-review` and `opentraces push --llm-review`.
 
     Stored globally in ~/.opentraces/config.json under
-    security.review_llm. One config per machine, projects inherit it.
+    security.llm_review. One config per machine, projects inherit it.
 
     Interactive picker when run with no flags. Non-interactive for agents:
 
     \b
-        opentraces setup review-llm --api-format openai-compat \\
+        opentraces setup llm-review --api-format openai-compat \\
             --base-url http://localhost:11434/v1 --model gemma3n:e4b
-        opentraces setup review-llm --api-format openai-compat \\
+        opentraces setup llm-review --api-format openai-compat \\
             --base-url https://api.groq.com/openai/v1 \\
             --model llama-3.3-70b-versatile --api-key-env GROQ_API_KEY
-        opentraces setup review-llm --api-format anthropic \\
+        opentraces setup llm-review --api-format anthropic \\
             --model claude-haiku-4-5-20251001 --api-key-env ANTHROPIC_API_KEY
     """
     cfg = load_config()
-    rc = cfg.security.review_llm
+    rc = cfg.security.llm_review
 
     if print_only:
-        emit_json({"status": "ok", "review_llm": _review_llm_config_from_cfg(cfg)})
+        emit_json({"status": "ok", "llm_review": _review_llm_config_from_cfg(cfg)})
         return
 
     if disable:
         rc.enabled = False
         save_config(cfg)
-        human_echo("review-llm disabled.")
+        human_echo("llm-review disabled.")
         emit_json({"status": "ok", "action": "disable",
-                   "review_llm": _review_llm_config_from_cfg(cfg)})
+                   "llm_review": _review_llm_config_from_cfg(cfg)})
         return
 
     # Agent / non-interactive path: any flag provided => skip the wizard.
@@ -1023,11 +1023,11 @@ def setup_review_llm_cmd(
         ok, message = _test_review_llm(
             eff_api_format, eff_base_url, eff_model, eff_api_key_env, eff_timeout,
         )
-        human_echo(f"review-llm test: {'ok' if ok else 'failed'} — {message}")
+        human_echo(f"llm-review test: {'ok' if ok else 'failed'} — {message}")
         emit_json({
             "status": "ok" if ok else "error",
             "action": "test",
-            "review_llm": {
+            "llm_review": {
                 "api_format": eff_api_format, "base_url": eff_base_url,
                 "model": eff_model, "api_key_env": eff_api_key_env,
             },
@@ -1050,7 +1050,7 @@ def setup_review_llm_cmd(
     )
     human_echo("")
     from opentraces import cli as _cli
-    tag = _cli._ok("review-llm configured") if ok else _cli._err("review-llm saved but unreachable")
+    tag = _cli._ok("llm-review configured") if ok else _cli._err("llm-review saved but unreachable")
     print_banner(tagline=tag)
     human_echo(f"  {_cli._dim('api format:')} {rc.api_format}")
     if rc.api_format != "anthropic":
@@ -1064,12 +1064,12 @@ def setup_review_llm_cmd(
     human_echo(f"  {_cli._bold('To run:')} opentraces llm-review  "
                f"{_cli._dim('(staged traces; out-of-band, not automatic)')}")
     human_echo(f"  {_cli._dim('gate push:')}     opentraces push --llm-review")
-    human_echo(f"  {_cli._dim('disable:')}       opentraces setup review-llm --disable")
+    human_echo(f"  {_cli._dim('disable:')}       opentraces setup llm-review --disable")
     human_echo(f"  {_cli._dim('health check:')}  opentraces doctor")
 
     emit_json({
         "status": "ok", "action": "install",
-        "review_llm": _review_llm_config_from_cfg(cfg),
+        "llm_review": _review_llm_config_from_cfg(cfg),
         "reachable": ok, "message": message,
     })
 
@@ -1491,7 +1491,7 @@ def _filter_by_trace_ids(records: list[dict],
         "opentraces llm-review --dry-run            # estimate token usage only",
     ],
     see_also=[
-        ("opentraces setup review-llm", "configure the LLM"),
+        ("opentraces setup llm-review", "configure the LLM"),
         ("opentraces push --llm-review", "gate uploads on a clean verdict"),
     ],
     option_groups=[
@@ -1531,13 +1531,13 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
                    force: bool, context_file: str | None) -> None:
     """Run Tier 2 LLM semantic review.
 
-    Uses the LLM configured by 'opentraces setup review-llm' unless you
+    Uses the LLM configured by 'opentraces setup llm-review' unless you
     override via --api-format / --model / --base-url / --api-key-env.
 
     LLM can be slow if using local models. Narrow with --scope (pick
     inbox or staged only) or --trace (one or more specific trace ids),
     and cap with --limit. The typical "second line of defence" flow is
-    'review-llm --scope staged' right before 'push --llm-review'.
+    'llm-review --scope staged' right before 'push --llm-review'.
     """
     from ..core.config import get_project_traces_dir, get_project_state_path
     from ..core.inbox import load_traces
@@ -1545,7 +1545,7 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
     from ..core.state import StateManager
 
     cfg = load_config()
-    rc = cfg.security.review_llm
+    rc = cfg.security.llm_review
     eff_api_format = api_format or rc.api_format
     eff_model = model or rc.model
     eff_base_url = base_url if base_url is not None else rc.base_url
@@ -1554,7 +1554,7 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
 
     if not rc.enabled and api_format is None and model is None:
         human_hint(
-            "review-llm is not configured. Run 'opentraces setup review-llm' "
+            "llm-review is not configured. Run 'opentraces setup llm-review' "
             "once, or pass --api-format/--model explicitly."
         )
 
@@ -1588,7 +1588,7 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
             + f" — {total_available} trace(s) in staging."
         )
         payload: dict = {
-            "status": "ok", "action": "review-llm",
+            "status": "ok", "action": "llm-review",
             "scope": scope, "trace_ids": list(trace_ids),
             "matched": 0, "total_available": total_available,
         }
@@ -1627,7 +1627,7 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
         )
         emit_json({
             "status": "ok",
-            "action": "review-llm",
+            "action": "llm-review",
             "dry_run": True,
             "scope": scope,
             "trace_ids": list(trace_ids),
@@ -1663,7 +1663,7 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
     )
     emit_json({
         "status": "ok",
-        "action": "review-llm",
+        "action": "llm-review",
         "dry_run": False,
         "scope": scope,
         "trace_ids": list(trace_ids),

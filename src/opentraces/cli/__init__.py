@@ -977,7 +977,7 @@ def _render_config_pretty(data: dict, config_path) -> None:
     _kv("verify secrets", "yes" if th.get("verify_secrets") else _dim("no"))
 
     # Security · LLM Review
-    rl = sec.get("review_llm") or {}
+    rl = sec.get("llm_review") or {}
     _section("SECURITY · LLM REVIEW")
     _kv("enabled", "yes" if rl.get("enabled") else _dim("no"))
     _kv("api format", rl.get("api_format", "?"))

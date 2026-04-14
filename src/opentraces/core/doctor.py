@@ -108,8 +108,8 @@ def _security_tiers(
             "name": "LLM trace review",
             "state": rl_state,
             "detail": rl_detail,
-            "enable_cmd": "opentraces setup review-llm",
-            "disable_cmd": "opentraces setup review-llm --disable",
+            "enable_cmd": "opentraces setup llm-review",
+            "disable_cmd": "opentraces setup llm-review --disable",
             "blocks": False,
             "api_format": review_llm.get("api_format"),
             "backend": review_llm.get("backend"),
@@ -186,7 +186,7 @@ def _review_llm_status(rc) -> dict[str, Any]:
     if not rc.enabled:
         return {
             "enabled": False,
-            "status": "disabled (opt in via 'opentraces setup review-llm')",
+            "status": "disabled (opt in via 'opentraces setup llm-review')",
             "api_format": rc.api_format, "backend": backend, "model": rc.model,
         }
 
@@ -314,7 +314,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
     cwd = cwd or Path.cwd()
     th_version = find_trufflehog()
     th_enabled = cfg.security.trufflehog.enabled
-    review_llm = _review_llm_status(cfg.security.review_llm)
+    llm_review = _review_llm_status(cfg.security.llm_review)
     review_policy = _project_review_policy(cwd)
 
     opted_in = sorted(getattr(cfg, "projects", {}).keys())
@@ -328,7 +328,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         },
         "security": {
             "version": SECURITY_VERSION,
-            "tiers": _security_tiers(cfg, th_version, review_llm, review_policy),
+            "tiers": _security_tiers(cfg, th_version, llm_review, review_policy),
             "classifier_sensitivity": getattr(cfg, "classifier_sensitivity", "medium"),
             "review_policy": review_policy,
             "blocked_reasons": ["parse_error", "trufflehog_finding"],
@@ -340,7 +340,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
             "binary_version": th_version,
             "status": _trufflehog_status(th_enabled, th_version),
         },
-        "review_llm": review_llm,
+        "llm_review": llm_review,
         "hf_auth": "ok" if cfg.hf_token else "missing",
         "post_processors": _post_processors(cwd),
         "hooks": _hook_installers(),

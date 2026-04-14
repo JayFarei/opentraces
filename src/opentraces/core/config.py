@@ -100,7 +100,7 @@ class TruffleHogConfig(BaseModel):
     )
 
 
-class ReviewLLMConfig(BaseModel):
+class LLMReviewConfig(BaseModel):
     """Global settings for the opt-in third-party LLM review step.
 
     ``api_format`` selects the wire protocol the local client speaks, not
@@ -121,7 +121,7 @@ class SecurityConfig(BaseModel):
     """Root security-module config tree (Plan 032)."""
 
     trufflehog: TruffleHogConfig = Field(default_factory=TruffleHogConfig)
-    review_llm: ReviewLLMConfig = Field(default_factory=ReviewLLMConfig)
+    llm_review: LLMReviewConfig = Field(default_factory=LLMReviewConfig)
 
 
 class PostProcessorConfig(BaseModel):
@@ -234,10 +234,14 @@ def load_config() -> Config:
     if stored_version != CONFIG_VERSION:
         raw = _migrate_config(raw, stored_version)
 
-    # In-place rename: review_llm.provider -> review_llm.api_format,
-    # value "openai" -> "openai-compat". Dead key pricing_file is dropped
-    # by Config (extra="ignore") on validate.
-    rl = raw.get("security", {}).get("review_llm") if isinstance(raw.get("security"), dict) else None
+    # In-place renames:
+    #   security.review_llm -> security.llm_review
+    #   review_llm.provider -> review_llm.api_format ("openai" -> "openai-compat")
+    # Dead key pricing_file is dropped by Config (extra="ignore") on validate.
+    sec = raw.get("security") if isinstance(raw.get("security"), dict) else None
+    if isinstance(sec, dict) and "review_llm" in sec and "llm_review" not in sec:
+        sec["llm_review"] = sec.pop("review_llm")
+    rl = sec.get("llm_review") if isinstance(sec, dict) else None
     if isinstance(rl, dict) and "provider" in rl and "api_format" not in rl:
         legacy = rl.pop("provider")
         rl["api_format"] = "openai-compat" if legacy == "openai" else legacy

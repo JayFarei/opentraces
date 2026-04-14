@@ -23,7 +23,7 @@ def runner():
     return CliRunner()
 
 
-@pytest.mark.parametrize("subcommand", ["trufflehog", "review-llm", "review-policy"])
+@pytest.mark.parametrize("subcommand", ["trufflehog", "llm-review", "review-policy"])
 def test_setup_subcommand_accepts_project_flag(runner, subcommand) -> None:
     """`--help` succeeds and lists --project."""
     result = runner.invoke(main, ["setup", subcommand, "--help"])

@@ -175,7 +175,7 @@ def _resolve_repo_id(*a, **k):
     ],
     see_also=[
         ("opentraces assess", "score traces before upload"),
-        ("opentraces setup review-llm", "configure the Tier 2 reviewer"),
+        ("opentraces setup llm-review", "configure the Tier 2 reviewer"),
     ],
     option_groups=[
         ("Visibility", ["private", "public", "publish", "gated"]),

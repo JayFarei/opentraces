@@ -1,4 +1,4 @@
-"""CLI tests for Plan 032 surfaces: setup trufflehog, doctor, review-llm."""
+"""CLI tests for Plan 032 surfaces: setup trufflehog, doctor, llm-review."""
 
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ class TestSetupReviewLLM:
         )
 
         result = runner.invoke(main, [
-            "setup", "review-llm",
+            "setup", "llm-review",
             "--api-format", "openai-compat",
             "--base-url", "http://localhost:11434/v1",
             "--model", "gemma3n:e4b",
@@ -104,34 +104,34 @@ class TestSetupReviewLLM:
         assert result.exit_code == 0, result.output
         payload = _extract_json(result.output)
         assert payload["status"] == "ok"
-        assert payload["review_llm"]["enabled"] is True
-        assert payload["review_llm"]["api_format"] == "openai-compat"
-        assert payload["review_llm"]["model"] == "gemma3n:e4b"
+        assert payload["llm_review"]["enabled"] is True
+        assert payload["llm_review"]["api_format"] == "openai-compat"
+        assert payload["llm_review"]["model"] == "gemma3n:e4b"
 
         # Round-trips to disk.
         from opentraces.core.config import load_config
         cfg = load_config()
-        assert cfg.security.review_llm.enabled is True
-        assert cfg.security.review_llm.model == "gemma3n:e4b"
+        assert cfg.security.llm_review.enabled is True
+        assert cfg.security.llm_review.model == "gemma3n:e4b"
 
     def test_print_dumps_current_config(self, runner, isolated_config) -> None:
-        result = runner.invoke(main, ["setup", "review-llm", "--print"])
+        result = runner.invoke(main, ["setup", "llm-review", "--print"])
         assert result.exit_code == 0, result.output
         payload = _extract_json(result.output)
-        # Default shipped config has review_llm present but disabled.
-        assert payload["review_llm"]["enabled"] is False
-        assert payload["review_llm"]["api_format"] == "openai-compat"
+        # Default shipped config has llm_review present but disabled.
+        assert payload["llm_review"]["enabled"] is False
+        assert payload["llm_review"]["api_format"] == "openai-compat"
 
     def test_disable_flips_config_off(self, runner, isolated_config) -> None:
         from opentraces.core.config import Config, save_config
         cfg = Config()
-        cfg.security.review_llm.enabled = True
+        cfg.security.llm_review.enabled = True
         save_config(cfg)
 
-        result = runner.invoke(main, ["setup", "review-llm", "--disable"])
+        result = runner.invoke(main, ["setup", "llm-review", "--disable"])
         assert result.exit_code == 0, result.output
         payload = _extract_json(result.output)
-        assert payload["review_llm"]["enabled"] is False
+        assert payload["llm_review"]["enabled"] is False
 
 
 class TestSetupTruffleHogDisable:
