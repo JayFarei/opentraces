@@ -842,8 +842,19 @@ def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=Non
             staging_file = staging / f"{result.record.trace_id}.jsonl"
             staging_file.write_text(result.record.to_jsonl_line() + "\n")
 
-            if review_policy == "auto" and not result.needs_review:
-                # Auto mode: commit directly for push
+            from ..core.workflow import decide_post_parse_status
+            decided_status, block_reason = decide_post_parse_status(
+                result, review_policy=review_policy
+            )
+
+            if decided_status == TraceStatus.BLOCKED:
+                state.block_trace(
+                    result.record.trace_id,
+                    reason=block_reason or "security finding",
+                    session_id=result.record.session_id,
+                    file_path=str(staging_file),
+                )
+            elif decided_status == TraceStatus.COMMITTED:
                 state.set_trace_status(
                     result.record.trace_id,
                     TraceStatus.COMMITTED,

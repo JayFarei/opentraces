@@ -11,7 +11,7 @@ DEFAULT_PUSH_POLICY = "manual"
 DEFAULT_REMOTE_NAME = "opentraces"
 DEFAULT_AGENT = "claude-code"
 
-VISIBLE_STAGE_ORDER = ("inbox", "committed", "pushed", "rejected")
+VISIBLE_STAGE_ORDER = ("inbox", "committed", "pushed", "rejected", "blocked")
 
 OPENTRACES_ASCII = r"""
  ________  _________
@@ -40,6 +40,9 @@ STAGE_PRESENTATIONS = {
     "committed": StagePresentation("committed", "Committed", "Ready to push"),
     "pushed": StagePresentation("pushed", "Pushed", "Published upstream"),
     "rejected": StagePresentation("rejected", "Rejected", "Kept local only"),
+    "blocked": StagePresentation(
+        "blocked", "Blocked", "Security finding — redact or reject before push"
+    ),
 }
 
 
@@ -106,8 +109,62 @@ def resolve_visible_stage(status: TraceStatus | str | None) -> str:
         TraceStatus.UPLOADED: "pushed",
         TraceStatus.REJECTED: "rejected",
         TraceStatus.FAILED: "inbox",
+        TraceStatus.BLOCKED: "blocked",
     }
     return mapping.get(status, "inbox")
+
+
+def decide_post_parse_status(
+    result, *, review_policy: str
+) -> tuple[TraceStatus, str | None]:
+    """Decide what status a freshly-parsed trace should land in.
+
+    Inputs
+    ------
+    result : ProcessedTrace
+        The output of ``core.pipeline.process_trace``. Only ``needs_review``
+        and ``trufflehog_blocked`` (or ``trufflehog_report.blocked``) are
+        consulted, plus ``trufflehog_report.findings`` for the BLOCKED
+        reason string. Duck-typed so the unit tests can pass a fake.
+    review_policy : str
+        ``"auto"`` or ``"review"``; anything else is treated as ``"review"``.
+
+    Returns
+    -------
+    (status, block_reason)
+        ``status`` is the ``TraceStatus`` to set. ``block_reason`` is a
+        human-readable string when ``status == BLOCKED`` (consumed by
+        ``StateManager.block_trace``), otherwise ``None``.
+
+    Policy
+    ------
+    1. TruffleHog blocked → BLOCKED. Trumps everything (even
+       review_policy=auto + needs_review=False) because critical secret
+       findings must never reach upload.
+    2. review_policy == "auto" AND not needs_review → COMMITTED
+       (auto-promote to staging).
+    3. otherwise → STAGED (waits for ``ot add``).
+    """
+    blocked = bool(getattr(result, "trufflehog_blocked", False))
+    if blocked:
+        report = getattr(result, "trufflehog_report", None)
+        n = getattr(report, "n_findings", None)
+        if n is None:
+            findings = getattr(report, "findings", None)
+            n = len(findings) if findings else 0
+        detectors = getattr(report, "detector_names", None)
+        if not detectors:
+            findings = getattr(report, "findings", None) or []
+            detectors = tuple(sorted({getattr(f, "detector_name", "?") for f in findings}))
+        detector_str = ", ".join(detectors) if detectors else "?"
+        reason = f"TruffleHog: {n} finding(s) ({detector_str})"
+        return TraceStatus.BLOCKED, reason
+
+    needs_review = bool(getattr(result, "needs_review", True))
+    policy = normalize_review_policy(review_policy)
+    if policy == "auto" and not needs_review:
+        return TraceStatus.COMMITTED, None
+    return TraceStatus.STAGED, None
 
 
 def stage_label(stage: str) -> str:

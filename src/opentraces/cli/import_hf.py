@@ -243,8 +243,21 @@ def import_hf(
             staging_file = staging_dir / f"{result.record.trace_id}.jsonl"
             staging_file.write_text(result.record.to_jsonl_line() + "\n")
 
-            # FIX-6: --auto uses COMMITTED (matching _capture_sessions_into_project)
-            if auto and not result.needs_review:
+            # Step 5: route through decide_post_parse_status so TruffleHog
+            # findings land as BLOCKED rather than auto-promoted.
+            from ..core.workflow import decide_post_parse_status
+            decided_status, block_reason = decide_post_parse_status(
+                result, review_policy="auto" if auto else "review"
+            )
+
+            if decided_status == TraceStatus.BLOCKED:
+                state.block_trace(
+                    result.record.trace_id,
+                    reason=block_reason or "security finding",
+                    session_id=result.record.session_id,
+                    file_path=str(staging_file),
+                )
+            elif decided_status == TraceStatus.COMMITTED:
                 state.set_trace_status(
                     result.record.trace_id,
                     TraceStatus.COMMITTED,
