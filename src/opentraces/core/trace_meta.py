@@ -237,15 +237,24 @@ class AmbiguousPrefixError(ValueError):
 
 
 def resolve_trace_id_prefix(project_cwd: Path, prefix: str) -> str | None:
-    """Resolve a 2+ char trace-id / session-id prefix to the full id.
+    """Resolve a 2+ char prefix to a full ``trace_id`` (never a session_id).
 
-    Returns the full id string on a unique match, ``None`` when no
-    stored trace has that prefix, and raises :class:`AmbiguousPrefixError`
-    when the prefix matches multiple stored traces.
+    The user-facing identifier in opentraces is ``trace_id``. ``session_id``
+    is an upstream-agent implementation detail that the CLI deliberately
+    abstracts away. This resolver therefore:
 
-    Accepts the ``t:`` prefix form and strips it transparently. The
-    minimum-length rule (>=2 chars after the prefix strip) is enforced
-    to avoid confusing near-misses with single-char typos.
+    - Accepts a prefix that matches either ``trace_id`` or ``session_id``
+      (people copy-paste both forms historically), but
+    - ALWAYS returns the corresponding ``trace_id`` — when a prefix only
+      matches a session_id, we look up the trace record and return its
+      ``trace_id``. Callers that need the session_id read it off the
+      ``TraceRecord``.
+
+    Returns the full trace_id on a unique match, ``None`` when no stored
+    trace has that prefix, and raises :class:`AmbiguousPrefixError` when
+    the prefix matches multiple distinct trace_ids. Accepts the ``t:``
+    prefix form and strips it transparently. Minimum prefix length is
+    2 chars (after stripping the ``t:``).
     """
     p = _strip_prefix(prefix).strip().lower()
     if not p:
@@ -261,29 +270,37 @@ def resolve_trace_id_prefix(project_cwd: Path, prefix: str) -> str | None:
     traces_dir = root / "traces"
     if not traces_dir.is_dir():
         return None
+    # Always collect trace_ids — when only the session_id matches, map
+    # through to the record's trace_id so the abstraction holds.
     matches: set[str] = set()
+
+    def _consider(rec: dict) -> None:
+        tid = str(rec.get("trace_id") or "")
+        sid = str(rec.get("session_id") or "")
+        if not tid:
+            # No real trace_id in the file — fall back to the session_id
+            # so we still have *some* identifier to round-trip. This only
+            # happens for malformed / pre-fix legacy JSONLs.
+            if sid and sid.lower().startswith(p):
+                matches.add(sid)
+            return
+        if tid.lower().startswith(p):
+            matches.add(tid)
+        elif sid and sid.lower().startswith(p):
+            matches.add(tid)  # NB: trace_id, not sid — abstraction boundary
+
     # First pass: filename starts with prefix (cheap).
     for path in traces_dir.glob(f"{p}*.jsonl"):
         rec = _first_line(path)
         if rec is None:
             continue
-        tid = str(rec.get("trace_id") or "")
-        sid = str(rec.get("session_id") or "")
-        if tid and tid.lower().startswith(p):
-            matches.add(tid)
-        elif sid and sid.lower().startswith(p):
-            matches.add(sid)
+        _consider(rec)
     # Second pass: scan all trace records (session_id != trace_id).
     for path in traces_dir.glob("*.jsonl"):
         rec = _first_line(path)
         if rec is None:
             continue
-        tid = str(rec.get("trace_id") or "")
-        sid = str(rec.get("session_id") or "")
-        if tid and tid.lower().startswith(p):
-            matches.add(tid)
-        if sid and sid.lower().startswith(p):
-            matches.add(sid)
+        _consider(rec)
     if not matches:
         return None
     if len(matches) > 1:

@@ -179,3 +179,21 @@ def test_resolve_prefix_too_short_raises(tmp_path, monkeypatch):
 def test_resolve_prefix_no_match_returns_none(tmp_path, monkeypatch):
     proj, _ = _mk_project(tmp_path, monkeypatch)
     assert tm.resolve_trace_id_prefix(proj, "zz") is None
+
+
+def test_resolve_prefix_session_id_match_returns_trace_id(tmp_path, monkeypatch):
+    """Prefix matching only the session_id must still yield the trace_id —
+    session_id is an upstream-agent implementation detail that the public
+    resolver abstracts away."""
+    proj, root = _mk_project(tmp_path, monkeypatch)
+    _write_trace(root, "111session-bbbbbbbbbbbbb.jsonl", {
+        "trace_id": "222trace-aaaaaaaaaaaaaaa",
+        "session_id": "111session-bbbbbbbbbbbbb",
+        "steps": [],
+    })
+    tm.clear_cache()
+    # The "111" prefix matches only the session_id; we still return the
+    # trace_id, never the session_id.
+    out = tm.resolve_trace_id_prefix(proj, "111")
+    assert out == "222trace-aaaaaaaaaaaaaaa"
+    assert out != "111session-bbbbbbbbbbbbb"
