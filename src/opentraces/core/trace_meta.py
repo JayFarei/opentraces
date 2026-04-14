@@ -218,3 +218,74 @@ def resolve_trace_meta(project_cwd: Path, id_prefix: str) -> TraceMeta | None:
 def clear_cache() -> None:
     """Flush the resolver cache — for tests."""
     _resolve_cached.cache_clear()
+
+
+# ---------------------------------------------------------------------------
+# Short-prefix resolution for CLI args (``t:XX`` etc.)
+# ---------------------------------------------------------------------------
+
+class AmbiguousPrefixError(ValueError):
+    """Raised when a trace-id prefix matches >1 stored trace."""
+
+    def __init__(self, prefix: str, candidates: list[str]):
+        self.prefix = prefix
+        self.candidates = candidates
+        super().__init__(
+            f"ambiguous trace prefix {prefix!r}: "
+            f"{len(candidates)} candidates: {', '.join(candidates[:6])}"
+        )
+
+
+def resolve_trace_id_prefix(project_cwd: Path, prefix: str) -> str | None:
+    """Resolve a 2+ char trace-id / session-id prefix to the full id.
+
+    Returns the full id string on a unique match, ``None`` when no
+    stored trace has that prefix, and raises :class:`AmbiguousPrefixError`
+    when the prefix matches multiple stored traces.
+
+    Accepts the ``t:`` prefix form and strips it transparently. The
+    minimum-length rule (>=2 chars after the prefix strip) is enforced
+    to avoid confusing near-misses with single-char typos.
+    """
+    p = _strip_prefix(prefix).strip().lower()
+    if not p:
+        return None
+    if len(p) < 2:
+        raise ValueError(
+            f"trace-id prefix must be >=2 chars (got {prefix!r})"
+        )
+    try:
+        root = get_project_dir(Path(project_cwd).resolve())
+    except Exception:
+        return None
+    traces_dir = root / "traces"
+    if not traces_dir.is_dir():
+        return None
+    matches: set[str] = set()
+    # First pass: filename starts with prefix (cheap).
+    for path in traces_dir.glob(f"{p}*.jsonl"):
+        rec = _first_line(path)
+        if rec is None:
+            continue
+        tid = str(rec.get("trace_id") or "")
+        sid = str(rec.get("session_id") or "")
+        if tid and tid.lower().startswith(p):
+            matches.add(tid)
+        elif sid and sid.lower().startswith(p):
+            matches.add(sid)
+    # Second pass: scan all trace records (session_id != trace_id).
+    for path in traces_dir.glob("*.jsonl"):
+        rec = _first_line(path)
+        if rec is None:
+            continue
+        tid = str(rec.get("trace_id") or "")
+        sid = str(rec.get("session_id") or "")
+        if tid and tid.lower().startswith(p):
+            matches.add(tid)
+        if sid and sid.lower().startswith(p):
+            matches.add(sid)
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise AmbiguousPrefixError(prefix, sorted(matches))
+    return next(iter(matches))

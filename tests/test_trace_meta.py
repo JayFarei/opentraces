@@ -129,3 +129,53 @@ def test_resolve_cached(tmp_path, monkeypatch):
     assert m1 == m2
     tm.clear_cache()
     assert tm.resolve_trace_meta(proj, "feedface") is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_trace_id_prefix (plan-043 follow-up patch)
+# ---------------------------------------------------------------------------
+
+def test_resolve_prefix_unique(tmp_path, monkeypatch):
+    proj, root = _mk_project(tmp_path, monkeypatch)
+    _write_trace(root, "b73af9c8-1111.jsonl", {
+        "trace_id": "b73af9c8-1111",
+        "session_id": "b73af9c8-1111",
+        "steps": [],
+    })
+    tm.clear_cache()
+    assert tm.resolve_trace_id_prefix(proj, "b7") == "b73af9c8-1111"
+
+
+def test_resolve_prefix_strips_t_colon(tmp_path, monkeypatch):
+    proj, root = _mk_project(tmp_path, monkeypatch)
+    _write_trace(root, "abcd0001.jsonl", {
+        "trace_id": "abcd0001", "session_id": "abcd0001", "steps": [],
+    })
+    tm.clear_cache()
+    assert tm.resolve_trace_id_prefix(proj, "t:ab") == "abcd0001"
+
+
+def test_resolve_prefix_ambiguous_raises(tmp_path, monkeypatch):
+    proj, root = _mk_project(tmp_path, monkeypatch)
+    _write_trace(root, "deadbeef-0001.jsonl", {
+        "trace_id": "deadbeef-0001", "session_id": "deadbeef-0001",
+        "steps": [],
+    })
+    _write_trace(root, "deadbeef-0002.jsonl", {
+        "trace_id": "deadbeef-0002", "session_id": "deadbeef-0002",
+        "steps": [],
+    })
+    tm.clear_cache()
+    with pytest.raises(tm.AmbiguousPrefixError):
+        tm.resolve_trace_id_prefix(proj, "de")
+
+
+def test_resolve_prefix_too_short_raises(tmp_path, monkeypatch):
+    proj, _ = _mk_project(tmp_path, monkeypatch)
+    with pytest.raises(ValueError):
+        tm.resolve_trace_id_prefix(proj, "a")
+
+
+def test_resolve_prefix_no_match_returns_none(tmp_path, monkeypatch):
+    proj, _ = _mk_project(tmp_path, monkeypatch)
+    assert tm.resolve_trace_id_prefix(proj, "zz") is None

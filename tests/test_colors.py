@@ -102,3 +102,37 @@ def test_detect_color_tty_true(monkeypatch):
             return True
 
     assert detect_color(False, stream=_FakeTTY()) is True
+
+
+# ---------------------------------------------------------------------------
+# render_handle (plan-043 follow-up patch)
+# ---------------------------------------------------------------------------
+
+from opentraces.clients.text.colors import render_handle
+
+
+def test_render_handle_no_color_plain():
+    out = render_handle("t", "b73af9c812345", use_color=False)
+    assert out == "t:b7 3af9c8"
+
+
+def test_render_handle_color_has_three_styled_parts():
+    out = render_handle("t", "b73af9c812345", use_color=True)
+    # 3 escape sequences: prefix, shortcut, tail. Each ends with reset.
+    assert out.count("\x1b[0m") == 3
+    # Layout still readable underneath.
+    plain = out.replace("\x1b[2;90m", "").replace("\x1b[1;4;95m", "")
+    plain = plain.replace("\x1b[35m", "").replace("\x1b[1;35m", "")
+    plain = plain.replace("\x1b[0m", "")
+    assert "t:" in plain and "b7" in plain and "3af9c8" in plain
+
+
+def test_render_handle_commit_uses_yellow():
+    out = render_handle("c", "2508ec1abcd", use_color=True)
+    # Bright-yellow underline+bold for the shortcut.
+    assert "\x1b[1;4;93m" in out
+
+
+def test_render_handle_short_id_no_tail():
+    out = render_handle("t", "ab", use_color=False)
+    assert out == "t:ab"

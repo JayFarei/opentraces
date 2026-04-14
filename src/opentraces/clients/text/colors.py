@@ -50,6 +50,12 @@ class Role(Enum):
     COVERAGE_POOR = "coverage_poor"
     DIM = "dim"
     PRE_AUDIT = "pre_audit"
+    # Plan-043 post-audit: 3-part handle rendering. The "t:" / "c:"
+    # letters are a dim grey prefix; the 2-char shortcut is bright,
+    # bold, and underlined; the remaining chars keep the base colour.
+    ID_PREFIX = "id_prefix"
+    COMMIT_ID_SHORTCUT = "commit_id_shortcut"
+    TRACE_ID_SHORTCUT = "trace_id_shortcut"
 
 
 RESET = "\x1b[0m"
@@ -72,7 +78,40 @@ _CODES: dict[Role, str] = {
     Role.COVERAGE_POOR:    "\x1b[31m",     # red
     Role.DIM:              "\x1b[90m",     # bright-black
     Role.PRE_AUDIT:        "\x1b[2;3;90m", # dim italic bright-black
+    Role.ID_PREFIX:           "\x1b[2;90m",    # dim bright-black
+    Role.COMMIT_ID_SHORTCUT:  "\x1b[1;4;93m",  # bold underline bright-yellow
+    Role.TRACE_ID_SHORTCUT:   "\x1b[1;4;95m",  # bold underline bright-magenta
 }
+
+
+def render_handle(kind: str, full_id: str, *,
+                  use_color: bool, shortcut_len: int = 2) -> str:
+    """Render a 3-part ``t:b7 3af9c8`` style handle.
+
+    - ``kind`` is ``"t"`` or ``"c"`` (trace vs commit). Case-insensitive.
+    - ``full_id`` is the full hash/id; only the first ~10 chars are used.
+    - Layout: ``<kind>:`` (ID_PREFIX) + ``<first-N>`` (ID_SHORTCUT) + space +
+      ``<rest>`` (COMMIT_ID / TRACE_ID), a visible space between the
+      bright shortcut and the muted tail keeps the shortcut skimmable.
+    - When ``use_color=False``, returns the plain concatenation (with
+      the separating space so column alignment still works).
+    """
+    k = (kind or "").lower()[:1]
+    if k not in ("t", "c"):
+        k = "t"
+    head_role = Role.COMMIT_ID_SHORTCUT if k == "c" else Role.TRACE_ID_SHORTCUT
+    tail_role = Role.COMMIT_ID if k == "c" else Role.TRACE_ID
+    # Take 2 for shortcut, then up to 6 more for tail (total 8 chars).
+    fid = full_id or ""
+    shortcut = fid[:shortcut_len]
+    tail = fid[shortcut_len:shortcut_len + 6]
+    prefix_txt = f"{k}:"
+    if not use_color:
+        return f"{prefix_txt}{shortcut} {tail}" if tail else f"{prefix_txt}{shortcut}"
+    pfx = paint(Role.ID_PREFIX, prefix_txt, use_color=True)
+    sc = paint(head_role, shortcut, use_color=True)
+    tl = paint(tail_role, tail, use_color=True)
+    return f"{pfx}{sc} {tl}" if tail else f"{pfx}{sc}"
 
 
 def paint(role: Role, text: str, *, use_color: bool) -> str:
