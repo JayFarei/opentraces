@@ -1552,7 +1552,7 @@ def _versions_section(report: dict) -> None:
 
 
 def _render_doctor_human(report: dict) -> None:
-    human_echo(_cli._bold("opentraces doctor"))
+    _cli.print_banner(tagline="doctor")
 
     _versions_section(report)
     _security_section(report["security"])
@@ -1565,7 +1565,6 @@ def _render_doctor_human(report: dict) -> None:
     else:
         _row("err", "huggingface", "missing", detail="run 'hf auth login'")
 
-    _processors_section(report["post_processors"])
     _entity_parser_section(report.get("entity_parser") or {})
     _attribution_section(report.get("attribution") or {})
     _watcher_section(report.get("watcher") or {})

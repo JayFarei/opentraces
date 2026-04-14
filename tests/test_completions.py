@@ -123,3 +123,101 @@ def test___complete_hidden_from_help(runner):
 def test_invalid_shell_errors(runner):
     result = runner.invoke(main, ["completions", "install", "fishbash"])
     assert result.exit_code == 2, result.output
+
+
+# ---------------------------------------------------------------------------
+# Commit-SHA and trace-handle completion (plan-043 follow-up)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def complete_project(tmp_path, monkeypatch):
+    """Set up a tmp project with one attributed commit + one staged trace."""
+    import importlib
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    # Reload the paths module so PROJECTS_DIR picks up the new $HOME.
+    from opentraces.core import paths as _paths
+    importlib.reload(_paths)
+    from opentraces.core import config as _config
+    importlib.reload(_config)
+    from opentraces.core import cache as _cache
+    importlib.reload(_cache)
+    from opentraces.core import state as _state_mod
+    importlib.reload(_state_mod)
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    # Opt-in marker.
+    (project / ".opentraces.json").write_text(
+        '{"project_id": "abc123", "policy": {}}'
+    )
+    monkeypatch.chdir(project)
+
+    cache = _cache.AttributionCache(project)
+    cache.write_attribution("2508ec10abcdef1234", {"traces": []})
+    cache.write_attribution("25ffffffffffffffff", {"traces": []})
+    cache.write_attribution("aabb00112233445566", {"traces": []})
+
+    state = _state_mod.StateManager(_config.get_project_state_path(project))
+    now = __import__("time").time()
+    # Feed a trace entry matching the real cache trace_id.
+    state._state.setdefault("traces", {})["b73af9c8-full-id"] = {
+        "trace_id": "b73af9c8-full-id",
+        "session_id": "b73af9c8-session",
+        "status": "parsed",
+        "created_at": now - 60,
+    }
+    state._state["traces"]["cafebabe-other"] = {
+        "trace_id": "cafebabe-other",
+        "session_id": "cafebabe-sess",
+        "status": "parsed",
+        "created_at": now - 120,
+    }
+    state.save()
+
+    yield project
+
+
+def _complete(runner, *tokens):
+    result = runner.invoke(main, ["__complete", *tokens])
+    assert result.exit_code == 0, result.output
+    return [ln for ln in result.output.splitlines() if ln]
+
+
+def test_complete_commit_prefix_bare(runner, complete_project):
+    lines = _complete(runner, "blame", "25")
+    names = [ln.split("\t")[0] for ln in lines]
+    assert "2508ec10" in names
+    assert "25ffffff" in names
+    assert "aabb0011" not in names
+
+
+def test_complete_commit_prefix_with_c_handle(runner, complete_project):
+    lines = _complete(runner, "blame", "c:25")
+    names = [ln.split("\t")[0] for ln in lines]
+    assert "c:2508ec10" in names
+    assert "c:25ffffff" in names
+
+
+def test_complete_trace_prefix_bare(runner, complete_project):
+    lines = _complete(runner, "graph", "--trace", "b7")
+    names = [ln.split("\t")[0] for ln in lines]
+    assert "b73af9c8" in names
+
+
+def test_complete_trace_prefix_with_t_handle(runner, complete_project):
+    lines = _complete(runner, "graph", "--trace", "t:b7")
+    names = [ln.split("\t")[0] for ln in lines]
+    assert "t:b73af9c8" in names
+
+
+def test_complete_trace_ambiguous_returns_multiple(runner, complete_project):
+    lines = _complete(runner, "graph", "--trace", "")
+    names = [ln.split("\t")[0] for ln in lines]
+    # No filter -> both traces show up (both actionable status).
+    assert "b73af9c8" in names
+    assert "cafebab" in " ".join(names)

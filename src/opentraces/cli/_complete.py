@@ -124,17 +124,35 @@ _ACTIONABLE_STATUSES = {
 _TRACE_ID_LIMIT = 30
 
 
+def _strip_handle_prefix(s: str, k: str) -> tuple[str, str]:
+    """Return (stripped, prefix) where prefix is "t:"/"c:" if present."""
+    lead = f"{k}:"
+    if s.startswith(lead):
+        return s[len(lead):], lead
+    return s, ""
+
+
 def _trace_id_candidates(
     cmd: click.Command, partial: str
 ) -> list[tuple[str, str, str]]:
-    """Emit trace IDs for commands whose positional arg is trace_id(s)."""
+    """Emit trace IDs for commands taking a trace_id (arg or --trace opt).
+
+    Accepts ``t:XX`` prefix on the partial and preserves it in the emitted
+    completion so the user's typed form is round-tripped.
+    """
     if partial.startswith("-"):
         return []
-    wants = any(
-        isinstance(p, click.Argument) and p.name in ("trace_id", "trace_ids")
+    wants_arg = any(
+        isinstance(p, click.Argument) and p.name in (
+            "trace_id", "trace_ids", "trace_handle",
+        )
         for p in cmd.params
     )
-    if not wants:
+    wants_opt = any(
+        isinstance(p, click.Option) and p.name == "trace_id"
+        for p in cmd.params
+    )
+    if not (wants_arg or wants_opt):
         return []
     try:
         from ..core.config import get_project_state_path, project_is_opted_in
@@ -148,6 +166,8 @@ def _trace_id_candidates(
         state = StateManager(get_project_state_path(project_dir))
     except Exception:
         return []
+    probe, lead = _strip_handle_prefix(partial, "t")
+    probe = probe.lower()
     now = time.time()
     # Two buckets so actionable traces sort above historical ones even when
     # recency would otherwise mix them.
@@ -155,7 +175,12 @@ def _trace_id_candidates(
     cold: list[tuple[float, str, str]] = []
     for entry in state._state.get("traces", {}).values():
         tid = entry.get("trace_id", "")
-        if not tid or not tid.startswith(partial):
+        if not tid:
+            continue
+        sid = entry.get("session_id", "") or ""
+        tid_lc = tid.lower()
+        sid_lc = sid.lower()
+        if probe and not (tid_lc.startswith(probe) or sid_lc.startswith(probe)):
             continue
         status = entry.get("status", "?")
         created = float(entry.get("created_at") or 0.0)
@@ -169,8 +194,46 @@ def _trace_id_candidates(
     # If the partial is empty we show actionable only — avoids dumping
     # thousands of uploaded-long-ago traces into the menu. A non-empty
     # partial signals the user is searching, so we allow cold matches.
-    pool = hot if not partial else hot + cold
-    return [("value", tid, desc) for _, tid, desc in pool[:_TRACE_ID_LIMIT]]
+    pool = hot if not probe else hot + cold
+    return [("value", f"{lead}{tid[:8]}", desc) for _, tid, desc in pool[:_TRACE_ID_LIMIT]]
+
+
+def _commit_sha_candidates(
+    cmd: click.Command, partial: str
+) -> list[tuple[str, str, str]]:
+    """Emit commit-SHA prefixes for commands taking a ``sha`` arg.
+
+    Sourced from the local attribution cache — commits already correlated
+    with traces. Accepts bare or ``c:``-prefixed partials.
+    """
+    if partial.startswith("-"):
+        return []
+    wants = any(
+        isinstance(p, click.Argument) and p.name == "sha"
+        for p in cmd.params
+    )
+    if not wants:
+        return []
+    try:
+        from ..core.cache import AttributionCache
+    except Exception:
+        return []
+    try:
+        cache = AttributionCache(Path.cwd())
+        shas = cache.list_attributed_shas()
+    except Exception:
+        return []
+    probe, lead = _strip_handle_prefix(partial, "c")
+    probe = probe.lower()
+    out: list[tuple[str, str, str]] = []
+    for sha in shas:
+        if probe and not sha.lower().startswith(probe):
+            continue
+        display = f"{lead}{sha[:8]}"
+        out.append(("value", display, "commit"))
+        if len(out) >= 20:
+            break
+    return out
 
 
 def _shell_choice_candidates(
@@ -221,6 +284,7 @@ def complete_cmd(ctx: click.Context, tokens: tuple[str, ...]) -> None:
     else:
         sub = _subcommand_candidates(cmd, partial, root)
         values = _trace_id_candidates(cmd, partial)
+        values += _commit_sha_candidates(cmd, partial)
         values += _shell_choice_candidates(cmd, partial, token_list)
         candidates.extend(sub)
         candidates.extend(values)
