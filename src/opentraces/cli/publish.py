@@ -451,9 +451,11 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                 if duplicate_trace_ids:
                     # Mark duplicates as uploaded (they exist on the remote)
                     from ..core.publish_flow import mark_uploaded as _mark_uploaded
+                    _active_remote = proj_config.get("active_remote") or "origin"
                     _mark_uploaded(
                         state,
                         (e.trace_id for e in traces_to_upload if e.trace_id in duplicate_trace_ids),
+                        remote_name=_active_remote,
                     )
                     click.echo(f"Skipped {len(duplicate_trace_ids)} duplicate trace(s) already on remote.")
 
@@ -479,11 +481,15 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                     except Exception as e:
                         click.echo(f"  Warning: failed to set gated access: {e}", err=True)
 
-                # Only mark traces that were actually loaded and uploaded
+                # Only mark traces that were actually loaded and uploaded.
+                # Per Step 3: thread the active remote name through so
+                # uploaded_to[<remote>] is recorded for per-remote replay.
                 from ..core.publish_flow import mark_uploaded as _mark_uploaded
+                _active_remote = proj_config.get("active_remote") or "origin"
                 _mark_uploaded(
                     state,
                     (e.trace_id for e in traces_to_upload if e.trace_id in loaded_trace_ids),
+                    remote_name=_active_remote,
                 )
 
                 # Print visibility-aware success message

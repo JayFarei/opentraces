@@ -13,10 +13,30 @@ from typing import Iterable, Optional
 from .state import StateManager, TraceStatus
 
 
-def mark_uploaded(state: StateManager, trace_ids: Iterable[str]) -> None:
-    """Mark the given trace_ids as UPLOADED, matching cli.py push behavior."""
+def mark_uploaded(
+    state: StateManager,
+    trace_ids: Iterable[str],
+    *,
+    remote_name: Optional[str] = None,
+) -> None:
+    """Mark the given trace_ids as UPLOADED.
+
+    When ``remote_name`` is supplied (the post-Step-3 path), each trace's
+    ``uploaded_to[remote_name]`` is written via
+    ``StateManager.mark_uploaded_to`` so the per-remote replay flow works.
+
+    When called without ``remote_name`` (legacy / transitional callers),
+    fall back to the old behavior of just flipping status to UPLOADED
+    without recording per-remote provenance. This keeps in-flight code
+    paths working while step 3 is finishing — they simply won't benefit
+    from per-remote tracking until they thread the active remote name
+    through.
+    """
     for trace_id in trace_ids:
-        state.set_trace_status(trace_id, TraceStatus.UPLOADED)
+        if remote_name is None:
+            state.set_trace_status(trace_id, TraceStatus.UPLOADED)
+        else:
+            state.mark_uploaded_to(trace_id, remote_name)
 
 
 def mark_failed(
