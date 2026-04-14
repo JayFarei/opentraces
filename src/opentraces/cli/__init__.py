@@ -1939,6 +1939,36 @@ main.add_command(_completions_group)
 main.add_command(_complete_cmd)
 
 
+# ---------------------------------------------------------------------------
+# Step 11 — auth group (parallel surface to flat login/logout/whoami).
+# Both surfaces share the _login_impl / _logout_impl / _auth_status_impl
+# helpers defined earlier in this module. Step 15 removes the flat verbs.
+# ---------------------------------------------------------------------------
+
+@main.group("auth")
+def _auth_group() -> None:
+    """HuggingFace identity (login, logout, whoami)."""
+
+
+@_auth_group.command("login")
+@click.option("--token", is_flag=True, help="Paste a personal access token (required for pushing traces)")
+def _auth_login(token: bool) -> None:
+    """Log in to HuggingFace Hub."""
+    _login_impl(token)
+
+
+@_auth_group.command("logout")
+def _auth_logout() -> None:
+    """Log out from HuggingFace Hub."""
+    _logout_impl()
+
+
+@_auth_group.command("whoami")
+def _auth_whoami() -> None:
+    """Show the active HuggingFace identity."""
+    _auth_status_impl()
+
+
 @main.group(invoke_without_command=True)
 @click.pass_context
 def remote(ctx) -> None:
