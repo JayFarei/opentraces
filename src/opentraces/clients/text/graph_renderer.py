@@ -107,6 +107,9 @@ class TraceContribution:
     # Optional: fraction of commit attributed to trace (used for dot color).
     attributed_ratio: float | None = None
     missing_ratio: float | None = None
+    # Post-043 enrichment (looked up via core.trace_meta when available).
+    short_name: str | None = None
+    turn_count: int | None = None
 
 
 @dataclass
@@ -196,24 +199,37 @@ def _truncate(text: str, max_len: int) -> str:
 # --------------------------------------------------------------------------- #
 
 def _render_trace_header(trace: TraceContribution, first: bool,
-                         show_entities: bool, opts: RenderOptions) -> str:
-    """Render one trace header line (either ┊╭┄ or ┊├┄)."""
+                         show_entities: bool, opts: RenderOptions,
+                         short_name: str | None = None,
+                         turn_count: int | None = None) -> str:
+    """Render one trace header line (either ┊╭┄ or ┊├┄).
+
+    Post-043 enrichment: emits ``t:<id>`` (magenta-bold if coloured),
+    optional short-name (bold), and a dim ``N turns . M entities`` suffix.
+    """
     key = "stack_header" if first else "stack_continue"
     prefix, _ = PREFIX[key]
     short_tid = trace.trace_id[:8] if trace.trace_id else "?"
-    parts = [short_tid, _fmt_lines(trace.line_count)]
+    id_plain = f"t:{short_tid}"
+
+    parts: list[str] = [id_plain]
+    if short_name and short_name != short_tid:
+        parts.append(short_name)
+    parts.append(_fmt_lines(trace.line_count))
+    ec = trace.entity_count if trace.entity_count is not None else 0
     if show_entities:
-        ec = trace.entity_count if trace.entity_count is not None else 0
         parts.append(_fmt_entities(ec))
     parts.append(_fmt_lifecycle(trace.lifecycle))
+    if turn_count:
+        parts.append(f"{turn_count} turns")
     suffix = " ".join(parts)
-    line = f"{prefix}{suffix}"
+
     budget = max(1, opts.width - len(prefix))
     line = prefix + _truncate(suffix, budget)
     if opts.color:
-        # Colorize the trace id cyan for readability.
-        colored_tid = _color(short_tid, ANSI_CYAN, True)
-        line = line.replace(short_tid, colored_tid, 1)
+        # Magenta-bold on the t:<id> handle to distinguish from c:<sha>.
+        line = line.replace(id_plain,
+                            _color(id_plain, "\x1b[1;35m", True), 1)
     return line
 
 
@@ -225,9 +241,20 @@ def _render_commit_line(c: Commit, opts: RenderOptions) -> str:
     dotted = prefix_with_dot
     if opts.color and code:
         dotted = prefix_with_dot.replace(glyph, _color(glyph, code, True), 1)
-    body = f"{c.short_sha} {c.subject}"
+    # Post-043: c:<sha> prefix + date + subject + coverage-coloured %.
+    date_part = (c.timestamp or "").split("T", 1)[0]
+    c_id = f"c:{c.short_sha}"
+    # Coverage percentage (from first trace's attributed_ratio).
+    pct_txt = ""
+    if c.traces and c.traces[0].attributed_ratio is not None:
+        pct = int(round(c.traces[0].attributed_ratio * 100))
+        pct_txt = f"  {pct}%"
+    body = f"{date_part} {c_id}  {c.subject}{pct_txt}"
     budget = max(1, opts.width - len(prefix_with_dot))
     body = _truncate(body, budget)
+    # Colorize c_id cyan-bold.
+    if opts.color:
+        body = body.replace(c_id, _color(c_id, "\x1b[1;36m", True), 1)
     return f"{dotted}{body}"
 
 
@@ -244,9 +271,10 @@ def _render_commit_block(c: Commit, opts: RenderOptions) -> list[str]:
         lines.append(f"{header_prefix}{c.short_sha} {_fmt_lifecycle('unattributed')}")
     else:
         for i, t in enumerate(traces):
-            lines.append(_render_trace_header(t, first=(i == 0),
-                                              show_entities=opts.show_entities,
-                                              opts=opts))
+            lines.append(_render_trace_header(
+                t, first=(i == 0), show_entities=opts.show_entities,
+                opts=opts, short_name=t.short_name, turn_count=t.turn_count,
+            ))
     lines.append(_render_commit_line(c, opts))
     close_prefix, _ = PREFIX["stack_close"]
     lines.append(close_prefix)
@@ -418,6 +446,16 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
             if show_entities:
                 by = (entity_data.get("by_trace") or {}).get(tid) or {}
                 ec = int(by.get("entity_count", 0)) if by else 0
+            short_name = None
+            turn_count = None
+            try:
+                from opentraces.core.trace_meta import resolve_trace_meta
+                meta = resolve_trace_meta(project_cwd, tid)
+                if meta is not None:
+                    short_name = meta.short_name
+                    turn_count = meta.turn_count or None
+            except Exception:
+                pass
             contribs.append(TraceContribution(
                 trace_id=tid,
                 line_count=int(tr.get("line_count", 0)),
@@ -426,6 +464,8 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
                 lifecycle=tr.get("lifecycle", "provisional"),
                 attributed_ratio=a_ratio,
                 missing_ratio=m_ratio,
+                short_name=short_name,
+                turn_count=turn_count,
             ))
         c.traces = contribs
     return commits
