@@ -239,22 +239,40 @@ def _hash_blob_into_repo(project_cwd: Path, source_file: Path) -> str:
                str(source_file)).strip()
 
 
+def _iter_porcelain_z(project_cwd: Path):
+    """Yield (xy, path) records from `git status --porcelain -z -uall`.
+
+    `-z` emits NUL-terminated raw paths (no quoting), which is the only
+    reliable way to parse paths containing spaces, quotes, or newlines.
+    For rename/copy records the format is `XY SP NEW \\0 OLD \\0`; we
+    yield only the NEW path and skip the OLD follow-up record.
+    """
+    out = git("-C", str(project_cwd), "status", "--porcelain", "-z", "-uall",
+              check=False)
+    records = out.split("\0")
+    i = 0
+    while i < len(records):
+        rec = records[i]
+        if len(rec) < 4:
+            i += 1
+            continue
+        xy, rel = rec[:2], rec[3:]
+        yield xy, rel
+        # Rename/copy: the original path follows as its own record — skip it.
+        if xy[0] in ("R", "C") or xy[1] in ("R", "C"):
+            i += 2
+        else:
+            i += 1
+
+
 def _working_tree_extras(project_cwd: Path,
                          already_in_snapshot: set[str]) -> dict[str, str]:
     """Return {rel_path: blob_sha} for files in the working tree that the
     snapshot did not capture (e.g., Bash-created, user-touched-outside-agent).
-    Uses `git status --porcelain -uall` to enumerate untracked + modified.
+    Uses `git status --porcelain -z -uall` to enumerate untracked + modified.
     """
     extras: dict[str, str] = {}
-    out = git("-C", str(project_cwd), "status", "--porcelain", "-uall",
-              check=False)
-    for line in out.splitlines():
-        if len(line) < 4:
-            continue
-        xy, rel = line[:2], line[3:]
-        # Strip trailing -> target in renames
-        if " -> " in rel:
-            rel = rel.split(" -> ", 1)[1]
+    for xy, rel in _iter_porcelain_z(project_cwd):
         # Ignore deletions (handled by snapshot's null markers where possible)
         if xy.strip() == "D":
             continue
@@ -473,15 +491,8 @@ def _capture_wt_changes(project_cwd: Path,
     Skip files whose content sha hasn't changed since last call.
     Returns {rel_path: blob_sha} for files whose content is newly observed.
     """
-    out = git("-C", str(project_cwd), "status", "--porcelain", "-uall",
-              check=False)
     changed: dict[str, str] = {}
-    for line in out.splitlines():
-        if len(line) < 4:
-            continue
-        xy, rel = line[:2], line[3:]
-        if " -> " in rel:
-            rel = rel.split(" -> ", 1)[1]
+    for xy, rel in _iter_porcelain_z(project_cwd):
         if xy.strip() == "D":
             continue  # deletions handled separately later
         # ignore our own sidecar (in case .git not skipped — it should be)
