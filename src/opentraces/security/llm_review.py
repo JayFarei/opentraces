@@ -171,20 +171,20 @@ def review_key(
     model: str,
     prompt_version: str,
     context: str,
-    provider: str = "",
+    api_format: str = "",
     base_url: str = "",
 ) -> str:
     """Stable cache key for a review result.
 
-    Any change to content, model, provider, base_url, prompt_version,
-    or context produces a fresh key so a re-review runs. ``provider``
+    Any change to content, model, api_format, base_url, prompt_version,
+    or context produces a fresh key so a re-review runs. ``api_format``
     and ``base_url`` default to empty for backwards compatibility with
     callers that pre-date multi-backend support.
     """
     h = hashlib.sha256()
     parts = (
         content, "\0", model, "\0", prompt_version, "\0", context,
-        "\0", provider, "\0", base_url,
+        "\0", api_format, "\0", base_url,
     )
     for part in parts:
         h.update(part.encode("utf-8"))

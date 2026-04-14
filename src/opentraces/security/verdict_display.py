@@ -84,7 +84,7 @@ def entity_summary_line(entity_map: EntityMap | None) -> str:
 def verdict_to_payload(
     verdict: LLMReviewVerdict | None,
     *,
-    provider: str = "",
+    api_format: str = "",
     model: str = "",
     base_url: str = "",
     reviewed_at: str = "",
@@ -92,7 +92,7 @@ def verdict_to_payload(
 ) -> dict:
     """JSON-safe payload for the web review client.
 
-    Provenance kwargs (``provider``, ``model``, ``base_url``,
+    Provenance kwargs (``api_format``, ``model``, ``base_url``,
     ``reviewed_at``, ``prompt_version``) are included when provided so
     downstream surfaces (TUI, web viewer, HF dataset metadata) can tell
     users *which* LLM issued the verdict, not just *a* verdict.
@@ -108,8 +108,8 @@ def verdict_to_payload(
             "flagged_parts": list(verdict.flagged_parts),
             "badge": verdict_badge(verdict),
         }
-    if provider:
-        out["provider"] = provider
+    if api_format:
+        out["api_format"] = api_format
     if model:
         out["model"] = model
     if base_url:

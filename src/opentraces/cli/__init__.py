@@ -903,16 +903,95 @@ def config() -> None:
 
 @config.command("show")
 def config_show() -> None:
-    """Display current configuration (redact_strings masked)."""
+    """Display current configuration (secrets masked).
+
+    TTY-aware: humans get a sectioned, colorized layout; pipes / --json
+    get the same JSON dump as before so downstream tools don't break.
+    """
+    from ..core.config import CONFIG_PATH
+
     cfg = load_config()
     data = cfg.model_dump()
-    # Mask redact strings
     if data.get("custom_redact_strings"):
         data["custom_redact_strings"] = ["***" for _ in data["custom_redact_strings"]]
-    # Never show token
     if data.get("hf_token"):
         data["hf_token"] = "***"
-    click.echo(json.dumps(data, indent=2))
+
+    if _json_mode or not sys.stdout.isatty():
+        click.echo(json.dumps(data, indent=2))
+        return
+
+    _render_config_pretty(data, CONFIG_PATH)
+    emit_json(data)
+
+
+def _render_config_pretty(data: dict, config_path) -> None:
+    """Sectioned human-readable rendering of the global config dict."""
+    label_w = 22
+
+    def _kv(key: str, value, dim_value: bool = False) -> None:
+        rendered = _dim(str(value)) if dim_value else str(value)
+        click.echo(f"  {_dim(key.ljust(label_w))}  {rendered}")
+
+    def _section(title: str, hint: str | None = None) -> None:
+        click.echo()
+        head = click.style(title, fg="magenta", bold=True)
+        suffix = f"  {_dim(hint)}" if hint else ""
+        click.echo(f"{head}{suffix}")
+
+    # Global block
+    _section("GLOBAL", str(config_path))
+    _kv("config version", data.get("config_version", "?"))
+    token = data.get("hf_token")
+    _kv("hf token", "*** (set)" if token else _dim("(not set)"))
+    _kv("classifier sensitivity", data.get("classifier_sensitivity", "medium"))
+    _kv("dataset visibility", data.get("dataset_visibility", "private"))
+    custom_path = data.get("projects_path")
+    if custom_path:
+        _kv("projects path", custom_path)
+
+    # Projects
+    projects = data.get("projects") or {}
+    excluded = set(data.get("excluded_projects") or [])
+    _section("REGISTERED PROJECTS", f"({len(projects)})")
+    if not projects:
+        click.echo(f"  {_dim('(none — run opentraces init in a project to opt in)')}")
+    else:
+        for path in sorted(projects.keys()):
+            mark = click.style("✓", fg="red") if path in excluded else click.style("✓", fg="green")
+            click.echo(f"  {mark} {path}")
+    if excluded:
+        click.echo(f"  {_dim(f'{len(excluded)} excluded')}")
+
+    # Redaction
+    redact = data.get("custom_redact_strings") or []
+    if redact:
+        _section("REDACTION")
+        _kv("custom strings", f"{len(redact)} (masked)")
+
+    # Security · TruffleHog
+    sec = data.get("security") or {}
+    th = sec.get("trufflehog") or {}
+    _section("SECURITY · TRUFFLEHOG")
+    _kv("enabled", "yes" if th.get("enabled") else _dim("no"))
+    _kv("verify secrets", "yes" if th.get("verify_secrets") else _dim("no"))
+
+    # Security · LLM Review
+    rl = sec.get("review_llm") or {}
+    _section("SECURITY · LLM REVIEW")
+    _kv("enabled", "yes" if rl.get("enabled") else _dim("no"))
+    _kv("api format", rl.get("api_format", "?"))
+    _kv("base url", rl.get("base_url") or _dim("(unset)"))
+    _kv("model", rl.get("model") or _dim("(unset)"))
+    api_key_env = rl.get("api_key_env")
+    if api_key_env:
+        present = "set" if os.environ.get(api_key_env) else click.style("NOT SET", fg="red")
+        _kv("api key env", f"${api_key_env} ({present})")
+    else:
+        _kv("api key env", _dim("(unset — local server)"))
+    _kv("timeout", f"{rl.get('timeout', '?')}s")
+    _kv("prompt version", rl.get("prompt_version", "?"))
+    click.echo()
 
 
 @config.command("set")
@@ -927,76 +1006,26 @@ def config_show() -> None:
     help="Write to ~/.opentraces/config.json (default).",
 )
 @click.option("--append", "append_value", is_flag=True, help="Append to a list-typed key.")
-# Legacy positional-less flags kept for back-compat (Step 15 removes them).
-@click.option("--exclude", type=str, default=None, help="(legacy) Project path to exclude")
-@click.option("--redact", type=str, default=None, help="(legacy) Custom redaction string")
-@click.option("--pricing-file", type=str, default=None, help="(legacy) Path to custom pricing table")
-@click.option(
-    "--classifier-sensitivity", type=click.Choice(["low", "medium", "high"]),
-    default=None, help="(legacy) Set classifier sensitivity directly",
-)
 def config_set(
     key: str | None,
     value: str | None,
     scope_project: bool,
     scope_global: bool,
     append_value: bool,
-    exclude: str | None,
-    redact: str | None,
-    pricing_file: str | None,
-    classifier_sensitivity: str | None,
 ) -> None:
     """Set a configuration value.
 
-    New form (Step 9):
       ot config set <key> <value> [--append] [--project|--global]
 
     Default scope is global; --project writes to <repo>/.opentraces.json.
     --append appends to list-typed keys (e.g. custom_redact_strings).
-
-    Legacy form (kept for back-compat until Step 15):
-      ot config set --exclude <path> | --redact <str> | --pricing-file <path> |
-                    --classifier-sensitivity <low|medium|high>
     """
     if scope_project and scope_global:
         click.echo("--project and --global are mutually exclusive.", err=True)
         sys.exit(2)
 
-    legacy_used = any(v is not None for v in (exclude, redact, pricing_file, classifier_sensitivity))
-    new_used = key is not None or value is not None
-
-    if legacy_used and new_used:
-        click.echo("Mix of legacy flags and <key> <value> not supported.", err=True)
-        sys.exit(2)
-
-    if not legacy_used and not new_used:
-        click.echo("Pass either <key> <value> or one of the legacy flags.", err=True)
-        sys.exit(2)
-
-    # Legacy path: untouched semantics.
-    if legacy_used:
-        cfg = load_config()
-        if exclude:
-            if exclude not in cfg.excluded_projects:
-                cfg.excluded_projects.append(exclude)
-            click.echo(f"Excluded project: {exclude}")
-        if redact:
-            if redact not in cfg.custom_redact_strings:
-                cfg.custom_redact_strings.append(redact)
-            click.echo("Added redaction string")
-        if pricing_file:
-            cfg.pricing_file = pricing_file
-            click.echo(f"Set pricing file: {pricing_file}")
-        if classifier_sensitivity:
-            cfg.classifier_sensitivity = classifier_sensitivity
-            click.echo(f"Set classifier sensitivity: {classifier_sensitivity}")
-        save_config(cfg)
-        emit_json({"status": "ok"})
-        return
-
-    # New generic path.
-    if value is None:
-        click.echo("Missing <value> for set.", err=True)
+    if key is None or value is None:
+        click.echo("Usage: ot config set <key> <value> [--project|--global]", err=True)
         sys.exit(2)
 
     if scope_project:

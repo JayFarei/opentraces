@@ -92,12 +92,15 @@ class TestConfigSetAppend:
         assert "bar" in global_cfg.get("custom_redact_strings", [])
 
 
-class TestConfigSetLegacyFlags:
-    """Back-compat: --exclude, --redact, --pricing-file flags still work
-    until Step 15 removes them."""
+class TestConfigSetGenericRedactAppend:
+    """``ot config set custom_redact_strings <value> --append`` is the
+    canonical way to add a redaction string after the legacy --redact flag
+    was removed in the simplification pass."""
 
-    def test_legacy_redact_flag_still_works(self, runner, isolated_home) -> None:
-        result = runner.invoke(main, ["config", "set", "--redact", "secret-key-123"])
+    def test_append_redact_string(self, runner, isolated_home) -> None:
+        result = runner.invoke(
+            main, ["config", "set", "custom_redact_strings", "secret-key-123", "--append"],
+        )
         assert result.exit_code == 0, result.output
 
         global_cfg = json.loads((isolated_home / ".opentraces" / "config.json").read_text())

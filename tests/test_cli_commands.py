@@ -188,7 +188,7 @@ class TestPostInitCommands:
 
     def test_config_set_classifier_sensitivity(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["config", "set", "--classifier-sensitivity", "high"])
+        result = runner.invoke(main, ["config", "set", "classifier_sensitivity", "high"])
         assert result.exit_code == 0
 
     def test_remote_show(self, initialized_project):

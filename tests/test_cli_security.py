@@ -96,7 +96,7 @@ class TestSetupReviewLLM:
 
         result = runner.invoke(main, [
             "setup", "review-llm",
-            "--provider", "openai",
+            "--api-format", "openai-compat",
             "--base-url", "http://localhost:11434/v1",
             "--model", "gemma3n:e4b",
             "--no-interactive",
@@ -105,7 +105,7 @@ class TestSetupReviewLLM:
         payload = _extract_json(result.output)
         assert payload["status"] == "ok"
         assert payload["review_llm"]["enabled"] is True
-        assert payload["review_llm"]["provider"] == "openai"
+        assert payload["review_llm"]["api_format"] == "openai-compat"
         assert payload["review_llm"]["model"] == "gemma3n:e4b"
 
         # Round-trips to disk.
@@ -120,7 +120,7 @@ class TestSetupReviewLLM:
         payload = _extract_json(result.output)
         # Default shipped config has review_llm present but disabled.
         assert payload["review_llm"]["enabled"] is False
-        assert payload["review_llm"]["provider"] == "openai"
+        assert payload["review_llm"]["api_format"] == "openai-compat"
 
     def test_disable_flips_config_off(self, runner, isolated_config) -> None:
         from opentraces.core.config import Config, save_config
@@ -366,7 +366,7 @@ class TestReviewLLMFilters:
         (isolated_config / "staging").mkdir(exist_ok=True)
 
         result = runner.invoke(
-            main, ["llm-review", "--dry-run", "--provider", "fake",
+            main, ["llm-review", "--dry-run", "--api-format", "fake",
                    "--scope", "staged"],
         )
         assert result.exit_code == 0, result.output
@@ -394,7 +394,7 @@ class TestReviewLLMFilters:
         (isolated_config / "staging").mkdir(exist_ok=True)
 
         result = runner.invoke(
-            main, ["llm-review", "--dry-run", "--provider", "fake",
+            main, ["llm-review", "--dry-run", "--api-format", "fake",
                    "--trace", "8a3f"],
         )
         assert result.exit_code == 0, result.output
@@ -417,7 +417,7 @@ class TestReviewLLMDryRun:
             "opentraces.core.inbox.load_traces", lambda _path: []
         )
         result = runner.invoke(
-            main, ["llm-review", "--dry-run", "--provider", "fake"]
+            main, ["llm-review", "--dry-run", "--api-format", "fake"]
         )
         assert result.exit_code == 0, result.output
         payload = _extract_json(result.output)

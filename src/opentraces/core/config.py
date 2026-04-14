@@ -101,10 +101,15 @@ class TruffleHogConfig(BaseModel):
 
 
 class ReviewLLMConfig(BaseModel):
-    """Global settings for the opt-in third-party LLM review step."""
+    """Global settings for the opt-in third-party LLM review step.
+
+    ``api_format`` selects the wire protocol the local client speaks, not
+    the vendor — ``openai-compat`` covers vLLM, LM Studio, llama.cpp and
+    Ollama-via-/v1, in addition to OpenAI proper.
+    """
 
     enabled: bool = False
-    provider: Literal["openai", "ollama", "anthropic", "fake"] = "openai"
+    api_format: Literal["openai-compat", "ollama", "anthropic", "fake"] = "openai-compat"
     base_url: str = "http://localhost:11434/v1"
     model: str = "gemma3n:e4b"
     api_key_env: str = Field("", description="Env var holding the API key")
@@ -181,7 +186,6 @@ class Config(BaseModel):
     projects: dict[str, ProjectRegistration] = Field(default_factory=dict)
     excluded_projects: list[str] = Field(default_factory=list)
     custom_redact_strings: list[str] = Field(default_factory=list)
-    pricing_file: str | None = None
     projects_path: str | None = Field(
         None,
         description="Override for ~/.claude/projects/ location",
@@ -189,6 +193,8 @@ class Config(BaseModel):
     classifier_sensitivity: str = Field("medium", pattern="^(low|medium|high)$")
     dataset_visibility: str = Field("private", pattern="^(public|private)$")
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+
+    model_config = {"extra": "ignore"}  # silently drop dead keys (e.g. legacy pricing_file)
 
 
 def ensure_dirs() -> None:
@@ -227,6 +233,14 @@ def load_config() -> Config:
 
     if stored_version != CONFIG_VERSION:
         raw = _migrate_config(raw, stored_version)
+
+    # In-place rename: review_llm.provider -> review_llm.api_format,
+    # value "openai" -> "openai-compat". Dead key pricing_file is dropped
+    # by Config (extra="ignore") on validate.
+    rl = raw.get("security", {}).get("review_llm") if isinstance(raw.get("security"), dict) else None
+    if isinstance(rl, dict) and "provider" in rl and "api_format" not in rl:
+        legacy = rl.pop("provider")
+        rl["api_format"] = "openai-compat" if legacy == "openai" else legacy
 
     config = Config.model_validate(raw)
 

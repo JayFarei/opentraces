@@ -298,12 +298,12 @@ class LLMReviewEstimate:
     tokens: int
     cost_usd: float
     model: str
-    provider: str
+    api_format: str
 
 
 @dataclass
 class LLMReviewOutcome:
-    provider: str
+    api_format: str
     model: str
     results: list[dict]
 
@@ -328,7 +328,7 @@ def _steps_text(rec: dict) -> list[str]:
 
 
 def estimate_llm_review(
-    records: list[dict], *, provider: str, model: str,
+    records: list[dict], *, api_format: str, model: str,
 ) -> LLMReviewEstimate:
     """Dry-run token/cost estimate for an LLM review run."""
     from ..security.llm_review import estimate_cost
@@ -341,7 +341,7 @@ def estimate_llm_review(
         tokens=int(est["tokens"]),
         cost_usd=float(est["cost_usd"]),
         model=model,
-        provider=provider,
+        api_format=api_format,
     )
 
 
@@ -368,7 +368,7 @@ def _trace_pre_blocked(rec: dict) -> str | None:
 def run_llm_review(
     records: list[dict],
     *,
-    provider: str,
+    api_format: str,
     model: str,
     base_url: str = "",
     api_key_env: str = "",
@@ -380,7 +380,7 @@ def run_llm_review(
 ) -> LLMReviewOutcome:
     """Run Tier 2 LLM semantic review across ``records``.
 
-    Cached verdicts (same content_hash, provider, base_url, model,
+    Cached verdicts (same content_hash, api_format, base_url, model,
     prompt_version, context) are returned untouched unless ``force=True``.
     ``on_progress`` is called with (trace_id, status_str) for each record
     so the CLI can stream output.
@@ -400,18 +400,18 @@ def run_llm_review(
     from ..security.verdict_display import verdict_badge, verdict_to_payload
 
     provider_kwargs: dict = {"timeout": timeout}
-    if provider == "openai":
+    if api_format == "openai-compat":
         if base_url:
             provider_kwargs["base_url"] = base_url
         if api_key_env:
             provider_kwargs["api_key_env"] = api_key_env
-    llm = build_provider(provider, model=model, **provider_kwargs)
+    llm = build_provider(api_format, model=model, **provider_kwargs)
     results: list[dict] = []
 
     def _payload(verdict, key) -> dict:
         payload = verdict_to_payload(
             verdict,
-            provider=provider,
+            api_format=api_format,
             model=model,
             base_url=base_url,
             reviewed_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -425,7 +425,7 @@ def run_llm_review(
         content_hash = rec.get("content_hash", "")
         key = _review_key(
             content_hash, model, prompt_version, context,
-            provider=provider, base_url=base_url,
+            api_format=api_format, base_url=base_url,
         )
 
         existing = (rec.get("metadata") or {}).get("llm_review", {}) or {}
@@ -466,4 +466,4 @@ def run_llm_review(
             {"trace_id": trace_id, "cached": False, "verdict": payload}
         )
 
-    return LLMReviewOutcome(provider=provider, model=model, results=results)
+    return LLMReviewOutcome(api_format=api_format, model=model, results=results)

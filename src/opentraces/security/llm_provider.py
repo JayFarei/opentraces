@@ -347,15 +347,14 @@ def build_provider(
     model: str,
     **kwargs: Any,
 ) -> LLMProvider:
-    """Build a provider by string name.
+    """Build a provider implementation by api-format name.
 
-    Known names: ``fake``, ``openai``, ``ollama``, ``anthropic``.
+    Known names: ``fake``, ``openai-compat``, ``ollama``, ``anthropic``.
 
-    ``openai`` is the preferred entry point for both hosted APIs
+    ``openai-compat`` is the preferred entry point for both hosted APIs
     (OpenAI, Groq, OpenRouter, Together) and local servers exposing an
     OpenAI-compatible endpoint (Ollama at ``/v1``, LM Studio, vLLM).
-    ``ollama`` is kept for backwards compatibility with the native
-    ``/api/generate`` path.
+    ``ollama`` is kept for the native ``/api/generate`` path.
     """
     normalized = name.strip().lower()
     if normalized == "fake":
@@ -363,7 +362,7 @@ def build_provider(
             responses=kwargs.get("responses", [{}]),
             model=model,
         )
-    if normalized == "openai":
+    if normalized == "openai-compat":
         return OpenAICompatProvider(
             model=model,
             base_url=kwargs.get("base_url", "http://localhost:11434/v1"),

@@ -63,7 +63,7 @@ class TestBuildProvider:
 
     def test_build_openai_compat(self) -> None:
         p = build_provider(
-            "openai", model="gpt-4o-mini",
+            "openai-compat", model="gpt-4o-mini",
             base_url="https://api.groq.com/openai/v1",
             api_key_env="GROQ_API_KEY",
         )

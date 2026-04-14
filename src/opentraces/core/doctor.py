@@ -64,7 +64,7 @@ def _security_tiers(
         rl_detail = review_llm.get("status") or "endpoint unreachable"
     else:
         rl_state = "enabled"
-        backend = review_llm.get("backend") or review_llm.get("provider") or "?"
+        backend = review_llm.get("backend") or review_llm.get("api_format") or "?"
         rl_detail = f"{backend} / {review_llm.get('model') or '?'}"
 
     # Human review — gated by project review policy, not a global toggle.
@@ -111,7 +111,7 @@ def _security_tiers(
             "enable_cmd": "opentraces setup review-llm",
             "disable_cmd": "opentraces setup review-llm --disable",
             "blocks": False,
-            "provider": review_llm.get("provider"),
+            "api_format": review_llm.get("api_format"),
             "backend": review_llm.get("backend"),
             "model": review_llm.get("model"),
             "reachable": rl_reachable,
@@ -136,19 +136,19 @@ def _trufflehog_status(enabled: bool, version: str | None) -> str:
     return f"enabled ({version})"
 
 
-def _infer_backend_label(provider: str, base_url: str) -> str:
-    """Translate (provider, base_url) into a user-facing backend name.
+def _infer_backend_label(api_format: str, base_url: str) -> str:
+    """Translate (api_format, base_url) into a user-facing backend name.
 
-    ``provider`` is our internal HTTP-shape dispatch key (openai,
-    anthropic, ollama native, fake). ``base_url`` is where the bytes
-    actually go. Users think in vendor names (Ollama, Groq, LM Studio),
-    not dispatch keys — so we infer one from the URL.
+    ``api_format`` is our internal HTTP-shape dispatch key
+    (openai-compat, anthropic, ollama native, fake). ``base_url`` is
+    where the bytes actually go. Users think in vendor names (Ollama,
+    Groq, LM Studio), not dispatch keys — so we infer one from the URL.
     """
-    if provider == "anthropic":
+    if api_format == "anthropic":
         return "anthropic"
-    if provider == "fake":
+    if api_format == "fake":
         return "fake"
-    if provider == "ollama":
+    if api_format == "ollama":
         return "ollama"
     url = (base_url or "").lower()
     if "localhost:11434" in url or "127.0.0.1:11434" in url:
@@ -171,7 +171,7 @@ def _infer_backend_label(provider: str, base_url: str) -> str:
         return "together"
     if "api.anthropic.com" in url:
         return "anthropic"
-    return base_url or provider
+    return base_url or api_format
 
 
 def _review_llm_status(rc) -> dict[str, Any]:
@@ -182,17 +182,17 @@ def _review_llm_status(rc) -> dict[str, Any]:
     """
     import os
 
-    backend = _infer_backend_label(rc.provider, rc.base_url)
+    backend = _infer_backend_label(rc.api_format, rc.base_url)
     if not rc.enabled:
         return {
             "enabled": False,
             "status": "disabled (opt in via 'opentraces setup review-llm')",
-            "provider": rc.provider, "backend": backend, "model": rc.model,
+            "api_format": rc.api_format, "backend": backend, "model": rc.model,
         }
 
     result: dict[str, Any] = {
         "enabled": True,
-        "provider": rc.provider,
+        "api_format": rc.api_format,
         "backend": backend,
         "model": rc.model,
         "base_url": rc.base_url,
@@ -207,7 +207,7 @@ def _review_llm_status(rc) -> dict[str, Any]:
         return result
 
     try:
-        if rc.provider == "anthropic":
+        if rc.api_format == "anthropic":
             try:
                 import anthropic  # noqa: F401
             except ImportError:
@@ -218,7 +218,7 @@ def _review_llm_status(rc) -> dict[str, Any]:
             result["status"] = f"enabled ({backend} / {rc.model})"
             return result
 
-        if rc.provider in ("openai", "ollama"):
+        if rc.api_format in ("openai-compat", "ollama"):
             from .. import security as _sec  # noqa: F401 — ensure package importable
             from ..security.llm_provider import OpenAICompatProvider
 

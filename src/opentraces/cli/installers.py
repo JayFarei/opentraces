@@ -833,14 +833,14 @@ def _maybe_pull_and_return(preset_name: str, tag: str) -> str:
     return tag
 
 
-def _test_review_llm(provider: str, base_url: str, model: str, api_key_env: str,
+def _test_review_llm(api_format: str, base_url: str, model: str, api_key_env: str,
                      timeout: float) -> tuple[bool, str]:
     """Ping the configured LLM endpoint. Returns (ok, message)."""
     from ..security.llm_provider import (
         AnthropicProvider, OpenAICompatProvider,
     )
     try:
-        if provider == "anthropic":
+        if api_format == "anthropic":
             if not (api_key_env and os.environ.get(api_key_env)):
                 return False, f"env var {api_key_env or 'ANTHROPIC_API_KEY'} is not set"
             # Just constructing + importing the SDK is the smoke test —
@@ -872,7 +872,7 @@ def _review_llm_config_from_cfg(cfg) -> dict:
     rc = cfg.security.review_llm
     return {
         "enabled": rc.enabled,
-        "provider": rc.provider,
+        "api_format": rc.api_format,
         "base_url": rc.base_url,
         "model": rc.model,
         "api_key_env": rc.api_key_env,
@@ -911,17 +911,20 @@ def _setup_review_llm_interactive() -> tuple[str, str, str, str, float]:
 
     if 1 <= choice <= len(_REVIEW_LLM_PRESETS):
         name, base_url, api_key_env, sample, _blurb = _REVIEW_LLM_PRESETS[choice - 1]
-        provider = "anthropic" if name == "anthropic-direct" else "openai"
+        api_format = "anthropic" if name == "anthropic-direct" else "openai-compat"
     elif choice == len(_REVIEW_LLM_PRESETS) + 1:
         name = "custom"
-        provider = click.prompt("provider", default="openai", show_default=True)
+        api_format = click.prompt(
+            "api format", default="openai-compat", show_default=True,
+            type=click.Choice(["openai-compat", "ollama", "anthropic", "fake"]),
+        )
         base_url = click.prompt("base URL (empty for anthropic)", default="", show_default=False)
         api_key_env = click.prompt("API key env var name (empty for local)", default="", show_default=False)
         sample = ""
     else:
         raise click.BadParameter(f"choice out of range: {choice}")
 
-    if provider == "anthropic":
+    if api_format == "anthropic":
         model = click.prompt("model", default=sample or "claude-haiku-4-5-20251001",
                              show_default=True)
     else:
@@ -933,15 +936,17 @@ def _setup_review_llm_interactive() -> tuple[str, str, str, str, float]:
     except ValueError:
         timeout = 120.0
 
-    return provider, base_url, model, api_key_env, timeout
+    return api_format, base_url, model, api_key_env, timeout
 
 
 @setup_group.command("review-llm")
-@click.option("--provider", default=None,
-              help="Provider kind: openai (default, OpenAI-compat servers), "
+@click.option("--api-format", "api_format", default=None,
+              type=click.Choice(["openai-compat", "ollama", "anthropic", "fake"], case_sensitive=False),
+              help="Wire protocol the local client speaks: openai-compat "
+                   "(default; vLLM/LM Studio/Ollama-via-/v1/OpenAI proper), "
                    "ollama (native /api/generate), anthropic, fake.")
 @click.option("--base-url", default=None,
-              help="Base URL including /v1 for OpenAI-compat servers. "
+              help="Base URL including /v1 for openai-compat servers. "
                    "Ignored for anthropic.")
 @click.option("--model", default=None, help="Model name/tag.")
 @click.option("--api-key-env", default=None,
@@ -958,7 +963,7 @@ def _setup_review_llm_interactive() -> tuple[str, str, str, str, float]:
 @click.option("--project", "scope_project", is_flag=True,
               help="Scope this change to the project's marker (default: global config).")
 def setup_review_llm_cmd(
-    provider: str | None, base_url: str | None, model: str | None,
+    api_format: str | None, base_url: str | None, model: str | None,
     api_key_env: str | None, timeout: float | None,
     disable: bool, enable: bool, test_only: bool, print_only: bool,
     no_interactive: bool,
@@ -978,12 +983,12 @@ def setup_review_llm_cmd(
     Interactive picker when run with no flags. Non-interactive for agents:
 
     \b
-        opentraces setup review-llm --provider openai \\
+        opentraces setup review-llm --api-format openai-compat \\
             --base-url http://localhost:11434/v1 --model gemma3n:e4b
-        opentraces setup review-llm --provider openai \\
+        opentraces setup review-llm --api-format openai-compat \\
             --base-url https://api.groq.com/openai/v1 \\
             --model llama-3.3-70b-versatile --api-key-env GROQ_API_KEY
-        opentraces setup review-llm --provider anthropic \\
+        opentraces setup review-llm --api-format anthropic \\
             --model claude-haiku-4-5-20251001 --api-key-env ANTHROPIC_API_KEY
     """
     cfg = load_config()
@@ -1002,13 +1007,13 @@ def setup_review_llm_cmd(
         return
 
     # Agent / non-interactive path: any flag provided => skip the wizard.
-    any_flag = any(v is not None for v in (provider, base_url, model, api_key_env, timeout))
+    any_flag = any(v is not None for v in (api_format, base_url, model, api_key_env, timeout))
 
     if not any_flag and not enable and not test_only and not no_interactive:
-        provider, base_url, model, api_key_env, timeout = _setup_review_llm_interactive()
+        api_format, base_url, model, api_key_env, timeout = _setup_review_llm_interactive()
 
     # Layer flag overrides on top of current config.
-    eff_provider = provider or rc.provider
+    eff_api_format = api_format or rc.api_format
     eff_base_url = base_url if base_url is not None else rc.base_url
     eff_model = model or rc.model
     eff_api_key_env = api_key_env if api_key_env is not None else rc.api_key_env
@@ -1016,14 +1021,14 @@ def setup_review_llm_cmd(
 
     if test_only:
         ok, message = _test_review_llm(
-            eff_provider, eff_base_url, eff_model, eff_api_key_env, eff_timeout,
+            eff_api_format, eff_base_url, eff_model, eff_api_key_env, eff_timeout,
         )
         human_echo(f"review-llm test: {'ok' if ok else 'failed'} — {message}")
         emit_json({
             "status": "ok" if ok else "error",
             "action": "test",
             "review_llm": {
-                "provider": eff_provider, "base_url": eff_base_url,
+                "api_format": eff_api_format, "base_url": eff_base_url,
                 "model": eff_model, "api_key_env": eff_api_key_env,
             },
             "reachable": ok, "message": message,
@@ -1032,7 +1037,7 @@ def setup_review_llm_cmd(
             sys.exit(3)
         return
 
-    rc.provider = eff_provider
+    rc.api_format = eff_api_format
     rc.base_url = eff_base_url
     rc.model = eff_model
     rc.api_key_env = eff_api_key_env
@@ -1041,14 +1046,14 @@ def setup_review_llm_cmd(
     save_config(cfg)
 
     ok, message = _test_review_llm(
-        rc.provider, rc.base_url, rc.model, rc.api_key_env, rc.timeout,
+        rc.api_format, rc.base_url, rc.model, rc.api_key_env, rc.timeout,
     )
     human_echo("")
     from opentraces import cli as _cli
     tag = _cli._ok("review-llm configured") if ok else _cli._err("review-llm saved but unreachable")
     print_banner(tagline=tag)
-    human_echo(f"  {_cli._dim('provider:  ')} {rc.provider}")
-    if rc.provider != "anthropic":
+    human_echo(f"  {_cli._dim('api format:')} {rc.api_format}")
+    if rc.api_format != "anthropic":
         human_echo(f"  {_cli._dim('base url:  ')} {rc.base_url}")
     human_echo(f"  {_cli._dim('model:     ')} {rc.model}")
     if rc.api_key_env:
@@ -1486,20 +1491,21 @@ def _filter_by_trace_ids(records: list[dict],
         "opentraces llm-review --dry-run            # estimate token usage only",
     ],
     see_also=[
-        ("opentraces setup review-llm", "configure the LLM provider"),
+        ("opentraces setup review-llm", "configure the LLM"),
         ("opentraces push --llm-review", "gate uploads on a clean verdict"),
     ],
     option_groups=[
-        ("Provider overrides", ["provider", "model", "base_url", "api_key_env"]),
+        ("API overrides", ["api_format", "model", "base_url", "api_key_env"]),
         ("Selection", ["scope", "trace_ids", "limit"]),
         ("Run", ["dry_run", "force", "context_file"]),
     ],
 )
-@click.option("--provider", default=None,
-              help="Override provider (openai, ollama, anthropic, fake)")
+@click.option("--api-format", "api_format", default=None,
+              type=click.Choice(["openai-compat", "ollama", "anthropic", "fake"], case_sensitive=False),
+              help="Override the wire-protocol family (openai-compat, ollama, anthropic, fake)")
 @click.option("--model", default=None, help="Override model")
 @click.option("--base-url", default=None,
-              help="Override base URL for OpenAI-compat providers")
+              help="Override base URL for openai-compat servers")
 @click.option("--api-key-env", default=None,
               help="Override the env var holding the API key")
 @click.option("--scope",
@@ -1519,14 +1525,14 @@ def _filter_by_trace_ids(records: list[dict],
               help="Re-review traces that already have a cached verdict")
 @click.option("--context-file", "context_file", type=click.Path(exists=True, dir_okay=False),
               default=None, help="Project README/AGENTS.md passed as context")
-def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None,
+def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | None,
                    api_key_env: str | None, scope: str,
                    trace_ids: tuple[str, ...], dry_run: bool, limit: int,
                    force: bool, context_file: str | None) -> None:
     """Run Tier 2 LLM semantic review.
 
     Uses the LLM configured by 'opentraces setup review-llm' unless you
-    override via --provider / --model / --base-url / --api-key-env.
+    override via --api-format / --model / --base-url / --api-key-env.
 
     LLM can be slow if using local models. Narrow with --scope (pick
     inbox or staged only) or --trace (one or more specific trace ids),
@@ -1540,16 +1546,16 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
 
     cfg = load_config()
     rc = cfg.security.review_llm
-    eff_provider = provider or rc.provider
+    eff_api_format = api_format or rc.api_format
     eff_model = model or rc.model
     eff_base_url = base_url if base_url is not None else rc.base_url
     eff_api_key_env = api_key_env if api_key_env is not None else rc.api_key_env
     eff_timeout = rc.timeout
 
-    if not rc.enabled and provider is None and model is None:
+    if not rc.enabled and api_format is None and model is None:
         human_hint(
             "review-llm is not configured. Run 'opentraces setup review-llm' "
-            "once, or pass --provider/--model explicitly."
+            "once, or pass --api-format/--model explicitly."
         )
 
     staging = get_project_traces_dir(Path.cwd())
@@ -1590,7 +1596,7 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
             payload.update({
                 "dry_run": True, "sessions": 0, "chars": 0,
                 "estimate": {"tokens": 0, "cost_usd": 0.0},
-                "model": eff_model, "provider": eff_provider,
+                "model": eff_model, "api_format": eff_api_format,
                 "base_url": eff_base_url,
             })
         else:
@@ -1614,7 +1620,7 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
             sys.exit(2)
 
     if dry_run:
-        est = estimate_llm_review(records, provider=eff_provider, model=eff_model)
+        est = estimate_llm_review(records, api_format=eff_api_format, model=eff_model)
         human_echo(
             f"Dry run: {est.sessions} sessions, ~{est.chars:,} chars, "
             f"~{est.tokens:,} tokens, ~${est.cost_usd:.4f}."
@@ -1631,7 +1637,7 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
             "chars": est.chars,
             "estimate": {"tokens": est.tokens, "cost_usd": est.cost_usd},
             "model": eff_model,
-            "provider": eff_provider,
+            "api_format": eff_api_format,
             "base_url": eff_base_url,
         })
         return
@@ -1645,7 +1651,7 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
 
     outcome = run_llm_review(
         records,
-        provider=eff_provider,
+        api_format=eff_api_format,
         model=eff_model,
         base_url=eff_base_url,
         api_key_env=eff_api_key_env,
@@ -1663,7 +1669,7 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
         "trace_ids": list(trace_ids),
         "matched": len(records),
         "total_available": total_available,
-        "provider": eff_provider,
+        "api_format": eff_api_format,
         "model": eff_model,
         "base_url": eff_base_url,
         "results": outcome.results,
