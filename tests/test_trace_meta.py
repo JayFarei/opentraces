@@ -16,22 +16,30 @@ from opentraces.core.config import _write_marker, get_project_dir
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("desc,expected", [
-    ("what remote are we connected to?", "what-remote-connected"),
-    ("Add service catalog table", "add-service-catalog-table"),
+    ("now that we have built the teenage milestone, It is time to schedule...",
+     "built-teenage-milestone"),
+    ("ultrathink use a team of agents to review the instructions",
+     "ultrathink-team-agents"),
+    ("what remote are we connected to?", "remote-connected"),
+    ("base directory for this skill", "base-directory-skill"),
     ("", None),
     (None, None),
     ("!!!", None),
-    ("the the the", "the-the-the"),
+    ("the the the a an of", None),
 ])
 def test_slugify_task_cases(desc, expected):
     assert tm.slugify_task(desc) == expected
 
 
-def test_slugify_truncates_to_max_len():
-    out = tm.slugify_task("very long description words here more more", max_len=10)
+def test_slugify_truncates_to_max_len_by_dropping_tokens():
+    out = tm.slugify_task("absolutely wonderful magnificent", max_len=15)
+    # "absolutely-wonderful" = 20, too long; drop trailing token.
     assert out is not None
-    assert len(out) <= 10
+    assert len(out) <= 15
     assert not out.endswith("-")
+    # Must not slice mid-token.
+    for tok in out.split("-"):
+        assert tok in {"absolutely", "wonderful", "magnificent"}
 
 
 # ---------------------------------------------------------------------------

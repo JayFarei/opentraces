@@ -46,38 +46,71 @@ class TraceMeta:
 # slugify
 # ---------------------------------------------------------------------------
 
-_PUNCT_RE = re.compile(r"[^a-zA-Z0-9\s-]+")
-_WS_RE = re.compile(r"\s+")
-# Very small stopword list — just enough to drop filler so the first 5
-# "meaningful" tokens are usually actual content words. Deliberately not a
-# full NLP stopword list.
-_STOP = frozenset({
-    "the", "a", "an", "and", "or", "of", "to", "for", "in", "on", "at",
-    "is", "are", "was", "be", "by", "with", "from", "this", "that",
-    "it", "as", "i", "we",
+# Split on whitespace, punctuation, and hyphens so "multi-word-thing" and
+# "word, other" both tokenize cleanly.
+_SPLIT_RE = re.compile(r"[^a-zA-Z0-9]+")
+_STOP_WORDS = frozenset({
+    # articles / determiners
+    "a", "an", "the",
+    # pronouns
+    "i", "me", "my", "you", "your", "we", "us", "our", "they", "them",
+    "their", "he", "she", "it", "its",
+    # copulas / aux
+    "is", "am", "are", "was", "were", "be", "been", "being",
+    "has", "have", "had", "do", "does", "did",
+    "will", "would", "shall", "should", "can", "could",
+    "may", "might", "must",
+    # prepositions
+    "of", "to", "in", "on", "at", "by", "for", "with", "from", "as",
+    "into", "about", "over", "under", "out", "off", "up", "down",
+    # conjunctions / subordinators
+    "and", "or", "but", "if", "so", "than", "that", "this", "these",
+    "those", "because", "while", "when", "where", "what", "which",
+    "who", "whom", "whose", "how", "why",
+    # negation / modifiers
+    "no", "not", "none",
+    "now", "just", "only", "very", "really", "quite", "also", "too",
+    "even", "then", "still", "yet", "already", "always", "ever",
+    "never",
+    # low-signal verbs / nouns
+    "use", "using", "used", "way", "ways", "thing", "things",
+    "make", "makes", "made",
+    # contractions (stripped of apostrophes by splitter)
+    "its", "lets", "weve", "youre", "id", "ill",
 })
 
 
-def slugify_task(description: str | None, max_len: int = 25) -> str | None:
-    """Return a kebab-case slug of the first 5 meaningful tokens, or None.
+def slugify_task(description: str | None, max_len: int = 30) -> str | None:
+    """Return a kebab-case slug of up to 3 meaningful tokens, or None.
 
-    Punctuation is stripped, stopwords are dropped, and the result is
-    truncated to ``max_len`` (without leaving a trailing hyphen).
+    Algorithm (plan-043 follow-up patch):
+    - Split on non-alphanumeric (whitespace, punctuation, hyphens).
+    - Keep tokens where ``len(token) >= 3`` and token not in stopword set.
+    - Take the first 3 surviving tokens, lowercase, join with ``-``.
+    - Cap total length at ``max_len`` by dropping trailing tokens (never
+      slice mid-token).
+    - Returns None for empty, punctuation-only, or all-stopword input.
     """
     if not description:
         return None
-    cleaned = _PUNCT_RE.sub(" ", description)
-    cleaned = _WS_RE.sub(" ", cleaned).strip().lower()
-    if not cleaned:
+    tokens_raw = _SPLIT_RE.split(description.lower())
+    kept: list[str] = []
+    for t in tokens_raw:
+        if len(t) < 3:
+            continue
+        if t in _STOP_WORDS:
+            continue
+        kept.append(t)
+        if len(kept) >= 3:
+            break
+    if not kept:
         return None
-    tokens = [t for t in cleaned.split(" ") if t and t not in _STOP]
-    if not tokens:
-        # All tokens were stopwords — fall back to the raw tokens.
-        tokens = cleaned.split(" ")
-    meaningful = tokens[:5]
-    slug = "-".join(meaningful)
-    if len(slug) > max_len:
-        slug = slug[:max_len].rstrip("-")
+    # Cap length by trimming trailing tokens rather than mid-token slicing.
+    while kept and len("-".join(kept)) > max_len:
+        kept.pop()
+    if not kept:
+        return None
+    slug = "-".join(kept)
     return slug or None
 
 

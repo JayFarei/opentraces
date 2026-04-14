@@ -21,6 +21,31 @@ def test_paint_wraps_with_ansi_when_enabled():
     assert "abc" in out
 
 
+def test_commit_id_is_yellow_bold():
+    out = paint(Role.COMMIT_ID, "c:deadbee", use_color=True)
+    assert "\x1b[1;33m" in out
+
+
+def test_trace_name_is_cyan_bold():
+    out = paint(Role.TRACE_NAME, "built-teenage-milestone", use_color=True)
+    assert "\x1b[1;36m" in out
+
+
+def test_line_count_is_blue():
+    out = paint(Role.LINE_COUNT, "[42 lines]", use_color=True)
+    assert "\x1b[34m" in out
+
+
+def test_turn_count_is_green():
+    out = paint(Role.TURN_COUNT, "12 turns", use_color=True)
+    assert "\x1b[32m" in out
+
+
+def test_entity_count_is_bright_blue():
+    out = paint(Role.ENTITY_COUNT, "8 entities", use_color=True)
+    assert "\x1b[94m" in out
+
+
 def test_paint_plain_when_disabled():
     assert paint(Role.COMMIT_ID, "abc", use_color=False) == "abc"
 
