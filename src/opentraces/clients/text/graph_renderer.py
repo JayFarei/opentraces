@@ -120,6 +120,10 @@ class Commit:
     timestamp: str
     parents: list[str]
     traces: list[TraceContribution] = field(default_factory=list)
+    # Populated by load_commits_from_repo from the entity cache + join.
+    # Maps trace_id -> (counts_str, names_str) for the compact summary form.
+    # When None, the renderer falls back to the legacy [N lines] form.
+    entity_summaries: dict[str, tuple[str, str]] | None = None
 
 
 @dataclass
@@ -148,28 +152,28 @@ def _color(text: str, code: str, enabled: bool) -> str:
 def _commit_dot(commit: Commit, enabled: bool) -> tuple[str, str]:
     """Return (glyph, ansi_code) for a commit's state.
 
-    Five-state mapping (manifesto rule 3), re-mapped to trace lifecycle:
-      - default ●      no attribution at all (like LocalOnly)
-      - green ●        all lines attributed (Pushed equivalent)
-      - green ◐        partial attribution (Modified equivalent)
-      - yellow ●       pre-audit only, no trace-attributed lines
-      - magenta ●      missing_from_audit fraction > 50%
+    Dot glyph is always ``●``. Colour is the only attribution signal:
+      - dim/default: no attribution
+      - magenta   : >50% missing_from_audit
+      - green     : coverage >= 75%
+      - yellow    : coverage >= 50%
+      - red       : coverage < 50% (but has traces)
     """
     if not commit.traces:
         return DOT_SOLID, ""
-    # Use first trace's ratios as commit-level summary.
     t = commit.traces[0]
     if t.missing_ratio is not None and t.missing_ratio > 0.5:
         return DOT_SOLID, ANSI_MAGENTA if enabled else ""
-    if t.attributed_ratio is not None:
-        if t.attributed_ratio >= 0.999:
-            return DOT_SOLID, ANSI_GREEN if enabled else ""
-        if t.attributed_ratio > 0.0:
-            return DOT_HALF, ANSI_GREEN if enabled else ""
-        # No attributed lines: pre-audit only.
-        return DOT_SOLID, ANSI_YELLOW if enabled else ""
-    # Have traces but no ratios -> default green solid.
-    return DOT_SOLID, ANSI_GREEN if enabled else ""
+    if t.attributed_ratio is None:
+        return DOT_SOLID, ANSI_GREEN if enabled else ""
+    ratio = t.attributed_ratio
+    if ratio >= 0.75:
+        code = ANSI_GREEN
+    elif ratio >= 0.50:
+        code = ANSI_YELLOW
+    else:
+        code = "\x1b[31m"  # red
+    return DOT_SOLID, code if enabled else ""
 
 
 # --------------------------------------------------------------------------- #
@@ -198,11 +202,107 @@ def _truncate(text: str, max_len: int) -> str:
 # Rendering — commit-primary
 # --------------------------------------------------------------------------- #
 
+def _entity_summary_parts(
+    entities: list[Any], chunks: list[tuple[int, int, str]],
+) -> tuple[str, str]:
+    """Return (counts_str, names_str) for a trace contribution.
+
+    counts_str: space-joined tokens like ``+12 ~5 -1 ↷2`` (only non-zero).
+                Tokens carry a single-char leading glyph for colour pass.
+    names_str : up to 5 sample entity names, priority-ordered, with a
+                trailing ``+N more`` when truncated. Empty when no data.
+
+    When contrib has neither entities nor chunks, returns ("—", "").
+    """
+    if not entities and not chunks:
+        return ("\u2014", "")
+
+    # Count change_types.
+    counts: dict[str, int] = {"added": 0, "modified": 0, "deleted": 0,
+                              "renamed": 0}
+    for e in entities:
+        ct = getattr(e, "change_type", "modified")
+        counts[ct] = counts.get(ct, 0) + 1
+    # Chunks roll into "modified" since join_entities_to_traces stores them
+    # separately by change_type.
+    for _s, _end, ct in chunks:
+        counts[ct] = counts.get(ct, 0) + 1
+
+    tokens: list[str] = []
+    if counts.get("added", 0):
+        tokens.append(f"+{counts['added']}")
+    if counts.get("modified", 0):
+        tokens.append(f"~{counts['modified']}")
+    if counts.get("deleted", 0):
+        tokens.append(f"-{counts['deleted']}")
+    if counts.get("renamed", 0):
+        tokens.append(f"\u21B7{counts['renamed']}")
+    counts_str = " ".join(tokens) if tokens else "\u2014"
+
+    # Priority-ordered names: added > modified > renamed > deleted, then
+    # alpha within each bucket. Chunks contribute synthesised labels.
+    order = ("added", "modified", "renamed", "deleted")
+    buckets: dict[str, list[str]] = {k: [] for k in order}
+    for e in entities:
+        ct = getattr(e, "change_type", "modified")
+        buckets.setdefault(ct, []).append(getattr(e, "entity_name", "") or "")
+    # Sort each bucket alphabetically.
+    for k in buckets:
+        buckets[k].sort()
+
+    # If we have named entities, use those. If chunk-only, synthesise labels.
+    names: list[str] = []
+    for k in order:
+        names.extend(n for n in buckets.get(k, []) if n)
+    if not names and chunks:
+        # Chunk-only: build "261-280" compact labels (strip "lines" prefix).
+        chunk_labels = [f"{s}-{e}" for s, e, _ in chunks]
+        if chunk_labels:
+            # Prefix first with "lines " for readability, rest bare.
+            head = f"lines {chunk_labels[0]}"
+            rest = chunk_labels[1:6]  # cap to 5 total after head
+            sample = [head] + rest
+            total = len(chunk_labels)
+            shown = len(sample)
+            suffix = f", +{total - shown} more" if total > shown else ""
+            return (counts_str, ", ".join(sample) + suffix)
+
+    total = len(names)
+    sample = names[:5]
+    suffix = f", +{total - 5} more" if total > 5 else ""
+    return (counts_str, ", ".join(sample) + suffix) if sample else (counts_str, "")
+
+
+def _paint_counts(counts_str: str, use_color: bool) -> str:
+    """Apply per-verb ANSI colour to the counts string."""
+    if not use_color or not counts_str or counts_str == "\u2014":
+        return counts_str
+    tokens = counts_str.split(" ")
+    out: list[str] = []
+    for tok in tokens:
+        if not tok:
+            continue
+        head = tok[0]
+        if head == "+":
+            code = "\x1b[32m"  # green added
+        elif head == "~":
+            code = "\x1b[33m"  # yellow modified
+        elif head == "-":
+            code = "\x1b[31m"  # red deleted
+        elif head == "\u21B7":
+            code = "\x1b[34m"  # blue renamed
+        else:
+            code = ""
+        out.append(_color(tok, code, True))
+    return " ".join(out)
+
+
 def _render_trace_header(trace: TraceContribution, first: bool,
                          show_entities: bool, opts: RenderOptions,
                          short_name: str | None = None,
                          turn_count: int | None = None,
-                         lifecycle_mixed: bool = False) -> str:
+                         lifecycle_mixed: bool = False,
+                         entity_summary: tuple[str, str] | None = None) -> str:
     """Render one trace header line (either ┊╭┄ or ┊├┄).
 
     Post-043 follow-up patch:
@@ -217,12 +317,38 @@ def _render_trace_header(trace: TraceContribution, first: bool,
     short_tid = trace.trace_id[:8] if trace.trace_id else "?"
     id_plain = f"t:{short_tid}"
 
-    # Build plain parts list; colour pass is applied after truncation so
-    # budget math stays on visible width.
+    # Commit-primary compact entity-summary mode: show counts + names.
+    if entity_summary is not None:
+        counts_str, names_str = entity_summary
+        # Layout: "t:<id>  <counts>   <names>"
+        if names_str:
+            line_plain = f"{id_plain}  {counts_str}   {names_str}"
+        elif counts_str == "\u2014":
+            line_plain = f"{id_plain}  \u2014       (no entity overlap)"
+        else:
+            line_plain = f"{id_plain}  {counts_str}"
+        if lifecycle_mixed:
+            line_plain += f" {_fmt_lifecycle(trace.lifecycle)}"
+        # No truncation.
+        body = line_plain
+        if opts.color:
+            # t:<id> magenta bold.
+            body = body.replace(id_plain, _color(id_plain, "\x1b[1;35m", True), 1)
+            # Paint counts (each token by verb).
+            if counts_str and counts_str in body:
+                painted = _paint_counts(counts_str, True)
+                body = body.replace(counts_str, painted, 1)
+            # Names stay default (dim-white — body text).
+            if "(no entity overlap)" in body:
+                body = body.replace("(no entity overlap)",
+                                    _color("(no entity overlap)",
+                                           "\x1b[90m", True), 1)
+        return prefix + body
+
+    # Legacy fallback: line-count form (no entity cache available).
     parts: list[str] = [id_plain]
     if short_name and short_name != short_tid:
         parts.append(short_name)
-    # Prefer turns+entities over raw line count when turn_count is available.
     line_part: str | None = None
     turn_part: str | None = None
     entity_part: str | None = None
@@ -246,12 +372,9 @@ def _render_trace_header(trace: TraceContribution, first: bool,
     if lifecycle_mixed:
         parts.append(_fmt_lifecycle(trace.lifecycle))
 
-    suffix = " ".join(parts)
-    budget = max(1, opts.width - len(prefix))
-    body = _truncate(suffix, budget)
-
+    body = " ".join(parts)
+    # No truncation of trace rows.
     if opts.color:
-        # t:<id> magenta bold
         body = body.replace(id_plain, _color(id_plain, "\x1b[1;35m", True), 1)
         if short_name and short_name != short_tid and short_name in body:
             body = body.replace(short_name,
@@ -285,8 +408,7 @@ def _render_commit_line(c: Commit, opts: RenderOptions) -> str:
         pct_val = int(round(c.traces[0].attributed_ratio * 100))
         pct_txt = f"  {pct_val}%"
     body = f"{c_id}  {c.subject}{pct_txt}"
-    budget = max(1, opts.width - len(prefix_with_dot))
-    body = _truncate(body, budget)
+    # No truncation — let long subjects wrap rather than ellipsize.
     if opts.color:
         # c:<sha> yellow bold
         body = body.replace(c_id, _color(c_id, "\x1b[1;33m", True), 1)
@@ -304,24 +426,33 @@ def _render_commit_line(c: Commit, opts: RenderOptions) -> str:
 
 
 def _render_commit_block(c: Commit, opts: RenderOptions,
-                         lifecycle_mixed: bool = False) -> list[str]:
-    """Render a full commit stack (trace headers + commit line + close)."""
-    lines: list[str] = []
-    # Stack-of-segments grammar: always emit the stack form, even for
-    # zero/one traces. For zero traces, we still emit a header so the ├╯
-    # close has something to belong to.
+                         lifecycle_mixed: bool = False,
+                         entity_summaries: dict[str, tuple[str, str]] | None = None,
+                         ) -> list[str]:
+    """Render a full commit stack (trace headers + commit line + close).
+
+    Unattributed-commit rule: when ``c.traces`` is empty, emit just the
+    single ``┊●  c:<sha>  <subject>`` line — no stack header, no close.
+
+    When ``entity_summaries`` is provided, trace rows use the compact
+    entity-summary form (counts + sample names); otherwise they fall back
+    to the legacy ``[N lines]`` form.
+    """
     traces = c.traces or []
     if not traces:
-        # Emit a synthetic "no attribution" header so the close still parses.
-        header_prefix, _ = PREFIX["stack_header"]
-        lines.append(f"{header_prefix}{c.short_sha} {_fmt_lifecycle('unattributed')}")
-    else:
-        for i, t in enumerate(traces):
-            lines.append(_render_trace_header(
-                t, first=(i == 0), show_entities=opts.show_entities,
-                opts=opts, short_name=t.short_name, turn_count=t.turn_count,
-                lifecycle_mixed=lifecycle_mixed,
-            ))
+        # Unattributed commit: single-line entry, no stack, no close.
+        return [_render_commit_line(c, opts)]
+
+    lines: list[str] = []
+    for i, t in enumerate(traces):
+        es = None
+        if entity_summaries is not None:
+            es = entity_summaries.get(t.trace_id, ("\u2014", ""))
+        lines.append(_render_trace_header(
+            t, first=(i == 0), show_entities=opts.show_entities,
+            opts=opts, short_name=t.short_name, turn_count=t.turn_count,
+            lifecycle_mixed=lifecycle_mixed, entity_summary=es,
+        ))
     lines.append(_render_commit_line(c, opts))
     close_prefix, _ = PREFIX["stack_close"]
     lines.append(close_prefix)
@@ -346,7 +477,10 @@ def _render_commit_primary(commits: list[Commit], opts: RenderOptions) -> str:
     for i, c in enumerate(commits):
         if i > 0:
             blocks.append(PREFIX["bare_trunk"][0])
-        blocks.extend(_render_commit_block(c, opts, lifecycle_mixed=mixed))
+        blocks.extend(_render_commit_block(
+            c, opts, lifecycle_mixed=mixed,
+            entity_summaries=c.entity_summaries,
+        ))
     return "\n".join(blocks) + "\n"
 
 
@@ -367,7 +501,9 @@ def _render_trace_primary(commits: list[Commit], opts: RenderOptions) -> str:
     for c in commits:
         prefix_tmpl, _ = PREFIX["commit_nonverbose"]
         # Find this trace's contribution on this commit.
-        tc = next((t for t in c.traces if t.trace_id == pivot), None)
+        tc = next((t for t in c.traces
+                   if t.trace_id == pivot or t.trace_id.startswith(pivot)),
+                  None)
         glyph = DOT_SOLID
         code = ANSI_GREEN if opts.color else ""
         dotted = prefix_tmpl.replace(DOT_SOLID, glyph, 1)
@@ -385,7 +521,7 @@ def _render_trace_primary(commits: list[Commit], opts: RenderOptions) -> str:
                 entity_tok = _fmt_entities(ec)
                 suffix_parts.append(entity_tok)
         body = " ".join(suffix_parts)
-        body = _truncate(body, max(1, opts.width - len(prefix_tmpl)))
+        # No truncation — keep full subject visible.
         if opts.color:
             body = body.replace(c_id, _color(c_id, "\x1b[1;33m", True), 1)
             if line_tok and line_tok in body:
@@ -541,6 +677,28 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
                 turn_count=turn_count,
             ))
         c.traces = contribs
+        # Populate compact entity summaries via join_entities_to_traces.
+        # Best-effort: if the join fails or returns empty, leave as None
+        # so the renderer falls back to [N lines].
+        try:
+            from opentraces.core.entity_join import join_entities_to_traces
+            joined = join_entities_to_traces(project_cwd, c.sha)
+            if joined:
+                summaries: dict[str, tuple[str, str]] = {}
+                has_any = False
+                for jc in joined:
+                    summaries[jc.trace_id] = _entity_summary_parts(
+                        jc.entities, jc.chunks,
+                    )
+                    if jc.entities or jc.chunks:
+                        has_any = True
+                # Fill in traces that weren't in the join (no entity data).
+                for tr in contribs:
+                    summaries.setdefault(tr.trace_id, ("\u2014", ""))
+                if has_any:
+                    c.entity_summaries = summaries
+        except Exception:
+            pass
     return commits
 
 
@@ -554,6 +712,9 @@ def load_commits_from_repo(project_cwd: Path, opts: RenderOptions) -> list[Commi
     commits = _attach_attribution(commits, project_cwd,
                                   show_entities=opts.show_entities)
     if opts.mode == "trace" and opts.pivot_trace_id:
+        pivot = opts.pivot_trace_id
         commits = [c for c in commits
-                   if any(t.trace_id == opts.pivot_trace_id for t in c.traces)]
+                   if any((t.trace_id == pivot or
+                           t.trace_id.startswith(pivot))
+                          for t in c.traces)]
     return _paginate(commits, opts)
