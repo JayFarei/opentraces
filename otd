@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# otd — dev-binary shim for the in-tree opentraces CLI.
+#
+# Invokes `python -m opentraces.cli` against the working-copy code, with
+# no publish step. Use this everywhere a test or a manual check would
+# otherwise call `ot`; `otd` guarantees you're exercising the branch under
+# test, not a stale installed binary.
+#
+# Honors $OT_CLI_BIN as an override — set it to the absolute path of a
+# different CLI entry point (e.g. a release-candidate wheel) and this
+# shim will exec that instead. This is the single escape hatch.
+
+set -e
+
+if [ -n "${OT_CLI_BIN:-}" ]; then
+    exec "$OT_CLI_BIN" "$@"
+fi
+
+# Prefer the repo's venv if present; fall back to whatever python3 resolves to.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -x "$here/.venv/bin/python" ]; then
+    PY="$here/.venv/bin/python"
+else
+    PY="python3"
+fi
+
+exec "$PY" -c 'from opentraces.cli import main; raise SystemExit(main())' "$@"
