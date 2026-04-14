@@ -1969,6 +1969,212 @@ def _auth_whoami() -> None:
     _auth_status_impl()
 
 
+# ---------------------------------------------------------------------------
+# Step 7 — flat workflow verbs alongside the trace group.
+# Step 8 — ot add refuses BLOCKED + REJECTED traces.
+#
+# These wrap the same underlying impls used by `ot trace ...` so the two
+# surfaces stay perfectly consistent. The `trace` group is removed in
+# Step 15; this is the bridge.
+# ---------------------------------------------------------------------------
+
+# Re-register existing trace.X commands at the root with the same name.
+# Click commands are first-class objects — add_command attaches the same
+# Command to two groups without copying logic.
+from .trace import (  # noqa: E402
+    trace_show as _trace_show_cmd,
+    trace_list as _trace_list_cmd,
+    trace_reject as _trace_reject_cmd,
+    trace_reset as _trace_reset_cmd,
+    trace_discard as _trace_discard_cmd,
+)
+main.add_command(_trace_show_cmd, name="show")
+main.add_command(_trace_reject_cmd, name="reject")
+main.add_command(_trace_reset_cmd, name="reset")
+main.add_command(_trace_discard_cmd, name="discard")
+
+
+@main.command("list")
+@click.option(
+    "--projects", "list_projects", is_flag=True,
+    help="List every project that has run `ot init` instead of traces.",
+)
+@click.option("--remote", "remote_filter", default=None,
+              help="Filter to traces missing on the named remote.")
+@click.option("--stage", default=None, help="Filter by visible stage")
+@click.option("--model", default=None, help="Filter by model")
+@click.option("--agent", default=None, help="Filter by agent")
+@click.option("--limit", type=int, default=20, help="Max rows to show")
+@click.option("--by-commit", is_flag=True, help="Group by commit")
+@click.pass_context
+def list_cmd(
+    ctx, list_projects: bool, remote_filter: str | None,
+    stage: str | None, model: str | None, agent: str | None,
+    limit: int, by_commit: bool,
+) -> None:
+    """List traces (or projects with --projects).
+
+    Default: list traces in the local inbox. With --projects, list every
+    directory that has run ot init. With --remote <name>, filter traces to
+    those missing on that remote.
+    """
+    if list_projects:
+        ctx.invoke(projects_list_cmd)
+        return
+    if remote_filter:
+        # Per-remote pending list — uses pending_for() from Step 2.
+        from ..core.config import get_project_state_path
+        from ..core.state import StateManager
+        state_path = get_project_state_path(Path.cwd())
+        state = StateManager(state_path=state_path)
+        traces = state.pending_for(remote_filter)
+        if not traces:
+            click.echo(f"No traces pending for remote '{remote_filter}'.")
+            emit_json({"status": "ok", "traces": [], "remote": remote_filter})
+            return
+        for t in traces:
+            click.echo(f"  {t.trace_id[:12]}  status={t.status.value}")
+        emit_json({
+            "status": "ok",
+            "remote": remote_filter,
+            "traces": [{"trace_id": t.trace_id, "status": t.status.value} for t in traces],
+        })
+        return
+    # Default: delegate to the trace.list impl.
+    ctx.invoke(_trace_list_cmd, stage=stage, model=model, agent=agent, limit=limit, by_commit=by_commit)
+
+
+@main.command("add")
+@click.argument("trace_ids", nargs=-1)
+@click.option("--all", "stage_all", is_flag=True, help="Stage every Inbox-status trace for push.")
+def add_cmd(trace_ids: tuple[str, ...], stage_all: bool) -> None:
+    """Stage trace(s) for the next push (mirrors `git add`).
+
+    Variadic: pass one or more ids, or --all to stage every Inbox trace.
+    Refuses BLOCKED + REJECTED traces with a clear pointer to ot redact /
+    ot reject (Step 8 approval gate).
+    """
+    from ..core.state import TraceStatus
+    from .trace import _trace_commit_impl, _load_project_state
+
+    if not trace_ids and not stage_all:
+        click.echo("Pass one or more trace ids, or --all to stage every Inbox trace.", err=True)
+        sys.exit(2)
+
+    state, _staging_dir = _load_project_state()
+
+    # Resolve --all to the explicit list of staged trace ids.
+    if stage_all:
+        staged = state.get_traces_by_status(TraceStatus.STAGED)
+        trace_ids = tuple(t.trace_id for t in staged)
+        if not trace_ids:
+            click.echo("Nothing to stage — inbox is empty.")
+            return
+
+    # Step 8 gate: refuse BLOCKED and REJECTED before doing any work.
+    refused: list[tuple[str, str, str]] = []  # (id, status, reason)
+    for tid in trace_ids:
+        # Allow short-id prefix lookup (trace_commit_impl already does
+        # full-id lookup; we duplicate a minimal check here for the gate).
+        entry = state.get_trace(tid)
+        if entry is None:
+            # Try short-id prefix match
+            matches = [
+                e for e in state.get_traces_by_status(TraceStatus.BLOCKED)
+                + state.get_traces_by_status(TraceStatus.REJECTED)
+                if e.trace_id.startswith(tid)
+            ]
+            if matches:
+                entry = matches[0]
+        if entry is None:
+            continue  # not blocked/rejected; let _trace_commit_impl handle the not-found
+        if entry.status == TraceStatus.BLOCKED:
+            refused.append((tid, "blocked", entry.block_reason or "security finding"))
+        elif entry.status == TraceStatus.REJECTED:
+            refused.append((tid, "rejected", "marked local-only"))
+
+    if refused:
+        for tid, status, reason in refused:
+            if status == "blocked":
+                click.echo(
+                    f"Refusing to stage {tid[:12]}: {reason}\n"
+                    f"  Run `ot redact {tid[:12]} <pattern>` to clean the offending content,\n"
+                    f"  then `ot reset {tid[:12]} && ot add {tid[:12]}` — or `ot reject {tid[:12]}` to keep local-only.",
+                    err=True,
+                )
+            else:
+                click.echo(
+                    f"Refusing to stage {tid[:12]}: {reason}\n"
+                    f"  Run `ot reset {tid[:12]}` first to bring it back to Inbox.",
+                    err=True,
+                )
+        sys.exit(2)
+
+    # Otherwise dispatch to the existing per-trace commit impl.
+    for tid in trace_ids:
+        _trace_commit_impl(tid)
+
+
+@main.command("redact")
+@click.argument("trace_id")
+@click.argument("pattern")
+@click.option("--regex", "use_regex", is_flag=True, help="Interpret PATTERN as a regex.")
+@click.option("--field", "field", default=None, help="Restrict to one field path (e.g. observations.stdout).")
+@click.option("--step", "step_index", type=int, default=None, help="Restrict to one step index.")
+def redact_cmd(trace_id: str, pattern: str, use_regex: bool, field: str | None, step_index: int | None) -> None:
+    """Find and replace text content in a trace (Step 6 + Step 7).
+
+    Default: literal-string find-and-replace across every field of every
+    step. Use --regex for pattern matching, --field to scope to one field
+    (dotted path supported), --step to scope to one step. Replaces matches
+    inline with [REDACTED]. Atomic in-place rewrite. Permanent — no undo.
+    """
+    from ..core.config import get_project_state_path, get_project_traces_dir
+    from ..core.review import redact_pattern_and_persist
+    from ..core.state import StateManager
+
+    project_dir = Path.cwd()
+    state_path = get_project_state_path(project_dir)
+    state = StateManager(state_path=state_path)
+    staging_dir = get_project_traces_dir(project_dir)
+
+    entry = state.get_trace(trace_id)
+    if entry is None:
+        # Try short-id prefix
+        matches = [
+            t for t in state._state.get("traces", {}).values()
+            if t.get("trace_id", "").startswith(trace_id)
+        ]
+        if not matches:
+            click.echo(f"Trace not found: {trace_id}", err=True)
+            sys.exit(6)
+        trace_id = matches[0]["trace_id"]
+        entry = state.get_trace(trace_id)
+
+    result = redact_pattern_and_persist(
+        state, staging_dir, trace_id,
+        pattern=pattern, regex=use_regex, field=field, step=step_index,
+    )
+
+    if hasattr(result, "error_code") and result.error_code:
+        click.echo(f"redact failed: {result.error_message}", err=True)
+        sys.exit(2)
+
+    click.echo(f"Redacted {trace_id[:12]} ({getattr(result, 'replacements', '?')} replacement(s))")
+    emit_json({
+        "status": "ok",
+        "trace_id": trace_id,
+        "replacements": getattr(result, "replacements", None),
+    })
+
+
+# ot llm-review: alias for the existing review-llm command (renamed per the
+# user's "second LLM review" clarification — the llm- prefix keeps the
+# machine-pass nature explicit).
+from .installers import review_llm_cmd as _review_llm_cmd  # noqa: E402
+main.add_command(_review_llm_cmd, name="llm-review")
+
+
 @main.group(invoke_without_command=True)
 @click.pass_context
 def remote(ctx) -> None:
