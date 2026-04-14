@@ -396,6 +396,15 @@ class StateManager:
         self._state["last_backfill_at"] = when or _utcnow_iso()
         self.save()
 
+    # --- Watcher bookmark (plan 043 phase 3) ---
+
+    def get_last_watcher_run_at(self) -> str | None:
+        return self._state.get("last_watcher_run_at")
+
+    def set_last_watcher_run_at(self, when: str | None = None) -> None:
+        self._state["last_watcher_run_at"] = when or _utcnow_iso()
+        self.save()
+
 
 class TraceLock:
     """File lock on a project's traces dir to prevent concurrent uploads."""
