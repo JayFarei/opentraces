@@ -132,7 +132,8 @@ def test_single_trace_stack_grammar() -> None:
     assert lines[1].startswith("┊●")
     # Date column is dropped.
     assert "2026-04-14" not in lines[1]
-    assert "c:aaaaaaa" in lines[1]
+    # Handle now emits a 3-part form: "c:aa aaaaa" (prefix, shortcut, tail).
+    assert "c:aa" in lines[1]
     assert lines[2] == "├╯"
 
 
@@ -242,7 +243,7 @@ def test_unattributed_commit_renders_single_line() -> None:
     lines = out.rstrip("\n").split("\n")
     assert len(lines) == 1
     assert lines[0].startswith("\u250A\u25CF")  # ┊●
-    assert "c:uuuuuuu" in lines[0]
+    assert "c:uu" in lines[0]
     assert "workspace commit" in lines[0]
     # No stack header or close.
     assert "\u256D\u2504" not in out  # ╭┄

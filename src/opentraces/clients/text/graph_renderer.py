@@ -77,6 +77,9 @@ ANSI_DIM = "\x1b[2m"
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
+# Handle form: "c:XX XXXXX" or "t:XX XXXXXXX" where the digits are all
+# hex. Two hex-chars, a space, 5-7 more hex chars.
+_HANDLE_RE = re.compile(r"\b([ct]):([0-9a-f]{2}) ([0-9a-f]{5,8})\b")
 _ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?")
 
 
@@ -88,6 +91,8 @@ def strip_ansi(text: str) -> str:
 def normalize_for_snapshot(text: str) -> str:
     """Replace real SHAs and ISO timestamps with stable placeholders."""
     text = strip_ansi(text)
+    # Handle-form first so its two hex halves get collapsed together.
+    text = _HANDLE_RE.sub(r"\1:{sha7}", text)
     text = _SHA_RE.sub("{sha7}", text)
     text = _ISO_RE.sub("{timestamp}", text)
     return text
@@ -124,6 +129,9 @@ class Commit:
     # Maps trace_id -> (counts_str, names_str) for the compact summary form.
     # When None, the renderer falls back to the legacy [N lines] form.
     entity_summaries: dict[str, tuple[str, str]] | None = None
+    # Optional: trace_id -> ordered list of (file_path, [(change_type,
+    # entity_type, entity_name)]) for --entities subline expansion.
+    entity_breakdowns: dict[str, list[tuple[str, list[tuple[str, str, str]]]]] | None = None
 
 
 @dataclass
@@ -273,6 +281,39 @@ def _entity_summary_parts(
     return (counts_str, ", ".join(sample) + suffix) if sample else (counts_str, "")
 
 
+def _paint_state(state: str, use_color: bool) -> str:
+    """Paint the state column.
+
+    - Bracketed scattered/diffuse state: render dim (grey body) with
+      the inline ``t:XX`` token painted like a TRACE_ID_SHORTCUT.
+    - Counts like ``+2 ~1 chunks``: colour each token by its verb, leave
+      any trailing word (``chunks``, ``headings``, ...) dim.
+    """
+    if not use_color or not state:
+        return state
+    if state.startswith("["):
+        # dim the whole bracket; no inner paint needed for v0.
+        return _color(state, "\x1b[90m", True)
+    # Split on whitespace; paint leading +/~/-/↷ tokens, dim trailing words.
+    parts = state.split(" ")
+    out: list[str] = []
+    for p in parts:
+        if not p:
+            continue
+        h = p[:1]
+        if h == "+":
+            out.append(_color(p, "\x1b[32m", True))
+        elif h == "~":
+            out.append(_color(p, "\x1b[33m", True))
+        elif h == "-":
+            out.append(_color(p, "\x1b[31m", True))
+        elif h == "\u21B7":
+            out.append(_color(p, "\x1b[34m", True))
+        else:
+            out.append(_color(p, "\x1b[90m", True))  # dim label
+    return " ".join(out)
+
+
 def _paint_counts(counts_str: str, use_color: bool) -> str:
     """Apply per-verb ANSI colour to the counts string."""
     if not use_color or not counts_str or counts_str == "\u2014":
@@ -317,33 +358,34 @@ def _render_trace_header(trace: TraceContribution, first: bool,
     short_tid = trace.trace_id[:8] if trace.trace_id else "?"
     id_plain = f"t:{short_tid}"
 
-    # Commit-primary compact entity-summary mode: show counts + names.
+    # Commit-primary compact entity-summary mode: columnar layout.
+    #   <prefix> <handle_10w> <state_14w>  <sep>  <summary>
     if entity_summary is not None:
-        counts_str, names_str = entity_summary
-        # Layout: "t:<id>  <counts>   <names>"
-        if names_str:
-            line_plain = f"{id_plain}  {counts_str}   {names_str}"
-        elif counts_str == "\u2014":
-            line_plain = f"{id_plain}  \u2014       (no entity overlap)"
+        state_col, summary_col = entity_summary
+        from .colors import render_handle  # local import to dodge cycles
+        handle = render_handle("t", trace.trace_id or "?",
+                               use_color=opts.color)
+        # Plain width of handle = len("t:XX XXXXXX") = 11 chars.
+        # State column right-pad to 14. State may overflow (diffuse state);
+        # in that case skip the separator and name column entirely.
+        STATE_W = 14
+        plain_state = state_col
+        sep = "  " + _color("\u2502", "\x1b[90m", opts.color) + "  "
+        if len(plain_state) > STATE_W:
+            pad = ""
+            body_plain = f"{plain_state}"
+            painted_state = _paint_state(plain_state, opts.color)
+            line = f"{handle}  {painted_state}"
         else:
-            line_plain = f"{id_plain}  {counts_str}"
+            pad = " " * (STATE_W - len(plain_state))
+            painted_state = _paint_state(plain_state, opts.color)
+            if summary_col:
+                line = f"{handle}  {painted_state}{pad}{sep}{summary_col}"
+            else:
+                line = f"{handle}  {painted_state}"
         if lifecycle_mixed:
-            line_plain += f" {_fmt_lifecycle(trace.lifecycle)}"
-        # No truncation.
-        body = line_plain
-        if opts.color:
-            # t:<id> magenta bold.
-            body = body.replace(id_plain, _color(id_plain, "\x1b[1;35m", True), 1)
-            # Paint counts (each token by verb).
-            if counts_str and counts_str in body:
-                painted = _paint_counts(counts_str, True)
-                body = body.replace(counts_str, painted, 1)
-            # Names stay default (dim-white — body text).
-            if "(no entity overlap)" in body:
-                body = body.replace("(no entity overlap)",
-                                    _color("(no entity overlap)",
-                                           "\x1b[90m", True), 1)
-        return prefix + body
+            line += f" {_fmt_lifecycle(trace.lifecycle)}"
+        return prefix + line
 
     # Legacy fallback: line-count form (no entity cache available).
     parts: list[str] = [id_plain]
@@ -400,28 +442,25 @@ def _render_commit_line(c: Commit, opts: RenderOptions) -> str:
     if opts.color and code:
         dotted = prefix_with_dot.replace(glyph, _color(glyph, code, True), 1)
     # Post-043 follow-up: drop date column; spine already conveys recency.
-    # Layout: "c:<sha>  <subject>  <pct>%"
-    c_id = f"c:{c.short_sha}"
+    # Layout: "<handle>  <subject>  <pct>%"  where <handle> is the
+    # render_handle() 3-part coloured token (c:<2bright> <5rest>).
+    from .colors import render_handle
+    handle = render_handle("c", c.sha or c.short_sha, use_color=opts.color)
     pct_txt = ""
     pct_val: int | None = None
     if c.traces and c.traces[0].attributed_ratio is not None:
         pct_val = int(round(c.traces[0].attributed_ratio * 100))
         pct_txt = f"  {pct_val}%"
-    body = f"{c_id}  {c.subject}{pct_txt}"
-    # No truncation — let long subjects wrap rather than ellipsize.
-    if opts.color:
-        # c:<sha> yellow bold
-        body = body.replace(c_id, _color(c_id, "\x1b[1;33m", True), 1)
-        # Coverage % coloured by threshold.
-        if pct_val is not None:
-            pct_tok = f"{pct_val}%"
-            if pct_val >= 75:
-                code = "\x1b[32m"
-            elif pct_val >= 50:
-                code = "\x1b[33m"
-            else:
-                code = "\x1b[31m"
-            body = body.replace(pct_tok, _color(pct_tok, code, True), 1)
+    body = f"{handle}  {c.subject}{pct_txt}"
+    if opts.color and pct_val is not None:
+        pct_tok = f"{pct_val}%"
+        if pct_val >= 75:
+            code = "\x1b[32m"
+        elif pct_val >= 50:
+            code = "\x1b[33m"
+        else:
+            code = "\x1b[31m"
+        body = body.replace(pct_tok, _color(pct_tok, code, True), 1)
     return f"{dotted}{body}"
 
 
@@ -437,12 +476,17 @@ def _render_commit_block(c: Commit, opts: RenderOptions,
     When ``entity_summaries`` is provided, trace rows use the compact
     entity-summary form (counts + sample names); otherwise they fall back
     to the legacy ``[N lines]`` form.
+
+    When ``opts.show_entities`` is set, trace rows are followed by
+    ``┊│`` sublines listing each file + its entity changes.
     """
     traces = c.traces or []
     if not traces:
         # Unattributed commit: single-line entry, no stack, no close.
         return [_render_commit_line(c, opts)]
 
+    sub_prefix, _ = PREFIX["sub_line"]
+    breakdowns = c.entity_breakdowns or {}
     lines: list[str] = []
     for i, t in enumerate(traces):
         es = None
@@ -453,10 +497,50 @@ def _render_commit_block(c: Commit, opts: RenderOptions,
             opts=opts, short_name=t.short_name, turn_count=t.turn_count,
             lifecycle_mixed=lifecycle_mixed, entity_summary=es,
         ))
+        if opts.show_entities:
+            bd = breakdowns.get(t.trace_id) or []
+            lines.extend(_render_entity_sublines(bd, sub_prefix, opts.color))
     lines.append(_render_commit_line(c, opts))
     close_prefix, _ = PREFIX["stack_close"]
     lines.append(close_prefix)
     return lines
+
+
+def _render_entity_sublines(
+    bd: list[tuple[str, list[tuple[str, str, str]]]],
+    sub_prefix: str, use_color: bool,
+) -> list[str]:
+    """Render ``--entities`` sublines: file group, then per-entity lines.
+
+    ``bd`` is ordered by (-entity_count, file_path). Caps at 3 files,
+    8 entities per file; overflow -> ``+ N more files`` / ``+ N more entities``.
+    """
+    out: list[str] = []
+    MAX_FILES = 3
+    MAX_PER_FILE = 8
+    total_files = len(bd)
+    for file_path, ents in bd[:MAX_FILES]:
+        file_line = f"{sub_prefix}  {file_path}"
+        if use_color:
+            file_line = f"{sub_prefix}  {_color(file_path, '\x1b[90m', True)}"
+        out.append(file_line)
+        for (ct, et, name) in ents[:MAX_PER_FILE]:
+            glyph, code = {
+                "added": ("+", "\x1b[32m"),
+                "modified": ("~", "\x1b[33m"),
+                "deleted": ("-", "\x1b[31m"),
+                "renamed": ("\u21B7", "\x1b[34m"),
+            }.get(ct, ("~", "\x1b[33m"))
+            painted = _color(glyph, code, use_color)
+            label_type = f"{et} " if et else ""
+            out.append(f"{sub_prefix}    {painted} {label_type}{name}")
+        if len(ents) > MAX_PER_FILE:
+            extra = len(ents) - MAX_PER_FILE
+            out.append(f"{sub_prefix}    + {extra} more entities")
+    if total_files > MAX_FILES:
+        extra_f = total_files - MAX_FILES
+        out.append(f"{sub_prefix}  + {extra_f} more files")
+    return out
 
 
 def _compute_lifecycle_mixed(commits: list[Commit]) -> bool:
@@ -682,21 +766,47 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
         # so the renderer falls back to [N lines].
         try:
             from opentraces.core.entity_join import join_entities_to_traces
+            from opentraces.core.trace_summary import (
+                summarize_contribution_compact,
+            )
             joined = join_entities_to_traces(project_cwd, c.sha)
             if joined:
                 summaries: dict[str, tuple[str, str]] = {}
+                breakdowns: dict[
+                    str, list[tuple[str, list[tuple[str, str, str]]]]
+                ] = {}
                 has_any = False
                 for jc in joined:
-                    summaries[jc.trace_id] = _entity_summary_parts(
-                        jc.entities, jc.chunks,
+                    state, summary = summarize_contribution_compact(jc)
+                    summaries[jc.trace_id] = (state, summary)
+                    # Group entities by file for --entities sublines.
+                    by_file: dict[str, list[tuple[str, str, str]]] = {}
+                    for e in jc.entities:
+                        by_file.setdefault(e.file_path, []).append(
+                            (e.change_type, e.entity_type or "",
+                             e.entity_name or ""),
+                        )
+                    ranked = sorted(
+                        by_file.items(),
+                        key=lambda kv: (-len(kv[1]), kv[0]),
                     )
-                    if jc.entities or jc.chunks:
+                    if ranked:
+                        breakdowns[jc.trace_id] = ranked
+                    if jc.entities or jc.chunks or state:
                         has_any = True
+                # Filter phantoms out of traces view too.
+                phantom = {jc.trace_id for jc in joined
+                           if jc.overlap_case == "phantom"}
+                if phantom:
+                    c.traces = [t for t in contribs
+                                if t.trace_id not in phantom]
                 # Fill in traces that weren't in the join (no entity data).
-                for tr in contribs:
-                    summaries.setdefault(tr.trace_id, ("\u2014", ""))
+                for tr in c.traces:
+                    summaries.setdefault(tr.trace_id, ("", ""))
                 if has_any:
                     c.entity_summaries = summaries
+                if breakdowns:
+                    c.entity_breakdowns = breakdowns
         except Exception:
             pass
     return commits
