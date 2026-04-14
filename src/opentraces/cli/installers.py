@@ -1789,3 +1789,46 @@ def setup_entity_parser(force: bool) -> None:
         "platform": result.platform,
         "source": result.source,
     })
+
+
+# ---------------------------------------------------------------------------
+# Plan-043 phase 3 — `ot setup watcher`.
+#
+# Isolated block (append-only, EOF) so phase 5/6 edits elsewhere in this
+# file never collide with phase 3. Mirrors the entity-parser block style.
+# ---------------------------------------------------------------------------
+
+@setup_group.command("watcher")
+@click.option("--interval", type=int, default=300, show_default=True,
+              help="Polling interval in seconds.")
+@click.option("--no-install", is_flag=True,
+              help="Render the unit file but don't load it.")
+def setup_watcher(interval: int, no_install: bool) -> None:
+    """Install the background attribution watcher.
+
+    Writes a launchd plist (macOS) or systemd user unit + timer (Linux),
+    plus a worker shim at ~/.opentraces/bin/ot-watcher. The service wakes
+    up every `--interval` seconds, walks enlisted projects, and runs
+    incremental backfill when new commits or new Claude Code JSONL
+    activity appears.
+    """
+    from ..watcher import installer as _winst
+
+    try:
+        path = _winst.install(interval=interval, dry_run=no_install)
+    except RuntimeError as e:
+        human_echo(f"{_cli._err('error')}: {e}")
+        emit_json({"status": "error", "action": "setup-watcher",
+                   "message": str(e)})
+        sys.exit(5)
+
+    human_echo(f"Watcher unit written: {path}")
+    if no_install:
+        human_hint("(dry run — not loaded)")
+    emit_json({
+        "status": "ok",
+        "action": "setup-watcher",
+        "unit_path": str(path),
+        "interval_seconds": int(interval),
+        "dry_run": bool(no_install),
+    })
