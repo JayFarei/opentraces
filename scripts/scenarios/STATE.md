@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T02:45Z
-Last iteration agent: claude-opus-4-6 (loop iter 6)
+Last update: 2026-04-14T03:15Z
+Last iteration agent: claude-opus-4-6 (loop iter 7)
 
 ---
 
@@ -37,16 +37,18 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | same_lines_overwrite         | pass | 2026-04-13 | — |
 | sed_inplace_edit             | pass | 2026-04-13 | — |
 | small_tweak                  | pass | 2026-04-14 | — |
+| symlink_added                | pass | 2026-04-14 | iter 7; documents symlink-as-file behavior (watcher follows link via is_file, audit snapshots target content rather than link path). Latent design question: symlink should arguably blame to 1 line of target-path content. |
 | two_traces_different_files   | pass | 2026-04-14 | new this iter; E2E variant of self-test, two sessions touching disjoint files, no cross-contamination |
 | watcher_offline              | pass | 2026-04-13 | — |
 | zero_file_history_session    | pass | 2026-04-14 | was failing; fixed by graceful-no-audit fallback |
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 24/26 passing.** Added `bash_rename` (iter 3),
+**Current: 25/27 passing.** Added `bash_rename` (iter 3),
 `mixed_write_and_bash` (iter 4), `two_traces_different_files` (iter 5),
-`binary_file_added` (iter 6, exposed a real spike bug). `clear_mid_session`
-and `file_create_then_delete` remain blocked on human design decisions.
+`binary_file_added` (iter 6, exposed a real spike bug), `symlink_added`
+(iter 7). `clear_mid_session` and `file_create_then_delete` remain
+blocked on human design decisions.
 
 ---
 
@@ -75,6 +77,18 @@ edge case (suggestions: Edit-tool vs Write-tool distinction; rename
 detection; binary-file touch; very-large-file blame; symlink file).
 
 ---
+
+## Latent issues worth flagging
+
+- **Symlink attribution is content-biased.** The watcher's
+  `_working_tree_extras` uses `Path.is_file()` which follows symlinks,
+  so audit snapshots a symlink as a *regular file* containing the
+  target's bytes. Meanwhile HEAD stores the symlink as mode 120000
+  with the link-target path as content. Attribution ends up blaming
+  the target's line count rather than the 1-line link-target path
+  that's actually committed. Not urgent (symlinks are rare in agent
+  traces) but worth a conscious decision later. Locked-in by scenario
+  `symlink_added` so future changes are intentional.
 
 ## Open questions for the human
 
@@ -110,6 +124,14 @@ detection; binary-file touch; very-large-file blame; symlink file).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 7 (opus 4.6): Authored `symlink_added` — agent
+  creates a target file then symlinks it via `ln -s`. Passed as
+  written: attribution credits trace a for both files. Documents a
+  latent design issue — audit snapshots the symlink as a regular file
+  (Path.is_file follows links), so blame sees the target's content
+  instead of the 1-line link-target path that HEAD actually stores.
+  Logged under Latent issues; no fix this iteration (design question).
 
 - 2026-04-14 — iter 6 (opus 4.6): Authored `binary_file_added` —
   agent uses Bash printf to create a file with non-UTF-8 bytes
