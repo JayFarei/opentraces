@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T06:45Z
-Last iteration agent: claude-opus-4-6 (loop iter 14)
+Last update: 2026-04-14T07:15Z
+Last iteration agent: claude-opus-4-6 (loop iter 15)
 
 ---
 
@@ -30,6 +30,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | exit_without_done            | pass | 2026-04-13 | — |
 | file_create_then_delete      | pass | 2026-04-14 | iter 13; scenario rewritten — commit now carries a persistent keep.md alongside the ephemeral temp.txt, asserts attribution of the surviving file (the semantic the scenario's description always pointed at) |
 | formatter_after_edit         | pass | 2026-04-13 | — |
+| git_mv_rename                | pass | 2026-04-14 | iter 15; exercises porcelain-z rename (R) record parsing — new path first, old path follow-up correctly skipped |
 | human_between_sessions       | pass | 2026-04-14 | — |
 | mixed_write_and_bash         | pass | 2026-04-14 | new this iter; Write + Bash append in one trace, all lines credit same trace (dual-signal integration) |
 | multi_commits_one_session    | pass | 2026-04-13 | — |
@@ -50,7 +51,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 32/33 passing.** Only `clear_mid_session` remains (blocked
+**Current: 33/34 passing.** Only `clear_mid_session` remains (blocked
 on a human design decision: whether to mine Write/Edit tool_use
 content from JSONL when file-history blobs are absent, or accept the
 attribution gap). Added scenarios across iters 3-10:
@@ -124,6 +125,13 @@ single line, CRLF conversion via `.gitattributes`).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 15 (opus 4.6): Authored `git_mv_rename` — agent
+  uses `git mv` (not plain `mv`) so the rename is staged, exercising
+  the `-z` porcelain parser's rename-record branch (`R NEW\\0 OLD\\0`).
+  Passed first try; same semantic as `bash_rename` (content authorship
+  preserved for old path, new path credits active trace via watcher).
+  Locks in the rename paired-record parsing added in iter 14.
 
 - 2026-04-14 — iter 14 (opus 4.6): Authored `path_with_spaces`. First
   run exposed a real spike bug: both `_working_tree_extras` (build

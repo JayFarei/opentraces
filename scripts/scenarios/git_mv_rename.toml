@@ -1,0 +1,60 @@
+name = "git_mv_rename"
+description = """
+Agent uses `git mv` (not plain `mv`) to rename a committed file.
+Tests that the spike's porcelain-z parser handles rename records
+correctly: git emits `R  NEW\\0 OLD\\0` — new path first, old second.
+The watcher should capture the new path and skip the old follow-up.
+
+Analogue of `bash_rename` but via `git mv`, which stages the rename
+in the index rather than leaving it as an untracked/deleted pair.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "seed.md"
+content = "alpha\nbravo\n"
+
+[[steps]]
+type = "git"
+args = ["add", "seed.md"]
+
+[[steps]]
+type = "git"
+args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "seed"]
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run: git mv seed.md renamed.md",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "git-mv rename"
+
+# Same semantics as bash_rename — authorship of content is preserved
+# for the deleted side; new path credits the active trace via watcher.
+[[assertions]]
+file = "renamed.md"
+trace = "a"
+lines = 2
+
+[[assertions]]
+file = "seed.md"
+trace = "pre-audit"
+lines = 2
