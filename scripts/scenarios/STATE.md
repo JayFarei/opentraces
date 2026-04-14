@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T03:15Z
-Last iteration agent: claude-opus-4-6 (loop iter 7)
+Last update: 2026-04-14T03:45Z
+Last iteration agent: claude-opus-4-6 (loop iter 8)
 
 ---
 
@@ -31,6 +31,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | mixed_write_and_bash         | pass | 2026-04-14 | new this iter; Write + Bash append in one trace, all lines credit same trace (dual-signal integration) |
 | multi_commits_one_session    | pass | 2026-04-13 | — |
 | multiple_edits_one_turn      | pass | 2026-04-13 | — |
+| no_trailing_newline          | pass | 2026-04-14 | iter 8; confirms last unterminated line still counts |
 | partial_commit               | pass | 2026-04-13 | — |
 | pre_session_content          | pass | 2026-04-13 | — |
 | revert_within_session        | pass | 2026-04-13 | — |
@@ -44,11 +45,11 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 25/27 passing.** Added `bash_rename` (iter 3),
-`mixed_write_and_bash` (iter 4), `two_traces_different_files` (iter 5),
-`binary_file_added` (iter 6, exposed a real spike bug), `symlink_added`
-(iter 7). `clear_mid_session` and `file_create_then_delete` remain
-blocked on human design decisions.
+**Current: 26/28 passing.** Added scenarios across iters 3-8:
+`bash_rename`, `mixed_write_and_bash`, `two_traces_different_files`,
+`binary_file_added` (exposed a real spike bug), `symlink_added`,
+`no_trailing_newline`. `clear_mid_session` and `file_create_then_delete`
+remain blocked on human design decisions.
 
 ---
 
@@ -124,6 +125,12 @@ detection; binary-file touch; very-large-file blame; symlink file).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 8 (opus 4.6): Authored `no_trailing_newline` —
+  agent creates a file via Bash `printf` without a terminating newline.
+  Confirms the spike's line-count parsing treats the final
+  unterminated line as a real attributed line (3 lines credited to
+  trace a). Passed first try.
 
 - 2026-04-14 — iter 7 (opus 4.6): Authored `symlink_added` — agent
   creates a target file then symlinks it via `ln -s`. Passed as

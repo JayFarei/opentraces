@@ -1,0 +1,48 @@
+name = "no_trailing_newline"
+description = """
+Agent writes a file whose last line is NOT terminated by a newline.
+Many editors silently add one; git treats such files specially (blame
+emits a "No newline at end of file" marker). Tests that the spike's
+line-count parser treats the final unterminated line as a real line
+(it represents real content authored by the trace) rather than
+dropping it.
+
+Realistic pattern: generated code, JSON, or config files where a
+missing trailing newline is common — we don't want attribution to
+silently undercount.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run: printf 'alpha\\nbravo\\ncharlie' > notes.md  (note: no trailing newline)",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "write file without trailing newline"
+
+# Three lines, regardless of whether the last one is newline-terminated.
+[[assertions]]
+file = "notes.md"
+trace = "a"
+lines = 3
+
+[[assertions]]
+file = "notes.md"
+total_lines = 3
