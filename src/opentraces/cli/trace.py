@@ -107,77 +107,78 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
     from opentraces_schema import TraceRecord
 
     state, staging_dir = _load_project_state()
-    # Walk newest-first so --limit stops early with the most recent traces,
-    # not the alphabetically-first ones (UUID names are not time-ordered).
-    staged_files = (
-        sorted(staging_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if staging_dir.exists()
-        else []
-    )
+    staged_files = list(staging_dir.glob("*.jsonl")) if staging_dir.exists() else []
 
-    traces: list[dict] = []
     now = _time.time()
+
+    def _ts_epoch(record) -> float:
+        if not record.timestamp_end:
+            return 0.0
+        try:
+            from datetime import datetime
+            if hasattr(record.timestamp_end, "timestamp"):
+                return record.timestamp_end.timestamp()
+            return datetime.fromisoformat(
+                str(record.timestamp_end).replace("Z", "+00:00")
+            ).timestamp()
+        except (ValueError, TypeError, AttributeError):
+            return 0.0
+
+    # Load all, sort by record timestamp_end desc (actual age, not mtime).
+    parsed: list[tuple[TraceRecord, float]] = []
     for sf in staged_files:
         try:
             data = sf.read_text().strip()
             record = TraceRecord.model_validate_json(data.splitlines()[0])
-            entry = state.get_trace(record.trace_id)
-            visible_stage = resolve_visible_stage(entry.status if entry else None)
-
-            # Apply filters
-            if stage and visible_stage != stage:
-                continue
-            if agent and record.agent.name != agent:
-                continue
-            if model and (not record.agent.model or model.lower() not in record.agent.model.lower()):
-                continue
-
-            # Relative timestamp
-            rel_time = "unknown"
-            ts_iso = None
-            if record.timestamp_end:
-                try:
-                    from datetime import datetime
-                    ts_str = str(record.timestamp_end)
-                    ts_iso = ts_str
-                    # Parse ISO string (may be str or datetime)
-                    if hasattr(record.timestamp_end, 'timestamp'):
-                        ts_epoch = record.timestamp_end.timestamp()
-                    else:
-                        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                        ts_epoch = dt.timestamp()
-                    diff_seconds = now - ts_epoch
-                    if diff_seconds < 3600:
-                        rel_time = f"{int(diff_seconds / 60)}m ago"
-                    elif diff_seconds < 86400:
-                        rel_time = f"{int(diff_seconds / 3600)}h ago"
-                    else:
-                        rel_time = f"{int(diff_seconds / 86400)}d ago"
-                except (ValueError, TypeError, AttributeError) as e:
-                    logger.debug("Could not compute relative time: %s", e)
-
-            traces.append({
-                "trace_id": record.trace_id,
-                "task": (record.task.description or "untitled")[:60],
-                "agent": record.agent.name,
-                "model": record.agent.model or "unknown",
-                "stage": visible_stage,
-                "step_count": len(record.steps),
-                "tool_count": sum(len(s.tool_calls) for s in record.steps),
-                "flag_count": record.security.flags_reviewed or 0,
-                "timestamp": ts_iso,
-                "relative_time": rel_time,
-                "git_links": [
-                    {"revision": l.revision, "tier": l.tier}
-                    for l in record.git_links
-                ],
-                "lifecycle": record.lifecycle,
-            })
-
-            if len(traces) >= limit:
-                break
+            parsed.append((record, _ts_epoch(record)))
         except Exception:
             continue
+    parsed.sort(key=lambda p: p[1], reverse=True)
+
+    traces: list[dict] = []
+    for record, ts_epoch in parsed:
+        entry = state.get_trace(record.trace_id)
+        visible_stage = resolve_visible_stage(entry.status if entry else None)
+
+        if stage and visible_stage != stage:
+            continue
+        if agent and record.agent.name != agent:
+            continue
+        if model and (not record.agent.model or model.lower() not in record.agent.model.lower()):
+            continue
+
+        rel_time = "unknown"
+        if ts_epoch:
+            diff_seconds = now - ts_epoch
+            if diff_seconds < 3600:
+                rel_time = f"{int(diff_seconds / 60)}m ago"
+            elif diff_seconds < 86400:
+                rel_time = f"{int(diff_seconds / 3600)}h ago"
+            elif diff_seconds < 172800:
+                rel_time = "yesterday"
+            else:
+                rel_time = f"{int(diff_seconds / 86400)}d ago"
+
+        traces.append({
+            "trace_id": record.trace_id,
+            "task": (record.task.description or "untitled")[:80],
+            "agent": record.agent.name,
+            "model": record.agent.model or "unknown",
+            "stage": visible_stage,
+            "step_count": len(record.steps),
+            "tool_count": sum(len(s.tool_calls) for s in record.steps),
+            "flag_count": record.security.flags_reviewed or 0,
+            "timestamp": str(record.timestamp_end) if record.timestamp_end else None,
+            "relative_time": rel_time,
+            "git_links": [
+                {"revision": l.revision, "tier": l.tier}
+                for l in record.git_links
+            ],
+            "lifecycle": record.lifecycle,
+        })
+
+        if len(traces) >= limit:
+            break
 
     from rich.console import Console as _Console
     from rich.table import Table as _Table
@@ -188,6 +189,7 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
     def _build_table():
         t = _Table(box=_box.SIMPLE_HEAD, show_edge=False, padding=(0, 1), header_style="dim")
         t.add_column("ID", no_wrap=True)
+        t.add_column("Age", no_wrap=True, justify="right")
         t.add_column("Task", overflow="ellipsis", no_wrap=True)
         return t
 
@@ -195,7 +197,11 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
         task = s["task"] or "untitled"
         if len(task) > 80:
             task = task[:79] + "…"
-        return (f"{s['trace_id'][:8]}", task)
+        return (
+            f"{s['trace_id'][:8]}",
+            f"[dim]{s['relative_time']}[/]",
+            task,
+        )
 
     console.print()
     if by_commit:
@@ -210,15 +216,13 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
             console.print(f"[bold]git {rev_label}[/]  [dim]({len(groups[rev])})[/]")
             t = _build_table()
             for s in groups[rev]:
-                tid, task = _row_task(s)
-                t.add_row(tid, task)
+                t.add_row(*_row_task(s))
             console.print(t)
             console.print()
     else:
         t = _build_table()
         for s in traces:
-            tid, task = _row_task(s)
-            t.add_row(tid, task)
+            t.add_row(*_row_task(s))
         console.print(t)
 
     console.print(

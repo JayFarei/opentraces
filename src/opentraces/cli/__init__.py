@@ -2064,24 +2064,46 @@ def status(limit: int) -> None:
     # Machine-readable mirror of visible rows for --json consumers.
     session_summary: list[dict] = []
 
-    # Session list (only the top N by mtime)
+    # Session list — sort by record timestamp_end desc (actual age), not
+    # file mtime, so the table order matches the "Age" column.
     if total_files == 0:
         click.echo("0 traces in inbox")
     else:
-        if limit and limit > 0 and total_files > limit:
-            staged_files = sorted(
-                staging_dir.glob("*.jsonl"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )[:limit]
-        else:
-            staged_files = sorted(
-                staging_dir.glob("*.jsonl"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
+        from opentraces_schema import TraceRecord
+        from rich.console import Console as _Console
+        from rich.table import Table as _Table
+        from rich import box as _box
+        from ..core.state import TraceStatus
 
-        shown = len(staged_files)
+        def _ts_of(record) -> float:
+            if not record.timestamp_end:
+                return 0.0
+            try:
+                if hasattr(record.timestamp_end, "timestamp"):
+                    return record.timestamp_end.timestamp()
+                from datetime import datetime as _dt
+                return _dt.fromisoformat(
+                    str(record.timestamp_end).replace("Z", "+00:00")
+                ).timestamp()
+            except (ValueError, TypeError, AttributeError):
+                return 0.0
+
+        all_files = list(staging_dir.glob("*.jsonl"))
+        loaded: list[tuple[Path, TraceRecord]] = []
+        for sf in all_files:
+            try:
+                rec = TraceRecord.model_validate_json(sf.read_text().strip().splitlines()[0])
+                loaded.append((sf, rec))
+            except Exception:
+                loaded.append((sf, None))
+
+        # Newest-first by record timestamp_end; unparseable records sort last.
+        loaded.sort(key=lambda pr: _ts_of(pr[1]) if pr[1] else -1.0, reverse=True)
+
+        if limit and limit > 0 and len(loaded) > limit:
+            loaded = loaded[:limit]
+
+        shown = len(loaded)
         if shown < total_files:
             pages = (total_files + shown - 1) // shown if shown else 1
             click.echo(
@@ -2091,11 +2113,6 @@ def status(limit: int) -> None:
         else:
             click.echo(f"{_bold(str(total_files))} trace{'s' if total_files != 1 else ''}")
         click.echo()
-
-        from opentraces_schema import TraceRecord
-        from rich.console import Console as _Console
-        from rich.table import Table as _Table
-        from rich import box as _box
 
         now = _time.time()
         console = _Console()
@@ -2107,56 +2124,54 @@ def status(limit: int) -> None:
         )
         table.add_column("ID", no_wrap=True)
         table.add_column("Age", no_wrap=True, justify="right")
-        table.add_column("T1 regex", no_wrap=True, justify="center")
-        table.add_column("T1.5 trufflehog", no_wrap=True, justify="center")
-        table.add_column("T2 llm", no_wrap=True, justify="center")
+        table.add_column("Task", overflow="ellipsis", no_wrap=True, max_width=40)
+        table.add_column("Regex", no_wrap=True, justify="center")
+        table.add_column("TH", no_wrap=True, justify="center")
+        table.add_column("LLM", no_wrap=True, justify="center")
+        table.add_column("Human", no_wrap=True, justify="center")
+        table.add_column("Push", no_wrap=True, justify="center")
 
-        # Load global cfg once for tier-enabled checks.
         _global_cfg = load_config()
         th_enabled = bool(_global_cfg.security.trufflehog.enabled)
         llm_enabled = bool(getattr(_global_cfg.security, "llm_review", None)
                            and _global_cfg.security.llm_review.enabled)
 
         rows_rendered = 0
-        # Retained for the "no git links" hint beneath the table.
         git_link_hits = 0
+        _reviewed = {TraceStatus.APPROVED, TraceStatus.COMMITTED,
+                     TraceStatus.UPLOADING, TraceStatus.UPLOADED,
+                     TraceStatus.REJECTED}
 
-        for sf in staged_files:
+        for sf, record in loaded:
+            if record is None:
+                table.add_row(
+                    f"[dim]{sf.stem[:8]}[/]", "", "[red]? parse error[/]",
+                    "[red]?[/]", "[red]?[/]", "[red]?[/]", "[red]?[/]", "[red]?[/]",
+                )
+                continue
             try:
-                data = sf.read_text().strip()
-                record = TraceRecord.model_validate_json(data)
                 entry = state.get_trace(record.trace_id)
                 visible_stage = resolve_visible_stage(entry.status if entry else None)
 
-                # Relative time
-                rel_time = "unknown"
-                if record.timestamp_end:
-                    try:
-                        if hasattr(record.timestamp_end, "timestamp"):
-                            ts = record.timestamp_end.timestamp()
-                        else:
-                            from datetime import datetime as _dt
-                            ts = _dt.fromisoformat(
-                                str(record.timestamp_end).replace("Z", "+00:00")
-                            ).timestamp()
-                        diff_seconds = now - ts
-                        if diff_seconds < 3600:
-                            rel_time = f"{int(diff_seconds / 60)}m ago"
-                        elif diff_seconds < 86400:
-                            rel_time = f"{int(diff_seconds / 3600)}h ago"
-                        elif diff_seconds < 172800:
-                            rel_time = "yesterday"
-                        else:
-                            rel_time = f"{int(diff_seconds / 86400)}d ago"
-                    except (ValueError, TypeError, AttributeError):
-                        pass
+                ts = _ts_of(record)
+                if ts:
+                    diff_seconds = now - ts
+                    if diff_seconds < 3600:
+                        rel_time = f"{int(diff_seconds / 60)}m ago"
+                    elif diff_seconds < 86400:
+                        rel_time = f"{int(diff_seconds / 3600)}h ago"
+                    elif diff_seconds < 172800:
+                        rel_time = "yesterday"
+                    else:
+                        rel_time = f"{int(diff_seconds / 86400)}d ago"
+                else:
+                    rel_time = "unknown"
 
                 title, source = _describe_trace(record)
+                if len(title) > 40:
+                    title = title[:39] + "…"
                 status_cell, status_plain = _status_cell(entry, record)
 
-                # Per-tier checklist. Y when the tier is enabled + evidence
-                # exists on the record; dash ("·") when the tier is disabled
-                # globally; X when enabled but the record was not scanned.
                 t1_ran = bool(record.security.scanned)
                 meta_all = getattr(record, "metadata", None) or {}
                 sec_meta = meta_all.get("security") or {}
@@ -2170,18 +2185,28 @@ def status(limit: int) -> None:
                         return "[dim]·[/]"
                     return "[green]✓[/]" if ran else "[yellow]○[/]"
 
-                # T1 (regex/entropy) is always enabled.
-                t1_cell = _tier_cell(True, t1_ran)
-                th_cell = _tier_cell(th_enabled, th_ran)
-                llm_cell = _tier_cell(llm_enabled, llm_ran)
+                entry_status = (
+                    TraceStatus(entry.status) if entry and isinstance(entry.status, str)
+                    else (entry.status if entry else None)
+                )
+                human_ran = entry_status in _reviewed if entry_status else False
+                pushed = False
+                if entry:
+                    pushed = (
+                        entry_status == TraceStatus.UPLOADED
+                        or bool(getattr(entry, "uploaded_to", None))
+                    )
 
                 short_id = record.trace_id[:8]
                 table.add_row(
                     short_id,
                     f"[dim]{rel_time}[/]",
-                    t1_cell,
-                    th_cell,
-                    llm_cell,
+                    title,
+                    _tier_cell(True, t1_ran),
+                    _tier_cell(th_enabled, th_ran),
+                    _tier_cell(llm_enabled, llm_ran),
+                    "[green]✓[/]" if human_ran else "[yellow]○[/]",
+                    "[green]✓[/]" if pushed else "[yellow]○[/]",
                 )
                 rows_rendered += 1
                 chip = _git_chip(record)
@@ -2196,14 +2221,17 @@ def status(limit: int) -> None:
                     "task_source": source,
                     "age": rel_time,
                     "security": {
-                        "t1_regex": t1_ran,
-                        "t1_5_trufflehog": {"enabled": th_enabled, "ran": th_ran},
-                        "t2_llm": {"enabled": llm_enabled, "ran": llm_ran},
+                        "regex": t1_ran,
+                        "trufflehog": {"enabled": th_enabled, "ran": th_ran},
+                        "llm": {"enabled": llm_enabled, "ran": llm_ran},
+                        "human": human_ran,
+                        "pushed": pushed,
                     },
                 })
             except Exception:
                 table.add_row(
-                    "", "", "[red]?[/]", "[red]?[/]", "[red]?[/]",
+                    f"[dim]{record.trace_id[:8]}[/]", "", "[red]? error[/]",
+                    "[red]?[/]", "[red]?[/]", "[red]?[/]", "[red]?[/]", "[red]?[/]",
                 )
 
         console.print(table)
