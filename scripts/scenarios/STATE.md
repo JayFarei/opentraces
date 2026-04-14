@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T07:45Z
-Last iteration agent: claude-opus-4-6 (loop iter 16)
+Last update: 2026-04-14T08:15Z
+Last iteration agent: claude-opus-4-6 (loop iter 17)
 
 ---
 
@@ -33,6 +33,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | formatter_after_edit         | pass | 2026-04-13 | — |
 | git_mv_rename                | pass | 2026-04-14 | iter 15; exercises porcelain-z rename (R) record parsing — new path first, old path follow-up correctly skipped |
 | human_between_sessions       | pass | 2026-04-14 | — |
+| long_single_line             | pass | 2026-04-14 | iter 17; 2000-char single line blames as 1 line (minified-JS / one-line-JSON case) |
 | mixed_write_and_bash         | pass | 2026-04-14 | new this iter; Write + Bash append in one trace, all lines credit same trace (dual-signal integration) |
 | multi_commits_one_session    | pass | 2026-04-13 | — |
 | multiple_edits_one_turn      | pass | 2026-04-13 | — |
@@ -52,7 +53,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 34/35 passing.** Only `clear_mid_session` remains (blocked
+**Current: 35/36 passing.** Only `clear_mid_session` remains (blocked
 on a human design decision: whether to mine Write/Edit tool_use
 content from JSONL when file-history blobs are absent, or accept the
 attribution gap). Added scenarios across iters 3-10:
@@ -126,6 +127,10 @@ single line, CRLF conversion via `.gitattributes`).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 17 (opus 4.6): Authored `long_single_line` — a
+  2000-character single line (minified-JS / one-line-JSON shape).
+  Blame correctly counts it as 1 line. Passed first try.
 
 - 2026-04-14 — iter 16 (opus 4.6): Authored `dotfile_added` — agent
   writes a `.gitignore`. Confirms leading-dot paths flow through the

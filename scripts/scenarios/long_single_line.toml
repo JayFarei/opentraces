@@ -1,0 +1,42 @@
+name = "long_single_line"
+description = """
+Agent writes a file consisting of a single long line (no interior
+newlines). Tests that blame parses the porcelain as one line rather
+than exploding into many. Realistic: minified JS bundles, one-line
+JSON, generated configs.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run this exactly: python3 -c \"print('x'*2000, end='')\" > blob.js",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "add minified blob"
+
+# A single line of 2000 characters → blame counts 1 line.
+[[assertions]]
+file = "blob.js"
+trace = "a"
+lines = 1
+
+[[assertions]]
+file = "blob.js"
+total_lines = 1
