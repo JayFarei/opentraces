@@ -67,9 +67,14 @@ class Snapshot:
 
 def git(*args: str, cwd: Path | None = None, input: str | None = None,
         env: dict | None = None, check: bool = True) -> str:
+    # blame --line-porcelain on files containing non-UTF-8 bytes (binary
+    # assets checked into the repo) emits raw bytes interleaved with
+    # ASCII metadata. Decode permissively so those bytes don't crash
+    # attribution; line-count integrity is preserved because the
+    # porcelain framing is ASCII-only.
     result = subprocess.run(
         ["git", *args], cwd=cwd, input=input,
-        capture_output=True, text=True, env=env,
+        capture_output=True, encoding="utf-8", errors="replace", env=env,
     )
     if check and result.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed:\n  stderr: {result.stderr}")
