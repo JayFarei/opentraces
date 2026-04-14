@@ -45,13 +45,26 @@ _json_mode = False
 # -- Grouped help formatting --------------------------------------------------
 
 COMMAND_SECTIONS = [
-    ("Getting Started", ["setup", "init", "doctor", "status"]),
-    ("Review", ["tui", "web", "graph", "resume", "blame"]),
-    ("Discover", ["projects", "stats", "log", "pull"]),
-    ("Publish", ["trace", "commit", "push", "export"]),
-    ("Manage", ["remote", "config", "remove", "upgrade"]),
-    ("Auth", ["login", "logout", "whoami"]),
-    ("Operations", ["review-llm", "assess"]),
+    ("Core", ["add", "push", "pull", "list", "show", "status", "blame", "resume"]),
+    (
+        "Inbox",
+        [
+            "reject",
+            "reset",
+            "redact",
+            "discard",
+            "llm-review",
+            "export",
+            "tui",
+            "web",
+            "stats",
+            "log",
+            "graph",
+            "assess",
+        ],
+    ),
+    ("Project", ["init", "doctor", "remove"]),
+    ("Resource", ["remote", "auth", "config", "setup", "completions"]),
 ]
 
 
@@ -230,7 +243,11 @@ class GroupedGroup(OpentracesGroup):
         ]
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        placed: set[str] = set()
+        # gh-style sectioned listing: CORE COMMANDS / INBOX COMMANDS /
+        # PROJECT COMMANDS / RESOURCE COMMANDS. Legacy verbs that are
+        # still registered (commit, login/logout/whoami, review-llm,
+        # upgrade, projects, trace) are intentionally NOT advertised
+        # here — they remain invokable until the Step 15 clean break.
         for section_name, cmd_names in COMMAND_SECTIONS:
             rows: list[tuple[str, str]] = []
             for name in cmd_names:
@@ -238,23 +255,10 @@ class GroupedGroup(OpentracesGroup):
                 if cmd is None or cmd.hidden:
                     continue
                 rows.append((name, cmd.get_short_help_str(limit=formatter.width)))
-                placed.add(name)
             if rows:
-                with self._section(formatter, section_name):
+                heading = f"{section_name.upper()} COMMANDS"
+                with self._section(formatter, heading):
                     formatter.write_dl(self._style_rows(rows))
-
-        # Anything unclassified falls into "More".
-        extras: list[tuple[str, str]] = []
-        for name in self.list_commands(ctx):
-            if name in placed:
-                continue
-            cmd = self.commands.get(name)
-            if cmd is None or cmd.hidden:
-                continue
-            extras.append((name, cmd.get_short_help_str(limit=formatter.width)))
-        if extras:
-            with self._section(formatter, "More"):
-                formatter.write_dl(self._style_rows(extras))
 
 
 def emit_json(data: dict) -> None:
