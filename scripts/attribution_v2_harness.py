@@ -574,6 +574,36 @@ def _step_stage_claude_corpus(state: RunState, params: dict) -> None:
     state._env_overrides = overrides
 
 
+def _step_watcher_run_once(state: RunState, params: dict) -> None:
+    """Run one in-process watcher tick; stash the TickReport on state."""
+    from opentraces.watcher import daemon as _wd
+    report = _wd.run_once(state.project_dir)
+    if not hasattr(state, "watcher_reports"):
+        state.watcher_reports = []
+    state.watcher_reports.append(report)
+
+
+def _step_simulate_crash_after(state: RunState, params: dict) -> None:
+    """Arm the NEXT ``watcher_run_once`` to raise at a checkpoint.
+
+    Valid checkpoints: ``after_probe``, ``after_first_commit``.
+    The flag auto-clears once a tick has been attempted.
+    """
+    from opentraces.watcher import daemon as _wd
+    _wd._CRASH_AFTER_PROBE = params.get("where", "after_probe")
+    import functools
+    orig = _wd.run_once
+
+    @functools.wraps(orig)
+    def _once(project_cwd, *a, **kw):
+        try:
+            return orig(project_cwd, *a, **kw)
+        finally:
+            _wd._CRASH_AFTER_PROBE = None
+            _wd.run_once = orig
+    _wd.run_once = _once
+
+
 def _step_write_attribution(state: RunState, params: dict) -> None:
     """Write a pre-built attribution JSON directly into the cache.
 
@@ -648,6 +678,8 @@ STEP_HANDLERS = {
     "invoke_cli": _step_invoke_cli,
     "delete_cache_entry": _step_delete_cache_entry,
     "write_attribution": _step_write_attribution,
+    "watcher_run_once": _step_watcher_run_once,
+    "simulate_crash_after": _step_simulate_crash_after,
     "write_entity_cache": _step_write_entity_cache,
     "mock_stdin": _step_mock_stdin,
     "stage_claude_corpus": _step_stage_claude_corpus,
@@ -772,6 +804,66 @@ def _assert_backfill_scenario(state: RunState, a: dict) -> str:
             f"name={want_name!r} change={want_change!r} "
             f"old={want_old!r} (got {entities!r})"
         )
+    if kind == "tick_field":
+        reports = getattr(state, "watcher_reports", None) or []
+        if not reports:
+            raise AssertionError("tick_field: no watcher ticks recorded")
+        report = reports[-1]
+        name = a["name"]
+        actual = getattr(report, name)
+        if "equals" in a:
+            expected = a["equals"]
+            if actual != expected:
+                raise AssertionError(
+                    f"tick.{name}: expected {expected!r}, got {actual!r}"
+                )
+            return f"tick.{name}={actual!r} ✓"
+        if "min" in a:
+            if actual is None or actual < a["min"]:
+                raise AssertionError(
+                    f"tick.{name}: expected ≥{a['min']}, got {actual}"
+                )
+            return f"tick.{name}={actual} (≥{a['min']}) ✓"
+        if "max" in a:
+            if actual is None or actual > a["max"]:
+                raise AssertionError(
+                    f"tick.{name}: expected ≤{a['max']}, got {actual}"
+                )
+            return f"tick.{name}={actual} (≤{a['max']}) ✓"
+        raise ValueError("tick_field needs 'equals', 'min', or 'max'")
+    if kind == "state_field":
+        # read from StateManager
+        from opentraces.core.config import get_project_state_path
+        from opentraces.core.state import StateManager
+        sp = get_project_state_path(state.project_dir)
+        sm = StateManager(state_path=sp)
+        name = a["name"]
+        getter = {
+            "last_backfilled_commit": sm.get_last_backfilled_commit,
+            "last_backfill_at": sm.get_last_backfill_at,
+            "last_watcher_run_at": sm.get_last_watcher_run_at,
+        }.get(name)
+        if getter is None:
+            raise ValueError(f"state_field: unknown field {name!r}")
+        actual = getter()
+        if "equals_head" in a and a["equals_head"]:
+            head = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=state.project_dir, text=True
+            ).strip()
+            if actual != head:
+                raise AssertionError(
+                    f"state.{name}: expected HEAD={head[:8]}, got {str(actual)[:8]}"
+                )
+            return f"state.{name}==HEAD ✓"
+        if "is_set" in a:
+            expected = bool(a["is_set"])
+            got = actual is not None and actual != ""
+            if got != expected:
+                raise AssertionError(
+                    f"state.{name}: is_set expected {expected}, got {got}"
+                )
+            return f"state.{name}.is_set={got} ✓"
+        raise ValueError("state_field needs 'equals_head' or 'is_set'")
     if kind == "report_field":
         if not state.backfill_reports:
             raise AssertionError("report_field: no backfill reports recorded")
@@ -810,7 +902,8 @@ def run_assertions(state: RunState, assertions: list[dict]) -> list[str]:
     # backfill scenarios don't reinvoke the spike unnecessarily.
     phase1_kinds = {"cache_file_exists", "cli_stdout_matches",
                     "cli_stderr_matches", "cli_returncode", "report_field",
-                    "entity_cache_has", "cli_stdout_matches_snapshot"}
+                    "entity_cache_has", "cli_stdout_matches_snapshot",
+                    "tick_field", "state_field"}
     if all(a.get("kind") in phase1_kinds for a in assertions):
         return [_assert_backfill_scenario(state, a) for a in assertions]
     result = _attribution_for(state)
