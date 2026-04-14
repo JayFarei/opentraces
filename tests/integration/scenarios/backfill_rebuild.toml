@@ -1,0 +1,48 @@
+name = "backfill_rebuild"
+description = "After the cache is dirtied, --rebuild reinstates every attribution."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "a.py"
+content = "print('a')\n"
+
+[[steps]]
+type = "commit"
+message = "add a"
+
+[[steps]]
+type = "write_file"
+path = "b.py"
+content = "print('b')\n"
+
+[[steps]]
+type = "commit"
+message = "add b"
+
+[[steps]]
+type = "run_backfill"
+mode = "rebuild"
+
+[[steps]]
+type = "delete_cache_entry"
+ref = "HEAD~1"
+
+[[steps]]
+type = "run_backfill"
+mode = "rebuild"
+
+[[assertions]]
+kind = "cache_file_exists"
+ref = "HEAD"
+exists = true
+
+[[assertions]]
+kind = "cache_file_exists"
+ref = "HEAD~1"
+exists = true

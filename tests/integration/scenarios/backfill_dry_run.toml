@@ -1,0 +1,36 @@
+name = "backfill_dry_run"
+description = "Dry-run computes a report but never writes cache files to disk."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "a.py"
+content = "print('a1')\nprint('a2')\nprint('a3')\n"
+
+[[steps]]
+type = "commit"
+message = "add a"
+
+[[steps]]
+type = "run_backfill"
+mode = "dry_run"
+
+[[assertions]]
+kind = "report_field"
+name = "dry_run"
+equals = true
+
+[[assertions]]
+kind = "report_field"
+name = "commits_processed"
+min = 1
+
+[[assertions]]
+kind = "cache_file_exists"
+ref = "HEAD"
+exists = false

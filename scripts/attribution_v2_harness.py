@@ -343,6 +343,9 @@ class RunState:
     label_to_trace: dict[str, set[str]] = field(default_factory=dict)
     contexts: list[ClaudeContext] = field(default_factory=list)
     watcher_proc: subprocess.Popen | None = None
+    # Plan-043 phase 1 additions — populated by run_backfill / invoke_cli.
+    backfill_reports: list = field(default_factory=list)
+    last_cli: dict = field(default_factory=dict)
 
 
 # --- step implementations ---
@@ -473,6 +476,69 @@ def _step_stop_watcher(state: RunState, params: dict) -> None:
     time.sleep(0.5)
 
 
+def _step_init_opentraces(state: RunState, params: dict) -> None:
+    """Drop an .opentraces.json marker so get_project_dir works.
+
+    Kept side-effect-free on the global registry — we only need the marker.
+    """
+    import uuid as _uuid
+    marker = state.project_dir / ".opentraces.json"
+    if not marker.is_file():
+        marker.write_text(json.dumps(
+            {"project_id": _uuid.uuid4().hex, "policy": {}}
+        ))
+    # Stage + commit so HEAD sees the marker.
+    if params.get("commit", True):
+        _run(["git", "add", ".opentraces.json"], cwd=state.project_dir,
+             check=False)
+        _run(["git", "-c", "user.email=h@h", "-c", "user.name=H",
+              "commit", "-q", "-m", "add opentraces marker"],
+             cwd=state.project_dir, check=False)
+
+
+def _step_run_backfill(state: RunState, params: dict) -> None:
+    """Invoke core.backfill in-process. Stashes the report on state."""
+    from opentraces.core import backfill as _backfill
+    mode = params.get("mode", "incremental")
+    max_commits = int(params.get("max_commits", 100))
+    if mode == "dry_run":
+        report = _backfill.run_dry_run(state.project_dir, max_commits=max_commits)
+    elif mode == "rebuild" or mode == "full":
+        report = _backfill.run_full(state.project_dir, max_commits=max_commits)
+    else:
+        report = _backfill.run_incremental(state.project_dir,
+                                           max_commits=max_commits)
+    state.backfill_reports.append(report)
+
+
+def _step_invoke_cli(state: RunState, params: dict) -> None:
+    """Run ``./otd <args...>`` via subprocess, capture stdout/stderr/exit."""
+    args = list(params.get("args") or [])
+    repo_root = Path(__file__).resolve().parent.parent
+    otd = repo_root / "otd"
+    r = subprocess.run([str(otd), *args], cwd=state.project_dir,
+                       capture_output=True, text=True)
+    state.last_cli = {
+        "args": args,
+        "stdout": r.stdout,
+        "stderr": r.stderr,
+        "returncode": r.returncode,
+    }
+
+
+def _step_delete_cache_entry(state: RunState, params: dict) -> None:
+    """Delete a specific attribution cache file by commit ref."""
+    from opentraces.core.cache import AttributionCache
+    ref = params["ref"]
+    sha = subprocess.check_output(
+        ["git", "rev-parse", ref], cwd=state.project_dir, text=True
+    ).strip()
+    c = AttributionCache(state.project_dir)
+    p = c.attribution_path(sha)
+    if p.is_file():
+        p.unlink()
+
+
 STEP_HANDLERS = {
     "reset": _step_reset,
     "claude": _step_claude,
@@ -484,6 +550,10 @@ STEP_HANDLERS = {
     "wait": _step_wait,
     "start_watcher": _step_start_watcher,
     "stop_watcher": _step_stop_watcher,
+    "init_opentraces": _step_init_opentraces,
+    "run_backfill": _step_run_backfill,
+    "invoke_cli": _step_invoke_cli,
+    "delete_cache_entry": _step_delete_cache_entry,
 }
 
 
@@ -509,14 +579,95 @@ def _attribution_for(state: RunState, ref: str = "HEAD") -> dict:
     return json.loads(r.stdout)
 
 
+def _assert_backfill_scenario(state: RunState, a: dict) -> str:
+    """Assertions specific to plan-043 phase 1 backfill scenarios.
+
+    Supported kinds:
+      - cache_file_exists: ref="HEAD" exists=true/false
+      - cli_stdout_matches / cli_stderr_matches: last invoke_cli must contain substr
+      - cli_returncode: exact exit code match
+      - report_field: name=... equals=... on the last backfill report
+    """
+    kind = a.get("kind")
+    if kind == "cache_file_exists":
+        from opentraces.core.cache import AttributionCache
+        ref = a.get("ref", "HEAD")
+        expected = bool(a.get("exists", True))
+        sha = subprocess.check_output(
+            ["git", "rev-parse", ref], cwd=state.project_dir, text=True
+        ).strip()
+        c = AttributionCache(state.project_dir)
+        actual = c.has_attribution(sha)
+        if actual != expected:
+            raise AssertionError(
+                f"cache_file_exists(ref={ref}, sha={sha[:8]}): "
+                f"expected {expected}, got {actual}"
+            )
+        return f"cache[{ref}]={actual} ✓"
+    if kind == "cli_stdout_matches":
+        needle = a["contains"]
+        haystack = state.last_cli.get("stdout", "")
+        if needle not in haystack:
+            raise AssertionError(
+                f"cli_stdout_matches: {needle!r} not in stdout "
+                f"(stdout={haystack[:200]!r})"
+            )
+        return f"stdout contains {needle!r} ✓"
+    if kind == "cli_returncode":
+        expected = int(a["equals"])
+        actual = int(state.last_cli.get("returncode", -1))
+        if expected != actual:
+            raise AssertionError(
+                f"cli_returncode: expected {expected}, got {actual} "
+                f"(stderr={state.last_cli.get('stderr','')[:200]!r})"
+            )
+        return f"returncode={actual} ✓"
+    if kind == "report_field":
+        if not state.backfill_reports:
+            raise AssertionError("report_field: no backfill reports recorded")
+        report = state.backfill_reports[-1]
+        name = a["name"]
+        actual = getattr(report, name)
+        if "equals" in a:
+            expected = a["equals"]
+            if actual != expected:
+                raise AssertionError(
+                    f"report.{name}: expected {expected!r}, got {actual!r}"
+                )
+            return f"report.{name}={actual!r} ✓"
+        if "min" in a:
+            if actual < a["min"]:
+                raise AssertionError(
+                    f"report.{name}: expected ≥{a['min']}, got {actual}"
+                )
+            return f"report.{name}={actual} (≥{a['min']}) ✓"
+        if "max" in a:
+            if actual > a["max"]:
+                raise AssertionError(
+                    f"report.{name}: expected ≤{a['max']}, got {actual}"
+                )
+            return f"report.{name}={actual} (≤{a['max']}) ✓"
+        raise ValueError(f"report_field needs 'equals', 'min', or 'max'")
+    return ""  # fall-through sentinel, caller handles legacy assertion
+
+
 def run_assertions(state: RunState, assertions: list[dict]) -> list[str]:
     """Returns a list of human-readable assertion-pass messages.
     Raises AssertionError on the first failure with full context."""
     if not assertions:
         return ["(no assertions specified)"]
+    # Plan-043 phase-1 kinds don't need an audit build — handle separately so
+    # backfill scenarios don't reinvoke the spike unnecessarily.
+    phase1_kinds = {"cache_file_exists", "cli_stdout_matches",
+                    "cli_stderr_matches", "cli_returncode", "report_field"}
+    if all(a.get("kind") in phase1_kinds for a in assertions):
+        return [_assert_backfill_scenario(state, a) for a in assertions]
     result = _attribution_for(state)
     msgs: list[str] = []
     for i, a in enumerate(assertions):
+        if a.get("kind") in phase1_kinds:
+            msgs.append(_assert_backfill_scenario(state, a))
+            continue
         path = a.get("file")
         if not path:
             raise ValueError(f"assertion {i} has no 'file' key")
