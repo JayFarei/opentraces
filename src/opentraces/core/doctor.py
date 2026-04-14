@@ -20,6 +20,166 @@ from ..security.trufflehog import find_trufflehog
 from ..security.version import SECURITY_VERSION
 
 
+# --- attribution panel (plan 043 phase 7) ---------------------------------
+
+def _attribution_status(cwd: Path) -> dict[str, Any]:
+    """Report on the attribution cache + last backfill for this project.
+
+    Returns a panel with cached_commits, last_backfilled_commit,
+    last_backfill_at, first_run_backfill_decision, and a health label.
+    """
+    import datetime as _dt
+
+    from .cache import AttributionCache
+    from .config import (
+        get_first_run_backfill_decision,
+        get_project_state_path,
+        _project_slug_for,
+    )
+    from .state import StateManager
+
+    if not project_is_opted_in(cwd):
+        return {
+            "project_slug": None,
+            "project_root_sha": None,
+            "attribution_cache_dir": None,
+            "cached_commits": 0,
+            "last_backfilled_commit": None,
+            "last_backfill_at": None,
+            "first_run_backfill_decision": None,
+            "coverage_estimate": None,
+            "health": "no-project",
+        }
+
+    try:
+        slug = _project_slug_for(cwd)
+    except Exception:
+        slug = None
+
+    cache = AttributionCache(cwd)
+    cached = cache.list_attributed_shas()
+
+    try:
+        sm = StateManager(state_path=get_project_state_path(cwd))
+        last_sha = sm.get_last_backfilled_commit()
+        last_at = sm.get_last_backfill_at()
+    except Exception:
+        last_sha, last_at = None, None
+
+    try:
+        decision = get_first_run_backfill_decision(cwd)
+    except Exception:
+        decision = None
+
+    try:
+        from .repo_identity import root_commit_sha
+        root_sha = root_commit_sha(cwd)
+    except Exception:
+        root_sha = None
+
+    # Watcher-aware staleness: if the watcher is running, missed ticks are
+    # the watcher's problem, not ours. If no watcher + last_at > 24h old,
+    # warn.
+    health = "ok"
+    if not cached:
+        health = "empty"
+    elif last_at:
+        try:
+            when = _dt.datetime.fromisoformat(last_at.replace("Z", "+00:00"))
+            now = _dt.datetime.now(_dt.timezone.utc)
+            age = (now - when).total_seconds()
+            if age > 86400:
+                try:
+                    from ..watcher import installer as _wi
+                    st = _wi.status()
+                    running = bool(st.running)
+                except Exception:
+                    running = False
+                if not running:
+                    health = "stale"
+        except ValueError:
+            pass
+
+    return {
+        "project_slug": slug,
+        "project_root_sha": root_sha,
+        "attribution_cache_dir": str(cache.root),
+        "cached_commits": len(cached),
+        "last_backfilled_commit": last_sha,
+        "last_backfill_at": last_at,
+        "first_run_backfill_decision": decision,
+        "coverage_estimate": None,
+        "health": health,
+    }
+
+
+def _watcher_status() -> dict[str, Any]:
+    """Report on watcher installation + running state."""
+    try:
+        from ..watcher import installer as _wi
+    except Exception:
+        return {
+            "platform": "unsupported",
+            "installed": False,
+            "running": False,
+            "last_run_at": None,
+            "interval_seconds": None,
+            "unit_path": None,
+            "health": "unsupported-platform",
+        }
+
+    try:
+        st = _wi.status()
+    except RuntimeError:
+        # current_platform() raises on Windows etc.
+        return {
+            "platform": "unsupported",
+            "installed": False,
+            "running": False,
+            "last_run_at": None,
+            "interval_seconds": None,
+            "unit_path": None,
+            "health": "unsupported-platform",
+        }
+    except Exception:
+        return {
+            "platform": "unsupported",
+            "installed": False,
+            "running": False,
+            "last_run_at": None,
+            "interval_seconds": None,
+            "unit_path": None,
+            "health": "unsupported-platform",
+        }
+
+    if not st.installed:
+        health = "not-installed"
+    elif not st.running:
+        health = "not-running"
+    else:
+        health = "ok"
+        # stale-heartbeat check: if last_run_at exists and is older than
+        # 3x interval, flag as stale-heartbeat
+        if st.last_run_at and st.interval_seconds:
+            import datetime as _dt
+            try:
+                age = (_dt.datetime.now(_dt.timezone.utc) - st.last_run_at).total_seconds()
+                if age > 3 * st.interval_seconds:
+                    health = "stale-heartbeat"
+            except Exception:
+                pass
+
+    return {
+        "platform": st.platform,
+        "installed": bool(st.installed),
+        "running": bool(st.running),
+        "last_run_at": st.last_run_at.isoformat() if st.last_run_at else None,
+        "interval_seconds": st.interval_seconds,
+        "unit_path": str(st.unit_path) if st.unit_path else None,
+        "health": health,
+    }
+
+
 def _regex_pattern_count() -> int:
     try:
         from ..security.secrets import _PATTERNS  # type: ignore
@@ -372,6 +532,8 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "hf_auth": "ok" if cfg.hf_token else "missing",
         "post_processors": _post_processors(cwd),
         "entity_parser": _entity_parser_status(),
+        "attribution": _attribution_status(cwd),
+        "watcher": _watcher_status(),
         "hooks": _hook_installers(),
     }
 

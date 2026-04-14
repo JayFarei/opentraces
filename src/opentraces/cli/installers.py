@@ -1431,8 +1431,61 @@ def _render_doctor_human(report: dict) -> None:
 
     _processors_section(report["post_processors"])
     _entity_parser_section(report.get("entity_parser") or {})
+    _attribution_section(report.get("attribution") or {})
+    _watcher_section(report.get("watcher") or {})
     _hooks_section(report["hooks"])
     human_echo("")
+
+
+def _attribution_section(info: dict) -> None:
+    """Render attribution cache panel (plan 043 phase 7)."""
+    _section("Attribution cache")
+    health = info.get("health")
+    if health == "no-project":
+        _row("off", "status", "no project",
+             detail="run 'opentraces init' in a project to enable attribution")
+        return
+    _row(
+        {"ok": "ok", "empty": "warn", "stale": "warn"}.get(health, "warn"),
+        "status",
+        health or "?",
+        detail=info.get("attribution_cache_dir"),
+    )
+    _row("ok", "cached commits", str(info.get("cached_commits") or 0))
+    last = info.get("last_backfilled_commit")
+    if last:
+        _row("ok", "last backfill", last[:12],
+             detail=info.get("last_backfill_at") or None)
+    else:
+        _row("off", "last backfill", "never",
+             detail="run 'opentraces backfill --project .'")
+    decision = info.get("first_run_backfill_decision")
+    if decision:
+        _row("ok", "first-run", str(decision))
+
+
+def _watcher_section(info: dict) -> None:
+    """Render watcher panel (plan 043 phase 7)."""
+    _section("Watcher")
+    health = info.get("health")
+    plat = info.get("platform") or "?"
+    if health == "unsupported-platform":
+        _row("off", "platform", plat, detail="watcher unavailable on this platform")
+        return
+    _row("ok", "platform", plat)
+    if not info.get("installed"):
+        _row("off", "installed", "no",
+             detail="run 'opentraces setup watcher'")
+        return
+    _row("ok", "installed", "yes", detail=info.get("unit_path"))
+    running_kind = "ok" if info.get("running") else "warn"
+    _row(running_kind, "running", "yes" if info.get("running") else "no")
+    interval = info.get("interval_seconds")
+    if interval:
+        _row("ok", "interval", f"{interval}s")
+    last = info.get("last_run_at")
+    if last:
+        _row("ok", "last tick", last)
 
 
 def _render_doctor_security(report: dict) -> None:
