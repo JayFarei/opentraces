@@ -1,19 +1,28 @@
 """`opentraces completions` noun.
 
-Implements cf-style shell completions via dynamic delegation: the installed
-shell script delegates every completion query to a hidden ``ot __complete``
-resolver. The shell script is tiny and never needs regenerating when new
-verbs are added.
+Shell completion for ``ot`` via dynamic delegation: the installed shell
+script forwards every completion query to a hidden ``ot __complete``
+resolver. The script is intentionally dumb — all command-tree knowledge
+lives in Python, so new verbs and options light up automatically.
+
+What the menu shows:
+    * subcommand names grouped by section with colored headings
+    * option flags (``--foo``) with their help text
+    * argument values that teach state — trace IDs with stage + age,
+      shell names for ``ot completions``
 
 Surface:
-    ot completions [shell]            Print script (auto-detects $SHELL)
-    ot completions install [shell]    Install to shell config
-    ot completions uninstall [shell]  Remove installation
+    ot completions [shell]                  Print script (auto-detects $SHELL)
+    ot completions install [shell]          Install (auto-detects $SHELL)
+        ``--alias NAME``                    Also bind completion to NAME (e.g. otd)
+    ot completions uninstall [shell]        Remove installation
 """
 
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 from pathlib import Path
 
 import click
@@ -27,41 +36,82 @@ EXAMPLES
   $ ot completions zsh             Output zsh completion script
   $ ot completions install         Install completions for detected shell
   $ ot completions install zsh     Install zsh completions explicitly
+  $ ot completions install zsh --alias otd
+                                   Also bind completion to a custom name
   $ ot completions uninstall       Remove completions
   $ source <(ot completions)       Load completions in current session
 """
 
+# Script templates. ``__OT_BIN__`` and the command-name blocks are
+# substituted at install time so completions keep working for dev
+# aliases (otd), pipx shims, or venv-local installs where ``ot`` may
+# not be on PATH. Bare-print (``ot completions zsh``) leaves the
+# placeholders as ``ot`` for portability.
+
 ZSH_SCRIPT = """\
-#compdef ot
+#compdef __OT_NAMES__
+# opentraces shell completions — flat menu, name on left, desc on right.
+# Colors come from the list-colors zstyle at the bottom; injecting ANSI
+# directly into compadd display strings breaks zsh's width math, so we
+# use the canonical zsh coloring path instead.
 _ot() {
-  local completions
-  completions=(${(f)"$(ot __complete "${words[@]:1}" 2>/dev/null)"})
-  [[ ${#completions[@]} -gt 0 ]] && compadd -a completions
+  local cmd="__OT_BIN__"
+  local raw
+  raw="$("$cmd" __complete "${words[@]:1}" 2>/dev/null)" || return 1
+  [[ -z "$raw" ]] && return 1
+
+  local -a items
+  local name desc section
+  while IFS=$'\\t' read -r name desc section; do
+    [[ -z "$name" ]] && continue
+    # Escape colons in names so _describe parses the name:desc split correctly.
+    items+=("${name//:/\\\\:}:${desc}")
+  done <<< "$raw"
+  (( ${#items[@]} )) && _describe 'opentraces' items
 }
-compdef _ot ot
+
+# Scoped coloring: yellow heading, cyan names, dim descriptions.
+# list-colors is zsh's ANSI-aware color engine — unlike raw ANSI in
+# compadd display strings, it understands width and doesn't break layout.
+#
+# Pattern: (#b) enables backreferences. We match ``<name>  --  <desc>``
+# which is the format _describe renders into the menu. Colors apply
+# positionally: the first color is for the whole match (kept default),
+# then one per captured group.
+zstyle ':completion:*:*:(ot|otd|opentraces):*:descriptions' \\
+  format $'\\e[33m%d\\e[0m'
+zstyle ':completion:*:*:(ot|otd|opentraces):*' list-colors \\
+  '=(#b)([^ ]##)(*)=0=1;36=2'
+# Arrow-key navigation inside the menu once there's more than one match.
+# Press TAB to open, arrow keys to move, Enter to insert, Esc to cancel.
+zstyle ':completion:*:*:(ot|otd|opentraces):*' menu select=2
+
+compdef _ot __OT_NAMES__
 """
 
 BASH_SCRIPT = """\
-# bash completion for ot (opentraces)
+# bash completion for ot (opentraces).
+# bash can't render descriptions, so we drop them — only names flow through.
+__ot_bin="__OT_BIN__"
 _ot_completions() {
-  local cur words_to_send
-  cur="${COMP_WORDS[COMP_CWORD]}"
+  local words_to_send
   words_to_send=("${COMP_WORDS[@]:1}")
   local IFS=$'\\n'
-  COMPREPLY=( $(ot __complete "${words_to_send[@]}" 2>/dev/null) )
+  COMPREPLY=( $("$__ot_bin" __complete "${words_to_send[@]}" 2>/dev/null | awk -F'\\t' '$1!="" {print $1}') )
   return 0
 }
-complete -F _ot_completions ot
+__OT_BASH_BINDS__
 """
 
 FISH_SCRIPT = """\
-# fish completion for ot (opentraces)
+# fish completion for ot (opentraces).
+set -g __ot_bin "__OT_BIN__"
 function __ot_complete
   set -l tokens (commandline -opc) (commandline -ct)
   set -e tokens[1]
-  ot __complete $tokens 2>/dev/null
+  $__ot_bin __complete $tokens 2>/dev/null | awk -F'\\t' '$1!="" { if ($2=="") print $1; else printf "%s\\t%s\\n", $1, $2 }'
 end
-complete -c ot -f -a '(__ot_complete)'
+__OT_FISH_BINDS__
 """
 
 SCRIPTS = {"zsh": ZSH_SCRIPT, "bash": BASH_SCRIPT, "fish": FISH_SCRIPT}
@@ -102,8 +152,6 @@ def _rc_path(shell: str) -> Path:
     if shell == "zsh":
         return _home() / ".zshrc"
     if shell == "bash":
-        # Prefer .bashrc; some systems use .bash_profile but .bashrc is the
-        # canonical interactive-shell file and most users source it.
         return _home() / ".bashrc"
     if shell == "fish":
         return _home() / ".config" / "fish" / "completions" / "ot.fish"
@@ -112,9 +160,59 @@ def _rc_path(shell: str) -> Path:
 
 def _source_line(shell: str, script: Path) -> str:
     if shell == "fish":
-        # fish uses file placement, not a source line.
         return ""
     return f'[ -f "{script}" ] && source "{script}"  # opentraces completions'
+
+
+def _resolve_bin() -> str:
+    """Pick an absolute path to the ``opentraces`` / ``ot`` binary.
+
+    We prefer a sibling of the running Python — that handles dev venvs,
+    pipx installs, and tool-specific prefixes where ``ot`` may not yet
+    be on PATH. Falls back to a PATH lookup, and finally to the literal
+    name for the rare case where neither resolves.
+    """
+    for candidate in (
+        Path(sys.executable).with_name("opentraces"),
+        Path(sys.executable).with_name("ot"),
+    ):
+        if candidate.exists():
+            return str(candidate)
+    which = shutil.which("opentraces") or shutil.which("ot")
+    return which or "ot"
+
+
+def _render_script(shell: str, bin_path: str, names: tuple[str, ...]) -> str:
+    """Substitute placeholders in the template for ``shell``.
+
+    ``names`` is the tuple of command names the completer should bind to
+    (``("ot",)`` by default; may include alias names like ``"otd"``).
+    """
+    template = SCRIPTS[shell]
+    if shell == "zsh":
+        # ``#compdef`` and ``compdef`` lines accept multiple names separated
+        # by whitespace.
+        names_joined = " ".join(names)
+        return (
+            template
+            .replace("__OT_BIN__", bin_path)
+            .replace("__OT_NAMES__", names_joined)
+        )
+    if shell == "bash":
+        binds = "\n".join(f"complete -F _ot_completions {n}" for n in names)
+        return (
+            template
+            .replace("__OT_BIN__", bin_path)
+            .replace("__OT_BASH_BINDS__", binds)
+        )
+    if shell == "fish":
+        binds = "\n".join(f"complete -c {n} -f -a '(__ot_complete)'" for n in names)
+        return (
+            template
+            .replace("__OT_BIN__", bin_path)
+            .replace("__OT_FISH_BINDS__", binds)
+        )
+    raise click.UsageError(f"Unsupported shell: {shell}")
 
 
 class _CompletionsGroup(click.Group):
@@ -126,7 +224,9 @@ class _CompletionsGroup(click.Group):
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         if args and args[0] in SUPPORTED_SHELLS and args[0] not in self.commands:
             shell = args[0]
-            click.echo(SCRIPTS[shell], nl=False)
+            # Bare print: use ``ot`` as the canonical name; users who need
+            # alias or path baking should run ``install`` instead.
+            click.echo(_render_script(shell, "ot", ("ot", "opentraces")), nl=False)
             ctx.exit(0)
         return super().parse_args(ctx, args)
 
@@ -136,7 +236,7 @@ class _CompletionsGroup(click.Group):
     cls=_CompletionsGroup,
     invoke_without_command=True,
     epilog=EPILOG,
-    help="Print or install shell completion scripts (cf-style).",
+    help="Print or install shell completion scripts.",
 )
 @click.pass_context
 def completions(ctx: click.Context) -> None:
@@ -146,30 +246,39 @@ def completions(ctx: click.Context) -> None:
     """
     if ctx.invoked_subcommand is not None:
         return
-    # Bare invocation: detect shell and print.
     resolved = _resolve_shell(None)
-    click.echo(SCRIPTS[resolved], nl=False)
+    click.echo(_render_script(resolved, "ot", ("ot",)), nl=False)
 
 
 @completions.command("install")
 @click.argument("shell", required=False, type=click.Choice(list(SUPPORTED_SHELLS), case_sensitive=False))
+@click.option("--alias", "aliases", multiple=True, metavar="NAME",
+              help="Also bind completion to NAME (repeatable). Useful for dev aliases.")
 @click.option("-q", "--quiet", is_flag=True, help="Suppress progress output.")
 @click.pass_context
-def install_cmd(ctx: click.Context, shell: str | None, quiet: bool) -> None:
+def install_cmd(ctx: click.Context, shell: str | None, aliases: tuple[str, ...], quiet: bool) -> None:
     """Install completions for SHELL (auto-detects if omitted)."""
     resolved = _resolve_shell(shell)
+    bin_path = _resolve_bin()
+    # Bind to both ``ot`` and ``opentraces`` by default — zsh expands shell
+    # aliases before looking up compdef, so an alias like ``otd='opentraces'``
+    # needs ``opentraces`` registered to pick up this completer.
+    names = ("ot", "opentraces") + tuple(aliases)
 
+    script_text = _render_script(resolved, bin_path, names)
     script_path = _script_path(resolved)
     script_path.parent.mkdir(parents=True, exist_ok=True)
-    script_path.write_text(SCRIPTS[resolved])
+    script_path.write_text(script_text)
 
     if resolved == "fish":
-        # fish auto-loads completions placed in ~/.config/fish/completions/
+        # fish auto-loads files placed in ~/.config/fish/completions/.
         rc = _rc_path(resolved)
         rc.parent.mkdir(parents=True, exist_ok=True)
-        rc.write_text(SCRIPTS[resolved])
+        rc.write_text(script_text)
         if not quiet:
             click.echo(f"Installed fish completions at {rc}")
+            if aliases:
+                click.echo(f"  Bound to: {', '.join(names)}")
         return
 
     rc = _rc_path(resolved)
@@ -188,6 +297,8 @@ def install_cmd(ctx: click.Context, shell: str | None, quiet: bool) -> None:
 
     if not quiet:
         click.echo(f"Installed {resolved} completion script at {script_path}")
+        if aliases:
+            click.echo(f"  Bound to: {', '.join(names)}")
         click.echo(f"Restart your shell or run: source {rc}")
 
 
