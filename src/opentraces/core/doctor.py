@@ -13,6 +13,9 @@ from typing import Any
 from ..capture import get_hook_installers
 from ..core.config import ProjectConfig, load_project_config, project_is_opted_in
 from ..core.processors import probe_processors
+from ..enrichment.entities import EntityRunner
+from ..enrichment.entities.installer import _safe_platform
+from ..enrichment.entities.runner import resolve_binary_path
 from ..security.trufflehog import find_trufflehog
 from ..security.version import SECURITY_VERSION
 
@@ -292,6 +295,31 @@ def _project_review_policy(cwd: Path) -> str | None:
         return None
 
 
+def _entity_parser_status() -> dict[str, Any]:
+    """Report on the entity-parser binary.
+
+    Shape:
+      {
+        "binary_path": "/abs/path",
+        "installed": bool,
+        "version": str | None,
+        "platform": "darwin-arm64" | "unknown" | …,
+        "advice": str | None,   # what to run if missing
+      }
+    """
+    path = resolve_binary_path()
+    runner = EntityRunner(binary_path=path)
+    installed = runner.available()
+    version = runner.version() if installed else None
+    return {
+        "binary_path": str(path),
+        "installed": installed,
+        "version": version,
+        "platform": _safe_platform(),
+        "advice": None if installed else "run 'opentraces setup entity-parser'",
+    }
+
+
 def _hook_installers() -> list[dict[str, Any]]:
     """Call .status() on every registered HookInstaller."""
     out: list[dict[str, Any]] = []
@@ -343,6 +371,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "llm_review": llm_review,
         "hf_auth": "ok" if cfg.hf_token else "missing",
         "post_processors": _post_processors(cwd),
+        "entity_parser": _entity_parser_status(),
         "hooks": _hook_installers(),
     }
 

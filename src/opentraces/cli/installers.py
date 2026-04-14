@@ -1305,6 +1305,25 @@ def _processors_section(specs: list[dict]) -> None:
         _row(kind, p["name"], status or "?", detail=detail)
 
 
+def _entity_parser_section(info: dict) -> None:
+    """Render the entity-parser panel under `opentraces doctor`."""
+    _section("Entity parser")
+    if not info:
+        _row("off", "ot-entities", "not installed",
+             detail="run 'opentraces setup entity-parser'")
+        return
+    if info.get("installed"):
+        version = info.get("version") or "installed"
+        _row("ok", "ot-entities", version, detail=info.get("binary_path"))
+    else:
+        _row(
+            "off", "ot-entities", "not installed",
+            detail=info.get("advice") or "run 'opentraces setup entity-parser'",
+        )
+    if info.get("platform"):
+        _row("ok", "  ↳ platform", info["platform"])
+
+
 def _hooks_section(hooks: list[dict]) -> None:
     _section("Agent integrations")
     if not hooks:
@@ -1411,6 +1430,7 @@ def _render_doctor_human(report: dict) -> None:
         _row("err", "huggingface", "missing", detail="run 'hf auth login'")
 
     _processors_section(report["post_processors"])
+    _entity_parser_section(report.get("entity_parser") or {})
     _hooks_section(report["hooks"])
     human_echo("")
 
@@ -1695,3 +1715,77 @@ def setup_upgrade(ctx: click.Context, skill_only: bool) -> None:
     # Lazy import to avoid circular imports at module load time.
     from . import _upgrade_impl
     _upgrade_impl(skill_only)
+
+
+# ---------------------------------------------------------------------------
+# Plan-043 phase 2 — `ot setup entity-parser`.
+#
+# Isolated block: no shared helpers with the rest of this file so phase 3
+# can grow its own install steps without a merge headache.
+# ---------------------------------------------------------------------------
+
+@setup_group.command(
+    "entity-parser",
+    examples=[
+        "opentraces setup entity-parser",
+        "opentraces setup entity-parser --force",
+    ],
+    see_also=[
+        ("opentraces doctor", "verify entity-parser install"),
+        ("opentraces backfill", "populate attribution + entity caches"),
+    ],
+)
+@click.option(
+    "--force", is_flag=True,
+    help="Re-download even if the expected version is already installed.",
+)
+def setup_entity_parser(force: bool) -> None:
+    """Download and verify the `ot-entities` binary.
+
+    The entity parser is a separate binary (distributed via the opentraces
+    release channel) that turns a commit diff into a structured entity
+    change list — added/modified/renamed/deleted functions, classes, etc.
+    It powers the richer side of `opentraces blame` and the per-commit
+    entity cache under ~/.opentraces/projects/<slug>/entities/.
+
+    Honours $OPENTRACES_ENTITY_BIN for airgapped installs: set it to a
+    pre-placed binary and this command will verify instead of downloading.
+    """
+    from ..enrichment.entities import installer as _inst
+    from ..enrichment.entities.version import ENTITY_BINARY_VERSION
+
+    def _progress_printer():
+        total = {"n": 0}
+
+        def _cb(chunk_size: int) -> None:
+            total["n"] += chunk_size
+            mb = total["n"] / (1024 * 1024)
+            click.echo(f"\r  downloading… {mb:6.2f} MiB", nl=False)
+
+        return _cb, total
+
+    cb, total = _progress_printer()
+    try:
+        result = _inst.install(force=force, progress=cb)
+    except _inst.InstallError as e:
+        if total["n"]:
+            click.echo("")
+        human_echo(f"{_cli._err('error')}: {e}")
+        emit_json({"status": "error", "action": "setup-entity-parser",
+                   "message": str(e)})
+        sys.exit(5)
+
+    if total["n"]:
+        click.echo("")
+    human_echo(
+        f"Entity parser installed at {result.path} "
+        f"(version {ENTITY_BINARY_VERSION}, {result.source})"
+    )
+    emit_json({
+        "status": "ok",
+        "action": "setup-entity-parser",
+        "binary_path": str(result.path),
+        "version": ENTITY_BINARY_VERSION,
+        "platform": result.platform,
+        "source": result.source,
+    })
