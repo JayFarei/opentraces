@@ -66,16 +66,21 @@ from .paths import (
 )
 
 CONFIG_VERSION = "0.2.0"
-MARKER_VERSION = "1"
+MARKER_VERSION = "2"
 
 # Fields that live inside the committable marker file. Anything outside
 # this set is treated as machine-local or transient and not written.
+#
+# Legacy single-remote fields (`remote`, `visibility`) are not in this list
+# anymore; load_project_config() migrates them to `remotes` + `active_remote`
+# on read, and save_project_config() never writes them back.
 _PORTABLE_FIELDS = (
     "excluded",
     "review_policy",
     "push_policy",
-    "remote",
-    "visibility",
+    "remotes",
+    "active_remote",
+    "default_visibility",
     "agents",
     "post_processors",
 )
@@ -123,14 +128,34 @@ class PostProcessorConfig(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
 
 
+class RemoteConfig(BaseModel):
+    """One named remote in ``ProjectConfig.remotes``.
+
+    The ``url`` carries the full backend-qualified URL (e.g.
+    ``hf://user/dataset``). Short forms like ``user/dataset`` are
+    expanded to ``hf://user/dataset`` by the CLI layer before they reach
+    this model.
+    """
+
+    url: str
+    visibility: str = Field("private", pattern="^(public|private)$")
+
+
 class ProjectConfig(BaseModel):
-    """Per-project portable policy (lives in the repo's .opentraces.json)."""
+    """Per-project portable policy (lives in the repo's .opentraces.json).
+
+    The remote model supports multiple named remotes (``remotes``) plus
+    a pointer to the active one (``active_remote``). Legacy single
+    ``remote`` / ``visibility`` fields from marker_version=1 are
+    migrated by ``load_project_config()`` and never written back.
+    """
 
     excluded: bool = False
     review_policy: str = DEFAULT_REVIEW_POLICY
     push_policy: str = DEFAULT_PUSH_POLICY
-    remote: str | None = None
-    visibility: str = "private"
+    remotes: dict[str, RemoteConfig] = Field(default_factory=dict)
+    active_remote: str | None = None
+    default_visibility: str = Field("private", pattern="^(public|private)$")
     agents: list[str] = Field(default_factory=lambda: [DEFAULT_AGENT])
     post_processors: list[PostProcessorConfig] = Field(default_factory=list)
 
@@ -400,7 +425,13 @@ def _parse_yaml_config(text: str) -> dict:
 
 
 def _normalize_project_data(data: dict) -> bool:
-    """Backfill new project-config keys and normalize values."""
+    """Backfill new project-config keys and normalize values.
+
+    Also migrates legacy single-remote fields (``remote``, ``visibility``)
+    into the new ``remotes`` / ``active_remote`` shape. The legacy keys
+    are dropped from ``data`` after migration so the saved marker has
+    only the new schema.
+    """
     modified = False
 
     legacy_mode = data.get("mode")
@@ -425,7 +456,62 @@ def _normalize_project_data(data: dict) -> bool:
             del data[legacy_key]
             modified = True
 
+    # Legacy single-remote -> remotes dict migration. Both legacy keys
+    # (``remote`` and ``visibility``) are dropped from ``data`` after
+    # being absorbed into the new shape.
+    legacy_remote = data.pop("remote", None) if "remote" in data else None
+    legacy_vis = data.pop("visibility", None) if "visibility" in data else None
+    if legacy_remote or legacy_vis:
+        modified = True
+    if legacy_remote and not data.get("remotes"):
+        data["remotes"] = {
+            "origin": {
+                "url": legacy_remote,
+                "visibility": legacy_vis or "private",
+            }
+        }
+        if not data.get("active_remote"):
+            data["active_remote"] = "origin"
+    elif "remotes" not in data:
+        data["remotes"] = {}
+    if "active_remote" not in data:
+        data["active_remote"] = None
+    # Project-level visibility default (used by ``ot remote add`` when
+    # no --public/--private is given). Legacy projects with
+    # ``visibility`` but no ``remote`` set this so the next remote
+    # inherits the user's expressed intent.
+    if legacy_vis and "default_visibility" not in data:
+        data["default_visibility"] = legacy_vis
+
     return modified
+
+
+def _synthesize_legacy_remote_keys(data: dict) -> None:
+    """Populate ``data["remote"]`` / ``data["visibility"]`` from the active remote.
+
+    Backward compatibility for callers (cli/__init__.py, cli/publish.py,
+    cli/inspect.py, clients/web_server.py, etc.) that still read the
+    legacy keys. These synthesized keys are NOT persisted by
+    ``save_project_config()`` — they exist only in the in-memory dict
+    returned to callers during the transition to the new schema. Step 4
+    of the CLI restructure migrates each caller; this shim disappears
+    when the last one is updated.
+    """
+    active = data.get("active_remote")
+    remotes = data.get("remotes") or {}
+    if active and active in remotes:
+        cfg = remotes[active]
+        # cfg may be a dict (loaded from JSON) or a RemoteConfig model.
+        if isinstance(cfg, dict):
+            data["remote"] = cfg.get("url")
+            data["visibility"] = cfg.get("visibility", data.get("default_visibility", "private"))
+        else:
+            data["remote"] = cfg.url
+            data["visibility"] = cfg.visibility
+    else:
+        # No active remote — expose the project-level default so callers
+        # that read data["visibility"] still see the expressed intent.
+        data["visibility"] = data.get("default_visibility", "private")
 
 
 def _migrate_legacy_to_marker(
@@ -626,11 +712,22 @@ def load_project_config(project_dir: Path) -> dict:
             "agents": [DEFAULT_AGENT],
         }
 
+    # Pull both new and legacy fields out of the on-disk marker so
+    # _normalize_project_data can migrate them.
     data = {k: marker[k] for k in _PORTABLE_FIELDS if k in marker}
+    if "remote" in marker:
+        data["remote"] = marker["remote"]
+    if "visibility" in marker:
+        data["visibility"] = marker["visibility"]
+
     changed = _normalize_project_data(data)
     if changed:
         # Persist normalized values back into the marker.
         _write_marker(project_dir, marker["project_id"], data)
+
+    # Synthesize legacy ``remote``/``visibility`` keys for back-compat
+    # with callers that haven't been migrated yet (step 4).
+    _synthesize_legacy_remote_keys(data)
     return data
 
 
@@ -638,11 +735,18 @@ def save_project_config(project_dir: Path, data: dict) -> None:
     """Write project portable policy into the ``.opentraces.json`` marker.
 
     Preserves an existing project_id if the marker already exists; mints
-    a fresh one otherwise.
+    a fresh one otherwise. Accepts either the new shape (``remotes`` /
+    ``active_remote``) or the legacy shape (``remote`` / ``visibility``);
+    legacy input is migrated before write so the on-disk marker has only
+    the new keys.
     """
     existing = _load_marker(project_dir)
     if existing and existing.get("project_id"):
         project_id = existing["project_id"]
     else:
         project_id = uuid.uuid4().hex
-    _write_marker(project_dir, project_id, data)
+
+    # Defensive copy so we don't mutate the caller's dict.
+    payload = dict(data)
+    _normalize_project_data(payload)
+    _write_marker(project_dir, project_id, payload)

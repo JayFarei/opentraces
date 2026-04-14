@@ -564,7 +564,9 @@ class TestInitFlags:
         ])
         assert result.exit_code == 0
         config = json.loads((tmp_path / ".opentraces.json").read_text())
-        assert config.get("visibility") == "private"
+        # Post-restructure: --private flows to default_visibility (project-level
+        # default for newly-added remotes).
+        assert config.get("default_visibility") == "private"
 
     def test_init_public(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -576,7 +578,7 @@ class TestInitFlags:
         ])
         assert result.exit_code == 0
         config = json.loads((tmp_path / ".opentraces.json").read_text())
-        assert config.get("visibility") == "public"
+        assert config.get("default_visibility") == "public"
 
 
 # ---------------------------------------------------------------------------
