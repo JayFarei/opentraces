@@ -537,13 +537,6 @@ def _auth_status_impl() -> None:
     emit_json({"status": "ok", "authenticated": True, "username": username})
 
 
-@main.command()
-@click.option("--token", is_flag=True, help="Paste a personal access token (required for pushing traces)")
-def login(token: bool) -> None:
-    """Log in to HuggingFace Hub."""
-    _login_impl(token)
-
-
 def _login_with_device_code(save_credentials, credentials_path) -> None:
     """OAuth device code flow. User authorizes in browser with a short code."""
     import time as _time
@@ -893,18 +886,6 @@ def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=Non
             click.echo(f"  Error: {session_file.name}: {e}", err=True)
 
     return parsed_count, error_count
-
-
-@main.command()
-def logout() -> None:
-    """Log out from HuggingFace Hub."""
-    _logout_impl()
-
-
-@main.command()
-def whoami() -> None:
-    """Show the active HuggingFace identity."""
-    _auth_status_impl()
 
 
 @main.group()
@@ -1424,15 +1405,7 @@ def remove() -> None:
     })
 
 
-@main.group("projects", invoke_without_command=True)
-@click.pass_context
-def projects_group(ctx: click.Context) -> None:
-    """Inspect the list of projects that have opted in to opentraces."""
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(projects_list_cmd)
-
-
-@projects_group.command("list")
+@click.command("projects-list")
 def projects_list_cmd() -> None:
     """List every project that has run ``opentraces init``.
 
@@ -1517,9 +1490,7 @@ def _run_upgrade_subprocess(cmd: list[str], method: str, timeout: int = 120) -> 
     sys.exit(4)
 
 
-@main.command()
-@click.option("--skill-only", is_flag=True, default=False, help="Only update the skill file and hook, skip CLI upgrade")
-def upgrade(skill_only: bool) -> None:
+def _upgrade_impl(skill_only: bool) -> None:
     """Upgrade opentraces CLI and refresh the project skill file."""
     current_version = __version__
 
@@ -2026,7 +1997,6 @@ def status(limit: int) -> None:
 
 
 # Register subcommand modules (side-effect: @main.command() bindings)
-from . import trace as _trace_module  # noqa: F401,E402
 from . import installers as _installers_module  # noqa: F401,E402
 from . import publish as _publish_module  # noqa: F401,E402
 from . import import_hf as _import_hf_module  # noqa: F401,E402
@@ -2271,13 +2241,6 @@ def redact_cmd(trace_id: str, pattern: str, use_regex: bool, field: str | None, 
     })
 
 
-# ot llm-review: alias for the existing review-llm command (renamed per the
-# user's "second LLM review" clarification — the llm- prefix keeps the
-# machine-pass nature explicit).
-from .installers import review_llm_cmd as _review_llm_cmd  # noqa: E402
-main.add_command(_review_llm_cmd, name="llm-review")
-
-
 @main.group(invoke_without_command=True)
 @click.pass_context
 def remote(ctx) -> None:
@@ -2374,54 +2337,34 @@ def remote_use(ctx: click.Context, name: str | None) -> None:
 
 
 @remote.command("remove")
-@click.argument("name", required=False, default=None)
-def remote_remove(name: str | None) -> None:
+@click.argument("name")
+def remote_remove(name: str) -> None:
     """Remove a remote.
 
-    With ``<name>``: remove the named entry from ``cfg.remotes`` and
-    drop its ``uploaded_to`` keys from every staging entry, atomically
-    (Step 4 git-parity behavior). Without arguments: legacy form that
-    clears the single project-level ``remote`` field (back-compat,
-    removed in Step 15).
+    Removes the named entry from ``cfg.remotes`` and drops its
+    ``uploaded_to`` keys from every staging entry, atomically
+    (Step 4 git-parity behavior).
     """
-    from ..core.config import (
-        load_project_config,
-        save_project_config,
-        get_project_state_path,
-    )
+    from ..core.config import save_project_config, get_project_state_path
     from ..core.state import StateManager, UnknownRemoteError
 
     project_dir = Path.cwd()
-
-    if name is not None:
-        proj_config, remotes = _read_remotes(project_dir)
-        if name not in remotes:
-            click.echo(f"No remote named '{name}'.", err=True)
-            sys.exit(2)
-        del remotes[name]
-        if proj_config.get("active_remote") == name:
-            proj_config["active_remote"] = next(iter(remotes), None)
-        state_path = get_project_state_path(project_dir)
-        state = StateManager(state_path=state_path)
-        try:
-            state.forget_remote(name)
-        except UnknownRemoteError:
-            pass
-        save_project_config(project_dir, proj_config)
-        click.echo(f"Removed remote '{name}'")
-        emit_json({"status": "ok", "name": name})
-        return
-
-    # Legacy no-arg form
-    proj_config = load_project_config(project_dir)
-    if "remote" not in proj_config:
-        click.echo("No remote configured.")
-        return
-
-    del proj_config["remote"]
+    proj_config, remotes = _read_remotes(project_dir)
+    if name not in remotes:
+        click.echo(f"No remote named '{name}'.", err=True)
+        sys.exit(2)
+    del remotes[name]
+    if proj_config.get("active_remote") == name:
+        proj_config["active_remote"] = next(iter(remotes), None)
+    state_path = get_project_state_path(project_dir)
+    state = StateManager(state_path=state_path)
+    try:
+        state.forget_remote(name)
+    except UnknownRemoteError:
+        pass
     save_project_config(project_dir, proj_config)
-    click.echo("Remote removed.")
-    emit_json({"status": "ok", "remote": None})
+    click.echo(f"Removed remote '{name}'")
+    emit_json({"status": "ok", "name": name})
 
 
 # ---------------------------------------------------------------------------
@@ -3008,85 +2951,6 @@ def assess(judge: bool, judge_model: str, limit: int,
         "judge_enabled": judge,
         "quality_summary": summary.to_dict(),
         "remote_delta": remote_delta,
-    })
-
-
-@main.command("commit")
-@click.option("-m", "--message", type=str, default=None, help="Commit message")
-@click.option("--all", "commit_all", is_flag=True, help="Commit all inbox traces")
-def commit_traces(message: str | None, commit_all: bool) -> None:
-    """Commit inbox traces for push."""
-    from ..core.state import StateManager, TraceStatus
-    from ..core.config import get_project_state_path
-
-    _require_project_opted_in("commit")
-
-    from opentraces_schema import TraceRecord
-
-    project_dir = Path.cwd()
-    state_path = get_project_state_path(project_dir)
-    state = StateManager(state_path=state_path)
-
-    inbox = state.get_traces_by_status(TraceStatus.STAGED)
-    if not inbox:
-        click.echo("No inbox traces to commit. Run 'opentraces' or 'opentraces web' to review traces.")
-        emit_json({"status": "ok", "committed": 0, "hint": "Open the inbox to review traces"})
-        return
-
-    if commit_all:
-        trace_ids = [entry.trace_id for entry in inbox]
-    else:
-        click.echo(f"{len(inbox)} inbox traces:\n")
-        for i, entry in enumerate(inbox):
-            desc = "(no description)"
-            if entry.file_path:
-                try:
-                    data = Path(entry.file_path).read_text().strip()
-                    record = TraceRecord.model_validate_json(data)
-                    desc = (record.task.description or "untitled")[:50]
-                except (OSError, ValueError) as e:
-                    logger.debug("Could not load trace %s: %s", entry.trace_id, e)
-            click.echo(f"  {i+1}. {entry.trace_id[:8]}  {desc}")
-
-        click.echo()
-        if click.confirm(f"Commit all {len(inbox)} traces?", default=True):
-            trace_ids = [entry.trace_id for entry in inbox]
-        else:
-            click.echo("Cancelled.")
-            return
-
-    # Auto-generate message if not provided
-    if message is None:
-        descriptions = []
-        for entry in inbox:
-            if entry.file_path:
-                try:
-                    data = Path(entry.file_path).read_text().strip()
-                    record = TraceRecord.model_validate_json(data)
-                    if record.task.description:
-                        descriptions.append(record.task.description[:60])
-                except (OSError, ValueError) as e:
-                    logger.debug("Could not read trace for message: %s", e)
-        if descriptions:
-            message = "; ".join(descriptions[:3])
-            if len(descriptions) > 3:
-                message += f" (+{len(descriptions) - 3} more)"
-        else:
-            message = f"Commit {len(trace_ids)} traces"
-
-    commit_id = state.create_commit_group(trace_ids, message)
-
-    click.echo(f"\nCommitted {len(trace_ids)} traces (commit {commit_id})")
-    click.echo(f"  Message: {message}")
-    click.echo(f"\nRun 'opentraces push' to upload to HuggingFace Hub.")
-
-    emit_json({
-        "status": "ok",
-        "commit_id": commit_id,
-        "committed": len(trace_ids),
-        "message": message,
-        "next_steps": ["Run 'opentraces push' to upload committed traces"],
-        "next_command": "opentraces push",
     })
 
 

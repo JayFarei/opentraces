@@ -1477,13 +1477,13 @@ def _filter_by_trace_ids(records: list[dict],
 
 
 @main.command(
-    "review-llm",
+    "llm-review",
     examples=[
-        "opentraces review-llm                      # every trace in staging",
-        "opentraces review-llm --scope committed    # 2nd line of defence before push",
-        "opentraces review-llm --scope staged       # pre-commit only",
-        "opentraces review-llm --trace 8a3f1c       # one trace (short id ok)",
-        "opentraces review-llm --dry-run            # estimate token usage only",
+        "opentraces llm-review                      # every trace in staging",
+        "opentraces llm-review --scope committed    # 2nd line of defence before push",
+        "opentraces llm-review --scope staged       # pre-commit only",
+        "opentraces llm-review --trace 8a3f1c       # one trace (short id ok)",
+        "opentraces llm-review --dry-run            # estimate token usage only",
     ],
     see_also=[
         ("opentraces setup review-llm", "configure the LLM provider"),
@@ -1687,5 +1687,5 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
 def setup_upgrade(ctx: click.Context, skill_only: bool) -> None:
     """Upgrade opentraces CLI and refresh the project skill file."""
     # Lazy import to avoid circular imports at module load time.
-    from . import upgrade as _flat_upgrade
-    ctx.invoke(_flat_upgrade, skill_only=skill_only)
+    from . import _upgrade_impl
+    _upgrade_impl(skill_only)

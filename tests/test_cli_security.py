@@ -361,7 +361,7 @@ class TestReviewLLMFilters:
         (isolated_config / "staging").mkdir(exist_ok=True)
 
         result = runner.invoke(
-            main, ["review-llm", "--dry-run", "--provider", "fake",
+            main, ["llm-review", "--dry-run", "--provider", "fake",
                    "--scope", "committed"],
         )
         assert result.exit_code == 0, result.output
@@ -389,7 +389,7 @@ class TestReviewLLMFilters:
         (isolated_config / "staging").mkdir(exist_ok=True)
 
         result = runner.invoke(
-            main, ["review-llm", "--dry-run", "--provider", "fake",
+            main, ["llm-review", "--dry-run", "--provider", "fake",
                    "--trace", "8a3f"],
         )
         assert result.exit_code == 0, result.output
@@ -412,7 +412,7 @@ class TestReviewLLMDryRun:
             "opentraces.core.inbox.load_traces", lambda _path: []
         )
         result = runner.invoke(
-            main, ["review-llm", "--dry-run", "--provider", "fake"]
+            main, ["llm-review", "--dry-run", "--provider", "fake"]
         )
         assert result.exit_code == 0, result.output
         payload = _extract_json(result.output)

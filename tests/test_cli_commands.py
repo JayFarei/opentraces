@@ -206,7 +206,7 @@ class TestPostInitCommands:
 
     def test_remote_remove(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["remote", "remove"])
+        result = runner.invoke(main, ["remote", "remove", "origin"])
         assert result.exit_code == 0
 
     def test_commit_all_empty(self, initialized_project):
@@ -324,7 +324,7 @@ class TestJsonMode:
 
     def test_json_session_list(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["--json", "trace", "list"])
+        result = runner.invoke(main, ["--json", "list"])
         assert result.exit_code == 0
         assert "---OPENTRACES_JSON---" in result.output
 
@@ -411,7 +411,7 @@ class TestSessionShowTruncation:
             data["steps"][0]["content"] = long_content
         staging_file.write_text(_json.dumps(data) + "\n")
 
-        result = runner.invoke(main, ["trace", "show", trace_id, "--verbose"])
+        result = runner.invoke(main, ["show", trace_id, "--verbose"])
         assert result.exit_code == 0
         assert "truncated" not in result.output
         assert long_content in result.output
@@ -429,7 +429,7 @@ class TestSessionShowTruncation:
             data["steps"][0]["content"] = long_content
         staging_file.write_text(_json.dumps(data) + "\n")
 
-        result = runner.invoke(main, ["--json", "trace", "show", trace_id])
+        result = runner.invoke(main, ["--json", "show", trace_id])
         assert result.exit_code == 0
         sentinel = "---OPENTRACES_JSON---"
         assert sentinel in result.output
@@ -484,72 +484,6 @@ class TestExitCodes:
 
 
 # ---------------------------------------------------------------------------
-# Deprecated `session` alias — must continue working and warn.
-# ---------------------------------------------------------------------------
-
-class TestSessionAliasDeprecation:
-    """`opentraces session <sub>` should still work but emit a stderr
-    deprecation warning pointing users at `opentraces trace`."""
-
-    def test_session_list_alias_works(self, initialized_project):
-        project_dir, runner = initialized_project
-        sep_runner = CliRunner()
-        result = sep_runner.invoke(main, ["session", "list"])
-        assert result.exit_code == 0
-
-    def test_session_list_alias_emits_deprecation_warning(self, initialized_project):
-        project_dir, runner = initialized_project
-        sep_runner = CliRunner()
-        result = sep_runner.invoke(main, ["session", "list"])
-        assert result.exit_code == 0
-        # Deprecation notice must go to stderr and mention 'trace'.
-        stderr = result.stderr
-        assert "deprecat" in stderr.lower()
-        assert "trace" in stderr.lower()
-
-    def test_session_show_alias_delegates(self, project_with_traces):
-        project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["session", "show", trace_id])
-        assert result.exit_code == 0
-        assert "deprecat" in result.stderr.lower()
-
-    def test_session_commit_alias_delegates(self, project_with_traces):
-        project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["session", "commit", trace_id])
-        assert result.exit_code == 0
-
-    def test_trace_command_does_not_emit_deprecation(self, initialized_project):
-        """The primary `trace` command should NOT emit a deprecation warning."""
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["trace", "list"])
-        assert result.exit_code == 0
-        assert "deprecat" not in result.stderr.lower()
-
-
-class TestTraceHelpText:
-    """User-facing help text for our concept must say 'trace', not 'session'."""
-
-    def test_trace_group_help_uses_trace(self):
-        runner = CliRunner()
-        result = runner.invoke(main, ["trace", "--help"])
-        assert result.exit_code == 0
-        # Help text should refer to traces, not "trace sessions".
-        assert "trace" in result.output.lower()
-        # The legacy phrase "trace sessions" (plural noun-noun) is what we're
-        # removing. Also forbid "Manage individual trace sessions".
-        assert "trace sessions" not in result.output.lower()
-
-    def test_trace_list_help_uses_trace_not_session(self):
-        runner = CliRunner()
-        result = runner.invoke(main, ["trace", "list", "--help"])
-        assert result.exit_code == 0
-        lower = result.output.lower()
-        # The --limit help used to say "Max sessions to return".
-        assert "max sessions" not in lower
-        assert "max traces" in lower
-
-
-# ---------------------------------------------------------------------------
 # Init flag tests
 # ---------------------------------------------------------------------------
 
@@ -592,7 +526,7 @@ class TestUpgrade:
 
     def test_upgrade_skill_only(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["upgrade", "--skill-only"])
+        result = runner.invoke(main, ["setup", "upgrade", "--skill-only"])
         assert result.exit_code == 0
 
     def test_upgrade_skill_only_refreshes_skill_file(self, initialized_project):
@@ -602,18 +536,18 @@ class TestUpgrade:
         # Corrupt the skill file
         if skill_path.exists():
             skill_path.write_text("old content")
-        result = runner.invoke(main, ["upgrade", "--skill-only"])
+        result = runner.invoke(main, ["setup", "upgrade", "--skill-only"])
         assert result.exit_code == 0
         if skill_path.exists():
             assert skill_path.read_text() != "old content"
 
     def test_upgrade_skill_only_not_initialized(self, runner, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(main, ["upgrade", "--skill-only"])
+        result = runner.invoke(main, ["setup", "upgrade", "--skill-only"])
         assert result.exit_code == 3
 
     def test_upgrade_help(self, runner):
-        result = runner.invoke(main, ["upgrade", "--help"])
+        result = runner.invoke(main, ["setup", "upgrade", "--help"])
         assert result.exit_code == 0
         assert "skill-only" in result.output
 
@@ -621,7 +555,7 @@ class TestUpgrade:
         """Full upgrade without a project should succeed but skip skill refresh."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "source")
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 0
         assert "Skill refresh skipped" in result.output or "No project" in result.output
 
@@ -629,7 +563,7 @@ class TestUpgrade:
         """Source installs should skip CLI upgrade and only refresh skill."""
         project_dir, runner = initialized_project
         monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "source")
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 0
         assert "Source install" in result.output
 
@@ -641,7 +575,7 @@ class TestUpgrade:
         mock_result = type("R", (), {"returncode": 0, "stdout": "upgraded opentraces", "stderr": ""})()
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
 
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 0
 
     def test_upgrade_pipx_failure(self, initialized_project, monkeypatch):
@@ -652,7 +586,7 @@ class TestUpgrade:
         mock_result = type("R", (), {"returncode": 1, "stdout": "", "stderr": "No such package"})()
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
 
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 4
 
     def test_upgrade_pipx_already_latest(self, initialized_project, monkeypatch):
@@ -665,7 +599,7 @@ class TestUpgrade:
         })()
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
 
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 0
         assert "latest version" in result.output.lower()
 
@@ -677,7 +611,7 @@ class TestUpgrade:
         mock_result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
 
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 0
 
     def test_upgrade_brew_already_latest(self, initialized_project, monkeypatch):
@@ -688,7 +622,7 @@ class TestUpgrade:
         mock_result = type("R", (), {"returncode": 1, "stdout": "", "stderr": "already installed"})()
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
 
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 0
         assert "latest version" in result.output.lower()
 
@@ -700,7 +634,7 @@ class TestUpgrade:
         mock_result = type("R", (), {"returncode": 1, "stdout": "", "stderr": "Error: no formula"})()
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
 
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 4
 
     def test_upgrade_pip_success(self, initialized_project, monkeypatch):
@@ -711,7 +645,7 @@ class TestUpgrade:
         mock_result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
 
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 0
 
     def test_upgrade_pip_failure(self, initialized_project, monkeypatch):
@@ -722,7 +656,7 @@ class TestUpgrade:
         mock_result = type("R", (), {"returncode": 1, "stdout": "", "stderr": "Permission denied"})()
         monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_result)
 
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 4
 
     def test_upgrade_binary_not_found(self, initialized_project, monkeypatch):
@@ -735,7 +669,7 @@ class TestUpgrade:
             raise FileNotFoundError("brew not found")
         monkeypatch.setattr("subprocess.run", raise_fnf)
 
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 4
         assert "not found" in result.output.lower()
 
@@ -749,7 +683,7 @@ class TestUpgrade:
             raise subprocess.TimeoutExpired(cmd="pipx", timeout=120)
         monkeypatch.setattr("subprocess.run", raise_timeout)
 
-        result = runner.invoke(main, ["upgrade"])
+        result = runner.invoke(main, ["setup", "upgrade"])
         assert result.exit_code == 4
         assert "timed out" in result.output.lower()
 
@@ -769,7 +703,7 @@ class TestUpgrade:
         cfg.pop("agents", None)
         config_path.write_text(json.dumps(cfg))
 
-        result = runner.invoke(main, ["upgrade", "--skill-only"])
+        result = runner.invoke(main, ["setup", "upgrade", "--skill-only"])
         assert result.exit_code == 0
 
     def test_upgrade_skill_source_missing(self, initialized_project, monkeypatch):
@@ -777,7 +711,7 @@ class TestUpgrade:
         project_dir, runner = initialized_project
         monkeypatch.setattr("opentraces.cli._resolve_skill_source", lambda: None)
 
-        result = runner.invoke(main, ["upgrade", "--skill-only"])
+        result = runner.invoke(main, ["setup", "upgrade", "--skill-only"])
         assert result.exit_code == 0
         assert "could not find" in result.output.lower() or "unchanged" in result.output.lower()
 

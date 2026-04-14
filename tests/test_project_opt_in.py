@@ -129,7 +129,7 @@ class TestPushGate:
 
 class TestProjectsList:
     def test_empty_registry(self, runner, isolated_home) -> None:
-        result = runner.invoke(main, ["projects", "list"])
+        result = runner.invoke(main, ["list", "--projects"])
         assert result.exit_code == 0
         assert "No projects have opted in" in result.output
 
@@ -146,7 +146,7 @@ class TestProjectsList:
         register_project(cfg, project)
         save_config(cfg)
 
-        result = runner.invoke(main, ["projects", "list"])
+        result = runner.invoke(main, ["list", "--projects"])
         assert result.exit_code == 0
         assert str(project.resolve()) in result.output
 
@@ -164,6 +164,6 @@ class TestProjectsList:
         # Simulate marker deletion (e.g. user removed it manually).
         (project / ".opentraces.json").unlink()
 
-        result = runner.invoke(main, ["projects", "list"])
+        result = runner.invoke(main, ["list", "--projects"])
         assert result.exit_code == 0
         assert "registered but .opentraces.json missing" in result.output

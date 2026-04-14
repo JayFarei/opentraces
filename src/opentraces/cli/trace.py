@@ -1,8 +1,8 @@
-"""CLI ``trace`` subgroup: CRUD for trace review actions.
+"""CLI trace commands: CRUD for trace review actions.
 
-Primary command is ``opentraces trace <sub>``. A hidden ``opentraces session``
-alias is retained for backward compatibility; invoking it prints a one-line
-stderr deprecation notice and then delegates to the same implementation.
+These commands are standalone Click commands (``show``, ``list``, ``reject``,
+``reset``, ``redact``, ``discard``) registered at the root in ``cli/__init__``.
+The legacy ``trace`` subgroup and ``session`` alias were removed in Step 15.
 """
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from pathlib import Path
 import click
 
 from opentraces import cli as _cli
-from . import main
 from ..core.workflow import resolve_visible_stage, stage_label  # noqa: F401
 
 logger = logging.getLogger("opentraces.cli.trace")
@@ -46,24 +45,8 @@ def error_response(*a, **k):
 
 
 # ---------------------------------------------------------------------------
-# trace subgroup: CRUD for trace review actions
+# Standalone trace commands (registered at root in cli/__init__).
 # ---------------------------------------------------------------------------
-
-@main.group("trace")
-@click.pass_context
-def trace(ctx: click.Context) -> None:
-    """Manage individual traces (list, show, commit, reject, redact)."""
-    # Every subcommand here operates on the current project's staging —
-    # refuse globally if the project hasn't opted in. The `--help` path
-    # bypasses the group callback, so this is only hit on real invocations.
-    from ..core.config import project_is_opted_in
-    if not project_is_opted_in(Path.cwd()):
-        click.echo(
-            "opentraces: this project has not opted in. "
-            "Run 'opentraces init' here first.",
-            err=True,
-        )
-        ctx.exit(2)
 
 
 def _load_project_state():
@@ -111,7 +94,7 @@ def _load_trace_record(staging_dir: Path, trace_id: str):
     return record, staging_file
 
 
-@trace.command("list")
+@click.command("list")
 @click.option("--stage", type=click.Choice(["inbox", "committed", "pushed", "rejected"]), default=None, help="Filter by stage")
 @click.option("--model", type=str, default=None, help="Filter by model name (substring)")
 @click.option("--agent", type=str, default=None, help="Filter by agent name")
@@ -232,7 +215,7 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
     })
 
 
-@trace.command("show")
+@click.command("show")
 @click.argument("trace_id")
 @click.option("--verbose", is_flag=True, default=False, help="Show full step content (default: truncated to 500 chars)")
 @click.option("--markdown", is_flag=True, default=False,
@@ -378,21 +361,7 @@ def _trace_commit_impl(trace_id: str) -> None:
     })
 
 
-@trace.command("commit")
-@click.argument("trace_id")
-def trace_commit(trace_id: str) -> None:
-    """Commit a trace for push."""
-    _trace_commit_impl(trace_id)
-
-
-@trace.command("approve", hidden=True)
-@click.argument("trace_id")
-def trace_approve(trace_id: str) -> None:
-    """Backward-compatible alias for `trace commit`."""
-    _trace_commit_impl(trace_id)
-
-
-@trace.command("reject")
+@click.command("reject")
 @click.argument("trace_id")
 def trace_reject(trace_id: str) -> None:
     """Reject a trace (kept local only, not pushed)."""
@@ -416,7 +385,7 @@ def trace_reject(trace_id: str) -> None:
     })
 
 
-@trace.command("reset")
+@click.command("reset")
 @click.argument("trace_id")
 def trace_reset(trace_id: str) -> None:
     """Reset a trace back to Inbox (undo commit or reject)."""
@@ -448,55 +417,7 @@ def trace_reset(trace_id: str) -> None:
     })
 
 
-@trace.command("redact")
-@click.argument("trace_id")
-@click.option("--step", "step_index", required=True, type=int, help="Step index to redact")
-def trace_redact(trace_id: str, step_index: int) -> None:
-    """Redact a step's content from a staged trace."""
-    import re as _re
-
-    if not _re.match(r'^[a-f0-9-]+$', trace_id):
-        click.echo("Invalid trace ID format.")
-        sys.exit(2)
-
-    state, staging_dir = _load_project_state()
-    staging_file = staging_dir / f"{trace_id}.jsonl"
-    if not staging_file.exists():
-        click.echo(f"Staging file not found for {trace_id}")
-        emit_json(error_response("NOT_FOUND", "trace", f"No staging file for {trace_id}"))
-        sys.exit(6)
-
-    # Preserve original CLI-only "empty" + OUT_OF_RANGE error messaging by
-    # pre-checking before delegating to the shared helper.
-    text = staging_file.read_text().strip()
-    if not text:
-        click.echo("Staging file is empty.")
-        sys.exit(5)
-
-    trace_data = json.loads(text.splitlines()[0])
-    steps = trace_data.get("steps", [])
-    if step_index < 0 or step_index >= len(steps):
-        click.echo(f"Step index {step_index} out of range (0-{len(steps) - 1}).")
-        emit_json(error_response("OUT_OF_RANGE", "trace", f"Step {step_index} out of range"))
-        sys.exit(2)
-
-    from ..core.review import redact_step_and_persist
-    result = redact_step_and_persist(staging_dir, trace_id, step_index)
-    if not result.ok:
-        click.echo(result.error or "Redaction failed.")
-        sys.exit(5)
-
-    human_echo(f"Redacted step {step_index} in {trace_id[:8]}")
-
-    emit_json({
-        "status": "ok",
-        "trace_id": trace_id,
-        "step_index": step_index,
-        "redacted": True,
-    })
-
-
-@trace.command("discard")
+@click.command("discard")
 @click.argument("trace_id")
 @click.option("--yes", "confirmed", is_flag=True, help="Skip confirmation")
 def trace_discard(trace_id: str, confirmed: bool) -> None:
@@ -532,47 +453,3 @@ def trace_discard(trace_id: str, confirmed: bool) -> None:
     })
 
 
-# ---------------------------------------------------------------------------
-# Deprecated `session` alias group
-# ---------------------------------------------------------------------------
-#
-# `opentraces session <sub>` is retained as a hidden backward-compatible
-# alias. It emits a one-line deprecation notice to stderr and then delegates
-# to the corresponding `trace` subcommand. Subcommands are shared by
-# reference with the canonical `trace` group so behavior stays in lock-step.
-
-
-class _DeprecatedAliasGroup(click.Group):
-    """Group that prints a stderr deprecation notice before dispatching.
-
-    We warn on any invocation that reaches a subcommand. `--help` at the
-    group level skips the warning because it short-circuits before invoke.
-    """
-
-    def invoke(self, ctx: click.Context) -> object:  # type: ignore[override]
-        # A non-empty args list at the group level means a subcommand will
-        # be dispatched. `protected_args` is the Click-8 field for the same
-        # thing; we prefer it when present for forward-compat, and fall back
-        # to `args` which is the Click-9 replacement.
-        pending = getattr(ctx, "protected_args", None) or ctx.args
-        if pending:
-            click.echo(
-                "opentraces: 'session' is deprecated; use 'opentraces trace' "
-                "instead.",
-                err=True,
-            )
-        return super().invoke(ctx)
-
-
-@main.group("session", cls=_DeprecatedAliasGroup, hidden=True)
-def session_alias() -> None:
-    """Deprecated alias for `opentraces trace`.
-
-    Use `opentraces trace` instead.
-    """
-    pass
-
-
-# Share subcommand objects so the two groups stay in lock-step.
-for _name, _cmd in trace.commands.items():
-    session_alias.add_command(_cmd, name=_name)
