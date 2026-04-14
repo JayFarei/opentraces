@@ -107,6 +107,35 @@ def _encode_cwd(path: Path) -> str:
     return "".join(c if c.isalnum() or c == "-" else "-" for c in s)
 
 
+def _read_trace_id_from_jsonl(path: Path) -> str | None:
+    """Return the ``trace_id`` from the first JSON line of a Claude Code
+    capture JSONL, or ``None`` if the file is empty / malformed / missing
+    a non-empty ``trace_id`` field.
+
+    Claude Code names session JSONL files by ``session_id``, NOT by
+    ``trace_id`` — those identifiers are distinct concepts. The canonical
+    trace identifier lives in the first record's JSON payload. Callers
+    that conflate the filename stem with the trace_id end up propagating
+    session_ids under the trace_id name, which leaks an upstream-agent
+    implementation detail through the rest of the pipeline.
+    """
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            first = fh.readline().strip()
+    except OSError:
+        return None
+    if not first:
+        return None
+    try:
+        d = json.loads(first)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    tid = d.get("trace_id") or ""
+    return tid if isinstance(tid, str) and tid else None
+
+
 def load_snapshots_for_project(project_cwd: Path) -> list[Snapshot]:
     """Combine file-history snapshots (from ~/.claude), tool-use
     reconstructions from the JSONL (when blobs are absent), and
@@ -117,7 +146,12 @@ def load_snapshots_for_project(project_cwd: Path) -> list[Snapshot]:
     proj_dir = Path.home() / ".claude" / "projects" / _encode_cwd(project_cwd)
     if proj_dir.is_dir():
         for jsonl_path in sorted(proj_dir.glob("*.jsonl")):
-            trace_id = jsonl_path.stem
+            # The JSONL filename is session_id (Claude Code's convention),
+            # but the trace_id is the canonical identifier we want to
+            # propagate downstream. Read the first line for the real
+            # trace_id and only fall back to the stem if the file is
+            # empty / malformed (test fixtures, race during write).
+            trace_id = _read_trace_id_from_jsonl(jsonl_path) or jsonl_path.stem
             # file-history snapshots capture the BEFORE-prompt state for
             # rollback, so they often record `backupFileName=None` for
             # newly-created files — which the spike treats as a delete
