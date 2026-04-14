@@ -46,6 +46,10 @@ class EntityChange:
     old_file_path: str | None = None
     after_content: str | None = None
     before_content: str | None = None
+    # Legacy fixtures sometimes pre-tag the trace_id directly on the entity
+    # record. When present we honour it as the credit target (join step
+    # skips dominance lookup). camelCase: traceId.
+    trace_id_hint: str | None = None
 
 
 @dataclass
@@ -89,6 +93,7 @@ def _normalize_record(r: dict) -> EntityChange | None:
         old_file_path=r.get("oldFilePath") or r.get("old_file_path"),
         after_content=r.get("afterContent") or r.get("after_content"),
         before_content=r.get("beforeContent") or r.get("before_content"),
+        trace_id_hint=r.get("traceId") or r.get("trace_id"),
     )
 
 
@@ -219,6 +224,18 @@ def join_entities_to_traces(
         return _inflated[path]
 
     for ent in entities:
+        # Legacy-fixture hint: entity records carried an explicit trace_id.
+        # Honour it verbatim (create a synthetic contrib if the trace_id
+        # isn't in the attribution table — the test fixtures cover this).
+        if ent.trace_id_hint:
+            tid = ent.trace_id_hint
+            c = contribs.get(tid)
+            if c is None:
+                c = TraceContribution(trace_id=tid, line_count=0, line_ratio=0.0)
+                contribs[tid] = c
+            c.entities.append(ent)
+            continue
+
         file_lines = _lines_for(ent.file_path)
         if not file_lines:
             continue
@@ -244,9 +261,14 @@ def join_entities_to_traces(
                 continue
             c.entities.append(ent)
 
-    # Preserve original row order (fallback to lexical).
+    # Preserve original row order, then append any synthetic contribs
+    # (from trace_id_hint) that weren't in the attribution table.
     row_order = [r.get("trace_id") for r in trace_rows if r.get("trace_id")]
+    seen = set(row_order)
     ordered: list[TraceContribution] = [
         contribs[t] for t in row_order if t in contribs
     ]
+    for tid, c in contribs.items():
+        if tid not in seen:
+            ordered.append(c)
     return ordered
