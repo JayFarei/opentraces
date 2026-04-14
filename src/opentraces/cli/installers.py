@@ -1342,6 +1342,7 @@ def _row(mark_kind: str, label: str, value: str, *, detail: str | None = None) -
 _TIER_STATE_MARK = {
     "always-on": "ok",
     "enabled": "ok",
+    "on-demand": "ok",
     "required": "ok",
     "disabled": "off",
     "not-required": "off",
@@ -1353,6 +1354,7 @@ _TIER_STATE_MARK = {
 _TIER_STATE_LABEL = {
     "always-on": "always on",
     "enabled": "enabled",
+    "on-demand": "on demand",
     "required": "required",
     "disabled": "disabled",
     "not-required": "not required",
@@ -1376,11 +1378,15 @@ def _tier_row(tier: dict) -> None:
         line += f"  {_cli._dim(detail)}"
     human_echo(line)
 
-    # Second line: actionable toggle hint, only where applicable.
-    hint = _tier_toggle_hint(state, tier)
-    if hint:
+    # Actionable hints, only where applicable.
+    hints = _tier_toggle_hint(state, tier)
+    if hints:
         pad = " " * (4 + 22 + 1)  # align under the state column
-        human_echo(f"{pad}{_cli._dim(hint)}")
+        if isinstance(hints, str):
+            hints = [hints]
+        for h in hints:
+            if h:
+                human_echo(f"{pad}{_cli._dim(h)}")
 
 
 def _tier_toggle_hint(state: str, tier: dict) -> str | None:
@@ -1400,6 +1406,12 @@ def _tier_toggle_hint(state: str, tier: dict) -> str | None:
         return f"enable: {enable}" if enable else None
     if state == "enabled":
         return f"disable: {disable}" if disable else None
+    if state == "on-demand":
+        return [
+            "run: opentraces llm-review",
+            "gate push: opentraces push --llm-review",
+            f"reconfigure: {enable}" if enable else "",
+        ]
     if state == "missing":
         return f"fix: {enable} --verify"
     if state == "unreachable":

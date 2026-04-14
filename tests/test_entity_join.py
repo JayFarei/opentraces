@@ -222,3 +222,110 @@ def test_join_tie_credits_both(tmp_path, monkeypatch):
 def test_join_empty_attribution_returns_empty(tmp_path, monkeypatch):
     proj = _mk_project(tmp_path, monkeypatch)
     assert join_entities_to_traces(proj, "f" * 40) == []
+
+
+# ---------------------------------------------------------------------------
+# Overlap-case detection (plan-043 follow-up patch)
+# ---------------------------------------------------------------------------
+
+def test_overlap_case_has_entities(tmp_path, monkeypatch):
+    """Trace owns >= 1 entity -> overlap_case = 'has_entities'."""
+    proj = _mk_project(tmp_path, monkeypatch)
+    sha = "1" * 40
+    cache = _write_attribution(proj, sha, {
+        "coverage": {"attributed": 2, "total": 2, "ratio": 1.0},
+        "traces": [{"trace_id": "aaa", "line_count": 2, "files": ["x.py"]}],
+        "files": {
+            "x.py": {"total": 2, "lines": [
+                {"n": 1, "trace_id": "aaa", "consistency": "attributed"},
+                {"n": 2, "trace_id": "aaa", "consistency": "attributed"},
+            ]},
+        },
+    })
+    _write_entity_cache(cache, sha, {"changes": [
+        {"changeType": "added", "entityType": "function",
+         "entityName": "foo", "filePath": "x.py"},
+    ]})
+    contribs = join_entities_to_traces(proj, sha)
+    assert contribs[0].overlap_case == "has_entities"
+
+
+def test_overlap_case_phantom_is_filtered(tmp_path, monkeypatch):
+    """trace with line_count == 0 is omitted entirely."""
+    proj = _mk_project(tmp_path, monkeypatch)
+    sha = "2" * 40
+    _write_attribution(proj, sha, {
+        "coverage": {"attributed": 1, "total": 1, "ratio": 1.0},
+        "traces": [
+            {"trace_id": "aaa", "line_count": 1, "files": ["x.py"]},
+            {"trace_id": "ghost", "line_count": 0, "files": []},
+        ],
+        "files": {
+            "x.py": {"total": 1, "lines": [
+                {"n": 1, "trace_id": "aaa", "consistency": "attributed"},
+            ]},
+        },
+    })
+    contribs = join_entities_to_traces(proj, sha)
+    assert [c.trace_id for c in contribs] == ["aaa"]
+
+
+def test_overlap_case_scattered(tmp_path, monkeypatch):
+    """Trace contributed lines outside any entity range."""
+    proj = _mk_project(tmp_path, monkeypatch)
+    sha = "3" * 40
+    cache = _write_attribution(proj, sha, {
+        "coverage": {"attributed": 3, "total": 3, "ratio": 1.0},
+        "traces": [
+            {"trace_id": "aaa", "line_count": 2, "files": ["x.py"]},
+            {"trace_id": "bbb", "line_count": 1, "files": ["y.py"]},
+        ],
+        "files": {
+            "x.py": {"total": 2, "lines": [
+                {"n": 10, "trace_id": "aaa", "consistency": "attributed"},
+                {"n": 11, "trace_id": "aaa", "consistency": "attributed"},
+            ]},
+            "y.py": {"total": 1, "lines": [
+                {"n": 1, "trace_id": "bbb", "consistency": "attributed"},
+            ]},
+        },
+    })
+    # Entity only on x.py; bbb's contribution on y.py is scattered.
+    _write_entity_cache(cache, sha, {"changes": [
+        {"changeType": "modified", "entityType": "chunk",
+         "entityName": "lines 10-11", "filePath": "x.py"},
+    ]})
+    contribs = join_entities_to_traces(proj, sha)
+    bbb = next(c for c in contribs if c.trace_id == "bbb")
+    assert bbb.overlap_case == "scattered"
+    assert bbb.dominant_by is None
+
+
+def test_overlap_case_diffuse(tmp_path, monkeypatch):
+    """Trace's lines fall inside an entity but another trace dominates."""
+    proj = _mk_project(tmp_path, monkeypatch)
+    sha = "4" * 40
+    cache = _write_attribution(proj, sha, {
+        "coverage": {"attributed": 4, "total": 4, "ratio": 1.0},
+        "traces": [
+            {"trace_id": "aaa", "line_count": 3, "files": ["x.py"]},
+            {"trace_id": "bbb", "line_count": 1, "files": ["x.py"]},
+        ],
+        "files": {
+            "x.py": {"total": 4, "lines": [
+                {"n": 1, "trace_id": "aaa", "consistency": "attributed"},
+                {"n": 2, "trace_id": "aaa", "consistency": "attributed"},
+                {"n": 3, "trace_id": "aaa", "consistency": "attributed"},
+                {"n": 4, "trace_id": "bbb", "consistency": "attributed"},
+            ]},
+        },
+    })
+    # Chunk covers 1-4; aaa dominates; bbb's line-4 falls inside -> diffuse.
+    _write_entity_cache(cache, sha, {"changes": [
+        {"changeType": "modified", "entityType": "chunk",
+         "entityName": "lines 1-4", "filePath": "x.py"},
+    ]})
+    contribs = join_entities_to_traces(proj, sha)
+    bbb = next(c for c in contribs if c.trace_id == "bbb")
+    assert bbb.overlap_case == "diffuse"
+    assert bbb.dominant_by == "aaa"

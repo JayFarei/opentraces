@@ -59,6 +59,15 @@ class TraceContribution:
     line_ratio: float
     entities: list[EntityChange] = field(default_factory=list)
     chunks: list[tuple[int, int, str]] = field(default_factory=list)
+    # Post-043 follow-up: which overlap case does this trace fall into?
+    #   "has_entities" — trace owns >= 1 entity (normal)
+    #   "scattered"    — contributed lines, none fall inside any entity
+    #   "diffuse"      — lines fall inside entities, but another trace
+    #                    dominates in each. ``dominant_by`` names that trace.
+    #   "phantom"      — trace listed in attribution with line_count == 0.
+    #                    Renderer omits these rows entirely.
+    overlap_case: str = "has_entities"
+    dominant_by: str | None = None
     # A stable short handle for display — just trace_id[:8].
     @property
     def short_id(self) -> str:
@@ -223,6 +232,22 @@ def join_entities_to_traces(
             _inflated[path] = _inflate_lines(cache, files.get(path) or {})
         return _inflated[path]
 
+    # Track per-file entity ranges for the overlap-case detection pass.
+    # An "entity range" is either (start, end) from a chunk name, or
+    # the full file span for a named entity (we don't know the exact lines).
+    #   file_path -> list[(start, end, dominant_tid)]
+    entity_ranges: dict[str, list[tuple[int, int, str | None]]] = {}
+
+    def _file_span(path: str) -> tuple[int, int] | None:
+        lines = _lines_for(path)
+        if not lines:
+            return None
+        ns = [int(ln.get("n") or 0) for ln in lines if isinstance(ln, dict)]
+        ns = [n for n in ns if n > 0]
+        if not ns:
+            return None
+        return (min(ns), max(ns))
+
     for ent in entities:
         # Legacy-fixture hint: entity records carried an explicit trace_id.
         # Honour it verbatim (create a synthetic contrib if the trace_id
@@ -244,7 +269,10 @@ def join_entities_to_traces(
             m = _CHUNK_RE.match(ent.entity_name or "")
             if m:
                 start, end = int(m.group(1)), int(m.group(2))
-                _, tied = _dominant_trace_in_range(file_lines, start, end)
+                dom, tied = _dominant_trace_in_range(file_lines, start, end)
+                entity_ranges.setdefault(ent.file_path, []).append(
+                    (start, end, dom),
+                )
                 for tid in tied or []:
                     c = contribs.get(tid)
                     if c is None:
@@ -254,21 +282,78 @@ def join_entities_to_traces(
 
         # Named entity: whole-file dominance (keeps the renderer bullet
         # semantics consistent — "this trace is the one that touched foo()").
-        _, tied = _dominant_trace_in_range(file_lines)
+        dom, tied = _dominant_trace_in_range(file_lines)
+        span = _file_span(ent.file_path)
+        if span is not None:
+            entity_ranges.setdefault(ent.file_path, []).append(
+                (span[0], span[1], dom),
+            )
         for tid in tied or []:
             c = contribs.get(tid)
             if c is None:
                 continue
             c.entities.append(ent)
 
+    # ------------------------------------------------------------------
+    # Case detection (phantom / scattered / diffuse / has_entities).
+    # Phantoms (line_count == 0) are filtered entirely from the output.
+    # ------------------------------------------------------------------
+    for tid, c in contribs.items():
+        if c.entities or c.chunks:
+            c.overlap_case = "has_entities"
+            continue
+        if c.line_count == 0:
+            c.overlap_case = "phantom"
+            continue
+        # Walk the trace's contributed lines and check: do any fall inside
+        # any entity range? Track the dominant other-trace when they do.
+        inside = 0
+        outside = 0
+        dom_counts: Counter[str] = Counter()
+        for fpath, finfo in files.items():
+            flines = _lines_for(fpath)
+            ranges = entity_ranges.get(fpath) or []
+            for ln in flines:
+                if not isinstance(ln, dict):
+                    continue
+                if (ln.get("trace_id") or "") != tid:
+                    continue
+                if (ln.get("consistency") or "attributed") != "attributed":
+                    continue
+                n = int(ln.get("n") or 0)
+                hit = False
+                for start, end, dom in ranges:
+                    if start <= n <= end:
+                        hit = True
+                        if dom and dom != tid:
+                            dom_counts[dom] += 1
+                        break
+                if hit:
+                    inside += 1
+                else:
+                    outside += 1
+        if inside == 0 and outside >= 0:
+            c.overlap_case = "scattered"
+        elif inside > 0 and outside == 0:
+            c.overlap_case = "diffuse"
+            if dom_counts:
+                c.dominant_by = dom_counts.most_common(1)[0][0]
+        elif inside > outside:
+            c.overlap_case = "diffuse"
+            if dom_counts:
+                c.dominant_by = dom_counts.most_common(1)[0][0]
+        else:
+            c.overlap_case = "scattered"
+
     # Preserve original row order, then append any synthetic contribs
     # (from trace_id_hint) that weren't in the attribution table.
     row_order = [r.get("trace_id") for r in trace_rows if r.get("trace_id")]
     seen = set(row_order)
     ordered: list[TraceContribution] = [
-        contribs[t] for t in row_order if t in contribs
+        contribs[t] for t in row_order
+        if t in contribs and contribs[t].overlap_case != "phantom"
     ]
     for tid, c in contribs.items():
-        if tid not in seen:
+        if tid not in seen and c.overlap_case != "phantom":
             ordered.append(c)
     return ordered

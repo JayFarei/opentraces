@@ -226,7 +226,7 @@ def _security_tiers(
         rl_state = "unreachable"
         rl_detail = review_llm.get("status") or "endpoint unreachable"
     else:
-        rl_state = "enabled"
+        rl_state = "on-demand"
         backend = review_llm.get("backend") or review_llm.get("api_format") or "?"
         rl_detail = f"{backend} / {review_llm.get('model') or '?'}"
 
