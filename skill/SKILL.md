@@ -21,31 +21,31 @@ push to a HuggingFace dataset.
 
 ### Getting Started
 ```
-opentraces login                       # authenticate with HuggingFace (browser OAuth)
-opentraces login --token               # authenticate via token paste (headless/CI)
+opentraces auth login                       # authenticate with HuggingFace (browser OAuth)
+opentraces auth login --token               # authenticate via token paste (headless/CI)
 opentraces init                        # initialize project (interactive)
 opentraces status                      # show inbox tree with stage counts
 ```
 
 ### Review & Publish
 ```
-opentraces trace list                # list staged traces (default: all stages)
-opentraces trace list --by-commit    # group staged traces by git_links[].revision
-opentraces trace show <ID>           # full trace detail
-opentraces trace show <ID> --markdown # prompt-injection-safe render wrapped in random-token boundaries
-opentraces trace commit <ID>         # commit a trace for push
-opentraces trace reject <ID>         # mark as rejected (never pushed)
-opentraces trace reset <ID>          # undo commit/reject, back to inbox
-opentraces trace redact <ID> --step N  # scrub a specific step
-opentraces trace discard <ID> --yes  # permanently delete a trace
-opentraces commit --all                # bulk commit all inbox traces
+opentraces list                # list staged traces (default: all stages)
+opentraces list --by-commit    # group staged traces by git_links[].revision
+opentraces show <ID>           # full trace detail
+opentraces show <ID> --markdown # prompt-injection-safe render wrapped in random-token boundaries
+opentraces add <ID>         # commit a trace for push
+opentraces reject <ID>         # mark as rejected (never pushed)
+opentraces reset <ID>          # undo commit/reject, back to inbox
+opentraces redact <ID> <pattern>    # find-and-replace text (add --step N or --field PATH to scope)
+opentraces discard <ID> --yes  # permanently delete a trace
+opentraces add --all                # bulk commit all inbox traces
 opentraces push                        # upload committed traces to HF Hub (runs configured post-processors pre-upload)
 opentraces push --assess               # upload + run quality assessment after push
 opentraces push --llm-review           # block push unless every committed trace has a clean Tier 2 verdict
 opentraces push --no-trufflehog        # one-shot: skip Tier 1.5 TruffleHog for this push
 opentraces assess                      # score committed traces (local quality.json)
 opentraces assess --dataset owner/name # refresh quality.json on remote HF dataset
-opentraces review-llm                  # Tier 2 LLM semantic review over staged traces
+opentraces llm-review                  # Tier 2 LLM semantic review over staged traces
 opentraces doctor                      # report security pipeline health, SECURITY_VERSION, configured post-processors
 opentraces setup                       # interactive wizard: walks every integration
 opentraces setup claude-code           # install Claude Code capture hooks
@@ -69,12 +69,12 @@ opentraces tui                         # open terminal inbox UI
 
 ### Settings
 ```
-opentraces auth                        # show active HF identity
-opentraces logout                      # clear stored credentials
+opentraces auth whoami                        # show active HF identity
+opentraces auth logout                      # clear stored credentials
 opentraces config show                 # display current config
 opentraces config set [OPTIONS]        # update config values
 opentraces remote                      # show current dataset remote
-opentraces remote set owner/name       # set HF dataset remote
+opentraces remote add origin owner/name       # set HF dataset remote
 opentraces remote remove               # remove configured remote
 opentraces remove                      # remove opentraces from project
 ```
@@ -92,11 +92,11 @@ Look for `.opentraces/config.json` in the project root. If it exists, run
 ### Step 2: Check authentication
 
 ```bash
-opentraces auth
+opentraces auth whoami
 ```
 
-If not authenticated: `opentraces login` opens a browser for OAuth device-code
-flow. In headless or CI environments, use `opentraces login --token` to paste
+If not authenticated: `opentraces auth login` opens a browser for OAuth device-code
+flow. In headless or CI environments, use `opentraces auth login --token` to paste
 an HF token with write scope. The `HF_TOKEN` environment variable also works
 and takes highest priority.
 
@@ -147,8 +147,8 @@ filtered out.
 Check what landed in the inbox:
 ```bash
 opentraces context                          # project state + suggested next action
-opentraces trace list --stage inbox       # list inbox traces
-opentraces trace show <TRACE_ID>          # inspect a specific trace
+opentraces list --stage inbox       # list inbox traces
+opentraces show <TRACE_ID>          # inspect a specific trace
 ```
 
 For each trace, decide: commit (commit for push), reject (keep local), or
@@ -157,9 +157,9 @@ redact specific steps before committing.
 ### 3. Commit
 
 ```bash
-opentraces trace commit <TRACE_ID>        # commit one trace
-opentraces commit --all                     # commit all inbox traces
-opentraces commit --all -m "description"    # with custom commit message
+opentraces add <TRACE_ID>        # commit one trace
+opentraces add --all                     # commit all inbox traces
+opentraces add --all -m "description"    # with custom commit message
 ```
 
 ### 4. Push
@@ -177,11 +177,11 @@ A dataset card (README.md) is auto-generated with CC-BY-4.0 license.
 ### Listing and filtering
 
 ```bash
-opentraces trace list                                 # all stages
-opentraces trace list --stage inbox                   # inbox only
-opentraces trace list --stage committed               # committed only
-opentraces trace list --model opus                    # filter by model substring
-opentraces trace list --agent claude-code --limit 10  # filter by agent, cap results
+opentraces list                                 # all stages
+opentraces list --stage inbox                   # inbox only
+opentraces list --stage committed               # committed only
+opentraces list --model opus                    # filter by model substring
+opentraces list --agent claude-code --limit 10  # filter by agent, cap results
 ```
 
 Valid stages: `inbox`, `committed`, `pushed`, `rejected`.
@@ -189,8 +189,8 @@ Valid stages: `inbox`, `committed`, `pushed`, `rejected`.
 ### Inspecting a trace
 
 ```bash
-opentraces trace show <TRACE_ID>           # summary + truncated step content
-opentraces trace show <TRACE_ID> --verbose # full step content (can be large)
+opentraces show <TRACE_ID>           # summary + truncated step content
+opentraces show <TRACE_ID> --verbose # full step content (can be large)
 opentraces --json trace show <TRACE_ID>    # full record as JSON (never truncated)
 ```
 
@@ -201,12 +201,13 @@ parse the complete record programmatically.
 ### Actions
 
 ```bash
-opentraces trace commit <ID>       # commit for push
-opentraces trace reject <ID>       # mark rejected, kept local only
-opentraces trace reset <ID>        # undo commit or reject, back to inbox
-opentraces trace redact <ID> --step 3   # clear step 3's content, reasoning,
-                                          # tool_calls, observations, and snippets
-opentraces trace discard <ID> --yes     # permanently delete (--yes skips confirm)
+opentraces add <ID>       # commit for push
+opentraces reject <ID>       # mark rejected, kept local only
+opentraces reset <ID>        # undo commit or reject, back to inbox
+opentraces redact <ID> secret-text        # find-and-replace; add --step 3 to
+                                          # scope to a single step, --field PATH to
+                                          # scope to one field, --regex for patterns
+opentraces discard <ID> --yes     # permanently delete (--yes skips confirm)
 ```
 
 `reset` works from committed or rejected states but cannot undo a pushed trace.
@@ -225,8 +226,8 @@ opentraces trace discard <ID> --yes     # permanently delete (--yes skips confir
 ### Committing
 
 ```bash
-opentraces commit --all                     # commit all inbox traces
-opentraces commit --all -m "batch of fixes" # with message
+opentraces add --all                     # commit all inbox traces
+opentraces add --all -m "batch of fixes" # with message
 ```
 
 Commit creates a bundle of traces ready for upload. Auto-generates a message
@@ -379,15 +380,15 @@ Together / Anthropic / custom).
 **Run review over staged traces:**
 
 ```bash
-opentraces review-llm                                # uses the configured LLM, every trace in staging
-opentraces review-llm --scope staged                 # STAGED only (pre-commit)
-opentraces review-llm --scope committed              # COMMITTED only — 2nd line of defence before push
-opentraces review-llm --trace 8a3f1c                 # one trace (short prefix ok); repeatable
-opentraces review-llm --provider fake                # offline stub, for tests
-opentraces review-llm --dry-run                      # estimate tokens + cost only
-opentraces review-llm --limit 5                      # cap traces reviewed
-opentraces review-llm --force                        # re-review cached verdicts
-opentraces review-llm --context-file AGENTS.md       # pass project README as context
+opentraces llm-review                                # uses the configured LLM, every trace in staging
+opentraces llm-review --scope staged                 # STAGED only (pre-commit)
+opentraces llm-review --scope committed              # COMMITTED only — 2nd line of defence before push
+opentraces llm-review --trace 8a3f1c                 # one trace (short prefix ok); repeatable
+opentraces llm-review --provider fake                # offline stub, for tests
+opentraces llm-review --dry-run                      # estimate tokens + cost only
+opentraces llm-review --limit 5                      # cap traces reviewed
+opentraces llm-review --force                        # re-review cached verdicts
+opentraces llm-review --context-file AGENTS.md       # pass project README as context
 ```
 
 **review-llm is slow.** Narrow what you run with `--scope` or `--trace`, cap with `--limit`. The typical 2nd-line-of-defence flow is `review-llm --scope committed` right before `push --llm-review`.
@@ -412,7 +413,7 @@ opentraces push --llm-review
 
 Aborts with exit code `3` and error code `LLM_REVIEW_BLOCKED` if any
 committed trace is missing a verdict, has `shareable="no"`, or has
-`missed_sensitive_data="yes"`. Fix by running `opentraces review-llm`,
+`missed_sensitive_data="yes"`. Fix by running `opentraces llm-review`,
 then retry.
 
 ### Skipping Tier 1.5 for one push
@@ -524,8 +525,8 @@ opentraces config set --pricing-file /path/to/pricing.json
 
 ```bash
 opentraces remote                          # show current remote and visibility
-opentraces remote set owner/dataset-name   # set remote
-opentraces remote set owner/name --public  # set with visibility
+opentraces remote add origin owner/dataset-name   # set remote
+opentraces remote add origin owner/name --public  # set with visibility
 opentraces remote remove                   # remove remote from config
 ```
 
@@ -535,12 +536,12 @@ If no `/` in the name, the authenticated username is prepended automatically.
 
 | Error | Fix |
 |-------|-----|
-| "Not authenticated" / "No HF token found" | `opentraces login` |
+| "Not authenticated" / "No HF token found" | `opentraces auth login` |
 | "Not an opentraces project" / "Not initialized" | `opentraces init` in the project directory |
 | "No traces found" | Check that `~/.claude/projects/` has Claude Code session files |
 | Push fails with 403 | HF token lacks write scope, regenerate at huggingface.co/settings/tokens |
 | Lock contention (exit 7) | Another process is pushing, wait and retry |
-| "No traces ready for upload" | Run `opentraces commit --all` first |
+| "No traces ready for upload" | Run `opentraces add --all` first |
 | "All traces already exist on remote" | Content-hash dedup, nothing new to push |
 | Traces not appearing after agent run | Hook may not be installed, run `opentraces init` again |
 
@@ -565,8 +566,8 @@ To reinitialize: `opentraces init`.
 ## Keeping Up To Date
 
 ```bash
-opentraces upgrade              # upgrade CLI + refresh skill and hook
-opentraces upgrade --skill-only # just refresh the skill file and hook
+opentraces setup upgrade              # upgrade CLI + refresh skill and hook
+opentraces setup upgrade --skill-only # just refresh the skill file and hook
 ```
 
 `upgrade` detects how opentraces was installed (pipx, brew, pip, source)

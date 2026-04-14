@@ -6,15 +6,15 @@ Complete reference for the current opentraces CLI surface.
 
 | Command | Description |
 |---------|-------------|
-| `opentraces login` | Authenticate with Hugging Face Hub |
-| `opentraces logout` | Clear stored credentials |
+| `opentraces auth login` | Authenticate with Hugging Face Hub |
+| `opentraces auth logout` | Clear stored credentials |
 | `opentraces auth` | Show the active Hugging Face identity |
 | `opentraces init` | Initialize the current project inbox |
 | `opentraces remove` | Remove the local inbox from the current project |
 | `opentraces status` | Show inbox status and counts |
 | `opentraces remote` | Manage the configured dataset remote |
 | `opentraces trace` | Inspect and edit staged traces |
-| `opentraces commit` | Commit inbox traces for upload |
+| `opentraces add` | Commit inbox traces for upload |
 | `opentraces push` | Upload committed traces to Hugging Face Hub |
 | `opentraces assess` | Run quality assessment on committed traces or a remote dataset |
 | `opentraces web` | Open the browser inbox UI |
@@ -24,35 +24,35 @@ Complete reference for the current opentraces CLI surface.
 | `opentraces config set` | Update config values |
 | `opentraces pull` | Import traces from a HuggingFace dataset |
 | `opentraces log` | List uploaded traces grouped by date |
-| `opentraces upgrade` | Upgrade CLI and refresh project skill file |
+| `opentraces setup upgrade` | Upgrade CLI and refresh project skill file |
 | `opentraces setup` | Interactive wizard: walks every integration (Claude Code, git, trufflehog, review-llm) |
 | `opentraces setup claude-code` | Install Claude Code capture hooks |
 | `opentraces setup git` | Install or remove the opentraces post-commit hook for commit linking |
 | `opentraces setup trufflehog` | Install or toggle the optional Tier 1.5 TruffleHog scanner |
 | `opentraces setup review-llm` | Configure the third-party LLM used by `review-llm` (global config) |
 | `opentraces doctor` | Report the health of the security pipeline (tiers, versions, auth) and any configured post-processors |
-| `opentraces review-llm` | Run optional Tier 2 LLM semantic review over staged traces |
+| `opentraces llm-review` | Run optional Tier 2 LLM semantic review over staged traces |
 | `opentraces blame` | Resolve a commit to the opentraces trace(s) behind it |
 | `opentraces export` | Export staged traces to another format (`atif` stub, `agent-trace`) |
 
 ## Authentication
 
-### `opentraces login`
+### `opentraces auth login`
 
 Authenticate with Hugging Face Hub.
 
 ```bash
-opentraces login --token
-opentraces login
+opentraces auth login --token
+opentraces auth login
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--token` | off | Paste a personal access token (required for pushing) |
 
-> **Recommended:** Use `opentraces login --token` with a write-access PAT from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). The browser OAuth flow (`opentraces login` without `--token`) authenticates your identity but cannot create or push to dataset repos.
+> **Recommended:** Use `opentraces auth login --token` with a write-access PAT from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). The browser OAuth flow (`opentraces auth login` without `--token`) authenticates your identity but cannot create or push to dataset repos.
 
-### `opentraces logout`
+### `opentraces auth logout`
 
 Clear stored Hugging Face credentials.
 
@@ -97,13 +97,13 @@ opentraces init --review-policy review --remote your-name/opentraces --start-fre
 
 Remove the local `.opentraces/` inbox and Claude Code hook from the current project.
 
-### `opentraces upgrade`
+### `opentraces setup upgrade`
 
 Upgrade the CLI and refresh the skill file and capture hook in the current project.
 
 ```bash
-opentraces upgrade              # upgrade CLI + refresh skill and hook
-opentraces upgrade --skill-only # just refresh the skill file and hook
+opentraces setup upgrade              # upgrade CLI + refresh skill and hook
+opentraces setup upgrade --skill-only # just refresh the skill file and hook
 ```
 
 | Flag | Default | Description |
@@ -163,16 +163,16 @@ opentraces tui --fullscreen
 Fine-grained review commands for staged traces.
 
 ```bash
-opentraces trace list
-opentraces trace list --by-commit
-opentraces trace show <trace-id>
-opentraces trace show <trace-id> --verbose
-opentraces trace show <trace-id> --markdown
-opentraces trace commit <trace-id>
-opentraces trace reject <trace-id>
-opentraces trace reset <trace-id>
-opentraces trace redact <trace-id> --step 3
-opentraces trace discard <trace-id> --yes
+opentraces list
+opentraces list --by-commit
+opentraces show <trace-id>
+opentraces show <trace-id> --verbose
+opentraces show <trace-id> --markdown
+opentraces add <trace-id>
+opentraces reject <trace-id>
+opentraces reset <trace-id>
+opentraces redact <trace-id> --step 3
+opentraces discard <trace-id> --yes
 ```
 
 `trace list` accepts `--stage inbox|committed|pushed|rejected`, `--model`, `--agent`, `--limit`, and `--by-commit`.
@@ -194,13 +194,13 @@ opentraces trace discard <trace-id> --yes
 
 ## Upload
 
-### `opentraces commit`
+### `opentraces add`
 
 Commit inbox traces into a commit group for upload.
 
 ```bash
-opentraces commit --all
-opentraces commit -m "Fix parser and update schema"
+opentraces add --all
+opentraces add -m "Fix parser and update schema"
 ```
 
 ### `opentraces push`
@@ -232,7 +232,7 @@ opentraces push --repo user/custom-dataset
 
 `--approved-only` is not part of the current CLI. The public path is `commit -> push`.
 
-When `--llm-review` aborts, the hint points you at `opentraces review-llm` (see below) to produce verdicts.
+When `--llm-review` aborts, the hint points you at `opentraces llm-review` (see below) to produce verdicts.
 
 ### `opentraces doctor`
 
@@ -327,9 +327,9 @@ Manage the configured dataset remote.
 
 ```bash
 opentraces remote
-opentraces remote set owner/dataset
-opentraces remote set owner/dataset --private
-opentraces remote set owner/dataset --public
+opentraces remote add origin owner/dataset
+opentraces remote add origin owner/dataset --private
+opentraces remote add origin owner/dataset --public
 opentraces remote remove
 ```
 
@@ -390,7 +390,7 @@ When `stdout` is not a TTY, bare `opentraces` prints help text instead of launch
 OPENTRACES_NO_TUI=1 opentraces    # always prints help, never opens TUI
 ```
 
-`HF_TOKEN` is also respected as the highest-priority credential source, so CI pipelines can authenticate without running `opentraces login`.
+`HF_TOKEN` is also respected as the highest-priority credential source, so CI pipelines can authenticate without running `opentraces auth login`.
 
 ## Security Pipeline
 
@@ -496,7 +496,7 @@ Exits `3` when either Tier 1.5 or the review-LLM tier is enabled in config but u
 
 ### `opentraces setup review-llm`
 
-Configure the third-party LLM that `opentraces review-llm` uses to independently review staged traces. Config is **global** (one LLM per machine, shared across projects) and lives under `security.review_llm` in `~/.opentraces/config.json`.
+Configure the third-party LLM that `opentraces llm-review` uses to independently review staged traces. Config is **global** (one LLM per machine, shared across projects) and lives under `security.review_llm` in `~/.opentraces/config.json`.
 
 ```bash
 opentraces setup review-llm            # interactive preset picker (9 options, incl. Ollama model picker + pull)
@@ -530,21 +530,21 @@ opentraces setup review-llm --disable  # turn off
 
 Built-in presets (shown in the picker): `ollama`, `lm-studio`, `llama-cpp`, `vllm`, `openai`, `groq`, `openrouter`, `together`, `anthropic-direct`, and a free-form `custom` option. When a local preset is chosen and the endpoint is reachable, the picker lists available models and offers `custom` to enter a tag manually; for Ollama specifically, an unknown tag triggers an offer to run `ollama pull <tag>` right there.
 
-### `opentraces review-llm`
+### `opentraces llm-review`
 
 Run the Tier 2 LLM semantic review over the staged traces using the LLM configured via `opentraces setup review-llm` (overridable per-invocation with `--provider` / `--model` / `--base-url` / `--api-key-env`). Each trace's transcript is chunked (400k chars per chunk) and sent to the chosen backend; per-chunk verdicts are aggregated pessimistically (`shareable`: `no` > `manual_review` > `yes`; `missed_sensitive_data`: `yes` > `maybe` > `no`). Results are cached on `sha256(content + provider + base_url + model + prompt_version + context)`.
 
 If Tier 1 / TruffleHog already blocked a trace, the LLM call is skipped and a synthetic `shareable="no"` verdict is recorded with `denied_before_llm: true` — no tokens spent on confirmed-bad traces.
 
 ```bash
-opentraces review-llm                                # every trace in staging (current default)
-opentraces review-llm --scope staged                 # STAGED status only (pre-commit)
-opentraces review-llm --scope committed              # COMMITTED only — second line of defence before push
-opentraces review-llm --trace 8a3f1c                 # one trace (short prefix ok)
-opentraces review-llm --trace 8a3f --trace b4c9 --force
-opentraces review-llm --limit 5 --dry-run            # cost estimate for the next 5
-opentraces review-llm --provider fake                # offline stub, for tests
-opentraces review-llm --context-file AGENTS.md
+opentraces llm-review                                # every trace in staging (current default)
+opentraces llm-review --scope staged                 # STAGED status only (pre-commit)
+opentraces llm-review --scope committed              # COMMITTED only — second line of defence before push
+opentraces llm-review --trace 8a3f1c                 # one trace (short prefix ok)
+opentraces llm-review --trace 8a3f --trace b4c9 --force
+opentraces llm-review --limit 5 --dry-run            # cost estimate for the next 5
+opentraces llm-review --provider fake                # offline stub, for tests
+opentraces llm-review --context-file AGENTS.md
 ```
 
 review-llm is slow. Narrow what you run with `--scope` or `--trace`, and cap with `--limit`. The typical "second line of defence" flow is `review-llm --scope committed` right before `push --llm-review`.

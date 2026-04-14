@@ -1,6 +1,6 @@
 # Push
 
-`opentraces push` uploads committed traces to Hugging Face Hub as sharded JSONL files. Only committed traces are uploaded — run `opentraces commit` first if needed.
+`opentraces push` uploads committed traces to Hugging Face Hub as sharded JSONL files. Only committed traces are uploaded — run `opentraces add` first if needed.
 
 ## Options
 
@@ -30,10 +30,10 @@ opentraces push --repo user/custom-dataset
 
 Two optional gates can run at push time:
 
-- `--llm-review` blocks the upload unless every committed trace carries `metadata.llm_review.status == "complete"` with `shareable != "no"` and `missed_sensitive_data != "yes"`. Produce verdicts in advance with `opentraces review-llm` (see [Security Tiers](/docs/security/tiers)).
+- `--llm-review` blocks the upload unless every committed trace carries `metadata.llm_review.status == "complete"` with `shareable != "no"` and `missed_sensitive_data != "yes"`. Produce verdicts in advance with `opentraces llm-review` (see [Security Tiers](/docs/security/tiers)).
 - `--no-trufflehog` is a one-shot escape hatch for projects where Tier 1.5 TruffleHog is enabled in config but you want to skip it just for this push. It does not change the persisted config.
 
-When `--llm-review` aborts, the CLI exits `3` and prints `opentraces review-llm` as the hint.
+When `--llm-review` aborts, the CLI exits `3` and prints `opentraces llm-review` as the hint.
 
 ## How Upload Works
 

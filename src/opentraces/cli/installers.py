@@ -1662,3 +1662,23 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
         "results": outcome.results,
     })
 
+
+
+# ---------------------------------------------------------------------------
+# Step 12 — ot setup upgrade (absorbs the flat ot upgrade).
+# Both surfaces survive during the transition; Step 15 drops the flat one.
+# ---------------------------------------------------------------------------
+
+@setup_group.command("upgrade")
+@click.option(
+    "--skill-only",
+    is_flag=True,
+    default=False,
+    help="Only update the skill file and hook, skip CLI upgrade",
+)
+@click.pass_context
+def setup_upgrade(ctx: click.Context, skill_only: bool) -> None:
+    """Upgrade opentraces CLI and refresh the project skill file."""
+    # Lazy import to avoid circular imports at module load time.
+    from . import upgrade as _flat_upgrade
+    ctx.invoke(_flat_upgrade, skill_only=skill_only)

@@ -3,14 +3,14 @@ export const AGENT_PROMPT = `Set up opentraces in this project for trace collect
 Step 1 - Install or update:
 Check if \`opentraces --version\` works.
 If not installed, run: pipx install opentraces
-If already installed, run: opentraces upgrade
+If already installed, run: opentraces setup upgrade
 
 Step 2 - Authenticate:
 Run \`opentraces auth status\` to check if already logged in.
-If not authenticated, ask the user to run \`opentraces login\` themselves
+If not authenticated, ask the user to run \`opentraces auth login\` themselves
 to authorize in the browser (this pushes to existing datasets).
 If they want to create new datasets directly from opentraces,
-they need a write-scope token: \`opentraces login --token\` with a
+they need a write-scope token: \`opentraces auth login --token\` with a
 token from https://huggingface.co/settings/tokens.
 
 Step 3 - Initialize:
@@ -27,7 +27,7 @@ Optional hardening:
 Run \`opentraces doctor\` to verify environment and security pipeline.
 For extra coverage, \`opentraces setup trufflehog\` enables TruffleHog
 scanning (800+ detectors, opt-in, requires the binary), and
-\`opentraces review-llm\` runs a local LLM session-level privacy pass.
+\`opentraces llm-review\` runs a local LLM session-level privacy pass.
 To gate uploads on that review, push with \`opentraces push --llm-review\`.
 
 Optional commit anchoring (schema 0.3.0+):

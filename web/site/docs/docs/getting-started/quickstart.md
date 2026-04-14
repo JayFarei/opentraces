@@ -11,7 +11,7 @@ pipx install opentraces
 ## 2. Authenticate
 
 ```bash
-opentraces login --token
+opentraces auth login --token
 ```
 
 Paste a HuggingFace access token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Use `HF_TOKEN` instead if you are running headless.
@@ -55,7 +55,7 @@ Use `trace list`, `trace commit`, `trace reject`, and `trace redact` if you pref
 ## 5. Commit and Push
 
 ```bash
-opentraces commit --all
+opentraces add --all
 opentraces push
 ```
 

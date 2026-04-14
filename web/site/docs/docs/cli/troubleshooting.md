@@ -24,7 +24,7 @@ opentraces doctor --security   # just the security pipeline subview
 Run:
 
 ```bash
-opentraces login --token
+opentraces auth login --token
 ```
 
 Paste a write-access token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Or export `HF_TOKEN` in your shell:
@@ -48,17 +48,17 @@ Claude Code session files live under `~/.claude/projects/`. If there are no sess
 If a specific trace looks wrong:
 
 ```bash
-opentraces trace list
-opentraces trace show <trace-id>
-opentraces trace redact <trace-id> --step 3
+opentraces list
+opentraces show <trace-id>
+opentraces redact <trace-id> --step 3
 ```
 
 ### Push Fails With 403
 
-Your token does not have write access. OAuth device tokens (from `opentraces login`) cannot create or write to dataset repos. Re-authenticate with a personal access token:
+Your token does not have write access. OAuth device tokens (from `opentraces auth login`) cannot create or write to dataset repos. Re-authenticate with a personal access token:
 
 ```bash
-opentraces login --token
+opentraces auth login --token
 ```
 
 Paste a token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
@@ -73,5 +73,5 @@ opentraces init
 To clear credentials as well:
 
 ```bash
-opentraces logout
+opentraces auth logout
 ```

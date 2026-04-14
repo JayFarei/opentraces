@@ -924,45 +924,144 @@ def config_show() -> None:
 
 
 @config.command("set")
-@click.option("--project", type=str, help="Project path for per-project config")
-@click.option("--exclude", type=str, help="Project path to exclude (appends)")
-@click.option("--redact", type=str, help="Custom redaction string (appends)")
-@click.option("--pricing-file", type=str, help="Path to custom pricing table")
-@click.option("--classifier-sensitivity", type=click.Choice(["low", "medium", "high"]))
+@click.argument("key", required=False)
+@click.argument("value", required=False)
+@click.option(
+    "--project", "scope_project", is_flag=True,
+    help="Write to <repo>/.opentraces.json instead of the global config.",
+)
+@click.option(
+    "--global", "scope_global", is_flag=True,
+    help="Write to ~/.opentraces/config.json (default).",
+)
+@click.option("--append", "append_value", is_flag=True, help="Append to a list-typed key.")
+# Legacy positional-less flags kept for back-compat (Step 15 removes them).
+@click.option("--exclude", type=str, default=None, help="(legacy) Project path to exclude")
+@click.option("--redact", type=str, default=None, help="(legacy) Custom redaction string")
+@click.option("--pricing-file", type=str, default=None, help="(legacy) Path to custom pricing table")
+@click.option(
+    "--classifier-sensitivity", type=click.Choice(["low", "medium", "high"]),
+    default=None, help="(legacy) Set classifier sensitivity directly",
+)
 def config_set(
-    project: str | None,
+    key: str | None,
+    value: str | None,
+    scope_project: bool,
+    scope_global: bool,
+    append_value: bool,
     exclude: str | None,
     redact: str | None,
     pricing_file: str | None,
     classifier_sensitivity: str | None,
 ) -> None:
-    """Set configuration values. Append-only for --exclude and --redact."""
+    """Set a configuration value.
+
+    New form (Step 9):
+      ot config set <key> <value> [--append] [--project|--global]
+
+    Default scope is global; --project writes to <repo>/.opentraces.json.
+    --append appends to list-typed keys (e.g. custom_redact_strings).
+
+    Legacy form (kept for back-compat until Step 15):
+      ot config set --exclude <path> | --redact <str> | --pricing-file <path> |
+                    --classifier-sensitivity <low|medium|high>
+    """
+    if scope_project and scope_global:
+        click.echo("--project and --global are mutually exclusive.", err=True)
+        sys.exit(2)
+
+    legacy_used = any(v is not None for v in (exclude, redact, pricing_file, classifier_sensitivity))
+    new_used = key is not None or value is not None
+
+    if legacy_used and new_used:
+        click.echo("Mix of legacy flags and <key> <value> not supported.", err=True)
+        sys.exit(2)
+
+    if not legacy_used and not new_used:
+        click.echo("Pass either <key> <value> or one of the legacy flags.", err=True)
+        sys.exit(2)
+
+    # Legacy path: untouched semantics.
+    if legacy_used:
+        cfg = load_config()
+        if exclude:
+            if exclude not in cfg.excluded_projects:
+                cfg.excluded_projects.append(exclude)
+            click.echo(f"Excluded project: {exclude}")
+        if redact:
+            if redact not in cfg.custom_redact_strings:
+                cfg.custom_redact_strings.append(redact)
+            click.echo("Added redaction string")
+        if pricing_file:
+            cfg.pricing_file = pricing_file
+            click.echo(f"Set pricing file: {pricing_file}")
+        if classifier_sensitivity:
+            cfg.classifier_sensitivity = classifier_sensitivity
+            click.echo(f"Set classifier sensitivity: {classifier_sensitivity}")
+        save_config(cfg)
+        emit_json({"status": "ok"})
+        return
+
+    # New generic path.
+    if value is None:
+        click.echo("Missing <value> for set.", err=True)
+        sys.exit(2)
+
+    if scope_project:
+        # Write to repo marker via load/save_project_config helpers.
+        from ..core.config import load_project_config, save_project_config
+        proj_dir = Path.cwd()
+        proj_cfg = load_project_config(proj_dir)
+        if append_value:
+            existing = proj_cfg.get(key)
+            if not isinstance(existing, list):
+                existing = [] if existing is None else [existing]
+            if value not in existing:
+                existing.append(value)
+            proj_cfg[key] = existing
+        else:
+            proj_cfg[key] = value
+        save_project_config(proj_dir, proj_cfg)
+        click.echo(f"Set {key}={value} (project)")
+        emit_json({"status": "ok", "scope": "project", "key": key, "value": value})
+        return
+
+    # Global scope (default).
     cfg = load_config()
-
-    if exclude:
-        if exclude not in cfg.excluded_projects:
-            cfg.excluded_projects.append(exclude)
-        click.echo(f"Excluded project: {exclude}")
-
-    if redact:
-        if redact not in cfg.custom_redact_strings:
-            cfg.custom_redact_strings.append(redact)
-        click.echo(f"Added redaction string")
-
-    if pricing_file:
-        cfg.pricing_file = pricing_file
-        click.echo(f"Set pricing file: {pricing_file}")
-
-    if classifier_sensitivity:
-        cfg.classifier_sensitivity = classifier_sensitivity
-        click.echo(f"Set classifier sensitivity: {classifier_sensitivity}")
+    # Validate key against the Config model.
+    if key not in type(cfg).model_fields:
+        click.echo(
+            f"Unknown config key '{key}'. Use 'ot config show' to see valid keys.",
+            err=True,
+        )
+        sys.exit(2)
+    if append_value:
+        existing = getattr(cfg, key, None) or []
+        if not isinstance(existing, list):
+            click.echo(f"--append only valid for list-typed keys; '{key}' is {type(existing).__name__}.", err=True)
+            sys.exit(2)
+        if value not in existing:
+            existing.append(value)
+        setattr(cfg, key, existing)
+    else:
+        # Coerce simple scalar types from the string value.
+        field_info = type(cfg).model_fields[key]
+        annotation = field_info.annotation
+        try:
+            if annotation is bool or "bool" in str(annotation):
+                coerced = value.lower() in {"true", "1", "yes", "on"}
+            elif annotation is int or "int" in str(annotation):
+                coerced = int(value)
+            else:
+                coerced = value
+            setattr(cfg, key, coerced)
+        except (ValueError, TypeError) as e:
+            click.echo(f"Invalid value for {key}: {e}", err=True)
+            sys.exit(2)
 
     save_config(cfg)
-    emit_json({
-        "status": "ok",
-        "next_steps": ["Run 'opentraces discover' to find traces"],
-        "next_command": "opentraces discover",
-    })
+    click.echo(f"Set {key}={value} (global)")
+    emit_json({"status": "ok", "scope": "global", "key": key, "value": value})
 
 
 @main.command(

@@ -11,7 +11,7 @@ export HF_TOKEN=hf_...
 or:
 
 ```bash
-opentraces login --token
+opentraces auth login --token
 ```
 
 `HF_TOKEN` is the preferred path in CI.
@@ -22,9 +22,9 @@ If you are running opentraces in automation, keep the steps explicit:
 
 ```bash
 opentraces init --review-policy review --remote my-org/opentraces --no-hook
-opentraces trace list
-opentraces trace commit <trace-id>
-opentraces commit --all
+opentraces list
+opentraces add <trace-id>
+opentraces add --all
 opentraces push --private
 ```
 
@@ -39,13 +39,13 @@ Your CI script should call `commit` and `push` directly.
 - name: Authenticate with Hugging Face
   env:
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  run: opentraces login --token
+  run: opentraces auth login --token
 
 - name: Commit and push traces
   env:
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
   run: |
-    opentraces commit --all
+    opentraces add --all
     opentraces push --private
 ```
 

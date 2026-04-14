@@ -122,7 +122,7 @@ Once the post-commit hook is installed (`opentraces setup git`), two local comma
 ### Traces grouped by commit
 
 ```bash
-opentraces trace list --by-commit
+opentraces list --by-commit
 opentraces --json trace list --by-commit
 ```
 

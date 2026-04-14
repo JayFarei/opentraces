@@ -62,7 +62,7 @@ Python 3.10 or later is required.
 The preferred in-project upgrade path is:
 
 ```bash
-opentraces upgrade
+opentraces setup upgrade
 ```
 
 Auto-detects whether you installed via pipx, brew, or pip and upgrades accordingly. Also refreshes the skill file and capture hook in the current project.
