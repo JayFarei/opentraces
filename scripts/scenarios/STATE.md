@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T01:45Z
-Last iteration agent: claude-opus-4-6 (loop iter 4)
+Last update: 2026-04-14T02:15Z
+Last iteration agent: claude-opus-4-6 (loop iter 5)
 
 ---
 
@@ -36,14 +36,16 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | same_lines_overwrite         | pass | 2026-04-13 | — |
 | sed_inplace_edit             | pass | 2026-04-13 | — |
 | small_tweak                  | pass | 2026-04-14 | — |
+| two_traces_different_files   | pass | 2026-04-14 | new this iter; E2E variant of self-test, two sessions touching disjoint files, no cross-contamination |
 | watcher_offline              | pass | 2026-04-13 | — |
 | zero_file_history_session    | pass | 2026-04-14 | was failing; fixed by graceful-no-audit fallback |
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 22/24 passing.** Added `bash_rename` (iter 3) and
-`mixed_write_and_bash` (iter 4). `clear_mid_session` and
-`file_create_then_delete` remain blocked on human design decisions.
+**Current: 23/25 passing.** Added `bash_rename` (iter 3),
+`mixed_write_and_bash` (iter 4), `two_traces_different_files` (iter 5).
+`clear_mid_session` and `file_create_then_delete` remain blocked on
+human design decisions.
 
 ---
 
@@ -107,6 +109,12 @@ detection; binary-file touch; very-large-file blame; symlink file).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 5 (opus 4.6): Authored `two_traces_different_files` —
+  E2E harness variant of the `two_sessions_different_files` self-test.
+  Two sequential claude sessions write disjoint files; single commit.
+  Each file must credit its own trace with no cross-contamination.
+  Passed first try.
 
 - 2026-04-14 — iter 4 (opus 4.6): Authored `mixed_write_and_bash` — one
   trace uses the Write tool then appends via Bash printf redirection in
