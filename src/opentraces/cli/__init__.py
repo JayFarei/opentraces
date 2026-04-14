@@ -491,7 +491,7 @@ def _login_impl(token: bool) -> None:
             user_info = api.whoami()
             username = user_info.get("name", "unknown")
             click.echo(f"Already authenticated as {username}.")
-            click.echo("Run 'opentraces login --token' to re-authenticate with a different token.")
+            click.echo("Run 'opentraces auth login --token' to re-authenticate with a different token.")
             emit_json({
                 "status": "ok",
                 "authenticated": True,
@@ -529,7 +529,7 @@ def _auth_status_impl() -> None:
     identity = _auth_identity(cfg.hf_token)
     if identity is None:
         click.echo("Not authenticated.")
-        emit_json({"status": "needs_action", "authenticated": False, "next_command": "opentraces login"})
+        emit_json({"status": "needs_action", "authenticated": False, "next_command": "opentraces auth login"})
         return
 
     username = identity.get("name", "unknown")
@@ -1057,7 +1057,7 @@ def config_set(
     ],
     see_also=[
         ("opentraces setup claude-code", "install Claude Code capture hooks"),
-        ("opentraces login", "authenticate with HuggingFace"),
+        ("opentraces auth login", "authenticate with HuggingFace"),
     ],
     option_groups=[
         ("Agents", ["agents", "no_hook", "import_existing"]),
@@ -1106,7 +1106,7 @@ def init(
         current_remote = proj_config.get("remote", "not set")
         # Backfill the global registry — projects that were initialized
         # before the registry existed (or before they got pruned) won't
-        # appear in `opentraces projects list` until we re-add them.
+        # appear in `opentraces list --projects` until we re-add them.
         from ..core.config import register_project as _register_project
         _cfg_for_register = load_config()
         if _register_project(_cfg_for_register, project_dir):
@@ -1235,7 +1235,7 @@ def init(
     save_project_config(project_dir, proj_config)
 
     # Register this project in the global opted-in list. This is the
-    # user-visible consent record: `opentraces projects list` reads it,
+    # user-visible consent record: `opentraces list --projects` reads it,
     # and every capture/TUI/web/push path cross-checks `.opentraces/
     # config.json` against it before doing anything.
     from ..core.config import register_project as _register_project
@@ -1313,7 +1313,7 @@ def init(
         click.echo(f"     Session dir: {existing_session_dir}")
     else:
         click.echo("  1. Start a connected agent; capture is automatic from now on")
-    click.echo("  2. Review and commit inbox traces with 'opentraces commit --all'")
+    click.echo("  2. Review and stage inbox traces with 'opentraces add --all'")
     click.echo("  3. Publish committed traces with 'opentraces push'")
 
     emit_json({
@@ -1379,7 +1379,7 @@ def remove() -> None:
         removed_global = True
 
     # Drop this project from the global opted-in registry so it no
-    # longer appears in `opentraces projects list`.
+    # longer appears in `opentraces list --projects`.
     cfg_for_unregister = load_config()
     if _unregister_project(cfg_for_unregister, project_dir):
         save_config(cfg_for_unregister)
@@ -2043,12 +2043,8 @@ def _auth_whoami() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Step 7 — flat workflow verbs alongside the trace group.
-# Step 8 — ot add refuses BLOCKED + REJECTED traces.
-#
-# These wrap the same underlying impls used by `ot trace ...` so the two
-# surfaces stay perfectly consistent. The `trace` group is removed in
-# Step 15; this is the bridge.
+# Flat workflow verbs registered at root: add, list, show, reject, reset,
+# redact, discard. ot add refuses BLOCKED + REJECTED traces.
 # ---------------------------------------------------------------------------
 
 # Re-register existing trace.X commands at the root with the same name.
@@ -2289,7 +2285,7 @@ def remote_set(name: str | None, is_private: bool | None) -> None:
     cfg = load_config()
     identity = _auth_identity(cfg.hf_token)
     if identity is None:
-        click.echo("Not authenticated. Run 'opentraces login' first.")
+        click.echo("Not authenticated. Run 'opentraces auth login' first.")
         sys.exit(3)
 
     repo_id, visibility = _choose_remote_interactively(_default_repo(identity))

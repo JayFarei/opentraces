@@ -176,9 +176,9 @@ def context() -> None:
 
     # Suggest next action
     if not authenticated:
-        suggested_next = "opentraces login"
+        suggested_next = "opentraces auth login"
     elif counts["inbox"] > 0:
-        suggested_next = "opentraces trace list --stage inbox"
+        suggested_next = "opentraces list --stage inbox"
     elif counts["committed"] > 0:
         suggested_next = "opentraces push"
     else:

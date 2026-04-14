@@ -33,7 +33,7 @@ from opentraces_schema.models import TraceRecord
 _HF_CACHE_TOKEN_PATH: Path = Path.home() / ".cache" / "huggingface" / "token"
 
 _LOGIN_HINT = (
-    "No HuggingFace token found. Run 'opentraces login' or "
+    "No HuggingFace token found. Run 'opentraces auth login' or "
     "'hf auth login' to authenticate,"
     "or set HF_TOKEN / HUGGINGFACE_TOKEN in your environment."
 )

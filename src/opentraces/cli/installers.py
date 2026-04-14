@@ -71,7 +71,7 @@ def setup_group(ctx: click.Context) -> None:
       trufflehog    Tier 1.5 secret scanner, any finding blocks upload
                     until resolved.
       review-llm    Tier 2 third-party LLM reviewer for staged traces,
-                    used by `opentraces review-llm` and `push --llm-review`.
+                    used by `opentraces llm-review` and `push --llm-review`.
 
     Run bare ``opentraces setup`` for an interactive wizard that walks every
     integration, or call a subcommand to target one directly.
@@ -430,7 +430,7 @@ def setup_git(remove: bool) -> None:
         "opentraces setup skill --harness claude-code",
     ],
     see_also=[
-        ("opentraces upgrade", "refresh the skill after a CLI update"),
+        ("opentraces setup upgrade", "refresh the skill after a CLI update"),
         ("opentraces doctor", "verify skill install + per-harness symlinks"),
     ],
 )
@@ -970,7 +970,7 @@ def setup_review_llm_cmd(
     fake backend that reads each staged trace and flags residual
     sensitive content the regex/entropy/TruffleHog tiers could miss
     (semantic PII, proprietary context, policy concerns). Used by
-    `opentraces review-llm` and `opentraces push --llm-review`.
+    `opentraces llm-review` and `opentraces push --llm-review`.
 
     Stored globally in ~/.opentraces/config.json under
     security.review_llm. One config per machine, projects inherit it.
@@ -1056,7 +1056,7 @@ def setup_review_llm_cmd(
         human_echo(f"  {_cli._dim('api key:   ')} ${rc.api_key_env} ({present})")
     human_echo(f"  {_cli._dim('reachable: ')} {message}")
     human_echo("")
-    human_echo(f"  {_cli._bold('To run:')} opentraces review-llm  "
+    human_echo(f"  {_cli._bold('To run:')} opentraces llm-review  "
                f"{_cli._dim('(staged traces; out-of-band, not automatic)')}")
     human_echo(f"  {_cli._dim('gate push:')}     opentraces push --llm-review")
     human_echo(f"  {_cli._dim('disable:')}       opentraces setup review-llm --disable")
@@ -1376,7 +1376,7 @@ def _opted_in_section(info: dict) -> None:
     if not count:
         human_echo(f"  {_cli._dim('(none — run opentraces init in a project to opt in)')}")
         return
-    human_echo(f"  {_cli._dim(f'{count} project(s) registered — list with: opentraces projects list')}")
+    human_echo(f"  {_cli._dim(f'{count} project(s) registered — list with: opentraces list --projects')}")
     # Show at most 3 to keep doctor compact; full list via the command.
     for p in paths[:3]:
         human_echo(f"    {_cli._dim(p)}")

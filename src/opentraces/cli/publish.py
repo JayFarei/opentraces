@@ -249,11 +249,11 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
             human_echo("Aborting: --llm-review requires a clean verdict for every committed trace.")
             for entry in pending_block:
                 human_echo(f"  - {entry}")
-            human_hint("Run: opentraces review-llm")
+            human_hint("Run: opentraces llm-review")
             emit_json(error_response(
                 "LLM_REVIEW_BLOCKED", "upload",
                 f"{len(pending_block)} trace(s) lack a shareable verdict",
-                "Run 'opentraces review-llm' to produce verdicts, then retry.",
+                "Run 'opentraces llm-review' to produce verdicts, then retry.",
             ))
             sys.exit(3)
 
@@ -270,8 +270,8 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
 
     if not cfg.hf_token:
         click.echo("Not authenticated.")
-        human_hint("Run: opentraces login")
-        emit_json(error_response("NOT_AUTHENTICATED", "auth", "No HF token", "Run: opentraces login"))
+        human_hint("Run: opentraces auth login")
+        emit_json(error_response("NOT_AUTHENTICATED", "auth", "No HF token", "Run: opentraces auth login"))
         sys.exit(3)
 
     # Get username from HF (needed for all paths)
@@ -424,11 +424,11 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                         "Permission denied. Your token does not have write access.\n"
                         "OAuth device tokens have limited permissions on HuggingFace.\n"
                         "Re-authenticate with a personal access token:\n"
-                        "  opentraces login --token\n"
+                        "  opentraces auth login --token\n"
                         "Get a token with 'write' scope at https://huggingface.co/settings/tokens"
                     )
-                    human_hint("Run: opentraces login --token")
-                    emit_json(error_response("PERMISSION_DENIED", "auth", "Token lacks write permissions", "Run: opentraces login --token"))
+                    human_hint("Run: opentraces auth login --token")
+                    emit_json(error_response("PERMISSION_DENIED", "auth", "Token lacks write permissions", "Run: opentraces auth login --token"))
                     sys.exit(3)
                 raise
 
