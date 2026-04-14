@@ -1,0 +1,37 @@
+name = "bf_heredoc_write_no_watcher"
+description = """
+Backfill proof point: agent writes a file via a heredoc shell pattern
+with watcher OFFLINE. Heredoc is a common way agents write multi-line
+content via Bash. Attribution must come from the JSONL Bash-pattern
+layer alone.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    """Use the Bash tool to run this exact command (a heredoc):
+cat > report.md <<EOF
+# Report
+line two
+line three
+EOF""",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "heredoc write, watcher off"
+
+# Body includes three content lines + trailing newline — 3 lines total.
+[[assertions]]
+file = "report.md"
+trace = "a"
+lines = 3
+
+[[assertions]]
+file = "report.md"
+total_lines = 3

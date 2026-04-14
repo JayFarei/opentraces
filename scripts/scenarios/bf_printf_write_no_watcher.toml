@@ -1,0 +1,34 @@
+name = "bf_printf_write_no_watcher"
+description = """
+Backfill proof point: agent writes a file via `printf > file` with the
+watcher OFFLINE. Attribution must come entirely from the JSONL Bash-
+pattern reconstruction (no file-history blob is produced for new-file
+Writes done via Bash; no watcher is running). If this scenario passes,
+the backfill path for the dominant mutation class (~47% of the corpus)
+is demonstrated end-to-end.
+"""
+
+[[steps]]
+type = "reset"
+
+# NOTE: no start_watcher — forces the reconstruction path to stand alone.
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run this exact command: printf 'alpha\\nbravo\\ncharlie\\n' > notes.md",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "printf redirect write, watcher off"
+
+[[assertions]]
+file = "notes.md"
+trace = "a"
+lines = 3
+
+[[assertions]]
+file = "notes.md"
+total_lines = 3
