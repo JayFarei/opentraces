@@ -201,36 +201,71 @@ def _truncate(text: str, max_len: int) -> str:
 def _render_trace_header(trace: TraceContribution, first: bool,
                          show_entities: bool, opts: RenderOptions,
                          short_name: str | None = None,
-                         turn_count: int | None = None) -> str:
+                         turn_count: int | None = None,
+                         lifecycle_mixed: bool = False) -> str:
     """Render one trace header line (either ┊╭┄ or ┊├┄).
 
-    Post-043 enrichment: emits ``t:<id>`` (magenta-bold if coloured),
-    optional short-name (bold), and a dim ``N turns . M entities`` suffix.
+    Post-043 follow-up patch:
+    - Drop ``<lifecycle>`` suffix unless the visible window has >1 distinct
+      lifecycle (``lifecycle_mixed=True``).
+    - Prefer ``N turns`` over ``[N lines]`` when turn_count is available.
+    - Palette: t:<id> magenta+bold, short_name cyan+bold, line count blue,
+      turn count green, entity count bright-blue, separators dim.
     """
     key = "stack_header" if first else "stack_continue"
     prefix, _ = PREFIX[key]
     short_tid = trace.trace_id[:8] if trace.trace_id else "?"
     id_plain = f"t:{short_tid}"
 
+    # Build plain parts list; colour pass is applied after truncation so
+    # budget math stays on visible width.
     parts: list[str] = [id_plain]
     if short_name and short_name != short_tid:
         parts.append(short_name)
-    parts.append(_fmt_lines(trace.line_count))
-    ec = trace.entity_count if trace.entity_count is not None else 0
-    if show_entities:
-        parts.append(_fmt_entities(ec))
-    parts.append(_fmt_lifecycle(trace.lifecycle))
+    # Prefer turns+entities over raw line count when turn_count is available.
+    line_part: str | None = None
+    turn_part: str | None = None
+    entity_part: str | None = None
     if turn_count:
-        parts.append(f"{turn_count} turns")
-    suffix = " ".join(parts)
+        turn_part = f"{turn_count} turns"
+        ec = trace.entity_count
+        if ec is not None and ec > 0:
+            entity_part = f"{ec} entities"
+    else:
+        line_part = _fmt_lines(trace.line_count)
+    if show_entities and entity_part is None:
+        ec = trace.entity_count if trace.entity_count is not None else 0
+        entity_part = _fmt_entities(ec)
 
+    if line_part:
+        parts.append(line_part)
+    if turn_part:
+        parts.append(turn_part)
+    if entity_part:
+        parts.append(entity_part)
+    if lifecycle_mixed:
+        parts.append(_fmt_lifecycle(trace.lifecycle))
+
+    suffix = " ".join(parts)
     budget = max(1, opts.width - len(prefix))
-    line = prefix + _truncate(suffix, budget)
+    body = _truncate(suffix, budget)
+
     if opts.color:
-        # Magenta-bold on the t:<id> handle to distinguish from c:<sha>.
-        line = line.replace(id_plain,
-                            _color(id_plain, "\x1b[1;35m", True), 1)
-    return line
+        # t:<id> magenta bold
+        body = body.replace(id_plain, _color(id_plain, "\x1b[1;35m", True), 1)
+        if short_name and short_name != short_tid and short_name in body:
+            body = body.replace(short_name,
+                                _color(short_name, "\x1b[1;36m", True), 1)
+        if line_part and line_part in body:
+            body = body.replace(line_part,
+                                _color(line_part, "\x1b[34m", True), 1)
+        if turn_part and turn_part in body:
+            body = body.replace(turn_part,
+                                _color(turn_part, "\x1b[32m", True), 1)
+        if entity_part and entity_part in body:
+            body = body.replace(entity_part,
+                                _color(entity_part, "\x1b[94m", True), 1)
+    return prefix + body
 
 
 def _render_commit_line(c: Commit, opts: RenderOptions) -> str:
@@ -241,24 +276,35 @@ def _render_commit_line(c: Commit, opts: RenderOptions) -> str:
     dotted = prefix_with_dot
     if opts.color and code:
         dotted = prefix_with_dot.replace(glyph, _color(glyph, code, True), 1)
-    # Post-043: c:<sha> prefix + date + subject + coverage-coloured %.
-    date_part = (c.timestamp or "").split("T", 1)[0]
+    # Post-043 follow-up: drop date column; spine already conveys recency.
+    # Layout: "c:<sha>  <subject>  <pct>%"
     c_id = f"c:{c.short_sha}"
-    # Coverage percentage (from first trace's attributed_ratio).
     pct_txt = ""
+    pct_val: int | None = None
     if c.traces and c.traces[0].attributed_ratio is not None:
-        pct = int(round(c.traces[0].attributed_ratio * 100))
-        pct_txt = f"  {pct}%"
-    body = f"{date_part} {c_id}  {c.subject}{pct_txt}"
+        pct_val = int(round(c.traces[0].attributed_ratio * 100))
+        pct_txt = f"  {pct_val}%"
+    body = f"{c_id}  {c.subject}{pct_txt}"
     budget = max(1, opts.width - len(prefix_with_dot))
     body = _truncate(body, budget)
-    # Colorize c_id cyan-bold.
     if opts.color:
-        body = body.replace(c_id, _color(c_id, "\x1b[1;36m", True), 1)
+        # c:<sha> yellow bold
+        body = body.replace(c_id, _color(c_id, "\x1b[1;33m", True), 1)
+        # Coverage % coloured by threshold.
+        if pct_val is not None:
+            pct_tok = f"{pct_val}%"
+            if pct_val >= 75:
+                code = "\x1b[32m"
+            elif pct_val >= 50:
+                code = "\x1b[33m"
+            else:
+                code = "\x1b[31m"
+            body = body.replace(pct_tok, _color(pct_tok, code, True), 1)
     return f"{dotted}{body}"
 
 
-def _render_commit_block(c: Commit, opts: RenderOptions) -> list[str]:
+def _render_commit_block(c: Commit, opts: RenderOptions,
+                         lifecycle_mixed: bool = False) -> list[str]:
     """Render a full commit stack (trace headers + commit line + close)."""
     lines: list[str] = []
     # Stack-of-segments grammar: always emit the stack form, even for
@@ -274,6 +320,7 @@ def _render_commit_block(c: Commit, opts: RenderOptions) -> list[str]:
             lines.append(_render_trace_header(
                 t, first=(i == 0), show_entities=opts.show_entities,
                 opts=opts, short_name=t.short_name, turn_count=t.turn_count,
+                lifecycle_mixed=lifecycle_mixed,
             ))
     lines.append(_render_commit_line(c, opts))
     close_prefix, _ = PREFIX["stack_close"]
@@ -281,12 +328,25 @@ def _render_commit_block(c: Commit, opts: RenderOptions) -> list[str]:
     return lines
 
 
+def _compute_lifecycle_mixed(commits: list[Commit]) -> bool:
+    """True if the window contains >1 distinct non-null lifecycle value."""
+    seen: set[str] = set()
+    for c in commits:
+        for t in c.traces or []:
+            if t.lifecycle:
+                seen.add(t.lifecycle)
+                if len(seen) > 1:
+                    return True
+    return False
+
+
 def _render_commit_primary(commits: list[Commit], opts: RenderOptions) -> str:
+    mixed = _compute_lifecycle_mixed(commits)
     blocks: list[str] = []
     for i, c in enumerate(commits):
         if i > 0:
             blocks.append(PREFIX["bare_trunk"][0])
-        blocks.extend(_render_commit_block(c, opts))
+        blocks.extend(_render_commit_block(c, opts, lifecycle_mixed=mixed))
     return "\n".join(blocks) + "\n"
 
 
@@ -313,14 +373,27 @@ def _render_trace_primary(commits: list[Commit], opts: RenderOptions) -> str:
         dotted = prefix_tmpl.replace(DOT_SOLID, glyph, 1)
         if opts.color and code:
             dotted = dotted.replace(glyph, _color(glyph, code, True), 1)
-        suffix_parts = [c.short_sha, c.subject]
+        c_id = f"c:{c.short_sha}"
+        suffix_parts = [c_id, c.subject]
+        line_tok: str | None = None
+        entity_tok: str | None = None
         if tc is not None:
-            suffix_parts.append(_fmt_lines(tc.line_count))
+            line_tok = _fmt_lines(tc.line_count)
+            suffix_parts.append(line_tok)
             if opts.show_entities:
                 ec = tc.entity_count if tc.entity_count is not None else 0
-                suffix_parts.append(_fmt_entities(ec))
+                entity_tok = _fmt_entities(ec)
+                suffix_parts.append(entity_tok)
         body = " ".join(suffix_parts)
         body = _truncate(body, max(1, opts.width - len(prefix_tmpl)))
+        if opts.color:
+            body = body.replace(c_id, _color(c_id, "\x1b[1;33m", True), 1)
+            if line_tok and line_tok in body:
+                body = body.replace(line_tok,
+                                    _color(line_tok, "\x1b[34m", True), 1)
+            if entity_tok and entity_tok in body:
+                body = body.replace(entity_tok,
+                                    _color(entity_tok, "\x1b[94m", True), 1)
         lines.append(f"{dotted}{body}")
     close_prefix, _ = PREFIX["stack_close"]
     lines.append(close_prefix)

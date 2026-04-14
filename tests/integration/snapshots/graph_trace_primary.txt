@@ -1,4 +1,4 @@
 ┊╭┄trace pivottra
-┊●   {sha7} second [7 lines]
-┊●   {sha7} first [4 lines]
+┊●   c:{sha7} second [7 lines]
+┊●   c:{sha7} first [4 lines]
 ├╯

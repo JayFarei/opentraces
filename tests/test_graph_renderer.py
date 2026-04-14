@@ -119,9 +119,44 @@ def test_single_trace_stack_grammar() -> None:
     assert len(lines) == 3
     assert lines[0].startswith("┊╭┄")
     assert "[5 lines]" in lines[0]
-    assert "<final>" in lines[0]
+    # Uniform lifecycle: suffix is suppressed.
+    assert "<final>" not in lines[0]
+    assert "<provisional>" not in lines[0]
     assert lines[1].startswith("┊●")
+    # Date column is dropped.
+    assert "2026-04-14" not in lines[1]
+    assert "c:aaaaaaa" in lines[1]
     assert lines[2] == "├╯"
+
+
+def test_lifecycle_mixed_renders_suffix() -> None:
+    c = gr.Commit(sha="m" * 40, short_sha="mmmmmmm",
+                  subject="mix", timestamp="2026-04-14T00:00:00Z",
+                  parents=[],
+                  traces=[
+                      gr.TraceContribution("t1", 5, lifecycle="final",
+                                           attributed_ratio=1.0),
+                      gr.TraceContribution("t2", 3, lifecycle="provisional",
+                                           attributed_ratio=1.0),
+                  ])
+    out = gr.strip_ansi(gr.render([c], gr.RenderOptions(color=False)))
+    assert "<final>" in out
+    assert "<provisional>" in out
+
+
+def test_lifecycle_uniform_suppresses_suffix() -> None:
+    c = gr.Commit(sha="u" * 40, short_sha="uuuuuuu",
+                  subject="uniform", timestamp="2026-04-14T00:00:00Z",
+                  parents=[],
+                  traces=[
+                      gr.TraceContribution("t1", 5, lifecycle="provisional",
+                                           attributed_ratio=1.0),
+                      gr.TraceContribution("t2", 3, lifecycle="provisional",
+                                           attributed_ratio=1.0),
+                  ])
+    out = gr.strip_ansi(gr.render([c], gr.RenderOptions(color=False)))
+    assert "<provisional>" not in out
+    assert "<final>" not in out
 
 
 # --- Multi-trace stack grammar -------------------------------------------- #
