@@ -1,0 +1,52 @@
+name = "watcher_tick_detects_new_commit"
+description = "Two ticks, two commits — each commit is attributed when its tick runs."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "a.py"
+content = "print('a1')\n"
+
+[[steps]]
+type = "commit"
+message = "add a"
+
+[[steps]]
+type = "watcher_run_once"
+
+[[steps]]
+type = "write_file"
+path = "b.py"
+content = "print('b1')\n"
+
+[[steps]]
+type = "commit"
+message = "add b"
+
+[[steps]]
+type = "watcher_run_once"
+
+[[assertions]]
+kind = "cache_file_exists"
+ref = "HEAD"
+exists = true
+
+[[assertions]]
+kind = "cache_file_exists"
+ref = "HEAD~1"
+exists = true
+
+[[assertions]]
+kind = "state_field"
+name = "last_backfilled_commit"
+equals_head = true
+
+[[assertions]]
+kind = "state_field"
+name = "last_watcher_run_at"
+is_set = true
