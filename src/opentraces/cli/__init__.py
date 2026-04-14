@@ -1595,7 +1595,11 @@ def init(
 
 
 @main.command()
-def remove() -> None:
+@click.option("--all", "purge_all", is_flag=True, default=False,
+              help="Also delete the audit ref (refs/opentraces/audit/*) "
+                   "and trace↔commit notes (refs/notes/opentraces) from "
+                   "this repository.")
+def remove(purge_all: bool) -> None:
     """Remove opentraces from the current project."""
     from ..core.config import (
         _marker_path,
@@ -1646,11 +1650,52 @@ def remove() -> None:
     if removed_hook:
         click.echo("Removed Claude Code SessionEnd hook.")
 
+    purged_refs: list[str] = []
+    if purge_all:
+        # Best-effort purge; we're inside a git repo because the marker
+        # check above didn't reject us. Missing refs are a no-op.
+        import subprocess
+        try:
+            audit_refs = subprocess.run(
+                ["git", "for-each-ref", "--format=%(refname)",
+                 "refs/opentraces/"],
+                capture_output=True, text=True, check=False,
+                cwd=str(project_dir),
+            ).stdout.splitlines()
+            notes_refs = subprocess.run(
+                ["git", "for-each-ref", "--format=%(refname)",
+                 "refs/notes/opentraces"],
+                capture_output=True, text=True, check=False,
+                cwd=str(project_dir),
+            ).stdout.splitlines()
+            for ref in audit_refs + notes_refs:
+                ref = ref.strip()
+                if not ref:
+                    continue
+                rc = subprocess.run(
+                    ["git", "update-ref", "-d", ref],
+                    capture_output=True, text=True, check=False,
+                    cwd=str(project_dir),
+                ).returncode
+                if rc == 0:
+                    purged_refs.append(ref)
+            if purged_refs:
+                click.echo(
+                    f"Purged {len(purged_refs)} git ref(s): "
+                    f"{', '.join(purged_refs)}"
+                )
+            elif audit_refs or notes_refs:
+                click.echo("No audit or notes refs found to purge.")
+        except FileNotFoundError:
+            # git not on PATH — silently skip
+            pass
+
     click.echo("Remote datasets were not changed.")
     emit_json({
         "status": "ok",
         "removed_local": removed_local,
         "removed_hook": removed_hook,
+        "purged_refs": purged_refs,
         "remote_changed": False,
         "next_steps": ["Run 'opentraces init' to set this project up again"],
         "next_command": "opentraces init",
