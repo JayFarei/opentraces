@@ -100,7 +100,21 @@ def _resolve_sha(cwd: Path, ref: str) -> str | None:
             stderr=subprocess.DEVNULL,
         ).strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
+        pass
+    # rev-parse failed (likely a 2-3 char prefix — git needs 4+ by default).
+    # Fall back to a unique-prefix search over the attribution cache keys.
+    if ref and len(ref) >= 2 and all(
+        ch in "0123456789abcdefABCDEF" for ch in ref
+    ):
+        try:
+            from ..core.cache import AttributionCache
+            shas = AttributionCache(cwd).list_attributed_shas()
+        except Exception:
+            shas = []
+        matches = [s for s in shas if s.lower().startswith(ref.lower())]
+        if len(matches) == 1:
+            return matches[0]
+    return None
 
 
 # --------------------------------------------------------------------------- #

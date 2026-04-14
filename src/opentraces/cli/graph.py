@@ -47,6 +47,32 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
     """Render commit + trace history."""
     cwd = Path(project_dir or Path.cwd()).resolve()
 
+    # Accept "t:<prefix>" (or bare prefix >=2 chars) on --trace and resolve
+    # to the full id via the project's attribution traces.
+    if trace_id:
+        from ..core.trace_meta import (
+            AmbiguousPrefixError,
+            resolve_trace_id_prefix,
+        )
+        probe = trace_id
+        if probe.lower().startswith("t:"):
+            probe = probe[2:]
+        # Only resolve when short (likely a prefix). Longer than 12 chars is
+        # probably already a full id — skip the lookup to stay cheap.
+        if 2 <= len(probe) < 12:
+            try:
+                resolved = resolve_trace_id_prefix(cwd, probe)
+            except AmbiguousPrefixError as e:
+                click.echo(f"Ambiguous trace prefix {probe!r}. "
+                           f"Candidates: {', '.join(e.candidates[:6])}",
+                           err=True)
+                raise SystemExit(2) from e
+            except ValueError as e:
+                click.echo(str(e), err=True)
+                raise SystemExit(2) from e
+            if resolved:
+                trace_id = resolved
+
     # Cache presence check — first run guidance.
     try:
         from ..core.cache import AttributionCache
