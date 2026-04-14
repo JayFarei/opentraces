@@ -2167,6 +2167,16 @@ from .graph import graph_cmd as _graph_cmd  # noqa: E402
 
 main.add_command(_graph_cmd)
 
+# Plan-043 phase 4 — `ot blame <sha>` per-commit attribution lookup.
+from .blame import blame_cmd as _blame_cmd  # noqa: E402
+
+main.add_command(_blame_cmd)
+
+# Plan-043 phase 3 — `ot watcher` background attribution watcher.
+from ._watcher_register import register_watcher_commands as _reg_watcher  # noqa: E402
+
+_reg_watcher(main)
+
 
 # ---------------------------------------------------------------------------
 # Step 11 — auth group (parallel surface to flat login/logout/whoami).
