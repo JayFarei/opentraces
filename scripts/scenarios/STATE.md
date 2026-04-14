@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T01:15Z
-Last iteration agent: claude-opus-4-6 (loop iter 3)
+Last update: 2026-04-14T01:45Z
+Last iteration agent: claude-opus-4-6 (loop iter 4)
 
 ---
 
@@ -27,6 +27,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | file_create_then_delete      | fail | 2026-04-13 | "README.md missing from attribution" — empty commit has no diff-tree files; scenario asserts README.md pre-audit which isn't in the commit diff |
 | formatter_after_edit         | pass | 2026-04-13 | — |
 | human_between_sessions       | pass | 2026-04-14 | — |
+| mixed_write_and_bash         | pass | 2026-04-14 | new this iter; Write + Bash append in one trace, all lines credit same trace (dual-signal integration) |
 | multi_commits_one_session    | pass | 2026-04-13 | — |
 | multiple_edits_one_turn      | pass | 2026-04-13 | — |
 | partial_commit               | pass | 2026-04-13 | — |
@@ -40,8 +41,9 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 21/23 passing.** (Added bash_rename. clear_mid_session and
-file_create_then_delete remain blocked on human design decisions.)
+**Current: 22/24 passing.** Added `bash_rename` (iter 3) and
+`mixed_write_and_bash` (iter 4). `clear_mid_session` and
+`file_create_then_delete` remain blocked on human design decisions.
 
 ---
 
@@ -105,6 +107,14 @@ detection; binary-file touch; very-large-file blame; symlink file).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 4 (opus 4.6): Authored `mixed_write_and_bash` — one
+  trace uses the Write tool then appends via Bash printf redirection in
+  the same session. Locks in the dual-signal design: all 5 lines
+  correctly attribute to the single trace (file-history catches the
+  Write, watcher catches the Bash append, both resolve to the same
+  trace_id). Passed first try; confirms integration of the two capture
+  paths in the happy case.
 
 - 2026-04-14 — iter 3 (opus 4.6): Authored new scenario `bash_rename`
   (agent renames file via Bash `mv`). First run failed my initial
