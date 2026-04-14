@@ -1686,19 +1686,29 @@ def projects_list_cmd() -> None:
     console.print()
 
     table = _Table(box=_box.SIMPLE_HEAD, show_edge=False, padding=(0, 1), header_style="dim")
-    table.add_column("", no_wrap=True)
     table.add_column("Path", overflow="fold")
-    table.add_column("Note", overflow="fold")
 
     rows: list[dict] = []
+    stale: list[str] = []
     for path_str in registered:
         exists = project_is_opted_in(Path(path_str))
-        glyph = "[green]✓[/]" if exists else "[yellow]⚠[/]"
-        note = "" if exists else "[dim]registered but .opentraces.json missing — run `opentraces remove` or re-init[/]"
-        table.add_row(glyph, path_str, note)
+        cell = path_str if exists else f"[yellow]{path_str}[/]"
+        table.add_row(cell)
         rows.append({"path": path_str, "on_disk": exists})
+        if not exists:
+            stale.append(path_str)
 
     console.print(table)
+    if stale:
+        console.print(
+            f"[dim]· {len(stale)} path(s) missing .opentraces.json — "
+            f"run `opentraces remove` or re-init[/]",
+            highlight=False,
+        )
+    console.print(
+        "[dim]· copy a path and `cd` into it to continue[/]",
+        highlight=False,
+    )
     console.print()
 
     emit_json({"status": "ok", "projects": rows, "count": len(rows)})
@@ -2097,14 +2107,19 @@ def status(limit: int) -> None:
         )
         table.add_column("ID", no_wrap=True)
         table.add_column("Age", no_wrap=True, justify="right")
-        table.add_column("Status", no_wrap=True)
-        table.add_column("Task", overflow="ellipsis", no_wrap=True)
-        table.add_column("Git", no_wrap=True)
-        table.add_column("", no_wrap=True)  # task-source dot
+        table.add_column("T1 regex", no_wrap=True, justify="center")
+        table.add_column("T1.5 trufflehog", no_wrap=True, justify="center")
+        table.add_column("T2 llm", no_wrap=True, justify="center")
 
-        # Coverage counters drive the "setup hint" block below the legend.
-        git_link_hits = 0  # rows with at least one git_link populated
+        # Load global cfg once for tier-enabled checks.
+        _global_cfg = load_config()
+        th_enabled = bool(_global_cfg.security.trufflehog.enabled)
+        llm_enabled = bool(getattr(_global_cfg.security, "llm_review", None)
+                           and _global_cfg.security.llm_review.enabled)
+
         rows_rendered = 0
+        # Retained for the "no git links" hint beneath the table.
+        git_link_hits = 0
 
         for sf in staged_files:
             try:
@@ -2137,43 +2152,41 @@ def status(limit: int) -> None:
                         pass
 
                 title, source = _describe_trace(record)
-                # Cap title so Rich can size the Task column predictably.
-                if len(title) > 60:
-                    title = title[:59] + "…"
-
                 status_cell, status_plain = _status_cell(entry, record)
 
-                chip = _git_chip(record)
-                if chip is not None:
-                    glyph, sha, color = chip
-                    commit_cell = f"[{color}]{glyph}[/] [dim]{sha}[/]"
-                else:
-                    commit_cell = ""
+                # Per-tier checklist. Y when the tier is enabled + evidence
+                # exists on the record; dash ("·") when the tier is disabled
+                # globally; X when enabled but the record was not scanned.
+                t1_ran = bool(record.security.scanned)
+                meta_all = getattr(record, "metadata", None) or {}
+                sec_meta = meta_all.get("security") or {}
+                th_findings = sec_meta.get("trufflehog_findings") or sec_meta.get("tier_1_5_findings")
+                th_ran = bool(th_findings) or (th_enabled and t1_ran)
+                llm_payload = meta_all.get("llm_review") or {}
+                llm_ran = bool(llm_payload.get("review_key"))
 
-                source_cell = {
-                    "task": "[cyan]●[/]",             # parser-provided
-                    "step": "[dim]○[/]",              # first step content
-                    "tool": "[magenta]○[/]",          # tool-call summary (no narrative)
-                    "none": "[red]○[/]",              # nothing usable
-                }.get(source, "")
+                def _tier_cell(enabled: bool, ran: bool) -> str:
+                    if not enabled:
+                        return "[dim]·[/]"
+                    return "[green]✓[/]" if ran else "[yellow]○[/]"
+
+                # T1 (regex/entropy) is always enabled.
+                t1_cell = _tier_cell(True, t1_ran)
+                th_cell = _tier_cell(th_enabled, th_ran)
+                llm_cell = _tier_cell(llm_enabled, llm_ran)
 
                 short_id = record.trace_id[:8]
                 table.add_row(
-                    f"[dim]{short_id}[/]",
+                    short_id,
                     f"[dim]{rel_time}[/]",
-                    status_cell,
-                    title,
-                    commit_cell,
-                    source_cell,
+                    t1_cell,
+                    th_cell,
+                    llm_cell,
                 )
                 rows_rendered += 1
+                chip = _git_chip(record)
                 if chip is not None:
                     git_link_hits += 1
-                tier = (
-                    record.git_links[0].tier
-                    if record.git_links
-                    else None
-                )
                 session_summary.append({
                     "trace_id": record.trace_id,
                     "short_id": short_id,
@@ -2181,24 +2194,25 @@ def status(limit: int) -> None:
                     "status": status_plain,
                     "task": title,
                     "task_source": source,
-                    "commit": chip[1] if chip else None,
-                    "commit_tier": tier,
                     "age": rel_time,
+                    "security": {
+                        "t1_regex": t1_ran,
+                        "t1_5_trufflehog": {"enabled": th_enabled, "ran": th_ran},
+                        "t2_llm": {"enabled": llm_enabled, "ran": llm_ran},
+                    },
                 })
             except Exception:
                 table.add_row(
-                    "", "", "[red]? error[/]", f"[dim]{sf.name}[/]", "", "",
+                    "", "", "[red]?[/]", "[red]?[/]", "[red]?[/]",
                 )
 
         console.print(table)
-        console.print()  # breathing room between table and legend
+        console.print()
         console.print(
-            "  [green bold]✓[/][dim] pushed[/]    "
-            "[green]✓[/][dim] staged / done[/]    "
-            "[yellow]~[/][dim] compacted[/]    "
-            "[red]✗[/][dim] failed / rejected[/]    "
-            "[dim]○ open[/]    "
-            "[dim](run `ot list` for filters and legend)[/]",
+            "  [green]✓[/][dim] reviewed[/]    "
+            "[yellow]○[/][dim] pending[/]    "
+            "[dim]· disabled[/]    "
+            "[dim]· copy an ID to continue (e.g. `ot show <id>`)[/]",
             highlight=False,
         )
 

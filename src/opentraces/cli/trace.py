@@ -179,9 +179,27 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
         except Exception:
             continue
 
+    from rich.console import Console as _Console
+    from rich.table import Table as _Table
+    from rich import box as _box
+
+    console = _Console()
+
+    def _build_table():
+        t = _Table(box=_box.SIMPLE_HEAD, show_edge=False, padding=(0, 1), header_style="dim")
+        t.add_column("ID", no_wrap=True)
+        t.add_column("Task", overflow="ellipsis", no_wrap=True)
+        return t
+
+    def _row_task(s):
+        task = s["task"] or "untitled"
+        if len(task) > 80:
+            task = task[:79] + "…"
+        return (f"{s['trace_id'][:8]}", task)
+
+    console.print()
     if by_commit:
-        # Plan 041 R29: group by git_links[].revision. Traces without
-        # any link appear under "(unlinked)".
+        # Plan 041 R29: group by git_links[].revision; unlinked bucket last.
         groups: dict[str, list[dict]] = {}
         for s in traces:
             keys = [gl["revision"] for gl in s.get("git_links") or []] or ["(unlinked)"]
@@ -189,24 +207,25 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
                 groups.setdefault(k, []).append(s)
         for rev in sorted(groups, key=lambda r: (r == "(unlinked)", r)):
             rev_label = rev if rev == "(unlinked)" else rev[:10]
-            human_echo(f"\ncommit {rev_label}")
+            console.print(f"[bold]git {rev_label}[/]  [dim]({len(groups[rev])})[/]")
+            t = _build_table()
             for s in groups[rev]:
-                tier = next(
-                    (gl["tier"] for gl in (s.get("git_links") or [])
-                     if gl["revision"] == rev), "—",
-                )
-                human_echo(
-                    f"  {s['trace_id'][:8]}  [{tier}]  {s['lifecycle']:<12}"
-                    f'  "{s["task"]}"'
-                )
+                tid, task = _row_task(s)
+                t.add_row(tid, task)
+            console.print(t)
+            console.print()
     else:
+        t = _build_table()
         for s in traces:
-            human_echo(
-                f"{s['stage']:<10} {s['relative_time']:<10} {s['trace_id'][:8]}  "
-                f"\"{s['task']}\"  {s['step_count']} steps  {s['flag_count']} flags"
-            )
+            tid, task = _row_task(s)
+            t.add_row(tid, task)
+        console.print(t)
 
-    human_echo(f"\n{len(traces)} traces")
+    console.print(
+        f"[dim]{len(traces)} trace{'s' if len(traces) != 1 else ''}  "
+        f"· copy an ID to continue (e.g. `ot show <id>` or paste into your next prompt)[/]",
+        highlight=False,
+    )
 
     emit_json({
         "status": "ok",
@@ -295,7 +314,7 @@ def trace_show(trace_id: str, verbose: bool, markdown: bool) -> None:
     if record.git_links:
         human_echo("")
         n = len(record.git_links)
-        human_echo(_cli._dim(f"Commits produced ({n}):"))
+        human_echo(_cli._dim(f"Git links ({n}):"))
         tier_glyph = {
             "tool_emitted": ("✓", "green"),
             "tool_emitted_with_divergence": ("~", "yellow"),
@@ -309,7 +328,7 @@ def trace_show(trace_id: str, verbose: bool, markdown: bool) -> None:
             human_echo(f"  {styled_glyph}  {_cli._bold(sha)}   {_cli._dim(gl.tier)}")
     elif record.lifecycle == "provisional":
         human_echo("")
-        human_echo(_cli._dim("Commits produced: none yet (provisional — install the git hook to correlate)"))
+        human_echo(_cli._dim("Git links: none yet (provisional — install the git hook to correlate)"))
 
     _STEP_TRUNCATE = 500
     for i, step in enumerate(record.steps):
