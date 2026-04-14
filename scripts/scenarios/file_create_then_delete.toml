@@ -1,8 +1,15 @@
 name = "file_create_then_delete"
 description = """
-Agent creates a file in turn 1, deletes it in turn 2, single commit. The
-file never appears in HEAD's tree. Tests that we don't get phantom
-attribution for a file that doesn't exist post-commit.
+Agent creates two files in turn 1 — one that persists (keep.md) and
+one that's deleted in turn 2 (temp.txt). Single commit covers both.
+The ephemeral file never reaches HEAD's tree, so it must not appear
+in attribution AT ALL; the persistent file must be cleanly credited
+to the trace.
+
+Previously this scenario asserted on README.md with an
+`allow_empty = true` commit — which could never match because
+empty commits produce no diff-tree entries. Now asserts on the
+persistent file, which is the intended semantic.
 """
 
 [[steps]]
@@ -15,7 +22,8 @@ type = "start_watcher"
 type = "claude"
 label = "a"
 prompts = [
-    "Use the Write tool to create temp.txt with the line: ephemeral",
+    "Use the Write tool to create keep.md with the single line: kept",
+    "Use the Write tool to create temp.txt with the single line: ephemeral",
     "Now use the Bash tool to run: rm temp.txt",
     "done",
 ]
@@ -29,14 +37,14 @@ type = "stop_watcher"
 
 [[steps]]
 type = "commit"
-message = "create-then-delete (no-op net)"
-allow_empty = true
+message = "add keep.md; temp.txt created-and-deleted in-session"
 
-# temp.txt should not appear in attribution because it doesn't exist at HEAD
-# We assert by trying to find a file that wasn't included in HEAD's tree.
-# Since the commit is empty (or only contains init artifacts), there's no
-# strong assertion to make on temp.txt — just ensure no crash.
+# The persistent file attributes cleanly to trace a.
 [[assertions]]
-file = "README.md"
-trace = "pre-audit"
-lines_min = 1
+file = "keep.md"
+trace = "a"
+lines = 1
+
+[[assertions]]
+file = "keep.md"
+total_lines = 1
