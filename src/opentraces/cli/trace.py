@@ -95,7 +95,7 @@ def _load_trace_record(staging_dir: Path, trace_id: str):
 
 
 @click.command("list")
-@click.option("--stage", type=click.Choice(["inbox", "committed", "pushed", "rejected"]), default=None, help="Filter by stage")
+@click.option("--stage", type=click.Choice(["inbox", "staged", "pushed", "rejected"]), default=None, help="Filter by stage")
 @click.option("--model", type=str, default=None, help="Filter by model name (substring)")
 @click.option("--agent", type=str, default=None, help="Filter by agent name")
 @click.option("--limit", type=int, default=50, help="Max traces to return")
@@ -355,7 +355,7 @@ def _trace_commit_impl(trace_id: str) -> None:
         "status": "ok",
         "trace_id": trace_id,
         "commit_id": commit_id,
-        "stage": "committed",
+        "stage": "staged",
         "next_steps": ["Run 'opentraces push' to upload"],
         "next_command": "opentraces push",
     })
@@ -388,7 +388,7 @@ def trace_reject(trace_id: str) -> None:
 @click.command("reset")
 @click.argument("trace_id")
 def trace_reset(trace_id: str) -> None:
-    """Reset a trace back to Inbox (undo commit or reject)."""
+    """Reset a trace back to Inbox."""
     from ..core.state import TraceStatus
 
     state, staging_dir = _load_project_state()

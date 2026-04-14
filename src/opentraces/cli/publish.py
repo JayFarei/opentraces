@@ -192,7 +192,7 @@ def _resolve_repo_id(*a, **k):
 @click.option("--repo", default=None, help="HF dataset repo (default: username/opentraces)")
 @click.option("--assess", "run_assess", is_flag=True, help="Run quality scoring and include badges in the dataset card (card itself always refreshes)")
 @click.option("--llm-review", "llm_review", is_flag=True,
-              help="Require a clean Tier 2 verdict on every committed trace before upload")
+              help="Require a clean Tier 2 verdict on every staged trace before upload")
 @click.option("--no-trufflehog", "no_trufflehog", is_flag=True,
               help="Skip Tier 1.5 TruffleHog scanning for this push only")
 @click.option("--migrate-remote/--no-migrate-remote", "migrate_remote", default=None,
@@ -202,7 +202,7 @@ def _resolve_repo_id(*a, **k):
 def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | None,
          run_assess: bool, llm_review: bool, no_trufflehog: bool,
          migrate_remote: bool | None, assume_yes: bool) -> None:
-    """Upload committed traces to HuggingFace Hub."""
+    """Upload staged traces to HuggingFace Hub."""
     from ..core.config import (
         get_project_traces_dir, load_project_config, save_project_config,
         project_is_opted_in,
@@ -246,7 +246,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                         f"{rec.get('trace_id', '?')} (verdict: shareable={shareable}, missed={missed})"
                     )
         if pending_block:
-            human_echo("Aborting: --llm-review requires a clean verdict for every committed trace.")
+            human_echo("Aborting: --llm-review requires a clean verdict for every staged trace.")
             for entry in pending_block:
                 human_echo(f"  - {entry}")
             human_hint("Run: opentraces llm-review")
@@ -362,7 +362,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
             return
 
         click.echo("No traces ready for upload.")
-        emit_json({"status": "ok", "uploaded": 0, "message": "No committed traces ready to upload"})
+        emit_json({"status": "ok", "uploaded": 0, "message": "No staged traces ready to upload"})
         return
 
     # Load trace records from staging files, track which ones loaded successfully

@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 def _status_icon(status: str) -> str:
     return {
-        "committed": "[cyan]\u25A0[/cyan]",
+        "staged": "[cyan]\u25A0[/cyan]",
         "rejected": "[red]\u2717[/red]",
         "inbox": "[yellow]\u25CB[/yellow]",
         "pushed": "[green]\u2713[/green]",
@@ -40,7 +40,7 @@ def _status_icon(status: str) -> str:
 def _stage_color(status: str) -> str:
     return {
         "inbox": "ansi_yellow",
-        "committed": "ansi_bright_blue",
+        "staged": "ansi_bright_blue",
         "pushed": "ansi_cyan",
         "rejected": "ansi_red",
     }.get(status, "ansi_yellow")
@@ -339,7 +339,7 @@ class TopBar(Static):
             f"[dim]{project_name}[/dim]  "
             f"[ansi_bright_blue]{remote}[/ansi_bright_blue]\n"
             f"[ansi_yellow]INBOX[/ansi_yellow]: {counts['inbox']}   "
-            f"[ansi_bright_blue]COMMITTED[/ansi_bright_blue]: {counts['committed']}   "
+            f"[ansi_bright_blue]STAGED[/ansi_bright_blue]: {counts['staged']}   "
             f"[ansi_cyan]PUSHED[/ansi_cyan]: {counts['pushed']}   "
             f"[ansi_red]REJECTED[/ansi_red]: {counts['rejected']}"
         )
@@ -833,7 +833,7 @@ class OpenTracesApp(App):
             f"[dim]remote[/dim] [ansi_bright_blue]{_truncate(self.remote_name, 22)}[/ansi_bright_blue]   "
             f"[dim]traces[/dim] {total}   "
             f"[ansi_yellow]{counts['inbox']} inbox[/ansi_yellow]   "
-            f"[ansi_bright_blue]{counts['committed']} committed[/ansi_bright_blue]"
+            f"[ansi_bright_blue]{counts['staged']} staged[/ansi_bright_blue]"
         )
 
     def _move_to_first_session(self) -> None:

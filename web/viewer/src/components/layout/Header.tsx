@@ -13,7 +13,7 @@ export function Header() {
 
   const counts: Record<TraceStage, number> = {
     inbox: 0,
-    committed: 0,
+    staged: 0,
     pushed: 0,
     rejected: 0,
   };
@@ -41,7 +41,7 @@ export function Header() {
 
         <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
           <span className="text-[var(--yellow)]">inbox: {counts.inbox}</span>
-          <span className="text-[var(--green)]">committed: {counts.committed}</span>
+          <span className="text-[var(--green)]">staged: {counts.staged}</span>
           <span className="text-[var(--cyan)]">pushed: {counts.pushed}</span>
         </div>
       </div>

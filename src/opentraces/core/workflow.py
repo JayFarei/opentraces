@@ -11,7 +11,7 @@ DEFAULT_PUSH_POLICY = "manual"
 DEFAULT_REMOTE_NAME = "opentraces"
 DEFAULT_AGENT = "claude-code"
 
-VISIBLE_STAGE_ORDER = ("inbox", "committed", "pushed", "rejected", "blocked")
+VISIBLE_STAGE_ORDER = ("inbox", "staged", "pushed", "rejected", "blocked")
 
 OPENTRACES_ASCII = r"""
  ________  _________
@@ -37,7 +37,7 @@ class StagePresentation:
 
 STAGE_PRESENTATIONS = {
     "inbox": StagePresentation("inbox", "Inbox", "Needs review"),
-    "committed": StagePresentation("committed", "Committed", "Ready to push"),
+    "staged": StagePresentation("staged", "Staged", "Ready to push"),
     "pushed": StagePresentation("pushed", "Pushed", "Published upstream"),
     "rejected": StagePresentation("rejected", "Rejected", "Kept local only"),
     "blocked": StagePresentation(
@@ -103,9 +103,9 @@ def resolve_visible_stage(status: TraceStatus | str | None) -> str:
         TraceStatus.PARSED: "inbox",
         TraceStatus.DISCOVERED: "inbox",
         TraceStatus.REVIEWING: "inbox",
-        TraceStatus.APPROVED: "committed",
-        TraceStatus.COMMITTED: "committed",
-        TraceStatus.UPLOADING: "committed",
+        TraceStatus.APPROVED: "staged",
+        TraceStatus.COMMITTED: "staged",
+        TraceStatus.UPLOADING: "staged",
         TraceStatus.UPLOADED: "pushed",
         TraceStatus.REJECTED: "rejected",
         TraceStatus.FAILED: "inbox",

@@ -52,7 +52,7 @@ def _auth_identity(*a, **k):
 
 @main.command()
 def stats() -> None:
-    """Show aggregate statistics for the current project inbox."""
+    """Show aggregate statistics for the current inbox."""
     from ..core.config import (
         get_project_traces_dir, get_project_state_path, project_is_opted_in,
     )
@@ -70,7 +70,7 @@ def stats() -> None:
 
     staged_files = sorted(staging_dir.glob("*.jsonl")) if staging_dir.exists() else []
 
-    counts = {stage: 0 for stage in ("inbox", "committed", "pushed", "rejected")}
+    counts = {stage: 0 for stage in ("inbox", "staged", "pushed", "rejected")}
     models: dict[str, int] = {}
     agents: dict[str, int] = {}
     total_steps = 0
@@ -157,7 +157,7 @@ def context() -> None:
 
     # Count stages from state.json directly — reading every staged JSONL
     # here costs seconds on big inboxes and yields the same result.
-    counts = {stage: 0 for stage in ("inbox", "committed", "pushed", "rejected")}
+    counts = {stage: 0 for stage in ("inbox", "staged", "pushed", "rejected")}
     for entry in state._state.get("traces", {}).values():  # noqa: SLF001
         visible_stage = resolve_visible_stage(entry.get("status"))
         counts[visible_stage] = counts.get(visible_stage, 0) + 1
@@ -179,7 +179,7 @@ def context() -> None:
         suggested_next = "opentraces auth login"
     elif counts["inbox"] > 0:
         suggested_next = "opentraces list --stage inbox"
-    elif counts["committed"] > 0:
+    elif counts["staged"] > 0:
         suggested_next = "opentraces push"
     else:
         suggested_next = "opentraces status"
@@ -208,7 +208,7 @@ def context() -> None:
     human_echo(f"Project:  {project_dir.name}")
     human_echo(f"Remote:   {proj_config.get('remote', 'not set')}")
     human_echo(f"Auth:     {'yes (' + username + ')' if authenticated else 'no'}")
-    human_echo(f"Inbox:    {counts['inbox']}  Committed: {counts['committed']}  Pushed: {counts['pushed']}")
+    human_echo(f"Inbox:    {counts['inbox']}  Staged: {counts['staged']}  Pushed: {counts['pushed']}")
     human_echo(f"Next:     {suggested_next}")
 
     emit_json(result)

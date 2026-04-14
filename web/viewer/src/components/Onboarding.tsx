@@ -6,7 +6,7 @@ const WORKFLOW_LINES = [
   { cmd: "opentraces init", comment: "connect agents and create the repo inbox" },
   { cmd: "opentraces", comment: "open the terminal inbox" },
   { cmd: "opentraces web", comment: "open the browser inbox" },
-  { cmd: "opentraces push", comment: "push committed traces to HuggingFace Hub" },
+  { cmd: "opentraces push", comment: "push staged traces to HuggingFace Hub" },
 ];
 
 export function Onboarding({ onLoadSample }: OnboardingProps) {

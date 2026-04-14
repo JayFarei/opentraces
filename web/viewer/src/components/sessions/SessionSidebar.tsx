@@ -5,7 +5,7 @@ import { StageGroup } from "./StageGroup";
 import { RemoteSetForm } from "../RemoteSetForm";
 import type { TraceStage, TraceListItem } from "../../types/trace";
 
-const STAGE_ORDER: TraceStage[] = ["inbox", "committed", "pushed", "rejected"];
+const STAGE_ORDER: TraceStage[] = ["inbox", "staged", "pushed", "rejected"];
 
 export function TraceSidebar() {
   const { data: traces, isLoading, error } = useTraceList();
@@ -40,7 +40,7 @@ export function TraceSidebar() {
 
   const grouped: Record<TraceStage, TraceListItem[]> = {
     inbox: [],
-    committed: [],
+    staged: [],
     pushed: [],
     rejected: [],
   };

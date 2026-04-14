@@ -77,7 +77,7 @@ export function ReviewBar() {
           </>
         )}
 
-        {currentStage === "committed" && (
+        {currentStage === "staged" && (
           <ActionButton
             label="push"
             color="var(--accent)"

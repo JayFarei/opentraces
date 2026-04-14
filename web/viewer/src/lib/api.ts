@@ -36,7 +36,7 @@ interface RawTrace {
   project: string;
 }
 
-const VALID_STAGES = new Set(["inbox", "committed", "pushed", "rejected"]);
+const VALID_STAGES = new Set(["inbox", "staged", "pushed", "rejected"]);
 
 function mapTrace(raw: RawTrace): TraceListItem {
   const rawStage = raw._stage ?? "inbox";

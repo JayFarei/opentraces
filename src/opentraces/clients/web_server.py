@@ -527,7 +527,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             pass
         state.create_commit_group([trace_id], task_desc)
         _invalidate_cache()
-        return jsonify({"status": "committed", "trace_id": trace_id})
+        return jsonify({"status": "staged", "trace_id": trace_id})
 
     @app.route("/api/trace/<trace_id>/reject", methods=["POST"])
     def api_reject(trace_id: str):
@@ -689,7 +689,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
 
     @app.route("/api/push", methods=["POST"])
     def api_push():
-        """Push committed sessions to HF Hub."""
+        """Push staged sessions to HF Hub."""
         traces = _traces()
 
         # Guard against pushing sample data
@@ -711,9 +711,9 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
 
         committed = [t for t in traces if t["trace_id"] in committed_ids]
         if not committed and not requested_commit_id:
-            committed = [t for t in traces if _get_review_status(t["trace_id"]) == "committed"]
+            committed = [t for t in traces if _get_review_status(t["trace_id"]) == "staged"]
         if not committed:
-            return jsonify({"error": "No committed sessions to push"}), 400
+            return jsonify({"error": "No staged sessions to push"}), 400
 
         # Try the real upload pipeline
         try:
@@ -770,10 +770,10 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
     def _compute_stats(traces: list[dict[str, Any]]) -> dict[str, Any]:
         """Compute dashboard statistics."""
         total = len(traces)
-        committed = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "committed")
+        staged = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "staged")
         pushed = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "pushed")
         rejected = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "rejected")
-        inbox = total - committed - pushed - rejected
+        inbox = total - staged - pushed - rejected
 
         total_tokens = sum(
             t.get("metrics", {}).get("total_input_tokens", 0)
@@ -801,7 +801,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         return {
             "total": total,
             "inbox": inbox,
-            "committed": committed,
+            "staged": staged,
             "pushed": pushed,
             "rejected": rejected,
             "total_tokens": total_tokens,

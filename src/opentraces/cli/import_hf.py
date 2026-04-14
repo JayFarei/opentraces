@@ -44,7 +44,7 @@ def _auth_identity(*a, **k):
         "opentraces pull owner/dataset --parser hermes --auto",
     ],
     see_also=[
-        ("opentraces push", "upload committed traces to HuggingFace"),
+        ("opentraces push", "upload staged traces to HuggingFace"),
         ("opentraces status", "inspect the inbox after import"),
     ],
     option_groups=[
@@ -280,7 +280,7 @@ def import_hf(
         parsed_count += 1
 
     # 9. Summary
-    mode = "dry-run" if dry_run else ("auto-committed" if auto else "staged")
+    mode = "dry-run" if dry_run else ("auto-staged" if auto else "inbox")
     human_echo(
         f"\nDone: {parsed_count} {mode}, {skipped_count} skipped, "
         f"{error_count} errors, {total_redactions} redactions"

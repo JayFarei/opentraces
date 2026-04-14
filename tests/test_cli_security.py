@@ -331,12 +331,17 @@ class TestPushLLMReviewGate:
 class TestReviewLLMFilters:
     """--scope and --trace narrow the slow review to a subset."""
 
-    def test_scope_committed_skips_staged_only_traces(
+    def test_scope_staged_skips_inbox_only_traces(
         self, runner, isolated_config, monkeypatch,
     ) -> None:
+        """``--scope staged`` matches only post-add traces (TraceStatus.COMMITTED).
+
+        Display vocab: STAGED status → "inbox", COMMITTED status → "staged".
+        """
         from opentraces.cli import installers as _inst
 
-        # Three fake records with distinct ids; state says only one is COMMITTED.
+        # Three fake records with distinct ids; state says only one is COMMITTED
+        # (which is "staged" in the display vocabulary).
         records = [
             {"trace_id": "aaa1", "content_hash": "h1", "steps": []},
             {"trace_id": "bbb2", "content_hash": "h2", "steps": []},
@@ -362,11 +367,11 @@ class TestReviewLLMFilters:
 
         result = runner.invoke(
             main, ["llm-review", "--dry-run", "--provider", "fake",
-                   "--scope", "committed"],
+                   "--scope", "staged"],
         )
         assert result.exit_code == 0, result.output
         payload = _extract_json(result.output)
-        assert payload["scope"] == "committed"
+        assert payload["scope"] == "staged"
         assert payload["matched"] == 1
         assert payload["total_available"] == 3
 

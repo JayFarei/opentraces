@@ -4,14 +4,14 @@ import type { TraceStage, TraceListItem } from "../../types/trace";
 
 const STAGE_COLORS: Record<TraceStage, string> = {
   inbox: "var(--yellow)",
-  committed: "var(--green)",
+  staged: "var(--green)",
   pushed: "var(--cyan)",
   rejected: "var(--red)",
 };
 
 const STAGE_LABELS: Record<TraceStage, string> = {
   inbox: "Inbox",
-  committed: "Committed",
+  staged: "Staged",
   pushed: "Pushed",
   rejected: "Rejected",
 };

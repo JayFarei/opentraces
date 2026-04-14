@@ -7,7 +7,7 @@ const SHORTCUTS = [
   { key: "Enter", desc: "expand / select" },
   { key: "Tab", desc: "switch panel focus" },
   { key: "c", desc: "open commit dialog" },
-  { key: "p", desc: "push committed" },
+  { key: "p", desc: "push staged" },
   { key: "r", desc: "toggle redaction preview" },
   { key: "?", desc: "show / hide this help" },
   { key: "Esc", desc: "dismiss overlay" },

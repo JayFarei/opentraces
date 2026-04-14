@@ -2,7 +2,7 @@ import { useTraceList } from "../../hooks/useTraceList";
 import { StageGroup } from "./StageGroup";
 import type { TraceStage, TraceListItem } from "../../types/trace";
 
-const STAGE_ORDER: TraceStage[] = ["inbox", "committed", "pushed", "rejected"];
+const STAGE_ORDER: TraceStage[] = ["inbox", "staged", "pushed", "rejected"];
 
 export function TraceListPanel() {
   const { data: traces, isLoading, error } = useTraceList();
@@ -35,7 +35,7 @@ export function TraceListPanel() {
 
   const grouped: Record<TraceStage, TraceListItem[]> = {
     inbox: [],
-    committed: [],
+    staged: [],
     pushed: [],
     rejected: [],
   };

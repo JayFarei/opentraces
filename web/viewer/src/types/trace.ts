@@ -174,7 +174,7 @@ export interface TreeNode {
 
 export type TraceStage =
   | "inbox"
-  | "committed"
+  | "staged"
   | "pushed"
   | "rejected";
 

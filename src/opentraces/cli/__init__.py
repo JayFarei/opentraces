@@ -76,7 +76,7 @@ COMMAND_SECTIONS = [
 
 _STAGE_COLORS = {
     "inbox": "yellow",
-    "committed": "cyan",
+    "staged": "cyan",
     "pushed": "green",
     "rejected": "red",
     "blocked": "red",
@@ -190,8 +190,8 @@ def _status_cell(entry, record) -> tuple[str, str]:
         return "[green bold]✓ pushed[/]", "pushed"
     if visible == "rejected":
         return "[red]✗ rejected[/]", "rejected"
-    if visible == "committed":
-        return "[green]✓ committed[/]", "committed"
+    if visible == "staged":
+        return "[green]✓ staged[/]", "staged"
 
     # inbox — differentiate by outcome signals
     outcome = getattr(record, "outcome", None)
@@ -232,22 +232,21 @@ class GroupedGroup(OpentracesGroup):
     for the curated sections defined in ``COMMAND_SECTIONS``.
     """
 
-    def _style_rows(self, rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
-        # Prefix every command with a dim-magenta "ot" shorthand — same
-        # short name shells can alias to, surfaced in the help so users
-        # discover the muscle-memory form without reading docs.
+    def _style_rows(self, rows: list[tuple[str, str]], name_width: int) -> list[tuple[str, str]]:
+        # Prefix each command with a dim-magenta "ot" shorthand, pad the
+        # name to a shared width so descriptions line up across all
+        # sections, and italicize the descriptions for visual hierarchy.
         prefix = click.style("ot", fg="magenta", bold=True)
-        return [
-            (f"{prefix} {click.style(n, fg='cyan', bold=True)}", h)
-            for n, h in rows
-        ]
+        styled = []
+        for name, help_text in rows:
+            padded = name.ljust(name_width)
+            key = f"{prefix} {click.style(padded, fg='cyan', bold=True)}"
+            styled.append((key, click.style(help_text, italic=True)))
+        return styled
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        # gh-style sectioned listing: CORE COMMANDS / INBOX COMMANDS /
-        # PROJECT COMMANDS / RESOURCE COMMANDS. Legacy verbs that are
-        # still registered (commit, login/logout/whoami, review-llm,
-        # upgrade, projects, trace) are intentionally NOT advertised
-        # here — they remain invokable until the Step 15 clean break.
+        # gh-style sectioned listing: CORE / INBOX / PROJECT / RESOURCE.
+        sections: list[tuple[str, list[tuple[str, str]]]] = []
         for section_name, cmd_names in COMMAND_SECTIONS:
             rows: list[tuple[str, str]] = []
             for name in cmd_names:
@@ -256,9 +255,17 @@ class GroupedGroup(OpentracesGroup):
                     continue
                 rows.append((name, cmd.get_short_help_str(limit=formatter.width)))
             if rows:
-                heading = f"{section_name.upper()} COMMANDS"
-                with self._section(formatter, heading):
-                    formatter.write_dl(self._style_rows(rows))
+                sections.append((section_name, rows))
+        # Cross-section width alignment: pick the widest name across all
+        # sections so descriptions align in one column from top to bottom.
+        name_width = max(
+            (len(n) for _, rows in sections for n, _ in rows),
+            default=0,
+        )
+        for section_name, rows in sections:
+            heading = f"{section_name.upper()} COMMANDS"
+            with self._section(formatter, heading):
+                formatter.write_dl(self._style_rows(rows, name_width))
 
 
 def emit_json(data: dict) -> None:
@@ -1088,7 +1095,7 @@ def init(
     is_private: bool | None,
     no_hook: bool,
 ) -> None:
-    """Initialize opentraces in the current project directory.
+    """Initialize opentraces in the current project.
 
     Sets up the repo-local inbox, agent hooks, policies, and optional remote.
     """
@@ -1314,7 +1321,7 @@ def init(
     else:
         click.echo("  1. Start a connected agent; capture is automatic from now on")
     click.echo("  2. Review and stage inbox traces with 'opentraces add --all'")
-    click.echo("  3. Publish committed traces with 'opentraces push'")
+    click.echo("  3. Publish staged traces with 'opentraces push'")
 
     emit_json({
         "status": "ok",
@@ -1755,7 +1762,7 @@ def status(limit: int) -> None:
     # Stage counts come from state.json directly — O(entries) in memory,
     # no file I/O. Reading every staged JSONL here used to take seconds
     # on big inboxes and make the command feel frozen.
-    counts = {stage: 0 for stage in ("inbox", "committed", "pushed", "rejected")}
+    counts = {stage: 0 for stage in ("inbox", "staged", "pushed", "rejected")}
     for entry in state._state.get("traces", {}).values():  # noqa: SLF001
         visible_stage = resolve_visible_stage(entry.get("status"))
         counts[visible_stage] = counts.get(visible_stage, 0) + 1
@@ -1926,7 +1933,7 @@ def status(limit: int) -> None:
         console.print()  # breathing room between table and legend
         console.print(
             "  [dim]status:[/]    [green bold]✓[/][dim] pushed[/]    "
-            "[green]✓[/][dim] committed / done[/]    "
+            "[green]✓[/][dim] staged / done[/]    "
             "[yellow]~[/][dim] compacted[/]    "
             "[red]✗[/][dim] failed / rejected[/]    "
             "[dim]○ open[/]",
@@ -1977,7 +1984,7 @@ def status(limit: int) -> None:
         click.echo(_dim("─" * 60))
     click.echo(
         f"  {_stage_c('inbox', 'inbox')} {_bold(str(counts['inbox']))}    "
-        f"{_stage_c('committed', 'committed')} {_bold(str(counts['committed']))}    "
+        f"{_stage_c('staged', 'staged')} {_bold(str(counts['staged']))}    "
         f"{_stage_c('pushed', 'pushed')} {_bold(str(counts['pushed']))}    "
         f"{_stage_c('rejected', 'rejected')} {_bold(str(counts['rejected']))}"
     )
@@ -2117,7 +2124,7 @@ def list_cmd(
 @click.argument("trace_ids", nargs=-1)
 @click.option("--all", "stage_all", is_flag=True, help="Stage every Inbox-status trace for push.")
 def add_cmd(trace_ids: tuple[str, ...], stage_all: bool) -> None:
-    """Stage trace(s) for the next push (mirrors `git add`).
+    """Stage trace(s) for the next push.
 
     Variadic: pass one or more ids, or --all to stage every Inbox trace.
     Refuses BLOCKED + REJECTED traces with a clear pointer to ot redact /
@@ -2191,7 +2198,7 @@ def add_cmd(trace_ids: tuple[str, ...], stage_all: bool) -> None:
 @click.option("--field", "field", default=None, help="Restrict to one field path (e.g. observations.stdout).")
 @click.option("--step", "step_index", type=int, default=None, help="Restrict to one step index.")
 def redact_cmd(trace_id: str, pattern: str, use_regex: bool, field: str | None, step_index: int | None) -> None:
-    """Find and replace text content in a trace (Step 6 + Step 7).
+    """Find and replace text content in a trace.
 
     Default: literal-string find-and-replace across every field of every
     step. Use --regex for pattern matching, --field to scope to one field
@@ -2829,7 +2836,7 @@ def _assess_dataset(
 
 
 def _load_local_traces() -> list:
-    """Load traces for local assess: committed first, fall back to all staged."""
+    """Load traces for local assess: staged first, fall back to everything in the staging dir."""
     from opentraces_schema import TraceRecord
     from ..core.state import StateManager
     from ..core.config import get_project_state_path, get_project_traces_dir
@@ -2899,11 +2906,11 @@ def _remote_delta(repo_id: str, local_summary) -> dict[str, float] | None:
               help="Show the glossary and exit.")
 def assess(judge: bool, judge_model: str, limit: int,
            dataset_repo: str | None, dry_run: bool, explain: bool) -> None:
-    """Score trace quality and (in dataset mode) update the dataset card.
+    """Score trace quality.
 
-    Local mode (default) assesses committed traces, falling back to all
-    staged traces if nothing has been committed yet. Use --dataset
-    user/repo to assess a remote HF dataset.
+    Local mode (default) assesses staged traces, falling back to every
+    trace in the staging dir if nothing has been staged yet. Use
+    --dataset user/repo to assess a remote HF dataset.
 
     Dimensions: Schema (safety), Conversation (SFT), Outcome (RL signal),
     Metrics (cost/cache), Metadata (search context). Run with --explain
@@ -3112,7 +3119,7 @@ def introspect() -> None:
             "web": {"description": "Open the browser inbox", "options": ["--port"]},
             "tui": {"description": "Open the terminal inbox"},
             "commit": {"description": "Commit inbox traces for push", "options": ["-m", "--all"]},
-            "push": {"description": "Upload committed traces to HuggingFace Hub", "options": ["--private", "--public"]},
+            "push": {"description": "Upload staged traces to HuggingFace Hub", "options": ["--private", "--public"]},
             "trace": {"description": "Manage individual traces", "subcommands": ["list", "show", "commit", "reject", "reset", "redact", "discard"]},
             "remote": {"description": "Manage dataset remote", "subcommands": ["current", "list", "use", "remove"]},
             "status": {"description": "Show repo inbox status"},

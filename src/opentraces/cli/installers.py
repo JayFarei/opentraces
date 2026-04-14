@@ -58,7 +58,7 @@ def run_post_commit_hook(repo_path: str) -> None:
 @main.group("setup", invoke_without_command=True)
 @click.pass_context
 def setup_group(ctx: click.Context) -> None:
-    """Wire opentraces into your agent, git, and security stack.
+    """Wire opentraces into your system.
 
     Each subcommand installs one integration:
 
@@ -154,7 +154,7 @@ def _run_setup_wizard() -> None:
 @click.argument("commit", default="HEAD")
 @click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON")
 def blame_cmd(commit: str, json_out: bool) -> None:
-    """Resolve a commit to the opentraces trace(s) behind it.
+    """Resolve a commit to the traces behind it.
 
     COMMIT is any git ref — a sha (short or full), branch name, or `HEAD~N`.
     Traces are linked via `refs/notes/opentraces` written by the post-commit
@@ -226,7 +226,7 @@ def blame_cmd(commit: str, json_out: bool) -> None:
 @click.argument("trace_id")
 @click.option("--exec", "do_exec", is_flag=True, help="Exec the claude resume command instead of printing it.")
 def resume_cmd(trace_id: str, do_exec: bool) -> None:
-    """Resume the Claude Code session that produced a trace.
+    """Resume the agent session that produced a trace.
 
     Looks up the trace's session_id and either prints the resume command
     (default) or execs it with --exec. Pairs naturally with `blame <sha>`
@@ -1419,12 +1419,12 @@ def _render_doctor_security(report: dict) -> None:
 
 
 def _filter_by_scope(records: list[dict], scope: str, state) -> list[dict]:
-    """Filter records by TraceStatus from the StateManager.
+    """Filter records by visible stage from the StateManager.
 
-    ``scope`` values:
+    ``scope`` values (display vocabulary):
       - ``all``: every record in the staging directory (default)
-      - ``staged``: STAGED status only (pre-commit)
-      - ``committed``: COMMITTED status only (second line of defence
+      - ``inbox``: pre-add traces still awaiting review
+      - ``staged``: post-add traces ready to push (second line of defence
         before push, after human review)
     """
     from ..core.state import TraceStatus
@@ -1432,8 +1432,8 @@ def _filter_by_scope(records: list[dict], scope: str, state) -> list[dict]:
     if scope == "all":
         return records
     target = {
-        "staged": TraceStatus.STAGED.value,
-        "committed": TraceStatus.COMMITTED.value,
+        "inbox": TraceStatus.STAGED.value,
+        "staged": TraceStatus.COMMITTED.value,
     }.get(scope)
     if target is None:
         return records
@@ -1480,8 +1480,8 @@ def _filter_by_trace_ids(records: list[dict],
     "llm-review",
     examples=[
         "opentraces llm-review                      # every trace in staging",
-        "opentraces llm-review --scope committed    # 2nd line of defence before push",
-        "opentraces llm-review --scope staged       # pre-commit only",
+        "opentraces llm-review --scope staged       # 2nd line of defence before push",
+        "opentraces llm-review --scope inbox        # pre-add only",
         "opentraces llm-review --trace 8a3f1c       # one trace (short id ok)",
         "opentraces llm-review --dry-run            # estimate token usage only",
     ],
@@ -1503,11 +1503,11 @@ def _filter_by_trace_ids(records: list[dict],
 @click.option("--api-key-env", default=None,
               help="Override the env var holding the API key")
 @click.option("--scope",
-              type=click.Choice(["all", "staged", "committed"], case_sensitive=False),
+              type=click.Choice(["all", "inbox", "staged"], case_sensitive=False),
               default="all",
               help="Which traces to review: 'all' (every trace in staging; default), "
-                   "'staged' (STAGED status only, pre-commit), "
-                   "'committed' (COMMITTED status only — second line of defence before push)")
+                   "'inbox' (Inbox-stage only, pre-add), "
+                   "'staged' (Staged-stage only — second line of defence before push)")
 @click.option("--trace", "trace_ids", multiple=True,
               help="Target specific trace(s) by id (full or short prefix). "
                    "Repeatable. Overrides --scope when set.")
@@ -1523,15 +1523,15 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
                    api_key_env: str | None, scope: str,
                    trace_ids: tuple[str, ...], dry_run: bool, limit: int,
                    force: bool, context_file: str | None) -> None:
-    """Run Tier 2 LLM semantic review over staged or committed traces.
+    """Run Tier 2 LLM semantic review.
 
     Uses the LLM configured by 'opentraces setup review-llm' unless you
     override via --provider / --model / --base-url / --api-key-env.
 
     LLM can be slow if using local models. Narrow with --scope (pick
-    staged or committed only) or --trace (one or more specific trace
-    ids), and cap with --limit. The typical "second line of defence"
-    flow is 'review-llm --scope committed' right before 'push --llm-review'.
+    inbox or staged only) or --trace (one or more specific trace ids),
+    and cap with --limit. The typical "second line of defence" flow is
+    'review-llm --scope staged' right before 'push --llm-review'.
     """
     from ..core.config import get_project_traces_dir, get_project_state_path
     from ..core.inbox import load_traces
