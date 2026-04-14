@@ -83,7 +83,17 @@ _PORTABLE_FIELDS = (
     "default_visibility",
     "agents",
     "post_processors",
+    # Plan-043 phase 6: committable repo-identity + first-run decision.
+    # `root_commit_sha` is populated by `ot init`; it's the SHA of the
+    # first commit and survives `git mv`/relocation. `first_run_backfill_decision`
+    # records the user's Y/n/never answer from the init prompt so we
+    # don't re-nag every time they re-init.
+    "root_commit_sha",
+    "first_run_backfill_decision",
 )
+
+# Valid values for first_run_backfill_decision. None = not asked yet.
+BACKFILL_DECISIONS = ("Y", "declined", "never")
 
 
 class TruffleHogConfig(BaseModel):
@@ -768,3 +778,57 @@ def save_project_config(project_dir: Path, data: dict) -> None:
     payload = dict(data)
     _normalize_project_data(payload)
     _write_marker(project_dir, project_id, payload)
+
+
+# ---------------------------------------------------------------------------
+# Plan-043 phase 6: root_commit_sha + first_run_backfill_decision helpers
+# ---------------------------------------------------------------------------
+
+
+def get_root_commit_sha(project_dir: Path) -> str | None:
+    """Return the marker's recorded ``root_commit_sha`` or None."""
+    marker = _load_marker(project_dir)
+    if not marker:
+        return None
+    v = marker.get("root_commit_sha")
+    return v if isinstance(v, str) and v else None
+
+
+def set_root_commit_sha(project_dir: Path, sha: str | None) -> None:
+    """Persist ``root_commit_sha`` into the marker, preserving other fields."""
+    marker = _load_marker_raw(project_dir) or {}
+    project_id = marker.get("project_id") or uuid.uuid4().hex
+    # Build policy from existing marker's portable fields.
+    policy = {k: marker[k] for k in _PORTABLE_FIELDS if k in marker}
+    if sha:
+        policy["root_commit_sha"] = sha
+    else:
+        policy.pop("root_commit_sha", None)
+    _write_marker(project_dir, project_id, policy)
+
+
+def get_first_run_backfill_decision(project_dir: Path) -> str | None:
+    """Return ``"Y" | "declined" | "never" | None``."""
+    marker = _load_marker(project_dir)
+    if not marker:
+        return None
+    v = marker.get("first_run_backfill_decision")
+    return v if v in BACKFILL_DECISIONS else None
+
+
+def set_first_run_backfill_decision(project_dir: Path, decision: str | None) -> None:
+    """Persist the backfill-prompt decision. ``None`` clears the field
+    (will re-prompt next init). Non-standard values raise ``ValueError``."""
+    if decision is not None and decision not in BACKFILL_DECISIONS:
+        raise ValueError(
+            f"invalid backfill decision: {decision!r} "
+            f"(expected one of {BACKFILL_DECISIONS} or None)"
+        )
+    marker = _load_marker_raw(project_dir) or {}
+    project_id = marker.get("project_id") or uuid.uuid4().hex
+    policy = {k: marker[k] for k in _PORTABLE_FIELDS if k in marker}
+    if decision:
+        policy["first_run_backfill_decision"] = decision
+    else:
+        policy.pop("first_run_backfill_decision", None)
+    _write_marker(project_dir, project_id, policy)
