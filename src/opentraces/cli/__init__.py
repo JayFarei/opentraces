@@ -2047,6 +2047,11 @@ from ._complete import complete_cmd as _complete_cmd  # noqa: E402
 main.add_command(_completions_group)
 main.add_command(_complete_cmd)
 
+# Plan-043 phase 1 — hidden `ot backfill` verb for the attribution cache.
+from .backfill import backfill_cmd as _backfill_cmd  # noqa: E402
+
+main.add_command(_backfill_cmd)
+
 
 # ---------------------------------------------------------------------------
 # Step 11 — auth group (parallel surface to flat login/logout/whoami).
