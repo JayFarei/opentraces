@@ -762,6 +762,46 @@ def _assert_backfill_scenario(state: RunState, a: dict) -> str:
                 f"cli_stdout_matches_snapshot({fixture}) diff:\n{diff}"
             )
         return f"snapshot {fixture} ✓"
+    if kind in ("json_field_exists", "json_field_equals"):
+        path = a["path"]
+        stdout = state.last_cli.get("stdout", "")
+        # tolerate human-preamble lines before the JSON body
+        body = stdout
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            # fall back: find last "{" line and parse from there
+            idx = body.rfind("\n{")
+            if idx == -1:
+                idx = body.find("{")
+            if idx == -1:
+                raise AssertionError(
+                    f"{kind}({path}): stdout is not valid JSON: {body[:200]!r}"
+                )
+            try:
+                data = json.loads(body[idx:])
+            except json.JSONDecodeError as e:
+                raise AssertionError(
+                    f"{kind}({path}): stdout not parseable: {e}; "
+                    f"stdout={body[:200]!r}"
+                )
+
+        cur: object = data
+        for segment in path.split("."):
+            if not isinstance(cur, dict) or segment not in cur:
+                raise AssertionError(
+                    f"{kind}({path}): missing segment {segment!r} "
+                    f"in {cur!r}"
+                )
+            cur = cur[segment]
+        if kind == "json_field_exists":
+            return f"json[{path}] exists ✓"
+        expected = a["equals"]
+        if cur != expected:
+            raise AssertionError(
+                f"json_field_equals({path}): expected {expected!r}, got {cur!r}"
+            )
+        return f"json[{path}]={cur!r} ✓"
     if kind == "cli_returncode":
         expected = int(a["equals"])
         actual = int(state.last_cli.get("returncode", -1))
@@ -903,7 +943,8 @@ def run_assertions(state: RunState, assertions: list[dict]) -> list[str]:
     phase1_kinds = {"cache_file_exists", "cli_stdout_matches",
                     "cli_stderr_matches", "cli_returncode", "report_field",
                     "entity_cache_has", "cli_stdout_matches_snapshot",
-                    "tick_field", "state_field"}
+                    "tick_field", "state_field",
+                    "json_field_exists", "json_field_equals"}
     if all(a.get("kind") in phase1_kinds for a in assertions):
         return [_assert_backfill_scenario(state, a) for a in assertions]
     result = _attribution_for(state)

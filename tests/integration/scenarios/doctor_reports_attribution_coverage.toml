@@ -1,0 +1,58 @@
+name = "doctor_reports_attribution_coverage"
+description = "After init + a write_attribution fixture, `ot doctor --json` surfaces an attribution panel with cached_commits=1 plus a watcher panel and the entity_parser panel."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "hello.py"
+content = "print('hi')\n"
+
+[[steps]]
+type = "commit"
+message = "add hello"
+
+# Opt the project in so the attribution panel reports real numbers
+# instead of the "no-project" sentinel.
+[[steps]]
+type = "init_opentraces"
+
+# Prime the attribution cache with one fixture record at HEAD.
+[[steps]]
+type = "write_attribution"
+ref = "HEAD"
+[steps.data]
+version = 1
+generated_at = "2026-04-14T00:00:00Z"
+traces = []
+files = {}
+[steps.data.coverage]
+attributed = 0
+total = 0
+ratio = 0.0
+
+[[steps]]
+type = "invoke_cli"
+args = ["--json", "doctor"]
+
+[[assertions]]
+kind = "cli_returncode"
+equals = 0
+
+[[assertions]]
+kind = "json_field_exists"
+path = "doctor.attribution.cached_commits"
+
+[[assertions]]
+kind = "json_field_equals"
+path = "doctor.attribution.cached_commits"
+equals = 1
+
+[[assertions]]
+kind = "json_field_exists"
+path = "doctor.watcher.platform"
+
+[[assertions]]
+kind = "json_field_exists"
+path = "doctor.entity_parser"
