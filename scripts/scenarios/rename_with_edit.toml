@@ -1,0 +1,72 @@
+name = "rename_with_edit"
+description = """
+Agent renames an existing file AND edits one of its lines, in the
+same session. Documents current spike behavior: `git blame` is NOT
+called with `--follow`, so at the new path, the entire file reads as
+"first introduced by the watcher snapshot" — the agent who only
+authored 1 of the 5 lines ends up credited for all 5.
+
+This is a latent design question. The correct product behavior is
+probably: the 4 unchanged lines belong to whoever seeded original.md
+(pre-audit), and only the edited line belongs to the renaming trace.
+Locking in current behavior so any future `--follow`-aware change is
+intentional.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "original.md"
+content = "one\ntwo\nthree\nfour\nfive\n"
+
+[[steps]]
+type = "git"
+args = ["add", "original.md"]
+
+[[steps]]
+type = "git"
+args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "seed original"]
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run: mv original.md renamed.md",
+    "Now use the Edit tool on renamed.md to replace exactly `three` (one line) with `THREE`. Do not modify any other line.",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "rename + edit line 3"
+
+# CURRENT behavior: all 5 lines at renamed.md credit trace `a` (no
+# --follow means the pre-rename history is lost at the new path).
+# IDEAL behavior: 4 lines to pre-audit seed author, 1 line to trace a.
+[[assertions]]
+file = "renamed.md"
+trace = "a"
+lines = 5
+
+[[assertions]]
+file = "renamed.md"
+total_lines = 5
+
+# original.md's delete side still blames through to the seed, as
+# bash_rename documented.
+[[assertions]]
+file = "original.md"
+trace = "pre-audit"
+lines = 5

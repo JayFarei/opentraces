@@ -1,0 +1,66 @@
+name = "file_mode_change"
+description = """
+Agent `chmod +x`s a previously-committed file. No content changes;
+git records only a mode bit flip (100644 → 100755). Tests that
+attribution handles mode-only commits without fabricating credit:
+the content was authored by whoever seeded it, and setting the
+execute bit is not line authorship.
+
+Current spike behavior: blobs in audit history are always stored as
+100644 (no mode tracking), and content-based blame correctly credits
+the seed author. The agent gets zero line attribution for the
+chmod — which is semantically correct.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "run.sh"
+content = "#!/bin/sh\necho hello\n"
+
+[[steps]]
+type = "git"
+args = ["add", "run.sh"]
+
+[[steps]]
+type = "git"
+args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "seed run.sh"]
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run: chmod +x run.sh",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "make run.sh executable"
+
+# Content unchanged → all 2 lines still belong to the seed author.
+[[assertions]]
+file = "run.sh"
+trace = "pre-audit"
+lines = 2
+
+[[assertions]]
+file = "run.sh"
+trace = "a"
+lines = 0
+
+[[assertions]]
+file = "run.sh"
+total_lines = 2

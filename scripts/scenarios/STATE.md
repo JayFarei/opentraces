@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T08:15Z
-Last iteration agent: claude-opus-4-6 (loop iter 17)
+Last update: 2026-04-14T08:55Z
+Last iteration agent: claude-opus-4-6 (JSONL-fallback + 4 new scenarios)
 
 ---
 
@@ -21,7 +21,8 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | bash_overwrites              | pass | 2026-04-13 | — |
 | bash_rename                  | pass | 2026-04-14 | iter 3; rename semantics (seed-author keeps credit for moved content, watcher credits active trace for new path) |
 | binary_file_added            | pass | 2026-04-14 | iter 6; exposed & fixed UnicodeDecodeError on blame output for non-UTF-8 bytes |
-| clear_mid_session            | fail | 2026-04-14 | timeout fixed (harness slash-command handling); now fails on attribution — `/clear` drops file-history blobs for the cleared session, so early.md has no snapshots. Deeper spike question (see Open questions) |
+| clear_mid_session            | pass | 2026-04-14 | resolved via JSONL tool-use reconstruction fallback + harness label-set generalization |
+| crlf_line_endings            | pass | 2026-04-14 | CRLF-terminated file blames 3 lines correctly |
 | close_without_exit           | pass | 2026-04-13 | — |
 | commit_amend                 | pass | 2026-04-14 | iter 9; amend doesn't break attribution (audit history immutable across SHA change) |
 | commit_amend_adds_file       | pass | 2026-04-14 | iter 10; amend adds user-authored file → correctly reported missing_from_audit, not invented credit |
@@ -29,17 +30,20 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | dotfile_added                | pass | 2026-04-14 | iter 16; `.gitignore` captured cleanly via watcher -uall |
 | empty_file_write             | pass | 2026-04-14 | iter 11; `touch` placeholder → attributed with total_lines=0 |
 | exit_without_done            | pass | 2026-04-13 | — |
-| file_create_then_delete      | pass | 2026-04-14 | iter 13; scenario rewritten — commit now carries a persistent keep.md alongside the ephemeral temp.txt, asserts attribution of the surviving file (the semantic the scenario's description always pointed at) |
+| file_create_then_delete      | pass | 2026-04-14 | iter 13; scenario rewritten — commit now carries a persistent keep.md alongside the ephemeral temp.txt, asserts attribution of the surviving file |
+| file_mode_change             | pass | 2026-04-14 | chmod +x on seeded file — content unchanged → pre-audit credit preserved, no fabricated attribution |
 | formatter_after_edit         | pass | 2026-04-13 | — |
 | git_mv_rename                | pass | 2026-04-14 | iter 15; exercises porcelain-z rename (R) record parsing — new path first, old path follow-up correctly skipped |
 | human_between_sessions       | pass | 2026-04-14 | — |
 | long_single_line             | pass | 2026-04-14 | iter 17; 2000-char single line blames as 1 line (minified-JS / one-line-JSON case) |
 | mixed_write_and_bash         | pass | 2026-04-14 | new this iter; Write + Bash append in one trace, all lines credit same trace (dual-signal integration) |
 | multi_commits_one_session    | pass | 2026-04-13 | — |
+| multi_edit_tool              | pass | 2026-04-14 | MultiEdit tool with 3 substitutions, watcher offline — exercises MultiEdit branch of JSONL reconstruction path |
 | multiple_edits_one_turn      | pass | 2026-04-13 | — |
 | no_trailing_newline          | pass | 2026-04-14 | iter 8; confirms last unterminated line still counts |
 | partial_commit               | pass | 2026-04-13 | — |
-| path_with_spaces             | pass | 2026-04-14 | iter 14; exposed & fixed porcelain parsing bug — paths with spaces were silently dropped by both `_working_tree_extras` and `_capture_wt_changes` |
+| path_with_spaces             | pass | 2026-04-14 | iter 14; exposed & fixed porcelain parsing bug |
+| rename_with_edit             | pass | 2026-04-14 | rename+edit in one session — current behavior credits ALL lines to agent, ignores seed. Latent design issue (blame lacks --follow). |
 | pre_session_content          | pass | 2026-04-13 | — |
 | revert_within_session        | pass | 2026-04-13 | — |
 | same_lines_overwrite         | pass | 2026-04-13 | — |
@@ -53,7 +57,10 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 35/36 passing.** Only `clear_mid_session` remains (blocked
+**Current: 40/40 passing.** `clear_mid_session` resolved by the
+JSONL-content fallback. Four new scenarios added:
+`rename_with_edit`, `file_mode_change`, `crlf_line_endings`,
+`multi_edit_tool`. Only `clear_mid_session` remains (blocked
 on a human design decision: whether to mine Write/Edit tool_use
 content from JSONL when file-history blobs are absent, or accept the
 attribution gap). Added scenarios across iters 3-10:
@@ -69,23 +76,27 @@ human design decisions.
 
 **Working on**: nothing active; next iteration picks one of the two remaining fails.
 
-**Remaining fails**:
+**Remaining fails**: none.
 
-1. **clear_mid_session** — `/clear` wipes the cleared session's
-   file-history directory, so no snapshots exist for the pre-clear
-   trace. Session 1's JSONL still records 5 `Write` tool_use calls,
-   but `~/.claude/file-history/<sid1>/` does not exist. Blocked on a
-   human design choice (see Open questions).
-
-**Next step**: either (a) human resolves the `/clear` attribution
-decision, or (b) next iteration keeps expanding coverage on uncovered
-edges (ideas: unicode/emoji content, CRLF line endings, paths with
-spaces, dotfiles like `.gitignore`, `git mv` vs `bash mv`, very-long
-single line, CRLF conversion via `.gitattributes`).
+**Next step**: continue widening coverage on likely-bug edges —
+unicode normalization (NFC vs NFD on mac), case-insensitive FS
+collisions, deep-nested paths, submodules, Edit-match-failure
+(ensuring no fabricated credit when old_string doesn't match),
+stress (5+ sequential traces on one file), concurrent traces across
+a single commit.
 
 ---
 
 ## Latent issues worth flagging
+
+- **Rename + edit over-credits the renaming trace.** Without
+  `git blame --follow`, the new path at a renamed file reads as
+  entirely new content. `rename_with_edit` shows this: agent edits
+  1 of 5 lines post-rename, gets credited for all 5. The 4 unchanged
+  lines should arguably belong to the pre-rename seed author. Either
+  enable `--follow` in `attribute_commit` or explicitly stitch
+  rename preimages into audit history. Locked in by scenario so any
+  fix is intentional.
 
 - **Symlink attribution is content-biased.** The watcher's
   `_working_tree_extras` uses `Path.is_file()` which follows symlinks,
@@ -99,34 +110,50 @@ single line, CRLF conversion via `.gitattributes`).
 
 ## Open questions for the human
 
-- **`clear_mid_session` — attribution across /clear.** Observed: `/clear`
-  retires the current session (new JSONL opens), and the cleared
-  session's `~/.claude/file-history/<sid>/` directory is deleted by
-  Claude Code. Session 1's JSONL still exists and records 5 `Write`
-  tool_use calls, but with no backup blobs, the spike has nothing to
-  snapshot. Options:
-    (a) Fall back to mining `Write`/`Edit` tool_use `content` fields
-        directly from the JSONL when file-history blobs are absent.
-        Biggest correctness win; moderate implementation (need to
-        reconstruct per-turn file state from Edit old→new string
-        replacements).
-    (b) Accept the gap; mark `clear_mid_session` as
-        expected-attribution-loss and assert early.md lines go to
-        pre-audit instead of trace `a`.
-    (c) Change the scenario to avoid `/clear` entirely (but that
-        sidesteps the case entirely; we still don't know how to
-        attribute across it in real traces).
-  Which direction? (a) is the honest answer but is a real feature.
+- ~~`clear_mid_session` — attribution across /clear.~~ **Resolved.**
+  Picked option (a) from the prior brief: added a JSONL tool-use
+  reconstruction fallback in the spike that replays
+  Write/Edit/MultiEdit content directly when file-history blobs are
+  absent. Harness generalized to `label_to_trace: dict[str,
+  set[str]]` so a /clear'd label accumulates both session IDs and
+  assertions sum their contributions.
 
-- ~~`file_create_then_delete` — assertion mismatch.~~ **Resolved iter
-  13.** Scenario rewritten: commit now carries a persistent keep.md
-  alongside the ephemeral temp.txt, asserts on the surviving file.
-  Matches the scenario's stated intent ("ephemeral create+delete
-  doesn't pollute attribution of real work").
+- ~~`file_create_then_delete` — assertion mismatch.~~ **Resolved.**
+  Scenario rewritten to assert on a persistent sibling file.
+
+- **Pending:** should the next improvement target rename-with-edit
+  (enable `--follow` or stitch rename preimages into audit history)?
+  Currently the renaming trace over-credits itself for all lines of
+  the moved file.
 
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — JSONL-fallback batch (opus 4.6, out of /loop cadence
+  on explicit user request):
+    1. **Spike:** added JSONL tool-use reconstruction. When file-
+       history blobs are absent, replay Write/Edit/MultiEdit content
+       from JSONL tool_uses into per-turn Snapshots. New-file Writes
+       and /clear'd sessions now contribute authorship evidence
+       rather than falling through to pre-audit. Merges alongside
+       existing file-history snapshots (timestamp-ordered).
+       Honestly skips Edits whose old_string won't match — no
+       fabricated attribution.
+    2. **Harness:** `label_to_trace` → `dict[str, set[str]]`. A
+       label can map to multiple session_ids (needed for /clear);
+       assertions sum contributions across the set.
+    3. **Four new scenarios authored and passing:**
+       - `rename_with_edit` — locks in current no-`--follow`
+         behavior; flags latent issue.
+       - `file_mode_change` — chmod +x correctly does NOT fabricate
+         line credit (content unchanged → pre-audit retains).
+       - `crlf_line_endings` — CRLF-terminated file blames cleanly.
+       - `multi_edit_tool` — MultiEdit reconstruction branch
+         exercised in isolation (watcher off, forces the fallback
+         to be the sole authorship source).
+    Suite 40/40. 6/6 self-tests still green. 8 regression scenarios
+    also verified intact.
 
 - 2026-04-14 — iter 17 (opus 4.6): Authored `long_single_line` — a
   2000-character single line (minified-JS / one-line-JSON shape).

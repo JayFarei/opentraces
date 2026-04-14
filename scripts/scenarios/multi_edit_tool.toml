@@ -1,0 +1,58 @@
+name = "multi_edit_tool"
+description = """
+Agent uses the MultiEdit tool (one call applying several string
+substitutions) rather than repeated Edit calls. Explicitly exercises
+the MultiEdit branch of the JSONL tool-use reconstruction path
+(added for the /clear fallback) — distinct from the existing
+`multiple_edits_one_turn` which issues N separate Edit tool calls.
+
+We preclude the usual file-history signal by running with the
+watcher OFFLINE, forcing the reconstruction path to be the sole
+source of authorship evidence. All 3 edited lines must credit
+trace a.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "config.yaml"
+content = "alpha: 1\nbravo: 2\ncharlie: 3\ndelta: 4\n"
+
+[[steps]]
+type = "git"
+args = ["add", "config.yaml"]
+
+[[steps]]
+type = "git"
+args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "seed config"]
+
+# NOTE: no start_watcher. The MultiEdit's effect on the file state
+# must be attributed via the JSONL reconstruction path alone.
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the MultiEdit tool on config.yaml with THREE edits: replace `alpha: 1` with `alpha: 10`, replace `bravo: 2` with `bravo: 20`, and replace `charlie: 3` with `charlie: 30`. Do not modify any other line.",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "apply three config bumps"
+
+# 3 lines edited by trace a; 1 line (delta: 4) remains with seed author.
+[[assertions]]
+file = "config.yaml"
+trace = "a"
+lines = 3
+
+[[assertions]]
+file = "config.yaml"
+trace = "pre-audit"
+lines = 1
+
+[[assertions]]
+file = "config.yaml"
+total_lines = 4
