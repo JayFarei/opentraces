@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T05:15Z
-Last iteration agent: claude-opus-4-6 (loop iter 11)
+Last update: 2026-04-14T05:45Z
+Last iteration agent: claude-opus-4-6 (loop iter 12)
 
 ---
 
@@ -42,13 +42,14 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | sed_inplace_edit             | pass | 2026-04-13 | — |
 | small_tweak                  | pass | 2026-04-14 | — |
 | symlink_added                | pass | 2026-04-14 | iter 7; documents symlink-as-file behavior (watcher follows link via is_file, audit snapshots target content rather than link path). Latent design question: symlink should arguably blame to 1 line of target-path content. |
-| two_traces_different_files   | pass | 2026-04-14 | new this iter; E2E variant of self-test, two sessions touching disjoint files, no cross-contamination |
+| two_traces_different_files   | pass | 2026-04-14 | iter 5; E2E variant of self-test, two sessions touching disjoint files, no cross-contamination |
+| two_traces_two_commits_one_file | pass | 2026-04-14 | iter 12; small_tweak split across 2 commits/sessions — a=9, b=1 |
 | watcher_offline              | pass | 2026-04-13 | — |
 | zero_file_history_session    | pass | 2026-04-14 | was failing; fixed by graceful-no-audit fallback |
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 29/31 passing.** Added scenarios across iters 3-10:
+**Current: 30/32 passing.** Added scenarios across iters 3-10:
 `bash_rename`, `mixed_write_and_bash`, `two_traces_different_files`,
 `binary_file_added` (exposed a real spike bug), `symlink_added`,
 `no_trailing_newline`, `commit_amend`, `commit_amend_adds_file`.
@@ -129,6 +130,13 @@ detection; binary-file touch; very-large-file blame; symlink file).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 12 (opus 4.6): Authored
+  `two_traces_two_commits_one_file` — trace a writes a 10-line file
+  and commits; trace b (new session) edits a single line and commits.
+  Attribution at HEAD correctly splits credit across commits and
+  sessions: a=9, b=1. Confirms audit history stitches cleanly across
+  commit boundaries. Passed first try.
 
 - 2026-04-14 — iter 11 (opus 4.6): Authored `empty_file_write` — agent
   creates a zero-byte file via `touch`. Blame on empty files yields no
