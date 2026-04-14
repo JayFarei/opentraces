@@ -1,0 +1,42 @@
+name = "dotfile_added"
+description = """
+Agent creates a dotfile (`.gitignore`). Tests that leading-dot paths
+are captured by the watcher's `-uall` sweep (git status ignores
+dotfiles by default without `-uall`, but -uall must list them) and
+that attribution flows cleanly. Realistic: the single most common
+first-commit of any project.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Write tool to create .gitignore with these three lines:\nnode_modules/\n.env\n*.log",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "add .gitignore"
+
+[[assertions]]
+file = ".gitignore"
+trace = "a"
+lines = 3
+
+[[assertions]]
+file = ".gitignore"
+total_lines = 3

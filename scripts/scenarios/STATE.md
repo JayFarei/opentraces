@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T07:15Z
-Last iteration agent: claude-opus-4-6 (loop iter 15)
+Last update: 2026-04-14T07:45Z
+Last iteration agent: claude-opus-4-6 (loop iter 16)
 
 ---
 
@@ -26,6 +26,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | commit_amend                 | pass | 2026-04-14 | iter 9; amend doesn't break attribution (audit history immutable across SHA change) |
 | commit_amend_adds_file       | pass | 2026-04-14 | iter 10; amend adds user-authored file → correctly reported missing_from_audit, not invented credit |
 | crash_during_prompt          | pass | 2026-04-13 | — |
+| dotfile_added                | pass | 2026-04-14 | iter 16; `.gitignore` captured cleanly via watcher -uall |
 | empty_file_write             | pass | 2026-04-14 | iter 11; `touch` placeholder → attributed with total_lines=0 |
 | exit_without_done            | pass | 2026-04-13 | — |
 | file_create_then_delete      | pass | 2026-04-14 | iter 13; scenario rewritten — commit now carries a persistent keep.md alongside the ephemeral temp.txt, asserts attribution of the surviving file (the semantic the scenario's description always pointed at) |
@@ -51,7 +52,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 33/34 passing.** Only `clear_mid_session` remains (blocked
+**Current: 34/35 passing.** Only `clear_mid_session` remains (blocked
 on a human design decision: whether to mine Write/Edit tool_use
 content from JSONL when file-history blobs are absent, or accept the
 attribution gap). Added scenarios across iters 3-10:
@@ -125,6 +126,10 @@ single line, CRLF conversion via `.gitattributes`).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 16 (opus 4.6): Authored `dotfile_added` — agent
+  writes a `.gitignore`. Confirms leading-dot paths flow through the
+  watcher's `-uall` sweep without special-casing. Passed first try.
 
 - 2026-04-14 — iter 15 (opus 4.6): Authored `git_mv_rename` — agent
   uses `git mv` (not plain `mv`) so the rename is staged, exercising
