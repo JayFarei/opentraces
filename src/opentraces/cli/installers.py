@@ -1396,7 +1396,7 @@ def _render_doctor_human(report: dict) -> None:
     if hf == "ok":
         _row("ok", "huggingface", "authenticated")
     else:
-        _row("err", "huggingface", "missing", detail="run 'huggingface-cli login'")
+        _row("err", "huggingface", "missing", detail="run 'hf auth login'")
 
     _processors_section(report["post_processors"])
     _hooks_section(report["hooks"])

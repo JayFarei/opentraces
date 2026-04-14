@@ -34,7 +34,7 @@ _HF_CACHE_TOKEN_PATH: Path = Path.home() / ".cache" / "huggingface" / "token"
 
 _LOGIN_HINT = (
     "No HuggingFace token found. Run 'opentraces login' or "
-    "'huggingface-cli login' to authenticate, "
+    "'hf auth login' to authenticate,"
     "or set HF_TOKEN / HUGGINGFACE_TOKEN in your environment."
 )
 

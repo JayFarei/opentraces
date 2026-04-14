@@ -212,7 +212,7 @@ def assess_remote(repo: str, judge: bool, judge_model: str, limit: int, rewrite_
             )
             click.echo(f"  README.md {'rewritten' if rewrite_readme else 'updated'}")
         else:
-            click.echo("\nNo HF token — scores computed but not uploaded. Run 'huggingface-cli login'.")
+            click.echo("\nNo HF token — scores computed but not uploaded. Run 'hf auth login'.")
 
         # Local report
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")

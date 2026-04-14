@@ -6,7 +6,7 @@ Mirrors pi-share-hf's 3-source token discovery:
   3. ~/.cache/huggingface/token file
 
 Surfaces a clear diagnostic message when no token is found so users
-know exactly what to run (``huggingface-cli login`` or ``opentraces login``).
+know exactly what to run (``hf auth login`` or ``opentraces login``).
 """
 
 from __future__ import annotations

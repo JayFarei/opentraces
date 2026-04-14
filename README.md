@@ -51,11 +51,11 @@ pip install -e ".[dev]"
 
 ### External tools
 
-`push` needs `huggingface-cli`:
+`push` needs the Hugging Face CLI (`hf`, formerly `huggingface-cli`):
 
 ```bash
 pip install "huggingface_hub[cli]"
-huggingface-cli login
+hf auth login
 ```
 
 When logging in, create a token at https://huggingface.co/settings/tokens with **write** scope.

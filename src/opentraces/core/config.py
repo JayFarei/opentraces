@@ -212,7 +212,7 @@ def load_config() -> Config:
 
 
 def _resolve_hf_token() -> str | None:
-    """Resolve HF token from env > opentraces credentials > huggingface-cli."""
+    """Resolve HF token from env > opentraces credentials > hf CLI cache."""
     token = os.environ.get("HF_TOKEN")
     if token:
         return token

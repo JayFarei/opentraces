@@ -61,7 +61,7 @@ for path in pathlib.Path("/mnt/traces/data").glob("traces_*.jsonl"):
 For private or gated datasets, authenticate first:
 
 ```bash
-huggingface-cli login
+hf auth login
 ```
 
 **Unmount when done:**

@@ -2222,7 +2222,7 @@ def _assess_dataset(
     else:
         if not token:
             click.echo("\nNo HF token — skipping dataset card update.")
-            click.echo("Run 'huggingface-cli login' or set HF_TOKEN to enable.")
+            click.echo("Run 'hf auth login' or set HF_TOKEN to enable.")
         else:
             click.echo("\nUpdating dataset card...")
             summary_dict = summary.to_dict()
