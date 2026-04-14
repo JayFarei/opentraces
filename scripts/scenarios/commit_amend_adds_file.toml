@@ -1,0 +1,59 @@
+name = "commit_amend_adds_file"
+description = """
+Trace writes a file and commits. Then the user amends the commit to
+include an ADDITIONAL file they authored manually. The amended HEAD
+now covers both paths but only one was authored by the trace. Tests
+that attribution correctly splits credit: trace `a` for its own file,
+pre-audit for the user-added file.
+
+Realistic pattern: user notices they forgot to stage a related config
+file and does `git add ... && git commit --amend --no-edit`.
+
+Current spike behavior: the user-added file is reported as
+`missing_from_audit` — it was never in an audit snapshot (no trace
+touched it, no watcher captured it). This is honest: the spike has no
+information to blame it. Distinct from `pre-audit` (which means blame
+found content predating the audit head). Locking this in so any future
+promotion of "missing_from_audit" to "pre-audit" is intentional.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Write tool to create release.md with these two lines:\nversion: 0.1.0\nstatus: draft",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "initial release notes"
+
+# User forgot to stage an unrelated config file; add it and amend.
+[[steps]]
+type = "write_file"
+path = "config.ini"
+content = "[app]\ndebug=false\n"
+
+[[steps]]
+type = "git"
+args = ["add", "config.ini"]
+
+[[steps]]
+type = "git"
+args = ["commit", "--amend", "--no-edit"]
+
+# release.md: still fully trace a's work.
+[[assertions]]
+file = "release.md"
+trace = "a"
+lines = 2
+
+# config.ini: user authored, no audit snapshot covers it. The spike
+# correctly reports missing_from_audit rather than inventing credit.
+[[assertions]]
+file = "config.ini"
+status = "missing_from_audit"

@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T04:15Z
-Last iteration agent: claude-opus-4-6 (loop iter 9)
+Last update: 2026-04-14T04:45Z
+Last iteration agent: claude-opus-4-6 (loop iter 10)
 
 ---
 
@@ -24,6 +24,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | clear_mid_session            | fail | 2026-04-14 | timeout fixed (harness slash-command handling); now fails on attribution — `/clear` drops file-history blobs for the cleared session, so early.md has no snapshots. Deeper spike question (see Open questions) |
 | close_without_exit           | pass | 2026-04-13 | — |
 | commit_amend                 | pass | 2026-04-14 | iter 9; amend doesn't break attribution (audit history immutable across SHA change) |
+| commit_amend_adds_file       | pass | 2026-04-14 | iter 10; amend adds user-authored file → correctly reported missing_from_audit, not invented credit |
 | crash_during_prompt          | pass | 2026-04-13 | — |
 | exit_without_done            | pass | 2026-04-13 | — |
 | file_create_then_delete      | fail | 2026-04-13 | "README.md missing from attribution" — empty commit has no diff-tree files; scenario asserts README.md pre-audit which isn't in the commit diff |
@@ -46,11 +47,12 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 27/29 passing.** Added scenarios across iters 3-9:
+**Current: 28/30 passing.** Added scenarios across iters 3-10:
 `bash_rename`, `mixed_write_and_bash`, `two_traces_different_files`,
 `binary_file_added` (exposed a real spike bug), `symlink_added`,
-`no_trailing_newline`, `commit_amend`. `clear_mid_session` and
-`file_create_then_delete` remain blocked on human design decisions.
+`no_trailing_newline`, `commit_amend`, `commit_amend_adds_file`.
+`clear_mid_session` and `file_create_then_delete` remain blocked on
+human design decisions.
 
 ---
 
@@ -126,6 +128,15 @@ detection; binary-file touch; very-large-file blame; symlink file).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 10 (opus 4.6): Authored `commit_amend_adds_file` —
+  user amends a trace's commit to include an unrelated file they
+  authored manually. First run had my initial assertion wrong
+  (expected pre-audit); actual spike behavior is better —
+  `missing_from_audit`, distinct from `pre-audit`. The former means
+  "no snapshot ever covered this path"; the latter means "blame found
+  content predating audit head." Updated assertion to lock in this
+  honest reporting. No fabricated attribution.
 
 - 2026-04-14 — iter 9 (opus 4.6): Authored `commit_amend` — trace writes
   a file, user commits with a typo in the message, then `git commit
