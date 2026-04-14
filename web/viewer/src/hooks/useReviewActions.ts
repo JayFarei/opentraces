@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   rejectTrace,
   redactStep,
-  commitTraces,
+  addTraces,
   pushCommit,
 } from "../lib/api";
 
@@ -17,9 +17,9 @@ export function useReviewActions() {
     void qc.invalidateQueries({ queryKey: ["trace", traceId] });
   };
 
-  const commit = useMutation({
+  const add = useMutation({
     mutationFn: ({ traceIds, message }: { traceIds: string[]; message: string }) =>
-      commitTraces(traceIds, message),
+      addTraces(traceIds, message),
     onSuccess: () => invalidateTraces(),
   });
 
@@ -44,5 +44,5 @@ export function useReviewActions() {
     },
   });
 
-  return { commit, reject, redact, push };
+  return { add, reject, redact, push };
 }

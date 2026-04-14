@@ -256,7 +256,7 @@ def commit_bulk(
 ) -> str:
     """Create a commit group for multiple traces and loop COMMITTED status.
 
-    Matches ``web_server.py::api_commit`` behavior exactly, including the
+    Matches ``web_server.py::api_add`` behavior exactly, including the
     redundant per-id ``set_trace_status(COMMITTED, session_id=...)`` loop that
     follows ``create_commit_group``.
     """

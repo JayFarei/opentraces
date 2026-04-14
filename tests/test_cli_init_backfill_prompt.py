@@ -69,14 +69,19 @@ def initialized_repo(tmp_path, monkeypatch):
     return repo
 
 
+def _stub_pyclack_select(monkeypatch, value):
+    """Patch pyclack.prompts.select to return ``value`` without touching TTY."""
+    import pyclack.prompts as _pk
+
+    async def _fake_select(*_a, **_kw):
+        return value
+    monkeypatch.setattr(_pk, "select", _fake_select)
+
+
 def test_prompt_yes_records_decision(initialized_repo, monkeypatch, capsys):
     repo = initialized_repo
-    # Force tty + stdin "Y\n".
-    monkeypatch.setattr("sys.stdin", io.StringIO("Y\n"))
     monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
-    # click.prompt reads via click's own input; monkeypatch click's prompt.
-    import click as _click
-    monkeypatch.setattr(_click, "prompt", lambda *a, **kw: "Y")
+    _stub_pyclack_select(monkeypatch, "Y")
 
     # Stub backfill so we don't need a full pipeline.
     from opentraces.core import backfill as _bf
@@ -93,8 +98,7 @@ def test_prompt_yes_records_decision(initialized_repo, monkeypatch, capsys):
 def test_prompt_no_records_declined(initialized_repo, monkeypatch):
     repo = initialized_repo
     monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
-    import click as _click
-    monkeypatch.setattr(_click, "prompt", lambda *a, **kw: "n")
+    _stub_pyclack_select(monkeypatch, "declined")
     _plan043_finalize_identity(repo)
     assert c.get_first_run_backfill_decision(repo) == "declined"
 
@@ -102,8 +106,7 @@ def test_prompt_no_records_declined(initialized_repo, monkeypatch):
 def test_prompt_never_records_never(initialized_repo, monkeypatch):
     repo = initialized_repo
     monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
-    import click as _click
-    monkeypatch.setattr(_click, "prompt", lambda *a, **kw: "never")
+    _stub_pyclack_select(monkeypatch, "never")
     _plan043_finalize_identity(repo)
     assert c.get_first_run_backfill_decision(repo) == "never"
 
@@ -111,11 +114,12 @@ def test_prompt_never_records_never(initialized_repo, monkeypatch):
 def test_non_tty_skips_prompt(initialized_repo, monkeypatch):
     repo = initialized_repo
     monkeypatch.setattr("sys.stdin.isatty", lambda: False, raising=False)
-    # If click.prompt is called, fail loudly.
-    import click as _click
-    def _boom(*a, **kw):
+    # If pyclack.select is called, fail loudly.
+    import pyclack.prompts as _pk
+
+    async def _boom(*_a, **_kw):
         raise AssertionError("prompt should not be called in non-tty mode")
-    monkeypatch.setattr(_click, "prompt", _boom)
+    monkeypatch.setattr(_pk, "select", _boom)
     _plan043_finalize_identity(repo)
     assert c.get_first_run_backfill_decision(repo) is None
     # But the root SHA must still be recorded.
@@ -126,9 +130,10 @@ def test_already_decided_does_not_reprompt(initialized_repo, monkeypatch):
     repo = initialized_repo
     c.set_first_run_backfill_decision(repo, "never")
     monkeypatch.setattr("sys.stdin.isatty", lambda: True, raising=False)
-    import click as _click
-    def _boom(*a, **kw):
+    import pyclack.prompts as _pk
+
+    async def _boom(*_a, **_kw):
         raise AssertionError("prompt should not be called when decision is set")
-    monkeypatch.setattr(_click, "prompt", _boom)
+    monkeypatch.setattr(_pk, "select", _boom)
     _plan043_finalize_identity(repo)
     assert c.get_first_run_backfill_decision(repo) == "never"

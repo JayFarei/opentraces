@@ -187,8 +187,11 @@ def install(interval: int = 300, *, throttle_on_battery: bool = True,
         unit_path.parent.mkdir(parents=True, exist_ok=True)
         unit_path.write_text(content)
         # Best-effort load; failures don't break install (tests mock this).
-        _launchctl("unload", str(unit_path), check=False)
-        _launchctl("load", str(unit_path), check=False)
+        # Capture stderr on the preemptive unload — if the plist isn't
+        # loaded yet, launchctl emits a scary "Unload failed: 5" we don't
+        # want surfacing to the user on a clean install.
+        _launchctl("unload", str(unit_path), check=False, capture=True)
+        _launchctl("load", str(unit_path), check=False, capture=True)
         return unit_path
 
     # linux / systemd --user
@@ -211,7 +214,7 @@ def uninstall(*, dry_run: bool = False) -> None:
     if plat == "macos":
         unit_path = _launchd_plist_path()
         if not dry_run:
-            _launchctl("unload", str(unit_path), check=False)
+            _launchctl("unload", str(unit_path), check=False, capture=True)
             if unit_path.is_file():
                 unit_path.unlink()
         return

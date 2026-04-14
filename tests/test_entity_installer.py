@@ -85,7 +85,7 @@ def test_install_happy_path(tmp_path, monkeypatch):
     result = _inst.install(dest_dir=tmp_path)
     assert result.source == "download"
     assert result.path.exists()
-    assert result.path.name == f"ot-entities-{ENTITY_BINARY_VERSION}"
+    assert result.path.name == f"sem-{ENTITY_BINARY_VERSION}"
     # chmod +x applied
     assert os.access(result.path, os.X_OK)
 
@@ -109,7 +109,7 @@ def test_install_rejects_sha256_mismatch(tmp_path, monkeypatch):
         _inst.install(dest_dir=tmp_path)
 
     # No artifact left behind
-    assert list(tmp_path.glob("ot-entities-*")) == []
+    assert list(tmp_path.glob("sem-*")) == []
 
 
 def test_install_placeholder_sha_accepted(tmp_path, monkeypatch):
@@ -133,15 +133,15 @@ def test_install_placeholder_sha_accepted(tmp_path, monkeypatch):
 def test_prune_old_versions(tmp_path):
     # Create 5 "versions", expect the oldest 2 to be pruned.
     for i in range(5):
-        p = tmp_path / f"ot-entities-0.3.{i}"
+        p = tmp_path / f"sem-0.3.{i}"
         p.write_text("x")
         # stagger mtimes
         os.utime(p, (i, i))
     pruned = _inst._prune_old_versions(tmp_path, keep=3)
     assert len(pruned) == 2
-    remaining = sorted(p.name for p in tmp_path.glob("ot-entities-*"))
+    remaining = sorted(p.name for p in tmp_path.glob("sem-*"))
     assert remaining == [
-        "ot-entities-0.3.2",
-        "ot-entities-0.3.3",
-        "ot-entities-0.3.4",
+        "sem-0.3.2",
+        "sem-0.3.3",
+        "sem-0.3.4",
     ]

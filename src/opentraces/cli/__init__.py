@@ -800,8 +800,19 @@ def _current_project_session_dir(project_dir: Path, cfg=None) -> Path | None:
     return session_dir if session_dir.exists() else None
 
 
-def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=None) -> tuple[int, int]:
-    """Import existing session files into the project's local inbox."""
+def _capture_sessions_into_project(
+    session_dir: Path,
+    project_dir: Path,
+    cfg=None,
+    *,
+    on_progress=None,
+) -> tuple[int, int]:
+    """Import existing session files into the project's local inbox.
+
+    ``on_progress``, if provided, is called as ``on_progress(done, total)``
+    after each file; ``total`` is the number of session files we plan to
+    attempt. Useful for wiring a progress bar in the CLI.
+    """
     from ..core.config import (
         load_project_config, get_project_traces_dir, get_project_state_path,
         project_is_opted_in,
@@ -832,9 +843,16 @@ def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=Non
     parsed_count = 0
     error_count = 0
 
-    for session_file in sorted(session_dir.glob("*.jsonl")):
+    session_files = sorted(session_dir.glob("*.jsonl"))
+    total = len(session_files)
+    if on_progress is not None:
+        on_progress(0, total)
+
+    for idx, session_file in enumerate(session_files, start=1):
         should_process, offset = state.should_reprocess(str(session_file))
         if not should_process:
+            if on_progress is not None:
+                on_progress(idx, total)
             continue
 
         try:
@@ -891,6 +909,9 @@ def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=Non
         except Exception as e:
             error_count += 1
             click.echo(f"  Error: {session_file.name}: {e}", err=True)
+        finally:
+            if on_progress is not None:
+                on_progress(idx, total)
 
     return parsed_count, error_count
 
@@ -1159,28 +1180,88 @@ def _plan043_finalize_identity(project_dir: Path) -> None:
     if not sys.stdin.isatty():
         return  # non-interactive: leave decision None, re-ask next time
 
+    # Ask with pyclack when available so the prompt renders with the same
+    # ◇ green-diamond styling as the rest of `init`. Fall back to click.
+    answer: str | None = None
     try:
-        answer = click.prompt(
-            f"Run initial attribution backfill over {len(corpus)} past session(s)? [Y/n/never]",
-            default="Y",
-            show_default=False,
-        )
-    except click.Abort:
+        from pyclack.prompts import select as _pk_select
+        from pyclack.core import Option as _PkOption
+        import asyncio as _asyncio
+
+        answer = _asyncio.run(_pk_select(
+            "Backfill commit attribution now?",
+            [
+                _PkOption(
+                    value="Y", label="Backfill now",
+                    hint=f"powers 'opentraces blame' over {len(corpus)} past session(s)",
+                ),
+                _PkOption(
+                    value="declined", label="Skip for now",
+                    hint="ask again next init",
+                ),
+                _PkOption(
+                    value="never", label="Never",
+                    hint="run 'opentraces backfill' manually later",
+                ),
+            ],
+            initial_value="Y",
+        ))
+    except ImportError:
+        try:
+            raw = click.prompt(
+                "Backfill commit attribution now? Powers 'opentraces blame' — "
+                f"points each committed line back to the trace that wrote it. "
+                f"({len(corpus)} past session(s)) [Y/n/never]",
+                default="Y",
+                show_default=False,
+            )
+        except click.Abort:
+            return
+        a = (raw or "").strip().lower()
+        if a in ("n", "no"):
+            answer = "declined"
+        elif a == "never":
+            answer = "never"
+        else:
+            answer = "Y"
+    except Exception:
         return
-    a = (answer or "").strip().lower()
-    if a in ("n", "no"):
+
+    if answer == "declined":
         set_first_run_backfill_decision(project_dir, "declined")
         click.echo("(skipped; will ask again next init)")
         return
-    if a == "never":
+    if answer == "never":
         set_first_run_backfill_decision(project_dir, "never")
         click.echo("(won't ask again; enable manually with 'opentraces backfill')")
         return
-    # Any other answer treated as Y.
     set_first_run_backfill_decision(project_dir, "Y")
     try:
         from ..core import backfill as _bf
-        report = _bf.run_full(project_dir)
+
+        # Determinate progress bar: we don't know the commit count until
+        # run_full starts, so the first on_progress call sets the length.
+        bar_state: dict = {"bar": None}
+
+        def _on_progress(done: int, total: int) -> None:
+            b = bar_state["bar"]
+            if b is None and total > 0:
+                bar_state["bar"] = click.progressbar(
+                    length=total, label="Backfilling commit attribution",
+                )
+                bar_state["bar"].__enter__()
+                b = bar_state["bar"]
+            if b is not None and done > 0:
+                delta = done - getattr(b, "_ot_last", 0)
+                if delta > 0:
+                    b.update(delta)
+                    b._ot_last = done  # type: ignore[attr-defined]
+
+        try:
+            report = _bf.run_full(project_dir, on_progress=_on_progress)
+        finally:
+            if bar_state["bar"] is not None:
+                bar_state["bar"].__exit__(None, None, None)
         click.echo(
             f"Backfilled {report.commits_processed} commit(s); "
             f"{report.attributed_lines} line(s) attributed."
@@ -1422,7 +1503,32 @@ def init(
             )
 
     if existing_session_count and import_existing:
-        imported_existing, import_errors = _capture_sessions_into_project(existing_session_dir, project_dir, cfg=cfg)
+        # Determinate progress bar for the import loop — `_capture_sessions_into_project`
+        # calls back after each file. We know the upfront count.
+        _bar_state: dict = {"bar": None, "last": 0}
+
+        def _import_progress(done: int, total: int) -> None:
+            b = _bar_state["bar"]
+            if b is None and total > 0:
+                _bar_state["bar"] = click.progressbar(
+                    length=total, label="Importing Claude Code traces",
+                )
+                _bar_state["bar"].__enter__()
+                b = _bar_state["bar"]
+            if b is not None:
+                delta = done - _bar_state["last"]
+                if delta > 0:
+                    b.update(delta)
+                    _bar_state["last"] = done
+
+        try:
+            imported_existing, import_errors = _capture_sessions_into_project(
+                existing_session_dir, project_dir, cfg=cfg,
+                on_progress=_import_progress,
+            )
+        finally:
+            if _bar_state["bar"] is not None:
+                _bar_state["bar"].__exit__(None, None, None)
 
     # Plan-043 phase 6: record root commit + prompt for first-run backfill.
     _plan043_finalize_identity(project_dir)
@@ -1570,14 +1676,30 @@ def projects_list_cmd() -> None:
         emit_json({"status": "ok", "projects": [], "count": 0})
         return
 
+    from rich.console import Console as _Console
+    from rich.table import Table as _Table
+    from rich import box as _box
+
+    console = _Console()
+    console.print()
+    console.print(f"[bold]Opted-in projects[/]  [dim]({len(registered)})[/]")
+    console.print()
+
+    table = _Table(box=_box.SIMPLE_HEAD, show_edge=False, padding=(0, 1), header_style="dim")
+    table.add_column("", no_wrap=True)
+    table.add_column("Path", overflow="fold")
+    table.add_column("Note", overflow="fold")
+
     rows: list[dict] = []
-    click.echo(f"Opted-in projects ({len(registered)}):")
     for path_str in registered:
         exists = project_is_opted_in(Path(path_str))
-        marker = "✓" if exists else "⚠"
-        suffix = "" if exists else "  (registered but .opentraces.json missing — run 'opentraces remove' or re-init)"
-        click.echo(f"  {marker} {path_str}{suffix}")
+        glyph = "[green]✓[/]" if exists else "[yellow]⚠[/]"
+        note = "" if exists else "[dim]registered but .opentraces.json missing — run `opentraces remove` or re-init[/]"
+        table.add_row(glyph, path_str, note)
         rows.append({"path": path_str, "on_disk": exists})
+
+    console.print(table)
+    console.print()
 
     emit_json({"status": "ok", "projects": rows, "count": len(rows)})
 
@@ -1977,7 +2099,7 @@ def status(limit: int) -> None:
         table.add_column("Age", no_wrap=True, justify="right")
         table.add_column("Status", no_wrap=True)
         table.add_column("Task", overflow="ellipsis", no_wrap=True)
-        table.add_column("Commit", no_wrap=True)
+        table.add_column("Git", no_wrap=True)
         table.add_column("", no_wrap=True)  # task-source dot
 
         # Coverage counters drive the "setup hint" block below the legend.
@@ -2071,19 +2193,12 @@ def status(limit: int) -> None:
         console.print(table)
         console.print()  # breathing room between table and legend
         console.print(
-            "  [dim]status:[/]    [green bold]✓[/][dim] pushed[/]    "
+            "  [green bold]✓[/][dim] pushed[/]    "
             "[green]✓[/][dim] staged / done[/]    "
             "[yellow]~[/][dim] compacted[/]    "
             "[red]✗[/][dim] failed / rejected[/]    "
-            "[dim]○ open[/]",
-            highlight=False,
-        )
-        console.print(
-            "  [dim]label:[/]     "
-            "[cyan]●[/][dim] task[/]  [dim]○ step[/]  "
-            "[magenta]○[/][dim] tool[/]  [red]○[/][dim] none[/]    "
-            "[dim]commit:[/]  [green]✓[/][dim] emitted[/]  "
-            "[yellow]~[/][dim] diverged[/]  [dim]? overlap  · orphan[/]",
+            "[dim]○ open[/]    "
+            "[dim](run `ot list` for filters and legend)[/]",
             highlight=False,
         )
 
@@ -2096,12 +2211,12 @@ def status(limit: int) -> None:
             if git_link_hits == 0:
                 if git_hook_installed:
                     hints.append(
-                        "no commit links yet  "
+                        "no git links yet  "
                         f"{_dim('— links populate on next git commit')}"
                     )
                 else:
                     hints.append(
-                        "no commit links  "
+                        "no git links  "
                         f"{_dim('— run')} opentraces setup git "
                         f"{_dim('to install the post-commit hook')}"
                     )

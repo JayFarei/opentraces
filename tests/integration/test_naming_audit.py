@@ -1,22 +1,19 @@
-"""Plan-043 naming audit — forbid upstream-branded tokens in user-visible surfaces.
+"""Plan-043 naming audit — forbid deep-internal tokens in user-visible surfaces.
 
-Rationale: the entity-diff binary we vendor is upstream-named ``sem`` from
-Ataraxy Labs; the upstream stack uses tree-sitter under the hood. We
-redistribute it as ``ot-entities`` and want none of those internal names
-to leak into CLI help, error messages, file names, manifests, or other
-surfaces a user could see.
+Rationale: the entity-diff binary we currently vendor is upstream ``sem``
+from Ataraxy Labs. During development we reference that upstream directly,
+so ``sem`` / ``ataraxy`` are allowed to appear in docstrings, manifests,
+and CLI messaging. What we still want to block is deep-internal language
+(``tree-sitter``) that leaks the upstream's own implementation detail into
+our user-facing copy.
 
 This test greps:
-  1. CLI help output (`./otd --help` and the four plan-043 subcommands)
-  2. User-facing string literals in `src/opentraces/**/*.py`
-  3. JSON/TOML manifests under `src/opentraces/`
+  1. CLI help output (``./otd --help`` and the plan-043 subcommands)
+  2. User-facing string literals in ``src/opentraces/**/*.py``
+  3. JSON/TOML manifests under ``src/opentraces/``
 
 Forbidden tokens (case-insensitive, word-boundary):
-  - sem
   - tree-sitter
-  - ataraxy
-
-"Semantic" etc. are fine; we key on \\bsem\\b specifically.
 """
 from __future__ import annotations
 
@@ -31,11 +28,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / "src" / "opentraces"
 OTD = REPO_ROOT / "otd"
 
-# Word-boundary regex. \bsem\b avoids matching "semantic", "Problem", etc.
 FORBIDDEN = [
-    re.compile(r"\bsem\b", re.IGNORECASE),
     re.compile(r"tree-sitter", re.IGNORECASE),
-    re.compile(r"\bataraxy\b", re.IGNORECASE),
 ]
 
 # Commands whose --help we audit. The plan-043 set plus top-level help.

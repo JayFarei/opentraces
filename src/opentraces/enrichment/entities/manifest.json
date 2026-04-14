@@ -1,26 +1,23 @@
 {
   "version": "0.3.19",
-  "binary_name": "ot-entities",
+  "binary_name": "sem",
+  "archive_format": "tar.gz",
+  "inner_path": "sem",
   "sources": [
     {
       "platform": "darwin-arm64",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "url": "https://github.com/opentraces/ot-entities/releases/download/v0.3.19/ot-entities-darwin-arm64"
-    },
-    {
-      "platform": "darwin-x86_64",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "url": "https://github.com/opentraces/ot-entities/releases/download/v0.3.19/ot-entities-darwin-x86_64"
+      "sha256": "f213fe17897e207599ed845ac01cedfcade69c04135f945178b541432a0e0c20",
+      "url": "https://github.com/Ataraxy-Labs/sem/releases/download/v0.3.19/sem-darwin-arm64.tar.gz"
     },
     {
       "platform": "linux-x86_64",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "url": "https://github.com/opentraces/ot-entities/releases/download/v0.3.19/ot-entities-linux-x86_64"
+      "sha256": "df84da34e69acaa46cdc318ba7a80ac11d788c41f415b1c01d2a16f4a937609f",
+      "url": "https://github.com/Ataraxy-Labs/sem/releases/download/v0.3.19/sem-linux-x86_64.tar.gz"
     },
     {
       "platform": "linux-arm64",
-      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "url": "https://github.com/opentraces/ot-entities/releases/download/v0.3.19/ot-entities-linux-arm64"
+      "sha256": "0d223820b6af8d025f2c07139b29716fee991703c00c12eacf27c741dd554a1f",
+      "url": "https://github.com/Ataraxy-Labs/sem/releases/download/v0.3.19/sem-linux-arm64.tar.gz"
     }
   ]
 }

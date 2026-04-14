@@ -2,13 +2,13 @@ import { useState } from "react";
 import { useReviewActions } from "../../hooks/useReviewActions";
 import type { TraceListItem } from "../../types/trace";
 
-interface CommitDialogProps {
+interface AddDialogProps {
   traces: TraceListItem[];
   onClose: () => void;
 }
 
-export function CommitDialog({ traces, onClose }: CommitDialogProps) {
-  const { commit } = useReviewActions();
+export function AddDialog({ traces, onClose }: AddDialogProps) {
+  const { add } = useReviewActions();
   const [selected, setSelected] = useState<Set<string>>(
     new Set(traces.map((s) => s.trace_id)),
   );
@@ -29,9 +29,9 @@ export function CommitDialog({ traces, onClose }: CommitDialogProps) {
     });
   };
 
-  const handleCommit = () => {
+  const handleAdd = () => {
     if (selected.size === 0) return;
-    commit.mutate(
+    add.mutate(
       { traceIds: Array.from(selected), message },
       { onSuccess: () => onClose() },
     );
@@ -49,7 +49,7 @@ export function CommitDialog({ traces, onClose }: CommitDialogProps) {
       <div className="relative bg-[var(--surface)] border border-[var(--border)] w-full max-w-lg mx-4">
         <div className="px-4 py-3 border-b border-[var(--border)]">
           <span className="text-[12px] uppercase tracking-wider font-[family-name:var(--font-mono)] text-[var(--text)]">
-            commit traces
+            add traces
           </span>
         </div>
 
@@ -79,7 +79,7 @@ export function CommitDialog({ traces, onClose }: CommitDialogProps) {
         {/* Message */}
         <div className="px-4 py-2 border-t border-[var(--border)]">
           <label className="block text-[9px] uppercase tracking-wider font-[family-name:var(--font-mono)] text-[var(--text-muted)] mb-1">
-            commit message
+            message
           </label>
           <input
             type="text"
@@ -98,11 +98,11 @@ export function CommitDialog({ traces, onClose }: CommitDialogProps) {
             [cancel]
           </button>
           <button
-            onClick={handleCommit}
-            disabled={selected.size === 0 || commit.isPending}
+            onClick={handleAdd}
+            disabled={selected.size === 0 || add.isPending}
             className="text-[11px] font-[family-name:var(--font-mono)] text-[var(--green)] px-2 py-0.5 border border-[var(--green)] cursor-pointer transition-colors duration-100 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            [commit {selected.size}]
+            [add {selected.size}]
           </button>
         </div>
       </div>

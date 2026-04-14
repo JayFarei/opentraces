@@ -231,7 +231,8 @@ def _write_entity_cache(runner: EntityRunner, cache: AttributionCache,
 
 def _run(project_cwd: Path, *, full: bool, dry_run: bool,
          verbose: bool, max_commits: int,
-         include_entities: bool = True) -> BackfillReport:
+         include_entities: bool = True,
+         on_progress=None) -> BackfillReport:
     project_cwd = Path(project_cwd).resolve()
     state = StateManager(state_path=get_project_state_path(project_cwd))
     cache = AttributionCache(project_cwd)
@@ -254,7 +255,11 @@ def _run(project_cwd: Path, *, full: bool, dry_run: bool,
         # Nothing to do — still stamp a coverage of 1.0 if we're up to date.
         head = _rev_parse(project_cwd, "HEAD")
         report.last_commit = head
+        if on_progress is not None:
+            on_progress(0, 0)
         return report
+    if on_progress is not None:
+        on_progress(0, len(targets))
 
     # Build audit once for the entire batch (expensive, cached on refs/notes).
     try:
@@ -283,6 +288,9 @@ def _run(project_cwd: Path, *, full: bool, dry_run: bool,
         cov = data.get("coverage") or {}
         report.attributed_lines += int(cov.get("attributed") or 0)
         report.total_lines += int(cov.get("total") or 0)
+        if on_progress is not None:
+            on_progress(report.commits_processed + report.commits_skipped,
+                        len(targets))
 
     report.coverage_ratio = (
         report.attributed_lines / report.total_lines
@@ -305,10 +313,12 @@ def run_incremental(project_cwd: Path, *, verbose: bool = False,
 
 def run_full(project_cwd: Path, *, verbose: bool = False,
              max_commits: int = DEFAULT_MAX_COMMITS,
-             include_entities: bool = True) -> BackfillReport:
+             include_entities: bool = True,
+             on_progress=None) -> BackfillReport:
     return _run(project_cwd, full=True, dry_run=False,
                 verbose=verbose, max_commits=max_commits,
-                include_entities=include_entities)
+                include_entities=include_entities,
+                on_progress=on_progress)
 
 
 def run_dry_run(project_cwd: Path, *, verbose: bool = False,

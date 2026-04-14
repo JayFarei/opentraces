@@ -511,10 +511,10 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         traces = _traces()
         return jsonify(_compute_stats(traces))
 
-    @app.route("/api/trace/<trace_id>/commit", methods=["POST"])
+    @app.route("/api/trace/<trace_id>/add", methods=["POST"])
     @app.route("/api/trace/<trace_id>/approve", methods=["POST"])
-    def api_commit_trace(trace_id: str):
-        """Commit a session for push."""
+    def api_add_trace(trace_id: str):
+        """Add a single session to the next push batch (CLI: ``opentraces add``)."""
         state = _get_state()
         task_desc = trace_id[:12]
         try:
@@ -595,9 +595,14 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         unstage_trace(state, trace_id)
         return jsonify({"status": "inbox"})
 
-    @app.route("/api/commit", methods=["POST"])
-    def api_commit():
-        """Create a commit group from staged sessions."""
+    @app.route("/api/add", methods=["POST"])
+    def api_add():
+        """Stage ("add") sessions into a batch group ready for push.
+
+        Mirrors ``opentraces add`` on the CLI — in the dataset=repo,
+        trace=commit mental model, this is the ``git add`` step. Already-added
+        traces are silently filtered so the endpoint is idempotent.
+        """
         data = request.get_json(silent=True) or {}
         ids = data.get("trace_ids", [])
         message = data.get("message", "")
@@ -605,28 +610,48 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         if not ids:
             return jsonify({"error": "No trace_ids provided"}), 400
 
-        # Validate all sessions exist and are commitable.
+        # Validate all sessions exist, and quietly drop ones already added
+        # so repeated clicks don't 400 the whole batch.
         traces = _traces()
         all_trace_ids = {t["trace_id"] for t in traces}
         state = _get_state()
 
+        addable: list[str] = []
+        already_added: list[str] = []
+        addable_statuses = {
+            TraceStatus.STAGED, TraceStatus.PARSED, TraceStatus.DISCOVERED,
+            TraceStatus.REVIEWING, TraceStatus.APPROVED,
+        }
         for sid in ids:
             if sid not in all_trace_ids:
                 return jsonify({"error": f"Session {sid} not found"}), 404
             entry = state.get_trace(sid)
-            if entry:
-                status_val = _coerce_status(entry.status)
-                if status_val not in (TraceStatus.STAGED, TraceStatus.PARSED, TraceStatus.DISCOVERED, TraceStatus.REVIEWING, TraceStatus.APPROVED):
-                    return jsonify({"error": f"Session {sid} is not in inbox (status: {status_val})"}), 400
+            status_val = _coerce_status(entry.status if entry else None)
+            if status_val == TraceStatus.COMMITTED:
+                already_added.append(sid)
+                continue
+            if status_val not in addable_statuses:
+                return jsonify({
+                    "error": f"Session {sid} cannot be added (status: {status_val.value})"
+                }), 400
+            addable.append(sid)
 
-        # Create the commit group + loop COMMITTED status (bulk semantics).
+        if not addable:
+            return jsonify({
+                "commit_id": None,
+                "session_count": 0,
+                "already_added": already_added,
+                "created_at": "",
+            })
+
         from ..core.review import commit_bulk
-        commit_id = commit_bulk(state, ids, message)
+        commit_id = commit_bulk(state, addable, message)
         group = state.get_commit_group(commit_id)
 
         return jsonify({
             "commit_id": commit_id,
-            "session_count": len(ids),
+            "session_count": len(addable),
+            "already_added": already_added,
             "created_at": group.created_at if group else "",
         })
 

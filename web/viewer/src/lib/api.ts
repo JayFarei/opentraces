@@ -65,8 +65,8 @@ export async function fetchTrace(traceId: string): Promise<TraceRecord> {
   return request<TraceRecord>(`/api/trace/${traceId}/detail`);
 }
 
-export async function commitTrace(traceId: string): Promise<void> {
-  await request<unknown>(`/api/trace/${traceId}/commit`, { method: "POST" });
+export async function addTrace(traceId: string): Promise<void> {
+  await request<unknown>(`/api/trace/${traceId}/add`, { method: "POST" });
 }
 
 export async function rejectTrace(traceId: string): Promise<void> {
@@ -83,14 +83,17 @@ export async function redactStep(
   );
 }
 
-export async function commitTraces(
+export async function addTraces(
   traceIds: string[],
   message: string,
-): Promise<{ commit_id: string }> {
-  return request<{ commit_id: string }>("/api/commit", {
-    method: "POST",
-    body: JSON.stringify({ trace_ids: traceIds, message }),
-  });
+): Promise<{ commit_id: string | null; session_count: number }> {
+  return request<{ commit_id: string | null; session_count: number }>(
+    "/api/add",
+    {
+      method: "POST",
+      body: JSON.stringify({ trace_ids: traceIds, message }),
+    },
+  );
 }
 
 export async function pushCommit(

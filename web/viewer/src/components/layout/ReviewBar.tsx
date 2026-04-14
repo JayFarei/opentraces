@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import { useSelection } from "../../contexts/SelectionContext";
 import { useTraceList } from "../../hooks/useTraceList";
 import { useReviewActions } from "../../hooks/useReviewActions";
-import { CommitDialog } from "../review/CommitDialog";
+import { AddDialog } from "../review/AddDialog";
 import { RedactionWand } from "../review/RedactionWand";
 import type { TraceStage } from "../../types/trace";
 
@@ -32,8 +32,8 @@ function ActionButton({
 export function ReviewBar() {
   const { selectedTraceId } = useSelection();
   const { data: traces } = useTraceList();
-  const { commit: commitTrace, reject, push } = useReviewActions();
-  const [showCommitDialog, setShowCommitDialog] = useState(false);
+  const { add, reject, push } = useReviewActions();
+  const [showAddDialog, setShowAddDialog] = useState(false);
 
   const handleWandRedact = useCallback((text: string) => {
     // For now, log the redaction. Full API integration when backend supports text-based redaction.
@@ -47,8 +47,7 @@ export function ReviewBar() {
 
   const currentStage: TraceStage = trace.stage;
   const traceId = trace.trace_id;
-  const isBusy =
-    commitTrace.isPending || reject.isPending || push.isPending;
+  const isBusy = add.isPending || reject.isPending || push.isPending;
 
   return (
     <>
@@ -63,9 +62,9 @@ export function ReviewBar() {
         {currentStage === "inbox" && (
           <>
             <ActionButton
-              label="commit"
+              label="add"
               color="var(--green)"
-              onClick={() => setShowCommitDialog(true)}
+              onClick={() => setShowAddDialog(true)}
               disabled={isBusy}
             />
             <ActionButton
@@ -97,10 +96,10 @@ export function ReviewBar() {
         )}
       </div>
 
-      {showCommitDialog && (
-        <CommitDialog
+      {showAddDialog && (
+        <AddDialog
           traces={traces?.filter((s) => s.stage === "inbox") ?? []}
-          onClose={() => setShowCommitDialog(false)}
+          onClose={() => setShowAddDialog(false)}
         />
       )}
     </>

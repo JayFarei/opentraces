@@ -1,29 +1,15 @@
-"""Subprocess wrapper for the `ot-entities` binary.
+"""Subprocess wrapper for the entity-diff binary (upstream: Ataraxy-Labs/sem).
 
 Contract (our side, locked in):
 
-    ot-entities --version                       -> prints version line on stdout
-    ot-entities diff --commit <sha> [--repo .]  -> prints entity-diff JSON
+    sem --version                                  -> prints version line
+    sem diff --commit <sha> --format json (cwd=.)  -> prints entity-diff JSON
 
-Entity-diff JSON shape::
-
-    {
-      "entities": [
-        {
-          "change_type": "added" | "modified" | "renamed" | "deleted",
-          "entity_kind": "function" | "class" | "method" | ...,
-          "entity_name": "foo",
-          "old_entity_name": "old" | null,   # only on renamed
-          "file": "src/a.py",
-          "before": "…" | null,
-          "after":  "…" | null
-        }
-      ]
-    }
-
-Missing binary, non-zero exit, or invalid JSON are all non-fatal —
-``available()`` / ``diff_commit()`` return graceful sentinels so callers
-can skip the entity pass without aborting the surrounding pipeline.
+The output JSON shape is sem's own; we pass it through to the attribution
+cache without re-interpreting structure. Missing binary, non-zero exit,
+or invalid JSON are all non-fatal — ``available()`` / ``diff_commit()``
+return graceful sentinels so callers can skip the entity pass without
+aborting the surrounding pipeline.
 """
 from __future__ import annotations
 
@@ -39,10 +25,14 @@ from .version import ENTITY_BINARY_VERSION
 # without hitting the installer's download path.
 _ENV_OVERRIDE = "OPENTRACES_ENTITY_BIN"
 
+# Matches manifest.json's binary_name. The binary lives at
+# ``~/.opentraces/bin/<BINARY_NAME>-<version>`` once installed.
+_BINARY_NAME = "sem"
+
 
 def _default_binary_path() -> Path:
     return (
-        Path.home() / ".opentraces" / "bin" / f"ot-entities-{ENTITY_BINARY_VERSION}"
+        Path.home() / ".opentraces" / "bin" / f"{_BINARY_NAME}-{ENTITY_BINARY_VERSION}"
     )
 
 
@@ -104,7 +94,7 @@ class EntityRunner:
     # --- diff --------------------------------------------------------------
 
     def diff_commit(self, repo: Path, sha: str) -> dict[str, Any]:
-        """Run `ot-entities diff --commit <sha> --repo <repo>` and parse stdout.
+        """Run ``sem diff --commit <sha> --format json`` from ``repo`` and parse stdout.
 
         On any failure (missing binary, non-zero exit, invalid JSON) returns
         an empty ``{"entities": []}`` — callers should treat that as
@@ -114,7 +104,8 @@ class EntityRunner:
             return {"entities": []}
         try:
             r = subprocess.run(
-                [str(self._binary), "diff", "--commit", sha, "--repo", str(repo)],
+                [str(self._binary), "diff", "--commit", sha, "--format", "json"],
+                cwd=str(repo),
                 capture_output=True, text=True, timeout=self._timeout,
             )
         except (OSError, subprocess.SubprocessError):

@@ -48,7 +48,9 @@ def _commit_message(repo: Path, sha: str) -> str:
 
 
 def cmd_diff(args) -> int:
-    repo = Path(args.repo) if args.repo else None
+    # sem operates on the current working directory when no repo flag is
+    # given. Our runner now relies on cwd=repo, so match that behaviour.
+    repo = Path(args.repo) if args.repo else Path.cwd()
     sha = _resolve_sha(repo, args.commit)
     # 1. exact sha match
     candidate = DIFFS / f"{sha}.json"
@@ -81,6 +83,9 @@ def main() -> int:
     d = sub.add_parser("diff")
     d.add_argument("--commit", required=True)
     d.add_argument("--repo", default=None)
+    # sem accepts --format json; our runner passes it, so the fixture
+    # needs to accept (and ignore) it too.
+    d.add_argument("--format", default="json")
 
     args = p.parse_args()
 

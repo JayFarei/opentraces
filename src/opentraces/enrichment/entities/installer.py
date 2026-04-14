@@ -2,24 +2,33 @@
 
 Pipeline:
     1. Detect platform (darwin-arm64 / linux-x86_64 / …)
-    2. Read expected sha256 + url from manifest.json
+    2. Read expected sha256, url, and archive layout from manifest.json
     3. Stream-download to a tmp file under ~/.opentraces/bin/
-    4. Verify sha256; reject and delete on mismatch
-    5. chmod +x, atomic rename to ot-entities-<version>
-    6. Prune prior versions beyond the last 3
+    4. Verify sha256 against the downloaded payload
+    5. If the payload is a tarball (manifest says so, or magic bytes sniff),
+       extract the inner binary; otherwise treat the payload as a raw binary
+    6. chmod +x, atomic rename to ``<binary_name>-<version>``
+    7. Prune prior versions beyond the last 3
 
 Honours ``OPENTRACES_ENTITY_BIN``: if set, the installer skips download
 entirely and just verifies the pre-placed binary (for airgapped setups).
+
+Upstream note: during development we point at ``Ataraxy-Labs/sem`` releases
+(the upstream project that superseded ``ot-entities``). The manifest keeps
+this swappable — bump ``version``, ``binary_name``, and ``sources`` in
+``manifest.json`` to target a different release channel.
 """
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import platform as _platform
 import shutil
 import stat
 import subprocess
+import tarfile
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,12 +84,29 @@ def _load_manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text())
 
 
+def _binary_name() -> str:
+    return _load_manifest().get("binary_name") or "sem"
+
+
+def _archive_format() -> str | None:
+    """'tar.gz' / 'zip' / None (raw binary)."""
+    return _load_manifest().get("archive_format")
+
+
+def _inner_path() -> str:
+    """Relative path inside the archive to the executable binary."""
+    return _load_manifest().get("inner_path") or _binary_name()
+
+
 def expected_sha256(platform: str) -> str:
     manifest = _load_manifest()
     for src in manifest.get("sources", []):
         if src.get("platform") == platform:
             return src["sha256"]
-    raise InstallError(f"no manifest entry for platform: {platform}")
+    raise InstallError(
+        f"no manifest entry for platform: {platform} "
+        f"(set {_ENV_OVERRIDE}=<path> to bypass)"
+    )
 
 
 def _source_url(platform: str) -> str:
@@ -118,15 +144,16 @@ def _sha256_of(path: Path) -> str:
 # --- install ---------------------------------------------------------------
 
 def _target_path(dest_dir: Path) -> Path:
-    return dest_dir / f"ot-entities-{ENTITY_BINARY_VERSION}"
+    return dest_dir / f"{_binary_name()}-{ENTITY_BINARY_VERSION}"
 
 
 def _prune_old_versions(dest_dir: Path, keep: int = 3) -> list[Path]:
-    """Keep the `keep` most recent `ot-entities-<ver>` binaries; remove the rest."""
+    """Keep the ``keep`` most recent ``<binary_name>-<ver>`` binaries."""
     if not dest_dir.is_dir():
         return []
+    prefix = f"{_binary_name()}-"
     candidates = sorted(
-        (p for p in dest_dir.glob("ot-entities-*") if p.is_file()),
+        (p for p in dest_dir.glob(f"{prefix}*") if p.is_file()),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -154,6 +181,39 @@ def _download(url: str, dest: Path, *, progress=None) -> None:
             out.write(chunk)
             if progress is not None:
                 progress(len(chunk))
+
+
+def _looks_like_gzip(path: Path) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return f.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
+
+
+def _extract_binary_from_tar_gz(archive: Path, inner: str, dest: Path) -> None:
+    """Extract ``inner`` (matched by basename) from ``archive`` to ``dest``."""
+    try:
+        with tarfile.open(archive, "r:gz") as tf:
+            member = None
+            for m in tf.getmembers():
+                if not m.isfile():
+                    continue
+                if Path(m.name).name == inner or m.name == inner:
+                    member = m
+                    break
+            if member is None:
+                raise InstallError(
+                    f"tarball {archive.name} has no member named {inner!r}"
+                )
+            extracted = tf.extractfile(member)
+            if extracted is None:
+                raise InstallError(
+                    f"could not read {inner!r} from {archive.name}"
+                )
+            dest.write_bytes(extracted.read())
+    except tarfile.TarError as e:
+        raise InstallError(f"tarball extraction failed: {e}") from e
 
 
 def install(
@@ -197,24 +257,44 @@ def install(
     expected = expected_sha256(platform)
     url = _source_url(platform)
 
-    tmp = target.with_suffix(".tmp")
+    # Raw download → tmp1. If archive, extract inner → tmp2 and swap.
+    tmp_download = target.with_suffix(".dl")
     try:
-        _download(url, tmp, progress=progress)
+        _download(url, tmp_download, progress=progress)
     except Exception as e:  # noqa: BLE001
-        if tmp.exists():
-            tmp.unlink()
+        if tmp_download.exists():
+            tmp_download.unlink()
         raise InstallError(f"download failed: {e}") from e
 
-    actual = _sha256_of(tmp)
+    # sha256 is always computed against the downloaded payload (matches the
+    # checksums.txt GitHub Releases publishes alongside tarballs).
+    actual = _sha256_of(tmp_download)
     if expected and expected != "0" * 64 and actual != expected:
-        tmp.unlink()
+        tmp_download.unlink()
         raise InstallError(
             f"sha256 mismatch for {platform}: expected {expected}, got {actual}"
         )
 
+    # Archive vs raw binary: trust the bytes. GitHub Releases for sem ship
+    # .tar.gz; older ``ot-entities`` releases and test doubles ship raw
+    # binaries. Magic-byte sniff handles both without needing the manifest
+    # to stay perfectly in sync with the test fixtures.
+    is_archive = _looks_like_gzip(tmp_download)
+
+    tmp_bin = target.with_suffix(".tmp")
+    if tmp_bin.exists():
+        tmp_bin.unlink()
+    if is_archive:
+        try:
+            _extract_binary_from_tar_gz(tmp_download, _inner_path(), tmp_bin)
+        finally:
+            tmp_download.unlink(missing_ok=True)
+    else:
+        os.replace(tmp_download, tmp_bin)
+
     # chmod +x
-    tmp.chmod(tmp.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    os.replace(tmp, target)
+    tmp_bin.chmod(tmp_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    os.replace(tmp_bin, target)
 
     if not verify(target):
         target.unlink(missing_ok=True)

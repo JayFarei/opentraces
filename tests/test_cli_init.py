@@ -104,8 +104,10 @@ def test_init_import_existing_flag_imports_backlog(tmp_path, monkeypatch):
 
     calls: list[tuple[Path, Path]] = []
 
-    def fake_capture(existing_dir: Path, current_project_dir: Path, cfg=None):
+    def fake_capture(existing_dir: Path, current_project_dir: Path, cfg=None, *, on_progress=None):
         calls.append((existing_dir, current_project_dir))
+        if on_progress is not None:
+            on_progress(1, 1)
         return (1, 0)
 
     monkeypatch.setattr("opentraces.cli._capture_sessions_into_project", fake_capture)
@@ -142,8 +144,10 @@ def test_init_start_fresh_skips_backlog_import(tmp_path, monkeypatch):
 
     calls: list[tuple[Path, Path]] = []
 
-    def fake_capture(existing_dir: Path, current_project_dir: Path, cfg=None):
+    def fake_capture(existing_dir: Path, current_project_dir: Path, cfg=None, *, on_progress=None):
         calls.append((existing_dir, current_project_dir))
+        if on_progress is not None:
+            on_progress(1, 1)
         return (1, 0)
 
     monkeypatch.setattr("opentraces.cli._capture_sessions_into_project", fake_capture)

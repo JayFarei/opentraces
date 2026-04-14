@@ -12,7 +12,7 @@ export function useKeyboardNav() {
 
   const [focusedPanel, setFocusedPanel] = useState<FocusedPanel>("traces");
   const [showHelp, setShowHelp] = useState(false);
-  const [showCommitDialog, setShowCommitDialog] = useState(false);
+  const [showAddDialog, setShowAddDialog] = useState(false);
 
   const cyclePanelForward = useCallback(() => {
     setFocusedPanel((p) => {
@@ -78,9 +78,9 @@ export function useKeyboardNav() {
         }
 
         case "c": {
-          // Open commit dialog
+          // Open add dialog
           e.preventDefault();
-          setShowCommitDialog(true);
+          setShowAddDialog(true);
           break;
         }
 
@@ -95,8 +95,8 @@ export function useKeyboardNav() {
           // Dismiss overlays
           if (showHelp) {
             setShowHelp(false);
-          } else if (showCommitDialog) {
-            setShowCommitDialog(false);
+          } else if (showAddDialog) {
+            setShowAddDialog(false);
           }
           break;
         }
@@ -119,13 +119,13 @@ export function useKeyboardNav() {
     selectedNodeId,
     tree,
     showHelp,
-    showCommitDialog,
+    showAddDialog,
     setSelectedTraceId,
     setSelectedNodeId,
     cyclePanelForward,
   ]);
 
-  return { focusedPanel, showHelp, setShowHelp, showCommitDialog, setShowCommitDialog };
+  return { focusedPanel, showHelp, setShowHelp, showAddDialog, setShowAddDialog };
 }
 
 /** Flatten a tree structure into a flat list for j/k navigation. */

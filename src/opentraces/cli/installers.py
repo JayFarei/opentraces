@@ -81,16 +81,52 @@ def setup_group(ctx: click.Context) -> None:
     _run_setup_wizard()
 
 
+def _wizard_confirm(prompt: str, *, default: bool, hint: str | None = None) -> bool:
+    """Ask a yes/no question with pyclack when available (for consistent
+    ◇ styling), else fall back to click.confirm.
+
+    ``hint`` is shown in dim text under the prompt when using click — pyclack
+    doesn't have a hint slot on confirm, so we fold it into the prompt.
+    """
+    full = prompt if not hint else f"{prompt} ({hint})"
+    try:
+        from pyclack.prompts import confirm as _pk_confirm
+        import asyncio as _asyncio
+        return bool(_asyncio.run(_pk_confirm(
+            full,
+            initial_value=default,
+            active="Yes",
+            inactive="No",
+        )))
+    except ImportError:
+        return click.confirm(f"    {full}", default=default)
+
+
 def _run_setup_wizard() -> None:
-    """Iterate HOOK_INSTALLERS + trufflehog and ask the user about each."""
+    """Walk every integration the user should know about, one prompt each.
+
+    Order (mandatory with opt-out, then optional):
+      1. claude-code / git / skill hooks  (hook installers, default yes)
+      2. watcher                          (powers 'opentraces blame', default yes)
+      3. entity-parser (sem)              (richer commit diffs, default yes)
+      4. HuggingFace login                (log in now or skip)
+      5. trufflehog                       (global config, default no)
+      6. llm-review                       (global config, default no)
+      7. closing panel — point at `opentraces init` + `opentraces doctor`
+    """
     from ..capture import get_hook_installers
     from ..security.trufflehog import find_trufflehog, install_binary
+    from ..watcher import installer as _winst
+    from ..enrichment.entities import installer as _entinst
+    from ..enrichment.entities import EntityRunner
+    from ..enrichment.entities.runner import resolve_binary_path
     from opentraces import cli as _cli
 
     print_banner(tagline="setup wizard")
     human_echo("")
 
-    # Hook installers — one prompt each, driven by HOOK_INSTALLERS registry.
+    # 1. Hook installers (claude-code, git, skill) — one prompt each,
+    #    default yes.
     for name, cls in get_hook_installers().items():
         inst = cls()
         st = inst.status()
@@ -99,7 +135,7 @@ def _run_setup_wizard() -> None:
         human_echo(f"  {_cli._bold(name):<28} {label}")
         if installed:
             continue
-        if not click.confirm(f"    install {name}?", default=True):
+        if not _wizard_confirm(f"install {name}?", default=True):
             continue
         try:
             result = inst.install()
@@ -112,17 +148,81 @@ def _run_setup_wizard() -> None:
             for note in result.notes:
                 human_echo(f"    {_cli._err('skip')}: {note}")
 
-    # Optional dependency: trufflehog.
+    # 2. Watcher — default yes. Powers "opentraces blame" by running
+    #    incremental backfill in the background after each commit.
+    w_st = _winst.status()
+    w_label = (
+        _cli._ok("installed") if w_st.installed else _cli._dim("not installed")
+    )
+    human_echo(f"  {_cli._bold('watcher'):<28} {w_label}")
+    if not w_st.installed:
+        if _wizard_confirm(
+            "install the attribution watcher?",
+            default=True,
+            hint="powers 'opentraces blame' on every new commit",
+        ):
+            try:
+                path = _winst.install()
+                human_echo(f"    {_cli._ok('installed')} {path}")
+            except Exception as e:
+                human_echo(f"    {_cli._err('failed')}: {e}")
+
+    # 3. Entity parser (sem) — default yes, richer commit diffs.
+    ent_runner = EntityRunner(binary_path=resolve_binary_path())
+    ent_installed = ent_runner.available()
+    ent_label = (
+        _cli._ok("installed") if ent_installed else _cli._dim("not installed")
+    )
+    human_echo(f"  {_cli._bold('entity-parser'):<28} {ent_label}")
+    if not ent_installed:
+        if _wizard_confirm(
+            "install the entity parser (sem)?",
+            default=True,
+            hint="entity-level diffs for richer commit attribution",
+        ):
+            try:
+                _entinst.install()
+                human_echo(f"    {_cli._ok('installed')}")
+            except _entinst.InstallError as e:
+                human_echo(f"    {_cli._err('failed')}: {e}")
+
+    # 4. HuggingFace login.
     cfg = load_config()
+    identity = _cli._auth_identity(cfg.hf_token) if cfg.hf_token else None
+    if identity:
+        human_echo(
+            f"  {_cli._bold('huggingface'):<28} "
+            f"{_cli._ok('authenticated')} "
+            f"{_cli._dim('(' + str(identity.get('name') or '') + ')')}"
+        )
+    else:
+        human_echo(f"  {_cli._bold('huggingface'):<28} {_cli._dim('not authenticated')}")
+        if _wizard_confirm(
+            "log into HuggingFace now?",
+            default=True,
+            hint="needed to push traces; skip and run 'opentraces auth login' later",
+        ):
+            try:
+                from ..core.config import save_credentials, CREDENTIALS_PATH
+                _cli._login_with_device_code(save_credentials, CREDENTIALS_PATH)
+            except Exception as e:
+                human_echo(f"    {_cli._err('failed')}: {e}")
+
+    # 5. Optional: trufflehog. Default no — it's a global config
+    #    change; users can override per-project via `opentraces init`.
     th_version = find_trufflehog()
     th_enabled = cfg.security.trufflehog.enabled
-    label = (
+    th_label = (
         _cli._ok(f"enabled ({th_version})") if th_enabled and th_version
         else _cli._dim("disabled" if not th_enabled else "enabled but missing")
     )
-    human_echo(f"  {_cli._bold('trufflehog'):<28} {label}")
+    human_echo(f"  {_cli._bold('trufflehog'):<28} {th_label}")
     if not (th_enabled and th_version):
-        if click.confirm("    install and enable trufflehog (Tier 1.5)?", default=False):
+        if _wizard_confirm(
+            "enable trufflehog (Tier 1.5) globally?",
+            default=False,
+            hint="blocks upload on any secret finding; global setting",
+        ):
             if th_version is None:
                 ok, method = install_binary()
                 if ok:
@@ -135,8 +235,32 @@ def _run_setup_wizard() -> None:
                 save_config(cfg)
                 human_echo(f"    {_cli._ok('enabled')}")
 
+    # 6. Optional: LLM review. Also a global config change.
+    llm_enabled = getattr(cfg.security, "llm_review", None) and getattr(cfg.security.llm_review, "enabled", False)
+    llm_label = _cli._ok("enabled") if llm_enabled else _cli._dim("disabled")
+    human_echo(f"  {_cli._bold('llm-review'):<28} {llm_label}")
+    if not llm_enabled:
+        if _wizard_confirm(
+            "enable Tier 2 LLM trace review globally?",
+            default=False,
+            hint="configure via 'opentraces setup llm-review'; global setting",
+        ):
+            human_hint(
+                "    run 'opentraces setup llm-review' to pick provider/model."
+            )
+
     human_echo("")
-    human_echo(f"run {_cli._bold('opentraces doctor')} to verify.")
+    human_echo(_cli._bold("Next steps"))
+    human_echo(
+        f"  • to track a project:  {_cli._bold('cd <project> && opentraces init')}"
+    )
+    human_echo(
+        f"  • to inspect health:   {_cli._bold('opentraces doctor')}"
+    )
+    human_echo(
+        f"  • security / review policy are per-project — set them at "
+        f"{_cli._bold('opentraces init')} time."
+    )
 
 
 @main.command(
@@ -1856,16 +1980,32 @@ def setup_entity_parser(force: bool) -> None:
               help="Polling interval in seconds.")
 @click.option("--no-install", is_flag=True,
               help="Render the unit file but don't load it.")
-def setup_watcher(interval: int, no_install: bool) -> None:
-    """Install the background attribution watcher.
+@click.option("--uninstall", is_flag=True,
+              help="Unload and remove the watcher unit file.")
+def setup_watcher(interval: int, no_install: bool, uninstall: bool) -> None:
+    """Install (or uninstall) the background attribution watcher.
 
     Writes a launchd plist (macOS) or systemd user unit + timer (Linux),
     plus a worker shim at ~/.opentraces/bin/ot-watcher. The service wakes
     up every `--interval` seconds, walks enlisted projects, and runs
     incremental backfill when new commits or new Claude Code JSONL
     activity appears.
+
+    Run with ``--uninstall`` to tear it down.
     """
     from ..watcher import installer as _winst
+
+    if uninstall:
+        try:
+            _winst.uninstall()
+        except RuntimeError as e:
+            human_echo(f"{_cli._err('error')}: {e}")
+            emit_json({"status": "error", "action": "uninstall-watcher",
+                       "message": str(e)})
+            sys.exit(5)
+        human_echo(f"{_cli._ok('uninstalled')} watcher")
+        emit_json({"status": "ok", "action": "uninstall-watcher"})
+        return
 
     try:
         path = _winst.install(interval=interval, dry_run=no_install)
