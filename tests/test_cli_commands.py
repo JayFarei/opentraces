@@ -196,12 +196,13 @@ class TestPostInitCommands:
         result = runner.invoke(main, ["remote"])
         assert result.exit_code == 0
 
-    def test_remote_set(self, initialized_project, monkeypatch):
-        """The fixture init wrote a legacy --remote which migrated to
-        remotes['origin']. Adding another remote under a fresh name works."""
+    def test_remote_add(self, initialized_project, monkeypatch):
+        """Connecting a second remote via the simplified ``add`` verb."""
         project_dir, runner = initialized_project
         monkeypatch.setattr("opentraces.cli._auth_identity", lambda *a: {"name": "testuser"})
-        result = runner.invoke(main, ["remote", "add", "upstream", "testuser/new-dataset"])
+        monkeypatch.setattr("opentraces.cli._remote_probe",
+                            lambda repo_id, token: {"private": True})
+        result = runner.invoke(main, ["remote", "add", "testuser/new-dataset"])
         assert result.exit_code == 0, result.output
 
     def test_remote_remove(self, initialized_project):

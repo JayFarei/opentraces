@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 from pathlib import Path
 
 from .. import __version__
-from ..core.config import auth_identity, load_config, load_project_config, save_config
+from ..core.config import auth_identity, load_config, load_project_config, save_config, save_project_config
 from ..core.workflow import (
     DEFAULT_AGENT,
     DEFAULT_PUSH_POLICY,
@@ -2243,137 +2243,37 @@ def remote(ctx) -> None:
     """Manage the HF dataset remote."""
     if ctx.invoked_subcommand is None:
         project_dir = Path.cwd()
-        proj_config = load_project_config(project_dir)
-        remote_name = proj_config.get("remote")
-        visibility = proj_config.get("visibility", "private")
-        if not remote_name:
-            click.echo("No remote configured. Run 'opentraces remote set' to configure.")
+        proj_config, remotes = _read_remotes(project_dir)
+        active = proj_config.get("active_remote")
+        legacy = proj_config.get("remote") if not remotes else None
+        if not remotes and not legacy:
+            click.echo("No remote connected.")
+            click.echo("  opentraces remote add <owner/name>     connect to an existing HF dataset")
+            click.echo("  opentraces remote create <owner/name>  create a new one")
             emit_json({"status": "ok", "remote": None})
             return
-        click.echo(f"{remote_name} ({visibility})")
-        emit_json({"status": "ok", "remote": remote_name, "visibility": visibility})
-
-
-@remote.command("set")
-@click.argument("name", required=False, default=None)
-@click.option("--private/--public", "is_private", default=None, help="Dataset visibility")
-def remote_set(name: str | None, is_private: bool | None) -> None:
-    """Set the dataset remote. Interactive if no arguments given."""
-    from ..core.config import load_project_config, save_project_config
-
-    project_dir = Path.cwd()
-    proj_config = load_project_config(project_dir)
-
-    if name is not None:
-        # Non-interactive: resolve owner prefix if needed
-        cfg = load_config()
-        identity = _auth_identity(cfg.hf_token)
-        username = identity.get("name", "unknown") if identity else "unknown"
-        repo_id = _resolve_username_prefix(name, username)
-
-        proj_config["remote"] = repo_id
-        if is_private is not None:
-            proj_config["visibility"] = "private" if is_private else "public"
-        save_project_config(project_dir, proj_config)
-
-        vis = proj_config.get("visibility", "private")
-        click.echo(f"Remote set to {repo_id} ({vis})")
-        emit_json({"status": "ok", "remote": repo_id, "visibility": vis})
-        return
-
-    # Interactive: use shared selector
-    cfg = load_config()
-    identity = _auth_identity(cfg.hf_token)
-    if identity is None:
-        click.echo("Not authenticated. Run 'opentraces auth login' first.")
-        sys.exit(3)
-
-    repo_id, visibility = _choose_remote_interactively(_default_repo(identity))
-    if repo_id is None:
-        click.echo("Remote unchanged.")
-        return
-
-    proj_config["remote"] = repo_id
-    proj_config["visibility"] = visibility or "private"
-    save_project_config(project_dir, proj_config)
-    click.echo(f"Remote set to {repo_id} ({visibility})")
-    emit_json({"status": "ok", "remote": repo_id, "visibility": visibility})
-
-
-@remote.command("use")
-@click.argument("name", required=False, default=None)
-@click.pass_context
-def remote_use(ctx: click.Context, name: str | None) -> None:
-    """Set the active remote for subsequent ``ot push`` / ``ot pull``.
-
-    Step 4: when ``<name>`` matches an entry in ``cfg.remotes``, just
-    switch ``active_remote``. Legacy fallback: if the project still
-    uses the single-remote shape (no ``cfg.remotes`` entries), defer
-    to ``remote set`` for back-compat.
-    """
-    from ..core.config import load_project_config, save_project_config
-
-    if name is None:
-        # No-arg legacy form: fall through to `remote set` interactive flow.
-        ctx.invoke(remote_set, name=None)
-        return
-
-    project_dir = Path.cwd()
-    proj_config, remotes = _read_remotes(project_dir)
-
-    if name in remotes:
-        proj_config["active_remote"] = name
-        save_project_config(project_dir, proj_config)
-        click.echo(f"Active remote set to '{name}'")
-        emit_json({"status": "ok", "active_remote": name})
-        return
-
-    click.echo(f"No remote named '{name}'.", err=True)
-    sys.exit(2)
-
-
-@remote.command("remove")
-@click.argument("name")
-def remote_remove(name: str) -> None:
-    """Remove a remote.
-
-    Removes the named entry from ``cfg.remotes`` and drops its
-    ``uploaded_to`` keys from every staging entry, atomically
-    (Step 4 git-parity behavior).
-    """
-    from ..core.config import save_project_config, get_project_state_path
-    from ..core.state import StateManager, UnknownRemoteError
-
-    project_dir = Path.cwd()
-    proj_config, remotes = _read_remotes(project_dir)
-    if name not in remotes:
-        click.echo(f"No remote named '{name}'.", err=True)
-        sys.exit(2)
-    del remotes[name]
-    if proj_config.get("active_remote") == name:
-        proj_config["active_remote"] = next(iter(remotes), None)
-    state_path = get_project_state_path(project_dir)
-    state = StateManager(state_path=state_path)
-    try:
-        state.forget_remote(name)
-    except UnknownRemoteError:
-        pass
-    save_project_config(project_dir, proj_config)
-    click.echo(f"Removed remote '{name}'")
-    emit_json({"status": "ok", "name": name})
+        if legacy:
+            vis = proj_config.get("visibility", "private")
+            click.echo(f"{legacy} ({vis})")
+            emit_json({"status": "ok", "remote": legacy, "visibility": vis})
+            return
+        name = active or next(iter(remotes))
+        cfg = remotes[name]
+        click.echo(f"{name} ({cfg.get('visibility', 'private')})")
+        emit_json({"status": "ok", "remote": name, "visibility": cfg.get("visibility")})
 
 
 # ---------------------------------------------------------------------------
-# Step 4 — git-parity remote verbs
+# Helpers: URL expansion, remotes-dict access, repo_id resolution, HF probes.
+# HF helpers are factored as module-level so tests can monkeypatch without
+# reaching into ``huggingface_hub``.
 # ---------------------------------------------------------------------------
 
 
 def _expand_hf_url(url: str) -> str:
     """Expand short-form ``user/repo`` to ``hf://user/repo``.
 
-    Full URLs (anything containing ``://``) are returned unchanged. The
-    short form is the convenient default because HuggingFace is the
-    only backend today; future backends require the full scheme.
+    Full URLs (anything containing ``://``) are returned unchanged.
     """
     if "://" in url:
         return url
@@ -2382,9 +2282,18 @@ def _expand_hf_url(url: str) -> str:
     return url
 
 
-def _read_remotes(project_dir: Path) -> tuple[dict, dict | None]:
-    """Return (proj_config_dict, remotes_dict). remotes is the live ref."""
+def _read_remotes(project_dir: Path) -> tuple[dict, dict]:
+    """Return (proj_config_dict, remotes_dict). remotes is the live ref.
+
+    Strips the legacy ``remote`` / ``visibility`` keys that
+    ``load_project_config`` synthesizes for back-compat callers — if we
+    handed them straight back to ``save_project_config`` they would be
+    interpreted as legacy migration triggers and re-create an ``origin``
+    entry on the next write.
+    """
     proj_config = load_project_config(project_dir)
+    proj_config.pop("remote", None)
+    proj_config.pop("visibility", None)
     remotes = proj_config.get("remotes")
     if remotes is None:
         proj_config["remotes"] = {}
@@ -2392,112 +2301,249 @@ def _read_remotes(project_dir: Path) -> tuple[dict, dict | None]:
     return proj_config, remotes
 
 
-@remote.command("add")
-@click.argument("name")
-@click.argument("url")
-@click.option("--private", "is_private", flag_value=True, default=None)
-@click.option("--public", "is_private", flag_value=False)
-def remote_add(name: str, url: str, is_private: bool | None) -> None:
-    """Register a remote (mirrors ``git remote add``).
+def _normalize_repo_id(repo: str, username_hint: str | None = None) -> str:
+    """Normalize a user-provided identifier to ``owner/name``.
 
-    URL accepts ``hf://user/dataset`` or the short form ``user/dataset``
-    (auto-expanded because HuggingFace is the default backend). If the
-    HF dataset doesn't yet exist on the hub, that's fine here — push
-    will create it on first publish. Use --public / --private to
-    override the project's default_visibility for this remote.
+    Accepts ``owner/name``, bare ``name`` (prefixed with the authenticated
+    HF user), or ``hf://owner/name``. Bare names require an authenticated
+    user to resolve the prefix.
     """
-    from ..core.config import load_project_config, save_project_config
+    if "://" in repo:
+        repo = repo.split("://", 1)[1]
+    if "/" in repo:
+        return repo
+    if not username_hint:
+        raise click.UsageError(
+            f"'{repo}' is a short name. Use '<owner>/{repo}' or "
+            "'opentraces auth login' first so we can resolve your HF user."
+        )
+    return f"{username_hint}/{repo}"
+
+
+def _remote_probe(repo_id: str, token: str | None) -> dict | None:
+    """Return dataset metadata dict if the repo exists on HF, None if not.
+
+    Raises on transport errors so callers can distinguish "missing" from
+    "network broken".
+    """
+    from huggingface_hub import HfApi
+    try:
+        from huggingface_hub.errors import RepositoryNotFoundError
+    except ImportError:  # older huggingface_hub
+        from huggingface_hub.utils import RepositoryNotFoundError  # type: ignore
+
+    api = HfApi(token=token)
+    try:
+        info = api.dataset_info(repo_id)
+    except RepositoryNotFoundError:
+        return None
+    return {"private": bool(getattr(info, "private", False))}
+
+
+def _remote_create(repo_id: str, private: bool, token: str | None) -> bool:
+    """Create an HF dataset. Returns True on create, False if it already existed."""
+    from huggingface_hub import HfApi
+    try:
+        from huggingface_hub.errors import HfHubHTTPError
+    except ImportError:
+        from huggingface_hub.utils import HfHubHTTPError  # type: ignore
+
+    api = HfApi(token=token)
+    try:
+        api.create_repo(repo_id=repo_id, repo_type="dataset", private=private, exist_ok=False)
+    except HfHubHTTPError as e:
+        msg = str(e).lower()
+        if "already" in msg or "409" in msg or "conflict" in msg:
+            return False
+        raise
+    return True
+
+
+def _remote_delete(repo_id: str, token: str | None) -> None:
+    """Delete an HF dataset."""
+    from huggingface_hub import HfApi
+    api = HfApi(token=token)
+    api.delete_repo(repo_id=repo_id, repo_type="dataset")
+
+
+@remote.command("add")
+@click.argument("repo")
+def remote_add(repo: str) -> None:
+    """Connect to an existing HF dataset.
+
+    REPO is ``owner/name``, a bare ``name`` (prefixed with your HF user),
+    or ``hf://owner/name``. The dataset must already exist on HuggingFace;
+    use ``opentraces remote create`` to make a new one.
+    """
+    cfg = load_config()
+    identity = _auth_identity(cfg.hf_token) if cfg.hf_token else None
+    username = identity.get("name") if identity else None
+    try:
+        repo_id = _normalize_repo_id(repo, username)
+    except click.UsageError as e:
+        click.echo(str(e), err=True)
+        sys.exit(2)
 
     project_dir = Path.cwd()
     proj_config, remotes = _read_remotes(project_dir)
-
-    if name in remotes:
-        click.echo(f"Remote '{name}' already exists. Use 'remote set-url' to update.", err=True)
+    if repo_id in remotes:
+        click.echo(f"{repo_id} is already connected.", err=True)
+        emit_json(error_response("ALREADY_CONNECTED", "remote",
+                                 f"Remote {repo_id} already connected", None))
         sys.exit(2)
 
-    full_url = _expand_hf_url(url)
+    try:
+        info = _remote_probe(repo_id, cfg.hf_token)
+    except Exception as e:
+        click.echo(f"Failed to verify dataset on HuggingFace: {e}", err=True)
+        emit_json(error_response("HF_ERROR", "remote", str(e), None))
+        sys.exit(3)
+    if info is None:
+        click.echo(f"No dataset at {repo_id} on HuggingFace.", err=True)
+        click.echo(f"  hint: opentraces remote create {repo_id}", err=True)
+        emit_json(error_response("NOT_FOUND", "remote",
+                                 f"Dataset {repo_id} does not exist on HF",
+                                 f"Run: opentraces remote create {repo_id}"))
+        sys.exit(3)
 
-    if is_private is None:
-        visibility = proj_config.get("default_visibility", "private")
-    else:
-        visibility = "private" if is_private else "public"
-
-    remotes[name] = {"url": full_url, "visibility": visibility}
+    visibility = "private" if info.get("private") else "public"
+    full_url = _expand_hf_url(repo_id)
+    remotes[repo_id] = {"url": full_url, "visibility": visibility}
     if not proj_config.get("active_remote"):
-        proj_config["active_remote"] = name
-
+        proj_config["active_remote"] = repo_id
     save_project_config(project_dir, proj_config)
-    click.echo(f"Added remote '{name}' -> {full_url} ({visibility})")
-    emit_json({"status": "ok", "name": name, "url": full_url, "visibility": visibility})
+    click.echo(f"Connected to {repo_id} ({visibility})")
+    emit_json({"status": "ok", "remote": repo_id, "visibility": visibility, "url": full_url})
 
 
-@remote.command("set-url")
-@click.argument("name")
-@click.argument("url")
-def remote_set_url(name: str, url: str) -> None:
-    """Change a remote's URL (mirrors ``git remote set-url``)."""
-    from ..core.config import load_project_config, save_project_config
+@remote.command("create")
+@click.argument("repo")
+@click.option("--private/--public", "is_private", default=True,
+              help="Dataset visibility on HuggingFace (default: private).")
+def remote_create(repo: str, is_private: bool) -> None:
+    """Create a new HF dataset and connect it.
+
+    Fails if REPO already exists on HuggingFace — use
+    ``opentraces remote add`` instead.
+    """
+    cfg = load_config()
+    if not cfg.hf_token:
+        click.echo("Not authenticated. Run 'opentraces auth login' first.", err=True)
+        sys.exit(3)
+    identity = _auth_identity(cfg.hf_token)
+    username = identity.get("name") if identity else None
+    try:
+        repo_id = _normalize_repo_id(repo, username)
+    except click.UsageError as e:
+        click.echo(str(e), err=True)
+        sys.exit(2)
 
     project_dir = Path.cwd()
     proj_config, remotes = _read_remotes(project_dir)
-
-    if name not in remotes:
-        click.echo(f"No remote named '{name}'.", err=True)
+    if repo_id in remotes:
+        click.echo(f"{repo_id} is already connected.", err=True)
         sys.exit(2)
 
-    full_url = _expand_hf_url(url)
-    remotes[name]["url"] = full_url
+    try:
+        created = _remote_create(repo_id, is_private, cfg.hf_token)
+    except Exception as e:
+        click.echo(f"Failed to create dataset: {e}", err=True)
+        emit_json(error_response("HF_ERROR", "remote", str(e), None))
+        sys.exit(3)
+    if not created:
+        click.echo(f"{repo_id} already exists on HuggingFace.", err=True)
+        click.echo(f"  hint: opentraces remote add {repo_id}", err=True)
+        emit_json(error_response("ALREADY_EXISTS", "remote",
+                                 f"Dataset {repo_id} already exists",
+                                 f"Run: opentraces remote add {repo_id}"))
+        sys.exit(3)
+
+    visibility = "private" if is_private else "public"
+    full_url = _expand_hf_url(repo_id)
+    remotes[repo_id] = {"url": full_url, "visibility": visibility}
+    if not proj_config.get("active_remote"):
+        proj_config["active_remote"] = repo_id
     save_project_config(project_dir, proj_config)
-    click.echo(f"URL for '{name}' is now {full_url}")
-    emit_json({"status": "ok", "name": name, "url": full_url})
+    click.echo(f"Created {repo_id} ({visibility}) and connected.")
+    emit_json({"status": "ok", "remote": repo_id, "visibility": visibility,
+               "url": full_url, "created": True})
 
 
-@remote.command("rename")
-@click.argument("old")
-@click.argument("new")
-def remote_rename(old: str, new: str) -> None:
-    """Rename a remote (atomic across config + state.uploaded_to keys)."""
-    from ..core.config import load_project_config, save_project_config, get_project_state_path
+@remote.command("remove")
+@click.argument("repo", required=False, default=None)
+@click.option("--delete-remote", is_flag=True,
+              help="Also delete the dataset on HuggingFace (irreversible).")
+@click.option("--yes", "confirmed", is_flag=True, help="Skip the confirmation prompt.")
+def remote_remove(repo: str | None, delete_remote: bool, confirmed: bool) -> None:
+    """Disconnect the remote from this project.
+
+    REPO is optional when exactly one remote is connected. With
+    ``--delete-remote``, also delete the dataset on HuggingFace.
+    """
+    from ..core.config import get_project_state_path
     from ..core.state import StateManager, UnknownRemoteError
 
     project_dir = Path.cwd()
     proj_config, remotes = _read_remotes(project_dir)
 
-    if old not in remotes:
-        click.echo(f"No remote named '{old}'.", err=True)
-        sys.exit(2)
-    if new in remotes:
-        click.echo(f"Remote '{new}' already exists.", err=True)
+    if not remotes:
+        click.echo("No remote connected.", err=True)
         sys.exit(2)
 
-    remotes[new] = remotes.pop(old)
-    if proj_config.get("active_remote") == old:
-        proj_config["active_remote"] = new
+    if repo is None:
+        if len(remotes) == 1:
+            repo = next(iter(remotes))
+        else:
+            click.echo("Multiple remotes connected; specify which to remove:", err=True)
+            for r in sorted(remotes):
+                click.echo(f"  {r}", err=True)
+            sys.exit(2)
 
+    if repo not in remotes:
+        click.echo(f"No remote '{repo}'.", err=True)
+        sys.exit(2)
+
+    if delete_remote and not confirmed:
+        click.echo(f"About to delete {repo} on HuggingFace (irreversible).")
+        if not click.confirm("Proceed?"):
+            click.echo("Cancelled.")
+            sys.exit(1)
+
+    if delete_remote:
+        cfg = load_config()
+        if not cfg.hf_token:
+            click.echo("Not authenticated. Run 'opentraces auth login' first.", err=True)
+            sys.exit(3)
+        try:
+            _remote_delete(repo, cfg.hf_token)
+            click.echo(f"Deleted {repo} on HuggingFace.")
+        except Exception as e:
+            click.echo(f"Failed to delete on HuggingFace: {e}", err=True)
+            sys.exit(3)
+
+    del remotes[repo]
+    if proj_config.get("active_remote") == repo:
+        proj_config["active_remote"] = next(iter(remotes), None)
     state_path = get_project_state_path(project_dir)
     state = StateManager(state_path=state_path)
     try:
-        state.rename_remote(old, new)
+        state.forget_remote(repo)
     except UnknownRemoteError:
-        # No upload history under that name — config-level rename is enough.
         pass
-
     save_project_config(project_dir, proj_config)
-    click.echo(f"Renamed '{old}' -> '{new}'")
-    emit_json({"status": "ok", "old": old, "new": new})
+    click.echo(f"Disconnected {repo}.")
+    emit_json({"status": "ok", "remote": repo, "deleted_remote": delete_remote})
 
 
 @remote.command("list")
 @click.option("-v", "verbose", is_flag=True, help="Show URLs.")
 def remote_list(verbose: bool) -> None:
-    """List configured remotes (active marked with *)."""
-    from ..core.config import load_project_config
-
+    """List connected remotes (active marked with *)."""
     proj_config, remotes = _read_remotes(Path.cwd())
     active = proj_config.get("active_remote")
 
     if not remotes:
-        click.echo("No remotes configured.")
+        click.echo("No remotes connected.")
         emit_json({"status": "ok", "remotes": {}, "active_remote": None})
         return
 

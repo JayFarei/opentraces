@@ -1,18 +1,14 @@
-"""Tests for git-parity ot remote verbs (Step 4 of CLI restructure).
+"""Tests for the simplified ``ot remote`` surface.
 
-The new verbs:
-  ot remote add <name> <url> [--public|--private]
-  ot remote set-url <name> <url>
-  ot remote rename <old> <new>
-  ot remote remove <name>
-  ot remote use <name>
-  ot remote list [-v]
+Current verbs (after the single-remote simplification):
+  ot remote add <repo>       — connect to an existing HF dataset
+  ot remote create <repo>    — create a new HF dataset and connect
+  ot remote remove [repo]    — disconnect; --delete-remote also deletes on HF
+  ot remote list [-v]        — list connected remotes
 
-Plus the HF URL shortcut: <url> accepts either a full `hf://user/repo` URL
-or the short form `user/repo` (auto-expanded because HF is the default).
-
-This test file isolates ProjectConfig / state / global config under a
-tmp_path HOME so the verbs never touch the real filesystem.
+``<repo>`` is ``owner/name``, bare ``name`` (prefixed with the authenticated
+HF user), or ``hf://owner/name``. HF-side probe / create / delete are
+factored as module-level helpers so tests can monkeypatch them.
 """
 
 from __future__ import annotations
@@ -28,12 +24,7 @@ from opentraces.core.paths import MARKER_FILENAME
 
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
-    """Isolate HOME so config/state are scoped to tmp_path.
-
-    The ProjectConfig + global config layer reads paths from
-    core/paths.py, which derives them from Path.home(). Pointing
-    HOME at tmp_path/home gives each test a clean slate.
-    """
+    """Isolate HOME so config/state are scoped to tmp_path."""
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -56,7 +47,7 @@ def isolated_home(tmp_path, monkeypatch):
 
 @pytest.fixture
 def project_dir(tmp_path, monkeypatch, isolated_home):
-    """A clean project directory with the marker pre-written."""
+    """Clean project directory with the opt-in marker written."""
     project = tmp_path / "proj"
     project.mkdir()
     monkeypatch.chdir(project)
@@ -72,154 +63,179 @@ def runner():
     return CliRunner()
 
 
+@pytest.fixture
+def authed(monkeypatch):
+    """Pretend we're authenticated as ``me`` on HuggingFace."""
+    monkeypatch.setattr(
+        "opentraces.cli.load_config",
+        lambda: type("C", (), {"hf_token": "fake-token"})(),
+    )
+    monkeypatch.setattr(
+        "opentraces.cli._auth_identity", lambda *a, **k: {"name": "me"}
+    )
+
+
 def _read_marker(project_dir) -> dict:
     return json.loads((project_dir / MARKER_FILENAME).read_text())
 
 
+def _stub_probe(monkeypatch, existing: dict | None):
+    """Stub ``_remote_probe`` to return ``existing`` regardless of repo_id.
+
+    ``existing`` is the dict ``{"private": bool}`` (or None for "missing").
+    """
+    monkeypatch.setattr("opentraces.cli._remote_probe", lambda repo_id, token: existing)
+
+
+def _stub_create(monkeypatch, result: bool):
+    monkeypatch.setattr("opentraces.cli._remote_create",
+                        lambda repo_id, private, token: result)
+
+
+def _stub_delete(monkeypatch, sink: list):
+    monkeypatch.setattr("opentraces.cli._remote_delete",
+                        lambda repo_id, token: sink.append(repo_id))
+
+
 # ---------------------------------------------------------------------------
-# ot remote add <name> <url>
+# ot remote add <repo>
 # ---------------------------------------------------------------------------
 
 
 class TestRemoteAdd:
-    def test_add_with_full_url_records_url_and_active(self, runner, project_dir) -> None:
-        result = runner.invoke(
-            main, ["remote", "add", "origin", "hf://me/dataset", "--private"]
+    def test_add_existing_dataset_connects(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        result = runner.invoke(main, ["remote", "add", "me/dataset"])
+        assert result.exit_code == 0, result.output
+
+        marker = _read_marker(project_dir)
+        assert marker["remotes"] == {
+            "me/dataset": {"url": "hf://me/dataset", "visibility": "private"}
+        }
+        assert marker["active_remote"] == "me/dataset"
+
+    def test_add_public_visibility_inferred_from_hf(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": False})
+        result = runner.invoke(main, ["remote", "add", "me/dataset"])
+        assert result.exit_code == 0, result.output
+        assert _read_marker(project_dir)["remotes"]["me/dataset"]["visibility"] == "public"
+
+    def test_add_short_form_uses_authed_username(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        result = runner.invoke(main, ["remote", "add", "my-traces"])
+        assert result.exit_code == 0, result.output
+        assert "me/my-traces" in _read_marker(project_dir)["remotes"]
+
+    def test_add_hf_url_prefix(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        result = runner.invoke(main, ["remote", "add", "hf://me/dataset"])
+        assert result.exit_code == 0, result.output
+        assert "me/dataset" in _read_marker(project_dir)["remotes"]
+
+    def test_add_missing_dataset_errors_with_hint_to_create(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, None)
+        result = runner.invoke(main, ["remote", "add", "me/ghost"])
+        assert result.exit_code != 0
+        assert "remote create" in result.output
+
+    def test_add_duplicate_errors(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        runner.invoke(main, ["remote", "add", "me/a"])
+        result = runner.invoke(main, ["remote", "add", "me/a"])
+        assert result.exit_code != 0
+        assert "already connected" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# ot remote create <repo>
+# ---------------------------------------------------------------------------
+
+
+class TestRemoteCreate:
+    def test_create_new_dataset_connects(self, runner, project_dir, authed, monkeypatch):
+        _stub_create(monkeypatch, True)
+        result = runner.invoke(main, ["remote", "create", "me/fresh"])
+        assert result.exit_code == 0, result.output
+
+        marker = _read_marker(project_dir)
+        assert marker["remotes"]["me/fresh"]["visibility"] == "private"
+        assert marker["active_remote"] == "me/fresh"
+
+    def test_create_public(self, runner, project_dir, authed, monkeypatch):
+        _stub_create(monkeypatch, True)
+        result = runner.invoke(main, ["remote", "create", "me/fresh", "--public"])
+        assert result.exit_code == 0, result.output
+        assert _read_marker(project_dir)["remotes"]["me/fresh"]["visibility"] == "public"
+
+    def test_create_existing_errors_with_hint_to_add(self, runner, project_dir, authed, monkeypatch):
+        _stub_create(monkeypatch, False)
+        result = runner.invoke(main, ["remote", "create", "me/taken"])
+        assert result.exit_code != 0
+        assert "remote add" in result.output
+
+    def test_create_requires_auth(self, runner, project_dir, monkeypatch):
+        monkeypatch.setattr(
+            "opentraces.cli.load_config",
+            lambda: type("C", (), {"hf_token": None})(),
         )
-        assert result.exit_code == 0, result.output
-
-        marker = _read_marker(project_dir)
-        assert marker["remotes"] == {"origin": {"url": "hf://me/dataset", "visibility": "private"}}
-        assert marker["active_remote"] == "origin"
-
-    def test_add_short_form_auto_expands(self, runner, project_dir) -> None:
-        """`ot remote add origin me/dataset` should auto-expand to hf://me/dataset
-        because HF is the default backend."""
-        result = runner.invoke(main, ["remote", "add", "origin", "me/dataset", "--private"])
-        assert result.exit_code == 0, result.output
-
-        marker = _read_marker(project_dir)
-        assert marker["remotes"]["origin"]["url"] == "hf://me/dataset"
-
-    def test_add_second_remote_does_not_change_active(self, runner, project_dir) -> None:
-        runner.invoke(main, ["remote", "add", "origin", "me/a", "--private"])
-        runner.invoke(main, ["remote", "add", "upstream", "me/b", "--private"])
-
-        marker = _read_marker(project_dir)
-        assert set(marker["remotes"]) == {"origin", "upstream"}
-        # First add wins for active_remote.
-        assert marker["active_remote"] == "origin"
-
-    def test_add_uses_default_visibility_when_unspecified(self, runner, project_dir) -> None:
-        """When neither --public nor --private is given, fall back to
-        ProjectConfig.default_visibility (which itself defaults to 'private')."""
-        result = runner.invoke(main, ["remote", "add", "origin", "me/dataset"])
-        assert result.exit_code == 0, result.output
-
-        marker = _read_marker(project_dir)
-        assert marker["remotes"]["origin"]["visibility"] == "private"
-
-    def test_add_public_flag(self, runner, project_dir) -> None:
-        result = runner.invoke(
-            main, ["remote", "add", "origin", "me/dataset", "--public"]
-        )
-        assert result.exit_code == 0, result.output
-
-        marker = _read_marker(project_dir)
-        assert marker["remotes"]["origin"]["visibility"] == "public"
-
-    def test_add_duplicate_name_errors(self, runner, project_dir) -> None:
-        runner.invoke(main, ["remote", "add", "origin", "me/a", "--private"])
-        result = runner.invoke(main, ["remote", "add", "origin", "me/b", "--private"])
+        result = runner.invoke(main, ["remote", "create", "me/fresh"])
         assert result.exit_code != 0
-        assert "already exists" in result.output.lower() or "exists" in result.output.lower()
+        assert "login" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------
-# ot remote set-url
+# ot remote remove [repo] [--delete-remote]
 # ---------------------------------------------------------------------------
 
 
-class TestRemoteSetUrl:
-    def test_set_url_updates_existing_remote(self, runner, project_dir) -> None:
-        runner.invoke(main, ["remote", "add", "origin", "me/old", "--private"])
-        result = runner.invoke(main, ["remote", "set-url", "origin", "me/new"])
+class TestRemoteRemove:
+    def test_remove_with_single_remote_needs_no_arg(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        runner.invoke(main, ["remote", "add", "me/a"])
+
+        result = runner.invoke(main, ["remote", "remove"])
         assert result.exit_code == 0, result.output
+        assert _read_marker(project_dir).get("remotes", {}) == {}
 
-        marker = _read_marker(project_dir)
-        assert marker["remotes"]["origin"]["url"] == "hf://me/new"
+    def test_remove_ambiguous_errors_when_multiple(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        runner.invoke(main, ["remote", "add", "me/a"])
+        runner.invoke(main, ["remote", "add", "me/b"])
 
-    def test_set_url_unknown_remote_errors(self, runner, project_dir) -> None:
-        result = runner.invoke(main, ["remote", "set-url", "ghost", "me/x"])
+        result = runner.invoke(main, ["remote", "remove"])
         assert result.exit_code != 0
+        assert "specify" in result.output.lower() or "multiple" in result.output.lower()
 
+    def test_remove_by_name(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        runner.invoke(main, ["remote", "add", "me/a"])
+        runner.invoke(main, ["remote", "add", "me/b"])
 
-# ---------------------------------------------------------------------------
-# ot remote rename
-# ---------------------------------------------------------------------------
-
-
-class TestRemoteRename:
-    def test_rename_updates_config(self, runner, project_dir) -> None:
-        runner.invoke(main, ["remote", "add", "origin", "me/a", "--private"])
-        result = runner.invoke(main, ["remote", "rename", "origin", "upstream"])
+        result = runner.invoke(main, ["remote", "remove", "me/a"])
         assert result.exit_code == 0, result.output
+        remaining = _read_marker(project_dir)["remotes"]
+        assert set(remaining) == {"me/b"}
 
-        marker = _read_marker(project_dir)
-        assert "origin" not in marker["remotes"]
-        assert "upstream" in marker["remotes"]
-        # active_remote follows the rename.
-        assert marker["active_remote"] == "upstream"
-
-    def test_rename_unknown_remote_errors(self, runner, project_dir) -> None:
-        result = runner.invoke(main, ["remote", "rename", "ghost", "upstream"])
-        assert result.exit_code != 0
-
-
-# ---------------------------------------------------------------------------
-# ot remote remove <name>
-# ---------------------------------------------------------------------------
-
-
-class TestRemoteRemoveByName:
-    def test_remove_named_remote(self, runner, project_dir) -> None:
-        runner.invoke(main, ["remote", "add", "origin", "me/a", "--private"])
-        runner.invoke(main, ["remote", "add", "upstream", "me/b", "--private"])
-
-        result = runner.invoke(main, ["remote", "remove", "origin"])
-        assert result.exit_code == 0, result.output
-
-        marker = _read_marker(project_dir)
-        assert "origin" not in marker["remotes"]
-        assert "upstream" in marker["remotes"]
-        # active_remote was origin; should be cleared (or rotated to upstream).
-        # We accept either: cleared (None) or rotated to the only remaining one.
-        assert marker.get("active_remote") in (None, "upstream")
-
-    def test_remove_unknown_errors(self, runner, project_dir) -> None:
+    def test_remove_unknown_errors(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        runner.invoke(main, ["remote", "add", "me/a"])
         result = runner.invoke(main, ["remote", "remove", "ghost"])
         assert result.exit_code != 0
 
-
-# ---------------------------------------------------------------------------
-# ot remote use <name>
-# ---------------------------------------------------------------------------
-
-
-class TestRemoteUse:
-    def test_use_changes_active_remote(self, runner, project_dir) -> None:
-        runner.invoke(main, ["remote", "add", "origin", "me/a", "--private"])
-        runner.invoke(main, ["remote", "add", "upstream", "me/b", "--private"])
-
-        result = runner.invoke(main, ["remote", "use", "upstream"])
-        assert result.exit_code == 0, result.output
-
-        marker = _read_marker(project_dir)
-        assert marker["active_remote"] == "upstream"
-
-    def test_use_unknown_errors(self, runner, project_dir) -> None:
-        result = runner.invoke(main, ["remote", "use", "ghost"])
+    def test_remove_without_any_errors(self, runner, project_dir):
+        result = runner.invoke(main, ["remote", "remove"])
         assert result.exit_code != 0
+
+    def test_delete_remote_calls_hf(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        runner.invoke(main, ["remote", "add", "me/a"])
+
+        deleted: list = []
+        _stub_delete(monkeypatch, deleted)
+
+        result = runner.invoke(main, ["remote", "remove", "--delete-remote", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert deleted == ["me/a"]
 
 
 # ---------------------------------------------------------------------------
@@ -228,38 +244,34 @@ class TestRemoteUse:
 
 
 class TestRemoteList:
-    def test_list_with_no_remotes(self, runner, project_dir) -> None:
+    def test_list_with_no_remotes(self, runner, project_dir):
         result = runner.invoke(main, ["remote", "list"])
         assert result.exit_code == 0, result.output
-        # Acceptable output: "no remotes" or empty / informative.
-        assert result.output is not None
+        assert "no remotes" in result.output.lower()
 
-    def test_list_shows_all_remotes(self, runner, project_dir) -> None:
-        runner.invoke(main, ["remote", "add", "origin", "me/a", "--private"])
-        runner.invoke(main, ["remote", "add", "upstream", "me/b", "--public"])
+    def test_list_shows_all_remotes(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        runner.invoke(main, ["remote", "add", "me/a"])
+        runner.invoke(main, ["remote", "add", "me/b"])
 
         result = runner.invoke(main, ["remote", "list"])
         assert result.exit_code == 0, result.output
-        assert "origin" in result.output
-        assert "upstream" in result.output
+        assert "me/a" in result.output
+        assert "me/b" in result.output
 
-    def test_list_marks_active(self, runner, project_dir) -> None:
-        runner.invoke(main, ["remote", "add", "origin", "me/a", "--private"])
-        runner.invoke(main, ["remote", "add", "upstream", "me/b", "--public"])
-        runner.invoke(main, ["remote", "use", "upstream"])
+    def test_list_marks_active(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        runner.invoke(main, ["remote", "add", "me/a"])
+        runner.invoke(main, ["remote", "add", "me/b"])
 
         result = runner.invoke(main, ["remote", "list"])
-        # Some marker on the active line — could be "*", "(active)", etc.
-        # Just assert upstream's line indicates active somehow.
-        upstream_line = [ln for ln in result.output.splitlines() if "upstream" in ln]
-        assert upstream_line
-        # Heuristic: active marker present in some form
-        assert any(
-            "*" in ln or "active" in ln.lower() or "->" in ln for ln in upstream_line
-        )
+        # First add becomes active; its line carries the '*' marker.
+        active_lines = [ln for ln in result.output.splitlines() if "me/a" in ln]
+        assert active_lines and "*" in active_lines[0]
 
-    def test_list_verbose_shows_urls(self, runner, project_dir) -> None:
-        runner.invoke(main, ["remote", "add", "origin", "me/a", "--private"])
+    def test_list_verbose_shows_urls(self, runner, project_dir, authed, monkeypatch):
+        _stub_probe(monkeypatch, {"private": True})
+        runner.invoke(main, ["remote", "add", "me/a"])
         result = runner.invoke(main, ["remote", "list", "-v"])
         assert result.exit_code == 0, result.output
         assert "hf://me/a" in result.output
