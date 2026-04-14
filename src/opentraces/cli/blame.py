@@ -39,6 +39,7 @@ from ..clients.text.colors import (
     coverage_role,
     detect_color,
     paint,
+    render_handle,
 )
 from ..clients.text.graph_renderer import (
     ANSI_DIM,
@@ -58,6 +59,32 @@ COMMIT_BULLET = "\u25CF"        # ●
 TRACE_BULLET = "\u25C6"         # ◆
 GLYPH_PRE_AUDIT = "\u00B7"      # ·
 GLYPH_MISSING = "?"
+
+# Spine — ties the commit dot to its trace bullets (mirrors ot graph).
+SPINE_V = "\u2502"              # │
+SPINE_T = "\u251C"              # ├
+SPINE_L = "\u2570"              # ╰
+SPINE_H = "\u2500"              # ─
+
+# Max characters for the body of an entity-bullet line; longer bodies
+# get truncated with a `[...]` suffix to stop one trace from dominating
+# the report.
+ENTITY_LINE_MAX = 100
+
+
+def _spine(glyph: str, color: bool) -> str:
+    """Paint a spine glyph with the trace-id palette (magenta)."""
+    return paint(Role.TRACE_ID, glyph, use_color=color)
+
+
+def _truncate_body(text: str, max_len: int = ENTITY_LINE_MAX) -> str:
+    """Clip long entity-commentary bodies and append ``[...]``."""
+    if len(text) <= max_len:
+        return text
+    cut = text[: max_len - 6].rstrip()
+    # Avoid ending mid-comma-list.
+    cut = cut.rstrip(",").rstrip()
+    return f"{cut} [...]"
 
 
 ENTITY_GLYPHS = {
@@ -177,9 +204,8 @@ def _render_header(meta: tuple[str, str, str], data: dict, *,
     pct = int(round(ratio * 100))
     date_part = (ts or "").split("T", 1)[0]
 
-    # Back-compat test expectations require the literal "Commit:" and
-    # "Coverage:" tokens. We keep them on the richly formatted lines.
-    commit_id = paint(Role.COMMIT_ID, f"c:{full_sha[:7]}", use_color=color)
+    # c: prefix rendered dim via render_handle (prefix is never colored).
+    commit_id = render_handle("c", full_sha, use_color=color)
     subj = paint(Role.COMMIT_SUBJECT, subject, use_color=color)
     date_dim = paint(Role.DIM, date_part, use_color=color)
 
@@ -187,20 +213,14 @@ def _render_header(meta: tuple[str, str, str], data: dict, *,
         f"{paint(Role.COMMIT_ID, COMMIT_BULLET, use_color=color)} "
         f"Commit: {commit_id}  {date_dim}  {subj}"
     )
-    cov_role = coverage_role(float(pct))
-    cov_pct = paint(cov_role, f"{pct}%", use_color=color)
-    total_dim = paint(Role.DIM, f"/{total}", use_color=color)
+    cov_pct = paint(coverage_role(float(pct)), f"{pct}%", use_color=color)
     n_traces = len(traces)
     n_files = len(files)
+    # Second line rides the spine so the commit dot and its traces read as
+    # one group. No spine when there are no traces to connect to.
+    lead = f"{_spine(SPINE_V, color)} " if traces else "  "
     line2 = (
-        f"  Coverage: {cov_pct} attributed  "
-        f"{paint(Role.DIM, str(attributed) + total_dim + ' lines', use_color=False) if False else f'{attributed}{total_dim} lines'}  "
-        f"{paint(Role.DIM, str(n_traces) + ' traces', use_color=False) if False else f'{n_traces} traces'}  "
-        f"{paint(Role.DIM, str(n_files) + ' files', use_color=False) if False else f'{n_files} files'}"
-    )
-    # Simplify: just emit a coverage line — readable, predictable.
-    line2 = (
-        f"  Coverage: {cov_pct} attributed ({attributed}/{total} lines)  "
+        f"{lead}Coverage: {cov_pct} attributed ({attributed}/{total} lines)  "
         f"{n_traces} traces  {n_files} files"
     )
     return [line1, line2]
@@ -210,7 +230,17 @@ def _iter_trace_blocks(
     project_cwd: Path, sha: str, data: dict, color: bool,
     verbose_entities: bool, scope_file: str | None,
 ) -> list[str]:
-    """Render the per-trace contribution blocks."""
+    """Render the per-trace contribution blocks with a magenta spine
+    connecting each trace to its parent commit.
+
+    Layout:
+
+        │                             ← spine continuation
+        ├─◆ t:abcd1234  short-name    ← non-last trace header
+        │   + Added foo, bar, [...]   ← entity bullet (spine continues)
+        ╰─◆ t:ef567890  ...           ← last trace header (corner)
+            - Removed baz             ← entity bullet (no spine, just indent)
+    """
     from ..core.entity_join import join_entities_to_traces
     from ..core.trace_meta import resolve_trace_meta
     from ..core.trace_summary import (
@@ -220,13 +250,9 @@ def _iter_trace_blocks(
 
     _attr, total, _r = _coverage_pct(data)
     contribs = join_entities_to_traces(project_cwd, sha)
-    # Map trace_id -> contrib for quick lookup.
     by_tid = {c.trace_id: c for c in contribs}
 
-    out: list[str] = []
     traces = list(data.get("traces") or [])
-    # Synthetic rows for traces that only appear via entity hints (legacy
-    # fixtures where the entity cache pre-tags trace_id).
     seen_tids = {t.get("trace_id") for t in traces if t.get("trace_id")}
     for c in contribs:
         if c.trace_id and c.trace_id not in seen_tids:
@@ -235,10 +261,27 @@ def _iter_trace_blocks(
                            "files": [], "lifecycle": None})
             seen_tids.add(c.trace_id)
 
-    for tr in traces:
+    # Filter out traces without an id before computing "last" position.
+    traces = [t for t in traces if t.get("trace_id")]
+    if not traces:
+        return []
+
+    out: list[str] = []
+    # Blank spine row — visual break between commit header and first trace.
+    out.append(_spine(SPINE_V, color))
+
+    body_spine_v = _spine(SPINE_V, color)
+    body_dash2 = _spine(SPINE_H * 2, color)
+
+    for idx, tr in enumerate(traces):
+        is_last = idx == len(traces) - 1
+        tee = _spine(SPINE_L if is_last else SPINE_T, color)
+        # Leading glyph for body lines under this trace:
+        #   non-last: "│   " (spine continues beside the entity bullets)
+        #   last:     "    " (no spine, plain indent)
+        body_prefix = f"{body_spine_v}   " if not is_last else "    "
+
         tid = tr.get("trace_id") or ""
-        if not tid:
-            continue
         lc = int(tr.get("line_count") or 0)
         pct = int(round((lc / total) * 100)) if total else 0
         short_id = tid[:8]
@@ -246,15 +289,17 @@ def _iter_trace_blocks(
         short_name = meta.short_name if meta and meta.short_name else short_id
         model = (meta.model if meta else None) or ""
 
-        id_paint = paint(Role.TRACE_ID, f"t:{short_id}", use_color=color)
+        # Dim prefix on t: via render_handle.
+        id_paint = render_handle("t", tid, use_color=color)
         bullet = paint(Role.TRACE_ID, TRACE_BULLET, use_color=color)
         name_paint = paint(Role.TRACE_NAME, short_name, use_color=color)
-        pct_role = coverage_role(float(pct))
-        pct_paint = paint(pct_role, f"{pct}%", use_color=color)
+        pct_paint = paint(
+            coverage_role(float(pct)), f"{pct}%", use_color=color,
+        )
         model_paint = paint(Role.DIM, model, use_color=color)
 
         header = (
-            f"  {bullet} {id_paint}   {name_paint}  "
+            f"{tee}{body_dash2} {bullet} {id_paint}   {name_paint}  "
             f"{lc} lines . {pct_paint}"
         )
         if model:
@@ -263,9 +308,6 @@ def _iter_trace_blocks(
 
         contrib = by_tid.get(tid)
         if contrib is None:
-            # Build a synthetic empty contribution so the bullet engine
-            # still emits "(no entity overlap on this commit)" when the
-            # trace contributed lines but no entities matched.
             from ..core.entity_join import TraceContribution as _TC
             contrib = _TC(trace_id=tid, line_count=lc,
                           line_ratio=(lc / total) if total else 0.0)
@@ -275,13 +317,8 @@ def _iter_trace_blocks(
         else:
             bullets = summarize_contribution(contrib)
 
-        # Back-compat: the older --entities tests assert specific body
-        # phrases that don't match the new natural-language bullets.
-        # In --entities mode we additionally emit the raw per-entity
-        # lines so those assertions hold.
         if verbose_entities:
             for b in bullets:
-                # Paint the glyph per role.
                 head = b.split(" ", 1)
                 if head:
                     g = head[0]
@@ -289,12 +326,12 @@ def _iter_trace_blocks(
                         "+": Role.ADDED, "~": Role.MODIFIED,
                         "-": Role.DELETED, "\u21B7": Role.RENAMED,
                     }.get(g, Role.MODIFIED)
-                    rest = head[1] if len(head) > 1 else ""
-                    out.append(f"    {paint(role, g, use_color=color)} {rest}")
+                    rest = _truncate_body(head[1] if len(head) > 1 else "")
+                    out.append(
+                        f"{body_prefix}{paint(role, g, use_color=color)} {rest}"
+                    )
                 else:
-                    out.append(f"    {b}")
-            # Also emit legacy-shape per-entity lines (back-compat for
-            # existing scenarios / unit tests).
+                    out.append(f"{body_prefix}{b}")
             for e in contrib.entities:
                 g, role = ENTITY_GLYPHS.get(e.change_type, ("~", Role.MODIFIED))
                 et = e.entity_type or ""
@@ -305,7 +342,7 @@ def _iter_trace_blocks(
                 else:
                     label = f"{et} {e.entity_name}".strip()
                 out.append(
-                    f"      {paint(role, g, use_color=color)} "
+                    f"{body_prefix}  {paint(role, g, use_color=color)} "
                     f"{label:<28} {paint(Role.DIM, e.file_path, use_color=color)}"
                 )
         else:
@@ -316,10 +353,15 @@ def _iter_trace_blocks(
                     "+": Role.ADDED, "~": Role.MODIFIED,
                     "-": Role.DELETED, "\u21B7": Role.RENAMED,
                 }.get(g, Role.MODIFIED)
-                rest = head[1] if len(head) > 1 else ""
-                out.append(f"    {paint(role, g, use_color=color)} {rest}")
+                rest = _truncate_body(head[1] if len(head) > 1 else "")
+                out.append(
+                    f"{body_prefix}{paint(role, g, use_color=color)} {rest}"
+                )
 
-        out.append("")
+        # Blank spine row between traces (no spine after the last one).
+        if not is_last:
+            out.append(body_spine_v)
+
     return out
 
 
@@ -331,22 +373,18 @@ def _render_default(meta: tuple[str, str, str], data: dict,
     lines: list[str] = []
     lines.extend(_render_header(meta, data, files=files, traces=traces,
                                 color=color))
-    rule = paint(Role.DIM, "─" * 72, use_color=color)
-    lines.append("")
-    lines.append(rule)
-    lines.append("")
     lines.extend(_iter_trace_blocks(
         project_cwd, meta[0], data, color,
         verbose_entities=show_entities, scope_file=scope_file,
     ))
 
-    # Files block — column-aligned for readability.
+    # Files block — simple, aligned, separated from the trace tree by a
+    # dim horizontal rule so the two sections read as distinct groups.
     if files:
-        visible_paths = [p for p in sorted(files)
-                         if not (scope_file and p != scope_file)]
-        # Precompute counts + widths.
         rows: list[tuple[str, int, int, int, int]] = []
-        for path in visible_paths:
+        for path in sorted(files):
+            if scope_file and path != scope_file:
+                continue
             finfo = files[path] or {}
             total_f = int(finfo.get("total") or 0)
             attr = pre = miss = 0
@@ -359,27 +397,29 @@ def _render_default(meta: tuple[str, str, str], data: dict,
                 elif c == "missing_from_audit":
                     miss += 1
             rows.append((path, total_f, attr, pre, miss))
-        path_w = max((len(r[0]) for r in rows), default=0)
-        total_w = max((len(str(r[1])) for r in rows), default=1)
-
-        lines.append(rule)
-        lines.append("")
-        lines.append(paint(Role.DIM, "Files", use_color=color))
-        lines.append("")
-        for path, total_f, attr, pre, miss in rows:
-            parts = [f"{attr} attributed"]
-            if pre:
-                parts.append(f"{pre} pre-audit")
-            if miss:
-                parts.append(f"{miss} missing")
-            path_cell = paint(Role.DIM, path.ljust(path_w), use_color=color)
-            total_cell = str(total_f).rjust(total_w)
-            breakdown = paint(
-                Role.DIM, f"({', '.join(parts)})", use_color=color,
-            )
-            lines.append(
-                f"  {path_cell}   {total_cell} line(s)   {breakdown}"
-            )
+        if rows:
+            path_w = max(len(r[0]) for r in rows)
+            total_w = max(len(str(r[1])) for r in rows)
+            rule = paint(Role.DIM, SPINE_H * 72, use_color=color)
+            lines.append("")
+            lines.append(rule)
+            lines.append("")
+            lines.append("Files:")
+            lines.append("")
+            for path, total_f, attr, pre, miss in rows:
+                parts = [f"{attr} attributed"]
+                if pre:
+                    parts.append(f"{pre} pre-audit")
+                if miss:
+                    parts.append(f"{miss} missing")
+                path_cell = paint(Role.DIM, path.ljust(path_w), use_color=color)
+                total_cell = str(total_f).rjust(total_w)
+                breakdown = paint(
+                    Role.DIM, f"({', '.join(parts)})", use_color=color,
+                )
+                lines.append(
+                    f"  {path_cell}  {total_cell} line(s)  {breakdown}"
+                )
     return "\n".join(lines) + "\n"
 
 
