@@ -29,7 +29,7 @@ from typing import Any
 # NOTE: config.py imports workflow.py which imports state.py — to avoid the
 # import cycle we defer the config import inside TraceLock.
 
-STATE_SCHEMA_VERSION = "2"
+STATE_SCHEMA_VERSION = "3"
 
 
 class UnknownRemoteError(KeyError):
@@ -114,7 +114,8 @@ class StateManager:
                 "use get_project_state_path(project_dir)"
             )
         self._state_path = state_path
-        self._state: dict[str, Any] = {"processed_files": {}, "traces": {}, "commit_groups": {}}
+        self._state: dict[str, Any] = {"processed_files": {}, "traces": {}, "commit_groups": {},
+             "last_backfilled_commit": None, "last_backfill_at": None}
         self._load()
 
     def _load(self) -> None:
@@ -125,7 +126,8 @@ class StateManager:
                 if "commit_groups" not in self._state:
                     self._state["commit_groups"] = {}
             except (json.JSONDecodeError, OSError):
-                self._state = {"processed_files": {}, "traces": {}, "commit_groups": {}}
+                self._state = {"processed_files": {}, "traces": {}, "commit_groups": {},
+             "last_backfilled_commit": None, "last_backfill_at": None}
         self._migrate()
 
     def _migrate(self) -> None:
@@ -142,11 +144,18 @@ class StateManager:
             return
 
         # v1 (no version key) -> v2: backfill uploaded_to.
-        for entry in self._state.get("traces", {}).values():
-            if entry.get("status") == TraceStatus.UPLOADED.value:
-                if not entry.get("uploaded_to"):
-                    ts = entry.get("uploaded_at") or "1970-01-01T00:00:00Z"
-                    entry["uploaded_to"] = {"origin": ts}
+        if version is None or version == "1":
+            for entry in self._state.get("traces", {}).values():
+                if entry.get("status") == TraceStatus.UPLOADED.value:
+                    if not entry.get("uploaded_to"):
+                        ts = entry.get("uploaded_at") or "1970-01-01T00:00:00Z"
+                        entry["uploaded_to"] = {"origin": ts}
+
+        # v2 -> v3 (plan 043 phase 1): add last_backfilled_commit +
+        # last_backfill_at at the top level. Both default to None; the
+        # `ot backfill` verb writes them when it advances.
+        self._state.setdefault("last_backfilled_commit", None)
+        self._state.setdefault("last_backfill_at", None)
 
         self._state["state_version"] = STATE_SCHEMA_VERSION
 
@@ -372,6 +381,20 @@ class StateManager:
 
     def get_commit_groups(self) -> list[CommitGroup]:
         return [CommitGroup(**v) for v in self._state["commit_groups"].values()]
+
+    # --- Backfill bookmark (plan 043 phase 1) ---
+
+    def get_last_backfilled_commit(self) -> str | None:
+        return self._state.get("last_backfilled_commit")
+
+    def get_last_backfill_at(self) -> str | None:
+        return self._state.get("last_backfill_at")
+
+    def set_last_backfilled_commit(self, sha: str | None, *,
+                                   when: str | None = None) -> None:
+        self._state["last_backfilled_commit"] = sha
+        self._state["last_backfill_at"] = when or _utcnow_iso()
+        self.save()
 
 
 class TraceLock:
