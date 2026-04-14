@@ -2251,8 +2251,8 @@ def redact_cmd(trace_id: str, pattern: str, use_regex: bool, field: str | None, 
         entry = state.get_trace(trace_id)
 
     result = redact_pattern_and_persist(
-        state, staging_dir, trace_id,
-        pattern=pattern, regex=use_regex, field=field, step=step_index,
+        staging_dir, trace_id, pattern,
+        regex=use_regex, field=field, step=step_index,
     )
 
     if hasattr(result, "error_code") and result.error_code:
