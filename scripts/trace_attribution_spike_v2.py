@@ -107,14 +107,28 @@ def _encode_cwd(path: Path) -> str:
 
 
 def load_snapshots_for_project(project_cwd: Path) -> list[Snapshot]:
-    """Combine file-history snapshots (from ~/.claude) and watcher-captured
-    working-tree snapshots (from sidecar in <project>/.git/)."""
+    """Combine file-history snapshots (from ~/.claude), tool-use
+    reconstructions from the JSONL (when blobs are absent), and
+    watcher-captured working-tree snapshots (from sidecar in
+    <project>/.git/).
+    """
     snapshots: list[Snapshot] = []
     proj_dir = Path.home() / ".claude" / "projects" / _encode_cwd(project_cwd)
     if proj_dir.is_dir():
         for jsonl_path in sorted(proj_dir.glob("*.jsonl")):
             trace_id = jsonl_path.stem
+            # file-history snapshots capture the BEFORE-prompt state for
+            # rollback, so they often record `backupFileName=None` for
+            # newly-created files — which the spike treats as a delete
+            # marker. On its own this can leave the final session state
+            # uncaptured. The tool-use reconstruction emits AFTER-tool
+            # state and fills the gap. Run both and merge; the timestamp
+            # ordering preserves causality.
             snapshots.extend(_iter_snapshots(jsonl_path, trace_id))
+            snapshots.extend(
+                _reconstruct_snapshots_from_jsonl(jsonl_path, trace_id,
+                                                   project_cwd)
+            )
     snapshots.extend(_load_working_tree_events(project_cwd))
     return snapshots
 
@@ -168,6 +182,137 @@ def _iter_snapshots(jsonl: Path, trace_id: str):
 
 def blob_path(trace_id: str, backup_name: str) -> Path:
     return Path.home() / ".claude" / "file-history" / trace_id / backup_name
+
+
+# --------------------------------------------------------------------------- #
+# JSONL tool-use reconstruction (fallback when file-history blobs are absent)
+# --------------------------------------------------------------------------- #
+
+def _hash_content_into_repo(project_cwd: Path, content: str) -> str:
+    """Hash an in-memory string into the project's git object store."""
+    return git("-C", str(project_cwd), "hash-object", "-w", "--stdin",
+               input=content).strip()
+
+
+def _read_head_content(project_cwd: Path, rel: str) -> str | None:
+    """Read the blob at HEAD:<rel>, or None if the path doesn't exist at HEAD."""
+    if not git_ok("-C", str(project_cwd), "cat-file", "-e", f"HEAD:{rel}"):
+        return None
+    return git("-C", str(project_cwd), "show", f"HEAD:{rel}", check=False)
+
+
+def _reconstruct_snapshots_from_jsonl(jsonl: Path, trace_id: str,
+                                       project_cwd: Path) -> list[Snapshot]:
+    """Replay the session's Write/Edit/MultiEdit tool_uses to reconstruct
+    per-turn file state when file-history blobs are missing (dominant
+    real-world case: /clear wipes blobs, new-file Writes don't produce
+    backups, blob dirs age out).
+
+    Returns a list of Snapshot objects carrying the reconstructed content
+    as prehashed shas — same shape as watcher events, so the downstream
+    index/commit machinery is unchanged.
+    """
+    try:
+        text = jsonl.read_text(errors="replace")
+    except OSError:
+        return []
+
+    # Pass 1: map tool_use_id -> success (is_error absent or false).
+    lines = text.splitlines()
+    success: dict[str, bool] = {}
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("type") != "user":
+            continue
+        for c in (e.get("message", {}).get("content") or []):
+            if not (isinstance(c, dict) and c.get("type") == "tool_result"):
+                continue
+            tid = c.get("tool_use_id")
+            if tid:
+                success[tid] = not bool(c.get("is_error"))
+
+    # Pass 2: walk tool_uses in order, replay, emit per-tool snapshots.
+    running: dict[str, str] = {}  # rel → current content
+    snaps: list[Snapshot] = []
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("type") != "assistant":
+            continue
+        ts = e.get("timestamp", "")
+        outer_id = e.get("message", {}).get("id") or e.get("uuid") or ""
+        for c in (e.get("message", {}).get("content") or []):
+            if not (isinstance(c, dict) and c.get("type") == "tool_use"):
+                continue
+            tu_id = c.get("id") or ""
+            # Skip tool_uses known to have errored. Absent entries (no
+            # matching tool_result yet — abrupt exit) are permissive:
+            # treat as attempted and apply optimistically.
+            if success.get(tu_id) is False:
+                continue
+            name = c.get("name")
+            inp = c.get("input") or {}
+            raw_path = inp.get("file_path")
+            if not raw_path:
+                continue
+            rel = _relative_path(raw_path, project_cwd)
+            if rel is None:
+                continue
+
+            if name == "Write":
+                running[rel] = inp.get("content", "") or ""
+            elif name == "Edit":
+                current = running.get(rel)
+                if current is None:
+                    current = _read_head_content(project_cwd, rel) or ""
+                old = inp.get("old_string", "") or ""
+                new = inp.get("new_string", "") or ""
+                if old and old not in current:
+                    continue  # Edit would fail; no authorship event
+                if bool(inp.get("replace_all")):
+                    current = current.replace(old, new)
+                else:
+                    current = current.replace(old, new, 1)
+                running[rel] = current
+            elif name == "MultiEdit":
+                current = running.get(rel)
+                if current is None:
+                    current = _read_head_content(project_cwd, rel) or ""
+                ok = True
+                for ed in (inp.get("edits") or []):
+                    old = ed.get("old_string", "") or ""
+                    new = ed.get("new_string", "") or ""
+                    if old and old not in current:
+                        ok = False
+                        break
+                    if bool(ed.get("replace_all")):
+                        current = current.replace(old, new)
+                    else:
+                        current = current.replace(old, new, 1)
+                if not ok:
+                    continue
+                running[rel] = current
+            else:
+                continue  # Read/Grep/Bash/etc. produce no authorship event
+
+            try:
+                sha = _hash_content_into_repo(project_cwd, running[rel])
+            except RuntimeError:
+                continue
+            snaps.append(Snapshot(
+                trace_id=trace_id,
+                jsonl_path=jsonl,
+                message_id=f"tu-{(outer_id or tu_id)[:12]}",
+                timestamp=ts or "",
+                source="working-tree",
+                prehashed={rel: sha},
+            ))
+    return snaps
 
 
 # --------------------------------------------------------------------------- #

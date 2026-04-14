@@ -337,7 +337,10 @@ class RunState:
     """Mutable state during a scenario run."""
     project_dir: Path
     verbose: bool = False
-    label_to_trace: dict[str, str] = field(default_factory=dict)
+    # Labels can map to MORE than one trace_id. /clear retires the current
+    # session and opens a new one under the same logical label; the harness
+    # records both session_ids under the label so assertions sum contributions.
+    label_to_trace: dict[str, set[str]] = field(default_factory=dict)
     contexts: list[ClaudeContext] = field(default_factory=list)
     watcher_proc: subprocess.Popen | None = None
 
@@ -370,6 +373,9 @@ def _step_reset(state: RunState, params: dict) -> None:
 
 def _step_claude(state: RunState, params: dict) -> None:
     label = params.get("label") or f"c{len(state.contexts)+1}"
+    # Existing label + reusing it: only allowed if the step's intent is to
+    # extend the same logical trace. Be strict — reject by default so
+    # typos don't silently merge two scenarios' assertions together.
     if label in state.label_to_trace:
         raise ValueError(f"duplicate claude label: {label}")
     prompts = params.get("prompts") or []
@@ -388,11 +394,11 @@ def _step_claude(state: RunState, params: dict) -> None:
     try:
         for prompt in prompts:
             ctx.prompt(prompt, timeout=timeout, quiesce=quiesce)
-            if ctx.trace_id and label not in state.label_to_trace:
-                state.label_to_trace[label] = ctx.trace_id
+            if ctx.trace_id:
+                state.label_to_trace.setdefault(label, set()).add(ctx.trace_id)
     finally:
-        if ctx.trace_id and label not in state.label_to_trace:
-            state.label_to_trace[label] = ctx.trace_id
+        if ctx.trace_id:
+            state.label_to_trace.setdefault(label, set()).add(ctx.trace_id)
         if cleanup == "kill":
             _run([TMUX, "kill-session", "-t", ctx.name], check=False)
         else:
@@ -490,7 +496,7 @@ def execute_step(state: RunState, step: dict) -> None:
 
 # --- assertion implementation ---
 
-def _resolve_trace(state: RunState, label: str) -> str | None:
+def _resolve_trace(state: RunState, label: str) -> set[str] | None:
     if label == "pre-audit":
         return None  # signal special handling
     return state.label_to_trace.get(label)
@@ -544,17 +550,18 @@ def run_assertions(state: RunState, assertions: list[dict]) -> list[str]:
         # determine expected line count for the assertion
         if "trace" in a:
             label = a["trace"]
-            tid = _resolve_trace(state, label)
+            tids = _resolve_trace(state, label)
             if label == "pre-audit":
                 actual = sum(e["count"] for k, e in f["by_trace"].items()
                              if k.startswith("pre-audit:"))
             else:
-                if tid is None:
+                if not tids:
                     raise ValueError(
                         f"assertion {i}: trace label '{label}' not "
                         f"resolved (known: {list(state.label_to_trace)})"
                     )
-                actual = f["by_trace"].get(tid, {}).get("count", 0)
+                actual = sum(f["by_trace"].get(t, {}).get("count", 0)
+                             for t in tids)
             target_str = label
         else:
             raise ValueError(
