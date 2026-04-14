@@ -1,0 +1,11 @@
+[Unit]
+Description=opentraces watcher timer (every 300s)
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=300
+AccuracySec=30
+Persistent=true
+
+[Install]
+WantedBy=timers.target
