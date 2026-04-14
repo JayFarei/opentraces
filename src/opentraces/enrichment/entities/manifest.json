@@ -1,0 +1,26 @@
+{
+  "version": "0.3.19",
+  "binary_name": "ot-entities",
+  "sources": [
+    {
+      "platform": "darwin-arm64",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "url": "https://github.com/opentraces/ot-entities/releases/download/v0.3.19/ot-entities-darwin-arm64"
+    },
+    {
+      "platform": "darwin-x86_64",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "url": "https://github.com/opentraces/ot-entities/releases/download/v0.3.19/ot-entities-darwin-x86_64"
+    },
+    {
+      "platform": "linux-x86_64",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "url": "https://github.com/opentraces/ot-entities/releases/download/v0.3.19/ot-entities-linux-x86_64"
+    },
+    {
+      "platform": "linux-arm64",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "url": "https://github.com/opentraces/ot-entities/releases/download/v0.3.19/ot-entities-linux-arm64"
+    }
+  ]
+}
