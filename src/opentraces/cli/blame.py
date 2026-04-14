@@ -331,18 +331,22 @@ def _render_default(meta: tuple[str, str, str], data: dict,
     lines: list[str] = []
     lines.extend(_render_header(meta, data, files=files, traces=traces,
                                 color=color))
+    rule = paint(Role.DIM, "─" * 72, use_color=color)
+    lines.append("")
+    lines.append(rule)
     lines.append("")
     lines.extend(_iter_trace_blocks(
         project_cwd, meta[0], data, color,
         verbose_entities=show_entities, scope_file=scope_file,
     ))
 
-    # Files block — same content, dimmer styling.
+    # Files block — column-aligned for readability.
     if files:
-        lines.append("Files:")
-        for path in sorted(files):
-            if scope_file and path != scope_file:
-                continue
+        visible_paths = [p for p in sorted(files)
+                         if not (scope_file and p != scope_file)]
+        # Precompute counts + widths.
+        rows: list[tuple[str, int, int, int, int]] = []
+        for path in visible_paths:
             finfo = files[path] or {}
             total_f = int(finfo.get("total") or 0)
             attr = pre = miss = 0
@@ -354,14 +358,27 @@ def _render_default(meta: tuple[str, str, str], data: dict,
                     pre += 1
                 elif c == "missing_from_audit":
                     miss += 1
+            rows.append((path, total_f, attr, pre, miss))
+        path_w = max((len(r[0]) for r in rows), default=0)
+        total_w = max((len(str(r[1])) for r in rows), default=1)
+
+        lines.append(rule)
+        lines.append("")
+        lines.append(paint(Role.DIM, "Files", use_color=color))
+        lines.append("")
+        for path, total_f, attr, pre, miss in rows:
             parts = [f"{attr} attributed"]
             if pre:
                 parts.append(f"{pre} pre-audit")
             if miss:
                 parts.append(f"{miss} missing")
+            path_cell = paint(Role.DIM, path.ljust(path_w), use_color=color)
+            total_cell = str(total_f).rjust(total_w)
+            breakdown = paint(
+                Role.DIM, f"({', '.join(parts)})", use_color=color,
+            )
             lines.append(
-                f"  {paint(Role.DIM, path, use_color=color)}  "
-                f"{total_f} line(s)  ({', '.join(parts)})"
+                f"  {path_cell}   {total_cell} line(s)   {breakdown}"
             )
     return "\n".join(lines) + "\n"
 

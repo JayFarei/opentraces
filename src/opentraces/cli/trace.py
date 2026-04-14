@@ -473,3 +473,83 @@ def trace_discard(trace_id: str, confirmed: bool) -> None:
     })
 
 
+# ---------------------------------------------------------------------------
+# ``ot resume`` — hand control back to the upstream agent.
+#
+# For claude-code traces we execvp into ``claude --resume <session_id>``
+# so the user drops straight into their native REPL. Other agents fall
+# back to printing the legacy hint.
+# ---------------------------------------------------------------------------
+
+
+@click.command("resume", cls=OpentracesCommand)
+@click.argument("trace_id")
+@click.option("--dry-run", "dry_run", is_flag=True,
+              help="Print the resume command instead of exec'ing it.")
+def trace_resume(trace_id: str, dry_run: bool) -> None:
+    """Resume the upstream agent session that produced a trace.
+
+    Accepts the full trace_id or a ``t:XX`` / ``XX`` prefix (>=2 chars).
+    For claude-code the command execs ``claude --resume <session_id>``;
+    other agents print the native resume command instead.
+    """
+    from ..core.trace_meta import (
+        resolve_trace_id_prefix,
+        AmbiguousPrefixError,
+    )
+    from ..core.agent_resume import resume_claude_code, print_generic_hint
+
+    state, staging_dir = _load_project_state()
+    project_dir = Path.cwd()
+
+    # Resolve the prefix to a full id. The resolver accepts ``t:`` form.
+    try:
+        full_id = resolve_trace_id_prefix(project_dir, trace_id)
+    except AmbiguousPrefixError as e:
+        click.echo(f"Ambiguous trace prefix {trace_id!r}:", err=True)
+        for cand in e.candidates[:10]:
+            click.echo(f"  {cand[:12]}...", err=True)
+        sys.exit(2)
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(2)
+
+    if not full_id:
+        click.echo(f"No trace matches {trace_id!r}", err=True)
+        sys.exit(6)
+
+    record, staging_file = _load_trace_record(staging_dir, full_id)
+    if record is None:
+        # Filename is historically the session_id for Claude Code captures,
+        # not the trace_id. Fall back to scanning all JSONL files for a
+        # matching trace_id or session_id.
+        from opentraces_schema import TraceRecord as _TR
+        for p in staging_dir.glob("*.jsonl"):
+            try:
+                line = p.read_text().strip().splitlines()[0]
+                rec = _TR.model_validate_json(line)
+            except Exception:
+                continue
+            if rec.trace_id == full_id or rec.session_id == full_id:
+                record = rec
+                staging_file = p
+                break
+    if record is None:
+        click.echo(f"Trace file unreadable: {full_id}", err=True)
+        sys.exit(6)
+
+    agent_name = (getattr(record.agent, "name", "") or "").lower()
+    session_id = record.session_id or ""
+    if not session_id:
+        click.echo(
+            f"Trace {full_id[:8]} has no session_id; cannot resume.", err=True
+        )
+        sys.exit(6)
+
+    if agent_name in ("claude-code", "claude_code", "claude"):
+        rc = resume_claude_code(session_id, project_cwd=project_dir,
+                                dry_run=dry_run)
+        sys.exit(rc)
+
+    # Non-claude-code: print the native resume hint and exit 0.
+    print_generic_hint(agent_name, session_id)

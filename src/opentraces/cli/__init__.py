@@ -2351,11 +2351,13 @@ from .trace import (  # noqa: E402
     trace_reject as _trace_reject_cmd,
     trace_reset as _trace_reset_cmd,
     trace_discard as _trace_discard_cmd,
+    trace_resume as _trace_resume_cmd,
 )
 main.add_command(_trace_show_cmd, name="show")
 main.add_command(_trace_reject_cmd, name="reject")
 main.add_command(_trace_reset_cmd, name="reset")
 main.add_command(_trace_discard_cmd, name="discard")
+main.add_command(_trace_resume_cmd, name="resume")
 
 
 @main.command("list")
