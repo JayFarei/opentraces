@@ -1085,6 +1085,110 @@ def config_set(
     emit_json({"status": "ok", "scope": "global", "key": key, "value": value})
 
 
+# --------------------------------------------------------------------------- #
+# Plan-043 phase 6: identity finalization helper
+# --------------------------------------------------------------------------- #
+
+def _plan043_finalize_identity(project_dir: Path) -> None:
+    """Record ``root_commit_sha`` and (if the user hasn't already answered)
+    prompt for a first-run backfill over any discovered Claude JSONL corpus.
+
+    Non-interactive sessions (``stdin`` not a tty) skip the prompt and leave
+    the decision as ``None`` so the next interactive init will ask.
+
+    Also handles the checkout-move case: if a ``~/.opentraces/projects/<slug>/``
+    already records the same root-commit SHA under a different path, we
+    print an informational line and reuse the existing slug by writing an
+    updated ``project.json`` pointer (same slug, new path). This avoids
+    creating duplicate attribution state.
+    """
+    from ..core import repo_identity as _ri
+    from ..core.config import (
+        get_first_run_backfill_decision,
+        get_root_commit_sha,
+        set_first_run_backfill_decision,
+        set_root_commit_sha,
+        get_project_dir,
+    )
+
+    root_sha = _ri.root_commit_sha(project_dir)
+    if root_sha and get_root_commit_sha(project_dir) != root_sha:
+        set_root_commit_sha(project_dir, root_sha)
+
+    # Checkout-move: another slug already holds this root SHA.
+    if root_sha:
+        existing = _ri.discover_matching_project(root_sha)
+        current_slug_dir = None
+        try:
+            current_slug_dir = get_project_dir(project_dir)
+        except Exception:
+            current_slug_dir = None
+        if existing and current_slug_dir and existing.slug != current_slug_dir.name:
+            click.echo(
+                f"Found existing attribution data at {existing.old_path} "
+                f"(slug={existing.slug}). Reusing that history under the new path."
+            )
+            # Update the existing slug's project.json to point at the new
+            # path. We intentionally do NOT move data — the slug directory
+            # stays put under ~/.opentraces/projects/.
+            try:
+                existing_slug_dir = existing.traces_dir.parent
+                _ri.write_project_identity(
+                    existing_slug_dir, project_dir=project_dir, root_sha=root_sha,
+                )
+            except Exception:
+                pass
+        elif current_slug_dir:
+            # Stamp our own slug's project.json so future moves can find us.
+            try:
+                _ri.write_project_identity(
+                    current_slug_dir, project_dir=project_dir, root_sha=root_sha
+                )
+            except Exception:
+                pass
+
+    # First-run backfill prompt.
+    decision = get_first_run_backfill_decision(project_dir)
+    if decision is not None:
+        return  # already answered (Y, declined, or never)
+
+    corpus = _ri.discover_claude_jsonl_corpus(project_dir) if root_sha else []
+    if not corpus:
+        return  # nothing to backfill; don't pester
+
+    if not sys.stdin.isatty():
+        return  # non-interactive: leave decision None, re-ask next time
+
+    try:
+        answer = click.prompt(
+            f"Run initial attribution backfill over {len(corpus)} past session(s)? [Y/n/never]",
+            default="Y",
+            show_default=False,
+        )
+    except click.Abort:
+        return
+    a = (answer or "").strip().lower()
+    if a in ("n", "no"):
+        set_first_run_backfill_decision(project_dir, "declined")
+        click.echo("(skipped; will ask again next init)")
+        return
+    if a == "never":
+        set_first_run_backfill_decision(project_dir, "never")
+        click.echo("(won't ask again; enable manually with 'opentraces backfill')")
+        return
+    # Any other answer treated as Y.
+    set_first_run_backfill_decision(project_dir, "Y")
+    try:
+        from ..core import backfill as _bf
+        report = _bf.run_full(project_dir)
+        click.echo(
+            f"Backfilled {report.commits_processed} commit(s); "
+            f"{report.attributed_lines} line(s) attributed."
+        )
+    except Exception as e:  # pragma: no cover - surfaced in logs
+        click.echo(f"(backfill failed: {e})", err=True)
+
+
 @main.command(
     examples=[
         "opentraces init",
@@ -1140,6 +1244,9 @@ def init(
     if marker_file.exists() or legacy_config_json.exists() or legacy_config_yml.exists():
         proj_config = load_project_config(project_dir)
         current_remote = proj_config.get("remote", "not set")
+        # Plan-043 phase 6: on every init (even repeated), refresh root
+        # commit identity + optionally prompt for first-run backfill.
+        _plan043_finalize_identity(project_dir)
         # Backfill the global registry — projects that were initialized
         # before the registry existed (or before they got pruned) won't
         # appear in `opentraces list --projects` until we re-add them.
@@ -1316,6 +1423,9 @@ def init(
 
     if existing_session_count and import_existing:
         imported_existing, import_errors = _capture_sessions_into_project(existing_session_dir, project_dir, cfg=cfg)
+
+    # Plan-043 phase 6: record root commit + prompt for first-run backfill.
+    _plan043_finalize_identity(project_dir)
 
     click.echo()
     print_banner(tagline=_ok("initialized"))
@@ -2051,6 +2161,11 @@ main.add_command(_complete_cmd)
 from .backfill import backfill_cmd as _backfill_cmd  # noqa: E402
 
 main.add_command(_backfill_cmd)
+
+# Plan-043 phase 5 — `ot graph` GitButler-style renderer.
+from .graph import graph_cmd as _graph_cmd  # noqa: E402
+
+main.add_command(_graph_cmd)
 
 
 # ---------------------------------------------------------------------------
