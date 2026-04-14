@@ -112,3 +112,97 @@ def test_verbose_one_line_per_entity():
     assert out[0].startswith("+ added function foo")
     assert "src/a.py" in out[0]
     assert "old" in out[1] and "new" in out[1]
+
+
+# ---------------------------------------------------------------------------
+# summarize_contribution_compact (graph renderer post-audit patch)
+# ---------------------------------------------------------------------------
+
+from opentraces.core.trace_summary import summarize_contribution_compact
+
+
+def test_compact_scattered():
+    c = TraceContribution("t1", 8, 0.1, overlap_case="scattered")
+    state, summary = summarize_contribution_compact(c)
+    assert state == "[8 lines \u00b7 scattered]"
+    assert summary == ""
+
+
+def test_compact_diffuse_with_dominant():
+    c = TraceContribution("t1", 3, 0.1,
+                          overlap_case="diffuse", dominant_by="b73af9c8")
+    state, summary = summarize_contribution_compact(c)
+    assert state == "[3 lines \u00b7 diffuse, t:b7 dominates]"
+    assert summary == ""
+
+
+def test_compact_name_list_mode():
+    c = _contrib([_ent("added", "foo", "x.py"),
+                  _ent("modified", "bar", "x.py"),
+                  _ent("added", "baz", "x.py")])
+    state, summary = summarize_contribution_compact(c)
+    assert state == "+2 ~1"
+    assert summary.startswith("foo, bar, baz")
+
+
+def test_compact_file_aggregate_mode():
+    ents = [
+        _ent("modified", "h1", "plans/010-managed-agents.md", "heading"),
+        _ent("modified", "h2", "plans/010-managed-agents.md", "heading"),
+        _ent("modified", "h3", "plans/010-managed-agents.md", "heading"),
+        _ent("modified", "h4", "plans/000-convention.md", "heading"),
+        _ent("modified", "h5", "plans/000-convention.md", "heading"),
+        _ent("added", "h6", "plans/foo.md", "heading"),
+    ]
+    c = _contrib(ents)
+    state, summary = summarize_contribution_compact(c)
+    assert "headings" in state
+    assert "010-managed-agents (+3)" in summary
+    assert "000-convention (+2)" in summary
+
+
+def test_compact_chunk_only():
+    ents = [
+        _ent("modified", "lines 61-140", "schema.prisma", "chunk"),
+        _ent("modified", "lines 281-320", "schema.prisma", "chunk"),
+    ]
+    c = _contrib(ents)
+    state, summary = summarize_contribution_compact(c)
+    assert "chunks" in state
+    assert "schema" in summary
+    assert "61-140" in summary
+
+
+def test_compact_summary_truncation():
+    """Summary column respects width budget and appends +N more."""
+    ents = [_ent("added", f"item_{i}", "a.py") for i in range(10)]
+    c = _contrib(ents[:5])  # name-list mode (<=5 entities, 1 file)
+    _, summary = summarize_contribution_compact(c, summary_width=20)
+    assert "more" in summary or len(summary) <= 20
+
+
+def test_compact_long_name_truncates():
+    """A single oversized entity name is truncated with ellipsis."""
+    ents = [_ent("added",
+                 "BR-010: Anthropic Managed Agents Decoupled Arch",
+                 "a.py")]
+    c = _contrib(ents)
+    _, summary = summarize_contribution_compact(c, summary_width=20)
+    assert len(summary) <= 20
+    assert "\u2026" in summary or summary.startswith("BR-010")
+
+
+def test_compact_phantom_returns_empty():
+    c = TraceContribution("t1", 0, 0.0, overlap_case="phantom")
+    state, summary = summarize_contribution_compact(c)
+    assert state == "" and summary == ""
+
+
+def test_compact_adjacent_dedupe():
+    ents = [_ent("added", "dup", "a.py"),
+            _ent("added", "dup", "b.py"),
+            _ent("modified", "other", "b.py")]
+    c = _contrib(ents)
+    _, summary = summarize_contribution_compact(c)
+    # name-list mode (2 files, 3 entities). Dup appears twice adjacent.
+    assert "dup x2" in summary
