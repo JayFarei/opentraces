@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T04:45Z
-Last iteration agent: claude-opus-4-6 (loop iter 10)
+Last update: 2026-04-14T05:15Z
+Last iteration agent: claude-opus-4-6 (loop iter 11)
 
 ---
 
@@ -26,6 +26,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | commit_amend                 | pass | 2026-04-14 | iter 9; amend doesn't break attribution (audit history immutable across SHA change) |
 | commit_amend_adds_file       | pass | 2026-04-14 | iter 10; amend adds user-authored file → correctly reported missing_from_audit, not invented credit |
 | crash_during_prompt          | pass | 2026-04-13 | — |
+| empty_file_write             | pass | 2026-04-14 | iter 11; `touch` placeholder → attributed with total_lines=0 |
 | exit_without_done            | pass | 2026-04-13 | — |
 | file_create_then_delete      | fail | 2026-04-13 | "README.md missing from attribution" — empty commit has no diff-tree files; scenario asserts README.md pre-audit which isn't in the commit diff |
 | formatter_after_edit         | pass | 2026-04-13 | — |
@@ -47,7 +48,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 28/30 passing.** Added scenarios across iters 3-10:
+**Current: 29/31 passing.** Added scenarios across iters 3-10:
 `bash_rename`, `mixed_write_and_bash`, `two_traces_different_files`,
 `binary_file_added` (exposed a real spike bug), `symlink_added`,
 `no_trailing_newline`, `commit_amend`, `commit_amend_adds_file`.
@@ -128,6 +129,11 @@ detection; binary-file touch; very-large-file blame; symlink file).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 11 (opus 4.6): Authored `empty_file_write` — agent
+  creates a zero-byte file via `touch`. Blame on empty files yields no
+  lines; attribution cleanly reports `total_lines = 0` without
+  crashing or mis-classifying. Passed first try.
 
 - 2026-04-14 — iter 10 (opus 4.6): Authored `commit_amend_adds_file` —
   user amends a trace's commit to include an unrelated file they

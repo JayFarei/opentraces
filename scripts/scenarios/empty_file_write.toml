@@ -1,0 +1,38 @@
+name = "empty_file_write"
+description = """
+Agent creates an empty file (zero bytes) via Bash `touch`. Commit.
+Blame on empty files yields no lines — attribution should report
+`attributed` with `total_lines = 0` rather than crash or mis-report
+as missing. Realistic: agents often `touch` placeholders (`.gitkeep`,
+`__init__.py`, empty manifest files).
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run: touch placeholder.txt",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "add placeholder"
+
+# Empty file: attributed cleanly with 0 total lines.
+[[assertions]]
+file = "placeholder.txt"
+total_lines = 0
