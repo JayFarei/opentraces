@@ -512,18 +512,88 @@ def _step_run_backfill(state: RunState, params: dict) -> None:
 
 
 def _step_invoke_cli(state: RunState, params: dict) -> None:
-    """Run ``./otd <args...>`` via subprocess, capture stdout/stderr/exit."""
+    """Run ``./otd <args...>`` via subprocess, capture stdout/stderr/exit.
+
+    Honors ``state._pending_stdin`` (from ``mock_stdin``) and
+    ``state._env_overrides`` (from ``stage_claude_corpus``).
+    """
     args = list(params.get("args") or [])
     repo_root = Path(__file__).resolve().parent.parent
     otd = repo_root / "otd"
-    r = subprocess.run([str(otd), *args], cwd=state.project_dir,
-                       capture_output=True, text=True)
+    env = {**os.environ}
+    overrides = getattr(state, "_env_overrides", None) or {}
+    env.update({k: str(v) for k, v in overrides.items()})
+    stdin_text = getattr(state, "_pending_stdin", None)
+    r = subprocess.run(
+        [str(otd), *args], cwd=state.project_dir,
+        capture_output=True, text=True,
+        input=stdin_text if stdin_text is not None else None,
+        env=env,
+    )
+    state._pending_stdin = None
     state.last_cli = {
         "args": args,
         "stdout": r.stdout,
         "stderr": r.stderr,
         "returncode": r.returncode,
     }
+
+
+def _step_mock_stdin(state: RunState, params: dict) -> None:
+    """Queue a scripted stdin payload for the NEXT ``invoke_cli`` step."""
+    state._pending_stdin = params.get("text", "") or ""
+
+
+def _step_stage_claude_corpus(state: RunState, params: dict) -> None:
+    """Create a fixture JSONL corpus under a scenario-local HOME.
+
+    Subsequent ``invoke_cli`` calls in this scenario inherit the HOME
+    override via ``state._env_overrides``.
+
+    Params (all optional):
+        home: relative dir under project_dir to use as HOME (default: ".fakehome")
+        target_dir: abs path whose encoded name becomes the corpus subdir
+                    (default: the current project_dir)
+        session: jsonl filename (default: "session-a.jsonl")
+        content: jsonl text (default: "{}\\n")
+    """
+    home_rel = params.get("home", ".fakehome")
+    home = (state.project_dir / home_rel).resolve()
+    home.mkdir(parents=True, exist_ok=True)
+    target = Path(params.get("target_dir") or state.project_dir).resolve()
+    encoded = "".join(
+        c if c.isalnum() or c == "-" else "-" for c in str(target)
+    )
+    corpus = home / ".claude" / "projects" / encoded
+    corpus.mkdir(parents=True, exist_ok=True)
+    (corpus / params.get("session", "session-a.jsonl")).write_text(
+        params.get("content", "{}\n")
+    )
+    overrides = getattr(state, "_env_overrides", None) or {}
+    overrides["HOME"] = str(home)
+    state._env_overrides = overrides
+
+
+def _step_write_attribution(state: RunState, params: dict) -> None:
+    """Write a pre-built attribution JSON directly into the cache.
+
+    Used by graph-rendering scenarios that need pre-populated attribution
+    without driving a real claude REPL. Resolves ``ref`` (default HEAD) to
+    a concrete SHA, fills it into the payload, and calls
+    ``AttributionCache.write_attribution``.
+    """
+    from opentraces.core.cache import AttributionCache
+    ref = params.get("ref", "HEAD")
+    data = params.get("data") or {}
+    sha = subprocess.check_output(
+        ["git", "rev-parse", ref], cwd=state.project_dir, text=True
+    ).strip()
+    payload = dict(data)
+    payload.setdefault("commit_sha", sha)
+    payload.setdefault("project_slug", state.project_dir.name)
+    payload.setdefault("generated_at", "2026-04-14T00:00:00Z")
+    c = AttributionCache(state.project_dir)
+    c.write_attribution(sha, payload)
 
 
 def _step_delete_cache_entry(state: RunState, params: dict) -> None:
@@ -554,6 +624,9 @@ STEP_HANDLERS = {
     "run_backfill": _step_run_backfill,
     "invoke_cli": _step_invoke_cli,
     "delete_cache_entry": _step_delete_cache_entry,
+    "write_attribution": _step_write_attribution,
+    "mock_stdin": _step_mock_stdin,
+    "stage_claude_corpus": _step_stage_claude_corpus,
 }
 
 
@@ -613,6 +686,26 @@ def _assert_backfill_scenario(state: RunState, a: dict) -> str:
                 f"(stdout={haystack[:200]!r})"
             )
         return f"stdout contains {needle!r} ✓"
+    if kind == "cli_stdout_matches_snapshot":
+        from opentraces.clients.text.graph_renderer import (
+            normalize_for_snapshot as _norm,
+        )
+        fixture = a["fixture"]
+        fixture_path = Path(__file__).resolve().parent.parent / fixture
+        if not fixture_path.is_file():
+            raise AssertionError(f"snapshot fixture missing: {fixture_path}")
+        expected = _norm(fixture_path.read_text())
+        actual = _norm(state.last_cli.get("stdout", ""))
+        if actual != expected:
+            import difflib
+            diff = "\n".join(difflib.unified_diff(
+                expected.splitlines(), actual.splitlines(),
+                fromfile="expected", tofile="actual", lineterm=""
+            ))
+            raise AssertionError(
+                f"cli_stdout_matches_snapshot({fixture}) diff:\n{diff}"
+            )
+        return f"snapshot {fixture} ✓"
     if kind == "cli_returncode":
         expected = int(a["equals"])
         actual = int(state.last_cli.get("returncode", -1))
@@ -622,6 +715,39 @@ def _assert_backfill_scenario(state: RunState, a: dict) -> str:
                 f"(stderr={state.last_cli.get('stderr','')[:200]!r})"
             )
         return f"returncode={actual} ✓"
+    if kind == "entity_cache_has":
+        from opentraces.core.cache import AttributionCache
+        ref = a.get("ref", "HEAD")
+        sha = subprocess.check_output(
+            ["git", "rev-parse", ref], cwd=state.project_dir, text=True
+        ).strip()
+        c = AttributionCache(state.project_dir)
+        p = c.entity_path(sha)
+        if not p.is_file():
+            raise AssertionError(
+                f"entity_cache_has(ref={ref}): no entity file at {p}"
+            )
+        data = json.loads(p.read_text())
+        entities = data.get("entities") or []
+        want_name = a.get("entity_name")
+        want_change = a.get("change_type")
+        want_old = a.get("old_entity_name")
+        for ent in entities:
+            if want_name is not None and ent.get("entity_name") != want_name:
+                continue
+            if want_change is not None and ent.get("change_type") != want_change:
+                continue
+            if want_old is not None and ent.get("old_entity_name") != want_old:
+                continue
+            return (
+                f"entity[{ref}] change={ent.get('change_type')} "
+                f"name={ent.get('entity_name')} ✓"
+            )
+        raise AssertionError(
+            f"entity_cache_has(ref={ref}): no entity matched "
+            f"name={want_name!r} change={want_change!r} "
+            f"old={want_old!r} (got {entities!r})"
+        )
     if kind == "report_field":
         if not state.backfill_reports:
             raise AssertionError("report_field: no backfill reports recorded")
@@ -659,7 +785,8 @@ def run_assertions(state: RunState, assertions: list[dict]) -> list[str]:
     # Plan-043 phase-1 kinds don't need an audit build — handle separately so
     # backfill scenarios don't reinvoke the spike unnecessarily.
     phase1_kinds = {"cache_file_exists", "cli_stdout_matches",
-                    "cli_stderr_matches", "cli_returncode", "report_field"}
+                    "cli_stderr_matches", "cli_returncode", "report_field",
+                    "entity_cache_has", "cli_stdout_matches_snapshot"}
     if all(a.get("kind") in phase1_kinds for a in assertions):
         return [_assert_backfill_scenario(state, a) for a in assertions]
     result = _attribution_for(state)

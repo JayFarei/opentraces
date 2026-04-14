@@ -1,0 +1,12 @@
+{
+  "entities": [
+    {
+      "change_type": "added",
+      "entity_kind": "function",
+      "entity_name": "greet",
+      "file": "src/a.py",
+      "before": null,
+      "after": "def greet():\n    return 'hi'\n"
+    }
+  ]
+}

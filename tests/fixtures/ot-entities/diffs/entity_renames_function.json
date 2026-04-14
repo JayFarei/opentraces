@@ -1,0 +1,13 @@
+{
+  "entities": [
+    {
+      "change_type": "renamed",
+      "entity_kind": "function",
+      "entity_name": "compute_total",
+      "old_entity_name": "compute",
+      "file": "src/a.py",
+      "before": "def compute():\n    return 0\n",
+      "after": "def compute_total():\n    return 0\n"
+    }
+  ]
+}

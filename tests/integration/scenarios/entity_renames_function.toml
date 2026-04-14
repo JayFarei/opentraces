@@ -1,0 +1,37 @@
+name = "entity_renames_function"
+description = "Renaming a function records old_entity_name in the entity cache."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "src/a.py"
+content = "def compute():\n    return 0\n"
+
+[[steps]]
+type = "commit"
+message = "initial compute"
+
+[[steps]]
+type = "write_file"
+path = "src/a.py"
+content = "def compute_total():\n    return 0\n"
+
+[[steps]]
+type = "commit"
+message = "entity_renames_function"
+
+[[steps]]
+type = "run_backfill"
+mode = "rebuild"
+
+[[assertions]]
+kind = "entity_cache_has"
+ref = "HEAD"
+entity_name = "compute_total"
+change_type = "renamed"
+old_entity_name = "compute"

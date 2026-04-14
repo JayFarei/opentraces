@@ -1,0 +1,36 @@
+name = "entity_deletes_function"
+description = "Deleting a function records a 'deleted' entry in the entity cache."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "src/a.py"
+content = "def old_helper():\n    return None\n\ndef keep():\n    return 1\n"
+
+[[steps]]
+type = "commit"
+message = "initial helpers"
+
+[[steps]]
+type = "write_file"
+path = "src/a.py"
+content = "def keep():\n    return 1\n"
+
+[[steps]]
+type = "commit"
+message = "entity_deletes_function"
+
+[[steps]]
+type = "run_backfill"
+mode = "rebuild"
+
+[[assertions]]
+kind = "entity_cache_has"
+ref = "HEAD"
+entity_name = "old_helper"
+change_type = "deleted"

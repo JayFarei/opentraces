@@ -1,0 +1,36 @@
+name = "entity_modifies_class"
+description = "Modifying a class body records a 'modified' entry in the entity cache."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "src/a.py"
+content = "class Widget:\n    def tick(self):\n        return 1\n"
+
+[[steps]]
+type = "commit"
+message = "initial widget"
+
+[[steps]]
+type = "write_file"
+path = "src/a.py"
+content = "class Widget:\n    def tick(self):\n        return 2\n"
+
+[[steps]]
+type = "commit"
+message = "entity_modifies_class"
+
+[[steps]]
+type = "run_backfill"
+mode = "rebuild"
+
+[[assertions]]
+kind = "entity_cache_has"
+ref = "HEAD"
+entity_name = "Widget"
+change_type = "modified"

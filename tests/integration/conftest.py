@@ -37,3 +37,26 @@ def pytest_collection_modifyitems(config, items):
 def scenarios_dir() -> Path:
     """Absolute path to the scenario TOMLs."""
     return SCENARIOS_DIR
+
+
+FIXTURE_ENTITY_BIN = (
+    Path(__file__).parent.parent / "fixtures" / "ot-entities" / "ot-entities"
+).resolve()
+
+
+@pytest.fixture(autouse=True)
+def _entity_parser_fixture_bin(request, monkeypatch):
+    """Point the entity parser at the fixture binary for `entity_*` scenarios.
+
+    Scenarios named ``entity_*`` exercise the entity-diff cache path but
+    we never want them to touch the real binary (which may not be
+    installed locally). Setting ``OPENTRACES_ENTITY_BIN`` to the fixture
+    means ``EntityRunner.available()`` returns True and the backfill
+    writes entity cache files using the fixture's canned JSON.
+    """
+    node = getattr(request, "node", None)
+    nodeid = getattr(node, "nodeid", "") if node else ""
+    # The scenario runner parametrizes with id=<stem>, e.g. "[entity_adds_function]"
+    if "entity_" in nodeid and FIXTURE_ENTITY_BIN.is_file():
+        monkeypatch.setenv("OPENTRACES_ENTITY_BIN", str(FIXTURE_ENTITY_BIN))
+    yield
