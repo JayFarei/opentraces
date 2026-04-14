@@ -23,6 +23,8 @@ def resume_claude_code(
     *,
     project_cwd: Path | None = None,
     dry_run: bool = False,
+    trace_id: str | None = None,
+    short_name: str | None = None,
 ) -> int:
     """Execvp into ``claude --resume <session_id>``.
 
@@ -44,6 +46,19 @@ def resume_claude_code(
     if dry_run:
         click.echo(" ".join(argv))
         return 0
+
+    # One-line summary so the user sees what we're handing control to
+    # before exec replaces the process. Stderr keeps stdout clean for
+    # any redirected pipeline. Best-effort — never abort the resume.
+    if trace_id:
+        try:
+            label = short_name or "untitled"
+            click.echo(
+                f"Resuming claude-code session for trace {trace_id[:8]} ({label})",
+                err=True,
+            )
+        except Exception:
+            pass
 
     if project_cwd is not None:
         try:

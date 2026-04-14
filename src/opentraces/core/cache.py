@@ -42,6 +42,11 @@ from typing import Any
 from .config import get_project_dir
 
 CACHE_VERSION = 1
+# Independent of CACHE_VERSION: tracks the *content* schema of the
+# attribution payload's identifier fields. Bumped to 2 when we fixed the
+# session_id-leaking-as-trace_id bug — v1 caches may carry session_ids in
+# the traces[].trace_id field and need read-time normalisation.
+ATTRIBUTION_SCHEMA_VERSION = 2
 BLOB_SPILL_THRESHOLD = 256 * 1024  # bytes
 
 # Subdir names — intentionally generic. No user-visible "sem"/"tree-sitter"/etc.
@@ -84,15 +89,81 @@ class AttributionCache:
         if not p.is_file():
             return None
         try:
-            return json.loads(p.read_text())
+            data = json.loads(p.read_text())
         except (json.JSONDecodeError, OSError):
             return None
+        if isinstance(data, dict):
+            data = self._normalise_legacy_trace_ids(data)
+        return data
+
+    def _normalise_legacy_trace_ids(self, data: dict) -> dict:
+        """In-memory fixup for v1 caches that wrote session_ids under the
+        ``trace_id`` name. Maps each session_id to the real trace_id by
+        looking up the matching JSONL's first line. Never mutates the
+        on-disk cache — users wanting permanent fix run ``ot backfill
+        --rebuild``.
+        """
+        try:
+            schema_v = int(data.get("attribution_schema_version") or 1)
+        except (TypeError, ValueError):
+            schema_v = 1
+        if schema_v >= ATTRIBUTION_SCHEMA_VERSION:
+            return data
+        traces = data.get("traces")
+        if not isinstance(traces, list) or not traces:
+            return data
+        # Build session_id -> trace_id map from the Claude Code corpus,
+        # lazily and only when needed.
+        try:
+            from ..enrichment.git.attribution import (
+                _encode_cwd, _read_trace_id_from_jsonl,
+            )
+        except Exception:
+            return data
+        proj_dir = (
+            Path.home() / ".claude" / "projects"
+            / _encode_cwd(self._project_cwd)
+        )
+        if not proj_dir.is_dir():
+            return data
+        sid_to_tid: dict[str, str] = {}
+        for jsonl_path in proj_dir.glob("*.jsonl"):
+            tid = _read_trace_id_from_jsonl(jsonl_path)
+            if tid:
+                sid_to_tid[jsonl_path.stem] = tid
+        if not sid_to_tid:
+            return data
+        for entry in traces:
+            if not isinstance(entry, dict):
+                continue
+            old = entry.get("trace_id")
+            if isinstance(old, str) and old in sid_to_tid:
+                entry["trace_id"] = sid_to_tid[old]
+        # Same fixup for files.<rel>.lines[].trace_id when present inline.
+        files = data.get("files") or {}
+        if isinstance(files, dict):
+            for info in files.values():
+                if not isinstance(info, dict):
+                    continue
+                lines = info.get("lines")
+                if not isinstance(lines, list):
+                    continue
+                for ln in lines:
+                    if not isinstance(ln, dict):
+                        continue
+                    old = ln.get("trace_id")
+                    if isinstance(old, str) and old in sid_to_tid:
+                        ln["trace_id"] = sid_to_tid[old]
+        return data
 
     def write_attribution(self, sha: str, data: dict) -> None:
         """Write attribution JSON atomically. Spills oversized file payloads
         into the blob store before writing."""
         data = dict(data)  # shallow copy; we may mutate files.*.lines
         data.setdefault("version", CACHE_VERSION)
+        # Stamp every fresh write with the current attribution schema
+        # version so future read-time normalisers can skip v2+ payloads.
+        data["attribution_schema_version"] = ATTRIBUTION_SCHEMA_VERSION
         data.setdefault("commit_sha", sha)
         files = data.get("files") or {}
         for rel, info in list(files.items()):
