@@ -67,18 +67,25 @@ def test_dot_full_attribution_green_solid() -> None:
     assert code == gr.ANSI_GREEN
 
 
-def test_dot_partial_attribution_green_half() -> None:
+def test_dot_is_always_solid_regardless_of_coverage() -> None:
+    """The commit dot is always ● — colour carries attribution state."""
+    # Partial coverage: yellow-solid, never ◐.
     c = _mk_commit(traces=[gr.TraceContribution("t", 10, attributed_ratio=0.5)])
-    glyph, code = gr._commit_dot(c, enabled=True)
-    assert glyph == gr.DOT_HALF
-    assert code == gr.ANSI_GREEN
-
-
-def test_dot_pre_audit_only_yellow_solid() -> None:
-    c = _mk_commit(traces=[gr.TraceContribution("t", 10, attributed_ratio=0.0)])
     glyph, code = gr._commit_dot(c, enabled=True)
     assert glyph == gr.DOT_SOLID
     assert code == gr.ANSI_YELLOW
+
+    # Low coverage: red-solid.
+    c2 = _mk_commit(traces=[gr.TraceContribution("t", 10, attributed_ratio=0.2)])
+    glyph2, code2 = gr._commit_dot(c2, enabled=True)
+    assert glyph2 == gr.DOT_SOLID
+    assert code2 == "\x1b[31m"
+
+    # Zero attributed but traces present: still red-solid.
+    c3 = _mk_commit(traces=[gr.TraceContribution("t", 10, attributed_ratio=0.0)])
+    glyph3, code3 = gr._commit_dot(c3, enabled=True)
+    assert glyph3 == gr.DOT_SOLID
+    assert code3 == "\x1b[31m"
 
 
 def test_dot_heavy_missing_magenta() -> None:
@@ -213,15 +220,93 @@ def test_trace_primary_mode() -> None:
 
 # --- Width truncation ----------------------------------------------------- #
 
-def test_long_subject_truncated_to_width() -> None:
+def test_long_subject_not_truncated() -> None:
+    """Commit subject is rendered in full; long lines may exceed width."""
+    subject = "x" * 200
     c = gr.Commit(sha="c" * 40, short_sha="ccccccc",
-                  subject="x" * 200, timestamp="2026-04-14T00:00:00Z",
+                  subject=subject, timestamp="2026-04-14T00:00:00Z",
                   parents=[],
                   traces=[gr.TraceContribution("t", 1, lifecycle="final",
                                                attributed_ratio=1.0)])
     out = gr.strip_ansi(gr.render([c], gr.RenderOptions(width=40, color=False)))
-    for line in out.splitlines():
-        assert len(line) <= 40, f"line over budget: {len(line)} {line!r}"
+    assert subject in out
+    assert "\u2026" not in out
+
+
+def test_unattributed_commit_renders_single_line() -> None:
+    """Commits with no trace attribution render as one line, no stack."""
+    c = gr.Commit(sha="u" * 40, short_sha="uuuuuuu",
+                  subject="workspace commit",
+                  timestamp="2026-04-14T00:00:00Z", parents=[], traces=[])
+    out = gr.strip_ansi(gr.render([c], gr.RenderOptions(color=False)))
+    lines = out.rstrip("\n").split("\n")
+    assert len(lines) == 1
+    assert lines[0].startswith("\u250A\u25CF")  # ┊●
+    assert "c:uuuuuuu" in lines[0]
+    assert "workspace commit" in lines[0]
+    # No stack header or close.
+    assert "\u256D\u2504" not in out  # ╭┄
+    assert "\u251C\u256F" not in out  # ├╯
+    assert "<unattributed>" not in out
+
+
+def test_entity_summary_render_with_summaries() -> None:
+    """Trace rows render compact entity summaries when provided."""
+    from opentraces.core.entity_join import EntityChange
+    ents = [
+        EntityChange(change_type="added", entity_type="function",
+                     entity_name="foo", file_path="a.py"),
+        EntityChange(change_type="added", entity_type="function",
+                     entity_name="bar", file_path="a.py"),
+        EntityChange(change_type="modified", entity_type="class",
+                     entity_name="Baz", file_path="a.py"),
+    ]
+    counts, names = gr._entity_summary_parts(ents, [])
+    assert counts == "+2 ~1"
+    assert "bar" in names and "foo" in names and "Baz" in names
+    assert "+X more" not in names  # only 3 total
+
+
+def test_entity_summary_caps_at_five_names() -> None:
+    from opentraces.core.entity_join import EntityChange
+    ents = [EntityChange(change_type="added", entity_type="function",
+                         entity_name=f"e{i:02d}", file_path="a.py")
+            for i in range(8)]
+    counts, names = gr._entity_summary_parts(ents, [])
+    assert counts == "+8"
+    assert names.endswith("+3 more")
+    # Five names rendered.
+    assert names.count(",") == 5  # 5 names = 4 commas + "+3 more" comma
+
+
+def test_entity_summary_empty_returns_em_dash() -> None:
+    counts, names = gr._entity_summary_parts([], [])
+    assert counts == "\u2014"
+    assert names == ""
+
+
+def test_line_count_fallback_when_no_summaries() -> None:
+    """Without entity_summaries the renderer uses [N lines]."""
+    c = gr.Commit(sha="a" * 40, short_sha="aaaaaaa", subject="s",
+                  timestamp="2026-04-14T00:00:00Z", parents=[],
+                  traces=[gr.TraceContribution("tid", 42, lifecycle="final",
+                                               attributed_ratio=1.0)])
+    # entity_summaries stays None.
+    out = gr.strip_ansi(gr.render([c], gr.RenderOptions(color=False)))
+    assert "[42 lines]" in out
+
+
+def test_entity_summary_rendered_when_provided() -> None:
+    c = gr.Commit(sha="a" * 40, short_sha="aaaaaaa", subject="s",
+                  timestamp="2026-04-14T00:00:00Z", parents=[],
+                  traces=[gr.TraceContribution("tid12345", 42,
+                                               lifecycle="final",
+                                               attributed_ratio=1.0)])
+    c.entity_summaries = {"tid12345": ("+3 ~1", "foo, bar, Baz, qux")}
+    out = gr.strip_ansi(gr.render([c], gr.RenderOptions(color=False)))
+    assert "+3 ~1" in out
+    assert "foo, bar, Baz, qux" in out
+    assert "[42 lines]" not in out
 
 
 # --- Manifesto reference snapshot ----------------------------------------- #
