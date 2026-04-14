@@ -86,15 +86,15 @@ _CODES: dict[Role, str] = {
 
 def render_handle(kind: str, full_id: str, *,
                   use_color: bool, shortcut_len: int = 2) -> str:
-    """Render a 3-part ``t:b7 3af9c8`` style handle.
+    """Render a 3-part ``t:b73af9c8`` style handle.
 
     - ``kind`` is ``"t"`` or ``"c"`` (trace vs commit). Case-insensitive.
     - ``full_id`` is the full hash/id; only the first ~10 chars are used.
-    - Layout: ``<kind>:`` (ID_PREFIX) + ``<first-N>`` (ID_SHORTCUT) + space +
-      ``<rest>`` (COMMIT_ID / TRACE_ID), a visible space between the
-      bright shortcut and the muted tail keeps the shortcut skimmable.
-    - When ``use_color=False``, returns the plain concatenation (with
-      the separating space so column alignment still works).
+    - Layout: ``<kind>:`` (ID_PREFIX) + ``<first-N>`` (ID_SHORTCUT) +
+      ``<rest>`` (COMMIT_ID / TRACE_ID), emitted as a single contiguous
+      token. The bright bold+underline on the shortcut handles visual
+      segmentation when colour is on; in ``--no-color`` the ID reads as
+      one token, which matches how users paste it back on the command line.
     """
     k = (kind or "").lower()[:1]
     if k not in ("t", "c"):
@@ -107,11 +107,11 @@ def render_handle(kind: str, full_id: str, *,
     tail = fid[shortcut_len:shortcut_len + 6]
     prefix_txt = f"{k}:"
     if not use_color:
-        return f"{prefix_txt}{shortcut} {tail}" if tail else f"{prefix_txt}{shortcut}"
+        return f"{prefix_txt}{shortcut}{tail}" if tail else f"{prefix_txt}{shortcut}"
     pfx = paint(Role.ID_PREFIX, prefix_txt, use_color=True)
     sc = paint(head_role, shortcut, use_color=True)
     tl = paint(tail_role, tail, use_color=True)
-    return f"{pfx}{sc} {tl}" if tail else f"{pfx}{sc}"
+    return f"{pfx}{sc}{tl}" if tail else f"{pfx}{sc}"
 
 
 def paint(role: Role, text: str, *, use_color: bool) -> str:

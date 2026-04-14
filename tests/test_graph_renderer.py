@@ -132,8 +132,8 @@ def test_single_trace_stack_grammar() -> None:
     assert lines[1].startswith("┊●")
     # Date column is dropped.
     assert "2026-04-14" not in lines[1]
-    # Handle now emits a 3-part form: "c:aa aaaaa" (prefix, shortcut, tail).
-    assert "c:aa" in lines[1]
+    # Handle emits a single-token form: "c:aaaaaaaa" (prefix, shortcut, tail).
+    assert "c:aaaaaaa" in lines[1]
     assert lines[2] == "├╯"
 
 

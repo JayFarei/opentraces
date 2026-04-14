@@ -77,9 +77,9 @@ ANSI_DIM = "\x1b[2m"
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _SHA_RE = re.compile(r"\b[0-9a-f]{7,40}\b")
-# Handle form: "c:XX XXXXX" or "t:XX XXXXXXX" where the digits are all
-# hex. Two hex-chars, a space, 5-7 more hex chars.
-_HANDLE_RE = re.compile(r"\b([ct]):([0-9a-f]{2}) ([0-9a-f]{5,8})\b")
+# Handle form: "c:XXXXXXXX" or "t:XXXXXXXX" — one contiguous hex token
+# of length 7-10 after the "c:" / "t:" prefix.
+_HANDLE_RE = re.compile(r"\b([ct]):([0-9a-f]{7,10})\b")
 _ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?")
 
 
@@ -365,7 +365,7 @@ def _render_trace_header(trace: TraceContribution, first: bool,
         from .colors import render_handle  # local import to dodge cycles
         handle = render_handle("t", trace.trace_id or "?",
                                use_color=opts.color)
-        # Plain width of handle = len("t:XX XXXXXX") = 11 chars.
+        # Plain width of handle = len("t:XXXXXXXX") = 10 chars.
         # State column right-pad to 14. State may overflow (diffuse state);
         # in that case skip the separator and name column entirely.
         STATE_W = 14
@@ -443,7 +443,7 @@ def _render_commit_line(c: Commit, opts: RenderOptions) -> str:
         dotted = prefix_with_dot.replace(glyph, _color(glyph, code, True), 1)
     # Post-043 follow-up: drop date column; spine already conveys recency.
     # Layout: "<handle>  <subject>  <pct>%"  where <handle> is the
-    # render_handle() 3-part coloured token (c:<2bright> <5rest>).
+    # render_handle() coloured token (c:<2bright><6rest>), one token.
     from .colors import render_handle
     handle = render_handle("c", c.sha or c.short_sha, use_color=opts.color)
     pct_txt = ""

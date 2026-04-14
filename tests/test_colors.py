@@ -113,7 +113,7 @@ from opentraces.clients.text.colors import render_handle
 
 def test_render_handle_no_color_plain():
     out = render_handle("t", "b73af9c812345", use_color=False)
-    assert out == "t:b7 3af9c8"
+    assert out == "t:b73af9c8"
 
 
 def test_render_handle_color_has_three_styled_parts():
