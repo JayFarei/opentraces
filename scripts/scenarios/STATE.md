@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T02:15Z
-Last iteration agent: claude-opus-4-6 (loop iter 5)
+Last update: 2026-04-14T02:45Z
+Last iteration agent: claude-opus-4-6 (loop iter 6)
 
 ---
 
@@ -19,7 +19,8 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | bash_creates_files           | pass | 2026-04-13 | — |
 | bash_deletes                 | pass | 2026-04-14 | was failing; fixed by graceful-no-audit fallback |
 | bash_overwrites              | pass | 2026-04-13 | — |
-| bash_rename                  | pass | 2026-04-14 | new this iter; documents rename semantics (seed-author keeps credit for moved content, watcher credits active trace for new path) |
+| bash_rename                  | pass | 2026-04-14 | iter 3; rename semantics (seed-author keeps credit for moved content, watcher credits active trace for new path) |
+| binary_file_added            | pass | 2026-04-14 | iter 6; exposed & fixed UnicodeDecodeError on blame output for non-UTF-8 bytes |
 | clear_mid_session            | fail | 2026-04-14 | timeout fixed (harness slash-command handling); now fails on attribution — `/clear` drops file-history blobs for the cleared session, so early.md has no snapshots. Deeper spike question (see Open questions) |
 | close_without_exit           | pass | 2026-04-13 | — |
 | crash_during_prompt          | pass | 2026-04-13 | — |
@@ -42,10 +43,10 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 23/25 passing.** Added `bash_rename` (iter 3),
-`mixed_write_and_bash` (iter 4), `two_traces_different_files` (iter 5).
-`clear_mid_session` and `file_create_then_delete` remain blocked on
-human design decisions.
+**Current: 24/26 passing.** Added `bash_rename` (iter 3),
+`mixed_write_and_bash` (iter 4), `two_traces_different_files` (iter 5),
+`binary_file_added` (iter 6, exposed a real spike bug). `clear_mid_session`
+and `file_create_then_delete` remain blocked on human design decisions.
 
 ---
 
@@ -109,6 +110,18 @@ detection; binary-file touch; very-large-file blame; symlink file).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 6 (opus 4.6): Authored `binary_file_added` —
+  agent uses Bash printf to create a file with non-UTF-8 bytes
+  (PNG-like header + payload). First run crashed with
+  `UnicodeDecodeError` deep in the spike's `git()` helper: blame
+  output includes raw content bytes interleaved with ASCII porcelain
+  metadata, and `subprocess.run(text=True)` defaults to strict UTF-8
+  decoding. Fixed by switching to `encoding="utf-8",
+  errors="replace"`; line-count integrity is preserved because the
+  porcelain framing is ASCII-only. Scenario now passes; 3 lines
+  attributed to trace a. No regressions across self-tests or
+  baseline/small_tweak/bash_rename.
 
 - 2026-04-14 — iter 5 (opus 4.6): Authored `two_traces_different_files` —
   E2E harness variant of the `two_sessions_different_files` self-test.
