@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
-from .inbox import redact_step
+from .inbox import redact_pattern, redact_step
 from .state import StateManager, TraceStatus
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,85 @@ def redact_step_and_persist(
         raise
 
     return RedactResult(ok=True, step_index=step_index)
+
+
+def redact_pattern_and_persist(
+    staging_dir: Path,
+    trace_id: str,
+    pattern: str,
+    *,
+    regex: bool = False,
+    field: Optional[str] = None,
+    step: Optional[int] = None,
+) -> RedactResult:
+    """Apply :func:`redact_pattern` to a staged trace and atomically rewrite it.
+
+    Mirrors :func:`redact_step_and_persist` — same discovery, tempfile +
+    ``os.replace`` atomic write, and ``RedactResult`` shape — so callers can
+    swap helpers based on whether they want whole-step blanking or targeted
+    find-and-replace.
+    """
+    staging_file = staging_dir / f"{trace_id}.jsonl"
+    if not staging_file.exists():
+        return RedactResult(
+            ok=False,
+            error=f"Staging file not found for {trace_id}",
+            error_code="NOT_FOUND",
+            step_index=step if step is not None else -1,
+        )
+
+    text = staging_file.read_text().strip()
+    if not text:
+        return RedactResult(
+            ok=False,
+            error="Staging file is empty",
+            error_code="EMPTY",
+            step_index=step if step is not None else -1,
+        )
+
+    trace_data = json.loads(text.splitlines()[0])
+
+    try:
+        redact_pattern(
+            trace_data, pattern, regex=regex, field=field, step=step,
+        )
+    except ValueError as exc:
+        msg = str(exc)
+        if "out of range" in msg:
+            code = "OUT_OF_RANGE"
+        elif "pattern must be non-empty" in msg or "invalid regex" in msg:
+            code = "INVALID_PATTERN"
+        else:
+            code = "INVALID_PATTERN"
+        return RedactResult(
+            ok=False,
+            error=msg,
+            error_code=code,
+            step_index=step if step is not None else -1,
+        )
+
+    new_line = json.dumps(trace_data, ensure_ascii=False)
+    fd = tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=str(staging_dir),
+        suffix=".jsonl.tmp",
+        delete=False,
+    )
+    try:
+        fd.write(new_line + "\n")
+        fd.flush()
+        os.fsync(fd.fileno())
+        fd.close()
+        os.replace(fd.name, str(staging_file))
+    except BaseException:
+        fd.close()
+        try:
+            os.unlink(fd.name)
+        except OSError:
+            logger.debug("Failed to clean up temp file: %s", fd.name)
+        raise
+
+    return RedactResult(ok=True, step_index=step if step is not None else -1)
 
 
 def reject_trace(
