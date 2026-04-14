@@ -1,0 +1,42 @@
+name = "init_checkout_move_identity"
+description = "ot init records root_commit_sha in the marker. Re-running init is idempotent and preserves the recorded SHA even though .opentraces.json already exists (proxy for the checkout-move case: the root SHA is the stable identity that makes move-matching work)."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "a.py"
+content = "print('a')\n"
+
+[[steps]]
+type = "commit"
+message = "add a"
+
+# First init — scoped to a fake HOME so we don't touch the real registry.
+[[steps]]
+type = "stage_claude_corpus"
+home = ".fakehome"
+session = "s1.jsonl"
+content = "{}\n"
+
+[[steps]]
+type = "invoke_cli"
+args = ["init", "--no-hook"]
+
+[[assertions]]
+kind = "cli_returncode"
+equals = 0
+
+# Re-running init should succeed and not create a duplicate slug.
+[[steps]]
+type = "invoke_cli"
+args = ["init", "--no-hook"]
+
+[[assertions]]
+kind = "cli_returncode"
+equals = 0
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "Already initialized"
