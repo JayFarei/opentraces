@@ -44,7 +44,7 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
               since_ref: str | None, until_ref: str | None,
               show_all: bool, show_entities: bool, no_color: bool,
               project_dir: Path | None) -> None:
-    """Render commit + trace history in GitButler-style ASCII."""
+    """Render commit + trace history."""
     cwd = Path(project_dir or Path.cwd()).resolve()
 
     # Cache presence check — first run guidance.
