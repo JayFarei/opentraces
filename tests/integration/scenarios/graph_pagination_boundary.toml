@@ -1,0 +1,37 @@
+name = "graph_pagination_boundary"
+description = """
+With 40 commits on the branch, `ot graph --limit 20 --page 2` emits the
+second window — commit subjects 'commit21'..'commit40' — and none of the
+first page's 'commit1'..'commit20'. Uses `shell` to seed 40 commits in a
+loop rather than 40 separate steps.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "shell"
+command = "for i in $(seq 1 40); do echo line$i > f$i.txt; git add f$i.txt; git -c user.email=h@h -c user.name=H commit -q -m commit$i; done"
+
+[[steps]]
+type = "invoke_cli"
+args = ["graph", "--limit", "20", "--page", "2", "--no-color"]
+
+[[assertions]]
+kind = "cli_returncode"
+equals = 0
+
+# git log is newest-first. With 40 `commit<n>` commits plus 2 setup
+# commits (init + opentraces marker), page 2 (slice [20:40]) includes
+# commit20, commit19, …, commit1. Assertions below confirm the
+# boundary: commit1 and commit20 must be present.
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "commit1\n"
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "commit20"

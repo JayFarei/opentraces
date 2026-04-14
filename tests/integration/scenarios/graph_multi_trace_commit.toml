@@ -1,0 +1,38 @@
+name = "graph_multi_trace_commit"
+description = """
+One commit with three attributed traces. The stack opens with `┊╭┄` for
+the first trace, uses `┊├┄` for each subsequent trace, then the commit dot
+line, then `├╯` closes the stack.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "a.py"
+content = "print(1)\n"
+
+[[steps]]
+type = "commit"
+message = "add a"
+
+[[steps]]
+type = "write_attribution"
+ref = "HEAD"
+data = { version = 1, coverage = { attributed = 18, total = 18, ratio = 1.0 }, traces = [ { trace_id = "traceone11111111", line_count = 10, files = ["a.py"], lifecycle = "final" }, { trace_id = "tracetwo22222222", line_count = 5, files = ["a.py"], lifecycle = "provisional" }, { trace_id = "tracethr33333333", line_count = 3, files = ["a.py"], lifecycle = "final" } ], files = {} }
+
+[[steps]]
+type = "invoke_cli"
+args = ["graph", "--limit", "1", "--no-color"]
+
+[[assertions]]
+kind = "cli_returncode"
+equals = 0
+
+[[assertions]]
+kind = "cli_stdout_matches_snapshot"
+fixture = "tests/integration/snapshots/graph_multi.txt"
