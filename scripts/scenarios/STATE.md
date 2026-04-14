@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T03:45Z
-Last iteration agent: claude-opus-4-6 (loop iter 8)
+Last update: 2026-04-14T04:15Z
+Last iteration agent: claude-opus-4-6 (loop iter 9)
 
 ---
 
@@ -23,6 +23,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | binary_file_added            | pass | 2026-04-14 | iter 6; exposed & fixed UnicodeDecodeError on blame output for non-UTF-8 bytes |
 | clear_mid_session            | fail | 2026-04-14 | timeout fixed (harness slash-command handling); now fails on attribution — `/clear` drops file-history blobs for the cleared session, so early.md has no snapshots. Deeper spike question (see Open questions) |
 | close_without_exit           | pass | 2026-04-13 | — |
+| commit_amend                 | pass | 2026-04-14 | iter 9; amend doesn't break attribution (audit history immutable across SHA change) |
 | crash_during_prompt          | pass | 2026-04-13 | — |
 | exit_without_done            | pass | 2026-04-13 | — |
 | file_create_then_delete      | fail | 2026-04-13 | "README.md missing from attribution" — empty commit has no diff-tree files; scenario asserts README.md pre-audit which isn't in the commit diff |
@@ -45,11 +46,11 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 26/28 passing.** Added scenarios across iters 3-8:
+**Current: 27/29 passing.** Added scenarios across iters 3-9:
 `bash_rename`, `mixed_write_and_bash`, `two_traces_different_files`,
 `binary_file_added` (exposed a real spike bug), `symlink_added`,
-`no_trailing_newline`. `clear_mid_session` and `file_create_then_delete`
-remain blocked on human design decisions.
+`no_trailing_newline`, `commit_amend`. `clear_mid_session` and
+`file_create_then_delete` remain blocked on human design decisions.
 
 ---
 
@@ -125,6 +126,12 @@ detection; binary-file touch; very-large-file blame; symlink file).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 9 (opus 4.6): Authored `commit_amend` — trace writes
+  a file, user commits with a typo in the message, then `git commit
+  --amend`s to fix it. Commit SHA changes but tree stays identical;
+  attribution resolves through to the audit history unchanged. 3 lines
+  still credited to trace a. Passed first try.
 
 - 2026-04-14 — iter 8 (opus 4.6): Authored `no_trailing_newline` —
   agent creates a file via Bash `printf` without a terminating newline.
