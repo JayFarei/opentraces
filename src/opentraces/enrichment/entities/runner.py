@@ -89,7 +89,15 @@ class EntityRunner:
             return None
         if r.returncode != 0:
             return None
-        return (r.stdout or r.stderr).strip() or None
+        raw = (r.stdout or r.stderr).strip()
+        if not raw:
+            return None
+        # Upstream binary emits e.g. "sem 0.3.19" — strip the binary name so
+        # doctor / help output doesn't leak it into user-facing surfaces.
+        parts = raw.split(None, 1)
+        if len(parts) == 2 and parts[0].lower() == _BINARY_NAME.lower():
+            return parts[1].strip() or None
+        return raw
 
     # --- diff --------------------------------------------------------------
 
