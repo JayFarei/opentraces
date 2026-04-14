@@ -596,6 +596,29 @@ def _step_write_attribution(state: RunState, params: dict) -> None:
     c.write_attribution(sha, payload)
 
 
+def _step_write_entity_cache(state: RunState, params: dict) -> None:
+    """Write a pre-built entity cache JSON directly into the cache.
+
+    Parallel to ``write_attribution`` but targets
+    ``AttributionCache.entity_path(sha)``. Resolves ``ref`` (default HEAD)
+    to a SHA, then writes ``data`` atomically. No blob-spill logic —
+    entity payloads stay small in scenarios.
+    """
+    import os as _os
+    from opentraces.core.cache import AttributionCache
+    ref = params.get("ref", "HEAD")
+    data = params.get("data") or {}
+    sha = subprocess.check_output(
+        ["git", "rev-parse", ref], cwd=state.project_dir, text=True
+    ).strip()
+    c = AttributionCache(state.project_dir)
+    p = c.entity_path(sha)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+    _os.replace(tmp, p)
+
+
 def _step_delete_cache_entry(state: RunState, params: dict) -> None:
     """Delete a specific attribution cache file by commit ref."""
     from opentraces.core.cache import AttributionCache
@@ -625,6 +648,7 @@ STEP_HANDLERS = {
     "invoke_cli": _step_invoke_cli,
     "delete_cache_entry": _step_delete_cache_entry,
     "write_attribution": _step_write_attribution,
+    "write_entity_cache": _step_write_entity_cache,
     "mock_stdin": _step_mock_stdin,
     "stage_claude_corpus": _step_stage_claude_corpus,
 }
