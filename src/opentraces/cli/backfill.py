@@ -39,20 +39,26 @@ from ..core import backfill as _backfill
               help="Emit a JSON payload instead of the human summary.")
 @click.option("--verbose", "-v", is_flag=True,
               help="Forward verbose logging to the audit builder.")
+@click.option("--no-entities", "no_entities", is_flag=True,
+              help="Skip the entity-parser pass (attribution only).")
 def backfill_cmd(dry_run: bool, rebuild: bool, since_ref: str | None,
                  project_dir: Path | None, max_commits: int,
-                 as_json: bool, verbose: bool) -> None:
+                 as_json: bool, verbose: bool, no_entities: bool) -> None:
     """Backfill per-commit attribution into the local cache."""
     cwd = Path(project_dir or Path.cwd()).resolve()
+    include_entities = not no_entities
     if dry_run:
         report = _backfill.run_dry_run(cwd, verbose=verbose,
-                                       max_commits=max_commits)
+                                       max_commits=max_commits,
+                                       include_entities=include_entities)
     elif rebuild or since_ref:
         report = _backfill.run_full(cwd, verbose=verbose,
-                                    max_commits=max_commits)
+                                    max_commits=max_commits,
+                                    include_entities=include_entities)
     else:
         report = _backfill.run_incremental(cwd, verbose=verbose,
-                                           max_commits=max_commits)
+                                           max_commits=max_commits,
+                                           include_entities=include_entities)
 
     payload = {
         "commits_processed": report.commits_processed,

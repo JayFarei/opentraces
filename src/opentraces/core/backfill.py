@@ -27,10 +27,14 @@ abort the run — other commits keep going. Under strict callers should inspect
 from __future__ import annotations
 
 import datetime
+import json
+import logging
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..enrichment.entities import EntityRunner
 from ..enrichment.git import attribution as _attr
 from ..enrichment.git.attribution import (
     attribute_commit,
@@ -41,6 +45,8 @@ from ..enrichment.git.attribution import (
 from .cache import AttributionCache, CACHE_VERSION
 from .config import _project_slug_for, get_project_state_path
 from .state import StateManager
+
+logger = logging.getLogger(__name__)
 
 # Safety cap for --rebuild; phase 7 will raise this.
 DEFAULT_MAX_COMMITS = 500
@@ -197,13 +203,45 @@ def _expand_ranges(ranges: list[str]) -> list[int]:
 
 # --- public api -------------------------------------------------------------
 
+def _write_entity_cache(runner: EntityRunner, cache: AttributionCache,
+                        project_cwd: Path, sha: str) -> bool:
+    """Run the entity parser for ``sha`` and persist its output.
+
+    Returns True on a successful write. Failures are logged and swallowed
+    — entity enrichment is best-effort, never blocks the attribution pass.
+    """
+    try:
+        data = runner.diff_commit(project_cwd, sha)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("entity parser failed for %s: %s", sha[:8], e)
+        return False
+    path = cache.entity_path(sha)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+        os.replace(tmp, path)
+    except OSError as e:
+        logger.warning("failed to write entity cache for %s: %s", sha[:8], e)
+        if tmp.exists():
+            tmp.unlink()
+        return False
+    return True
+
+
 def _run(project_cwd: Path, *, full: bool, dry_run: bool,
-         verbose: bool, max_commits: int) -> BackfillReport:
+         verbose: bool, max_commits: int,
+         include_entities: bool = True) -> BackfillReport:
     project_cwd = Path(project_cwd).resolve()
     state = StateManager(state_path=get_project_state_path(project_cwd))
     cache = AttributionCache(project_cwd)
 
     report = BackfillReport(dry_run=dry_run)
+    entity_runner: EntityRunner | None = None
+    if include_entities and not dry_run:
+        er = EntityRunner()
+        if er.available():
+            entity_runner = er
 
     if full and not dry_run:
         cache.clear()
@@ -239,6 +277,8 @@ def _run(project_cwd: Path, *, full: bool, dry_run: bool,
                                       project_slug=project_slug)
         if not dry_run:
             cache.write_attribution(sha, data)
+            if entity_runner is not None:
+                _write_entity_cache(entity_runner, cache, project_cwd, sha)
         report.commits_processed += 1
         cov = data.get("coverage") or {}
         report.attributed_lines += int(cov.get("attributed") or 0)
@@ -256,18 +296,24 @@ def _run(project_cwd: Path, *, full: bool, dry_run: bool,
 
 
 def run_incremental(project_cwd: Path, *, verbose: bool = False,
-                    max_commits: int = DEFAULT_MAX_COMMITS) -> BackfillReport:
+                    max_commits: int = DEFAULT_MAX_COMMITS,
+                    include_entities: bool = True) -> BackfillReport:
     return _run(project_cwd, full=False, dry_run=False,
-                verbose=verbose, max_commits=max_commits)
+                verbose=verbose, max_commits=max_commits,
+                include_entities=include_entities)
 
 
 def run_full(project_cwd: Path, *, verbose: bool = False,
-             max_commits: int = DEFAULT_MAX_COMMITS) -> BackfillReport:
+             max_commits: int = DEFAULT_MAX_COMMITS,
+             include_entities: bool = True) -> BackfillReport:
     return _run(project_cwd, full=True, dry_run=False,
-                verbose=verbose, max_commits=max_commits)
+                verbose=verbose, max_commits=max_commits,
+                include_entities=include_entities)
 
 
 def run_dry_run(project_cwd: Path, *, verbose: bool = False,
-                max_commits: int = DEFAULT_MAX_COMMITS) -> BackfillReport:
+                max_commits: int = DEFAULT_MAX_COMMITS,
+                include_entities: bool = True) -> BackfillReport:
     return _run(project_cwd, full=True, dry_run=True,
-                verbose=verbose, max_commits=max_commits)
+                verbose=verbose, max_commits=max_commits,
+                include_entities=include_entities)
