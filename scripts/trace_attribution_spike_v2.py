@@ -25,6 +25,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -194,11 +195,506 @@ def _hash_content_into_repo(project_cwd: Path, content: str) -> str:
                input=content).strip()
 
 
-def _read_head_content(project_cwd: Path, rel: str) -> str | None:
-    """Read the blob at HEAD:<rel>, or None if the path doesn't exist at HEAD."""
-    if not git_ok("-C", str(project_cwd), "cat-file", "-e", f"HEAD:{rel}"):
+def _read_head_content(project_cwd: Path, rel: str,
+                        ref: str = "HEAD") -> str | None:
+    """Read the blob at <ref>:<rel>. Defaults to HEAD but can be pointed
+    at an earlier commit (e.g. the one that was HEAD at session-start
+    time, for backfill reconstruction of historical sessions)."""
+    if not git_ok("-C", str(project_cwd), "cat-file", "-e", f"{ref}:{rel}"):
         return None
-    return git("-C", str(project_cwd), "show", f"HEAD:{rel}", check=False)
+    return git("-C", str(project_cwd), "show", f"{ref}:{rel}", check=False)
+
+
+# Bash-command effects: derive (rel_path, new_content_or_None) tuples
+# from a single Bash tool_use command string. This is the "pattern layer"
+# that closes the backfill Bash gap without requiring a live watcher.
+# Parsing is deliberately conservative: when confidence is low, return
+# an empty list rather than fabricate attribution.
+
+_BASH_SHLEX_EXC = (ValueError,)
+
+
+def _split_shlex(s: str) -> list[str] | None:
+    try:
+        import shlex
+        return shlex.split(s, comments=False, posix=True)
+    except _BASH_SHLEX_EXC:
+        return None
+
+
+def _interpret_printf(fmt: str, args: list[str]) -> str:
+    """Minimal printf interpreter: handles the common escapes (\\n, \\t,
+    \\r, \\\\, \\0, \\xHH) and the %s conversion cycling through args.
+    Unknown conversions abort (return None)."""
+    out = []
+    i = 0
+    arg_iter = iter(args)
+    consumed_any_conversion = False
+    while i < len(fmt):
+        ch = fmt[i]
+        if ch == "\\" and i + 1 < len(fmt):
+            nxt = fmt[i + 1]
+            mapping = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\",
+                       "0": "\0", "a": "\a", "b": "\b", "f": "\f",
+                       "v": "\v", "'": "'", '"': '"'}
+            if nxt in mapping:
+                out.append(mapping[nxt])
+                i += 2
+                continue
+            if nxt == "x" and i + 3 < len(fmt):
+                try:
+                    out.append(chr(int(fmt[i+2:i+4], 16)))
+                    i += 4
+                    continue
+                except ValueError:
+                    pass
+            # unknown escape — treat backslash literally
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "%" and i + 1 < len(fmt):
+            nxt = fmt[i + 1]
+            if nxt == "%":
+                out.append("%")
+                i += 2
+                continue
+            if nxt == "s":
+                try:
+                    out.append(next(arg_iter))
+                except StopIteration:
+                    out.append("")
+                i += 2
+                consumed_any_conversion = True
+                continue
+            # Anything else (e.g. %d, %x, %.2f) — opaque; bail
+            return None
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _interpret_echo(args: list[str]) -> str:
+    """Interpret `echo` args: respects -n (no newline) and -e (enable
+    escapes). Returns the stdout bytes as a string."""
+    suppress_newline = False
+    interpret_escapes = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if not a.startswith("-") or len(a) < 2:
+            break
+        body = a[1:]
+        if not all(c in "neE" for c in body):
+            break
+        if "n" in body:
+            suppress_newline = True
+        if "e" in body:
+            interpret_escapes = True
+        if "E" in body:
+            interpret_escapes = False
+        i += 1
+    text = " ".join(args[i:])
+    if interpret_escapes:
+        text = _interpret_printf(text.replace("%", "%%"), [])
+        if text is None:
+            return ""
+    return text + ("" if suppress_newline else "\n")
+
+
+def _parse_trailing_heredoc(cmd: str) -> tuple[str, str] | None:
+    """If `cmd` contains a heredoc (`<<[-]DELIM\\nbody\\nDELIM`), return
+    the command-line prefix (everything before the heredoc body) and the
+    body. Otherwise None.
+    """
+    m = re.search(r"<<-?\s*(?:'([^']+)'|\"([^\"]+)\"|([A-Za-z_]\w*))", cmd)
+    if not m:
+        return None
+    delim = m.group(1) or m.group(2) or m.group(3)
+    nl = cmd.find("\n", m.end())
+    if nl < 0:
+        return None
+    pre = cmd[:m.start()].rstrip()
+    body_start = nl + 1
+    pattern = re.compile(rf"\n\s*{re.escape(delim)}\s*(?:\n|$)")
+    end_m = pattern.search(cmd, body_start - 1)
+    if not end_m:
+        return None
+    body = cmd[body_start:end_m.start()]
+    if body and not body.endswith("\n"):
+        body += "\n"
+    return pre, body
+
+
+def _find_trailing_redirect(cmd_line: str) -> tuple[str, str, int] | None:
+    """Locate the last top-level `> path` or `>> path` in a single-line
+    command (no heredoc). Returns (op, path_token, span_start) or None."""
+    # Walk right-to-left to find the final redirect.
+    # Skip anything inside quotes.
+    quote = None
+    escape = False
+    i = 0
+    redir = None
+    while i < len(cmd_line):
+        ch = cmd_line[i]
+        if escape:
+            escape = False
+            i += 1
+            continue
+        if ch == "\\":
+            escape = True
+            i += 1
+            continue
+        if quote:
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            continue
+        if ch == ">":
+            op = ">>" if cmd_line.startswith(">>", i) else ">"
+            # Skip fd redirects (2>, &>) — not our concern
+            if i > 0 and cmd_line[i-1].isdigit():
+                i += len(op)
+                continue
+            op_end = i + len(op)
+            rest = cmd_line[op_end:].lstrip()
+            # Take first token (may be quoted)
+            if not rest:
+                i = op_end
+                continue
+            tok = _split_shlex(rest)
+            if not tok:
+                i = op_end
+                continue
+            path = tok[0]
+            redir = (op, path, i)
+            i = op_end
+            continue
+        i += 1
+    return redir
+
+
+def _effects_of_bash_command(cmd: str, running: dict[str, str],
+                              project_cwd: Path,
+                              seed_ref: str = "HEAD") -> list[tuple[str, str | None]]:
+    """Reconstruct per-file effects of a Bash command.
+    Returns a list of (rel_path, new_content_or_None). None means delete.
+    Returns [] when the command is read-only, opaque, or unparseable —
+    never fabricate attribution.
+    """
+    s = cmd.strip()
+    if not s:
+        return []
+
+    # Handle heredoc shape first
+    heredoc = _parse_trailing_heredoc(s)
+    if heredoc:
+        pre_line, body = heredoc
+        redir = _find_trailing_redirect(pre_line)
+        if redir:
+            op, target, span = redir
+            rel = _relative_path(target, project_cwd)
+            if rel is None:
+                return []
+            if op == ">":
+                return [(rel, body)]
+            current = running.get(rel)
+            if current is None:
+                current = _read_head_content(project_cwd, rel, seed_ref) or ""
+            return [(rel, current + body)]
+        # Heredoc but no redirect; might be `tee file <<EOF`
+        toks = _split_shlex(pre_line)
+        if toks and toks[0] == "tee":
+            append = False
+            i = 1
+            while i < len(toks) and toks[i].startswith("-"):
+                if toks[i] in ("-a", "--append"):
+                    append = True
+                i += 1
+            out = []
+            for t in toks[i:]:
+                rel = _relative_path(t, project_cwd)
+                if rel is None:
+                    continue
+                if append:
+                    current = running.get(rel)
+                    if current is None:
+                        current = _read_head_content(project_cwd, rel, seed_ref) or ""
+                    out.append((rel, current + body))
+                else:
+                    out.append((rel, body))
+            return out
+        return []
+
+    # No heredoc: look for trailing redirect on a single-line command
+    # (allow multi-line commands too, redirect must be on the outermost chain).
+    one_line = s.replace("\n", " ") if "\n" in s and "<<" not in s else s
+    redir = _find_trailing_redirect(one_line)
+    if redir:
+        op, target, span = redir
+        rel = _relative_path(target, project_cwd)
+        if rel is None:
+            return []
+        left = one_line[:span].rstrip()
+        content = _content_from_producer(left, running, project_cwd, seed_ref)
+        if content is None:
+            return []  # opaque producer; don't fabricate
+        if op == ">":
+            return [(rel, content)]
+        current = running.get(rel)
+        if current is None:
+            current = _read_head_content(project_cwd, rel, seed_ref) or ""
+        return [(rel, current + content)]
+
+    # No redirect — dispatch on first word
+    toks = _split_shlex(one_line)
+    if not toks:
+        return []
+    cmd0 = toks[0]
+
+    if cmd0 == "mv":
+        # last arg is destination (unless --target-directory flag — ignore for now)
+        flagless = [t for t in toks[1:] if not t.startswith("-")]
+        if len(flagless) < 2:
+            return []
+        dst = flagless[-1]
+        srcs = flagless[:-1]
+        results: list[tuple[str, str | None]] = []
+        for src in srcs:
+            src_rel = _relative_path(src, project_cwd)
+            dst_rel = _relative_path(dst, project_cwd)
+            if src_rel is None or dst_rel is None:
+                continue
+            src_content = running.get(src_rel)
+            if src_content is None:
+                src_content = _read_head_content(project_cwd, src_rel, seed_ref) or ""
+            # Intentionally do NOT emit a deletion for the source path.
+            # Leaving it as a ghost in the audit tree lets
+            # `attribute_commit` still blame through to whoever authored
+            # its content, so renamed/deleted lines retain attribution.
+            # (HEAD will report the path as deleted; attribute_commit
+            # handles that via its exists_in_audit check.)
+            results.append((dst_rel, src_content))
+        return results
+
+    if cmd0 == "rm":
+        results = []
+        for t in toks[1:]:
+            if t.startswith("-"):
+                continue
+            rel = _relative_path(t, project_cwd)
+            if rel:
+                results.append((rel, None))
+        return results
+
+    if cmd0 == "cp":
+        flagless = [t for t in toks[1:] if not t.startswith("-")]
+        if len(flagless) < 2:
+            return []
+        dst = flagless[-1]
+        srcs = flagless[:-1]
+        results = []
+        for src in srcs:
+            src_rel = _relative_path(src, project_cwd)
+            dst_rel = _relative_path(dst, project_cwd)
+            if src_rel is None or dst_rel is None:
+                continue
+            src_content = running.get(src_rel)
+            if src_content is None:
+                src_content = _read_head_content(project_cwd, src_rel, seed_ref) or ""
+            results.append((dst_rel, src_content))
+        return results
+
+    if cmd0 == "touch":
+        results = []
+        for t in toks[1:]:
+            if t.startswith("-"):
+                continue
+            rel = _relative_path(t, project_cwd)
+            if rel is None:
+                continue
+            if rel in running:
+                continue
+            if _read_head_content(project_cwd, rel, seed_ref) is not None:
+                continue
+            results.append((rel, ""))
+        return results
+
+    if cmd0 in ("chmod", "chown"):
+        return []  # mode-only; no content change
+
+    if cmd0 == "ln":
+        return []  # symlink handling is a separate design question
+
+    if cmd0 == "git" and len(toks) >= 2:
+        sub = toks[1]
+        if sub == "mv" and len(toks) >= 4:
+            # git mv [flags] src dst
+            flagless = [t for t in toks[2:] if not t.startswith("-")]
+            if len(flagless) < 2:
+                return []
+            src, dst = flagless[0], flagless[-1]
+            src_rel = _relative_path(src, project_cwd)
+            dst_rel = _relative_path(dst, project_cwd)
+            if src_rel and dst_rel:
+                src_content = running.get(src_rel)
+                if src_content is None:
+                    src_content = _read_head_content(project_cwd, src_rel, seed_ref) or ""
+                # Preserve attribution of the source (see mv branch above).
+                return [(dst_rel, src_content)]
+            return []
+        if sub == "rm" and len(toks) >= 3:
+            results = []
+            for t in toks[2:]:
+                if t.startswith("-"):
+                    continue
+                rel = _relative_path(t, project_cwd)
+                if rel:
+                    results.append((rel, None))
+            return results
+        return []
+
+    if cmd0 == "sed" and "-i" in toks:
+        return _apply_sed_inplace(toks, running, project_cwd, seed_ref)
+
+    return []
+
+
+def _content_from_producer(left: str, running: dict[str, str],
+                           project_cwd: Path,
+                           seed_ref: str = "HEAD") -> str | None:
+    """Parse the command LEFT of a `>` / `>>` redirect and return the
+    stdout bytes it would produce. None = opaque."""
+    left = left.strip()
+    if not left:
+        return ""
+    toks = _split_shlex(left)
+    if not toks:
+        return None
+    cmd0 = toks[0]
+    if cmd0 == "echo":
+        return _interpret_echo(toks[1:])
+    if cmd0 == "printf":
+        if len(toks) < 2:
+            return None
+        out = _interpret_printf(toks[1], toks[2:])
+        return out
+    if cmd0 == "cat":
+        parts = []
+        for t in toks[1:]:
+            if t.startswith("-"):
+                continue
+            rel = _relative_path(t, project_cwd)
+            if rel is None:
+                return None
+            c = running.get(rel)
+            if c is None:
+                c = _read_head_content(project_cwd, rel, seed_ref) or ""
+            parts.append(c)
+        return "".join(parts)
+    return None  # opaque (jq, node -e, python -c, etc.)
+
+
+def _apply_sed_inplace(toks: list[str], running: dict[str, str],
+                       project_cwd: Path,
+                       seed_ref: str = "HEAD") -> list[tuple[str, str | None]]:
+    """Apply `sed -i [''] '<script>' FILE...` to running state. Supports
+    the common `s/a/b/[flags]` substitution; otherwise opaque."""
+    i = toks.index("-i")
+    cursor = i + 1
+    # macOS: `-i ''` — the empty-string backup suffix is a separate arg
+    if cursor < len(toks) and toks[cursor] == "":
+        cursor += 1
+    scripts = []
+    # Scripts may be preceded by further flags like -e
+    while cursor < len(toks):
+        t = toks[cursor]
+        if t == "-e" and cursor + 1 < len(toks):
+            scripts.append(toks[cursor + 1])
+            cursor += 2
+            continue
+        if t.startswith("-") and t != "-":
+            cursor += 1
+            continue
+        # First positional is the script, the rest are files
+        if not scripts:
+            scripts.append(t)
+            cursor += 1
+            continue
+        break
+    files = [t for t in toks[cursor:] if not t.startswith("-")]
+    if not scripts or not files:
+        return []
+    results = []
+    for fpath in files:
+        rel = _relative_path(fpath, project_cwd)
+        if rel is None:
+            continue
+        current = running.get(rel)
+        if current is None:
+            current = _read_head_content(project_cwd, rel, seed_ref) or ""
+        new = current
+        for script in scripts:
+            applied = _apply_sed_script(script, new)
+            if applied is None:
+                new = None
+                break
+            new = applied
+        if new is None:
+            continue
+        results.append((rel, new))
+    return results
+
+
+def _apply_sed_script(script: str, content: str) -> str | None:
+    """Handle `s/PAT/REPL/FLAGS` substitution scripts. Returns new content
+    or None if the script is not a recognized substitution."""
+    m = re.match(r"\s*s(.)(.*)", script, re.DOTALL)
+    if not m:
+        return None
+    sep = m.group(1)
+    rest = m.group(2)
+    # Split on unescaped separator
+    parts = []
+    buf = []
+    esc = False
+    for ch in rest:
+        if esc:
+            buf.append(ch)
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            buf.append(ch)
+            continue
+        if ch == sep:
+            parts.append("".join(buf))
+            buf = []
+            continue
+        buf.append(ch)
+    parts.append("".join(buf))
+    if len(parts) < 3:
+        return None
+    pat_raw, repl_raw, flags = parts[0], parts[1], parts[2] if len(parts) > 2 else ""
+    # Translate sed ERE-ish syntax to Python; we handle only BRE literal +
+    # common escapes for MVP. No capture-group magic.
+    try:
+        pat = re.compile(pat_raw, re.MULTILINE) if "E" in flags.upper() \
+              else re.compile(pat_raw, re.MULTILINE)
+    except re.error:
+        return None
+    repl = repl_raw.replace("\\n", "\n").replace("\\t", "\t")
+    count = 0 if "g" in flags else 1
+    try:
+        return pat.sub(repl, content, count=count)
+    except re.error:
+        return None
 
 
 def _reconstruct_snapshots_from_jsonl(jsonl: Path, trace_id: str,
@@ -234,6 +730,23 @@ def _reconstruct_snapshots_from_jsonl(jsonl: Path, trace_id: str,
             if tid:
                 success[tid] = not bool(c.get("is_error"))
 
+    # Determine the seed ref: the commit that was HEAD at session-start
+    # time. Reading prior file state from HEAD would be wrong for any
+    # session older than HEAD (downstream replays would compound error).
+    session_start = ""
+    for line in lines:
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = e.get("timestamp", "")
+        if ts:
+            session_start = ts
+            break
+    seed_ref = _parent_commit_at(project_cwd, session_start) if session_start else None
+    if not seed_ref:
+        seed_ref = "HEAD"
+
     # Pass 2: walk tool_uses in order, replay, emit per-tool snapshots.
     running: dict[str, str] = {}  # rel → current content
     snaps: list[Snapshot] = []
@@ -257,6 +770,39 @@ def _reconstruct_snapshots_from_jsonl(jsonl: Path, trace_id: str,
                 continue
             name = c.get("name")
             inp = c.get("input") or {}
+
+            # Bash: derive per-file effects from the command string.
+            # This is the backfill Bash-pattern layer — closes the gap
+            # between JSONL-tracked Write/Edit/MultiEdit and the actual
+            # on-disk state when the agent used the shell.
+            if name == "Bash":
+                cmd = inp.get("command", "") or ""
+                effects = _effects_of_bash_command(cmd, running, project_cwd, seed_ref)
+                if not effects:
+                    continue
+                prehashed: dict[str, str | None] = {}
+                for rel, new_content in effects:
+                    if new_content is None:
+                        running.pop(rel, None)
+                        prehashed[rel] = None
+                        continue
+                    running[rel] = new_content
+                    try:
+                        sha = _hash_content_into_repo(project_cwd, new_content)
+                    except RuntimeError:
+                        continue
+                    prehashed[rel] = sha
+                if prehashed:
+                    snaps.append(Snapshot(
+                        trace_id=trace_id,
+                        jsonl_path=jsonl,
+                        message_id=f"tu-{(outer_id or tu_id)[:12]}",
+                        timestamp=ts or "",
+                        source="working-tree",
+                        prehashed=prehashed,
+                    ))
+                continue
+
             raw_path = inp.get("file_path")
             if not raw_path:
                 continue
@@ -269,7 +815,7 @@ def _reconstruct_snapshots_from_jsonl(jsonl: Path, trace_id: str,
             elif name == "Edit":
                 current = running.get(rel)
                 if current is None:
-                    current = _read_head_content(project_cwd, rel) or ""
+                    current = _read_head_content(project_cwd, rel, seed_ref) or ""
                 old = inp.get("old_string", "") or ""
                 new = inp.get("new_string", "") or ""
                 if old and old not in current:
@@ -282,7 +828,7 @@ def _reconstruct_snapshots_from_jsonl(jsonl: Path, trace_id: str,
             elif name == "MultiEdit":
                 current = running.get(rel)
                 if current is None:
-                    current = _read_head_content(project_cwd, rel) or ""
+                    current = _read_head_content(project_cwd, rel, seed_ref) or ""
                 ok = True
                 for ed in (inp.get("edits") or []):
                     old = ed.get("old_string", "") or ""
@@ -442,14 +988,25 @@ def _apply_snapshot_to_index(project_cwd: Path, snap: Snapshot,
     """
     touched: list[str] = []
     if snap.source == "working-tree":
-        # Files already hash-object'd by the watcher; just install in index
+        # Files already hash-object'd by the watcher; just install in index.
+        # A sha value of None signals deletion (Bash-reconstruction path
+        # uses this for `rm`, `mv`-source, `git rm`, etc.).
+        # All updates are best-effort: backfill across long project
+        # histories routinely hits paths that flip between file and
+        # directory over time, or other git-index conflicts. Better to
+        # skip the offending cell than abort the whole audit build.
         for rel, sha in (snap.prehashed or {}).items():
-            subprocess.run(
-                ["git", "-C", str(project_cwd), "update-index",
-                 "--add", "--cacheinfo", f"100644,{sha},{rel}"],
-                env=env, check=True,
-            )
-            touched.append(rel)
+            if sha is None:
+                subprocess.run(
+                    ["git", "-C", str(project_cwd), "update-index", "--remove", rel],
+                    env=env, capture_output=True, check=False,
+                )
+                touched.append(rel)
+                continue
+            if _safe_update_index(project_cwd, rel, sha, env):
+                touched.append(rel)
+            elif verbose:
+                print(f"  ⚠ skipped {rel}: index conflict", file=sys.stderr)
         return touched
 
     # source == "file-history": resolve backup blobs
@@ -475,23 +1032,43 @@ def _apply_snapshot_to_index(project_cwd: Path, snap: Snapshot,
             sha = _hash_blob_into_repo(project_cwd, blob)
         except RuntimeError:
             continue
-        subprocess.run(
-            ["git", "-C", str(project_cwd), "update-index",
-             "--add", "--cacheinfo", f"100644,{sha},{rel}"],
-            env=env, check=True,
-        )
+        if not _safe_update_index(project_cwd, rel, sha, env):
+            continue
         touched.append(rel)
     return touched
+
+
+def _safe_update_index(project_cwd: Path, rel: str, sha: str,
+                       env: dict) -> bool:
+    """Install `100644,{sha},{rel}` into the index; retry once after
+    clearing any conflicting directory/file entry (common in backfill
+    when a path changed kind across a project's history). Returns True
+    on success.
+    """
+    r = subprocess.run(
+        ["git", "-C", str(project_cwd), "update-index",
+         "--add", "--replace", "--cacheinfo", f"100644,{sha},{rel}"],
+        env=env, capture_output=True, check=False,
+    )
+    if r.returncode == 0:
+        return True
+    subprocess.run(
+        ["git", "-C", str(project_cwd), "rm", "--cached",
+         "-r", "-f", "--quiet", "--ignore-unmatch", rel],
+        env=env, capture_output=True, check=False,
+    )
+    retry = subprocess.run(
+        ["git", "-C", str(project_cwd), "update-index",
+         "--add", "--replace", "--cacheinfo", f"100644,{sha},{rel}"],
+        env=env, capture_output=True, check=False,
+    )
+    return retry.returncode == 0
 
 
 def _apply_extras_to_index(project_cwd: Path, extras: dict[str, str],
                            env: dict) -> None:
     for rel, sha in extras.items():
-        subprocess.run(
-            ["git", "-C", str(project_cwd), "update-index",
-             "--add", "--cacheinfo", f"100644,{sha},{rel}"],
-            env=env, check=True,
-        )
+        _safe_update_index(project_cwd, rel, sha, env)
 
 
 def _write_audit_commit(project_cwd: Path, env: dict, snap: Snapshot,
