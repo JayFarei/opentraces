@@ -1919,6 +1919,14 @@ from . import import_hf as _import_hf_module  # noqa: F401,E402
 from . import _debug as __debug_module  # noqa: F401,E402
 from . import inspect as _inspect_module  # noqa: F401,E402
 
+# Standalone Click groups/commands declared without @main.group decoration
+# need explicit registration. Step 13: completions noun + hidden __complete.
+from .completions import completions as _completions_group  # noqa: E402
+from ._complete import complete_cmd as _complete_cmd  # noqa: E402
+
+main.add_command(_completions_group)
+main.add_command(_complete_cmd)
+
 
 @main.group(invoke_without_command=True)
 @click.pass_context
