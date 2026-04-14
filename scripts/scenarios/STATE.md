@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T00:45Z
-Last iteration agent: claude-opus-4-6 (loop iter 2)
+Last update: 2026-04-14T01:15Z
+Last iteration agent: claude-opus-4-6 (loop iter 3)
 
 ---
 
@@ -19,6 +19,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | bash_creates_files           | pass | 2026-04-13 | — |
 | bash_deletes                 | pass | 2026-04-14 | was failing; fixed by graceful-no-audit fallback |
 | bash_overwrites              | pass | 2026-04-13 | — |
+| bash_rename                  | pass | 2026-04-14 | new this iter; documents rename semantics (seed-author keeps credit for moved content, watcher credits active trace for new path) |
 | clear_mid_session            | fail | 2026-04-14 | timeout fixed (harness slash-command handling); now fails on attribution — `/clear` drops file-history blobs for the cleared session, so early.md has no snapshots. Deeper spike question (see Open questions) |
 | close_without_exit           | pass | 2026-04-13 | — |
 | crash_during_prompt          | pass | 2026-04-13 | — |
@@ -39,7 +40,8 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 20/22 passing.** (clear_mid_session fail mode shifted from timeout → attribution gap; still a fail, but a better-understood one.)
+**Current: 21/23 passing.** (Added bash_rename. clear_mid_session and
+file_create_then_delete remain blocked on human design decisions.)
 
 ---
 
@@ -103,6 +105,15 @@ detection; binary-file touch; very-large-file blame; symlink file).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 3 (opus 4.6): Authored new scenario `bash_rename`
+  (agent renames file via Bash `mv`). First run failed my initial
+  expectation (I assumed original.md would be missing_from_audit); the
+  actual spike behavior is better — audit tree retains the pre-rename
+  content, so the commit's delete side blames through to the seed
+  author (pre-audit), while the new path attributes to the watcher-
+  captured active trace. Updated scenario assertions to document and
+  lock in these semantics: renaming doesn't reassign authorship. Green.
 
 - 2026-04-14 — iter 2 (opus 4.6): Tackled `clear_mid_session`. Root cause of
   the 240s timeout: prompts starting with `/` are local UI actions that
