@@ -3,8 +3,8 @@
 > **For loop agents:** Read this file first every iteration. Update it last.
 > Without this file, you cannot know what the previous iteration did.
 
-Last update: 2026-04-14T06:15Z
-Last iteration agent: claude-opus-4-6 (loop iter 13)
+Last update: 2026-04-14T06:45Z
+Last iteration agent: claude-opus-4-6 (loop iter 14)
 
 ---
 
@@ -36,6 +36,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 | multiple_edits_one_turn      | pass | 2026-04-13 | — |
 | no_trailing_newline          | pass | 2026-04-14 | iter 8; confirms last unterminated line still counts |
 | partial_commit               | pass | 2026-04-13 | — |
+| path_with_spaces             | pass | 2026-04-14 | iter 14; exposed & fixed porcelain parsing bug — paths with spaces were silently dropped by both `_working_tree_extras` and `_capture_wt_changes` |
 | pre_session_content          | pass | 2026-04-13 | — |
 | revert_within_session        | pass | 2026-04-13 | — |
 | same_lines_overwrite         | pass | 2026-04-13 | — |
@@ -49,7 +50,7 @@ Status legend: `pass` ✓ | `fail` ✗ | `unknown` ? | `flaky` 🌀 | `wip` 🔨
 
 Self-tests (`scripts/attribution_v2_selftest.py`): pass (6/6)
 
-**Current: 31/32 passing.** Only `clear_mid_session` remains (blocked
+**Current: 32/33 passing.** Only `clear_mid_session` remains (blocked
 on a human design decision: whether to mine Write/Edit tool_use
 content from JSONL when file-history blobs are absent, or accept the
 attribution gap). Added scenarios across iters 3-10:
@@ -123,6 +124,19 @@ single line, CRLF conversion via `.gitattributes`).
 ---
 
 ## Activity log (newest first)
+
+- 2026-04-14 — iter 14 (opus 4.6): Authored `path_with_spaces`. First
+  run exposed a real spike bug: both `_working_tree_extras` (build
+  time) and `_capture_wt_changes` (watcher) parsed `git status
+  --porcelain` line-by-line, which leaves git's built-in quoting
+  (`"my dir/notes.md"`) intact. The quoted filename wasn't a real
+  filesystem path, so `is_file()` was false and the file was silently
+  dropped. Fixed by switching both to a shared `_iter_porcelain_z`
+  helper that uses `-z` (NUL-terminated, raw paths) and handles
+  rename/copy's paired-record format. Regressions: none across
+  bash_creates_files, bash_rename, mixed_write_and_bash,
+  binary_file_added, and the 6 self-tests. Scenario now passes; suite
+  32/33.
 
 - 2026-04-14 — iter 13 (opus 4.6): Rewrote `file_create_then_delete`.
   Prior version had `allow_empty = true` and asserted on README.md —
