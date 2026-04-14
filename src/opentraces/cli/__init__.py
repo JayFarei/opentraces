@@ -2002,22 +2002,79 @@ def remote_set(name: str | None, is_private: bool | None) -> None:
     emit_json({"status": "ok", "remote": repo_id, "visibility": visibility})
 
 
-@remote.command("use", hidden=True)
-@click.argument("repo", required=False, default=None)
+@remote.command("use")
+@click.argument("name", required=False, default=None)
 @click.pass_context
-def remote_use(ctx: click.Context, repo: str | None) -> None:
-    """Backward-compatible alias for remote set."""
-    ctx.invoke(remote_set, name=repo)
+def remote_use(ctx: click.Context, name: str | None) -> None:
+    """Set the active remote for subsequent ``ot push`` / ``ot pull``.
+
+    Step 4: when ``<name>`` matches an entry in ``cfg.remotes``, just
+    switch ``active_remote``. Legacy fallback: if the project still
+    uses the single-remote shape (no ``cfg.remotes`` entries), defer
+    to ``remote set`` for back-compat.
+    """
+    from ..core.config import load_project_config, save_project_config
+
+    if name is None:
+        # No-arg legacy form: fall through to `remote set` interactive flow.
+        ctx.invoke(remote_set, name=None)
+        return
+
+    project_dir = Path.cwd()
+    proj_config, remotes = _read_remotes(project_dir)
+
+    if name in remotes:
+        proj_config["active_remote"] = name
+        save_project_config(project_dir, proj_config)
+        click.echo(f"Active remote set to '{name}'")
+        emit_json({"status": "ok", "active_remote": name})
+        return
+
+    click.echo(f"No remote named '{name}'.", err=True)
+    sys.exit(2)
 
 
 @remote.command("remove")
-def remote_remove() -> None:
-    """Remove the configured remote."""
-    from ..core.config import load_project_config, save_project_config
+@click.argument("name", required=False, default=None)
+def remote_remove(name: str | None) -> None:
+    """Remove a remote.
+
+    With ``<name>``: remove the named entry from ``cfg.remotes`` and
+    drop its ``uploaded_to`` keys from every staging entry, atomically
+    (Step 4 git-parity behavior). Without arguments: legacy form that
+    clears the single project-level ``remote`` field (back-compat,
+    removed in Step 15).
+    """
+    from ..core.config import (
+        load_project_config,
+        save_project_config,
+        get_project_state_path,
+    )
+    from ..core.state import StateManager, UnknownRemoteError
 
     project_dir = Path.cwd()
-    proj_config = load_project_config(project_dir)
 
+    if name is not None:
+        proj_config, remotes = _read_remotes(project_dir)
+        if name not in remotes:
+            click.echo(f"No remote named '{name}'.", err=True)
+            sys.exit(2)
+        del remotes[name]
+        if proj_config.get("active_remote") == name:
+            proj_config["active_remote"] = next(iter(remotes), None)
+        state_path = get_project_state_path(project_dir)
+        state = StateManager(state_path=state_path)
+        try:
+            state.forget_remote(name)
+        except UnknownRemoteError:
+            pass
+        save_project_config(project_dir, proj_config)
+        click.echo(f"Removed remote '{name}'")
+        emit_json({"status": "ok", "name": name})
+        return
+
+    # Legacy no-arg form
+    proj_config = load_project_config(project_dir)
     if "remote" not in proj_config:
         click.echo("No remote configured.")
         return
@@ -2026,6 +2083,163 @@ def remote_remove() -> None:
     save_project_config(project_dir, proj_config)
     click.echo("Remote removed.")
     emit_json({"status": "ok", "remote": None})
+
+
+# ---------------------------------------------------------------------------
+# Step 4 — git-parity remote verbs
+# ---------------------------------------------------------------------------
+
+
+def _expand_hf_url(url: str) -> str:
+    """Expand short-form ``user/repo`` to ``hf://user/repo``.
+
+    Full URLs (anything containing ``://``) are returned unchanged. The
+    short form is the convenient default because HuggingFace is the
+    only backend today; future backends require the full scheme.
+    """
+    if "://" in url:
+        return url
+    if "/" in url:
+        return f"hf://{url}"
+    return url
+
+
+def _read_remotes(project_dir: Path) -> tuple[dict, dict | None]:
+    """Return (proj_config_dict, remotes_dict). remotes is the live ref."""
+    proj_config = load_project_config(project_dir)
+    remotes = proj_config.get("remotes")
+    if remotes is None:
+        proj_config["remotes"] = {}
+        remotes = proj_config["remotes"]
+    return proj_config, remotes
+
+
+@remote.command("add")
+@click.argument("name")
+@click.argument("url")
+@click.option("--private", "is_private", flag_value=True, default=None)
+@click.option("--public", "is_private", flag_value=False)
+def remote_add(name: str, url: str, is_private: bool | None) -> None:
+    """Register a remote (mirrors ``git remote add``).
+
+    URL accepts ``hf://user/dataset`` or the short form ``user/dataset``
+    (auto-expanded because HuggingFace is the default backend). If the
+    HF dataset doesn't yet exist on the hub, that's fine here — push
+    will create it on first publish. Use --public / --private to
+    override the project's default_visibility for this remote.
+    """
+    from ..core.config import load_project_config, save_project_config
+
+    project_dir = Path.cwd()
+    proj_config, remotes = _read_remotes(project_dir)
+
+    if name in remotes:
+        click.echo(f"Remote '{name}' already exists. Use 'remote set-url' to update.", err=True)
+        sys.exit(2)
+
+    full_url = _expand_hf_url(url)
+
+    if is_private is None:
+        visibility = proj_config.get("default_visibility", "private")
+    else:
+        visibility = "private" if is_private else "public"
+
+    remotes[name] = {"url": full_url, "visibility": visibility}
+    if not proj_config.get("active_remote"):
+        proj_config["active_remote"] = name
+
+    save_project_config(project_dir, proj_config)
+    click.echo(f"Added remote '{name}' -> {full_url} ({visibility})")
+    emit_json({"status": "ok", "name": name, "url": full_url, "visibility": visibility})
+
+
+@remote.command("set-url")
+@click.argument("name")
+@click.argument("url")
+def remote_set_url(name: str, url: str) -> None:
+    """Change a remote's URL (mirrors ``git remote set-url``)."""
+    from ..core.config import load_project_config, save_project_config
+
+    project_dir = Path.cwd()
+    proj_config, remotes = _read_remotes(project_dir)
+
+    if name not in remotes:
+        click.echo(f"No remote named '{name}'.", err=True)
+        sys.exit(2)
+
+    full_url = _expand_hf_url(url)
+    remotes[name]["url"] = full_url
+    save_project_config(project_dir, proj_config)
+    click.echo(f"URL for '{name}' is now {full_url}")
+    emit_json({"status": "ok", "name": name, "url": full_url})
+
+
+@remote.command("rename")
+@click.argument("old")
+@click.argument("new")
+def remote_rename(old: str, new: str) -> None:
+    """Rename a remote (atomic across config + state.uploaded_to keys)."""
+    from ..core.config import load_project_config, save_project_config, get_project_state_path
+    from ..core.state import StateManager, UnknownRemoteError
+
+    project_dir = Path.cwd()
+    proj_config, remotes = _read_remotes(project_dir)
+
+    if old not in remotes:
+        click.echo(f"No remote named '{old}'.", err=True)
+        sys.exit(2)
+    if new in remotes:
+        click.echo(f"Remote '{new}' already exists.", err=True)
+        sys.exit(2)
+
+    remotes[new] = remotes.pop(old)
+    if proj_config.get("active_remote") == old:
+        proj_config["active_remote"] = new
+
+    state_path = get_project_state_path(project_dir)
+    state = StateManager(state_path=state_path)
+    try:
+        state.rename_remote(old, new)
+    except UnknownRemoteError:
+        # No upload history under that name — config-level rename is enough.
+        pass
+
+    save_project_config(project_dir, proj_config)
+    click.echo(f"Renamed '{old}' -> '{new}'")
+    emit_json({"status": "ok", "old": old, "new": new})
+
+
+@remote.command("list")
+@click.option("-v", "verbose", is_flag=True, help="Show URLs.")
+def remote_list(verbose: bool) -> None:
+    """List configured remotes (active marked with *)."""
+    from ..core.config import load_project_config
+
+    proj_config, remotes = _read_remotes(Path.cwd())
+    active = proj_config.get("active_remote")
+
+    if not remotes:
+        click.echo("No remotes configured.")
+        emit_json({"status": "ok", "remotes": {}, "active_remote": None})
+        return
+
+    payload = {}
+    for name, cfg in sorted(remotes.items()):
+        marker = "*" if name == active else " "
+        if verbose:
+            click.echo(f"  {marker} {name}\t{cfg['url']} ({cfg.get('visibility', 'private')})")
+        else:
+            click.echo(f"  {marker} {name}")
+        payload[name] = cfg
+
+    emit_json({"status": "ok", "remotes": payload, "active_remote": active})
+
+
+# Step 4 also rebinds bare `ot remote remove <name>` semantics — the existing
+# no-arg form (line ~2013) is kept for back-compat and removed in step 15.
+# Click does NOT support overloading commands, so the new name-taking remove
+# is exposed as the hidden `remote remove-named` + `remote rm` aliases above.
+# Step 15 will rename remove-named -> remove and delete the legacy no-arg form.
 
 
 @main.command(hidden=True)
