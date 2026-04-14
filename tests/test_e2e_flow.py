@@ -282,7 +282,7 @@ class TestLoginMock:
 
             with patch("webbrowser.open"):
                 with patch("time.sleep"):
-                    result = runner.invoke(main, ["login"])
+                    result = runner.invoke(main, ["auth", "login"])
 
             assert mock_validate.called or "TEST-CODE" in result.output
 

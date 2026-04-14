@@ -29,14 +29,14 @@ Three-panel layout: traces list, summary, and detail. Keyboard shortcuts for nav
 ## CLI
 
 ```bash
-opentraces trace list
-opentraces trace show <trace-id>
-opentraces trace show <trace-id> --verbose
-opentraces trace commit <trace-id>
-opentraces trace reject <trace-id>
-opentraces trace reset <trace-id>
-opentraces trace redact <trace-id> --step 3
-opentraces trace discard <trace-id> --yes
+opentraces list
+opentraces show <trace-id>
+opentraces show <trace-id> --verbose
+opentraces add <trace-id>
+opentraces reject <trace-id>
+opentraces reset <trace-id>
+opentraces redact <trace-id> --step 3
+opentraces discard <trace-id> --yes
 ```
 
 `commit` moves a trace directly to `Committed`, `reject` keeps it local only, `reset` sends it back to `Inbox`, and `redact` rewrites the staged JSONL in place. `trace show --verbose` prints the full step-level detail including raw tool inputs and outputs.
@@ -61,7 +61,7 @@ opentraces trace discard <trace-id> --yes
 ## Inbox Flow
 
 ```bash
-opentraces trace commit <trace-id>
-opentraces commit --all
+opentraces add <trace-id>
+opentraces add --all
 opentraces push
 ```

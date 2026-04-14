@@ -61,9 +61,9 @@ Verdict shape:
 Run manually:
 
 ```bash
-opentraces review-llm                         # ollama, default model
-opentraces review-llm --provider anthropic    # cloud model
-opentraces review-llm --dry-run               # just estimate cost
+opentraces llm-review                         # ollama, default model
+opentraces llm-review --provider anthropic    # cloud model
+opentraces llm-review --dry-run               # just estimate cost
 ```
 
 Gate `push` on a clean verdict for every committed trace:

@@ -84,7 +84,7 @@ function StatusContent() {
       <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 5h ago    </span><span className="s">{"\u201C"}fix billing webhook{"\u201D"}</span>        <span className="n">23</span> <span className="di">steps</span>  <span className="w">1 flag {"\u26A0"}</span></span>
       <span className="terminal-line"><span className="di">  {"\u2514\u2500\u2500"} yesterday </span><span className="s">{"\u201C"}add settings page{"\u201D"}</span>          <span className="n">65</span> <span className="di">steps</span>  <span className="di">inbox</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  next: opentraces commit --all</span></span>
+      <span className="terminal-line"><span className="di">  next: opentraces add --all</span></span>
     </>
   );
 }

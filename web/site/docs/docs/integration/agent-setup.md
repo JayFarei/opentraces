@@ -13,7 +13,7 @@ Most commands emit structured JSON with `next_steps` and `next_command`, so an a
 ### Claude Code
 
 ```bash
-opentraces login
+opentraces auth login
 opentraces init --agent claude-code --review-policy review --start-fresh
 ```
 
@@ -38,7 +38,7 @@ Hooks fire automatically on every agent run, no further action needed after `set
 ### Hermes
 
 ```bash
-opentraces login
+opentraces auth login
 opentraces init --agent hermes --review-policy review --start-fresh
 ```
 
@@ -46,7 +46,7 @@ After setup, the current surfaces are:
 
 - `opentraces web` for the browser inbox
 - `opentraces tui` for the terminal inbox
-- `opentraces trace list` for machine-readable review
+- `opentraces list` for machine-readable review
 - `opentraces status` for the current inbox summary
 - `opentraces context` for a compact project snapshot
 

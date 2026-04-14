@@ -102,13 +102,13 @@ class TestPreInitCommands:
     """Commands that don't require an initialized project."""
 
     def test_login_help(self, runner):
-        result = runner.invoke(main, ["login", "--help"])
+        result = runner.invoke(main, ["auth", "login", "--help"])
         assert result.exit_code == 0
         assert "token" in result.output.lower()
 
     def test_logout(self, runner, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        result = runner.invoke(main, ["logout"])
+        result = runner.invoke(main, ["auth", "logout"])
         assert result.exit_code == 0
 
     def test_auth_status_unauthenticated(self, runner, monkeypatch):
@@ -197,10 +197,12 @@ class TestPostInitCommands:
         assert result.exit_code == 0
 
     def test_remote_set(self, initialized_project, monkeypatch):
+        """The fixture init wrote a legacy --remote which migrated to
+        remotes['origin']. Adding another remote under a fresh name works."""
         project_dir, runner = initialized_project
         monkeypatch.setattr("opentraces.cli._auth_identity", lambda *a: {"name": "testuser"})
-        result = runner.invoke(main, ["remote", "set", "testuser/new-dataset"])
-        assert result.exit_code == 0
+        result = runner.invoke(main, ["remote", "add", "upstream", "testuser/new-dataset"])
+        assert result.exit_code == 0, result.output
 
     def test_remote_remove(self, initialized_project):
         project_dir, runner = initialized_project
@@ -210,7 +212,7 @@ class TestPostInitCommands:
     def test_commit_all_empty(self, initialized_project):
         """commit --all with no inbox traces should still exit 0."""
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["commit", "--all"])
+        result = runner.invoke(main, ["add", "--all"])
         assert result.exit_code == 0
 
     def test_remove(self, initialized_project):
@@ -229,54 +231,54 @@ class TestSessionCommands:
 
     def test_session_list(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["trace", "list"])
+        result = runner.invoke(main, ["list"])
         assert result.exit_code == 0
 
     def test_session_list_stage_filter(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["trace", "list", "--stage", "inbox"])
+        result = runner.invoke(main, ["list", "--stage", "inbox"])
         assert result.exit_code == 0
 
     def test_session_show(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["trace", "show", trace_id])
+        result = runner.invoke(main, ["show", trace_id])
         assert result.exit_code == 0
 
     def test_session_show_not_found(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["trace", "show", "nonexistent-trace-id"])
+        result = runner.invoke(main, ["show", "nonexistent-trace-id"])
         assert result.exit_code == 6
 
     def test_session_commit(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["trace", "commit", trace_id])
+        result = runner.invoke(main, ["add", trace_id])
         assert result.exit_code == 0
 
     def test_session_reject(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["trace", "reject", trace_id])
+        result = runner.invoke(main, ["reject", trace_id])
         assert result.exit_code == 0
 
     def test_session_reset_after_commit(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        runner.invoke(main, ["trace", "commit", trace_id])
-        result = runner.invoke(main, ["trace", "reset", trace_id])
+        runner.invoke(main, ["add", trace_id])
+        result = runner.invoke(main, ["reset", trace_id])
         assert result.exit_code == 0
 
     def test_session_redact(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["trace", "redact", trace_id, "--step", "0"])
-        # May be 0 (success) or 2 (step out of range depending on 0-vs-1 indexing)
+        result = runner.invoke(main, ["redact", trace_id, "nonexistent-pattern", "--step", "0"])
+        # May be 0 (success, no match is still OK) or 2 (step out of range)
         assert result.exit_code in (0, 2)
 
     def test_session_discard(self, project_with_traces):
         project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["trace", "discard", trace_id, "--yes"])
+        result = runner.invoke(main, ["discard", trace_id, "--yes"])
         assert result.exit_code == 0
 
     def test_session_discard_not_found(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["trace", "discard", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "--yes"])
+        result = runner.invoke(main, ["discard", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "--yes"])
         assert result.exit_code == 6
 
 
@@ -389,7 +391,7 @@ class TestSessionShowTruncation:
             data["steps"][0]["content"] = long_content
         staging_file.write_text(_json.dumps(data) + "\n")
 
-        result = runner.invoke(main, ["trace", "show", trace_id])
+        result = runner.invoke(main, ["show", trace_id])
         assert result.exit_code == 0
         # Only check the human output portion (before the JSON sentinel)
         human_output = result.output.split("---OPENTRACES_JSON---")[0]
@@ -467,17 +469,17 @@ class TestExitCodes:
 
     def test_session_commit_not_found_exits_6(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["trace", "commit", "nonexistent-trace-id"])
+        result = runner.invoke(main, ["add", "nonexistent-trace-id"])
         assert result.exit_code == 6
 
     def test_session_reject_not_found_exits_6(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["trace", "reject", "nonexistent-trace-id"])
+        result = runner.invoke(main, ["reject", "nonexistent-trace-id"])
         assert result.exit_code == 6
 
     def test_session_reset_not_found_exits_6(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["trace", "reset", "nonexistent-trace-id"])
+        result = runner.invoke(main, ["reset", "nonexistent-trace-id"])
         assert result.exit_code == 6
 
 
@@ -564,7 +566,9 @@ class TestInitFlags:
         ])
         assert result.exit_code == 0
         config = json.loads((tmp_path / ".opentraces.json").read_text())
-        assert config.get("visibility") == "private"
+        # Post-restructure: --private flows to default_visibility (project-level
+        # default for newly-added remotes).
+        assert config.get("default_visibility") == "private"
 
     def test_init_public(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -576,7 +580,7 @@ class TestInitFlags:
         ])
         assert result.exit_code == 0
         config = json.loads((tmp_path / ".opentraces.json").read_text())
-        assert config.get("visibility") == "public"
+        assert config.get("default_visibility") == "public"
 
 
 # ---------------------------------------------------------------------------

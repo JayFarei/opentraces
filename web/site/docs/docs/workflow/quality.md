@@ -6,7 +6,7 @@
 opentraces assess
 ```
 
-Scores are printed to the terminal. Low-scoring traces show which checks failed so you can decide whether to fix or push anyway. Assessment only runs against committed traces — run `opentraces commit` first if your inbox isn't empty.
+Scores are printed to the terminal. Low-scoring traces show which checks failed so you can decide whether to fix or push anyway. Assessment only runs against committed traces — run `opentraces add` first if your inbox isn't empty.
 
 You can also score and push in one step with `opentraces push --assess`, which uploads and embeds the scorecard in the HuggingFace dataset card. See [Push](/docs/workflow/pushing) for details.
 

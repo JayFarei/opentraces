@@ -558,7 +558,9 @@ def _pick_install_method_interactive() -> str | None:
               help="Flip Tier 1.5 off (binary stays installed)")
 @click.option("--verify", is_flag=True, hidden=True,
               help="Legacy alias for --enable")
-def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool) -> None:
+@click.option("--project", "scope_project", is_flag=True,
+              help="Scope this change to the project's marker (default: global config).")
+def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool, scope_project: bool = False) -> None:
     """Enable Tier 1.5 secret scanning via TruffleHog.
 
     Tier 1.5 runs the TruffleHog verified-secret scanner on every staged
@@ -953,11 +955,14 @@ def _setup_review_llm_interactive() -> tuple[str, str, str, str, float]:
               help="Print effective config as JSON and exit.")
 @click.option("--no-interactive", is_flag=True,
               help="Skip the preset picker even if no flags are given.")
+@click.option("--project", "scope_project", is_flag=True,
+              help="Scope this change to the project's marker (default: global config).")
 def setup_review_llm_cmd(
     provider: str | None, base_url: str | None, model: str | None,
     api_key_env: str | None, timeout: float | None,
     disable: bool, enable: bool, test_only: bool, print_only: bool,
     no_interactive: bool,
+    scope_project: bool = False,
 ) -> None:
     """Configure the Tier 2 LLM reviewer for staged traces.
 
@@ -1071,8 +1076,10 @@ def setup_review_llm_cmd(
               help="Require human review on every trace.")
 @click.option("--print", "print_only", is_flag=True,
               help="Print the current project review policy and exit.")
+@click.option("--project", "scope_project", is_flag=True, default=True,
+              help="Always scoped to project (this command's default; flag accepted for surface consistency).")
 def setup_review_policy_cmd(
-    set_auto: bool, set_review: bool, print_only: bool,
+    set_auto: bool, set_review: bool, print_only: bool, scope_project: bool = True,
 ) -> None:
     """Set this project's review policy.
 
@@ -1662,3 +1669,23 @@ def review_llm_cmd(provider: str | None, model: str | None, base_url: str | None
         "results": outcome.results,
     })
 
+
+
+# ---------------------------------------------------------------------------
+# Step 12 — ot setup upgrade (absorbs the flat ot upgrade).
+# Both surfaces survive during the transition; Step 15 drops the flat one.
+# ---------------------------------------------------------------------------
+
+@setup_group.command("upgrade")
+@click.option(
+    "--skill-only",
+    is_flag=True,
+    default=False,
+    help="Only update the skill file and hook, skip CLI upgrade",
+)
+@click.pass_context
+def setup_upgrade(ctx: click.Context, skill_only: bool) -> None:
+    """Upgrade opentraces CLI and refresh the project skill file."""
+    # Lazy import to avoid circular imports at module load time.
+    from . import upgrade as _flat_upgrade
+    ctx.invoke(_flat_upgrade, skill_only=skill_only)

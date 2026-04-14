@@ -17,7 +17,7 @@ Every agent run produces action trajectories, tool-use sequences, and reasoning 
 5. **Correlate** traces to commits via an optional post-commit hook (`opentraces setup git`), writing `refs/notes/opentraces` and evidence-graded `GitLink`s (`tool_emitted` / `tool_emitted_with_divergence` / `overlapping` / `orphan`)
 6. **Review** in the browser or terminal before anything leaves your machine
 7. **Push** approved traces as sharded JSONL to a Hugging Face dataset
-8. **Inspect** commit-anchored history with `opentraces blame <commit>` and `opentraces trace list --by-commit`
+8. **Inspect** commit-anchored history with `opentraces blame <commit>` and `opentraces list --by-commit`
 9. **Export** to [Agent Trace v0.1.0](https://github.com/nichochar/agent-trace) via `opentraces export --format agent-trace`
 
 ---
@@ -74,7 +74,7 @@ pipx install opentraces
 
 Step 2 - Authenticate:
 Run `opentraces auth status` to check if already logged in.
-If not authenticated, ask me to run `opentraces login --token` myself,
+If not authenticated, ask me to run `opentraces auth login --token` myself,
 I need to paste a HuggingFace access token with write scope
 (from https://huggingface.co/settings/tokens).
 
@@ -96,7 +96,7 @@ that backlog into the inbox immediately, or `--start-fresh` to begin from now on
 
 After setup, the workflow is:
 - `opentraces web` to inspect traces before sharing
-- `opentraces commit --all` to commit inbox traces
+- `opentraces add --all` to commit inbox traces
 - `opentraces push` to publish committed traces to HuggingFace (runs any
   configured post-processors pre-upload)
 - `opentraces doctor` to check installed integrations, any configured
@@ -105,7 +105,7 @@ After setup, the workflow is:
 - `opentraces setup trufflehog` to opt into Tier 1.5 verified-secret scanning
 - `opentraces setup review-llm` to configure a third-party LLM (local Ollama,
   LM Studio, llama.cpp, vLLM, or any hosted OpenAI-compat API) as an
-  independent Tier 2 reviewer; then `opentraces review-llm` over staged
+  independent Tier 2 reviewer; then `opentraces llm-review` over staged
   traces, and `opentraces push --llm-review` to gate pushes on a clean verdict
 ~~~
 
@@ -115,14 +115,14 @@ After setup, the workflow is:
 
 ```bash
 # Authenticate and initialize
-opentraces login --token
+opentraces auth login --token
 opentraces init --review-policy review
 
 # Review traces in the browser
 opentraces web
 
 # Commit reviewed traces
-opentraces commit --all
+opentraces add --all
 
 # Publish to HuggingFace Hub
 opentraces push --repo your-username/my-traces

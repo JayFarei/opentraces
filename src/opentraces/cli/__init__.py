@@ -45,13 +45,26 @@ _json_mode = False
 # -- Grouped help formatting --------------------------------------------------
 
 COMMAND_SECTIONS = [
-    ("Getting Started", ["setup", "init", "doctor", "status"]),
-    ("Review", ["tui", "web", "graph", "resume", "blame"]),
-    ("Discover", ["projects", "stats", "log", "pull"]),
-    ("Publish", ["trace", "commit", "push", "export"]),
-    ("Manage", ["remote", "config", "remove", "upgrade"]),
-    ("Auth", ["login", "logout", "whoami"]),
-    ("Operations", ["review-llm", "assess"]),
+    ("Core", ["add", "push", "pull", "list", "show", "status", "blame", "resume"]),
+    (
+        "Inbox",
+        [
+            "reject",
+            "reset",
+            "redact",
+            "discard",
+            "llm-review",
+            "export",
+            "tui",
+            "web",
+            "stats",
+            "log",
+            "graph",
+            "assess",
+        ],
+    ),
+    ("Project", ["init", "doctor", "remove"]),
+    ("Resource", ["remote", "auth", "config", "setup", "completions"]),
 ]
 
 
@@ -230,7 +243,11 @@ class GroupedGroup(OpentracesGroup):
         ]
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        placed: set[str] = set()
+        # gh-style sectioned listing: CORE COMMANDS / INBOX COMMANDS /
+        # PROJECT COMMANDS / RESOURCE COMMANDS. Legacy verbs that are
+        # still registered (commit, login/logout/whoami, review-llm,
+        # upgrade, projects, trace) are intentionally NOT advertised
+        # here — they remain invokable until the Step 15 clean break.
         for section_name, cmd_names in COMMAND_SECTIONS:
             rows: list[tuple[str, str]] = []
             for name in cmd_names:
@@ -238,23 +255,10 @@ class GroupedGroup(OpentracesGroup):
                 if cmd is None or cmd.hidden:
                     continue
                 rows.append((name, cmd.get_short_help_str(limit=formatter.width)))
-                placed.add(name)
             if rows:
-                with self._section(formatter, section_name):
+                heading = f"{section_name.upper()} COMMANDS"
+                with self._section(formatter, heading):
                     formatter.write_dl(self._style_rows(rows))
-
-        # Anything unclassified falls into "More".
-        extras: list[tuple[str, str]] = []
-        for name in self.list_commands(ctx):
-            if name in placed:
-                continue
-            cmd = self.commands.get(name)
-            if cmd is None or cmd.hidden:
-                continue
-            extras.append((name, cmd.get_short_help_str(limit=formatter.width)))
-        if extras:
-            with self._section(formatter, "More"):
-                formatter.write_dl(self._style_rows(extras))
 
 
 def emit_json(data: dict) -> None:
@@ -842,8 +846,19 @@ def _capture_sessions_into_project(session_dir: Path, project_dir: Path, cfg=Non
             staging_file = staging / f"{result.record.trace_id}.jsonl"
             staging_file.write_text(result.record.to_jsonl_line() + "\n")
 
-            if review_policy == "auto" and not result.needs_review:
-                # Auto mode: commit directly for push
+            from ..core.workflow import decide_post_parse_status
+            decided_status, block_reason = decide_post_parse_status(
+                result, review_policy=review_policy
+            )
+
+            if decided_status == TraceStatus.BLOCKED:
+                state.block_trace(
+                    result.record.trace_id,
+                    reason=block_reason or "security finding",
+                    session_id=result.record.session_id,
+                    file_path=str(staging_file),
+                )
+            elif decided_status == TraceStatus.COMMITTED:
                 state.set_trace_status(
                     result.record.trace_id,
                     TraceStatus.COMMITTED,
@@ -913,45 +928,144 @@ def config_show() -> None:
 
 
 @config.command("set")
-@click.option("--project", type=str, help="Project path for per-project config")
-@click.option("--exclude", type=str, help="Project path to exclude (appends)")
-@click.option("--redact", type=str, help="Custom redaction string (appends)")
-@click.option("--pricing-file", type=str, help="Path to custom pricing table")
-@click.option("--classifier-sensitivity", type=click.Choice(["low", "medium", "high"]))
+@click.argument("key", required=False)
+@click.argument("value", required=False)
+@click.option(
+    "--project", "scope_project", is_flag=True,
+    help="Write to <repo>/.opentraces.json instead of the global config.",
+)
+@click.option(
+    "--global", "scope_global", is_flag=True,
+    help="Write to ~/.opentraces/config.json (default).",
+)
+@click.option("--append", "append_value", is_flag=True, help="Append to a list-typed key.")
+# Legacy positional-less flags kept for back-compat (Step 15 removes them).
+@click.option("--exclude", type=str, default=None, help="(legacy) Project path to exclude")
+@click.option("--redact", type=str, default=None, help="(legacy) Custom redaction string")
+@click.option("--pricing-file", type=str, default=None, help="(legacy) Path to custom pricing table")
+@click.option(
+    "--classifier-sensitivity", type=click.Choice(["low", "medium", "high"]),
+    default=None, help="(legacy) Set classifier sensitivity directly",
+)
 def config_set(
-    project: str | None,
+    key: str | None,
+    value: str | None,
+    scope_project: bool,
+    scope_global: bool,
+    append_value: bool,
     exclude: str | None,
     redact: str | None,
     pricing_file: str | None,
     classifier_sensitivity: str | None,
 ) -> None:
-    """Set configuration values. Append-only for --exclude and --redact."""
+    """Set a configuration value.
+
+    New form (Step 9):
+      ot config set <key> <value> [--append] [--project|--global]
+
+    Default scope is global; --project writes to <repo>/.opentraces.json.
+    --append appends to list-typed keys (e.g. custom_redact_strings).
+
+    Legacy form (kept for back-compat until Step 15):
+      ot config set --exclude <path> | --redact <str> | --pricing-file <path> |
+                    --classifier-sensitivity <low|medium|high>
+    """
+    if scope_project and scope_global:
+        click.echo("--project and --global are mutually exclusive.", err=True)
+        sys.exit(2)
+
+    legacy_used = any(v is not None for v in (exclude, redact, pricing_file, classifier_sensitivity))
+    new_used = key is not None or value is not None
+
+    if legacy_used and new_used:
+        click.echo("Mix of legacy flags and <key> <value> not supported.", err=True)
+        sys.exit(2)
+
+    if not legacy_used and not new_used:
+        click.echo("Pass either <key> <value> or one of the legacy flags.", err=True)
+        sys.exit(2)
+
+    # Legacy path: untouched semantics.
+    if legacy_used:
+        cfg = load_config()
+        if exclude:
+            if exclude not in cfg.excluded_projects:
+                cfg.excluded_projects.append(exclude)
+            click.echo(f"Excluded project: {exclude}")
+        if redact:
+            if redact not in cfg.custom_redact_strings:
+                cfg.custom_redact_strings.append(redact)
+            click.echo("Added redaction string")
+        if pricing_file:
+            cfg.pricing_file = pricing_file
+            click.echo(f"Set pricing file: {pricing_file}")
+        if classifier_sensitivity:
+            cfg.classifier_sensitivity = classifier_sensitivity
+            click.echo(f"Set classifier sensitivity: {classifier_sensitivity}")
+        save_config(cfg)
+        emit_json({"status": "ok"})
+        return
+
+    # New generic path.
+    if value is None:
+        click.echo("Missing <value> for set.", err=True)
+        sys.exit(2)
+
+    if scope_project:
+        # Write to repo marker via load/save_project_config helpers.
+        from ..core.config import load_project_config, save_project_config
+        proj_dir = Path.cwd()
+        proj_cfg = load_project_config(proj_dir)
+        if append_value:
+            existing = proj_cfg.get(key)
+            if not isinstance(existing, list):
+                existing = [] if existing is None else [existing]
+            if value not in existing:
+                existing.append(value)
+            proj_cfg[key] = existing
+        else:
+            proj_cfg[key] = value
+        save_project_config(proj_dir, proj_cfg)
+        click.echo(f"Set {key}={value} (project)")
+        emit_json({"status": "ok", "scope": "project", "key": key, "value": value})
+        return
+
+    # Global scope (default).
     cfg = load_config()
-
-    if exclude:
-        if exclude not in cfg.excluded_projects:
-            cfg.excluded_projects.append(exclude)
-        click.echo(f"Excluded project: {exclude}")
-
-    if redact:
-        if redact not in cfg.custom_redact_strings:
-            cfg.custom_redact_strings.append(redact)
-        click.echo(f"Added redaction string")
-
-    if pricing_file:
-        cfg.pricing_file = pricing_file
-        click.echo(f"Set pricing file: {pricing_file}")
-
-    if classifier_sensitivity:
-        cfg.classifier_sensitivity = classifier_sensitivity
-        click.echo(f"Set classifier sensitivity: {classifier_sensitivity}")
+    # Validate key against the Config model.
+    if key not in type(cfg).model_fields:
+        click.echo(
+            f"Unknown config key '{key}'. Use 'ot config show' to see valid keys.",
+            err=True,
+        )
+        sys.exit(2)
+    if append_value:
+        existing = getattr(cfg, key, None) or []
+        if not isinstance(existing, list):
+            click.echo(f"--append only valid for list-typed keys; '{key}' is {type(existing).__name__}.", err=True)
+            sys.exit(2)
+        if value not in existing:
+            existing.append(value)
+        setattr(cfg, key, existing)
+    else:
+        # Coerce simple scalar types from the string value.
+        field_info = type(cfg).model_fields[key]
+        annotation = field_info.annotation
+        try:
+            if annotation is bool or "bool" in str(annotation):
+                coerced = value.lower() in {"true", "1", "yes", "on"}
+            elif annotation is int or "int" in str(annotation):
+                coerced = int(value)
+            else:
+                coerced = value
+            setattr(cfg, key, coerced)
+        except (ValueError, TypeError) as e:
+            click.echo(f"Invalid value for {key}: {e}", err=True)
+            sys.exit(2)
 
     save_config(cfg)
-    emit_json({
-        "status": "ok",
-        "next_steps": ["Run 'opentraces discover' to find traces"],
-        "next_command": "opentraces discover",
-    })
+    click.echo(f"Set {key}={value} (global)")
+    emit_json({"status": "ok", "scope": "global", "key": key, "value": value})
 
 
 @main.command(
@@ -1919,6 +2033,250 @@ from . import import_hf as _import_hf_module  # noqa: F401,E402
 from . import _debug as __debug_module  # noqa: F401,E402
 from . import inspect as _inspect_module  # noqa: F401,E402
 
+# Standalone Click groups/commands declared without @main.group decoration
+# need explicit registration. Step 13: completions noun + hidden __complete.
+from .completions import completions as _completions_group  # noqa: E402
+from ._complete import complete_cmd as _complete_cmd  # noqa: E402
+
+main.add_command(_completions_group)
+main.add_command(_complete_cmd)
+
+
+# ---------------------------------------------------------------------------
+# Step 11 — auth group (parallel surface to flat login/logout/whoami).
+# Both surfaces share the _login_impl / _logout_impl / _auth_status_impl
+# helpers defined earlier in this module. Step 15 removes the flat verbs.
+# ---------------------------------------------------------------------------
+
+@main.group("auth")
+def _auth_group() -> None:
+    """HuggingFace identity (login, logout, whoami)."""
+
+
+@_auth_group.command("login")
+@click.option("--token", is_flag=True, help="Paste a personal access token (required for pushing traces)")
+def _auth_login(token: bool) -> None:
+    """Log in to HuggingFace Hub."""
+    _login_impl(token)
+
+
+@_auth_group.command("logout")
+def _auth_logout() -> None:
+    """Log out from HuggingFace Hub."""
+    _logout_impl()
+
+
+@_auth_group.command("whoami")
+def _auth_whoami() -> None:
+    """Show the active HuggingFace identity."""
+    _auth_status_impl()
+
+
+# ---------------------------------------------------------------------------
+# Step 7 — flat workflow verbs alongside the trace group.
+# Step 8 — ot add refuses BLOCKED + REJECTED traces.
+#
+# These wrap the same underlying impls used by `ot trace ...` so the two
+# surfaces stay perfectly consistent. The `trace` group is removed in
+# Step 15; this is the bridge.
+# ---------------------------------------------------------------------------
+
+# Re-register existing trace.X commands at the root with the same name.
+# Click commands are first-class objects — add_command attaches the same
+# Command to two groups without copying logic.
+from .trace import (  # noqa: E402
+    trace_show as _trace_show_cmd,
+    trace_list as _trace_list_cmd,
+    trace_reject as _trace_reject_cmd,
+    trace_reset as _trace_reset_cmd,
+    trace_discard as _trace_discard_cmd,
+)
+main.add_command(_trace_show_cmd, name="show")
+main.add_command(_trace_reject_cmd, name="reject")
+main.add_command(_trace_reset_cmd, name="reset")
+main.add_command(_trace_discard_cmd, name="discard")
+
+
+@main.command("list")
+@click.option(
+    "--projects", "list_projects", is_flag=True,
+    help="List every project that has run `ot init` instead of traces.",
+)
+@click.option("--remote", "remote_filter", default=None,
+              help="Filter to traces missing on the named remote.")
+@click.option("--stage", default=None, help="Filter by visible stage")
+@click.option("--model", default=None, help="Filter by model")
+@click.option("--agent", default=None, help="Filter by agent")
+@click.option("--limit", type=int, default=20, help="Max rows to show")
+@click.option("--by-commit", is_flag=True, help="Group by commit")
+@click.pass_context
+def list_cmd(
+    ctx, list_projects: bool, remote_filter: str | None,
+    stage: str | None, model: str | None, agent: str | None,
+    limit: int, by_commit: bool,
+) -> None:
+    """List traces (or projects with --projects).
+
+    Default: list traces in the local inbox. With --projects, list every
+    directory that has run ot init. With --remote <name>, filter traces to
+    those missing on that remote.
+    """
+    if list_projects:
+        ctx.invoke(projects_list_cmd)
+        return
+    if remote_filter:
+        # Per-remote pending list — uses pending_for() from Step 2.
+        from ..core.config import get_project_state_path
+        from ..core.state import StateManager
+        state_path = get_project_state_path(Path.cwd())
+        state = StateManager(state_path=state_path)
+        traces = state.pending_for(remote_filter)
+        if not traces:
+            click.echo(f"No traces pending for remote '{remote_filter}'.")
+            emit_json({"status": "ok", "traces": [], "remote": remote_filter})
+            return
+        for t in traces:
+            click.echo(f"  {t.trace_id[:12]}  status={t.status.value}")
+        emit_json({
+            "status": "ok",
+            "remote": remote_filter,
+            "traces": [{"trace_id": t.trace_id, "status": t.status.value} for t in traces],
+        })
+        return
+    # Default: delegate to the trace.list impl.
+    ctx.invoke(_trace_list_cmd, stage=stage, model=model, agent=agent, limit=limit, by_commit=by_commit)
+
+
+@main.command("add")
+@click.argument("trace_ids", nargs=-1)
+@click.option("--all", "stage_all", is_flag=True, help="Stage every Inbox-status trace for push.")
+def add_cmd(trace_ids: tuple[str, ...], stage_all: bool) -> None:
+    """Stage trace(s) for the next push (mirrors `git add`).
+
+    Variadic: pass one or more ids, or --all to stage every Inbox trace.
+    Refuses BLOCKED + REJECTED traces with a clear pointer to ot redact /
+    ot reject (Step 8 approval gate).
+    """
+    from ..core.state import TraceStatus
+    from .trace import _trace_commit_impl, _load_project_state
+
+    if not trace_ids and not stage_all:
+        click.echo("Pass one or more trace ids, or --all to stage every Inbox trace.", err=True)
+        sys.exit(2)
+
+    state, _staging_dir = _load_project_state()
+
+    # Resolve --all to the explicit list of staged trace ids.
+    if stage_all:
+        staged = state.get_traces_by_status(TraceStatus.STAGED)
+        trace_ids = tuple(t.trace_id for t in staged)
+        if not trace_ids:
+            click.echo("Nothing to stage — inbox is empty.")
+            return
+
+    # Step 8 gate: refuse BLOCKED and REJECTED before doing any work.
+    refused: list[tuple[str, str, str]] = []  # (id, status, reason)
+    for tid in trace_ids:
+        # Allow short-id prefix lookup (trace_commit_impl already does
+        # full-id lookup; we duplicate a minimal check here for the gate).
+        entry = state.get_trace(tid)
+        if entry is None:
+            # Try short-id prefix match
+            matches = [
+                e for e in state.get_traces_by_status(TraceStatus.BLOCKED)
+                + state.get_traces_by_status(TraceStatus.REJECTED)
+                if e.trace_id.startswith(tid)
+            ]
+            if matches:
+                entry = matches[0]
+        if entry is None:
+            continue  # not blocked/rejected; let _trace_commit_impl handle the not-found
+        if entry.status == TraceStatus.BLOCKED:
+            refused.append((tid, "blocked", entry.block_reason or "security finding"))
+        elif entry.status == TraceStatus.REJECTED:
+            refused.append((tid, "rejected", "marked local-only"))
+
+    if refused:
+        for tid, status, reason in refused:
+            if status == "blocked":
+                click.echo(
+                    f"Refusing to stage {tid[:12]}: {reason}\n"
+                    f"  Run `ot redact {tid[:12]} <pattern>` to clean the offending content,\n"
+                    f"  then `ot reset {tid[:12]} && ot add {tid[:12]}` — or `ot reject {tid[:12]}` to keep local-only.",
+                    err=True,
+                )
+            else:
+                click.echo(
+                    f"Refusing to stage {tid[:12]}: {reason}\n"
+                    f"  Run `ot reset {tid[:12]}` first to bring it back to Inbox.",
+                    err=True,
+                )
+        sys.exit(2)
+
+    # Otherwise dispatch to the existing per-trace commit impl.
+    for tid in trace_ids:
+        _trace_commit_impl(tid)
+
+
+@main.command("redact")
+@click.argument("trace_id")
+@click.argument("pattern")
+@click.option("--regex", "use_regex", is_flag=True, help="Interpret PATTERN as a regex.")
+@click.option("--field", "field", default=None, help="Restrict to one field path (e.g. observations.stdout).")
+@click.option("--step", "step_index", type=int, default=None, help="Restrict to one step index.")
+def redact_cmd(trace_id: str, pattern: str, use_regex: bool, field: str | None, step_index: int | None) -> None:
+    """Find and replace text content in a trace (Step 6 + Step 7).
+
+    Default: literal-string find-and-replace across every field of every
+    step. Use --regex for pattern matching, --field to scope to one field
+    (dotted path supported), --step to scope to one step. Replaces matches
+    inline with [REDACTED]. Atomic in-place rewrite. Permanent — no undo.
+    """
+    from ..core.config import get_project_state_path, get_project_traces_dir
+    from ..core.review import redact_pattern_and_persist
+    from ..core.state import StateManager
+
+    project_dir = Path.cwd()
+    state_path = get_project_state_path(project_dir)
+    state = StateManager(state_path=state_path)
+    staging_dir = get_project_traces_dir(project_dir)
+
+    entry = state.get_trace(trace_id)
+    if entry is None:
+        # Try short-id prefix
+        matches = [
+            t for t in state._state.get("traces", {}).values()
+            if t.get("trace_id", "").startswith(trace_id)
+        ]
+        if not matches:
+            click.echo(f"Trace not found: {trace_id}", err=True)
+            sys.exit(6)
+        trace_id = matches[0]["trace_id"]
+        entry = state.get_trace(trace_id)
+
+    result = redact_pattern_and_persist(
+        staging_dir, trace_id, pattern,
+        regex=use_regex, field=field, step=step_index,
+    )
+
+    if hasattr(result, "error_code") and result.error_code:
+        click.echo(f"redact failed: {result.error_message}", err=True)
+        sys.exit(2)
+
+    click.echo(f"Redacted {trace_id[:12]} ({getattr(result, 'replacements', '?')} replacement(s))")
+    emit_json({
+        "status": "ok",
+        "trace_id": trace_id,
+        "replacements": getattr(result, "replacements", None),
+    })
+
+
+# ot llm-review: alias for the existing review-llm command (renamed per the
+# user's "second LLM review" clarification — the llm- prefix keeps the
+# machine-pass nature explicit).
+from .installers import review_llm_cmd as _review_llm_cmd  # noqa: E402
+main.add_command(_review_llm_cmd, name="llm-review")
+
 
 @main.group(invoke_without_command=True)
 @click.pass_context
@@ -1983,22 +2341,79 @@ def remote_set(name: str | None, is_private: bool | None) -> None:
     emit_json({"status": "ok", "remote": repo_id, "visibility": visibility})
 
 
-@remote.command("use", hidden=True)
-@click.argument("repo", required=False, default=None)
+@remote.command("use")
+@click.argument("name", required=False, default=None)
 @click.pass_context
-def remote_use(ctx: click.Context, repo: str | None) -> None:
-    """Backward-compatible alias for remote set."""
-    ctx.invoke(remote_set, name=repo)
+def remote_use(ctx: click.Context, name: str | None) -> None:
+    """Set the active remote for subsequent ``ot push`` / ``ot pull``.
+
+    Step 4: when ``<name>`` matches an entry in ``cfg.remotes``, just
+    switch ``active_remote``. Legacy fallback: if the project still
+    uses the single-remote shape (no ``cfg.remotes`` entries), defer
+    to ``remote set`` for back-compat.
+    """
+    from ..core.config import load_project_config, save_project_config
+
+    if name is None:
+        # No-arg legacy form: fall through to `remote set` interactive flow.
+        ctx.invoke(remote_set, name=None)
+        return
+
+    project_dir = Path.cwd()
+    proj_config, remotes = _read_remotes(project_dir)
+
+    if name in remotes:
+        proj_config["active_remote"] = name
+        save_project_config(project_dir, proj_config)
+        click.echo(f"Active remote set to '{name}'")
+        emit_json({"status": "ok", "active_remote": name})
+        return
+
+    click.echo(f"No remote named '{name}'.", err=True)
+    sys.exit(2)
 
 
 @remote.command("remove")
-def remote_remove() -> None:
-    """Remove the configured remote."""
-    from ..core.config import load_project_config, save_project_config
+@click.argument("name", required=False, default=None)
+def remote_remove(name: str | None) -> None:
+    """Remove a remote.
+
+    With ``<name>``: remove the named entry from ``cfg.remotes`` and
+    drop its ``uploaded_to`` keys from every staging entry, atomically
+    (Step 4 git-parity behavior). Without arguments: legacy form that
+    clears the single project-level ``remote`` field (back-compat,
+    removed in Step 15).
+    """
+    from ..core.config import (
+        load_project_config,
+        save_project_config,
+        get_project_state_path,
+    )
+    from ..core.state import StateManager, UnknownRemoteError
 
     project_dir = Path.cwd()
-    proj_config = load_project_config(project_dir)
 
+    if name is not None:
+        proj_config, remotes = _read_remotes(project_dir)
+        if name not in remotes:
+            click.echo(f"No remote named '{name}'.", err=True)
+            sys.exit(2)
+        del remotes[name]
+        if proj_config.get("active_remote") == name:
+            proj_config["active_remote"] = next(iter(remotes), None)
+        state_path = get_project_state_path(project_dir)
+        state = StateManager(state_path=state_path)
+        try:
+            state.forget_remote(name)
+        except UnknownRemoteError:
+            pass
+        save_project_config(project_dir, proj_config)
+        click.echo(f"Removed remote '{name}'")
+        emit_json({"status": "ok", "name": name})
+        return
+
+    # Legacy no-arg form
+    proj_config = load_project_config(project_dir)
     if "remote" not in proj_config:
         click.echo("No remote configured.")
         return
@@ -2007,6 +2422,163 @@ def remote_remove() -> None:
     save_project_config(project_dir, proj_config)
     click.echo("Remote removed.")
     emit_json({"status": "ok", "remote": None})
+
+
+# ---------------------------------------------------------------------------
+# Step 4 — git-parity remote verbs
+# ---------------------------------------------------------------------------
+
+
+def _expand_hf_url(url: str) -> str:
+    """Expand short-form ``user/repo`` to ``hf://user/repo``.
+
+    Full URLs (anything containing ``://``) are returned unchanged. The
+    short form is the convenient default because HuggingFace is the
+    only backend today; future backends require the full scheme.
+    """
+    if "://" in url:
+        return url
+    if "/" in url:
+        return f"hf://{url}"
+    return url
+
+
+def _read_remotes(project_dir: Path) -> tuple[dict, dict | None]:
+    """Return (proj_config_dict, remotes_dict). remotes is the live ref."""
+    proj_config = load_project_config(project_dir)
+    remotes = proj_config.get("remotes")
+    if remotes is None:
+        proj_config["remotes"] = {}
+        remotes = proj_config["remotes"]
+    return proj_config, remotes
+
+
+@remote.command("add")
+@click.argument("name")
+@click.argument("url")
+@click.option("--private", "is_private", flag_value=True, default=None)
+@click.option("--public", "is_private", flag_value=False)
+def remote_add(name: str, url: str, is_private: bool | None) -> None:
+    """Register a remote (mirrors ``git remote add``).
+
+    URL accepts ``hf://user/dataset`` or the short form ``user/dataset``
+    (auto-expanded because HuggingFace is the default backend). If the
+    HF dataset doesn't yet exist on the hub, that's fine here — push
+    will create it on first publish. Use --public / --private to
+    override the project's default_visibility for this remote.
+    """
+    from ..core.config import load_project_config, save_project_config
+
+    project_dir = Path.cwd()
+    proj_config, remotes = _read_remotes(project_dir)
+
+    if name in remotes:
+        click.echo(f"Remote '{name}' already exists. Use 'remote set-url' to update.", err=True)
+        sys.exit(2)
+
+    full_url = _expand_hf_url(url)
+
+    if is_private is None:
+        visibility = proj_config.get("default_visibility", "private")
+    else:
+        visibility = "private" if is_private else "public"
+
+    remotes[name] = {"url": full_url, "visibility": visibility}
+    if not proj_config.get("active_remote"):
+        proj_config["active_remote"] = name
+
+    save_project_config(project_dir, proj_config)
+    click.echo(f"Added remote '{name}' -> {full_url} ({visibility})")
+    emit_json({"status": "ok", "name": name, "url": full_url, "visibility": visibility})
+
+
+@remote.command("set-url")
+@click.argument("name")
+@click.argument("url")
+def remote_set_url(name: str, url: str) -> None:
+    """Change a remote's URL (mirrors ``git remote set-url``)."""
+    from ..core.config import load_project_config, save_project_config
+
+    project_dir = Path.cwd()
+    proj_config, remotes = _read_remotes(project_dir)
+
+    if name not in remotes:
+        click.echo(f"No remote named '{name}'.", err=True)
+        sys.exit(2)
+
+    full_url = _expand_hf_url(url)
+    remotes[name]["url"] = full_url
+    save_project_config(project_dir, proj_config)
+    click.echo(f"URL for '{name}' is now {full_url}")
+    emit_json({"status": "ok", "name": name, "url": full_url})
+
+
+@remote.command("rename")
+@click.argument("old")
+@click.argument("new")
+def remote_rename(old: str, new: str) -> None:
+    """Rename a remote (atomic across config + state.uploaded_to keys)."""
+    from ..core.config import load_project_config, save_project_config, get_project_state_path
+    from ..core.state import StateManager, UnknownRemoteError
+
+    project_dir = Path.cwd()
+    proj_config, remotes = _read_remotes(project_dir)
+
+    if old not in remotes:
+        click.echo(f"No remote named '{old}'.", err=True)
+        sys.exit(2)
+    if new in remotes:
+        click.echo(f"Remote '{new}' already exists.", err=True)
+        sys.exit(2)
+
+    remotes[new] = remotes.pop(old)
+    if proj_config.get("active_remote") == old:
+        proj_config["active_remote"] = new
+
+    state_path = get_project_state_path(project_dir)
+    state = StateManager(state_path=state_path)
+    try:
+        state.rename_remote(old, new)
+    except UnknownRemoteError:
+        # No upload history under that name — config-level rename is enough.
+        pass
+
+    save_project_config(project_dir, proj_config)
+    click.echo(f"Renamed '{old}' -> '{new}'")
+    emit_json({"status": "ok", "old": old, "new": new})
+
+
+@remote.command("list")
+@click.option("-v", "verbose", is_flag=True, help="Show URLs.")
+def remote_list(verbose: bool) -> None:
+    """List configured remotes (active marked with *)."""
+    from ..core.config import load_project_config
+
+    proj_config, remotes = _read_remotes(Path.cwd())
+    active = proj_config.get("active_remote")
+
+    if not remotes:
+        click.echo("No remotes configured.")
+        emit_json({"status": "ok", "remotes": {}, "active_remote": None})
+        return
+
+    payload = {}
+    for name, cfg in sorted(remotes.items()):
+        marker = "*" if name == active else " "
+        if verbose:
+            click.echo(f"  {marker} {name}\t{cfg['url']} ({cfg.get('visibility', 'private')})")
+        else:
+            click.echo(f"  {marker} {name}")
+        payload[name] = cfg
+
+    emit_json({"status": "ok", "remotes": payload, "active_remote": active})
+
+
+# Step 4 also rebinds bare `ot remote remove <name>` semantics — the existing
+# no-arg form (line ~2013) is kept for back-compat and removed in step 15.
+# Click does NOT support overloading commands, so the new name-taking remove
+# is exposed as the hidden `remote remove-named` + `remote rm` aliases above.
+# Step 15 will rename remove-named -> remove and delete the legacy no-arg form.
 
 
 @main.command(hidden=True)
