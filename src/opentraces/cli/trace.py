@@ -14,6 +14,7 @@ from pathlib import Path
 import click
 
 from opentraces import cli as _cli
+from ._help import OpentracesCommand
 from ..core.workflow import resolve_visible_stage, stage_label  # noqa: F401
 
 logger = logging.getLogger("opentraces.cli.trace")
@@ -94,7 +95,7 @@ def _load_trace_record(staging_dir: Path, trace_id: str):
     return record, staging_file
 
 
-@click.command("list")
+@click.command("list", cls=OpentracesCommand)
 @click.option("--stage", type=click.Choice(["inbox", "staged", "pushed", "rejected"]), default=None, help="Filter by stage")
 @click.option("--model", type=str, default=None, help="Filter by model name (substring)")
 @click.option("--agent", type=str, default=None, help="Filter by agent name")
@@ -215,7 +216,7 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
     })
 
 
-@click.command("show")
+@click.command("show", cls=OpentracesCommand)
 @click.argument("trace_id")
 @click.option("--verbose", is_flag=True, default=False, help="Show full step content (default: truncated to 500 chars)")
 @click.option("--markdown", is_flag=True, default=False,
@@ -361,7 +362,7 @@ def _trace_commit_impl(trace_id: str) -> None:
     })
 
 
-@click.command("reject")
+@click.command("reject", cls=OpentracesCommand)
 @click.argument("trace_id")
 def trace_reject(trace_id: str) -> None:
     """Reject a trace (kept local only, not pushed)."""
@@ -385,7 +386,7 @@ def trace_reject(trace_id: str) -> None:
     })
 
 
-@click.command("reset")
+@click.command("reset", cls=OpentracesCommand)
 @click.argument("trace_id")
 def trace_reset(trace_id: str) -> None:
     """Reset a trace back to Inbox."""
@@ -417,7 +418,7 @@ def trace_reset(trace_id: str) -> None:
     })
 
 
-@click.command("discard")
+@click.command("discard", cls=OpentracesCommand)
 @click.argument("trace_id")
 @click.option("--yes", "confirmed", is_flag=True, help="Skip confirmation")
 def trace_discard(trace_id: str, confirmed: bool) -> None:

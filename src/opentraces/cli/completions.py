@@ -27,6 +27,8 @@ from pathlib import Path
 
 import click
 
+from ._help import OpentracesGroup
+
 SUPPORTED_SHELLS = ("bash", "zsh", "fish")
 
 EPILOG = """\
@@ -215,10 +217,13 @@ def _render_script(shell: str, bin_path: str, names: tuple[str, ...]) -> str:
     raise click.UsageError(f"Unsupported shell: {shell}")
 
 
-class _CompletionsGroup(click.Group):
+class _CompletionsGroup(OpentracesGroup):
     """Group that supports ``ot completions [shell]`` bare-print alongside
     ``install``/``uninstall`` subcommands. If the first arg is a supported
     shell name (not a subcommand), print the script for that shell and exit.
+
+    Inherits ``OpentracesGroup`` so the ``--help`` screen carries the
+    canonical banner + dim-rule layout instead of vanilla Click's plain one.
     """
 
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
