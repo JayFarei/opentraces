@@ -2952,6 +2952,40 @@ def parse(auto: bool, limit: int) -> None:
     sys.exit(2)
 
 
+@main.command("_ingest-session", hidden=True)
+@click.argument("transcript_path", type=click.Path())
+@click.option("--project", "project_override", type=click.Path(),
+              default=None,
+              help="Resolve against a specific project (default: cwd).")
+def _ingest_session(transcript_path: str, project_override: str | None) -> None:
+    """Ingest one Claude Code session — invoked fire-and-forget by the Stop hook.
+
+    Contract: must exit 0 quickly and silently in every reasonable
+    failure mode (missing file, non-enlisted project, parse failure).
+    Any stderr noise propagates into the agent's hook telemetry and
+    degrades the user's session; it's not worth it. The watcher sweep
+    will recover anything this path misses.
+    """
+    try:
+        path = Path(transcript_path)
+        if not path.exists():
+            return  # vanished transcript — nothing to do
+
+        if project_override:
+            project_dir = Path(project_override).resolve()
+        else:
+            project_dir = Path.cwd().resolve()
+
+        if not (project_dir / ".opentraces.json").exists():
+            return  # not enlisted — watcher on other projects will catch it
+
+        from ..core.ingest import ingest_one_session
+        ingest_one_session(path, project_dir)
+    except Exception:  # noqa: BLE001
+        # Belt: never let a hook break the user's agent session.
+        return
+
+
 @main.command("_scan", hidden=True)
 @click.option("--reparse", is_flag=True,
               help="Force re-derivation even if a session hasn't grown "
