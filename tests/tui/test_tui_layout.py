@@ -241,6 +241,49 @@ async def test_preview_scrolls_to_top_on_select(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_bracket_keys_page_preview_from_inbox(tmp_path, monkeypatch):
+    """``]`` and ``[`` page through the trace preview without requiring
+    focus on the preview pane — you should be able to skim a long trace
+    while still navigating the inbox list."""
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+    long_steps = []
+    for i in range(40):
+        long_steps.append({"role": "user",
+                           "content": f"line {i}\n" * 6,
+                           "timestamp": "2026-04-15T10:00:00Z"})
+        long_steps.append({"role": "agent",
+                           "content": f"reply {i}\n" * 6,
+                           "timestamp": "2026-04-15T10:00:00Z"})
+    t = _make_trace("trace_pageable_001", "long", steps=long_steps)
+    (staging / f"{t['trace_id']}.jsonl").write_text(json.dumps(t) + "\n")
+
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(140, 30)) as pilot:
+        await pilot.pause()
+        await pilot.press("2")  # focus inbox, preview already populated
+        await pilot.pause()
+        stream = app.query_one("#trace-stream")
+        inbox = app.query_one("#inbox-list")
+        assert app.focused is inbox, "inbox should hold focus"
+        assert stream.scroll_y == 0
+        await pilot.press("right_square_bracket")
+        await pilot.pause()
+        first_jump = stream.scroll_y
+        assert first_jump > 0, "] should scroll preview down"
+        assert app.focused is inbox, "focus must stay on inbox"
+        await pilot.press("right_square_bracket")
+        await pilot.pause()
+        assert stream.scroll_y > first_jump, "] should keep paging down"
+        await pilot.press("left_square_bracket")
+        await pilot.pause()
+        assert stream.scroll_y < first_jump * 2, "[ should page back up"
+
+
+@pytest.mark.asyncio
 async def test_user_vs_agent_body_colors_actually_render(tmp_path, monkeypatch):
     """Regression guard: Rich markup must use Rich color names (``cyan``,
     ``bright_magenta``), not Textual CSS keywords (``ansi_cyan``) — the

@@ -450,6 +450,10 @@ class OpenTracesApp(App):
         Binding("a", "toggle_view_mode", "Toggle view", priority=True),
         Binding("g", "scroll_home", "Top", show=False),
         Binding("G", "scroll_end", "Bottom", show=False),
+        # Page through the trace preview from any pane — saves you having
+        # to leave the inbox to skim a long trace.
+        Binding("left_square_bracket", "preview_page_up", "Page up", show=False),
+        Binding("right_square_bracket", "preview_page_down", "Page down", show=False),
         Binding("enter", "focus_stream", "Inspect", show=False),
     )
 
@@ -783,7 +787,11 @@ class OpenTracesApp(App):
     def _keybar_text(self) -> str:
         mode = "conv" if self._view_mode == "conversation" else "full"
         def k(key: str, label: str) -> str:
-            return f"[{BLUE_ACCENT}]{key}[/{BLUE_ACCENT}] [dim]{label}[/dim]"
+            # Rich only treats an unclosed ``[`` as the start of a tag;
+            # escape that one character so a literal ``[/]`` key label
+            # renders as ``[/]`` rather than being eaten as markup.
+            safe = key.replace("[", r"\[")
+            return f"[{BLUE_ACCENT}]{safe}[/{BLUE_ACCENT}] [dim]{label}[/dim]"
         return "  ".join([
             k("j/k", "move"),
             k("space", "add/remove"),
@@ -792,6 +800,7 @@ class OpenTracesApp(App):
             k("d", "discard"),
             k("a", f"view:{mode}"),
             k("g/G", "top/bot"),
+            k("[/]", "page"),
             k("?", "help"),
             k("q", "quit"),
         ])
@@ -862,6 +871,12 @@ class OpenTracesApp(App):
 
     def action_scroll_end(self) -> None:
         self.query_one("#trace-stream", RichLog).scroll_end(animate=False)
+
+    def action_preview_page_up(self) -> None:
+        self.query_one("#trace-stream", RichLog).scroll_page_up(animate=False)
+
+    def action_preview_page_down(self) -> None:
+        self.query_one("#trace-stream", RichLog).scroll_page_down(animate=False)
 
     def action_toggle_help(self) -> None:
         self.query_one(HelpOverlay).toggle()
