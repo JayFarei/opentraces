@@ -66,6 +66,25 @@ def escape(text: str) -> str:
     return text.replace("[", "\\[")
 
 
+def _is_recently_touched(ts_end: str | None, window_seconds: int = 7200) -> bool:
+    """True if ``ts_end`` is within the last ``window_seconds`` (default 2h).
+
+    Used as a "recently touched" hint in the inbox — it does NOT claim
+    the underlying Claude Code session is still live, only that the last
+    observed turn landed recently. See plan B.6 for the intended UX.
+    """
+    if not ts_end:
+        return False
+    try:
+        dt = datetime.fromisoformat(str(ts_end).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    secs = (datetime.now(timezone.utc) - dt).total_seconds()
+    return 0 <= secs <= window_seconds
+
+
 def _relative_time(ts: str | None) -> str:
     if not ts:
         return ""
@@ -167,6 +186,8 @@ class TraceRow(ListItem):
             dot = "[red]●[/red]"
         elif flags:
             dot = "[yellow]●[/yellow]"
+        elif _is_recently_touched(self.trace.get("timestamp_end")):
+            dot = "[cyan dim]◐[/cyan dim]"
         else:
             dot = "[dim]·[/dim]"
         yield Static(
@@ -200,7 +221,7 @@ class HelpOverlay(Vertical):
         "  [bold]g G[/bold]       Jump to top / bottom of trace preview\n"
         "  [bold]\\[ \\][/bold]       Page trace preview up / down (works from any pane)\n"
         "  [bold]p[/bold]         Push staged traces\n"
-        "  [bold]r[/bold]         Reject trace (deferred — undo with u)\n"
+        "  [bold]r[/bold]         Refresh (re-capture and reload)\n"
         "  [bold]d[/bold]         Discard trace (deferred — undo with u)\n"
         "  [bold]u[/bold]         Undo last reject / discard / stage move\n"
         "  [bold]i[/bold]         Security pipeline info for the selected trace\n"
@@ -665,7 +686,7 @@ class OpenTracesApp(App):
         Binding("k", "cursor_up", "Up", show=False),
         Binding("space", "toggle_stage", "Add/Remove", priority=True),
         Binding("p", "push", "Push", priority=True),
-        Binding("r", "reject", "Reject", priority=True),
+        Binding("r", "refresh", "Refresh", priority=True),
         Binding("d", "discard", "Discard", priority=True),
         Binding("a", "toggle_view_mode", "Toggle view", priority=True),
         Binding("u", "undo", "Undo", priority=True),
@@ -1115,7 +1136,7 @@ class OpenTracesApp(App):
             k("j/k", "move"),
             k("space", "add/remove"),
             k("p", "push"),
-            k("r", "reject"),
+            k("r", "refresh"),
             k("d", "discard"),
         ]
         if self._undo_stack:
@@ -1274,6 +1295,64 @@ class OpenTracesApp(App):
         self._reload_traces(keep_trace_id=trace_id)
         self._refresh_keybar()
         self.notify("Rejected · u to undo", severity="warning")
+
+    def action_refresh(self) -> None:
+        """Re-capture sessions from disk, then rehydrate and report counts.
+
+        The heavy work (subprocess + state rebuild) runs on a worker
+        thread; the UI stays responsive. On completion we reuse
+        ``_rehydrate_after_external_write`` — same path the push flow
+        already uses when a subprocess has mutated state.json.
+        """
+        pre_snapshot: dict[str, str] = {
+            t.get("trace_id", ""): str(t.get("timestamp_end") or "")
+            for t in self.traces
+            if t.get("trace_id")
+        }
+        self.notify("Refreshing: re-capturing sessions...", severity="information")
+        self._run_refresh_worker(pre_snapshot)
+
+    @work(thread=True, exclusive=True)
+    def _run_refresh_worker(self, pre_snapshot: dict[str, str]) -> None:
+        import subprocess
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "opentraces", "_capture",
+                 "--project-dir", str(self.project_dir)],
+                cwd=str(self.project_dir),
+                check=False,
+                capture_output=True,
+                timeout=120,
+            )
+        except Exception:
+            logger.exception("Refresh capture failed")
+            self.call_from_thread(
+                self.notify, "Refresh failed (capture error)", severity="error"
+            )
+            return
+        self.call_from_thread(self._finish_refresh, pre_snapshot)
+
+    def _finish_refresh(self, pre_snapshot: dict[str, str]) -> None:
+        self._rehydrate_after_external_write()
+        new_count = 0
+        updated_count = 0
+        recently = 0
+        for trace in self.traces:
+            tid = trace.get("trace_id", "")
+            te = str(trace.get("timestamp_end") or "")
+            if not tid:
+                continue
+            if tid not in pre_snapshot:
+                new_count += 1
+            elif pre_snapshot[tid] and te > pre_snapshot[tid]:
+                updated_count += 1
+            if _is_recently_touched(trace.get("timestamp_end")):
+                recently += 1
+        self.notify(
+            f"Pulled +{new_count} new / ~{updated_count} updated · "
+            f"{recently} recently touched",
+            severity="information",
+        )
 
     def action_discard(self) -> None:
         """Defer the JSONL deletion until quit. Until then, the trace is
