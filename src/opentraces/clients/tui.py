@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -163,7 +164,15 @@ class FocusableLog(RichLog, can_focus=True):
     pass
 
 
-class HelpOverlay(Static):
+class HelpOverlay(Vertical):
+    """Full-screen overlay that centers a help card.
+
+    Implementation note: ``align: center middle`` only positions a
+    container's *children*, not the container itself within its parent.
+    So the overlay fills the screen on the ``overlay`` layer and the
+    actual help card lives as its child — that's what gets centered.
+    """
+
     HELP = (
         "[bold]Keybindings[/bold]\n\n"
         "  [bold]1 2 3 4[/bold]   Focus Info / Inbox / Staged / Pushed\n"
@@ -172,18 +181,24 @@ class HelpOverlay(Static):
         "  [bold]enter[/bold]     Inspect (focus stream)\n"
         "  [bold]space[/bold]     Add (inbox→staged) / Remove (staged→inbox)\n"
         "  [bold]a[/bold]         Toggle conversation / full view\n"
-        "  [bold]g G[/bold]       Jump to top / bottom of stream\n"
+        "  [bold]g G[/bold]       Jump to top / bottom of trace preview\n"
+        "  [bold]\\[ \\][/bold]       Page trace preview up / down (works from any pane)\n"
         "  [bold]p[/bold]         Push staged traces\n"
-        "  [bold]r[/bold]         Reject trace\n"
-        "  [bold]d[/bold]         Discard (delete staging file + state)\n"
+        "  [bold]r[/bold]         Reject trace (deferred — undo with u)\n"
+        "  [bold]d[/bold]         Discard trace (deferred — undo with u)\n"
+        "  [bold]u[/bold]         Undo last reject / discard / stage move\n"
         "  [bold]?[/bold]         Toggle this help\n"
-        "  [bold]q[/bold]         Quit\n"
+        "  [bold]q[/bold]         Quit (flushes pending discards)\n"
     )
 
     def __init__(self) -> None:
-        super().__init__(self.HELP, markup=True)
+        super().__init__(id="help-overlay")
+
+    def compose(self) -> ComposeResult:
+        yield Static(self.HELP, markup=True, id="help-card")
+
+    def on_mount(self) -> None:
         self.styles.display = "none"
-        self.styles.layer = "overlay"
 
     def toggle(self) -> None:
         self.styles.display = "block" if self.styles.display == "none" else "none"
@@ -379,12 +394,18 @@ Screen {
     color: ansi_bright_black;
 }
 
+/* Full-screen translucent layer; the help-card child is what gets centered. */
 HelpOverlay {
     layer: overlay;
-    width: 72;
-    height: auto;
-    max-height: 24;
+    width: 100%;
+    height: 100%;
     align: center middle;
+    background: ansi_default;
+}
+#help-card {
+    width: 78;
+    height: auto;
+    max-height: 28;
     background: ansi_default;
     border: round ansi_bright_blue;
     padding: 1 2;
@@ -421,6 +442,30 @@ PushRunnerModal {
 """
 
 
+# ---------------------------------------------------------------------------
+# Undo
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _UndoOp:
+    """One reversible action on the undo stack.
+
+    ``kind``        one of ``"stage"`` / ``"unstage"`` / ``"reject"`` /
+                    ``"discard"``. Drives the undo branch.
+    ``trace_id``    target trace.
+    ``label``       short human label for the keybar / notify toast.
+    ``prior_status``the ``TraceStatus`` to restore. ``STAGED`` doubles as
+                    "no entry / inbox" since ``resolve_visible_stage``
+                    maps it back to inbox.
+    """
+
+    kind: str
+    trace_id: str
+    label: str
+    prior_status: TraceStatus
+
+
 STAGE_KEYS = ("inbox", "staged", "pushed")
 STAGE_TITLES = {"inbox": "[2] Inbox", "staged": "[3] Staged", "pushed": "[4] Pushed"}
 STAGE_IDS = {"inbox": "inbox-list", "staged": "staged-list", "pushed": "pushed-list"}
@@ -448,6 +493,7 @@ class OpenTracesApp(App):
         Binding("r", "reject", "Reject", priority=True),
         Binding("d", "discard", "Discard", priority=True),
         Binding("a", "toggle_view_mode", "Toggle view", priority=True),
+        Binding("u", "undo", "Undo", priority=True),
         Binding("g", "scroll_home", "Top", show=False),
         Binding("G", "scroll_end", "Bottom", show=False),
         # Page through the trace preview from any pane — saves you having
@@ -473,6 +519,17 @@ class OpenTracesApp(App):
         self._view_mode = "conversation"  # or "full"
         self._current_trace: dict[str, Any] | None = None
         self._active_stage: str | None = None
+        # Undo / deferred-destruction model:
+        #   - reject and stage-toggle apply state changes immediately and
+        #     push an inverse op onto _undo_stack
+        #   - discard is fully deferred — the trace is hidden from the
+        #     view and its file path queued in _pending_deletes; the
+        #     actual file removal happens on quit. Undo just removes
+        #     it from the queue.
+        # All in-memory: anything still pending when the app exits
+        # without a clean quit (e.g. crash) is forgotten.
+        self._undo_stack: list[_UndoOp] = []
+        self._pending_deletes: dict[str, Path] = {}
 
     # --- compose -------------------------------------------------------
 
@@ -513,7 +570,10 @@ class OpenTracesApp(App):
             self.remote_visibility = None
 
     def _reload_traces(self, keep_trace_id: str | None = None) -> None:
-        self.traces = list(load_traces(self.staging_dir, limit=self.trace_limit))
+        self.traces = [
+            t for t in load_traces(self.staging_dir, limit=self.trace_limit)
+            if t["trace_id"] not in self._pending_deletes
+        ]
         grouped: dict[str, list[dict[str, Any]]] = {k: [] for k in STAGE_KEYS}
         for t in self.traces:
             stage = get_stage(self.state, t["trace_id"])
@@ -792,18 +852,23 @@ class OpenTracesApp(App):
             # renders as ``[/]`` rather than being eaten as markup.
             safe = key.replace("[", r"\[")
             return f"[{BLUE_ACCENT}]{safe}[/{BLUE_ACCENT}] [dim]{label}[/dim]"
-        return "  ".join([
+        parts = [
             k("j/k", "move"),
             k("space", "add/remove"),
             k("p", "push"),
             k("r", "reject"),
             k("d", "discard"),
+        ]
+        if self._undo_stack:
+            parts.append(k("u", f"undo ({len(self._undo_stack)})"))
+        parts += [
             k("a", f"view:{mode}"),
             k("g/G", "top/bot"),
             k("[/]", "page"),
             k("?", "help"),
             k("q", "quit"),
-        ])
+        ]
+        return "  ".join(parts)
 
     def _refresh_keybar(self) -> None:
         self.query_one("#keybar", Static).update(self._keybar_text())
@@ -887,45 +952,120 @@ class OpenTracesApp(App):
         if self._current_trace:
             self._render_trace(self._current_trace)
 
+    # ---- destructive actions all push an entry onto the undo stack ----
+
+    def _snapshot_status(self, trace_id: str) -> TraceStatus:
+        """Return the current ``TraceStatus`` for restore-on-undo.
+
+        ``StateManager.get_trace`` returns a dataclass whose ``status``
+        field is typed as ``TraceStatus`` but is actually a bare string
+        at runtime (JSON round-trip — dataclasses don't coerce). Coerce
+        back to the enum so ``set_trace_status`` — which calls
+        ``status.value`` — doesn't blow up on undo.
+        """
+        entry = self.state.get_trace(trace_id)
+        if entry is None:
+            return TraceStatus.STAGED
+        raw = entry.status
+        if isinstance(raw, TraceStatus):
+            return raw
+        try:
+            return TraceStatus(raw)
+        except (ValueError, TypeError):
+            return TraceStatus.STAGED
+
     def action_toggle_stage(self) -> None:
         trace = self._focused_list_trace()
         if not trace:
             return
         trace_id = trace["trace_id"]
         stage = get_stage(self.state, trace_id)
+        prior = self._snapshot_status(trace_id)
+        task_label = (trace.get("task", {}).get("description") or "trace")[:40]
         if stage == "inbox":
-            task = (trace.get("task", {}).get("description") or "trace")[:60]
-            commit_single(self.state, trace_id, task)
-            self.notify("Added to staged", severity="information")
+            commit_single(self.state, trace_id, task_label)
+            self._undo_stack.append(_UndoOp("stage", trace_id,
+                                            f"stage '{task_label}'", prior))
+            self.notify("Added to staged · u to undo", severity="information")
         elif stage == "staged":
             unstage_trace(self.state, trace_id)
-            self.notify("Moved back to inbox", severity="information")
+            self._undo_stack.append(_UndoOp("unstage", trace_id,
+                                            f"unstage '{task_label}'", prior))
+            self.notify("Moved back to inbox · u to undo", severity="information")
         else:
             self.notify("Only inbox/staged traces can be toggled", severity="warning")
             return
         self._reload_traces(keep_trace_id=trace_id)
+        self._refresh_keybar()
 
     def action_reject(self) -> None:
         trace = self._focused_list_trace()
         if not trace:
             return
         trace_id = trace["trace_id"]
+        prior = self._snapshot_status(trace_id)
+        task_label = (trace.get("task", {}).get("description") or "trace")[:40]
         try:
             reject_trace(self.state, trace_id, with_session_kwarg=True)
         except TypeError:
             reject_trace(self.state, trace_id)
+        self._undo_stack.append(_UndoOp("reject", trace_id,
+                                        f"reject '{task_label}'", prior))
         self._reload_traces(keep_trace_id=trace_id)
-        self.notify("Rejected", severity="warning")
+        self._refresh_keybar()
+        self.notify("Rejected · u to undo", severity="warning")
 
     def action_discard(self) -> None:
+        """Defer the JSONL deletion until quit. Until then, the trace is
+        hidden from the view and ``u`` un-hides it. This is the only
+        op that survives only in memory — a crash before quit forgets
+        the discard, which is the correct safe-by-default behavior."""
         trace = self._focused_list_trace()
         if not trace:
             return
         trace_id = trace["trace_id"]
-        staging_file = self.staging_dir / f"{trace_id}.jsonl"
-        discard_trace_state_only(self.state, trace_id, staging_file=staging_file)
+        prior = self._snapshot_status(trace_id)
+        task_label = (trace.get("task", {}).get("description") or "trace")[:40]
+        self._pending_deletes[trace_id] = self.staging_dir / f"{trace_id}.jsonl"
+        self._undo_stack.append(_UndoOp("discard", trace_id,
+                                        f"discard '{task_label}'", prior))
         self._reload_traces()
-        self.notify("Discarded", severity="warning")
+        self._refresh_keybar()
+        self.notify("Discarded · u to undo (kept until you quit)",
+                    severity="warning")
+
+    def _flush_pending_deletes(self) -> int:
+        """Apply queued discards. Called from action_quit so the file
+        deletions only happen on a clean exit — closing the terminal,
+        ``Ctrl-C``, or a crash leaves the staging files in place."""
+        flushed = 0
+        for trace_id, staging_file in list(self._pending_deletes.items()):
+            try:
+                discard_trace_state_only(self.state, trace_id,
+                                         staging_file=staging_file)
+                flushed += 1
+            except Exception as exc:  # pragma: no cover — best-effort cleanup
+                logger.warning("flush discard failed for %s: %s", trace_id, exc)
+        self._pending_deletes.clear()
+        return flushed
+
+    def action_quit(self) -> None:
+        self._flush_pending_deletes()
+        self.exit()
+
+    def action_undo(self) -> None:
+        if not self._undo_stack:
+            self.notify("Nothing to undo", severity="information")
+            return
+        op = self._undo_stack.pop()
+        if op.kind == "discard":
+            self._pending_deletes.pop(op.trace_id, None)
+        # Restore the prior on-disk status. STAGED maps back to inbox via
+        # resolve_visible_stage so this also handles "no prior entry".
+        self.state.set_trace_status(op.trace_id, op.prior_status)
+        self._reload_traces(keep_trace_id=op.trace_id)
+        self._refresh_keybar()
+        self.notify(f"Undid: {op.label}", severity="information")
 
     def action_push(self) -> None:
         if not self.by_stage["staged"]:

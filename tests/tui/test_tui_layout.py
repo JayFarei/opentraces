@@ -318,6 +318,134 @@ async def test_header_shows_in_out_only_not_cache(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_help_overlay_is_centered(staged_app):
+    """Help popup centers on screen rather than anchoring to top-left."""
+    app, _, _ = staged_app
+    width, height = 140, 40
+    async with app.run_test(size=(width, height)) as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        card = app.query_one("#help-card")
+        # Card should be visible and centered ± 1 cell of horizontal center.
+        cx = card.region.x + card.region.width // 2
+        screen_cx = width // 2
+        assert abs(cx - screen_cx) <= 1, f"card center {cx} ≠ screen center {screen_cx}"
+        # And vertically inside the viewport (not flush against the top).
+        assert 1 < card.region.y, f"card flush at top: y={card.region.y}"
+
+
+@pytest.mark.asyncio
+async def test_discard_is_deferred_and_undoable(tmp_path, monkeypatch):
+    """Discard hides the trace but keeps the file. Undo restores it."""
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+    t = _make_trace("trace_doomed_001", "doomed")
+    file_path = staging / f"{t['trace_id']}.jsonl"
+    file_path.write_text(json.dumps(t) + "\n")
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        assert any(tr["trace_id"] == "trace_doomed_001" for tr in app.by_stage["inbox"])
+        await pilot.press("d")
+        await pilot.pause()
+        # Hidden from view but file untouched on disk.
+        assert all(tr["trace_id"] != "trace_doomed_001" for tr in app.by_stage["inbox"])
+        assert file_path.exists(), "discard must defer file deletion until quit"
+        assert app._pending_deletes.get("trace_doomed_001") == file_path
+        # Undo brings it back.
+        await pilot.press("u")
+        await pilot.pause()
+        assert any(tr["trace_id"] == "trace_doomed_001" for tr in app.by_stage["inbox"])
+        assert "trace_doomed_001" not in app._pending_deletes
+        assert app._undo_stack == []
+
+
+@pytest.mark.asyncio
+async def test_quit_flushes_pending_discards(tmp_path, monkeypatch):
+    """``q`` writes the queued discards to disk; the JSONL is gone after."""
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+    t = _make_trace("trace_doomed_002", "doomed")
+    file_path = staging / f"{t['trace_id']}.jsonl"
+    file_path.write_text(json.dumps(t) + "\n")
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("d")
+        await pilot.pause()
+        assert file_path.exists(), "still on disk before quit"
+        # Drive the same path quit takes — exercise the flush helper
+        # directly so we don't have to wait for the test pilot to tear down.
+        flushed = app._flush_pending_deletes()
+        assert flushed == 1
+        assert not file_path.exists(), "file must be gone after flush"
+
+
+@pytest.mark.asyncio
+async def test_undo_after_stage_toggle_with_persisted_prior_status(
+    tmp_path, monkeypatch,
+):
+    """Regression: StateManager.get_trace returns a dataclass whose
+    ``status`` is actually a bare string (dataclasses don't coerce on
+    init). If we snapshot that raw value and hand it back to
+    ``set_trace_status`` — which calls ``status.value`` — the undo
+    would crash with ``'str' object has no attribute 'value'``. Pin the
+    coercion in ``_snapshot_status``."""
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+    t = _make_trace("trace_stageable_001", "stage me")
+    (staging / f"{t['trace_id']}.jsonl").write_text(json.dumps(t) + "\n")
+    # Persist a prior status via the same StateManager path the live
+    # app uses — this is what forces the round-trip to a plain string.
+    from opentraces.core.config import get_project_state_path
+    sm = StateManager(state_path=get_project_state_path(project))
+    sm.set_trace_status("trace_stageable_001", TraceStatus.COMMITTED)
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        # The trace is currently staged. Space moves it back to inbox…
+        await pilot.press("3")  # focus Staged
+        await pilot.pause()
+        await pilot.press("space")
+        await pilot.pause()
+        # …now undo — previously exploded on ``status.value``.
+        await pilot.press("u")
+        await pilot.pause()
+        # Trace landed back in Staged.
+        assert any(tr["trace_id"] == "trace_stageable_001"
+                   for tr in app.by_stage["staged"])
+
+
+@pytest.mark.asyncio
+async def test_reject_is_undoable(staged_app):
+    """``r`` then ``u`` puts the trace back where it came from."""
+    app, _, _ = staged_app
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("2")  # focus inbox
+        await pilot.pause()
+        target = app.by_stage["inbox"][0]
+        target_id = target["trace_id"]
+        await pilot.press("r")
+        await pilot.pause()
+        # Rejected traces are filtered out of the visible buckets.
+        assert all(tr["trace_id"] != target_id for tr in app.by_stage["inbox"])
+        await pilot.press("u")
+        await pilot.pause()
+        assert any(tr["trace_id"] == target_id for tr in app.by_stage["inbox"])
+
+
+@pytest.mark.asyncio
 async def test_user_vs_agent_body_colors_actually_render(tmp_path, monkeypatch):
     """Regression guard: Rich markup must use Rich color names (``cyan``,
     ``bright_magenta``), not Textual CSS keywords (``ansi_cyan``) — the
