@@ -26,6 +26,7 @@ kb/
 .claude/*
 !.claude/skills/
 .opentraces
+.opentraces.json
 skills-lock.json
 .coverage
 .context/
