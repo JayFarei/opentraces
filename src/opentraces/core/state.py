@@ -29,7 +29,7 @@ from typing import Any
 # NOTE: config.py imports workflow.py which imports state.py — to avoid the
 # import cycle we defer the config import inside TraceLock.
 
-STATE_SCHEMA_VERSION = "3"
+STATE_SCHEMA_VERSION = "4"
 
 
 class UnknownRemoteError(KeyError):
@@ -84,6 +84,48 @@ class ProcessedFile:
 
 
 @dataclass
+class GenerationRecord:
+    """One captured snapshot of a session's JSONL.
+
+    A new generation is opened whenever the prior latest generation is in
+    a terminal status (UPLOADED / REJECTED / DISCARDED / COMMITTED) and
+    the source JSONL has grown, OR when a schema bump forces a re-capture
+    of an UPLOADED trace. Non-terminal generations are refreshed in place
+    as the JSONL grows.
+    """
+
+    trace_id: str
+    generation: int
+    captured_size: int
+    captured_mtime: float
+    schema_version: str
+    security_version: str
+    status_at_capture: str
+    supersedes: str | None = None
+    supersedes_reason: str | None = None
+    created_at: str = field(default_factory=_utcnow_iso)
+
+
+@dataclass
+class SessionRecord:
+    """One Claude Code (or other runtime) session tracked on disk.
+
+    Keyed by the runtime's session_id. A session maps 1:1 to a JSONL file —
+    `claude --resume` is an in-place append, not a sibling fork, so the
+    path stays stable across resumes. ``generations`` is the ordered
+    history of what we've captured from it.
+    """
+
+    session_id: str
+    source_path: str
+    observed_size: int
+    observed_mtime: float
+    session_end_seen: bool = False
+    post_commit_triggered: bool = False
+    generations: list[GenerationRecord] = field(default_factory=list)
+
+
+@dataclass
 class TraceStagingEntry:
     """State for a single trace in the staging pipeline.
 
@@ -115,7 +157,8 @@ class StateManager:
             )
         self._state_path = state_path
         self._state: dict[str, Any] = {"processed_files": {}, "traces": {}, "commit_groups": {},
-             "last_backfilled_commit": None, "last_backfill_at": None}
+             "last_backfilled_commit": None, "last_backfill_at": None,
+             "sessions": {}}
         self._load()
 
     def _load(self) -> None:
@@ -156,6 +199,10 @@ class StateManager:
         # `ot backfill` verb writes them when it advances.
         self._state.setdefault("last_backfilled_commit", None)
         self._state.setdefault("last_backfill_at", None)
+
+        # v3 -> v4 (live-session ingestion): add ``sessions`` dict. Empty
+        # on migration; first scan populates it from on-disk JSONLs.
+        self._state.setdefault("sessions", {})
 
         self._state["state_version"] = STATE_SCHEMA_VERSION
 
@@ -404,6 +451,81 @@ class StateManager:
     def set_last_watcher_run_at(self, when: str | None = None) -> None:
         self._state["last_watcher_run_at"] = when or _utcnow_iso()
         self.save()
+
+    # --- Sessions + generations (live-session ingestion) ---
+
+    def get_session(self, session_id: str) -> SessionRecord | None:
+        raw = self._state.get("sessions", {}).get(session_id)
+        if raw is None:
+            return None
+        gens = [GenerationRecord(**g) for g in raw.get("generations", [])]
+        return SessionRecord(
+            session_id=raw["session_id"],
+            source_path=raw["source_path"],
+            observed_size=raw.get("observed_size", 0),
+            observed_mtime=raw.get("observed_mtime", 0.0),
+            session_end_seen=raw.get("session_end_seen", False),
+            post_commit_triggered=raw.get("post_commit_triggered", False),
+            generations=gens,
+        )
+
+    def upsert_session(
+        self,
+        session_id: str,
+        source_path: str,
+        observed_size: int,
+        observed_mtime: float,
+    ) -> None:
+        sessions = self._state.setdefault("sessions", {})
+        existing = sessions.get(session_id)
+        if existing is None:
+            sessions[session_id] = {
+                "session_id": session_id,
+                "source_path": source_path,
+                "observed_size": observed_size,
+                "observed_mtime": observed_mtime,
+                "session_end_seen": False,
+                "post_commit_triggered": False,
+                "generations": [],
+            }
+        else:
+            existing["source_path"] = source_path
+            existing["observed_size"] = observed_size
+            existing["observed_mtime"] = observed_mtime
+        self.save()
+
+    def set_session_flag(self, session_id: str, flag: str, value: bool) -> None:
+        if flag not in ("session_end_seen", "post_commit_triggered"):
+            raise ValueError(f"unknown session flag: {flag}")
+        sessions = self._state.setdefault("sessions", {})
+        if session_id not in sessions:
+            raise KeyError(f"session not found: {session_id}")
+        sessions[session_id][flag] = bool(value)
+        self.save()
+
+    def append_generation(self, session_id: str, gen: GenerationRecord) -> None:
+        sessions = self._state.setdefault("sessions", {})
+        if session_id not in sessions:
+            raise KeyError(f"session not found: {session_id}")
+        sessions[session_id].setdefault("generations", []).append({
+            "trace_id": gen.trace_id,
+            "generation": gen.generation,
+            "captured_size": gen.captured_size,
+            "captured_mtime": gen.captured_mtime,
+            "schema_version": gen.schema_version,
+            "security_version": gen.security_version,
+            "status_at_capture": gen.status_at_capture,
+            "supersedes": gen.supersedes,
+            "supersedes_reason": gen.supersedes_reason,
+            "created_at": gen.created_at,
+        })
+        self.save()
+
+    def latest_generation(self, session_id: str) -> GenerationRecord | None:
+        rec = self.get_session(session_id)
+        if rec is None or not rec.generations:
+            return None
+        return rec.generations[-1]
 
 
 class TraceLock:

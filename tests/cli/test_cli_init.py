@@ -91,6 +91,12 @@ def test_choose_remote_interactively_async_inside_event_loop(monkeypatch):
 
 
 def test_init_import_existing_flag_imports_backlog(tmp_path, monkeypatch):
+    """--import-existing wires the backlog into the inbox.
+
+    Phase-1 live-session ingestion replaced ``_capture_sessions_into_project``
+    with ``scan_project`` as the single source of truth. This test now
+    asserts the new call shape.
+    """
     project_dir = tmp_path / "repo"
     project_dir.mkdir()
     session_dir = tmp_path / "sessions"
@@ -102,15 +108,21 @@ def test_init_import_existing_flag_imports_backlog(tmp_path, monkeypatch):
     monkeypatch.setattr("opentraces.cli._install_skill", lambda *_args, **_kwargs: False)
     monkeypatch.setattr("opentraces.cli._current_project_session_dir", lambda _project_dir, cfg=None: session_dir)
 
-    calls: list[tuple[Path, Path]] = []
+    calls: list[Path] = []
 
-    def fake_capture(existing_dir: Path, current_project_dir: Path, cfg=None, *, on_progress=None):
-        calls.append((existing_dir, current_project_dir))
-        if on_progress is not None:
-            on_progress(1, 1)
-        return (1, 0)
+    class _Report:
+        results = [object()]
+        created = 1
+        refreshed = 0
+        new_generations = 0
+        noops = 0
+        errored = 0
 
-    monkeypatch.setattr("opentraces.cli._capture_sessions_into_project", fake_capture)
+    def fake_scan(project_dir: Path, **kwargs):
+        calls.append(Path(project_dir))
+        return _Report()
+
+    monkeypatch.setattr("opentraces.core.ingest.scan_project", fake_scan)
 
     runner = CliRunner()
     prev_cwd = Path.cwd()
@@ -126,7 +138,9 @@ def test_init_import_existing_flag_imports_backlog(tmp_path, monkeypatch):
         os.chdir(prev_cwd)
 
     assert result.exit_code == 0, result.output
-    assert calls == [(session_dir, project_dir)]
+    assert calls == [project_dir], (
+        "init should route backlog import through scan_project"
+    )
     assert "Imported existing: 1 (0 errors)" in result.output
 
 
@@ -142,15 +156,16 @@ def test_init_start_fresh_skips_backlog_import(tmp_path, monkeypatch):
     monkeypatch.setattr("opentraces.cli._install_skill", lambda *_args, **_kwargs: False)
     monkeypatch.setattr("opentraces.cli._current_project_session_dir", lambda _project_dir, cfg=None: session_dir)
 
-    calls: list[tuple[Path, Path]] = []
+    calls: list[Path] = []
 
-    def fake_capture(existing_dir: Path, current_project_dir: Path, cfg=None, *, on_progress=None):
-        calls.append((existing_dir, current_project_dir))
-        if on_progress is not None:
-            on_progress(1, 1)
-        return (1, 0)
+    def fake_scan(project_dir: Path, **kwargs):
+        calls.append(Path(project_dir))
+        class _R:
+            results = []
+            created = refreshed = new_generations = noops = errored = 0
+        return _R()
 
-    monkeypatch.setattr("opentraces.cli._capture_sessions_into_project", fake_capture)
+    monkeypatch.setattr("opentraces.core.ingest.scan_project", fake_scan)
 
     runner = CliRunner()
     prev_cwd = Path.cwd()
@@ -166,5 +181,5 @@ def test_init_start_fresh_skips_backlog_import(tmp_path, monkeypatch):
         os.chdir(prev_cwd)
 
     assert result.exit_code == 0, result.output
-    assert calls == []
+    assert calls == [], "--start-fresh must not invoke scan_project"
     assert "Existing traces were left untouched" in result.output

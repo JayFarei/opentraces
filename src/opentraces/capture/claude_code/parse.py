@@ -400,6 +400,7 @@ class ClaudeCodeParser:
             if (
                 line_type == "user"
                 and "message" in line
+                and not line.get("isCompactSummary")
                 and not metadata.get("first_user_message")
             ):
                 msg = line["message"]
@@ -477,6 +478,17 @@ class ClaudeCodeParser:
             line_type = line.get("type")
 
             if line_type not in ("user", "assistant"):
+                continue
+
+            # Claude Code writes a synthetic {type:user, isCompactSummary:true}
+            # line immediately after a compact_boundary — an auto-generated
+            # summary the agent will read in place of pre-boundary history.
+            # We re-derive from offset 0 on every ingest, so the full pre-compact
+            # transcript is already captured. The synthetic line adds no
+            # information and would pollute the trace with text the user
+            # never typed. The compact_boundary marker (handled elsewhere)
+            # still flips metadata.is_compacted.
+            if line.get("isCompactSummary") is True:
                 continue
 
             msg = line.get("message", {})

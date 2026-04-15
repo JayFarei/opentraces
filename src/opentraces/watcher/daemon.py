@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..core.config import PROJECTS_DIR, get_project_state_path
+from ..core.ingest import scan_project
 from ..core.paths import OPENTRACES_DIR
 from ..core.state import StateManager
 
@@ -65,6 +66,15 @@ class TickReport:
     error: str | None = None
     # Extra fields (kept non-default so dataclass stays append-friendly)
     commits_processed: int = 0
+    # Session-ingestion sweep (Phase 1 of live-session ingestion). These
+    # are zero on quiet ticks (no sweep) and populated on active ticks
+    # from ``ScanReport``. Always present so callers don't need version
+    # guards.
+    sessions_created: int = 0
+    sessions_refreshed: int = 0
+    sessions_new_generations: int = 0
+    sessions_noops: int = 0
+    sessions_errored: int = 0
 
 
 # --- helpers ---------------------------------------------------------------
@@ -238,11 +248,31 @@ def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
         # run-at timestamp.
         state = StateManager(state_path=state_path)
         state.set_last_watcher_run_at()
+
+        # Session sweep (Phase 1 of live-session ingestion). Active ticks
+        # only — quiet ticks are short-circuited above. Best-effort:
+        # anything that goes wrong here is logged but does NOT fail the
+        # commit-attribution tick. The daemon looks up ``scan_project``
+        # via module-level attribute so tests can monkeypatch it.
+        try:
+            sr = scan_project(project_cwd)
+            report.sessions_created = int(getattr(sr, "created", 0) or 0)
+            report.sessions_refreshed = int(getattr(sr, "refreshed", 0) or 0)
+            report.sessions_new_generations = int(
+                getattr(sr, "new_generations", 0) or 0
+            )
+            report.sessions_noops = int(getattr(sr, "noops", 0) or 0)
+            report.sessions_errored = int(getattr(sr, "errored", 0) or 0)
+        except Exception as sweep_err:  # noqa: BLE001
+            logger.exception("session sweep failed for %s", project_cwd)
+
         report.duration_ms = (time.monotonic() - t0) * 1000.0
         logger.info(
-            "tick %s processed=%d coverage=%.2f (%.1fms)",
+            "tick %s processed=%d coverage=%.2f sessions=+%d/*%d/g%d (%.1fms)",
             project_cwd, report.commits_processed,
-            report.coverage_ratio or 0.0, report.duration_ms,
+            report.coverage_ratio or 0.0,
+            report.sessions_created, report.sessions_refreshed,
+            report.sessions_new_generations, report.duration_ms,
         )
     except Exception as e:  # noqa: BLE001
         report.error = f"{type(e).__name__}: {e}"

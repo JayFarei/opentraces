@@ -1503,32 +1503,24 @@ def init(
             )
 
     if existing_session_count and import_existing:
-        # Determinate progress bar for the import loop — `_capture_sessions_into_project`
-        # calls back after each file. We know the upfront count.
-        _bar_state: dict = {"bar": None, "last": 0}
+        # Route through the single-source ingestion core (live-session
+        # ingestion, Phase 1). ``scan_project`` runs the generation-aware
+        # pipeline per session; the progress bar ticks once per session
+        # processed.
+        from ..core.ingest import scan_project
 
-        def _import_progress(done: int, total: int) -> None:
-            b = _bar_state["bar"]
-            if b is None and total > 0:
-                _bar_state["bar"] = click.progressbar(
-                    length=total, label="Importing Claude Code traces",
-                )
-                _bar_state["bar"].__enter__()
-                b = _bar_state["bar"]
-            if b is not None:
-                delta = done - _bar_state["last"]
-                if delta > 0:
-                    b.update(delta)
-                    _bar_state["last"] = done
-
-        try:
-            imported_existing, import_errors = _capture_sessions_into_project(
-                existing_session_dir, project_dir, cfg=cfg,
-                on_progress=_import_progress,
-            )
-        finally:
-            if _bar_state["bar"] is not None:
-                _bar_state["bar"].__exit__(None, None, None)
+        with click.progressbar(
+            length=existing_session_count,
+            label="Importing Claude Code traces",
+        ) as bar:
+            report = scan_project(project_dir)
+            # scan_project doesn't offer a per-session callback (one call
+            # per tick of the outer watcher loop is enough), so we fill
+            # the bar at the end. A future version could wire a callback
+            # if latency on large backlogs becomes visible.
+            bar.update(len(report.results))
+            imported_existing = report.created + report.new_generations
+            import_errors = report.errored
 
     # Plan-043 phase 6: record root commit + prompt for first-run backfill.
     _plan043_finalize_identity(project_dir)
@@ -2410,6 +2402,12 @@ def _auth_whoami() -> None:
     _auth_status_impl()
 
 
+@_auth_group.command("status")
+def _auth_status() -> None:
+    """Alias for ``whoami`` — report whether we're authenticated."""
+    _auth_status_impl()
+
+
 # ---------------------------------------------------------------------------
 # Flat workflow verbs registered at root: add, list, show, reject, reset,
 # redact, discard. ot add refuses BLOCKED + REJECTED traces.
@@ -2940,13 +2938,166 @@ def remote_list(verbose: bool) -> None:
 @click.option("--auto", is_flag=True, help="Auto-approve (skip review)")
 @click.option("--limit", type=int, default=0, help="Max traces to parse (0=all)")
 def parse(auto: bool, limit: int) -> None:
-    """Deprecated: use ``opentraces scan`` from inside an opted-in project."""
+    """Deprecated: the watcher now ingests sessions automatically.
+
+    For a forced manual pass, use ``opentraces _scan`` from inside an
+    opted-in project.
+    """
     click.echo(
-        "opentraces parse is deprecated — staging is per-project now.\n"
-        "Run `opentraces init` then `opentraces scan` inside a project.",
+        "opentraces parse is deprecated — the watcher keeps the inbox "
+        "in sync automatically.\n"
+        "For a manual pass, run `opentraces _scan` inside the project.",
         err=True,
     )
     sys.exit(2)
+
+
+@main.command("_scan", hidden=True)
+@click.option("--reparse", is_flag=True,
+              help="Force re-derivation even if a session hasn't grown "
+                   "(e.g. after a schema bump).")
+@click.option("--session", "session_filter", type=str, default=None,
+              help="Limit to a single session_id (JSONL basename).")
+@click.option("--dry-run", is_flag=True,
+              help="Report what would change without writing state.")
+@click.option("--project", "project_override", type=click.Path(),
+              default=None,
+              help="Run against an opted-in project other than the cwd.")
+def _scan(reparse: bool, session_filter: str | None,
+          dry_run: bool, project_override: str | None) -> None:
+    """Manually re-sync the current project's inbox from its JSONL corpus.
+
+    Hidden because the Stop hook + watcher sweep keep the inbox live
+    without user intervention. Kept available for testing, post-upgrade
+    reparse, and recovering from a missed hook fire.
+    """
+    from ..core.ingest import scan_project
+    from ..core.repo_identity import discover_claude_jsonl_corpus
+
+    project_dir = (Path(project_override) if project_override
+                   else Path.cwd()).resolve()
+
+    if not (project_dir / ".opentraces.json").exists():
+        click.echo(
+            f"No opted-in project at {project_dir}. Run `opentraces init` first.",
+            err=True,
+        )
+        sys.exit(4)
+
+    paths: list[Path] | None = None
+    if session_filter:
+        # Narrow the corpus to the requested session. We still go through
+        # scan_project so the per-session rules (locks, state, etc.) are
+        # applied uniformly.
+        all_paths = discover_claude_jsonl_corpus(project_dir)
+        paths = [p for p in all_paths if p.stem == session_filter]
+        if not paths:
+            click.echo(
+                f"No JSONL found for session_id={session_filter} "
+                f"under this project's corpus.",
+                err=True,
+            )
+            sys.exit(3)
+
+    if dry_run:
+        # Dry-run mode: enumerate candidates without calling scan_project.
+        # A full "would-do" report would need a parse-and-diff pass; for
+        # Phase 1 we report the corpus size and what the action WOULD be
+        # based on current state (new | refreshed | new_generation | noop).
+        _emit_dry_run(project_dir, paths=paths)
+        return
+
+    report = scan_project(project_dir, reparse=reparse, paths=paths)
+
+    payload = {
+        "project": str(project_dir),
+        "sessions_seen": len(report.results),
+        "created": report.created,
+        "refreshed": report.refreshed,
+        "new_generations": report.new_generations,
+        "noops": report.noops,
+        "errored": report.errored,
+        "results": [
+            {
+                "session_id": r.session_id,
+                "action": r.action,
+                "trace_id": r.trace_id,
+                "supersedes": r.supersedes,
+                "supersedes_reason": r.supersedes_reason,
+                "error": r.error,
+            }
+            for r in report.results
+        ],
+    }
+    emit_json(payload)
+    if _json_mode:
+        return
+
+    # Human-readable summary — terse.
+    click.echo(
+        f"scan {project_dir}: "
+        f"new={report.created} refreshed={report.refreshed} "
+        f"new_gen={report.new_generations} noop={report.noops} "
+        f"err={report.errored}"
+    )
+
+
+def _emit_dry_run(project_dir: Path, *, paths: list[Path] | None) -> None:
+    """Dry-run report: what would `_scan` do, given current state?"""
+    from ..core.config import get_project_state_path
+    from ..core.ingest import _has_grown  # noqa: SLF001 — shared helper
+    from ..core.repo_identity import discover_claude_jsonl_corpus
+    from ..core.state import StateManager, TraceStatus
+
+    terminal = {
+        TraceStatus.UPLOADED.value, TraceStatus.REJECTED.value,
+        TraceStatus.COMMITTED.value, TraceStatus.FAILED.value,
+    }
+
+    candidates = paths if paths is not None else \
+        discover_claude_jsonl_corpus(project_dir)
+    state = StateManager(state_path=get_project_state_path(project_dir))
+
+    would: list[dict] = []
+    counts = {"new": 0, "refreshed": 0, "new_generation": 0, "noop": 0}
+    for p in candidates:
+        sid = p.stem
+        sess = state.get_session(sid)
+        if sess is None:
+            action = "new"
+        elif not _has_grown(p, sess.observed_size, sess.observed_mtime):
+            action = "noop"
+        else:
+            latest = sess.generations[-1] if sess.generations else None
+            if latest is None:
+                action = "new"
+            else:
+                entry = state.get_trace(latest.trace_id)
+                if entry and entry.status == TraceStatus.BLOCKED.value:
+                    action = "noop"
+                elif entry and entry.status in terminal:
+                    action = "new_generation"
+                else:
+                    action = "refreshed"
+        counts[action] = counts.get(action, 0) + 1
+        would.append({"session_id": sid, "action": action,
+                      "source_path": str(p)})
+
+    payload = {
+        "project": str(project_dir),
+        "dry_run": True,
+        "sessions_seen": len(candidates),
+        "would": would,
+        **counts,
+    }
+    emit_json(payload)
+    if _json_mode:
+        return
+    click.echo(
+        f"dry-run {project_dir}: "
+        f"new={counts['new']} refreshed={counts['refreshed']} "
+        f"new_gen={counts['new_generation']} noop={counts['noop']}"
+    )
     # The remainder is dead code retained so import-time references don't
     # break; structurally rewritten under the per-project layout.
     from ..core.config import get_projects_path, is_project_excluded, get_project_traces_dir
