@@ -427,6 +427,47 @@ async def test_undo_after_stage_toggle_with_persisted_prior_status(
 
 
 @pytest.mark.asyncio
+async def test_push_result_moves_trace_from_staged_to_pushed(
+    tmp_path, monkeypatch,
+):
+    """After ``opentraces push`` writes UPLOADED into state.json, the
+    TUI must pick up the change and move the trace into the Pushed
+    bucket. We simulate the subprocess write by mutating state.json
+    through a second StateManager instance, then call the same
+    rehydrate helper the push modal's after_run callback uses."""
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+    t = _make_trace("trace_to_push_0001", "will be pushed")
+    (staging / f"{t['trace_id']}.jsonl").write_text(json.dumps(t) + "\n")
+    from opentraces.core.config import get_project_state_path
+    sm = StateManager(state_path=get_project_state_path(project))
+    sm.set_trace_status("trace_to_push_0001", TraceStatus.COMMITTED)
+
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        assert any(tr["trace_id"] == "trace_to_push_0001"
+                   for tr in app.by_stage["staged"])
+        # Simulate ``opentraces push`` writing through its own
+        # StateManager instance to the same state.json on disk.
+        external = StateManager(state_path=get_project_state_path(project))
+        external.set_trace_status("trace_to_push_0001", TraceStatus.UPLOADED)
+        # The TUI's in-memory state is still stale.
+        from opentraces.core.inbox import get_stage
+        assert get_stage(app.state, "trace_to_push_0001") == "staged"
+        app._rehydrate_after_external_write()
+        await pilot.pause()
+        # Now the trace appears in the Pushed bucket.
+        assert any(tr["trace_id"] == "trace_to_push_0001"
+                   for tr in app.by_stage["pushed"])
+        assert all(tr["trace_id"] != "trace_to_push_0001"
+                   for tr in app.by_stage["staged"])
+
+
+@pytest.mark.asyncio
 async def test_reject_is_undoable(staged_app):
     """``r`` then ``u`` puts the trace back where it came from."""
     app, _, _ = staged_app

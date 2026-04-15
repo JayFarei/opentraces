@@ -1034,6 +1034,22 @@ class OpenTracesApp(App):
         self.notify("Discarded · u to undo (kept until you quit)",
                     severity="warning")
 
+    def _rehydrate_after_external_write(self) -> None:
+        """Refresh from disk after a subprocess mutated state.json.
+
+        ``self.state`` is initialised once at app startup and kept
+        entirely in-memory; the push subprocess (``opentraces push``)
+        writes directly into state.json, so the live TUI's snapshot
+        goes stale and just-pushed traces keep showing as staged until
+        the app is restarted. Rebuild ``StateManager`` from disk before
+        reloading the view.
+        """
+        self.state = StateManager(
+            state_path=get_project_state_path(self.project_dir)
+        )
+        self._load_project_context()
+        self._reload_traces()
+
     def _flush_pending_deletes(self) -> int:
         """Apply queued discards. Called from action_quit so the file
         deletions only happen on a clean exit — closing the terminal,
@@ -1080,8 +1096,7 @@ class OpenTracesApp(App):
                             severity="information")
 
             def after_run(_: None) -> None:
-                self._load_project_context()
-                self._reload_traces()
+                self._rehydrate_after_external_write()
 
             self.push_screen(PushRunnerModal(choice, self.project_dir), after_run)
 
