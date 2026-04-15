@@ -380,7 +380,7 @@ def _launch_tui_ui(fullscreen: bool = False, limit: int | None = 500) -> None:
 
     _require_project_opted_in("review")
     project_staging = get_project_traces_dir(Path.cwd())
-    app = OpenTracesApp(staging_dir=project_staging, fullscreen=fullscreen, limit=limit)
+    app = OpenTracesApp(staging_dir=project_staging, limit=limit)
     app.run()
 
 
