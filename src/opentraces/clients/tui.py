@@ -140,21 +140,37 @@ def _tool_color(tool_name: str) -> str:
 
 
 class TraceRow(ListItem):
-    """A single trace row: short id · task · relative time."""
+    """A single trace row: status dot · short id · task · relative time.
 
-    def __init__(self, trace: dict[str, Any], width_hint: int = 46) -> None:
+    The leading dot is a 3-way status marker — red for LLM-blocked,
+    yellow for tier-1 findings that haven't yet risen to a block,
+    nothing otherwise. Tight space budget on a 52-col column means one
+    character is all we get; ``i`` on the row brings up the full
+    pipeline breakdown.
+    """
+
+    def __init__(
+        self, trace: dict[str, Any], *, is_blocked: bool = False,
+        width_hint: int = 46,
+    ) -> None:
         super().__init__()
         self.trace = trace
+        self.is_blocked = is_blocked
         self.width_hint = width_hint
 
     def compose(self) -> ComposeResult:
-        task = _truncate(_session_label(self.trace), max(12, self.width_hint - 20))
+        task = _truncate(_session_label(self.trace), max(12, self.width_hint - 22))
         ts = _relative_time(self.trace.get("timestamp_end") or self.trace.get("timestamp_start"))
         sid = _short_id(self.trace["trace_id"])
         flags = len(self.trace.get("_security_flags", []))
-        flag_tag = f" [red]{flags}f[/red]" if flags else ""
+        if self.is_blocked:
+            dot = "[red]●[/red]"
+        elif flags:
+            dot = "[yellow]●[/yellow]"
+        else:
+            dot = "[dim]·[/dim]"
         yield Static(
-            f"[dim]{sid}[/dim]  {escape(task)}{flag_tag}  [dim]{ts}[/dim]",
+            f"{dot} [dim]{sid}[/dim]  {escape(task)}  [dim]{ts}[/dim]",
             markup=True,
             classes="trace-row",
         )
@@ -187,6 +203,7 @@ class HelpOverlay(Vertical):
         "  [bold]r[/bold]         Reject trace (deferred — undo with u)\n"
         "  [bold]d[/bold]         Discard trace (deferred — undo with u)\n"
         "  [bold]u[/bold]         Undo last reject / discard / stage move\n"
+        "  [bold]i[/bold]         Security pipeline info for the selected trace\n"
         "  [bold]?[/bold]         Toggle this help\n"
         "  [bold]q[/bold]         Quit (flushes pending discards)\n"
     )
@@ -202,6 +219,100 @@ class HelpOverlay(Vertical):
 
     def toggle(self) -> None:
         self.styles.display = "block" if self.styles.display == "none" else "none"
+
+
+class SecurityInfoModal(ModalScreen[None]):
+    """Pipeline breakdown for a single trace.
+
+    Answers "what has run on this trace, and what does the TUI still
+    expect me to do?" without forcing the user to pop out to the CLI.
+    Tier labels mirror the ``opentraces status`` column vocabulary.
+    """
+
+    BINDINGS = (Binding("escape", "close", "Close"), Binding("i", "close", "Close"))
+
+    def __init__(self, trace: dict[str, Any], visible_stage: str) -> None:
+        super().__init__()
+        self.trace = trace
+        self.visible_stage = visible_stage
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(self._build_body(), id="security-modal-body")
+
+    def _build_body(self) -> Static:
+        t = self.trace
+        stage = self.visible_stage
+        meta_all = t.get("metadata") or {}
+        sec_meta = meta_all.get("security") or {}
+        tier1 = t.get("_security_flags") or []
+        regex_scanned = bool((t.get("security") or {}).get("scanned"))
+        th_findings = sec_meta.get("trufflehog_findings") \
+            or sec_meta.get("tier_1_5_findings")
+        lr = meta_all.get("llm_review") or {}
+        lr_status = lr.get("status")
+        lr_shareable = lr.get("shareable")
+        lr_missed = lr.get("missed_sensitive_data")
+
+        def ok_dot() -> str: return "[green]✓[/green]"
+        def warn_dot() -> str: return "[yellow]●[/yellow]"
+        def bad_dot() -> str: return "[red]●[/red]"
+        def pending_dot() -> str: return "[dim]·[/dim]"
+
+        # Tier 1 (regex / entropy)
+        if tier1:
+            regex_line = (f"{warn_dot()} [bold]Regex / entropy[/bold]  "
+                          f"{len(tier1)} finding(s) flagged")
+        elif regex_scanned:
+            regex_line = f"{ok_dot()} [bold]Regex / entropy[/bold]  scanned, no findings"
+        else:
+            regex_line = f"{pending_dot()} [bold]Regex / entropy[/bold]  not scanned yet"
+
+        # Tier 1.5 (TruffleHog)
+        if th_findings:
+            th_line = (f"{warn_dot()} [bold]TruffleHog[/bold]  "
+                       f"{len(th_findings)} finding(s)")
+        else:
+            th_line = (f"{pending_dot()} [bold]TruffleHog[/bold]  not run  "
+                       "[dim](opt-in: opentraces setup trufflehog)[/dim]")
+
+        # Manual review — inferred from visible stage.
+        if stage == "inbox":
+            manual_line = (f"{pending_dot()} [bold]Manual review[/bold]  pending  "
+                           "[dim](press space to add to staged)[/dim]")
+        elif stage == "staged":
+            manual_line = f"{ok_dot()} [bold]Manual review[/bold]  staged"
+        elif stage == "pushed":
+            manual_line = f"{ok_dot()} [bold]Manual review[/bold]  pushed"
+        else:
+            manual_line = f"{pending_dot()} [bold]Manual review[/bold]  —"
+
+        # Tier 2 (LLM review)
+        if lr_status == "complete" and lr_shareable == "yes" and lr_missed != "yes":
+            model = lr.get("model") or "?"
+            lr_line = (f"{ok_dot()} [bold]LLM review[/bold]  "
+                       f"shareable  [dim]({escape(model)})[/dim]")
+        elif lr_status == "complete":
+            lr_line = (f"{bad_dot()} [bold]LLM review[/bold]  blocked  "
+                       f"[dim]shareable={lr_shareable}, "
+                       f"missed={lr_missed}[/dim]")
+        else:
+            lr_line = (f"{pending_dot()} [bold]LLM review[/bold]  not run  "
+                       "[dim](opt-in: press p then L on push)[/dim]")
+
+        body = (
+            f"[bold]Security pipeline[/bold]\n"
+            f"[dim]{escape(_short_id(t['trace_id']))}  "
+            f"{escape(_truncate(_session_label(t), 60))}[/dim]\n\n"
+            f"  {regex_line}\n"
+            f"  {th_line}\n"
+            f"  {manual_line}\n"
+            f"  {lr_line}\n\n"
+            f"[dim]Esc or i to close[/dim]"
+        )
+        return Static(body, markup=True, id="security-modal-text")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
 
 
 class PushModal(ModalScreen[str | None]):
@@ -437,6 +548,18 @@ HelpOverlay {
 PushModal {
     align: center middle;
 }
+
+SecurityInfoModal {
+    align: center middle;
+}
+#security-modal-body {
+    width: 78;
+    height: auto;
+    max-height: 24;
+    background: ansi_default;
+    border: round ansi_bright_blue;
+    padding: 1 2;
+}
 #push-modal-body {
     width: 60;
     height: auto;
@@ -517,6 +640,7 @@ class OpenTracesApp(App):
         Binding("d", "discard", "Discard", priority=True),
         Binding("a", "toggle_view_mode", "Toggle view", priority=True),
         Binding("u", "undo", "Undo", priority=True),
+        Binding("i", "security_info", "Security info", priority=True),
         Binding("g", "scroll_home", "Top", show=False),
         Binding("G", "scroll_end", "Bottom", show=False),
         # Page through the trace preview from any pane — saves you having
@@ -553,6 +677,7 @@ class OpenTracesApp(App):
         # without a clean quit (e.g. crash) is forgotten.
         self._undo_stack: list[_UndoOp] = []
         self._pending_deletes: dict[str, Path] = {}
+        self._blocked_ids: set[str] = set()
 
     # --- compose -------------------------------------------------------
 
@@ -598,8 +723,15 @@ class OpenTracesApp(App):
             if t["trace_id"] not in self._pending_deletes
         ]
         grouped: dict[str, list[dict[str, Any]]] = {k: [] for k in STAGE_KEYS}
+        self._blocked_ids: set[str] = set()
         for t in self.traces:
             stage = get_stage(self.state, t["trace_id"])
+            # Blocked traces surface in the Inbox with a red dot instead
+            # of disappearing — the user still needs to see them, read
+            # the reason in the preview, and recover or reject manually.
+            if stage == "blocked":
+                self._blocked_ids.add(t["trace_id"])
+                stage = "inbox"
             if stage in grouped:
                 grouped[stage].append(t)
         for k in grouped:
@@ -647,7 +779,11 @@ class OpenTracesApp(App):
             pass
         width_hint = max(36, list_view.size.width - 4 or 44)
         for t in items:
-            list_view.append(TraceRow(t, width_hint=width_hint))
+            list_view.append(TraceRow(
+                t,
+                is_blocked=t["trace_id"] in self._blocked_ids,
+                width_hint=width_hint,
+            ))
 
         panel = self.query_one(f"#{STAGE_PANEL_IDS[stage]}", Vertical)
         panel.border_subtitle_align = "right"
@@ -762,6 +898,7 @@ class OpenTracesApp(App):
     def _render_trace(self, trace: dict[str, Any]) -> None:
         stream = self.query_one("#trace-stream", RichLog)
         stream.clear()
+        self._write_flag_callout(stream, trace)
         self._write_trace_header(stream, trace)
         stream.write("")
         steps = trace.get("steps", []) or []
@@ -817,6 +954,50 @@ class OpenTracesApp(App):
         # edge-to-edge block instead of a fixed 80-char stripe.
         width = max(40, (stream.size.width or 80) - 1)
         stream.write("[bright_black]" + "─" * width + "[/bright_black]")
+
+    def _write_flag_callout(self, stream: RichLog, trace: dict[str, Any]) -> None:
+        """Leading callout that explains *why* a trace is blocked / flagged.
+
+        Shows exactly one line per dimension the user cares about so the
+        preview stays skimmable:
+
+        * red block — LLM review said "not shareable"; surface summary
+          and the first flagged part.
+        * yellow block — tier-1 scanners (regex / TruffleHog) fired.
+
+        ``i`` on the row pulls up the full pipeline breakdown.
+        """
+        trace_id = trace["trace_id"]
+        is_blocked = trace_id in self._blocked_ids
+        meta = (trace.get("metadata") or {}).get("llm_review") or {}
+        tier1 = trace.get("_security_flags") or []
+        wrote = False
+        if is_blocked or meta.get("shareable") == "no" \
+                or meta.get("missed_sensitive_data") == "yes":
+            summary = meta.get("summary") or "flagged by LLM review"
+            flagged = meta.get("flagged_parts") or []
+            extra = ""
+            if flagged:
+                first = flagged[0]
+                snippet = first.get("text") or first.get("reason") or ""
+                if snippet:
+                    extra = f" — [dim]{escape(_truncate(snippet, 80))}[/dim]"
+            stream.write(
+                f"[red]● Blocked by LLM review[/red]  "
+                f"{escape(_truncate(summary, 120))}{extra}"
+            )
+            wrote = True
+        if tier1 and not is_blocked:
+            kinds = sorted({f.get("type", "") for f in tier1 if f.get("type")})
+            kinds_txt = ", ".join(kinds[:4]) if kinds else "findings"
+            stream.write(
+                f"[yellow]● Tier 1 flagged[/yellow]  "
+                f"{len(tier1)} finding(s) · [dim]{escape(kinds_txt)}[/dim]"
+            )
+            wrote = True
+        if wrote:
+            stream.write("[dim]i — show security pipeline[/dim]")
+            stream.write("")
 
     def _write_body(self, stream: RichLog, content: str, color: str) -> None:
         text = content or ""
@@ -888,6 +1069,7 @@ class OpenTracesApp(App):
             k("a", f"view:{mode}"),
             k("g/G", "top/bot"),
             k("[/]", "page"),
+            k("i", "sec info"),
             k("?", "help"),
             k("q", "quit"),
         ]
@@ -1091,6 +1273,16 @@ class OpenTracesApp(App):
     def action_quit(self) -> None:
         self._flush_pending_deletes()
         self.exit()
+
+    def action_security_info(self) -> None:
+        trace = self._current_trace or self._focused_list_trace()
+        if not trace:
+            self.notify("Select a trace first", severity="warning")
+            return
+        stage = get_stage(self.state, trace["trace_id"])
+        if stage == "blocked":
+            stage = "inbox"  # TUI surfaces blocked under inbox
+        self.push_screen(SecurityInfoModal(trace, stage))
 
     def action_undo(self) -> None:
         if not self._undo_stack:

@@ -318,6 +318,61 @@ async def test_header_shows_in_out_only_not_cache(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_blocked_trace_shows_in_inbox_with_red_dot(tmp_path, monkeypatch):
+    """Blocked traces surface in the Inbox with a red dot and a callout
+    explaining the verdict — they don't silently disappear."""
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+    t = _make_trace("trace_blocked_001", "contains a password")
+    t["metadata"] = {"llm_review": {
+        "status": "complete",
+        "shareable": "no",
+        "missed_sensitive_data": "yes",
+        "summary": "contains a password in step 4",
+        "flagged_parts": [{"text": "password=hunter2", "reason": "credential"}],
+    }}
+    (staging / f"{t['trace_id']}.jsonl").write_text(json.dumps(t) + "\n")
+    from opentraces.core.config import get_project_state_path
+    sm = StateManager(state_path=get_project_state_path(project))
+    sm.block_trace("trace_blocked_001", "llm-review: contains a password")
+
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        # Trace appears in Inbox bucket (not silently filtered out).
+        assert any(tr["trace_id"] == "trace_blocked_001"
+                   for tr in app.by_stage["inbox"])
+        assert "trace_blocked_001" in app._blocked_ids
+        # Callout at top of preview surfaces the reason.
+        stream = app.query_one("#trace-stream")
+        head = " ".join(seg.text for strip in stream.lines[:4] for seg in strip)
+        assert "Blocked by LLM review" in head
+        assert "password" in head
+
+
+@pytest.mark.asyncio
+async def test_security_info_modal_opens_with_pipeline(staged_app):
+    """``i`` opens a modal that lays out the 4-tier pipeline."""
+    app, _, _ = staged_app
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("i")
+        await pilot.pause()
+        # Modal screens live on top of the default screen, so query
+        # through ``app.screen`` (the current top screen) rather than
+        # ``app.query_one`` (which only hits the default).
+        body = app.screen.query_one("#security-modal-text")
+        text = str(body.render())
+        # Every tier is named so the user can see pass/pending at a glance.
+        for label in ("Regex / entropy", "TruffleHog",
+                      "Manual review", "LLM review"):
+            assert label in text, text
+
+
+@pytest.mark.asyncio
 async def test_help_overlay_is_centered(staged_app):
     """Help popup centers on screen rather than anchoring to top-left."""
     app, _, _ = staged_app
