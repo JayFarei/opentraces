@@ -282,6 +282,8 @@ class Metrics(BaseModel):
     total_steps: int = 0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    total_cache_read_tokens: int = 0
+    total_cache_creation_tokens: int = 0
     total_duration_s: float | None = None
     cache_hit_rate: float | None = Field(None, ge=0.0, le=1.0)
     estimated_cost_usd: float | None = None

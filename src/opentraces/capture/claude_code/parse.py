@@ -119,9 +119,11 @@ class ClaudeCodeParser:
 
         # Parse steps (with visited set for circular reference detection)
         visited_sessions: set[str] = {session_id}
+        seen_request_keys: set[tuple[str, str, str]] = set()
         steps, system_prompts = self._parse_steps(
             lines, tool_result_map, session_path, depth=0,
             visited_sessions=visited_sessions,
+            seen_request_keys=seen_request_keys,
         )
 
         if not steps:
@@ -467,6 +469,7 @@ class ClaudeCodeParser:
         depth: int = 0,
         parent_step_index: int | None = None,
         visited_sessions: set[str] | None = None,
+        seen_request_keys: set[tuple[str, str, str]] | None = None,
     ) -> tuple[list[Step], dict[str, str]]:
         """Parse JSONL lines into Step objects."""
         steps: list[Step] = []
@@ -474,12 +477,28 @@ class ClaudeCodeParser:
         step_index = 0
         unknown_blocks = 0
         total_blocks = 0
+        if seen_request_keys is None:
+            seen_request_keys = set()
 
         for line in lines:
             line_type = line.get("type")
 
             if line_type not in ("user", "assistant"):
                 continue
+
+            # Dedup assistant events that are mirrored into both the parent
+            # session JSONL and a subagent JSONL. Same (sessionId, uuid,
+            # requestId) => same API turn, count tokens once. See plan 046
+            # and lazyusage/packages/core/src/parsers/claude-parser.ts.
+            if line_type == "assistant":
+                sid = line.get("sessionId")
+                uid = line.get("uuid")
+                rid = line.get("requestId")
+                if sid and uid and rid:
+                    key = (sid, uid, rid)
+                    if key in seen_request_keys:
+                        continue
+                    seen_request_keys.add(key)
 
             # Claude Code writes a synthetic {type:user, isCompactSummary:true}
             # line immediately after a compact_boundary — an auto-generated
@@ -688,6 +707,7 @@ class ClaudeCodeParser:
                     subagent_ref = self._load_subagent(
                         session_path, tc, step_index, steps, system_prompts, depth,
                         visited_sessions=visited_sessions or set(),
+                        seen_request_keys=seen_request_keys,
                     )
                     if subagent_ref:
                         step.subagent_trajectory_ref = subagent_ref
@@ -712,6 +732,7 @@ class ClaudeCodeParser:
         system_prompts: dict[str, str],
         depth: int,
         visited_sessions: set[str] | None = None,
+        seen_request_keys: set[tuple[str, str, str]] | None = None,
     ) -> str | None:
         """Recursively load a sub-agent session and inline its steps."""
         session_dir = parent_session_path.parent / parent_session_path.stem
@@ -735,6 +756,7 @@ class ClaudeCodeParser:
                         return self._inline_subagent(
                             jsonl_file, parent_step_index, parent_steps,
                             system_prompts, depth, subagent_type, visited_sessions,
+                            seen_request_keys=seen_request_keys,
                         )
             except (json.JSONDecodeError, OSError) as e:
                 logger.debug("Skipping subagent state file: %s", e)
@@ -745,6 +767,7 @@ class ClaudeCodeParser:
             return self._inline_subagent(
                 jsonl_file, parent_step_index, parent_steps,
                 system_prompts, depth, subagent_type, visited_sessions,
+                seen_request_keys=seen_request_keys,
             )
 
         return None
@@ -758,6 +781,7 @@ class ClaudeCodeParser:
         depth: int,
         subagent_type: str,
         visited_sessions: set[str] | None = None,
+        seen_request_keys: set[tuple[str, str, str]] | None = None,
     ) -> str:
         """Parse and inline a sub-agent session."""
         subagent_id = subagent_path.stem
@@ -779,6 +803,7 @@ class ClaudeCodeParser:
             lines, tool_result_map, subagent_path,
             depth=depth + 1, parent_step_index=parent_step_index,
             visited_sessions=visited_sessions,
+            seen_request_keys=seen_request_keys,
         )
 
         # Set agent_role based on subagent_type
@@ -991,39 +1016,12 @@ class ClaudeCodeParser:
         )
 
     def _compute_metrics(self, steps: list[Step]) -> Metrics:
-        """Aggregate token usage across all steps."""
-        total_input = 0
-        total_output = 0
-        total_cache_read = 0
+        """Aggregate token usage across all steps.
 
-        for step in steps:
-            total_input += step.token_usage.input_tokens
-            total_output += step.token_usage.output_tokens
-            total_cache_read += step.token_usage.cache_read_tokens
-
-        total_input_with_cache = total_input + total_cache_read
-        cache_hit_rate = (
-            total_cache_read / total_input_with_cache
-            if total_input_with_cache > 0
-            else None
-        )
-
-        # Duration from timestamps
-        duration = None
-        timestamped_steps = [s for s in steps if s.timestamp]
-        if len(timestamped_steps) >= 2:
-            try:
-                from datetime import datetime
-                first = datetime.fromisoformat(timestamped_steps[0].timestamp.replace("Z", "+00:00"))
-                last = datetime.fromisoformat(timestamped_steps[-1].timestamp.replace("Z", "+00:00"))
-                duration = (last - first).total_seconds()
-            except (ValueError, TypeError) as e:
-                logger.debug("Could not compute duration from timestamps: %s", e)
-
-        return Metrics(
-            total_steps=len(steps),
-            total_input_tokens=total_input,
-            total_output_tokens=total_output,
-            total_duration_s=duration,
-            cache_hit_rate=round(cache_hit_rate, 4) if cache_hit_rate is not None else None,
-        )
+        Delegates to the canonical enrichment.metrics.compute_metrics so the
+        live-ingest path (which skips core/pipeline.py) produces identical
+        aggregates — including cache_read / cache_creation totals and cost —
+        to the batch path. See plan 046.
+        """
+        from ...enrichment.metrics import compute_metrics
+        return compute_metrics(steps)
