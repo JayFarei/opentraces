@@ -1689,6 +1689,60 @@ def _filter_by_trace_ids(records: list[dict],
     return out
 
 
+def _persist_llm_verdicts(staging_dir: Path, outcome, state) -> None:
+    """Write each verdict back into its trace's ``metadata.llm_review``
+    so later gates (``push --llm-review``) and the TUI can see them.
+
+    Verdicts that flag the trace (``shareable=no`` or
+    ``missed_sensitive_data=yes``) also promote the trace to the
+    BLOCKED state — the push flow skips BLOCKED traces entirely and
+    the user sees the flag surfaced in the TUI rather than the trace
+    silently failing the gate on every push attempt.
+    """
+    import json as _json
+    from ..core.state import TraceStatus  # local import — lives in a func module
+
+    for result in outcome.results:
+        tid = result.get("trace_id")
+        verdict = result.get("verdict") or {}
+        if not tid or not verdict:
+            continue
+        jsonl = staging_dir / f"{tid}.jsonl"
+        if not jsonl.exists():
+            # Fallback: scan the dir for a file whose first-line
+            # ``trace_id`` matches. Covers any non-canonical layout.
+            for f in staging_dir.glob("*.jsonl"):
+                try:
+                    head = f.read_text().strip().splitlines()
+                    if head and _json.loads(head[0]).get("trace_id") == tid:
+                        jsonl = f
+                        break
+                except Exception:
+                    continue
+            else:
+                continue
+        try:
+            raw = jsonl.read_text().strip().splitlines()
+            if not raw:
+                continue
+            rec = _json.loads(raw[0])
+            meta = rec.setdefault("metadata", {})
+            # Merge so any unrelated metadata keys survive untouched.
+            meta["llm_review"] = verdict
+            jsonl.write_text(_json.dumps(rec) + "\n")
+        except Exception as exc:
+            human_hint(f"could not persist verdict for {tid}: {exc}")
+            continue
+
+        if verdict.get("shareable") == "no" or \
+                verdict.get("missed_sensitive_data") == "yes":
+            reason = verdict.get("summary") or "flagged by LLM review"
+            try:
+                state.block_trace(tid, f"llm-review: {reason}")
+            except Exception as exc:
+                human_hint(f"could not mark {tid} blocked: {exc}")
+
+
 @main.command(
     "llm-review",
     examples=[
@@ -1869,6 +1923,13 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
         force=force,
         on_progress=_progress,
     )
+    # Persist verdicts so downstream gates (``push --llm-review``) and
+    # the TUI can see them. Without this the verdict only lives in the
+    # JSON payload we emit below and is lost as soon as the command
+    # exits. Bad verdicts also mark the trace BLOCKED in state so the
+    # push flow skips them and the user sees them flagged.
+    state_for_block = StateManager(get_project_state_path(Path.cwd()))
+    _persist_llm_verdicts(staging, outcome, state_for_block)
     emit_json({
         "status": "ok",
         "action": "llm-review",
