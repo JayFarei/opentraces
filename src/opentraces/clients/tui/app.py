@@ -190,8 +190,10 @@ class TraceRow(ListItem):
             dot = "[cyan dim]◐[/cyan dim]"
         else:
             dot = "[dim]·[/dim]"
+        gen = self.trace.get("generation_index") or 0
+        gen_tag = f"  [cyan dim]↑{gen}[/cyan dim]" if gen else ""
         yield Static(
-            f"{dot} [dim]{sid}[/dim]  {escape(task)}  [dim]{ts}[/dim]",
+            f"{dot} [dim]{sid}[/dim]  {escape(task)}  [dim]{ts}[/dim]{gen_tag}",
             markup=True,
             classes="trace-row",
         )
@@ -1334,12 +1336,18 @@ class OpenTracesApp(App):
 
     def _finish_refresh(self, pre_snapshot: dict[str, str]) -> None:
         self._rehydrate_after_external_write()
+
+        remote_index = self._load_remote_index_if_fresh()
         new_count = 0
         updated_count = 0
         recently = 0
+        supersedes_local = 0
+        supersedes_remote = 0
         for trace in self.traces:
             tid = trace.get("trace_id", "")
             te = str(trace.get("timestamp_end") or "")
+            gen = trace.get("generation_index") or 0
+            sid = trace.get("session_id") or ""
             if not tid:
                 continue
             if tid not in pre_snapshot:
@@ -1348,11 +1356,42 @@ class OpenTracesApp(App):
                 updated_count += 1
             if _is_recently_touched(trace.get("timestamp_end")):
                 recently += 1
-        self.notify(
+            if gen > 0 and sid:
+                supersedes_local += 1
+                if remote_index and remote_index.supersedes_remote(sid, gen):
+                    supersedes_remote += 1
+        toast = (
             f"Pulled +{new_count} new / ~{updated_count} updated · "
-            f"{recently} recently touched",
-            severity="information",
+            f"{recently} recently touched"
         )
+        if supersedes_local:
+            toast += (
+                f" · {supersedes_local} supersede earlier gen "
+                f"(remote {supersedes_remote} / local {supersedes_local - supersedes_remote})"
+            )
+        self.notify(toast, severity="information")
+
+    def _load_remote_index_if_fresh(self, ttl_seconds: int = 900):
+        """Return the cached RemoteIndex if present and younger than ``ttl_seconds``.
+
+        Non-fatal: a missing or stale cache just suppresses the "remote
+        supersedes" portion of the refresh toast. Users can run
+        ``opentraces pull`` to refresh it manually.
+        """
+        try:
+            from ..core.config import get_project_dir
+            from ..publish.huggingface.remote_index import (
+                RemoteIndex,
+                cache_path_for,
+            )
+            path = cache_path_for(get_project_dir(self.project_dir))
+            idx = RemoteIndex.load(path)
+            if idx is None or idx.is_stale(ttl_seconds):
+                return None
+            return idx
+        except Exception:
+            logger.exception("remote_index load failed")
+            return None
 
     def action_discard(self) -> None:
         """Defer the JSONL deletion until quit. Until then, the trace is

@@ -609,7 +609,12 @@ async def test_push_result_moves_trace_from_staged_to_pushed(
 
 @pytest.mark.asyncio
 async def test_reject_is_undoable(staged_app):
-    """``r`` then ``u`` puts the trace back where it came from."""
+    """``action_reject`` then ``u`` puts the trace back where it came from.
+
+    The ``r`` shortcut was rebound to ``refresh`` (plan B.6); the reject
+    action is still exposed via ``action_reject`` and remains
+    undoable, just no longer surfaced in the default keymap.
+    """
     app, _, _ = staged_app
     async with app.run_test(size=(140, 40)) as pilot:
         await pilot.pause()
@@ -617,7 +622,7 @@ async def test_reject_is_undoable(staged_app):
         await pilot.pause()
         target = app.by_stage["inbox"][0]
         target_id = target["trace_id"]
-        await pilot.press("r")
+        app.action_reject()
         await pilot.pause()
         # Rejected traces are filtered out of the visible buckets.
         assert all(tr["trace_id"] != target_id for tr in app.by_stage["inbox"])

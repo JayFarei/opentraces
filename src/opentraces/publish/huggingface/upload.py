@@ -484,11 +484,25 @@ class HFUploader:
         a partial hash set would silently allow duplicate traces to be uploaded,
         so fail-closed is the only safe behavior here.
         """
+        return self.fetch_remote_index().content_hashes
+
+    def fetch_remote_index(self) -> "RemoteIndex":
+        """One-pass scan of all shards yielding dedup + lineage info.
+
+        Returns a ``RemoteIndex`` carrying both the ``content_hash`` set
+        used by the push-time dedup filter and ``{session_id:
+        max(generation_index)}`` used by the TUI's "supersedes remote"
+        hint. Fail-closed: if any shard is unavailable, raises
+        ``RemoteShardError`` so callers don't silently miss duplicates
+        or lineage.
+        """
+        from .remote_index import RemoteIndex
+
+        index = RemoteIndex.empty(self.repo_id)
         shards = self.get_existing_shards()
         if not shards:
-            return set()
+            return index
 
-        hashes: set[str] = set()
         for shard_path in shards:
             try:
                 local_path = self.api.hf_hub_download(
@@ -502,11 +516,17 @@ class HFUploader:
                         continue
                     try:
                         record = json.loads(line)
-                        ch = record.get("content_hash")
-                        if ch:
-                            hashes.add(ch)
                     except json.JSONDecodeError:
                         continue
+                    ch = record.get("content_hash")
+                    if ch:
+                        index.content_hashes.add(ch)
+                    sid = record.get("session_id")
+                    gen = record.get("generation_index")
+                    if sid and isinstance(gen, int):
+                        prior = index.session_generations.get(sid, -1)
+                        if gen > prior:
+                            index.session_generations[sid] = gen
             except RemoteShardError:
                 raise
             except Exception as e:
@@ -514,4 +534,4 @@ class HFUploader:
                     f"Cannot safely dedup: shard {shard_path} unavailable: {e}. "
                     "Retry when the shard is accessible."
                 ) from e
-        return hashes
+        return index

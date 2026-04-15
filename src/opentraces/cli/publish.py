@@ -441,8 +441,18 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                 emit_json(error_response(code, kind, message, hint))
                 sys.exit(3)
 
-            # Dedup: skip traces whose content_hash already exists on the remote
-            remote_hashes = uploader.fetch_remote_content_hashes()
+            # Dedup + lineage: one-pass scan of remote shards.
+            remote_index = uploader.fetch_remote_index()
+            remote_hashes = remote_index.content_hashes
+            # Cache the index for TUI "supersedes remote" hints + later
+            # `opentraces pull` staleness checks. Best-effort: a failed
+            # write should not block the push.
+            try:
+                from ..core.config import get_project_dir as _proj_dir
+                from ..publish.huggingface.remote_index import cache_path_for as _cache_path
+                remote_index.save(_cache_path(_proj_dir(Path.cwd())))
+            except Exception as _e:  # pragma: no cover — best-effort cache
+                logging.getLogger(__name__).debug("remote_index cache save failed: %s", _e)
             if remote_hashes:
                 before_count = len(records)
                 # Only pair records with the entries that actually loaded successfully.
@@ -540,3 +550,39 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
 
 
 
+
+
+@main.command(
+    examples=["opentraces pull"],
+    see_also=[("opentraces push", "push staged traces to the dataset")],
+)
+@click.option("--repo", default=None, help="HF dataset repo (default: from active remote)")
+def pull(repo: str | None) -> None:
+    """Refresh the local cache of the remote dataset's content hashes and session lineage.
+
+    No traces are fetched — this only updates ``~/.opentraces/projects/<slug>/remote_index.json``
+    so the TUI's "supersedes remote" hint stays fresh between pushes.
+    """
+    from ..core.config import get_project_dir, project_is_opted_in
+    from ..publish.huggingface.upload import HFUploader
+    from ..publish.huggingface.remote_index import cache_path_for
+
+    if not project_is_opted_in(Path.cwd()):
+        click.echo("Project not opted in. Run 'opentraces opt-in' first.", err=True)
+        sys.exit(2)
+
+    proj_config = load_project_config(Path.cwd())
+    repo_id = repo or proj_config.get("hf_repo_id") or proj_config.get("repo_id")
+    if not repo_id:
+        click.echo("No dataset repo configured. Run 'opentraces push' first or pass --repo.", err=True)
+        sys.exit(2)
+
+    uploader = HFUploader(repo_id=repo_id)
+    click.echo(f"Fetching remote index from {repo_id}...")
+    index = uploader.fetch_remote_index()
+    cache = cache_path_for(get_project_dir(Path.cwd()))
+    index.save(cache)
+    click.echo(
+        f"Cached {len(index.content_hashes)} content hashes and "
+        f"{len(index.session_generations)} session lineages to {cache}"
+    )
