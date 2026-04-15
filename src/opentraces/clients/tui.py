@@ -249,7 +249,20 @@ class PushRunnerModal(ModalScreen[None]):
     @work(thread=True, exclusive=True)
     def run_push(self) -> None:
         log = self.query_one("#push-runner-log", RichLog)
-        cmd = [sys.executable, "-m", "opentraces.cli", "push"]
+        # Resolve the ``opentraces`` console script next to the active
+        # interpreter — works in any venv layout (editable install, pipx,
+        # deployed wheel) without depending on PATH or shell aliases like
+        # ``ot`` or ``otd``. ``python -m opentraces.cli`` doesn't work
+        # because the cli module is a package without a ``__main__``.
+        script = Path(sys.executable).parent / "opentraces"
+        if not script.exists():
+            self.app.call_from_thread(
+                log.write,
+                f"[error] could not find 'opentraces' next to {sys.executable}",
+            )
+            self._done = True
+            return
+        cmd = [str(script), "push"]
         if self.mode == "llm":
             cmd.append("--llm-review")
         try:
