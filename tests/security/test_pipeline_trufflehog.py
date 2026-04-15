@@ -100,14 +100,19 @@ class TestTruffleHogInPipeline:
         for cmd in calls:
             assert "filesystem" not in cmd
 
-    def test_findings_set_blocked_flag(self, monkeypatch, tmp_path) -> None:
-        import shutil
-
+    def test_findings_trigger_redaction_and_metadata(self, monkeypatch, tmp_path) -> None:
+        """Tier 1.5 findings no longer gate the trace. The pipeline
+        redacts the matched substring in place (same mitigation Tier 1
+        uses for regex hits) and persists the per-finding detail on
+        ``record.metadata.security.trufflehog_findings`` so downstream
+        surfaces can show which detectors fired and whether the hit
+        was verified."""
         monkeypatch.setattr("shutil.which", lambda _: "/bin/trufflehog")
 
+        raw_secret = "AKIAIOSFODNN7EXAMPLE"
         finding = {
             "DetectorName": "AWS",
-            "Raw": "AKIAIOSFODNN7EXAMPLE",
+            "Raw": raw_secret,
             "Verified": False,
             "SourceMetadata": {"Data": {"Filesystem": {"file": "f", "line": 1}}},
         }
@@ -126,7 +131,24 @@ class TestTruffleHogInPipeline:
         cfg = Config()
         cfg.security.trufflehog.enabled = True
         record = _make_minimal_trace()
+        # Plant the raw secret somewhere the scanner walks so we can
+        # prove the redaction path actually ran end-to-end.
+        record.task.description = f"check this key {raw_secret} for me"
+
         result = process_imported_trace(record, cfg)
 
+        # Block flag survives on the report object for back-compat with
+        # callers that still read it, but the trace flows as STAGED.
         assert result.trufflehog_blocked is True
-        assert result.needs_review is True
+        # The raw secret is no longer present anywhere on the record.
+        # (For AWS-shaped keys, Tier 1 regex catches it before Tier 1.5
+        # sees the already-redacted text — either tier getting there is
+        # fine; the guarantee we care about is "not on disk".)
+        assert raw_secret not in result.record.task.description
+        assert "[REDACTED]" in result.record.task.description
+        # Findings persisted for the UI to surface later, regardless of
+        # which tier actually performed the redaction.
+        sec_meta = (result.record.metadata or {}).get("security") or {}
+        th_findings = sec_meta.get("trufflehog_findings") or []
+        assert any(f.get("detector") == "AWS" for f in th_findings), th_findings
+        assert result.record.security.redactions_applied >= 1

@@ -306,6 +306,88 @@ def apply_redactions(record: TraceRecord) -> int:
     return total
 
 
+def apply_trufflehog_redactions(record: TraceRecord, findings) -> int:
+    """Redact TruffleHog raw matches across the same fields Tier 1 covers.
+
+    TruffleHog hands us the exact matched substring (``finding.raw_match``)
+    so a plain string replacement is the right tool — TH detectors are
+    vendor-formatted strings (AWS keys, Box tokens, …) that collide with
+    benign text vanishingly rarely, and we don't need span arithmetic
+    because the secret shows up identically in every field that carries
+    it.
+
+    Returns the total number of replacements made. Same return shape as
+    :func:`apply_redactions` so callers can fold both counts into
+    ``record.security.redactions_applied``.
+    """
+    raw_matches = [f.raw_match for f in findings if getattr(f, "raw_match", None)]
+    if not raw_matches:
+        return 0
+    # Deduplicate; longest first so we don't prefix-redact a longer
+    # secret with a shorter one (e.g. AWS access + secret key pair).
+    raw_matches = sorted(set(raw_matches), key=len, reverse=True)
+    total = 0
+
+    def _redact(text: str) -> tuple[str, int]:
+        n = 0
+        for rm in raw_matches:
+            if rm and rm in text:
+                n += text.count(rm)
+                text = text.replace(rm, "[REDACTED]")
+        return text, n
+
+    for _hash, prompt_text in list(record.system_prompts.items()):
+        new, n = _redact(prompt_text)
+        if n:
+            record.system_prompts[_hash] = new
+            total += n
+
+    if record.task.description:
+        new, n = _redact(record.task.description)
+        if n:
+            record.task.description = new
+            total += n
+
+    for step in record.steps:
+        if step.content:
+            new, n = _redact(step.content)
+            if n:
+                step.content = new
+                total += n
+        if step.reasoning_content:
+            new, n = _redact(step.reasoning_content)
+            if n:
+                step.reasoning_content = new
+                total += n
+        for tc in step.tool_calls:
+            for key, val in list(tc.input.items()):
+                if isinstance(val, str):
+                    new, n = _redact(val)
+                    if n:
+                        tc.input[key] = new
+                        total += n
+        for obs in step.observations:
+            if obs.content:
+                new, n = _redact(obs.content)
+                if n:
+                    obs.content = new
+                    total += n
+        for snippet in step.snippets:
+            if snippet.text:
+                new, n = _redact(snippet.text)
+                if n:
+                    snippet.text = new
+                    total += n
+
+    if record.outcome.patch:
+        new, n = _redact(record.outcome.patch)
+        if n:
+            record.outcome.patch = new
+            total += n
+
+    return total
+
+
 def two_pass_scan(record: TraceRecord) -> tuple[ScanResult, ScanResult]:
     """Run the full two-pass scan on a trace record.
 

@@ -82,34 +82,42 @@ class TestVisibleStageBlocked:
 
 
 class TestDecidePostParseStatus:
-    def test_blocked_when_trufflehog_blocks(self) -> None:
+    """Post-phase-shift: TruffleHog findings no longer block. The pipeline
+    redacts matches in-place (same Tier 1 mitigation) and the trace
+    still flows to STAGED / COMMITTED based on ``needs_review`` and
+    review policy. Blocking was the wrong posture for a deterministic
+    scanner — we already know exactly what to mask."""
+
+    def test_trufflehog_findings_do_not_block(self) -> None:
+        """A trace with TH findings and needs_review=True goes to STAGED,
+        not BLOCKED. The review policy still decides auto-promotion."""
         result = _FakeProcessedTrace(
             needs_review=True,
-            trufflehog_report=_FakeReport(blocked=True, n_findings=2, detector_names=("AWS",)),
+            trufflehog_report=_FakeReport(blocked=True, n_findings=2,
+                                          detector_names=("AWS",)),
         )
         status, reason = decide_post_parse_status(result, review_policy="auto")
-        assert status == TraceStatus.BLOCKED
-        assert reason and "TruffleHog" in reason
-        # The reason should mention the count.
-        assert "2" in reason
+        assert status == TraceStatus.STAGED
+        assert reason is None
 
-    def test_blocked_overrides_auto_promotion(self) -> None:
-        """Even with review_policy=auto and needs_review=False, a TruffleHog
-        block trumps everything — never auto-promote a blocked trace."""
+    def test_trufflehog_findings_allow_auto_promotion_when_clean(self) -> None:
+        """needs_review=False + review_policy=auto → COMMITTED, even with TH
+        findings, because the matches were already redacted upstream."""
         result = _FakeProcessedTrace(
             needs_review=False,
             trufflehog_report=_FakeReport(blocked=True, n_findings=1),
         )
-        status, _ = decide_post_parse_status(result, review_policy="auto")
-        assert status == TraceStatus.BLOCKED
+        status, reason = decide_post_parse_status(result, review_policy="auto")
+        assert status == TraceStatus.COMMITTED
+        assert reason is None
 
-    def test_blocked_overrides_review_policy(self) -> None:
+    def test_trufflehog_findings_stay_staged_under_review_policy(self) -> None:
         result = _FakeProcessedTrace(
             needs_review=True,
             trufflehog_report=_FakeReport(blocked=True, n_findings=1),
         )
         status, _ = decide_post_parse_status(result, review_policy="review")
-        assert status == TraceStatus.BLOCKED
+        assert status == TraceStatus.STAGED
 
     def test_auto_promote_when_safe(self) -> None:
         result = _FakeProcessedTrace(needs_review=False, trufflehog_report=None)

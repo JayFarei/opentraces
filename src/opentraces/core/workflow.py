@@ -138,28 +138,16 @@ def decide_post_parse_status(
 
     Policy
     ------
-    1. TruffleHog blocked → BLOCKED. Trumps everything (even
-       review_policy=auto + needs_review=False) because critical secret
-       findings must never reach upload.
-    2. review_policy == "auto" AND not needs_review → COMMITTED
+    1. review_policy == "auto" AND not needs_review → COMMITTED
        (auto-promote to staging).
-    3. otherwise → STAGED (waits for ``ot add``).
-    """
-    blocked = bool(getattr(result, "trufflehog_blocked", False))
-    if blocked:
-        report = getattr(result, "trufflehog_report", None)
-        n = getattr(report, "n_findings", None)
-        if n is None:
-            findings = getattr(report, "findings", None)
-            n = len(findings) if findings else 0
-        detectors = getattr(report, "detector_names", None)
-        if not detectors:
-            findings = getattr(report, "findings", None) or []
-            detectors = tuple(sorted({getattr(f, "detector_name", "?") for f in findings}))
-        detector_str = ", ".join(detectors) if detectors else "?"
-        reason = f"TruffleHog: {n} finding(s) ({detector_str})"
-        return TraceStatus.BLOCKED, reason
+    2. otherwise → STAGED (waits for ``ot add``).
 
+    TruffleHog findings no longer block here — the pipeline redacts the
+    matched substrings in place (same mitigation as Tier 1 regex) and
+    the per-finding detail is persisted on ``record.metadata.security``
+    so the TUI can surface what was caught. Blocking was a poor fit for
+    a deterministic scanner: we already know exactly what to mask.
+    """
     needs_review = bool(getattr(result, "needs_review", True))
     policy = normalize_review_policy(review_policy)
     if policy == "auto" and not needs_review:
