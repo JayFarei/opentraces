@@ -19,13 +19,13 @@ from pathlib import Path
 import pytest
 
 
-SCRIPTS_DIR = Path(__file__).parent.parent.parent / "scripts"
-SELFTEST_PATH = SCRIPTS_DIR / "attribution_v2_selftest.py"
+HARNESS_DIR = Path(__file__).parent / "harness"
+SELFTEST_PATH = HARNESS_DIR / "attribution_v2_selftest.py"
 
 
 def _load_selftest_module():
-    """Load scripts/attribution_v2_selftest.py as a module without requiring
-    the scripts/ directory on sys.path. The file still reads trace IDs,
+    """Load attribution_v2_selftest.py as a module without requiring
+    the harness directory on sys.path. The file still reads trace IDs,
     blob helpers, and scenario functions the way the CLI invocation does."""
     spec = importlib.util.spec_from_file_location(
         "_ot_selftest", SELFTEST_PATH

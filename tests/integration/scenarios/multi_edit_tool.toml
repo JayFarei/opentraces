@@ -34,7 +34,7 @@ args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "seed
 type = "claude"
 label = "a"
 prompts = [
-    "Use the MultiEdit tool on config.yaml with THREE edits: replace `alpha: 1` with `alpha: 10`, replace `bravo: 2` with `bravo: 20`, and replace `charlie: 3` with `charlie: 30`. Do not modify any other line.",
+    "First use the Read tool on config.yaml, then use the MultiEdit tool on config.yaml with THREE edits: replace `alpha: 1` with `alpha: 10`, replace `bravo: 2` with `bravo: 20`, and replace `charlie: 3` with `charlie: 30`. Do not modify any other line.",
     "done",
 ]
 

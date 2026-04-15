@@ -95,7 +95,7 @@ from pathlib import Path
 
 
 SPIKE = Path(__file__).parent / "trace_attribution_spike_v2.py"
-SCENARIOS_DIR = Path(__file__).parent / "scenarios"
+SCENARIOS_DIR = Path(__file__).parent.parent / "scenarios"
 TMUX = "tmux"
 # `c` is the user's shell alias for `claude --dangerously-skip-permissions`.
 # Resolved by the interactive shell tmux spawns, so aliases work.
@@ -518,7 +518,7 @@ def _step_invoke_cli(state: RunState, params: dict) -> None:
     ``state._env_overrides`` (from ``stage_claude_corpus``).
     """
     args = list(params.get("args") or [])
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = Path(__file__).resolve().parent.parent.parent.parent
     otd = repo_root / "otd"
     env = {**os.environ}
     overrides = getattr(state, "_env_overrides", None) or {}
@@ -747,7 +747,7 @@ def _assert_backfill_scenario(state: RunState, a: dict) -> str:
             normalize_for_snapshot as _norm,
         )
         fixture = a["fixture"]
-        fixture_path = Path(__file__).resolve().parent.parent / fixture
+        fixture_path = Path(__file__).resolve().parent.parent.parent.parent / fixture
         if not fixture_path.is_file():
             raise AssertionError(f"snapshot fixture missing: {fixture_path}")
         expected = _norm(fixture_path.read_text())

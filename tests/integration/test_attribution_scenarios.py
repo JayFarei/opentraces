@@ -31,7 +31,7 @@ import pytest
 
 
 SCENARIOS_DIR = Path(__file__).parent / "scenarios"
-HARNESS_PATH = Path(__file__).parent.parent.parent / "scripts" / "attribution_v2_harness.py"
+HARNESS_PATH = Path(__file__).parent / "harness" / "attribution_v2_harness.py"
 
 
 # Plan-043 "no-regression gate" — 16 scenarios that lock in specific bugs
