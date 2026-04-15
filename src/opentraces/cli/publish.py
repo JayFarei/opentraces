@@ -552,37 +552,3 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
 
 
 
-@main.command(
-    examples=["opentraces pull"],
-    see_also=[("opentraces push", "push staged traces to the dataset")],
-)
-@click.option("--repo", default=None, help="HF dataset repo (default: from active remote)")
-def pull(repo: str | None) -> None:
-    """Refresh the local cache of the remote dataset's content hashes and session lineage.
-
-    No traces are fetched — this only updates ``~/.opentraces/projects/<slug>/remote_index.json``
-    so the TUI's "supersedes remote" hint stays fresh between pushes.
-    """
-    from ..core.config import get_project_dir, project_is_opted_in
-    from ..publish.huggingface.upload import HFUploader
-    from ..publish.huggingface.remote_index import cache_path_for
-
-    if not project_is_opted_in(Path.cwd()):
-        click.echo("Project not opted in. Run 'opentraces opt-in' first.", err=True)
-        sys.exit(2)
-
-    proj_config = load_project_config(Path.cwd())
-    repo_id = repo or proj_config.get("hf_repo_id") or proj_config.get("repo_id")
-    if not repo_id:
-        click.echo("No dataset repo configured. Run 'opentraces push' first or pass --repo.", err=True)
-        sys.exit(2)
-
-    uploader = HFUploader(repo_id=repo_id)
-    click.echo(f"Fetching remote index from {repo_id}...")
-    index = uploader.fetch_remote_index()
-    cache = cache_path_for(get_project_dir(Path.cwd()))
-    index.save(cache)
-    click.echo(
-        f"Cached {len(index.content_hashes)} content hashes and "
-        f"{len(index.session_generations)} session lineages to {cache}"
-    )
