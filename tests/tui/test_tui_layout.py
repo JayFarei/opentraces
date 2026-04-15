@@ -284,6 +284,40 @@ async def test_bracket_keys_page_preview_from_inbox(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_header_shows_in_out_only_not_cache(tmp_path, monkeypatch):
+    """The trace header keeps the top in/out figure even when the new
+    cache_read / cache_creation token fields (plan 046) are present —
+    we explicitly *don't* surface cache numbers in the TUI, that's
+    reserved for power-user views."""
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+    t = _make_trace("trace_tokens_001", "token check")
+    t["metrics"] = {
+        "total_steps": 1,
+        "total_input_tokens": 12345,
+        "total_output_tokens": 6789,
+        "total_cache_read_tokens": 999111,
+        "total_cache_creation_tokens": 22222,
+        "estimated_cost_usd": 1.23,
+    }
+    (staging / f"{t['trace_id']}.jsonl").write_text(json.dumps(t) + "\n")
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(180, 30)) as pilot:
+        await pilot.pause()
+        stream = app.query_one("#trace-stream")
+        header = "".join(seg.text for strip in stream.lines[:2] for seg in strip)
+        assert "12,345" in header, header
+        assert "6,789" in header, header
+        # Cache numbers from the new fields must NOT leak into the header.
+        assert "999,111" not in header
+        assert "999111" not in header
+        assert "22,222" not in header
+
+
+@pytest.mark.asyncio
 async def test_user_vs_agent_body_colors_actually_render(tmp_path, monkeypatch):
     """Regression guard: Rich markup must use Rich color names (``cyan``,
     ``bright_magenta``), not Textual CSS keywords (``ansi_cyan``) — the
