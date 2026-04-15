@@ -47,6 +47,7 @@ CORRUPTED_LINE_THRESHOLD = 0.05  # Reject session if >5% lines fail to parse
 # not be treated as the task description.
 _SYNTHETIC_USER_PREFIXES = (
     "<local-command-caveat>",
+    "<local-command-stdout>",   # terminal-echo of a slash command's output
     "<command-name>",
     "<command-message>",
     "<command-args>",
@@ -498,8 +499,14 @@ class ClaudeCodeParser:
 
             content_blocks = msg.get("content")
             if not isinstance(content_blocks, list):
-                # Plain text content (user message)
+                # Plain text content (user message). Drop Claude Code's
+                # wrapper/echo lines (<local-command-stdout>, system
+                # reminders, continuation preambles) — these are UI /
+                # provenance, not user input, and polluting steps with
+                # them confuses downstream rubrics and consumers.
                 if isinstance(content_blocks, str):
+                    if _is_synthetic_user_message(content_blocks):
+                        continue
                     step_index += 1
                     steps.append(Step(
                         step_index=step_index,

@@ -133,6 +133,43 @@ def test_parser_skips_compact_summary_user_line(tmp_path: Path) -> None:
     )
 
 
+def test_parser_skips_local_command_stdout_user_lines(tmp_path: Path) -> None:
+    """``<local-command-stdout>`` wrappers are Claude Code's terminal-echo.
+
+    When the user runs a slash command (``/compact``, ``/exit``, ``/ide``,
+    etc.) Claude Code injects a ``{role: user, content: "<local-command-stdout>..."}``
+    line into the transcript to record what the CLI rendered on screen.
+    That's UI provenance, not user input. Skip it from user steps (same
+    treatment as the synthetic compact summary and the other wrapper
+    prefixes already in ``_SYNTHETIC_USER_PREFIXES``).
+    """
+    lines = [
+        _user_turn("2026-04-15T07:00:00Z", "real user prompt"),
+        _assistant_tool_turn("2026-04-15T07:00:01Z", "tu_1"),
+        _tool_result("2026-04-15T07:00:02Z", "tu_1"),
+        _user_turn(
+            "2026-04-15T07:00:03Z",
+            "<local-command-stdout>\x1b[2mCompacted (ctrl+o to see full summary)\x1b[0m",
+        ),
+        _user_turn("2026-04-15T07:00:04Z", "another real prompt"),
+        _assistant_tool_turn("2026-04-15T07:00:05Z", "tu_2"),
+        _tool_result("2026-04-15T07:00:06Z", "tu_2"),
+    ]
+    session_path = _write(tmp_path, lines)
+
+    record = ClaudeCodeParser().parse_session(session_path)
+    assert record is not None
+
+    user_texts = [step.content or "" for step in record.steps
+                  if step.role == "user"]
+
+    assert any("real user prompt" in t for t in user_texts)
+    assert any("another real prompt" in t for t in user_texts)
+    assert not any("local-command-stdout" in t for t in user_texts), (
+        "local-command-stdout lines are terminal UI, not user turns — skip them"
+    )
+
+
 def test_parser_still_flags_is_compacted(tmp_path: Path) -> None:
     """Skipping the synthetic summary must not lose the is_compacted signal.
 
