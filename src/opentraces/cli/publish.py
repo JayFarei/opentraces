@@ -227,11 +227,24 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
 
     # Plan 032: --llm-review gate — abort before touching the uploader if any
     # committed trace lacks a verdict or has a blocking one.
+    #
+    # Scope the check to the staged (COMMITTED) set only. Iterating every
+    # JSONL in the staging dir would pull in inbox traces the user hasn't
+    # reviewed yet and block the push even though those traces aren't
+    # part of this upload — bug reported from the TUI push modal.
     if llm_review:
+        from ..core.config import get_project_state_path as _get_state_path
         staging = get_project_traces_dir(Path.cwd())
+        _state_path = _get_state_path(Path.cwd())
+        _state = StateManager(state_path=_state_path)
+        _committed_ids = {
+            e.trace_id for e in _state.get_traces_by_status(TraceStatus.COMMITTED)
+        }
         pending_block: list[str] = []
-        if staging.exists():
+        if staging.exists() and _committed_ids:
             for rec in load_traces(staging):
+                if rec.get("trace_id") not in _committed_ids:
+                    continue
                 meta = (rec.get("metadata") or {}).get("llm_review") or {}
                 status = meta.get("status")
                 shareable = meta.get("shareable")
@@ -252,7 +265,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
             human_hint("Run: opentraces llm-review")
             emit_json(error_response(
                 "LLM_REVIEW_BLOCKED", "upload",
-                f"{len(pending_block)} trace(s) lack a shareable verdict",
+                f"{len(pending_block)} staged trace(s) lack a shareable verdict",
                 "Run 'opentraces llm-review' to produce verdicts, then retry.",
             ))
             sys.exit(3)
@@ -418,19 +431,15 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
             try:
                 uploader.ensure_repo_exists(private=is_private)
             except Exception as e:
-                msg = str(e)
-                if "403" in msg or "Forbidden" in msg:
-                    click.echo(
-                        "Permission denied. Your token does not have write access.\n"
-                        "OAuth device tokens have limited permissions on HuggingFace.\n"
-                        "Re-authenticate with a personal access token:\n"
-                        "  opentraces auth login --token\n"
-                        "Get a token with 'write' scope at https://huggingface.co/settings/tokens"
-                    )
-                    human_hint("Run: opentraces auth login --token")
-                    emit_json(error_response("PERMISSION_DENIED", "auth", "Token lacks write permissions", "Run: opentraces auth login --token"))
-                    sys.exit(3)
-                raise
+                code, kind, message, hint = _cli._classify_hf_repo_error(e, repo_id)
+                if kind == "unknown":
+                    raise
+                click.echo(message, err=True)
+                if hint:
+                    click.echo(f"  hint: {hint}", err=True)
+                    human_hint(hint)
+                emit_json(error_response(code, kind, message, hint))
+                sys.exit(3)
 
             # Dedup: skip traces whose content_hash already exists on the remote
             remote_hashes = uploader.fetch_remote_content_hashes()

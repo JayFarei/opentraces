@@ -246,13 +246,13 @@ class PushRunnerModal(ModalScreen[None]):
         self._done = False
 
     def compose(self) -> ComposeResult:
+        title = (
+            "Running opentraces llm-review --scope staged → push --llm-review"
+            if self.mode == "llm"
+            else "Running opentraces push"
+        )
         yield Vertical(
-            Static(
-                f"[bold]Running opentraces push"
-                + (" --llm-review" if self.mode == "llm" else "")
-                + "[/bold]",
-                id="push-runner-title",
-            ),
+            Static(f"[bold]{title}[/bold]", id="push-runner-title"),
             FocusableLog(id="push-runner-log", markup=False, wrap=True, highlight=False),
             Static("[dim]Esc to close once finished[/dim]", id="push-runner-hint"),
             id="push-runner-body",
@@ -277,9 +277,34 @@ class PushRunnerModal(ModalScreen[None]):
             )
             self._done = True
             return
-        cmd = [str(script), "push"]
+
+        # LLM-review flow is two steps: first produce verdicts scoped to
+        # the staged set, then push with the gate. Running the gate alone
+        # (the old behavior) aborted immediately on fresh staged traces
+        # because they had no verdict yet.
         if self.mode == "llm":
-            cmd.append("--llm-review")
+            rc_review = self._run_step(
+                log, [str(script), "llm-review", "--scope", "staged"],
+                header="→ opentraces llm-review --scope staged",
+            )
+            if rc_review != 0:
+                self.app.call_from_thread(
+                    log.write,
+                    "\n[aborting push — llm-review did not succeed]",
+                )
+                self._done = True
+                return
+            push_cmd = [str(script), "push", "--llm-review"]
+            push_header = "→ opentraces push --llm-review"
+        else:
+            push_cmd = [str(script), "push"]
+            push_header = "→ opentraces push"
+
+        self._run_step(log, push_cmd, header=push_header)
+        self._done = True
+
+    def _run_step(self, log: RichLog, cmd: list[str], *, header: str) -> int:
+        self.app.call_from_thread(log.write, f"\n{header}")
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -291,15 +316,13 @@ class PushRunnerModal(ModalScreen[None]):
             )
         except FileNotFoundError as exc:
             self.app.call_from_thread(log.write, f"[error] {exc}")
-            self._done = True
-            return
-
+            return 127
         assert proc.stdout is not None
         for line in proc.stdout:
             self.app.call_from_thread(log.write, line.rstrip())
         rc = proc.wait()
-        self.app.call_from_thread(log.write, f"\n[exit {rc}]")
-        self._done = True
+        self.app.call_from_thread(log.write, f"[exit {rc}]")
+        return rc
 
     def action_dismiss_if_done(self) -> None:
         if self._done:

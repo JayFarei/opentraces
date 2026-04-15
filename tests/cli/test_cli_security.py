@@ -270,10 +270,16 @@ class TestDoctor:
 
 
 class TestPushLLMReviewGate:
-    def test_blocks_when_no_verdict_exists(
-        self, runner, isolated_config, monkeypatch, tmp_path
-    ) -> None:
-        # Monkeypatch config so push gets past the auth check.
+    """The gate fires before auth so we can exercise it without a real HF token.
+
+    These tests install a fake StateManager that reports ``t1`` as
+    COMMITTED — post-scope-fix the gate only checks the staged set,
+    so the trace has to be COMMITTED (i.e. "staged" in display vocab)
+    for it to be considered.
+    """
+
+    @staticmethod
+    def _install_fakes(monkeypatch, isolated_config, trace_records):
         from opentraces import cli as _cli
 
         class _Cfg:
@@ -281,15 +287,48 @@ class TestPushLLMReviewGate:
         monkeypatch.setattr(_cli, "load_config", lambda: _Cfg())
 
         staging = isolated_config / "staging"
-        staging.mkdir()
+        staging.mkdir(exist_ok=True)
         monkeypatch.setattr(
             "opentraces.core.config.get_project_traces_dir", lambda _: staging
         )
         monkeypatch.setattr(
-            "opentraces.core.inbox.load_traces",
-            lambda _p: [{"trace_id": "t1", "metadata": {}}],
+            "opentraces.core.inbox.load_traces", lambda _p: trace_records
         )
 
+        committed_ids = {r["trace_id"] for r in trace_records}
+
+        class _FakeEntry:
+            def __init__(self, trace_id: str) -> None:
+                self.trace_id = trace_id
+
+        class _FakeState:
+            def __init__(self, *a, **kw) -> None:
+                pass
+
+            def get_traces_by_status(self, _status):
+                return [_FakeEntry(tid) for tid in committed_ids]
+
+            def get_trace(self, tid):
+                return None
+
+            # Swallow the rest of the StateManager surface the CLI may
+            # still poke at after the gate.
+            def __getattr__(self, name):
+                def _noop(*a, **kw):
+                    return None
+                return _noop
+
+        # publish.py imports StateManager inside the function body, so
+        # monkey-patch the source module.
+        monkeypatch.setattr("opentraces.core.state.StateManager", _FakeState)
+
+    def test_blocks_when_no_verdict_exists(
+        self, runner, isolated_config, monkeypatch, tmp_path
+    ) -> None:
+        self._install_fakes(
+            monkeypatch, isolated_config,
+            [{"trace_id": "t1", "metadata": {}}],
+        )
         result = runner.invoke(main, ["push", "--llm-review"])
         assert result.exit_code == 3, result.output
         payload = _extract_json(result.output)
@@ -298,20 +337,9 @@ class TestPushLLMReviewGate:
     def test_blocks_when_verdict_is_no(
         self, runner, isolated_config, monkeypatch
     ) -> None:
-        from opentraces import cli as _cli
-
-        class _Cfg:
-            hf_token = "hf_fake"
-        monkeypatch.setattr(_cli, "load_config", lambda: _Cfg())
-
-        staging = isolated_config / "staging"
-        staging.mkdir()
-        monkeypatch.setattr(
-            "opentraces.core.config.get_project_traces_dir", lambda _: staging
-        )
-        monkeypatch.setattr(
-            "opentraces.core.inbox.load_traces",
-            lambda _p: [{
+        self._install_fakes(
+            monkeypatch, isolated_config,
+            [{
                 "trace_id": "t1",
                 "metadata": {
                     "llm_review": {
