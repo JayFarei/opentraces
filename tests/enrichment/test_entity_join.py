@@ -108,7 +108,12 @@ def test_load_entities_missing_file(tmp_path):
 
 def test_load_entities_real_upstream_fixture():
     """Trimmed copy of a real upstream cache file — camelCase + changes[]."""
-    fixture = Path(__file__).resolve().parent / "fixtures" / "entity_join" / "cache_camelcase"
+    # Fixtures live at tests/fixtures/ — this test was moved under
+    # tests/enrichment/, so step up one level to find them.
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "fixtures" / "entity_join" / "cache_camelcase"
+    )
     out = load_entities(fixture / "entities", "2508ec10eb21361b0bea7f6ca6179958671929aa")
     assert len(out) == 5
     assert {e.change_type for e in out} == {"added", "modified", "renamed"}

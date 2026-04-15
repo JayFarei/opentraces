@@ -19,7 +19,7 @@ import pytest
 from opentraces.clients.text import graph_renderer as gr
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFESTO_SNAPSHOT = REPO_ROOT / "tests" / "integration" / "snapshots" / "manifesto_reference.txt"
 
 

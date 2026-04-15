@@ -132,22 +132,16 @@ def test_invalid_shell_errors(runner):
 
 @pytest.fixture
 def complete_project(tmp_path, monkeypatch):
-    """Set up a tmp project with one attributed commit + one staged trace."""
-    import importlib
+    """Set up a tmp project with one attributed commit + one staged trace.
 
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-
-    # Reload the paths module so PROJECTS_DIR picks up the new $HOME.
-    from opentraces.core import paths as _paths
-    importlib.reload(_paths)
-    from opentraces.core import config as _config
-    importlib.reload(_config)
+    HOME / OPENTRACES_DIR isolation is handled by the autouse fixture
+    in ``tests/conftest.py`` via ``monkeypatch.setattr`` on module
+    globals — the old ``importlib.reload`` pattern broke class identity
+    for cross-test ``pytest.raises(...)`` assertions.
+    """
     from opentraces.core import cache as _cache
-    importlib.reload(_cache)
-    from opentraces.core import state as _state_mod
-    importlib.reload(_state_mod)
+    from opentraces.core import config as _config
+    from opentraces.core import state as _state_mod  # noqa: F401
 
     project = tmp_path / "proj"
     project.mkdir()

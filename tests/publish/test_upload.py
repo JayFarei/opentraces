@@ -118,10 +118,14 @@ class TestUploadTraces:
         assert result.success is True
         assert result.trace_count == 3
 
-        # Verify the uploaded content is valid JSONL
+        # Verify the uploaded content is valid JSONL. The uploader
+        # passes ``path_or_fileobj`` as raw bytes, not a file-like
+        # object — support both in case the implementation swings back.
         call_args = mock_api.upload_file.call_args
-        fileobj = call_args.kwargs["path_or_fileobj"]
-        content = fileobj.read().decode("utf-8")
+        payload = call_args.kwargs["path_or_fileobj"]
+        if hasattr(payload, "read"):
+            payload = payload.read()
+        content = payload.decode("utf-8") if isinstance(payload, bytes) else payload
         lines = [l for l in content.strip().split("\n") if l]
         assert len(lines) == 3
 

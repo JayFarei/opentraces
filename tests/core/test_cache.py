@@ -21,18 +21,15 @@ from opentraces.core.cache import (
 
 
 @pytest.fixture
-def project_cwd(tmp_path, monkeypatch):
-    """Fresh project dir with an .opentraces.json marker + redirected HOME."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    # Re-import path constants pegged to HOME at import time.
-    from importlib import reload
+def project_cwd(tmp_path):
+    """Fresh project dir with an .opentraces.json marker.
 
-    from opentraces.core import paths as _paths
-    reload(_paths)
-    from opentraces.core import config as _config
-    reload(_config)
-    reload(cache_mod)
-
+    HOME / OPENTRACES_DIR isolation is provided by the autouse fixture
+    in ``tests/conftest.py`` (``monkeypatch.setattr`` on module globals).
+    Previously this fixture did ``importlib.reload`` on core modules
+    which broke class identity for cross-test ``pytest.raises(...)``
+    assertions.
+    """
     proj = tmp_path / "proj"
     proj.mkdir()
     # Minimal marker so get_project_dir() is happy.

@@ -20,19 +20,13 @@ import pytest
 
 
 @pytest.fixture
-def project(tmp_path, monkeypatch):
-    """Init a tmp git repo with an opentraces marker + redirected HOME."""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    # Force-refresh path constants that pegged to HOME at import time.
-    from opentraces.core import paths as _paths
-    reload(_paths)
-    from opentraces.core import config as _config
-    reload(_config)
-    from opentraces.core import cache as _cache
-    reload(_cache)
-    from opentraces.core import backfill as _backfill
-    reload(_backfill)
+def project(tmp_path):
+    """Init a tmp git repo with an opentraces marker.
 
+    HOME / OPENTRACES_DIR isolation is handled by the autouse fixture
+    in ``tests/conftest.py`` via ``monkeypatch.setattr`` on module
+    globals — no reload gymnastics needed.
+    """
     proj = tmp_path / "proj"
     proj.mkdir()
     subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=proj)
@@ -48,6 +42,8 @@ def project(tmp_path, monkeypatch):
     subprocess.check_call(
         ["git", "-c", "user.email=t@t", "-c", "user.name=T",
          "commit", "-q", "-m", "marker"], cwd=proj)
+    from opentraces.core import backfill as _backfill
+    from opentraces.core import cache as _cache
     return proj, _backfill, _cache
 
 

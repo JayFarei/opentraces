@@ -17,19 +17,16 @@ def runner():
 
 @pytest.fixture
 def resume_project(tmp_path, monkeypatch):
-    """Tmp project with an opted-in marker and one claude-code trace."""
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
+    """Tmp project with an opted-in marker and one claude-code trace.
 
-    for modname in (
-        "opentraces.core.paths",
-        "opentraces.core.config",
-        "opentraces.core.cache",
-        "opentraces.core.state",
-    ):
-        importlib.reload(importlib.import_module(modname))
-
+    HOME + OPENTRACES_DIR isolation is already provided by the autouse
+    ``_isolate_opentraces_global_state`` fixture in tests/conftest.py via
+    ``monkeypatch.setattr`` on module globals. Previously this fixture
+    did ``importlib.reload`` on core modules, which broke class identity
+    for any later test using ``pytest.raises(UnknownRemoteError)`` —
+    that check compared the reloaded class against the old one imported
+    at module-collection time.
+    """
     project = tmp_path / "proj"
     project.mkdir()
     (project / ".opentraces.json").write_text(

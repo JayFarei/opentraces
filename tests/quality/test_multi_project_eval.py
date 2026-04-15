@@ -91,8 +91,14 @@ class TestMultiProjectAssessment:
         assert len(multi_assessment.cohorts) >= 2
 
     def test_total_traces_reasonable(self, multi_assessment):
-        """Should parse a meaningful number of traces."""
-        assert multi_assessment.total_traces_parsed >= 10, (
+        """Should parse a meaningful number of traces.
+
+        Threshold set low (>= 5) to keep the test portable across dev
+        machines with small ``~/.claude/projects/`` corpuses. The intent
+        is "the harness actually parsed some traces" — not a corpus-size
+        benchmark.
+        """
+        assert multi_assessment.total_traces_parsed >= 5, (
             f"Only {multi_assessment.total_traces_parsed} traces parsed"
         )
 

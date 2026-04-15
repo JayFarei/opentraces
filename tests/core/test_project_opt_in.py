@@ -166,4 +166,7 @@ class TestProjectsList:
 
         result = runner.invoke(main, ["list", "--projects"])
         assert result.exit_code == 0
-        assert "registered but .opentraces.json missing" in result.output
+        # Message text was rewritten to be more actionable; assert on
+        # the stable substring "missing .opentraces.json" so wording
+        # tweaks don't re-break this test.
+        assert "missing .opentraces.json" in result.output
