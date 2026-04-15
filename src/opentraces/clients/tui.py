@@ -231,10 +231,14 @@ class SecurityInfoModal(ModalScreen[None]):
 
     BINDINGS = (Binding("escape", "close", "Close"), Binding("i", "close", "Close"))
 
-    def __init__(self, trace: dict[str, Any], visible_stage: str) -> None:
+    def __init__(
+        self, trace: dict[str, Any], visible_stage: str,
+        block_reason: str | None = None,
+    ) -> None:
         super().__init__()
         self.trace = trace
         self.visible_stage = visible_stage
+        self.block_reason = block_reason
 
     def compose(self) -> ComposeResult:
         yield Vertical(self._build_body(), id="security-modal-body")
@@ -282,10 +286,20 @@ class SecurityInfoModal(ModalScreen[None]):
         else:
             regex_line = f"{pending_dot()} [bold]Regex / entropy[/bold]  not scanned yet"
 
-        # Tier 1.5 (TruffleHog)
+        # Tier 1.5 (TruffleHog). Findings may live on the trace
+        # metadata (modern captures) OR be reflected only in the state
+        # block_reason (older captures that blocked inline). Prefer the
+        # state signal when it's present — it's what actually gated the
+        # trace, regardless of whether the metadata round-tripped.
+        br = (self.block_reason or "").strip()
+        th_from_state = br.lower().startswith("trufflehog")
         if th_findings:
-            th_line = (f"{warn_dot()} [bold]TruffleHog[/bold]  "
+            th_line = (f"{bad_dot()} [bold]TruffleHog[/bold]  "
                        f"{len(th_findings)} finding(s)")
+        elif th_from_state:
+            tail = br.split(":", 1)[1].strip() if ":" in br else br
+            th_line = (f"{bad_dot()} [bold]TruffleHog[/bold]  "
+                       f"[dim]{escape(tail)}[/dim]")
         else:
             th_line = (f"{pending_dot()} [bold]TruffleHog[/bold]  not run  "
                        "[dim](opt-in: opentraces setup trufflehog)[/dim]")
@@ -970,24 +984,50 @@ class OpenTracesApp(App):
         width = max(40, (stream.size.width or 80) - 1)
         stream.write("[bright_black]" + "─" * width + "[/bright_black]")
 
+    def _block_label(self, reason: str | None) -> tuple[str, str]:
+        """Map a raw ``block_reason`` string onto a (tier, detail) pair.
+
+        The security tiers stamp the reason with a leading prefix —
+        ``TruffleHog:``, ``llm-review:``, ``regex:`` etc. — so we can
+        pick a user-friendly tier name without enumerating every
+        possible reason. Unknown prefixes fall back to a generic
+        "Blocked" label with the raw reason as the detail.
+        """
+        raw = (reason or "").strip()
+        low = raw.lower()
+        if low.startswith("trufflehog"):
+            return ("TruffleHog", raw.split(":", 1)[1].strip() if ":" in raw else raw)
+        if low.startswith("llm-review") or low.startswith("llm review"):
+            return ("LLM review", raw.split(":", 1)[1].strip() if ":" in raw else raw)
+        if low.startswith("regex"):
+            return ("regex / entropy", raw.split(":", 1)[1].strip() if ":" in raw else raw)
+        return ("", raw)
+
     def _write_flag_callout(self, stream: RichLog, trace: dict[str, Any]) -> None:
         """Leading callout that explains *why* a trace is blocked / flagged.
 
-        Shows exactly one line per dimension the user cares about so the
-        preview stays skimmable:
-
-        * red block — LLM review said "not shareable"; surface summary
-          and the first flagged part.
-        * yellow block — tier-1 scanners (regex / TruffleHog) fired.
-
-        ``i`` on the row pulls up the full pipeline breakdown.
+        Resolves the block reason from the StateManager entry (its
+        ``block_reason`` is the ground truth — any tier can write
+        there). Falls back to LLM-review metadata for the "not-yet
+        blocked but flagged" case where the verdict exists on the
+        trace itself.
         """
         trace_id = trace["trace_id"]
         is_blocked = trace_id in self._blocked_ids
+        entry = self.state.get_trace(trace_id) if is_blocked else None
+        block_reason = getattr(entry, "block_reason", None) if entry else None
         meta = (trace.get("metadata") or {}).get("llm_review") or {}
         tier1 = trace.get("_security_flags") or []
         wrote = False
-        if is_blocked or meta.get("shareable") == "no" \
+        if is_blocked:
+            tier, detail = self._block_label(block_reason)
+            tier_txt = f" by {tier}" if tier else ""
+            detail_txt = (
+                f"  [dim]{escape(_truncate(detail, 120))}[/dim]" if detail else ""
+            )
+            stream.write(f"[red]● Blocked{tier_txt}[/red]{detail_txt}")
+            wrote = True
+        elif meta.get("shareable") == "no" \
                 or meta.get("missed_sensitive_data") == "yes":
             summary = meta.get("summary") or "flagged by LLM review"
             flagged = meta.get("flagged_parts") or []
@@ -998,7 +1038,7 @@ class OpenTracesApp(App):
                 if snippet:
                     extra = f" — [dim]{escape(_truncate(snippet, 80))}[/dim]"
             stream.write(
-                f"[red]● Blocked by LLM review[/red]  "
+                f"[red]● Flagged by LLM review[/red]  "
                 f"{escape(_truncate(summary, 120))}{extra}"
             )
             wrote = True
@@ -1301,10 +1341,12 @@ class OpenTracesApp(App):
         if not trace:
             self.notify("Select a trace first", severity="warning")
             return
+        entry = self.state.get_trace(trace["trace_id"])
         stage = get_stage(self.state, trace["trace_id"])
         if stage == "blocked":
             stage = "inbox"  # TUI surfaces blocked under inbox
-        self.push_screen(SecurityInfoModal(trace, stage))
+        block_reason = getattr(entry, "block_reason", None) if entry else None
+        self.push_screen(SecurityInfoModal(trace, stage, block_reason))
 
     def action_undo(self) -> None:
         if not self._undo_stack:

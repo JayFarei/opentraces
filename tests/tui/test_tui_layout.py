@@ -384,6 +384,46 @@ async def test_security_info_surfaces_auto_redactions(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_trufflehog_block_labels_correctly(tmp_path, monkeypatch):
+    """A trace blocked by TruffleHog must say so — not "Blocked by LLM review".
+    The ground truth is ``state.block_reason`` (TH writes its reason
+    there, not into ``metadata.security``), so the preview callout
+    and the modal's TruffleHog row both need to read from it."""
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+    t = _make_trace("trace_th_blocked_001", "has a box api key")
+    # Modern capture leaves metadata.security null when TH blocked inline.
+    t["security"] = {"scanned": True, "flags_reviewed": 10,
+                     "redactions_applied": 0, "classifier_version": "0.4.0"}
+    (staging / f"{t['trace_id']}.jsonl").write_text(json.dumps(t) + "\n")
+    from opentraces.core.config import get_project_state_path
+    sm = StateManager(state_path=get_project_state_path(project))
+    sm.block_trace("trace_th_blocked_001", "TruffleHog: 1 finding(s) (Box)")
+
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        # Preview callout — tier and detail come from block_reason.
+        stream = app.query_one("#trace-stream")
+        head = " ".join(seg.text for strip in stream.lines[:3] for seg in strip)
+        assert "Blocked by TruffleHog" in head, head
+        assert "Box" in head, head
+        assert "Blocked by LLM review" not in head, head
+        # Security modal — TruffleHog row surfaces the detail, LLM stays pending.
+        await pilot.press("i")
+        await pilot.pause()
+        body = str(app.screen.query_one("#security-modal-text").render())
+        assert "TruffleHog" in body
+        # The dim detail with the vendor should appear on the TH row.
+        assert "Box" in body
+        # LLM review still correctly reads as not run.
+        assert "LLM review" in body and "not run" in body
+
+
+@pytest.mark.asyncio
 async def test_i_key_toggles_security_modal(staged_app):
     """Pressing ``i`` a second time closes the modal instead of stacking a copy."""
     app, _, _ = staged_app
