@@ -241,6 +241,43 @@ async def test_preview_scrolls_to_top_on_select(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_user_vs_agent_body_colors_actually_render(tmp_path, monkeypatch):
+    """Regression guard: Rich markup must use Rich color names (``cyan``,
+    ``bright_magenta``), not Textual CSS keywords (``ansi_cyan``) — the
+    latter are silently dropped by the Rich parser, leaving body text
+    uncolored. We inspect the RichLog's rendered Strip segments to prove
+    colors land on the right spans."""
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+    t = _make_trace("trace_color_0001", "color check", steps=[
+        {"role": "user", "content": "user-line-probe",
+         "timestamp": "2026-04-15T14:32:00Z"},
+        {"role": "agent", "content": "agent-line-probe",
+         "timestamp": "2026-04-15T14:32:01Z"},
+    ])
+    (staging / f"{t['trace_id']}.jsonl").write_text(json.dumps(t) + "\n")
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        stream = app.query_one("#trace-stream")
+        # Gather (text, color_name) tuples from every segment.
+        colors: dict[str, str] = {}
+        for strip in stream.lines:
+            for seg in strip:
+                if seg.style and seg.style.color is not None:
+                    colors[seg.text] = seg.style.color.name
+        # Header banners carry the bright variants.
+        assert colors.get("── User ──") == "bright_cyan", colors
+        assert colors.get("── Agent ──") == "bright_magenta", colors
+        # User body text is cyan; agent body uses the terminal default (no
+        # explicit color) so we only assert the user case here.
+        assert colors.get("user-line-probe") == "cyan", colors
+
+
+@pytest.mark.asyncio
 async def test_view_mode_toggle(staged_app):
     app, _, _ = staged_app
     async with app.run_test(size=(140, 40)) as pilot:

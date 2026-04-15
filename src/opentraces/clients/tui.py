@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -48,6 +48,13 @@ from ..core.workflow import OPENTRACES_ASCII
 from .tui_transforms import conversation_view, full_view
 
 logger = logging.getLogger(__name__)
+
+# Accent blue — used for the remote name in the info panel and the key
+# letters in the bottom keybar. ANSI ``bright_blue`` is too theme-dependent
+# (Textual's ``textual-ansi`` theme was swallowing it to default fg); a
+# truecolor hex bypasses the terminal palette and renders as an
+# unambiguous blue regardless of terminal theme.
+BLUE_ACCENT = "#60a5fa"
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +84,24 @@ def _relative_time(ts: str | None) -> str:
         return str(ts)[:16]
 
 
+def _format_started(ts: str | None) -> str:
+    """Render a trace start timestamp as e.g. ``Apr 15 · 2:32 PM``.
+
+    Falls back to the raw ISO prefix when the value doesn't parse.
+    """
+    if not ts:
+        return "unknown"
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return str(ts)[:19]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone()
+    hour = local.hour % 12 or 12
+    return f"{local.strftime('%b')} {local.day} · {hour}:{local.strftime('%M %p')}"
+
+
 def _truncate(text: str, limit: int) -> str:
     compact = " ".join(str(text).replace("\n", " ").split())
     if len(compact) <= limit:
@@ -96,16 +121,16 @@ def _short_id(trace_id: str) -> str:
 
 def _tool_color(tool_name: str) -> str:
     if tool_name in {"Read", "Edit", "Write", "Grep", "Glob", "Bash"}:
-        return "ansi_green"
+        return "green"
     if tool_name in {"WebSearch", "WebFetch", "ToolSearch"}:
-        return "ansi_yellow"
+        return "yellow"
     if tool_name == "Agent":
-        return "ansi_cyan"
+        return "cyan"
     if tool_name == "AskUserQuestion":
-        return "ansi_bright_blue"
+        return "bright_blue"
     if tool_name == "Skill":
-        return "ansi_magenta"
-    return "ansi_bright_black"
+        return "magenta"
+    return "bright_black"
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +151,7 @@ class TraceRow(ListItem):
         ts = _relative_time(self.trace.get("timestamp_end") or self.trace.get("timestamp_start"))
         sid = _short_id(self.trace["trace_id"])
         flags = len(self.trace.get("_security_flags", []))
-        flag_tag = f" [ansi_red]{flags}f[/ansi_red]" if flags else ""
+        flag_tag = f" [red]{flags}f[/red]" if flags else ""
         yield Static(
             f"[dim]{sid}[/dim]  {escape(task)}{flag_tag}  [dim]{ts}[/dim]",
             markup=True,
@@ -181,7 +206,7 @@ class PushModal(ModalScreen[str | None]):
         remote_line = self.remote or "no remote set"
         yield Vertical(
             Static("[bold]Push staged traces[/bold]", id="push-title"),
-            Static(f"[dim]remote[/dim]  [ansi_bright_blue]{remote_line}[/ansi_bright_blue]"),
+            Static(f"[dim]remote[/dim]  [bright_blue]{remote_line}[/bright_blue]"),
             Static(""),
             Static("[bold]L[/bold]  LLM review then push  [dim]opentraces push --llm-review[/dim]"),
             Static("[bold]I[/bold]  Ignore and push        [dim]opentraces push[/dim]"),
@@ -497,26 +522,18 @@ class OpenTracesApp(App):
     def _refresh_info_panel(self) -> None:
         if self.remote_name:
             vis = (self.remote_visibility or "").lower()
-            if vis == "public":
-                badge = "  [ansi_green](public)[/ansi_green]"
-            elif vis == "private":
-                badge = "  [ansi_bright_black](private)[/ansi_bright_black]"
-            elif vis == "gated":
-                badge = "  [ansi_yellow](gated)[/ansi_yellow]"
-            elif vis:
-                badge = f"  [ansi_bright_black]({escape(vis)})[/ansi_bright_black]"
-            else:
-                badge = ""
+            badge = f"  [bright_black]({escape(vis)})[/bright_black]" if vis else ""
             remote_line = (
-                f"[ansi_bright_black]→[/ansi_bright_black] "
-                f"[ansi_bright_blue]{escape(self.remote_name)}[/ansi_bright_blue]{badge}"
+                f"[bright_black]→[/bright_black] "
+                f"[{BLUE_ACCENT}]{escape(self.remote_name)}[/{BLUE_ACCENT}]{badge}"
             )
         else:
-            remote_line = "[ansi_bright_black]→[/ansi_bright_black] [ansi_red]no remote[/ansi_red]"
+            remote_line = "[bright_black]→[/bright_black] [red]no remote[/red]"
         # Two lines — project on top, remote on bottom — so the remote stays
-        # visible even when the project folder name is long.
+        # visible even when the project folder name is long. Both lines are
+        # blue so the info pane reads as one unit.
         self.query_one("#info-body", Static).update(
-            f"[bold ansi_bright_white]{escape(self.project_name)}[/bold ansi_bright_white]\n"
+            f"{escape(self.project_name)}\n"
             f"{remote_line}"
         )
         self.query_one("#info-panel", Vertical).border_subtitle = None
@@ -626,16 +643,19 @@ class OpenTracesApp(App):
 
     # --- detail rendering ---------------------------------------------
 
-    # Colors for the merged trace pane
-    USER_COLOR = "ansi_bright_cyan"
-    AGENT_COLOR = "ansi_bright_magenta"
-    TOOL_RESULT_COLOR = "ansi_bright_black"
-    ERROR_COLOR = "ansi_bright_red"
+    # Colors for the merged trace pane. Headers use the same hue as their
+    # body so a quick eye-scan tells user (cyan) apart from agent (magenta).
+    USER_COLOR = "bright_cyan"
+    USER_BODY = "cyan"
+    AGENT_COLOR = "bright_magenta"
+    AGENT_BODY = "default"
+    TOOL_RESULT_COLOR = "bright_black"
+    ERROR_COLOR = "bright_red"
 
     def _render_empty_detail(self) -> None:
         stream = self.query_one("#trace-stream", RichLog)
         stream.clear()
-        stream.write(f"[bold ansi_bright_blue]{OPENTRACES_ASCII}[/bold ansi_bright_blue]")
+        stream.write(f"[bold bright_blue]{OPENTRACES_ASCII}[/bold bright_blue]")
         stream.write("")
         stream.write("[dim]No trace selected. This inbox is empty — run opentraces init and finish an agent run.[/dim]")
 
@@ -665,27 +685,38 @@ class OpenTracesApp(App):
         total_steps = trace.get("metrics", {}).get("total_steps", len(steps))
         tool_calls = sum(len(s.get("tool_calls", [])) for s in steps)
         flags = len(trace.get("_security_flags", []))
-        tokens_in = trace.get("metrics", {}).get("total_input_tokens", 0)
-        tokens_out = trace.get("metrics", {}).get("total_output_tokens", 0)
+        tokens_in = trace.get("metrics", {}).get("total_input_tokens", 0) or 0
+        tokens_out = trace.get("metrics", {}).get("total_output_tokens", 0) or 0
         cost = trace.get("metrics", {}).get("estimated_cost_usd")
-        ts_start = trace.get("timestamp_start", "") or ""
-        started = ts_start[:19] if ts_start else "unknown"
+        started = _format_started(trace.get("timestamp_start"))
 
-        cost_str = f"[ansi_green]${cost:.4f}[/ansi_green]" if isinstance(cost, (int, float)) else "[dim]—[/dim]"
-        flag_str = f"[ansi_red]{flags}[/ansi_red]" if flags else "0"
+        cost_str = f"${cost:.2f}" if isinstance(cost, (int, float)) else "—"
+        # Flags stay red only when non-zero — one of the few places color
+        # carries real signal (a security flag is something to look at).
+        flag_str = f"[red]{flags}[/red]" if flags else "0"
 
+        # NBSP ("\u00A0") binds each label to its value so the wrapper never
+        # breaks "agent  claude-code" across two lines. Regular double
+        # spaces between groups give it room to wrap between fields. Values
+        # render in the default foreground, labels in dim — keeping the
+        # header neutrally greyscale so cyan/magenta in the body below
+        # actually mean "user" and "agent".
+        nb = "\u00A0"
         stream.write(
-            f"[dim]agent[/dim] [ansi_cyan]{escape(agent)}[/ansi_cyan]  "
-            f"[dim]model[/dim] [ansi_cyan]{escape(model)}[/ansi_cyan]  "
-            f"[dim]steps[/dim] [ansi_bright_white]{total_steps}[/ansi_bright_white]  "
-            f"[dim]tools[/dim] [ansi_bright_white]{tool_calls}[/ansi_bright_white]  "
-            f"[dim]flags[/dim] {flag_str}  "
-            f"[dim]in[/dim] {tokens_in}  "
-            f"[dim]out[/dim] {tokens_out}  "
-            f"[dim]cost[/dim] {cost_str}  "
-            f"[dim]started[/dim] {started}"
+            f"[dim]agent[/dim]{nb}{escape(agent)}  "
+            f"[dim]model[/dim]{nb}{escape(model)}  "
+            f"[dim]steps[/dim]{nb}{total_steps}  "
+            f"[dim]tools[/dim]{nb}{tool_calls}  "
+            f"[dim]flags[/dim]{nb}{flag_str}  "
+            f"[dim]in[/dim]{nb}{tokens_in:,}  "
+            f"[dim]out[/dim]{nb}{tokens_out:,}  "
+            f"[dim]cost[/dim]{nb}{cost_str}  "
+            f"[dim]started[/dim]{nb}{started}"
         )
-        stream.write("[ansi_bright_black]" + "─" * 80 + "[/ansi_bright_black]")
+        # Separator spans the full pane width so the stats bar reads as an
+        # edge-to-edge block instead of a fixed 80-char stripe.
+        width = max(40, (stream.size.width or 80) - 1)
+        stream.write("[bright_black]" + "─" * width + "[/bright_black]")
 
     def _write_body(self, stream: RichLog, content: str, color: str) -> None:
         text = content or ""
@@ -696,25 +727,30 @@ class OpenTracesApp(App):
         for it in items:
             if it["type"] == "user":
                 stream.write(f"[{self.USER_COLOR} bold]── User ──[/{self.USER_COLOR} bold]")
+                self._write_body(stream, it.get("content") or "", self.USER_BODY)
             else:
                 hdr = f"[{self.AGENT_COLOR} bold]── Agent ──[/{self.AGENT_COLOR} bold]"
                 if it.get("tool_count"):
                     hdr += f"  [dim]{it['tool_count']} tools: {escape(it['tool_summary'])}[/dim]"
                 stream.write(hdr)
-            self._write_body(stream, it.get("content") or "", "ansi_default")
+                self._write_body(stream, it.get("content") or "", self.AGENT_BODY)
             stream.write("")
 
     def _write_full(self, stream: RichLog, items: list[dict[str, Any]]) -> None:
         for it in items:
             et = it["event_type"]
+            body_color = "default"
             if et == "user_message":
                 stream.write(f"[{self.USER_COLOR} bold]── User ──[/{self.USER_COLOR} bold]")
+                body_color = self.USER_BODY
             elif et == "agent_text":
                 stream.write(f"[{self.AGENT_COLOR} bold]── Agent ──[/{self.AGENT_COLOR} bold]")
+                body_color = self.AGENT_BODY
             elif et == "tool_call":
                 name = it.get("tool_name", "?")
                 c = _tool_color(name)
                 stream.write(f"[{c} bold]── Tool Call: {escape(name)} ──[/{c} bold]")
+                body_color = c
             elif et == "tool_result":
                 name = it.get("tool_name") or "result"
                 status = it.get("tool_status") or ""
@@ -722,9 +758,11 @@ class OpenTracesApp(App):
                 stream.write(
                     f"[{self.TOOL_RESULT_COLOR} bold]── Tool Result: {escape(name)}{suffix} ──[/{self.TOOL_RESULT_COLOR} bold]"
                 )
+                body_color = self.TOOL_RESULT_COLOR
             elif et == "error":
                 stream.write(f"[{self.ERROR_COLOR} bold]── Error ──[/{self.ERROR_COLOR} bold]")
-            self._write_body(stream, it.get("content") or "", "ansi_default")
+                body_color = self.ERROR_COLOR
+            self._write_body(stream, it.get("content") or "", body_color)
             stream.write("")
 
     # --- keybar --------------------------------------------------------
@@ -732,7 +770,7 @@ class OpenTracesApp(App):
     def _keybar_text(self) -> str:
         mode = "conv" if self._view_mode == "conversation" else "full"
         def k(key: str, label: str) -> str:
-            return f"[ansi_bright_cyan]{key}[/ansi_bright_cyan] [dim]{label}[/dim]"
+            return f"[{BLUE_ACCENT}]{key}[/{BLUE_ACCENT}] [dim]{label}[/dim]"
         return "  ".join([
             k("j/k", "move"),
             k("space", "add/remove"),
@@ -882,6 +920,26 @@ class OpenTracesApp(App):
         self.push_screen(PushModal(self.remote_name), after_choice)
 
     # --- events --------------------------------------------------------
+
+    _last_stream_width: int = 0
+
+    def on_resize(self, event: events.Resize) -> None:
+        """Re-wrap the preview when the pane width changes.
+
+        ``RichLog`` caches rendered strips by width; without an explicit
+        re-render the trailing separator bar (which is sized to the widget
+        width at write-time) goes stale on resize.
+        """
+        if not self._current_trace:
+            return
+        try:
+            stream = self.query_one("#trace-stream", RichLog)
+        except Exception:
+            return
+        w = stream.size.width or 0
+        if w and w != self._last_stream_width:
+            self._last_stream_width = w
+            self._render_trace(self._current_trace)
 
     @on(ListView.Highlighted)
     def on_any_highlighted(self, event: ListView.Highlighted) -> None:
