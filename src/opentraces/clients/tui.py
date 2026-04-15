@@ -245,7 +245,14 @@ class SecurityInfoModal(ModalScreen[None]):
         meta_all = t.get("metadata") or {}
         sec_meta = meta_all.get("security") or {}
         tier1 = t.get("_security_flags") or []
-        regex_scanned = bool((t.get("security") or {}).get("scanned"))
+        # Top-level ``security`` carries the pipeline report written at
+        # capture time: scanned flag, flags_reviewed, redactions_applied,
+        # classifier_version. Surfacing it is how the user knows the
+        # pipeline *did* do something even when no residual flags remain.
+        sec_top = t.get("security") or {}
+        regex_scanned = bool(sec_top.get("scanned"))
+        redactions = int(sec_top.get("redactions_applied") or 0)
+        flags_reviewed = int(sec_top.get("flags_reviewed") or 0)
         th_findings = sec_meta.get("trufflehog_findings") \
             or sec_meta.get("tier_1_5_findings")
         lr = meta_all.get("llm_review") or {}
@@ -258,10 +265,18 @@ class SecurityInfoModal(ModalScreen[None]):
         def bad_dot() -> str: return "[red]●[/red]"
         def pending_dot() -> str: return "[dim]·[/dim]"
 
-        # Tier 1 (regex / entropy)
+        # Tier 1 (regex / entropy). If the scanner auto-redacted any
+        # hits, the user cares about the redaction count more than the
+        # residual-findings count (which is typically zero once redactions
+        # have been applied).
         if tier1:
             regex_line = (f"{warn_dot()} [bold]Regex / entropy[/bold]  "
-                          f"{len(tier1)} finding(s) flagged")
+                          f"{len(tier1)} residual finding(s)")
+        elif redactions > 0:
+            regex_line = (
+                f"{ok_dot()} [bold]Regex / entropy[/bold]  "
+                f"[dim]{flags_reviewed} reviewed, {redactions} auto-redacted[/dim]"
+            )
         elif regex_scanned:
             regex_line = f"{ok_dot()} [bold]Regex / entropy[/bold]  scanned, no findings"
         else:
@@ -1275,6 +1290,13 @@ class OpenTracesApp(App):
         self.exit()
 
     def action_security_info(self) -> None:
+        # Toggle: if the modal is already on top, close it. The app-level
+        # binding for ``i`` fires with priority, which otherwise swallows
+        # the modal's own escape-binding for the same key and opens a
+        # second copy of itself on top.
+        if isinstance(self.screen, SecurityInfoModal):
+            self.pop_screen()
+            return
         trace = self._current_trace or self._focused_list_trace()
         if not trace:
             self.notify("Select a trace first", severity="warning")

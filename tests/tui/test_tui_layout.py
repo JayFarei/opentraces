@@ -354,6 +354,51 @@ async def test_blocked_trace_shows_in_inbox_with_red_dot(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_security_info_surfaces_auto_redactions(tmp_path, monkeypatch):
+    """Regression for a misleading "no findings" display. The capture
+    pipeline writes ``security.flags_reviewed`` and ``redactions_applied``
+    at the top level of the trace; the modal must surface those counts
+    so the user doesn't assume the scanner did nothing."""
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+    t = _make_trace("trace_redacted_001", "lots of auto-redactions")
+    t["security"] = {
+        "scanned": True,
+        "flags_reviewed": 436,
+        "redactions_applied": 45,
+        "classifier_version": "0.4.0",
+    }
+    (staging / f"{t['trace_id']}.jsonl").write_text(json.dumps(t) + "\n")
+
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("i")
+        await pilot.pause()
+        text = str(app.screen.query_one("#security-modal-text").render())
+        assert "45 auto-redacted" in text, text
+        assert "436 reviewed" in text, text
+
+
+@pytest.mark.asyncio
+async def test_i_key_toggles_security_modal(staged_app):
+    """Pressing ``i`` a second time closes the modal instead of stacking a copy."""
+    app, _, _ = staged_app
+    from opentraces.clients.tui import SecurityInfoModal
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("i")
+        await pilot.pause()
+        assert isinstance(app.screen, SecurityInfoModal)
+        await pilot.press("i")
+        await pilot.pause()
+        assert not isinstance(app.screen, SecurityInfoModal)
+
+
+@pytest.mark.asyncio
 async def test_security_info_modal_opens_with_pipeline(staged_app):
     """``i`` opens a modal that lays out the 4-tier pipeline."""
     app, _, _ = staged_app
