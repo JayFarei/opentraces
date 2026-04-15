@@ -41,6 +41,43 @@ class CommitBlameHit:
     url: str | None
 
 
+def diff_line_count(cwd: Path, sha: str) -> int:
+    """Count of added (insertion) lines in the commit's diff.
+
+    Uses ``git show --numstat``. Binary files (shown as ``-\t-``) are
+    excluded. Merge commits with no numstat, unreachable shas, or any
+    failure return 0 — callers treat 0 as "denominator unknown" and
+    fall back to whole-file blame.
+
+    Insertion-only denominator is deliberate: modifications produce an
+    add + a delete in numstat, and blaming counts the inserted line
+    once, so dividing by (adds+deletes) would artificially halve
+    coverage for every modified line.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "show", "--numstat", "--format=", sha],
+            cwd=cwd, capture_output=True, text=True, check=False,
+        )
+    except FileNotFoundError:
+        return 0
+    if out.returncode != 0:
+        return 0
+    total = 0
+    for line in out.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        added = parts[0].strip()
+        if not added or added == "-":  # blank line or binary
+            continue
+        try:
+            total += int(added)
+        except ValueError:
+            continue
+    return total
+
+
 def blame_commit(ref: str, cwd: Path) -> tuple[str, list[CommitBlameHit]]:
     """Resolve a ref to the opentraces notes attached to its commit.
 

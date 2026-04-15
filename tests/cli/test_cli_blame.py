@@ -79,7 +79,12 @@ def test_default_summary(tmp_path, monkeypatch):
     assert r.exit_code == 0, r.output
     assert "Commit:" in r.output
     assert "Coverage:" in r.output
-    assert "67% attributed" in r.output or "66% attributed" in r.output
+    # Diff-scoped headline (plan 047): initial commit added 2 lines to
+    # x.txt, attribution credits 2 of them → 100% of diff. The 67%
+    # whole-file reading surfaces as the secondary dim line.
+    assert "100% of diff" in r.output
+    assert "(2/2 lines)" in r.output
+    assert "file-wide: 67%" in r.output or "file-wide: 66%" in r.output
     assert "traceXYZ" in r.output
     assert "x.txt" in r.output
 

@@ -177,29 +177,91 @@ def run(
     return results
 
 
+HOOK_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB, then rotate-by-truncate.
+
+
+def _hook_log_path(repo: Path) -> Path:
+    """One log file per repo, kept inside .git so it's repo-local and
+    naturally excluded from worktree commits."""
+    return repo / ".git" / "opentraces-hook.log"
+
+
+def _append_hook_log(repo: Path, entry: dict) -> None:
+    """Append a structured JSON line to the hook log. Never raises; a
+    failed log write must not block a commit."""
+    import json as _json
+    try:
+        path = _hook_log_path(repo)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Best-effort rotation: if over the cap, truncate to last half.
+        try:
+            if path.exists() and path.stat().st_size > HOOK_LOG_MAX_BYTES:
+                tail = path.read_bytes()[-HOOK_LOG_MAX_BYTES // 2:]
+                # Drop partial first line after truncation.
+                nl = tail.find(b"\n")
+                if nl >= 0:
+                    tail = tail[nl + 1:]
+                path.write_bytes(tail)
+        except OSError:
+            pass
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(entry, default=str) + "\n")
+    except Exception:
+        # Logging is best-effort — swallow any filesystem failure.
+        pass
+
+
 def run_for_repo(repo: Path, *, window_hours: int = 2) -> None:
     """Entrypoint for the installed post-commit shim.
 
     Loads recent inbox traces, calls ``run()`` to correlate + write notes,
-    and swallows all failures (the shell hook must never block a commit).
+    and records a structured JSON line to ``.git/opentraces-hook.log`` for
+    every invocation so silent failures are never invisible. All failures
+    are swallowed — the shell hook must never block a commit.
     """
-    import logging
-    log = logging.getLogger("opentraces.post_commit")
+    entry: dict = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "repo": None,
+        "sha": None,
+        "candidates": 0,
+        "verdicts": [],
+        "notes_written": False,
+        "error": None,
+        "reason": None,
+    }
     try:
         from ...core.config import get_project_traces_dir
         from ...core.inbox import load_trace_records
 
         repo = Path(repo).resolve()
+        entry["repo"] = str(repo)
+        entry["sha"] = head_sha(repo)
+
         staging = get_project_traces_dir(repo)
         if not staging.exists():
+            entry["reason"] = "no_staging_dir"
             return
         since = (
             datetime.now(timezone.utc) - timedelta(hours=window_hours)
         ).isoformat()
         records = load_trace_records(staging, since_iso=since)
-        run(repo, records)
+        records = list(records)
+        entry["candidates"] = len(records)
+        if not records:
+            entry["reason"] = "no_traces_in_inbox_window"
+            return
+        results = run(repo, records)
+        entry["verdicts"] = [
+            {"trace_id": tid, "tier": (links[0].tier if links else "orphan")}
+            for tid, links in results
+        ]
+        entry["notes_written"] = bool(results)
+        if not results:
+            entry["reason"] = "all_candidates_orphan"
     except Exception as e:
-        log.debug("post-commit hook suppressed error: %s", e)
+        entry["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        _append_hook_log(Path(repo), entry)
 
 
 def kick_background_share(cwd: Path) -> None:

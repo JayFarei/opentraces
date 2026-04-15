@@ -20,6 +20,77 @@ from ..security.trufflehog import find_trufflehog
 from ..security.version import SECURITY_VERSION
 
 
+# --- post-commit hook panel (plan 047) ------------------------------------
+
+def _post_commit_hook_status(cwd: Path) -> dict[str, Any]:
+    """Report on the post-commit correlator: hook installed, last run
+    from the hook log, recent candidate counts, notes-ref reachable."""
+    import json as _json
+    import subprocess as _sp
+
+    hook_file = cwd / ".git" / "hooks" / "opentraces-post-commit"
+    chained = cwd / ".git" / "hooks" / "post-commit"
+    log_path = cwd / ".git" / "opentraces-hook.log"
+
+    installed = hook_file.is_file()
+    chained_in = False
+    if chained.is_file():
+        try:
+            chained_in = "opentraces-post-commit" in chained.read_text()
+        except OSError:
+            chained_in = False
+
+    last_entry: dict[str, Any] | None = None
+    recent_runs = 0
+    if log_path.is_file():
+        try:
+            # Read tail (last 64 KiB) so huge logs don't blow up doctor.
+            raw = log_path.read_bytes()[-65536:]
+            for line in reversed(raw.decode("utf-8", "replace").splitlines()):
+                if not line.strip():
+                    continue
+                try:
+                    rec = _json.loads(line)
+                except ValueError:
+                    continue
+                if last_entry is None:
+                    last_entry = rec
+                recent_runs += 1
+                if recent_runs >= 20:
+                    break
+        except OSError:
+            pass
+
+    notes_reachable = False
+    try:
+        res = _sp.run(
+            ["git", "show-ref", "--verify", "refs/notes/opentraces"],
+            cwd=cwd, capture_output=True, text=True, check=False,
+        )
+        notes_reachable = res.returncode == 0
+    except (FileNotFoundError, OSError):
+        notes_reachable = False
+
+    if installed and chained_in and last_entry is not None:
+        state = "ok"
+    elif installed and chained_in:
+        state = "installed_never_ran"
+    elif installed and not chained_in:
+        state = "installed_not_chained"
+    else:
+        state = "missing"
+
+    return {
+        "state": state,
+        "installed": installed,
+        "chained_in_post_commit": chained_in,
+        "log_path": str(log_path) if log_path.is_file() else None,
+        "recent_runs": recent_runs,
+        "last_run": last_entry,
+        "notes_ref_reachable": notes_reachable,
+    }
+
+
 # --- attribution panel (plan 043 phase 7) ---------------------------------
 
 def _attribution_status(cwd: Path) -> dict[str, Any]:
@@ -535,6 +606,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "attribution": _attribution_status(cwd),
         "watcher": _watcher_status(),
         "hooks": _hook_installers(),
+        "post_commit_hook": _post_commit_hook_status(cwd),
     }
 
 

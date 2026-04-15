@@ -198,11 +198,31 @@ def _line_glyph_and_tid(line: dict) -> tuple[str, str]:
 
 def _render_header(meta: tuple[str, str, str], data: dict, *,
                    files: dict, traces: list[dict],
-                   color: bool) -> list[str]:
+                   color: bool, project_cwd: Path | None = None) -> list[str]:
     full_sha, subject, ts = meta
     attributed, total, ratio = _coverage_pct(data)
-    pct = int(round(ratio * 100))
     date_part = (ts or "").split("T", 1)[0]
+
+    # Diff-scoped denominator (plan 047): explain the commit's change, not
+    # the whole-file blame. Falls back to whole-file when diff_line_count
+    # can't compute (merge commits, detached shas, binary-only diffs).
+    diff_total = 0
+    if project_cwd is not None:
+        try:
+            from ..enrichment.git.blame import diff_line_count
+            diff_total = diff_line_count(project_cwd, full_sha)
+        except Exception:
+            diff_total = 0
+
+    if diff_total > 0:
+        diff_attr = min(attributed, diff_total)
+        headline_pct = int(round((diff_attr / diff_total) * 100))
+        headline_num, headline_den = diff_attr, diff_total
+        headline_label = "of diff"
+    else:
+        headline_pct = int(round(ratio * 100))
+        headline_num, headline_den = attributed, total
+        headline_label = "attributed"
 
     # c: prefix rendered dim via render_handle (prefix is never colored).
     commit_id = render_handle("c", full_sha, use_color=color)
@@ -213,17 +233,31 @@ def _render_header(meta: tuple[str, str, str], data: dict, *,
         f"{paint(Role.COMMIT_ID, COMMIT_BULLET, use_color=color)} "
         f"Commit: {commit_id}  {date_dim}  {subj}"
     )
-    cov_pct = paint(coverage_role(float(pct)), f"{pct}%", use_color=color)
+    cov_pct = paint(
+        coverage_role(float(headline_pct)), f"{headline_pct}%", use_color=color,
+    )
     n_traces = len(traces)
     n_files = len(files)
-    # Second line rides the spine so the commit dot and its traces read as
-    # one group. No spine when there are no traces to connect to.
     lead = f"{_spine(SPINE_V, color)} " if traces else "  "
     line2 = (
-        f"{lead}Coverage: {cov_pct} attributed ({attributed}/{total} lines)  "
+        f"{lead}Coverage: {cov_pct} {headline_label} "
+        f"({headline_num}/{headline_den} lines)  "
         f"{n_traces} traces  {n_files} files"
     )
-    return [line1, line2]
+    out = [line1, line2]
+    # Secondary dim line: whole-file blame, when it differs from the
+    # headline. Gives operators diagnostic signal (churn-prone files)
+    # without crowding the lead number.
+    if diff_total > 0 and total > 0 and (attributed != headline_num or total != headline_den):
+        file_pct = int(round(ratio * 100))
+        lead2 = f"{_spine(SPINE_V, color)} " if traces else "  "
+        file_line = paint(
+            Role.DIM,
+            f"  file-wide: {file_pct}% ({attributed}/{total} lines)",
+            use_color=color,
+        )
+        out.append(f"{lead2}{file_line}")
+    return out
 
 
 def _iter_trace_blocks(
@@ -372,7 +406,7 @@ def _render_default(meta: tuple[str, str, str], data: dict,
     traces = data.get("traces") or []
     lines: list[str] = []
     lines.extend(_render_header(meta, data, files=files, traces=traces,
-                                color=color))
+                                color=color, project_cwd=project_cwd))
     lines.extend(_iter_trace_blocks(
         project_cwd, meta[0], data, color,
         verbose_entities=show_entities, scope_file=scope_file,

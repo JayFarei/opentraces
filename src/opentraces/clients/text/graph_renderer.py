@@ -721,7 +721,20 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
             for ln in fi.get("lines", []) or []:
                 if isinstance(ln, dict) and ln.get("consistency") == "missing_from_audit":
                     missing += 1
-        a_ratio = (attributed / total) if total else None
+        # Diff-scoped denominator (plan 047): the headline % explains the
+        # commit's change, not the whole-file blame. Falls back to
+        # whole-file when diff_line_count can't compute (merge commits,
+        # missing shas, binary-only diffs).
+        diff_total = 0
+        try:
+            from opentraces.enrichment.git.blame import diff_line_count
+            diff_total = diff_line_count(project_cwd, c.sha)
+        except Exception:
+            diff_total = 0
+        if diff_total > 0:
+            a_ratio = min(attributed, diff_total) / diff_total
+        else:
+            a_ratio = (attributed / total) if total else None
         m_ratio = (missing / total) if total else None
         entity_data: dict[str, Any] = {}
         if show_entities:
