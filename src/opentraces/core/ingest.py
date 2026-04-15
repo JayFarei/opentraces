@@ -342,6 +342,11 @@ def _ingest_locked(
     # override after the fact so the staging filename matches the
     # generation ID we just picked.
     final_record.trace_id = trace_id
+    # Project the session's monotonic generation counter onto the outgoing
+    # record so downstream consumers can resolve latest-per-session with a
+    # single ``max(generation_index)`` pass. Source of truth is the state
+    # record we are about to write below (``next_generation``).
+    final_record.generation_index = next_generation
 
     # Write the staging JSONL (idempotent overwrite).
     staging_dir = get_project_traces_dir(project_dir)

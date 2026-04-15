@@ -344,6 +344,17 @@ Schema version: `{SCHEMA_VERSION}`
 
 Full schema docs: [opentraces.ai/schema](https://opentraces.ai/schema)
 
+## Resolving latest generation
+
+Each record has `session_id` and `generation_index`. Generations are
+replacement snapshots, later generations may differ from earlier ones in
+redaction, enrichment, or security-pipeline output, not just appended
+turns. To get the latest view of each session:
+
+```python
+df.sort_values("generation_index").drop_duplicates("session_id", keep="last")
+```
+
 ## License
 
 This dataset is licensed under [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/).

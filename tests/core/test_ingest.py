@@ -360,3 +360,61 @@ class TestScanProject:
         # The bad file should appear as errored or skipped — not propagate out
         # and kill the scan.
         assert any(r.action in ("error", "skipped") for r in report.results)
+
+
+class TestIngestGenerationIndex:
+    def test_ingest_generation_index_increments(self, project_dir) -> None:
+        """Re-ingesting a grown session after a terminal status must stamp
+        the outgoing TraceRecord's ``generation_index`` with the session's
+        monotonic generation counter, and produce a different content_hash
+        than the prior generation (since generation_index is part of the
+        hashed payload).
+
+        Note: the plan copy claimed ``first trace has generation_index=0``
+        but the state-layer counter is 1-based (see
+        ``_ingest_locked`` where ``next_generation = 1`` on the first
+        generation). The field is populated from
+        ``generation_record.generation`` per the plan's primary
+        instruction, so the observed values are 1 and 2.
+        """
+        import json as _json
+
+        from opentraces.core.config import get_project_traces_dir, get_project_state_path
+        from opentraces.core.ingest import ingest_one_session
+        from opentraces.core.state import StateManager, TraceStatus
+
+        session_id = "sess-genidx"
+        path = _write_jsonl(project_dir, session_id, turns=3)
+
+        first = ingest_one_session(path, project_dir)
+        assert first.action == "new"
+
+        # Read back the first staged trace.
+        staging_dir = get_project_traces_dir(project_dir)
+        gen1_file = staging_dir / f"{first.trace_id}.jsonl"
+        gen1_payload = _json.loads(gen1_file.read_text().strip())
+        assert gen1_payload["generation_index"] == 1
+        gen1_hash = gen1_payload["content_hash"]
+
+        # Mark first gen as UPLOADED so the next ingest opens a new gen.
+        state = StateManager(state_path=get_project_state_path(project_dir))
+        state.set_trace_status(
+            first.trace_id, TraceStatus.UPLOADED,
+            session_id=session_id, file_path=str(gen1_file),
+        )
+
+        # Grow the JSONL.
+        _append_turns(path, session_id, start=4, count=2)
+
+        second = ingest_one_session(path, project_dir)
+        assert second.action == "new_generation"
+        assert second.trace_id != first.trace_id
+
+        gen2_file = staging_dir / f"{second.trace_id}.jsonl"
+        gen2_payload = _json.loads(gen2_file.read_text().strip())
+        assert gen2_payload["generation_index"] == 2
+        gen2_hash = gen2_payload["content_hash"]
+
+        # Content hashes must differ — even beyond the new turns,
+        # generation_index itself is part of the hashed payload.
+        assert gen1_hash != gen2_hash

@@ -341,6 +341,17 @@ class TraceRecord(BaseModel):
             "RFC #25."
         ),
     )
+    generation_index: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Monotonic generation counter per session_id. Generations are "
+            "replacement snapshots, NOT stitchable supersets — later "
+            "generations may have different redactions, enrichments, or "
+            "security-pipeline output. Consumers resolving 'latest' should "
+            "group by session_id and take max(generation_index)."
+        ),
+    )
     git_links: list[GitLink] = Field(
         default_factory=list,
         description=(

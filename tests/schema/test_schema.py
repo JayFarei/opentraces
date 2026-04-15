@@ -287,3 +287,39 @@ class TestSecurityMetadata:
     def test_scanned_with_classifier(self):
         sec = SecurityMetadata(scanned=True, classifier_version="0.1.0", flags_reviewed=5)
         assert sec.classifier_version == "0.1.0"
+
+
+class TestGenerationIndex:
+    def test_generation_index_field(self):
+        """Round-trip a TraceRecord with generation_index survives JSON serialization."""
+        import pytest
+        from pydantic import ValidationError
+
+        record = TraceRecord(
+            trace_id="t-1",
+            session_id="s-1",
+            agent=Agent(name="claude-code"),
+            generation_index=3,
+        )
+        assert record.generation_index == 3
+
+        payload = record.model_dump_json()
+        parsed = TraceRecord.model_validate_json(payload)
+        assert parsed.generation_index == 3
+
+        # Default is zero
+        default_record = TraceRecord(
+            trace_id="t-2",
+            session_id="s-2",
+            agent=Agent(name="claude-code"),
+        )
+        assert default_record.generation_index == 0
+
+        # Negative rejected by ge=0
+        with pytest.raises(ValidationError):
+            TraceRecord(
+                trace_id="t-3",
+                session_id="s-3",
+                agent=Agent(name="claude-code"),
+                generation_index=-1,
+            )

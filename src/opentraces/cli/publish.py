@@ -190,7 +190,7 @@ def _resolve_repo_id(*a, **k):
 @click.option("--publish", is_flag=True, help="Change an existing private dataset to public (no upload)")
 @click.option("--gated", is_flag=True, help="Enable gated access (auto-approve) on the dataset")
 @click.option("--repo", default=None, help="HF dataset repo (default: username/opentraces)")
-@click.option("--assess", "run_assess", is_flag=True, help="Run quality scoring and include badges in the dataset card (card itself always refreshes)")
+@click.option("--assess/--no-assess", "run_assess", default=True, help="Run quality scoring and include badges in the dataset card (card itself always refreshes). Default: enabled.")
 @click.option("--llm-review", "llm_review", is_flag=True,
               help="Require a clean Tier 2 verdict on every staged trace before upload")
 @click.option("--no-trufflehog", "no_trufflehog", is_flag=True,
