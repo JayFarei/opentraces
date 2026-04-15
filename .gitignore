@@ -32,3 +32,5 @@ skills-lock.json
 .context/
 tmp/
 .spec
+.agents/skills/agent-browser
+.claude/skills/agent-browser
