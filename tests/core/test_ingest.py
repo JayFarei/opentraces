@@ -16,18 +16,29 @@ Terminal-status policy when the JSONL has grown:
     resumes can't untaint).
 
 Trace ID scheme:
-  Generation 1: ``claude-code_{session_id}``
-  Generation N > 1: ``claude-code_{session_id}_g{N}``
+  Every generation: a fresh UUIDv4 minted by ``_trace_id_for``. Generation
+  number lives in the SessionRecord, not in the id string. The same session
+  can own multiple generations, each with its own canonical trace_id.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from opentraces.core.state import StateManager, TraceStatus
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _is_uuid(s: str) -> bool:
+    return bool(_UUID_RE.match(s))
 
 
 # --------------------------------------------------------------------------- #
@@ -131,7 +142,7 @@ class TestIngestOneSession:
 
         assert result.action == "new"
         assert result.session_id == session_id
-        assert result.trace_id == f"claude-code_{session_id}"
+        assert _is_uuid(result.trace_id)
         assert result.error is None
 
         # State reflects the new session + one generation.
@@ -146,7 +157,8 @@ class TestIngestOneSession:
 
         gen = sess.generations[0]
         assert gen.generation == 1
-        assert gen.trace_id == f"claude-code_{session_id}"
+        assert gen.trace_id == result.trace_id
+        assert _is_uuid(gen.trace_id)
         assert gen.status_at_capture == TraceStatus.STAGED.value
         assert gen.supersedes is None
 
@@ -165,19 +177,20 @@ class TestIngestOneSession:
         from opentraces.core.ingest import ingest_one_session
 
         path = _write_jsonl(project_dir, "sess-beta", turns=3)
-        ingest_one_session(path, project_dir)
-        # Second ingest without changes → no-op.
+        first = ingest_one_session(path, project_dir)
+        # Second ingest without changes → no-op, same canonical trace_id.
         result = ingest_one_session(path, project_dir)
         assert result.action == "noop"
-        assert result.trace_id == "claude-code_sess-beta"
+        assert result.trace_id == first.trace_id
+        assert _is_uuid(result.trace_id)
 
     def test_grown_file_inbox_generation_refreshed_in_place(self, project_dir) -> None:
         from opentraces.core.ingest import ingest_one_session
 
         session_id = "sess-gamma"
         path = _write_jsonl(project_dir, session_id, turns=3)
-        ingest_one_session(path, project_dir)
-        original_trace_id = f"claude-code_{session_id}"
+        first = ingest_one_session(path, project_dir)
+        original_trace_id = first.trace_id
 
         # JSONL grows — still INBOX.
         _append_turns(path, session_id, start=4, count=2)
@@ -200,8 +213,8 @@ class TestIngestOneSession:
 
         session_id = "sess-delta"
         path = _write_jsonl(project_dir, session_id, turns=3)
-        ingest_one_session(path, project_dir)
-        gen1_trace_id = f"claude-code_{session_id}"
+        gen1 = ingest_one_session(path, project_dir)
+        gen1_trace_id = gen1.trace_id
 
         # Mark gen 1 as UPLOADED (terminal).
         from opentraces.core.state import StateManager
@@ -214,7 +227,8 @@ class TestIngestOneSession:
         result = ingest_one_session(path, project_dir)
 
         assert result.action == "new_generation"
-        assert result.trace_id == f"claude-code_{session_id}_g2"
+        assert _is_uuid(result.trace_id)
+        assert result.trace_id != gen1_trace_id
         assert result.supersedes == gen1_trace_id
         assert result.supersedes_reason == "resume"
 
@@ -223,7 +237,8 @@ class TestIngestOneSession:
         assert len(sess.generations) == 2
         gen2 = sess.generations[1]
         assert gen2.generation == 2
-        assert gen2.trace_id == f"claude-code_{session_id}_g2"
+        assert gen2.trace_id == result.trace_id
+        assert _is_uuid(gen2.trace_id)
         assert gen2.supersedes == gen1_trace_id
         assert gen2.status_at_capture == TraceStatus.STAGED.value
 
@@ -250,18 +265,20 @@ class TestIngestOneSession:
 
         session_id = f"sess-{terminal_status.value}"
         path = _write_jsonl(project_dir, session_id, turns=3)
-        ingest_one_session(path, project_dir)
+        gen1 = ingest_one_session(path, project_dir)
 
         from opentraces.core.state import StateManager
         from opentraces.core.config import get_project_state_path
         state = StateManager(state_path=get_project_state_path(project_dir))
-        state.set_trace_status(f"claude-code_{session_id}", terminal_status)
+        state.set_trace_status(gen1.trace_id, terminal_status)
 
         _append_turns(path, session_id, start=4, count=2)
         result = ingest_one_session(path, project_dir)
 
         assert result.action == "new_generation"
-        assert result.trace_id.endswith("_g2")
+        assert _is_uuid(result.trace_id)
+        assert result.trace_id != gen1.trace_id
+        assert result.supersedes == gen1.trace_id
 
     def test_blocked_status_is_noop(self, project_dir) -> None:
         """A BLOCKED trace must not spawn new generations; security stays blocked."""
@@ -269,12 +286,12 @@ class TestIngestOneSession:
 
         session_id = "sess-blocked"
         path = _write_jsonl(project_dir, session_id, turns=3)
-        ingest_one_session(path, project_dir)
+        first = ingest_one_session(path, project_dir)
 
         from opentraces.core.state import StateManager
         from opentraces.core.config import get_project_state_path
         state = StateManager(state_path=get_project_state_path(project_dir))
-        state.block_trace(f"claude-code_{session_id}", reason="test-block")
+        state.block_trace(first.trace_id, reason="test-block")
 
         _append_turns(path, session_id, start=4, count=2)
         result = ingest_one_session(path, project_dir)

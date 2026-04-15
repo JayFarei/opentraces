@@ -10,8 +10,13 @@ import io
 import json
 import logging
 import os
+import signal
+import socket
 import shutil
+import subprocess
 import sys
+import threading
+import time
 
 import click
 
@@ -21,6 +26,7 @@ from pathlib import Path
 
 from .. import __version__
 from ..core.config import auth_identity, load_config, load_project_config, save_config, save_project_config
+from ..core.trace_meta import short_trace_id
 from ..core.workflow import (
     DEFAULT_AGENT,
     DEFAULT_PUSH_POLICY,
@@ -362,16 +368,11 @@ def _require_project_opted_in(action: str) -> None:
     Used by TUI / web / push — surfaces a clear error rather than
     silently acting on an uninitialized project.
     """
-    from ..core.config import project_is_opted_in
+    from ..core.config import NotOptedInError, project_is_opted_in
 
-    if not project_is_opted_in(Path.cwd()):
-        click.echo(
-            f"opentraces: this project has not opted in to {action}.\n"
-            "Run 'opentraces init' here first — only initialized "
-            "projects appear in the UI or get pushed upstream.",
-            err=True,
-        )
-        sys.exit(2)
+    cwd = Path.cwd()
+    if not project_is_opted_in(cwd):
+        raise NotOptedInError(cwd, action=action)
 
 
 def _launch_tui_ui(fullscreen: bool = False, limit: int | None = 500) -> None:
@@ -384,9 +385,171 @@ def _launch_tui_ui(fullscreen: bool = False, limit: int | None = 500) -> None:
     app.run()
 
 
+def _listener_pid_for_port(port: int) -> int | None:
+    result = subprocess.run(
+        ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fp"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode not in (0, 1):
+        return None
+    for line in result.stdout.splitlines():
+        if line.startswith("p"):
+            try:
+                return int(line[1:])
+            except ValueError:
+                return None
+    return None
+
+
+def _command_for_pid(pid: int) -> str:
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "command="],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _port_is_listening(port: int, *, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        return sock.connect_ex((host, port)) == 0
+
+
+def _wait_for_port_release(port: int, *, timeout_s: float = 5.0) -> bool:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if not _port_is_listening(port):
+            return True
+        time.sleep(0.1)
+    return not _port_is_listening(port)
+
+
+def _is_opentraces_web_process(command: str) -> bool:
+    cmd = command.lower()
+    return (
+        "opentraces" in cmd
+        or " ot web" in cmd
+        or "opentraces.cli" in cmd
+        or "opentraces.clients.web" in cmd
+    )
+
+
+def _reclaim_stale_web_port(port: int) -> bool:
+    if not _port_is_listening(port):
+        return False
+    pid = _listener_pid_for_port(port)
+    if pid is None:
+        raise click.ClickException(
+            f"Port {port} is already in use. Stop that process or run `opentraces web --port <port>`."
+        )
+    command = _command_for_pid(pid)
+    if not _is_opentraces_web_process(command):
+        detail = f"PID {pid}" if not command else f"PID {pid} ({command})"
+        raise click.ClickException(
+            f"Port {port} is already in use by {detail}. Stop that process or run `opentraces web --port <port>`."
+        )
+    click.echo(f"Port {port} is already in use by an earlier opentraces web server (PID {pid}). Stopping it first.")
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    except PermissionError as exc:
+        raise click.ClickException(
+            f"Could not stop stale opentraces web server PID {pid}: {exc}"
+        ) from exc
+    if _wait_for_port_release(port):
+        return True
+    raise click.ClickException(
+        f"Port {port} is still busy after signalling stale opentraces server PID {pid}. "
+        "Stop it manually or choose another port."
+    )
+
+
+def _serve_web_app(app, *, host: str, port: int) -> str | None:
+    from werkzeug.serving import make_server
+
+    if _port_is_listening(port):
+        _reclaim_stale_web_port(port)
+    try:
+        server = make_server(host, port, app, threaded=True)
+    except OSError as exc:
+        if _port_is_listening(port):
+            _reclaim_stale_web_port(port)
+            server = make_server(host, port, app, threaded=True)
+        else:
+            raise click.ClickException(str(exc)) from exc
+
+    stop_event = threading.Event()
+    stop_reason: dict[str, str | None] = {"value": None}
+
+    def request_stop(reason: str) -> None:
+        if stop_event.is_set():
+            return
+        stop_reason["value"] = reason
+        stop_event.set()
+
+    app.extensions.setdefault("opentraces_web_runtime", {})["request_stop"] = request_stop
+    lifecycle = app.extensions.get("opentraces_web_lifecycle") or {}
+    snapshot = lifecycle.get("snapshot")
+
+    server_thread = threading.Thread(
+        target=server.serve_forever,
+        name="opentraces-web-server",
+        daemon=True,
+    )
+    server_thread.start()
+
+    if callable(snapshot):
+        def idle_monitor() -> None:
+            while not stop_event.wait(5.0):
+                state = snapshot(stale_after=45.0)
+                if state.get("seen_any_client") and state.get("active_clients", 0) == 0:
+                    request_stop("browser disconnected")
+                    return
+
+        threading.Thread(
+            target=idle_monitor,
+            name="opentraces-web-idle-monitor",
+            daemon=True,
+        ).start()
+
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def _handle_signal(signum, _frame) -> None:
+        try:
+            signame = signal.Signals(signum).name
+        except ValueError:
+            signame = str(signum)
+        request_stop(f"signal {signame}")
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    try:
+        while not stop_event.wait(0.5):
+            pass
+    except KeyboardInterrupt:
+        request_stop("keyboard interrupt")
+    finally:
+        signal.signal(signal.SIGINT, previous_sigint)
+        signal.signal(signal.SIGTERM, previous_sigterm)
+        server.shutdown()
+        server.server_close()
+        server_thread.join(timeout=5.0)
+
+    return stop_reason["value"]
+
+
 def _launch_web_ui(port: int = 5050, open_browser: bool = False) -> None:
     from ..core.config import get_project_traces_dir, get_project_state_path
-    from ..clients.web_server import create_app
+    from ..clients.web import create_app
 
     _require_project_opted_in("review")
     project_staging = get_project_traces_dir(Path.cwd())
@@ -411,7 +574,11 @@ def _launch_web_ui(port: int = 5050, open_browser: bool = False) -> None:
     click.echo("Press Ctrl+C to stop.")
     if open_browser:
         _schedule_browser_open(url)
-    app.run(host="127.0.0.1", port=port, debug=False)
+    stop_reason = _serve_web_app(app, host="127.0.0.1", port=port)
+    if stop_reason == "browser disconnected":
+        click.echo("Browser closed. Stopped opentraces web inbox.")
+    elif stop_reason == "browser quit":
+        click.echo("Stopped opentraces web inbox.")
 
 
 def _parse_agent_selection(agent_text: str) -> list[str]:
@@ -520,13 +687,16 @@ def _login_impl(token: bool) -> None:
 
 
 def _logout_impl() -> None:
-    from ..core.config import clear_credentials, CREDENTIALS_PATH
+    from ..core.config import clear_credentials, load_config
 
-    if CREDENTIALS_PATH.exists():
-        clear_credentials()
+    # Did we have a token *anywhere* (CLI creds OR huggingface_hub cache)?
+    was_authenticated = bool(load_config().hf_token)
+    clear_credentials()
+
+    if was_authenticated:
         click.echo("Logged out. Credentials removed.")
     else:
-        click.echo("Not logged in (no stored credentials).")
+        click.echo("Not logged in.")
 
     emit_json({"status": "ok", "authenticated": False})
 
@@ -754,6 +924,24 @@ async def _choose_remote_interactively_async(default_repo: str) -> tuple[str | N
                     default_value=default_name,
                 )
                 repo_id = _resolve_username_prefix(repo_name, username)
+
+                # Actually create the dataset on HuggingFace *now* so the
+                # user sees namespace-permission errors up front rather
+                # than during their first push.
+                try:
+                    created = _remote_create(repo_id, visibility == "private", cfg.hf_token)
+                    if created:
+                        click.echo(f"  Created {repo_id} on HuggingFace.")
+                    else:
+                        click.echo(f"  {repo_id} already exists — connecting to it.")
+                except Exception as e:
+                    code, kind, message, hint = _classify_hf_repo_error(e, repo_id)
+                    click.echo(f"  {message}")
+                    if hint:
+                        click.echo(f"    hint: {hint}")
+                    # Don't abort init — let the user finish setup with
+                    # the repo_id saved locally. Push will re-surface the
+                    # same error with the same guidance if unresolved.
                 return repo_id, visibility
 
             # Existing repo selected: inherit visibility
@@ -888,7 +1076,7 @@ def _capture_sessions_into_project(
                     task_desc = (result.record.task.description or "")[:80] if hasattr(result.record.task, "description") else ""
                 state.create_commit_group(
                     [result.record.trace_id],
-                    task_desc or result.record.trace_id[:12],
+                    task_desc or short_trace_id(result.record.trace_id, 12),
                 )
             else:
                 state.set_trace_status(
@@ -1586,13 +1774,27 @@ def init(
     })
 
 
-@main.command()
+@main.command(
+    examples=[
+        "opentraces remove",
+        "opentraces remove --all",
+    ],
+    see_also=[
+        ("opentraces init", "re-initialize the project later."),
+    ],
+)
 @click.option("--all", "purge_all", is_flag=True, default=False,
               help="Also delete the audit ref (refs/opentraces/audit/*) "
-                   "and trace↔commit notes (refs/notes/opentraces) from "
+                   "and trace-to-commit notes (refs/notes/opentraces) from "
                    "this repository.")
 def remove(purge_all: bool) -> None:
-    """Remove opentraces from the current project."""
+    """Remove opentraces from the current project.
+
+    Uninstalls the capture hook, deletes the repo marker, and unregisters
+    the project from the global registry. Traces already pushed upstream
+    are untouched. Use ``--all`` to additionally purge the git-side audit
+    ref and trace-to-commit notes.
+    """
     from ..core.config import (
         _marker_path,
         get_project_dir,
@@ -1887,7 +2089,7 @@ def _install_capture_hook(project_dir: Path, agents: list[str]) -> bool:
 
     hook_entry = {
         "type": "command",
-        "command": "opentraces _capture --project-dir .",
+        "command": "$(command -v opentraces || command -v OTD || command -v OT) _capture --project-dir .",
         "timeout": 60,
     }
 
@@ -2036,7 +2238,16 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
     except Exception as e:
         human_echo(f"  Could not install skill: {e}")
         return False
-@main.command()
+@main.command(
+    examples=[
+        "opentraces status",
+        "opentraces status --limit 0",
+    ],
+    see_also=[
+        ("opentraces list", "list individual traces with filters."),
+        ("opentraces doctor", "check pipeline and integration health."),
+    ],
+)
 @click.option(
     "--limit",
     type=int,
@@ -2045,7 +2256,11 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
     help="Show N most-recent traces. Use 0 to list all.",
 )
 def status(limit: int) -> None:
-    """Show status of the current opentraces project."""
+    """Show status of the current opentraces project.
+
+    Summarises inbox counts by stage, the active remote, and the most
+    recent traces. A fast snapshot of what's waiting, staged, and shipped.
+    """
     import time as _time
     from ..core.config import (
         load_project_config, get_project_traces_dir, get_project_state_path,
@@ -2234,7 +2449,7 @@ def status(limit: int) -> None:
                         or bool(getattr(entry, "uploaded_to", None))
                     )
 
-                short_id = record.trace_id[:8]
+                short_id = short_trace_id(record.trace_id)
                 table.add_row(
                     short_id,
                     f"[dim]{rel_time}[/]",
@@ -2267,7 +2482,7 @@ def status(limit: int) -> None:
                 })
             except Exception:
                 table.add_row(
-                    f"[dim]{record.trace_id[:8]}[/]", "", "[red]? error[/]",
+                    f"[dim]{short_trace_id(record.trace_id)}[/]", "", "[red]? error[/]",
                     "[red]?[/]", "[red]?[/]", "[red]?[/]", "[red]?[/]", "[red]?[/]",
                 )
 
@@ -2384,9 +2599,21 @@ def _auth_group() -> None:
 
 
 @_auth_group.command("login")
-@click.option("--token", is_flag=True, help="Paste a personal access token (required for pushing traces)")
+@click.option(
+    "--token",
+    is_flag=True,
+    help="Paste a personal access token instead (headless / CI fallback).",
+)
 def _auth_login(token: bool) -> None:
-    """Log in to HuggingFace Hub."""
+    """Log in to HuggingFace Hub.
+
+    By default, opens a browser to authorize opentraces via HuggingFace's
+    OAuth device flow. The granted scopes (``openid profile write-repos
+    manage-repos``) allow opentraces to read, push, create, delete, and
+    change visibility on datasets in namespaces you belong to, with no
+    token paste required. Use ``--token`` only when you cannot open a
+    browser (e.g. CI, remote shells).
+    """
     _login_impl(token)
 
 
@@ -2404,7 +2631,7 @@ def _auth_whoami() -> None:
 
 @_auth_group.command("status")
 def _auth_status() -> None:
-    """Alias for ``whoami`` — report whether we're authenticated."""
+    """Alias for ``whoami``, report whether we're authenticated."""
     _auth_status_impl()
 
 
@@ -2470,7 +2697,7 @@ def list_cmd(
             emit_json({"status": "ok", "traces": [], "remote": remote_filter})
             return
         for t in traces:
-            click.echo(f"  {t.trace_id[:12]}  status={t.status.value}")
+            click.echo(f"  {short_trace_id(t.trace_id, 12)}  status={t.status.value}")
         emit_json({
             "status": "ok",
             "remote": remote_filter,
@@ -2481,7 +2708,19 @@ def list_cmd(
     ctx.invoke(_trace_list_cmd, stage=stage, model=model, agent=agent, limit=limit, by_commit=by_commit)
 
 
-@main.command("add")
+@main.command(
+    "add",
+    examples=[
+        "opentraces add abc12",
+        "opentraces add abc12 def34",
+        "opentraces add --all",
+    ],
+    see_also=[
+        ("opentraces push", "upload staged traces upstream."),
+        ("opentraces list", "review what's in the inbox."),
+        ("opentraces reject", "mark a trace local-only instead of staging."),
+    ],
+)
 @click.argument("trace_ids", nargs=-1)
 @click.option("--all", "stage_all", is_flag=True, help="Stage every Inbox-status trace for push.")
 def add_cmd(trace_ids: tuple[str, ...], stage_all: bool) -> None:
@@ -2552,7 +2791,22 @@ def add_cmd(trace_ids: tuple[str, ...], stage_all: bool) -> None:
         _trace_commit_impl(tid)
 
 
-@main.command("redact")
+@main.command(
+    "redact",
+    examples=[
+        "opentraces redact abc12 'sk-live-1234'",
+        "opentraces redact abc12 --regex 'sk-[a-z]+-[0-9]+'",
+        "opentraces redact abc12 'password' --field observations.stdout",
+    ],
+    see_also=[
+        ("opentraces add", "stage the trace once it's clean."),
+        ("opentraces reset", "move a BLOCKED trace back to Inbox after redacting."),
+    ],
+    option_groups=[
+        ("Match", ["use_regex"]),
+        ("Scope", ["field", "step_index"]),
+    ],
+)
 @click.argument("trace_id")
 @click.argument("pattern")
 @click.option("--regex", "use_regex", is_flag=True, help="Interpret PATTERN as a regex.")
@@ -2564,7 +2818,7 @@ def redact_cmd(trace_id: str, pattern: str, use_regex: bool, field: str | None, 
     Default: literal-string find-and-replace across every field of every
     step. Use --regex for pattern matching, --field to scope to one field
     (dotted path supported), --step to scope to one step. Replaces matches
-    inline with [REDACTED]. Atomic in-place rewrite. Permanent — no undo.
+    inline with [REDACTED]. Atomic in-place rewrite. Permanent, no undo.
     """
     from ..core.config import get_project_state_path, get_project_traces_dir
     from ..core.review import redact_pattern_and_persist
@@ -2597,7 +2851,7 @@ def redact_cmd(trace_id: str, pattern: str, use_regex: bool, field: str | None, 
         click.echo(f"redact failed: {result.error_message}", err=True)
         sys.exit(2)
 
-    click.echo(f"Redacted {trace_id[:12]} ({getattr(result, 'replacements', '?')} replacement(s))")
+    click.echo(f"Redacted {short_trace_id(trace_id, 12)} ({getattr(result, 'replacements', '?')} replacement(s))")
     emit_json({
         "status": "ok",
         "trace_id": trace_id,
@@ -2734,6 +2988,73 @@ def _remote_delete(repo_id: str, token: str | None) -> None:
     api.delete_repo(repo_id=repo_id, repo_type="dataset")
 
 
+def _remote_set_visibility(repo_id: str, private: bool, token: str | None) -> None:
+    """Flip an HF dataset between private and public."""
+    from huggingface_hub import HfApi
+    api = HfApi(token=token)
+    api.update_repo_settings(repo_id=repo_id, repo_type="dataset", private=private)
+
+
+def _classify_hf_repo_error(exc: Exception, repo_id: str) -> tuple[str, str, str, str]:
+    """Turn a huggingface_hub exception into actionable CLI guidance.
+
+    Returns ``(code, kind, message, hint)``. ``kind`` is one of
+    ``remote_missing``, ``namespace_forbidden``, ``auth``, ``unknown``.
+    Callers decide how to present (human echo + JSON envelope).
+    """
+    try:
+        from huggingface_hub.errors import (
+            RepositoryNotFoundError,
+            HfHubHTTPError,
+        )
+    except ImportError:  # older huggingface_hub
+        from huggingface_hub.utils import (  # type: ignore
+            RepositoryNotFoundError,
+            HfHubHTTPError,
+        )
+
+    if isinstance(exc, RepositoryNotFoundError):
+        return (
+            "REMOTE_NOT_FOUND",
+            "remote_missing",
+            f"No dataset at {repo_id} on HuggingFace.",
+            f"Run: opentraces remote create {repo_id}",
+        )
+
+    status = None
+    if isinstance(exc, HfHubHTTPError):
+        resp = getattr(exc, "response", None)
+        status = getattr(resp, "status_code", None)
+
+    msg = str(exc).lower()
+    if status == 403 or "403" in msg or "forbidden" in msg or "don't have the rights" in msg:
+        owner = repo_id.split("/", 1)[0] if "/" in repo_id else repo_id
+        return (
+            "NAMESPACE_FORBIDDEN",
+            "namespace_forbidden",
+            f"You don't have write access to the '{owner}' namespace on HuggingFace.",
+            (
+                f"Join the '{owner}' org, or pick a different namespace "
+                f"(e.g. your own user) with 'opentraces remote add' / 'opentraces init'."
+            ),
+        )
+
+    if status == 401 or "401" in msg or "unauthor" in msg or "invalid token" in msg:
+        return (
+            "AUTH_FAILED",
+            "auth",
+            "HuggingFace rejected the current credentials.",
+            "Run: opentraces auth login",
+        )
+
+    return (
+        "HF_ERROR",
+        "unknown",
+        f"HuggingFace request failed: {exc}",
+        None,
+    )
+
+
 @remote.command("add")
 @click.argument("repo")
 def remote_add(repo: str) -> None:
@@ -2791,7 +3112,7 @@ def remote_add(repo: str) -> None:
 def remote_create(repo: str, is_private: bool) -> None:
     """Create a new HF dataset and connect it.
 
-    Fails if REPO already exists on HuggingFace — use
+    Fails if REPO already exists on HuggingFace; use
     ``opentraces remote add`` instead.
     """
     cfg = load_config()
@@ -2815,8 +3136,11 @@ def remote_create(repo: str, is_private: bool) -> None:
     try:
         created = _remote_create(repo_id, is_private, cfg.hf_token)
     except Exception as e:
-        click.echo(f"Failed to create dataset: {e}", err=True)
-        emit_json(error_response("HF_ERROR", "remote", str(e), None))
+        code, kind, message, hint = _classify_hf_repo_error(e, repo_id)
+        click.echo(message, err=True)
+        if hint:
+            click.echo(f"  hint: {hint}", err=True)
+        emit_json(error_response(code, kind, message, hint))
         sys.exit(3)
     if not created:
         click.echo(f"{repo_id} already exists on HuggingFace.", err=True)
@@ -2843,10 +3167,14 @@ def remote_create(repo: str, is_private: bool) -> None:
               help="Also delete the dataset on HuggingFace (irreversible).")
 @click.option("--yes", "confirmed", is_flag=True, help="Skip the confirmation prompt.")
 def remote_remove(repo: str | None, delete_remote: bool, confirmed: bool) -> None:
-    """Disconnect the remote from this project.
+    """Disconnect a remote from this project (local-only by default).
 
-    REPO is optional when exactly one remote is connected. With
-    ``--delete-remote``, also delete the dataset on HuggingFace.
+    By itself, this does NOT delete the dataset on HuggingFace, the
+    repository and its data stay intact and can be reconnected later with
+    ``opentraces remote add``. To also delete upstream, pass
+    ``--delete-remote`` (or use ``opentraces remote delete <repo>``).
+
+    REPO is optional when exactly one remote is connected.
     """
     from ..core.config import get_project_state_path
     from ..core.state import StateManager, UnknownRemoteError
@@ -2903,8 +3231,85 @@ def remote_remove(repo: str | None, delete_remote: bool, confirmed: bool) -> Non
     emit_json({"status": "ok", "remote": repo, "deleted_remote": delete_remote})
 
 
+@remote.command("visibility")
+@click.argument("repo", required=False, default=None)
+@click.option("--private", "make_private", flag_value=True, default=None,
+              help="Set the dataset to private.")
+@click.option("--public", "make_private", flag_value=False,
+              help="Set the dataset to public.")
+def remote_visibility(repo: str | None, make_private: bool | None) -> None:
+    """Flip a connected remote between private and public on HuggingFace.
+
+    REPO is optional when exactly one remote is connected. Requires an
+    authenticated session with ``manage-repos`` scope (the default from
+    ``opentraces auth login``).
+    """
+    if make_private is None:
+        click.echo("Specify --private or --public.", err=True)
+        sys.exit(2)
+
+    project_dir = Path.cwd()
+    proj_config, remotes = _read_remotes(project_dir)
+    if not remotes:
+        click.echo("No remote connected.", err=True)
+        sys.exit(2)
+    if repo is None:
+        if len(remotes) == 1:
+            repo = next(iter(remotes))
+        else:
+            click.echo("Multiple remotes connected; specify which:", err=True)
+            for r in sorted(remotes):
+                click.echo(f"  {r}", err=True)
+            sys.exit(2)
+    if repo not in remotes:
+        click.echo(f"No remote '{repo}'.", err=True)
+        sys.exit(2)
+
+    cfg = load_config()
+    if not cfg.hf_token:
+        click.echo("Not authenticated. Run 'opentraces auth login' first.", err=True)
+        sys.exit(3)
+
+    # Stored ``url`` is ``hf://owner/name`` for new-style remotes; HfApi
+    # needs the bare ``owner/name``. Legacy ``origin``-keyed remotes store
+    # the repo_id directly in ``url``.
+    stored_url = remotes[repo].get("url", repo)
+    repo_id = stored_url.split("://", 1)[1] if "://" in stored_url else stored_url
+    try:
+        _remote_set_visibility(repo_id, make_private, cfg.hf_token)
+    except Exception as e:
+        code, kind, message, hint = _classify_hf_repo_error(e, repo_id)
+        click.echo(message, err=True)
+        if hint:
+            click.echo(f"  hint: {hint}", err=True)
+        emit_json(error_response(code, kind, message, hint))
+        sys.exit(3)
+
+    visibility = "private" if make_private else "public"
+    remotes[repo]["visibility"] = visibility
+    save_project_config(project_dir, proj_config)
+    click.echo(f"{repo_id} is now {visibility}.")
+    emit_json({"status": "ok", "remote": repo, "visibility": visibility})
+
+
+@remote.command("delete")
+@click.argument("repo", required=False, default=None)
+@click.option("--yes", "confirmed", is_flag=True, help="Skip the confirmation prompt.")
+def remote_delete(repo: str | None, confirmed: bool) -> None:
+    """Delete the dataset on HuggingFace AND disconnect locally (destructive).
+
+    REPO is optional when exactly one remote is connected. For a local-only
+    disconnect, use ``opentraces remote remove`` instead.
+    """
+    # Delegate to the existing remove-with-delete path so we have one code
+    # path for both surfaces. This preserves the state-manager / config
+    # cleanup and the confirmation prompt.
+    ctx = click.get_current_context()
+    ctx.invoke(remote_remove, repo=repo, delete_remote=True, confirmed=confirmed)
+
+
 @remote.command("list")
-@click.option("-v", "verbose", is_flag=True, help="Show URLs.")
+@click.option("-v", "verbose", is_flag=True, help="Also show full URLs.")
 def remote_list(verbose: bool) -> None:
     """List connected remotes (active marked with *)."""
     proj_config, remotes = _read_remotes(Path.cwd())
@@ -2918,10 +3323,18 @@ def remote_list(verbose: bool) -> None:
     payload = {}
     for name, cfg in sorted(remotes.items()):
         marker = "*" if name == active else " "
-        if verbose:
-            click.echo(f"  {marker} {name}\t{cfg['url']} ({cfg.get('visibility', 'private')})")
+        visibility = cfg.get("visibility", "private")
+        url = cfg.get("url", name)
+        # Legacy-migrated remotes are keyed ``origin`` with the repo_id in
+        # ``url``; new-style remotes are keyed by repo_id. Always print the
+        # repo_id so the user can confirm which HF dataset is wired up.
+        if name == url:
+            line = f"  {marker} {name} ({visibility})"
         else:
-            click.echo(f"  {marker} {name}")
+            line = f"  {marker} {name} \u2192 {url} ({visibility})"
+        if verbose:
+            line = f"{line}\t{_expand_hf_url(url)}"
+        click.echo(line)
         payload[name] = cfg
 
     emit_json({"status": "ok", "remotes": payload, "active_remote": active})
@@ -3214,11 +3627,24 @@ def _emit_dry_run(project_dir: Path, *, paths: list[Path] | None) -> None:
         ],
         "next_command": "opentraces tui" if not auto else "opentraces push",
     })
-@main.command()
-@click.option("--port", type=int, default=5050, help="Port for the local web inbox")
-@click.option("--no-open", is_flag=True, help="Do not open a browser automatically")
+@main.command(
+    examples=[
+        "opentraces web",
+        "opentraces web --port 6060 --no-open",
+    ],
+    see_also=[
+        ("opentraces tui", "same inbox, terminal UI."),
+    ],
+)
+@click.option("--port", type=int, default=5050, help="Port for the local web inbox.")
+@click.option("--no-open", is_flag=True, help="Do not open a browser automatically.")
 def web(port: int, no_open: bool) -> None:
-    """Open the browser inbox UI."""
+    """Open the browser inbox UI.
+
+    Starts a local Flask server against the current project's inbox. Use
+    this when you want richer diff views than the TUI, or to share the
+    review URL with a teammate on the same machine.
+    """
     try:
         _launch_web_ui(port=port, open_browser=_is_interactive_terminal() and not no_open)
     except ImportError:
@@ -3226,8 +3652,17 @@ def web(port: int, no_open: bool) -> None:
         sys.exit(2)
 
 
-@main.command()
-@click.option("--fullscreen", is_flag=True, help="Open directly into fullscreen inspect mode")
+@main.command(
+    examples=[
+        "opentraces tui",
+        "opentraces tui --fullscreen",
+        "opentraces tui --limit 0",
+    ],
+    see_also=[
+        ("opentraces web", "same inbox, browser UI."),
+    ],
+)
+@click.option("--fullscreen", is_flag=True, help="Open directly into fullscreen inspect mode.")
 @click.option(
     "--limit",
     type=int,
@@ -3236,7 +3671,12 @@ def web(port: int, no_open: bool) -> None:
     help="Maximum number of traces to load (most recent first). Use 0 for no limit.",
 )
 def tui(fullscreen: bool, limit: int) -> None:
-    """Open the terminal inbox UI."""
+    """Open the terminal inbox UI.
+
+    Default entry point for reviewing traces without leaving the shell.
+    Running bare ``opentraces`` launches the same UI in an interactive
+    terminal.
+    """
     try:
         _launch_tui_ui(fullscreen=fullscreen, limit=limit if limit > 0 else None)
     except ImportError:
@@ -3441,15 +3881,31 @@ def _remote_delta(repo_id: str, local_summary) -> dict[str, float] | None:
         return None
 
 
-@main.command()
-@click.option("--judge/--no-judge", default=False, help="Enable LLM judge for qualitative scoring")
+@main.command(
+    examples=[
+        "opentraces assess",
+        "opentraces assess --judge --judge-model sonnet",
+        "opentraces assess --dataset user/my-traces",
+        "opentraces assess --explain",
+    ],
+    see_also=[
+        ("opentraces push", "publish the assessed traces upstream."),
+        ("opentraces llm-review", "run the Tier 2 security pass before push."),
+    ],
+    option_groups=[
+        ("Scope", ["limit", "dataset_repo"]),
+        ("Judge", ["judge", "judge_model"]),
+        ("Output", ["dry_run", "explain"]),
+    ],
+)
+@click.option("--judge/--no-judge", default=False, help="Enable LLM judge for qualitative scoring.")
 @click.option("--judge-model", default="haiku", type=click.Choice(["haiku", "sonnet", "opus"]),
-              help="Model for LLM judge")
-@click.option("--limit", type=int, default=0, help="Max traces to assess (0=all)")
+              help="Model for LLM judge.")
+@click.option("--limit", type=int, default=0, help="Max traces to assess (0=all).")
 @click.option("--dataset", "dataset_repo", type=str, default=None,
               help="Assess a remote HF dataset (e.g. user/my-traces).")
 @click.option("--dry-run", is_flag=True,
-              help="Print the assessment only — no remote writes, no local report.")
+              help="Print the assessment only, no remote writes, no local report.")
 @click.option("--explain", is_flag=True,
               help="Show the glossary and exit.")
 def assess(judge: bool, judge_model: str, limit: int,
@@ -3569,13 +4025,28 @@ def _resolve_repo_id(username: str, repo_flag: str | None = None) -> str:
         return config_remote
 
     return f"{username}/opentraces"
-@main.command()
+@main.command(
+    examples=[
+        "opentraces export --format atif",
+        "opentraces export --format agent-trace --output /tmp/out.jsonl",
+    ],
+    see_also=[
+        ("opentraces push", "upload in the native opentraces schema instead."),
+    ],
+)
 @click.option("--format", "output_format", required=True,
-              type=click.Choice(["atif", "agent-trace"]))
+              type=click.Choice(["atif", "agent-trace"]),
+              help="Target schema: ATIF or the `agent-trace` community format.")
 @click.option("--output", "output_path", type=click.Path(),
-              help="Output JSONL path (default: ./opentraces-export.jsonl)")
+              help="Output JSONL path (default: ./opentraces-export.jsonl).")
 def export(output_format: str, output_path: str | None) -> None:
-    """Export staged traces to another format."""
+    """Export staged traces to another format.
+
+    Writes every staged trace to a single JSONL file in the chosen
+    schema. Use this when publishing to a downstream consumer that
+    expects ATIF or the community agent-trace format rather than
+    opentraces' native shape.
+    """
     from ..core.config import get_project_traces_dir
     from ..core.inbox import load_trace_records
 
@@ -3614,6 +4085,35 @@ def migrate() -> None:
         "status": "ok",
         "config_version": cfg.config_version,
         "schema_version": SCHEMA_VERSION,
+    })
+
+
+@main.command("_migrate-trace-ids", hidden=True)
+@click.option("--dry-run", is_flag=True, help="Report what would change without writing.")
+def _migrate_trace_ids_cmd(dry_run: bool) -> None:
+    """Rewrite legacy ``<agent>_<session>`` trace ids to canonical UUIDv4."""
+    from ..core.migrate_trace_ids import migrate_project
+
+    project_dir = Path.cwd()
+    report = migrate_project(project_dir, dry_run=dry_run)
+    click.echo(
+        f"scanned={report.traces_scanned}  "
+        f"migrated={report.traces_migrated}  "
+        f"state_rekeyed={report.state_entries_rekeyed}  "
+        f"generations_updated={report.generations_updated}  "
+        f"commit_groups_updated={report.commit_groups_updated}  "
+        f"attribution_files_updated={report.attribution_files_updated}"
+    )
+    for err in report.errors:
+        click.echo(f"  error: {err}", err=True)
+    emit_json({
+        "status": "ok",
+        "dry_run": dry_run,
+        "traces_scanned": report.traces_scanned,
+        "traces_migrated": report.traces_migrated,
+        "state_entries_rekeyed": report.state_entries_rekeyed,
+        "generations_updated": report.generations_updated,
+        "errors": report.errors,
     })
 
 

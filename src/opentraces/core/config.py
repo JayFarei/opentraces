@@ -31,9 +31,34 @@ import uuid
 from pathlib import Path
 from typing import Any, Literal
 
+import click
+
 logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
+
+
+class NotOptedInError(click.ClickException):
+    """Raised when a command is run from a directory that has not run
+    ``opentraces init``. Click renders ``message`` to stderr and exits 2.
+    """
+
+    exit_code = 2
+
+    def __init__(self, project_dir: Path, action: str = "review") -> None:
+        self.project_dir = project_dir
+        self.action = action
+        super().__init__(
+            f"opentraces: this project has not opted in to {action}.\n"
+            "Run 'opentraces init' here first, only initialized "
+            "projects appear in the UI or get pushed upstream."
+        )
+
+    def format_message(self) -> str:
+        return self.message
+
+    def show(self, file: Any = None) -> None:
+        click.echo(self.format_message(), err=True)
 
 from .workflow import (
     DEFAULT_AGENT,
@@ -297,9 +322,33 @@ def save_credentials(token: str) -> None:
 
 
 def clear_credentials() -> None:
-    """Remove stored HF credentials."""
+    """Remove stored HF credentials from both opentraces and huggingface_hub caches.
+
+    The token may live in either location: device-flow login writes to
+    ``~/.opentraces/credentials`` via ``save_credentials``, while tokens that
+    arrived through ``huggingface-cli login`` or older paths sit in the
+    huggingface_hub cache. Logout must clear both or it is a silent no-op.
+    """
     if CREDENTIALS_PATH.exists():
         CREDENTIALS_PATH.unlink()
+
+    try:
+        from huggingface_hub import logout as _hf_logout
+        _hf_logout()
+    except Exception:
+        # Fall back to direct file removal if the hf_hub helper is absent or
+        # misbehaves — we still want logout to clear the cache.
+        try:
+            from huggingface_hub.constants import HF_TOKEN_PATH
+            hf_token_path = Path(HF_TOKEN_PATH)
+        except Exception:
+            hf_token_path = Path.home() / ".cache" / "huggingface" / "token"
+        for p in (hf_token_path, hf_token_path.parent / "stored_tokens"):
+            try:
+                if p.exists():
+                    p.unlink()
+            except Exception:
+                pass
 
 
 def save_config(config: Config) -> None:
@@ -652,10 +701,7 @@ def _project_id_for(project_dir: Path) -> str:
     """Return the project_id from the marker. Raises if not opted in."""
     marker = _load_marker(project_dir)
     if not marker or not marker.get("project_id"):
-        raise RuntimeError(
-            f"{project_dir} is not opted in to opentraces "
-            f"(no {MARKER_FILENAME} marker). Run `opentraces init` first."
-        )
+        raise NotOptedInError(project_dir)
     return marker["project_id"]
 
 

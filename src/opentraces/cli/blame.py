@@ -33,6 +33,7 @@ from typing import Any
 
 import click
 
+from ._help import OpentracesCommand
 from ..clients.text.colors import (
     RESET,
     Role,
@@ -286,6 +287,32 @@ def _iter_trace_blocks(
     contribs = join_entities_to_traces(project_cwd, sha)
     by_tid = {c.trace_id: c for c in contribs}
 
+    # Per-trace % is diff-scoped so it reads consistently with the headline
+    # "Coverage: N% of diff (M/D lines)" rather than the whole-file blame
+    # denominator. Falls back to whole-file when diff_line_count can't
+    # compute (merge commits, missing shas, binary-only diffs).
+    diff_total = 0
+    try:
+        from ..enrichment.git.blame import diff_line_count
+        diff_total = diff_line_count(project_cwd, sha)
+    except Exception:
+        diff_total = 0
+    pct_denom = diff_total if diff_total > 0 else total
+
+    # Build the inbox-membership set so each trace row can pick the right
+    # handle prefix: ``t:`` for canonical (ingested) traces that resolve via
+    # ``ot show``, ``s:`` for attribution-only upstream sessions that live
+    # in the attribution cache but never landed in the opentraces inbox
+    # (live/mid-conversation, below parse gate, pre-init, or discarded).
+    canonical_ids: set[str] = set()
+    try:
+        from ..core.config import get_project_state_path
+        from ..core.state import StateManager
+        _state = StateManager(state_path=get_project_state_path(project_cwd))
+        canonical_ids = set(_state._state.get("traces", {}).keys())  # noqa: SLF001
+    except Exception:
+        canonical_ids = set()
+
     traces = list(data.get("traces") or [])
     seen_tids = {t.get("trace_id") for t in traces if t.get("trace_id")}
     for c in contribs:
@@ -317,14 +344,19 @@ def _iter_trace_blocks(
 
         tid = tr.get("trace_id") or ""
         lc = int(tr.get("line_count") or 0)
-        pct = int(round((lc / total) * 100)) if total else 0
-        short_id = tid[:8]
+        # Cap at diff_total so overlapping per-trace attributions never
+        # push an individual trace over 100% of the diff.
+        pct = int(round((min(lc, pct_denom) / pct_denom) * 100)) if pct_denom else 0
+        from ..core.trace_meta import short_trace_id as _short_tid
+        short_id = _short_tid(tid)
         meta = resolve_trace_meta(project_cwd, tid)
         short_name = meta.short_name if meta and meta.short_name else short_id
         model = (meta.model if meta else None) or ""
 
-        # Dim prefix on t: via render_handle.
-        id_paint = render_handle("t", tid, use_color=color)
+        # ``t:`` for canonical (in-inbox) traces, ``s:`` for attribution-only
+        # upstream sessions — see TraceContribution.canonical for the rule.
+        handle_kind = "t" if tid in canonical_ids else "s"
+        id_paint = render_handle(handle_kind, tid, use_color=color)
         bullet = paint(Role.TRACE_ID, TRACE_BULLET, use_color=color)
         name_paint = paint(Role.TRACE_NAME, short_name, use_color=color)
         pct_paint = paint(
@@ -531,14 +563,14 @@ def _build_json_payload(meta: tuple[str, str, str], data: dict,
 
     # New: per-trace entity_contributions.
     from ..core.entity_join import join_entities_to_traces
-    from ..core.trace_meta import resolve_trace_meta
+    from ..core.trace_meta import resolve_trace_meta, short_trace_id
     contribs = join_entities_to_traces(project_cwd, full_sha)
     ec_out: list[dict] = []
     for c in contribs:
         meta_obj = resolve_trace_meta(project_cwd, c.trace_id)
         ec_out.append({
             "trace_id": c.trace_id,
-            "short_name": (meta_obj.short_name if meta_obj else None) or c.trace_id[:8],
+            "short_name": (meta_obj.short_name if meta_obj else None) or short_trace_id(c.trace_id),
             "line_count": c.line_count,
             "entities": [
                 {
@@ -623,7 +655,25 @@ def _maybe_prompt_first_run(project_dir: Path, sha: str) -> bool:
 # Click command
 # --------------------------------------------------------------------------- #
 
-@click.command("blame", context_settings={"ignore_unknown_options": False})
+@click.command(
+    "blame",
+    cls=OpentracesCommand,
+    context_settings={"ignore_unknown_options": False},
+    examples=[
+        "opentraces blame abc1234",
+        "opentraces blame abc1234 src/main.py",
+        "opentraces blame abc1234 --lines",
+        "opentraces blame abc1234 --json",
+    ],
+    see_also=[
+        ("opentraces graph", "render commit + trace history."),
+        ("opentraces show", "view the full trace for an id."),
+    ],
+    option_groups=[
+        ("Scope", ["show_lines", "show_entities", "project_dir"]),
+        ("Output", ["as_json", "no_color"]),
+    ],
+)
 @click.argument("sha", required=True)
 @click.argument("path", required=False, default=None)
 @click.option("--lines", "show_lines", is_flag=True,

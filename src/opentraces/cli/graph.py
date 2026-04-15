@@ -17,10 +17,29 @@ from pathlib import Path
 
 import click
 
+from ._help import OpentracesCommand
 from ..clients.text import graph_renderer as _gr
 
 
-@click.command("graph")
+@click.command(
+    "graph",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces graph",
+        "opentraces graph --limit 50",
+        "opentraces graph --trace abc12",
+        "opentraces graph --since HEAD~20 --until HEAD",
+    ],
+    see_also=[
+        ("opentraces blame", "show per-commit attribution for a SHA."),
+        ("opentraces show", "view the full trace for an id."),
+    ],
+    option_groups=[
+        ("Pagination", ["limit", "page", "show_all"]),
+        ("Scope", ["trace_id", "since_ref", "until_ref", "project_dir"]),
+        ("Output", ["show_entities", "no_color"]),
+    ],
+)
 @click.option("--limit", type=int, default=20, show_default=True,
               help="Number of commits per page.")
 @click.option("--page", type=int, default=1, show_default=True,
@@ -44,7 +63,13 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
               since_ref: str | None, until_ref: str | None,
               show_all: bool, show_entities: bool, no_color: bool,
               project_dir: Path | None) -> None:
-    """Render commit + trace history."""
+    """Render commit + trace history.
+
+    Commit-primary by default: the git log is the spine and each commit
+    shows the traces that touched it. Pass ``--trace <id>`` to pivot to
+    trace-primary mode, where the trace is the spine. Requires a populated
+    attribution cache (run ``ot backfill`` if empty).
+    """
     cwd = Path(project_dir or Path.cwd()).resolve()
 
     # Accept "t:<prefix>" (or bare prefix >=2 chars) on --trace and resolve

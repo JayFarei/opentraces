@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .cache import AttributionCache
+from .trace_meta import short_trace_id
 
 
 # ---------------------------------------------------------------------------
@@ -68,10 +69,11 @@ class TraceContribution:
     #                    Renderer omits these rows entirely.
     overlap_case: str = "has_entities"
     dominant_by: str | None = None
-    # A stable short handle for display — just trace_id[:8].
+    # A stable short handle for display: first 8 chars of the session-uuid
+    # portion of trace_id (skipping the ``<agent>_`` prefix).
     @property
     def short_id(self) -> str:
-        return self.trace_id[:8] if self.trace_id else "?"
+        return short_trace_id(self.trace_id)
 
 
 # ---------------------------------------------------------------------------

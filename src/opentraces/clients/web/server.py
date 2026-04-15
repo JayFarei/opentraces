@@ -1,0 +1,958 @@
+"""Flask application for the opentraces web review interface.
+
+Serves a local web UI for trace review: browse sessions,
+approve/reject/redact traces, then push to HF Hub.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import random
+import string
+import tempfile
+import threading
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+from flask import Flask, jsonify, request, send_from_directory
+
+from ...core.config import (
+    auth_identity,
+    get_project_state_path,
+    get_project_traces_dir,
+    load_config,
+    load_project_config,
+    project_is_opted_in,
+    save_project_config,
+)
+from ...security import SECURITY_VERSION
+from opentraces_schema import SCHEMA_VERSION
+from ...core.inbox import get_stage, load_traces, redact_step
+from ...core.state import StateManager, TraceStatus
+from ...core.workflow import (
+    DEFAULT_AGENT,
+    DEFAULT_PUSH_POLICY,
+    DEFAULT_REVIEW_POLICY,
+    resolve_visible_stage,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _coerce_status(val: TraceStatus | str | None) -> TraceStatus:
+    """Coerce a TraceStatus-or-string into a TraceStatus enum, defaulting to PARSED."""
+    if val is None:
+        return TraceStatus.PARSED
+    if isinstance(val, TraceStatus):
+        return val
+    try:
+        return TraceStatus(val)
+    except ValueError:
+        return TraceStatus.PARSED
+
+
+
+
+def _generate_trace_id() -> str:
+    return uuid.uuid4().hex[:16]
+
+
+def _generate_sample_traces() -> list[dict[str, Any]]:
+    """Generate sample trace data for demo purposes when no real staged traces exist."""
+    models = [
+        "anthropic/claude-sonnet-4-20250514",
+        "anthropic/claude-opus-4-20250514",
+        "openai/gpt-4o",
+        "anthropic/claude-3-haiku",
+    ]
+    agents = ["claude-code", "cursor", "codex-cli", "aider"]
+    tasks = [
+        "Refactor the authentication module to use JWT tokens instead of session cookies",
+        "Fix the race condition in the WebSocket handler causing dropped messages",
+        "Add pagination to the /api/users endpoint with cursor-based navigation",
+        "Implement rate limiting middleware for the public API endpoints",
+        "Write unit tests for the payment processing service",
+        "Migrate database schema from v2 to v3 with zero-downtime deploy",
+        "Debug memory leak in the image processing pipeline",
+        "Add OpenTelemetry tracing to all gRPC service calls",
+    ]
+    tool_names = [
+        "Read", "Edit", "Bash", "Grep", "Glob", "Write",
+        "WebSearch", "ListFiles", "RunTests",
+    ]
+
+    traces = []
+    for i in range(12):
+        trace_id = _generate_trace_id()
+        model = random.choice(models)
+        agent = random.choice(agents)
+        task_desc = tasks[i % len(tasks)]
+        num_steps = random.randint(4, 20)
+        num_flags = random.choice([0, 0, 0, 1, 2, 3])
+
+        steps = []
+        for s in range(num_steps):
+            role = "agent" if s % 3 != 0 else ("user" if s % 3 == 1 else "system")
+            if s == 0:
+                role = "user"
+
+            step_tool_calls = []
+            step_observations = []
+            step_snippets_list = []
+
+            if role == "agent" and random.random() > 0.3:
+                tc_count = random.randint(1, 3)
+                for t in range(tc_count):
+                    tc_id = f"tc_{s}_{t}"
+                    tool = random.choice(tool_names)
+                    step_tool_calls.append({
+                        "tool_call_id": tc_id,
+                        "tool_name": tool,
+                        "input": _sample_tool_input(tool),
+                        "duration_ms": random.randint(50, 5000),
+                    })
+                    step_observations.append({
+                        "source_call_id": tc_id,
+                        "content": _sample_tool_output(tool),
+                        "output_summary": f"{tool} completed successfully",
+                        "error": None,
+                    })
+
+            if role == "agent" and random.random() > 0.7:
+                step_snippets_list.append({
+                    "file_path": f"src/{''.join(random.choices(string.ascii_lowercase, k=6))}.py",
+                    "start_line": random.randint(1, 100),
+                    "end_line": random.randint(101, 200),
+                    "language": "python",
+                    "text": 'def example():\n    """Sample function."""\n    return True\n',
+                    "source_step": s,
+                })
+
+            content = _sample_content(role, task_desc, s)
+            reasoning = None
+            if role == "agent" and random.random() > 0.6:
+                reasoning = (
+                    "Let me think about how to approach this. "
+                    "The user wants to modify the existing code, so I need to "
+                    "first understand the current structure, then identify the "
+                    "specific changes needed, and finally implement them carefully."
+                )
+
+            parent_step = None
+            call_type = "main"
+            if s > 5 and random.random() > 0.8:
+                parent_step = random.randint(0, s - 1)
+                call_type = "subagent"
+
+            steps.append({
+                "step_index": s,
+                "role": role,
+                "content": content,
+                "reasoning_content": reasoning,
+                "model": model if role == "agent" else None,
+                "system_prompt_hash": "abc123" if s == 0 else None,
+                "agent_role": "main" if call_type == "main" else "explore",
+                "parent_step": parent_step,
+                "call_type": call_type,
+                "subagent_trajectory_ref": None,
+                "tools_available": tool_names if role == "agent" else [],
+                "tool_calls": step_tool_calls,
+                "observations": step_observations,
+                "snippets": step_snippets_list,
+                "token_usage": {
+                    "input_tokens": random.randint(500, 5000),
+                    "output_tokens": random.randint(100, 2000),
+                    "cache_read_tokens": random.randint(0, 3000),
+                    "cache_write_tokens": random.randint(0, 1000),
+                    "prefix_reuse_tokens": 0,
+                },
+                "timestamp": f"2026-03-27T{10 + s // 4:02d}:{(s * 7) % 60:02d}:00Z",
+            })
+
+        # Security flags
+        security_flags = []
+        if num_flags > 0:
+            flag_types = [
+                ("api_key_detected", "Possible API key found in tool output"),
+                ("pii_email", "Email address detected in content"),
+                ("secret_pattern", "Pattern matching secret/password detected"),
+                ("ip_address", "Internal IP address found"),
+            ]
+            for f in range(num_flags):
+                ft = flag_types[f % len(flag_types)]
+                security_flags.append({
+                    "type": ft[0],
+                    "reason": ft[1],
+                    "step_index": random.randint(0, num_steps - 1),
+                    "severity": random.choice(["high", "medium", "low"]),
+                })
+
+        total_input = sum(s_["token_usage"]["input_tokens"] for s_ in steps)
+        total_output = sum(s_["token_usage"]["output_tokens"] for s_ in steps)
+
+        trace = {
+            "schema_version": SCHEMA_VERSION,
+            "trace_id": trace_id,
+            "session_id": f"session-{trace_id[:8]}",
+            "content_hash": None,
+            "timestamp_start": f"2026-03-{20 + i % 8:02d}T10:00:00Z",
+            "timestamp_end": f"2026-03-{20 + i % 8:02d}T10:{random.randint(5, 55):02d}:00Z",
+            "task": {
+                "description": task_desc,
+                "source": "user_prompt",
+                "repository": f"org/project-{chr(65 + i % 4).lower()}",
+                "base_commit": None,
+            },
+            "agent": {
+                "name": agent,
+                "version": "1.0.0",
+                "model": model,
+            },
+            "environment": {
+                "os": "darwin",
+                "shell": "zsh",
+                "vcs": {"type": "git", "base_commit": "abc123", "branch": "main", "diff": None},
+                "language_ecosystem": ["python", "typescript"],
+            },
+            "system_prompts": {"abc123": "You are a helpful coding assistant."},
+            "tool_definitions": [],
+            "steps": steps,
+            "outcome": {
+                "success": random.choice([True, True, True, False]),
+                "signal_source": "deterministic",
+                "signal_confidence": "derived",
+                "description": "Task completed" if random.random() > 0.3 else "Partial completion",
+                "patch": None,
+                "committed": random.choice([True, False]),
+                "commit_sha": None,
+            },
+            "dependencies": [],
+            "metrics": {
+                "total_steps": num_steps,
+                "total_input_tokens": total_input,
+                "total_output_tokens": total_output,
+                "total_duration_s": random.uniform(30, 600),
+                "cache_hit_rate": random.uniform(0.1, 0.9),
+                "estimated_cost_usd": round(random.uniform(0.01, 2.5), 4),
+            },
+            "security": {
+                "scanned": True,
+                "flags_reviewed": 0,
+                "redactions_applied": 0,
+                "classifier_version": SECURITY_VERSION,
+            },
+            "attribution": None,
+            "metadata": {
+                "project": f"project-{chr(65 + i % 4).lower()}",
+            },
+            "_security_flags": security_flags,
+        }
+        traces.append(trace)
+
+    return traces
+
+
+def _sample_tool_input(tool_name: str) -> dict[str, Any]:
+    """Generate sample tool input based on tool name."""
+    inputs = {
+        "Read": {"file_path": "/src/main.py", "limit": 50},
+        "Edit": {
+            "file_path": "/src/main.py",
+            "old_string": "def old_func():",
+            "new_string": "def new_func():",
+        },
+        "Bash": {"command": "python -m pytest tests/ -v", "description": "Run tests"},
+        "Grep": {"pattern": "def process_", "path": "/src/", "output_mode": "content"},
+        "Glob": {"pattern": "**/*.py", "path": "/src/"},
+        "Write": {"file_path": "/src/new_file.py", "content": "# New module\n"},
+        "WebSearch": {"query": "python async best practices"},
+        "ListFiles": {"path": "/src/"},
+        "RunTests": {"test_path": "tests/", "verbose": True},
+    }
+    return inputs.get(tool_name, {"input": "sample"})
+
+
+def _sample_tool_output(tool_name: str) -> str:
+    """Generate sample tool output."""
+    outputs = {
+        "Read": '     1\tdef process_request(req):\n     2\t    """Handle incoming request."""\n     3\t    validate(req)\n     4\t    return Response(status=200)\n',
+        "Edit": "Successfully edited /src/main.py",
+        "Bash": "===== 12 passed, 0 failed in 3.42s =====",
+        "Grep": "/src/handlers.py:15: def process_webhook(data):\n/src/utils.py:42: def process_batch(items):",
+        "Glob": "/src/main.py\n/src/utils.py\n/src/handlers.py\n/src/models.py",
+        "Write": "File written: /src/new_file.py",
+        "WebSearch": "Found 5 results for 'python async best practices'",
+        "ListFiles": "main.py\nutils.py\nhandlers.py\nmodels.py\ntests/",
+        "RunTests": "All 12 tests passed.",
+    }
+    return outputs.get(tool_name, "Operation completed.")
+
+
+def _sample_content(role: str, task: str, step_index: int) -> str:
+    """Generate sample message content."""
+    if role == "user":
+        if step_index == 0:
+            return task
+        return random.choice([
+            "Yes, that looks correct. Please proceed.",
+            "Can you also add error handling for edge cases?",
+            "Good. Now run the tests to make sure nothing is broken.",
+        ])
+    if role == "system":
+        return "You are a helpful coding assistant. Follow best practices."
+    # agent
+    responses = [
+        "I'll start by reading the relevant files to understand the current implementation.",
+        "Let me examine the code structure and identify the changes needed.",
+        "I've made the changes. Let me run the tests to verify everything works correctly.",
+        "The implementation looks good. Here's a summary of what I changed:\n\n1. Updated the main handler\n2. Added input validation\n3. Wrote new test cases",
+        "I found a potential issue in the error handling. Let me fix that first.",
+    ]
+    return responses[step_index % len(responses)]
+
+
+def _is_sample_data(traces: list[dict[str, Any]], staging_path: Path) -> bool:
+    """Check if traces are sample data (no corresponding JSONL files on disk)."""
+    if not traces:
+        return True
+    # Sample traces have no file on disk
+    for t in traces[:3]:
+        trace_id = t.get("trace_id", "")
+        jsonl_file = staging_path / f"{trace_id}.jsonl"
+        if jsonl_file.exists():
+            return False
+    # Also check if any JSONL files exist at all
+    if staging_path.exists() and list(staging_path.glob("*.jsonl")):
+        return False
+    return True
+
+
+def create_app(staging_dir: str | None = None, state_path: str | None = None, viewer_dist: str | None = None) -> Flask:
+    """Create the Flask review app."""
+    app = Flask(__name__)
+    app.secret_key = "opentraces-review-" + uuid.uuid4().hex[:8]
+    app.extensions.setdefault("opentraces_web_runtime", {})
+
+    # The web server is always invoked from inside an opted-in project,
+    # so cwd is the source of truth for project_dir. Caller may override
+    # via the staging_dir/state_path kwargs (used by tests).
+    project_dir = Path.cwd()
+    if staging_dir:
+        staging_path = Path(staging_dir)
+    elif project_is_opted_in(project_dir):
+        staging_path = get_project_traces_dir(project_dir)
+    else:
+        staging_path = project_dir
+    viewer_dist_path = Path(viewer_dist) if viewer_dist else None
+
+    # All mutable state is closure-local, so each app instance is independent
+    _state_mgr: list[StateManager | None] = [None]
+    if state_path:
+        _state_path: Path | None = Path(state_path)
+    elif project_is_opted_in(project_dir):
+        _state_path = get_project_state_path(project_dir)
+    else:
+        _state_path = None
+    _trace_cache: list[list[dict[str, Any]] | None] = [None]
+
+    def _get_state() -> StateManager:
+        if _state_mgr[0] is None:
+            if _state_path is None:
+                raise RuntimeError(
+                    "web server has no state_path; project must be opted in"
+                )
+            _state_mgr[0] = StateManager(state_path=_state_path)
+        return _state_mgr[0]
+
+    def _invalidate_cache() -> None:
+        _trace_cache[0] = None
+
+    # Default cap keeps /api/traces responsive on big inboxes (thousands
+    # of staged files). Power users can request more via ?limit=N.
+    _default_trace_limit = 500
+
+    def _traces(*, limit: int | None = None) -> list[dict[str, Any]]:
+        effective = limit if limit is not None else _default_trace_limit
+        if limit is None and _trace_cache[0] is not None:
+            return _trace_cache[0]
+        traces = load_traces(staging_path, limit=effective if effective > 0 else None)
+        if not traces:
+            traces = _generate_sample_traces()
+        if limit is None:
+            _trace_cache[0] = traces
+        return traces
+
+    def _total_staged() -> int:
+        """Count staged files without reading them — directory entry only."""
+        if not staging_path.exists():
+            return 0
+        return sum(1 for _ in staging_path.glob("*.jsonl"))
+
+    def _get_review_status(trace_id: str) -> str:
+        return get_stage(_get_state(), trace_id)
+
+    _context_cache: dict[str, Any] = {}
+    _context_cache_time: list[float] = [0.0]
+    _client_lock = threading.Lock()
+    _clients: dict[str, float] = {}
+    _client_seen_once: list[bool] = [False]
+
+    def _context() -> dict[str, Any]:
+        now = time.time()
+        if _context_cache and now - _context_cache_time[0] < 60:
+            return _context_cache
+        project_cfg = load_project_config(project_dir)
+        cfg = load_config()
+        identity = auth_identity(cfg.hf_token)
+        result = {
+            "project_name": project_dir.name,
+            "remote": project_cfg.get("remote"),
+            "review_policy": project_cfg.get("review_policy", DEFAULT_REVIEW_POLICY),
+            "push_policy": project_cfg.get("push_policy", DEFAULT_PUSH_POLICY),
+            "agents": project_cfg.get("agents") or [DEFAULT_AGENT],
+            "authenticated": identity is not None,
+            "username": identity.get("name") if identity else None,
+        }
+        _context_cache.clear()
+        _context_cache.update(result)
+        _context_cache_time[0] = now
+        return result
+
+    def _touch_client(client_id: str | None) -> None:
+        if not client_id:
+            return
+        with _client_lock:
+            _clients[client_id] = time.monotonic()
+            _client_seen_once[0] = True
+
+    def _drop_client(client_id: str | None) -> None:
+        if not client_id:
+            return
+        with _client_lock:
+            _clients.pop(client_id, None)
+
+    def _client_id() -> str | None:
+        if request.args.get("client_id"):
+            return request.args["client_id"]
+        data = request.get_json(silent=True)
+        if isinstance(data, dict):
+            raw = data.get("client_id")
+            if isinstance(raw, str) and raw:
+                return raw
+        header = request.headers.get("X-Opentraces-Client")
+        if header:
+            return header
+        return None
+
+    def _lifecycle_snapshot(*, stale_after: float = 45.0) -> dict[str, Any]:
+        now = time.monotonic()
+        with _client_lock:
+            stale_ids = [cid for cid, last_seen in _clients.items() if now - last_seen > stale_after]
+            for client_id in stale_ids:
+                _clients.pop(client_id, None)
+            last_seen = max(_clients.values(), default=None)
+            return {
+                "seen_any_client": _client_seen_once[0],
+                "active_clients": len(_clients),
+                "last_seen_age_s": None if last_seen is None else max(0.0, now - last_seen),
+            }
+
+    def _request_runtime_stop(reason: str) -> None:
+        runtime = app.extensions.get("opentraces_web_runtime") or {}
+        callback = runtime.get("request_stop")
+        if callable(callback):
+            callback(reason)
+
+    app.extensions["opentraces_web_lifecycle"] = {
+        "snapshot": _lifecycle_snapshot,
+    }
+
+    # --- Page routes ---
+
+    # SPA mode: serve the React viewer from web/viewer/dist
+    if viewer_dist_path and viewer_dist_path.exists():
+        @app.route("/")
+        def serve_index():
+            return send_from_directory(str(viewer_dist_path), "index.html")
+
+        @app.route("/assets/<path:filename>")
+        def serve_assets(filename):
+            return send_from_directory(str(viewer_dist_path / "assets"), filename)
+
+        @app.errorhandler(404)
+        def not_found(e):
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "not found"}), 404
+            return send_from_directory(str(viewer_dist_path), "index.html")
+
+    # --- API routes ---
+
+    @app.route("/api/traces")
+    def api_traces():
+        """JSON API for trace list. Accepts ?limit=N to override the default 500-trace cap."""
+        try:
+            limit_param = request.args.get("limit", type=int)
+        except (TypeError, ValueError):
+            limit_param = None
+        traces = _traces(limit=limit_param) if limit_param is not None else _traces()
+        total = _total_staged()
+        state = _get_state()
+        sessions = []
+        for t in traces:
+            trace_id = t["trace_id"]
+            entry = state.get_trace(trace_id)
+            status_enum = _coerce_status(entry.status if entry else None)
+            sessions.append({
+                "trace_id": trace_id,
+                "task": (t.get("task", {}).get("description") or "")[:100],
+                "model": t.get("agent", {}).get("model") or ", ".join(
+                    sorted(set(
+                        s.get("model") for s in t.get("steps", [])
+                        if s.get("model")
+                    ))
+                ) or "unknown",
+                "agent": t.get("agent", {}).get("name", "unknown"),
+                "steps": t.get("metrics", {}).get("total_steps", len(t.get("steps", []))),
+                "tool_calls": sum(
+                    len(s.get("tool_calls", [])) for s in t.get("steps", [])
+                ),
+                "timestamp": t.get("timestamp_start"),
+                "status": _get_review_status(trace_id),
+                "_stage": resolve_visible_stage(status_enum),
+                "security_flags": len(t.get("_security_flags", [])),
+                "project": t.get("metadata", {}).get("project", "unknown"),
+                # Plan 032: surface cached LLM review verdict so reviewers
+                # can see at a glance whether a session has been reviewed.
+                "llm_review": (t.get("metadata", {}) or {}).get("llm_review") or {"status": "not_run"},
+            })
+        response = jsonify(sessions)
+        response.headers["X-Total-Staged"] = str(total)
+        response.headers["X-Returned"] = str(len(sessions))
+        return response
+
+    @app.route("/api/context")
+    def api_context():
+        return jsonify(_context())
+
+    @app.route("/api/_lifecycle/ping", methods=["POST"])
+    def api_lifecycle_ping():
+        _touch_client(_client_id())
+        return jsonify({"status": "ok"})
+
+    @app.route("/api/_lifecycle/disconnect", methods=["POST"])
+    def api_lifecycle_disconnect():
+        _drop_client(_client_id())
+        return ("", 204)
+
+    @app.route("/api/_lifecycle/quit", methods=["POST"])
+    def api_lifecycle_quit():
+        _drop_client(_client_id())
+        _request_runtime_stop("browser quit")
+        return jsonify({"status": "stopping"})
+
+    @app.route("/api/remote", methods=["POST"])
+    def api_set_remote():
+        """Set or update the HuggingFace Hub remote (owner/dataset)."""
+        data = request.get_json(silent=True) or {}
+        remote = data.get("remote", "").strip()
+
+        if not remote:
+            return jsonify({"error": "remote is required"}), 400
+        if "/" not in remote or remote.count("/") != 1:
+            return jsonify({"error": "Invalid format. Use: owner/dataset"}), 400
+
+        proj_config = load_project_config(project_dir)
+        proj_config["remote"] = remote
+        save_project_config(project_dir, proj_config)
+
+        # Bust the context cache so the next /api/context read picks it up
+        _context_cache.clear()
+        _context_cache_time[0] = 0.0
+
+        return jsonify({"status": "ok", "remote": remote})
+
+    @app.route("/api/stats")
+    def api_stats():
+        """Dashboard stats."""
+        traces = _traces()
+        return jsonify(_compute_stats(traces))
+
+    @app.route("/api/trace/<trace_id>/add", methods=["POST"])
+    @app.route("/api/trace/<trace_id>/approve", methods=["POST"])
+    def api_add_trace(trace_id: str):
+        """Add a single session to the next push batch (CLI: ``opentraces add``)."""
+        state = _get_state()
+        task_desc = trace_id[:12]
+        try:
+            traces = _traces()
+            for t in traces:
+                if t.get("trace_id") == trace_id:
+                    task_desc = (t.get("task", {}).get("description") or "")[:80] or trace_id[:12]
+                    break
+        except Exception:
+            pass
+        state.create_commit_group([trace_id], task_desc)
+        _invalidate_cache()
+        return jsonify({"status": "staged", "trace_id": trace_id})
+
+    @app.route("/api/trace/<trace_id>/reject", methods=["POST"])
+    def api_reject(trace_id: str):
+        """Reject a session, persisting to StateManager."""
+        from ...core.review import reject_trace
+        state = _get_state()
+        reject_trace(state, trace_id, with_session_kwarg=True)
+        _invalidate_cache()
+        return jsonify({"status": "rejected", "trace_id": trace_id})
+
+    @app.route("/api/trace/<trace_id>/step/<int:step_index>/redact", methods=["POST"])
+    def api_redact_step(trace_id: str, step_index: int):
+        """Redact a step's content, persisting to the staging JSONL on disk."""
+        # Validate trace_id to prevent path traversal
+        import re as _re
+        if not _re.match(r'^[a-f0-9-]+$', trace_id):
+            return jsonify({"error": "Invalid trace ID format"}), 400
+
+        from ...core.review import redact_step_and_persist
+        result = redact_step_and_persist(staging_path, trace_id, step_index)
+        if not result.ok:
+            return jsonify({"error": result.error}), 404
+
+        _invalidate_cache()
+
+        return jsonify({
+            "status": "redacted",
+            "trace_id": trace_id,
+            "step_index": step_index,
+        })
+
+    @app.route("/api/trace/<trace_id>/detail")
+    def api_trace_detail(trace_id: str):
+        """Return full trace JSON for a single session."""
+        traces = _traces()
+        trace = None
+        for t in traces:
+            if t["trace_id"] == trace_id:
+                trace = t
+                break
+        if trace is None:
+            return jsonify({"error": "Session not found"}), 404
+
+        state = _get_state()
+        entry = state.get_trace(trace_id)
+        status_enum = _coerce_status(entry.status if entry else None)
+
+        result = dict(trace)
+        result["_stage"] = resolve_visible_stage(status_enum)
+        return jsonify(result)
+
+    @app.route("/api/trace/<trace_id>/stage", methods=["POST"])
+    def api_stage(trace_id: str):
+        """Transition a session to STAGED status."""
+        from ...core.review import stage_trace
+        state = _get_state()
+        stage_trace(state, trace_id)
+        return jsonify({"status": "inbox"})
+
+    @app.route("/api/trace/<trace_id>/unstage", methods=["POST"])
+    def api_unstage(trace_id: str):
+        """Revert a session to PARSED status."""
+        from ...core.review import unstage_trace
+        state = _get_state()
+        unstage_trace(state, trace_id)
+        return jsonify({"status": "inbox"})
+
+    @app.route("/api/add", methods=["POST"])
+    def api_add():
+        """Stage ("add") sessions into a batch group ready for push.
+
+        Mirrors ``opentraces add`` on the CLI — in the dataset=repo,
+        trace=commit mental model, this is the ``git add`` step. Already-added
+        traces are silently filtered so the endpoint is idempotent.
+        """
+        data = request.get_json(silent=True) or {}
+        ids = data.get("trace_ids", [])
+        message = data.get("message", "")
+
+        if not ids:
+            return jsonify({"error": "No trace_ids provided"}), 400
+
+        # Validate all sessions exist, and quietly drop ones already added
+        # so repeated clicks don't 400 the whole batch.
+        traces = _traces()
+        all_trace_ids = {t["trace_id"] for t in traces}
+        state = _get_state()
+
+        addable: list[str] = []
+        already_added: list[str] = []
+        addable_statuses = {
+            TraceStatus.STAGED, TraceStatus.PARSED, TraceStatus.DISCOVERED,
+            TraceStatus.REVIEWING, TraceStatus.APPROVED,
+        }
+        for sid in ids:
+            if sid not in all_trace_ids:
+                return jsonify({"error": f"Session {sid} not found"}), 404
+            entry = state.get_trace(sid)
+            status_val = _coerce_status(entry.status if entry else None)
+            if status_val == TraceStatus.COMMITTED:
+                already_added.append(sid)
+                continue
+            if status_val not in addable_statuses:
+                return jsonify({
+                    "error": f"Session {sid} cannot be added (status: {status_val.value})"
+                }), 400
+            addable.append(sid)
+
+        if not addable:
+            return jsonify({
+                "commit_id": None,
+                "session_count": 0,
+                "already_added": already_added,
+                "created_at": "",
+            })
+
+        from ...core.review import commit_bulk
+        commit_id = commit_bulk(state, addable, message)
+        group = state.get_commit_group(commit_id)
+
+        return jsonify({
+            "commit_id": commit_id,
+            "session_count": len(addable),
+            "already_added": already_added,
+            "created_at": group.created_at if group else "",
+        })
+
+    @app.route("/api/trace/<trace_id>/redaction-preview")
+    def api_redaction_preview(trace_id: str):
+        """Preview redaction results for a trace."""
+        traces = _traces()
+        trace = None
+        for t in traces:
+            if t["trace_id"] == trace_id:
+                trace = t
+                break
+        if trace is None:
+            return jsonify({"error": "Session not found"}), 404
+
+        # Build a simplified redaction preview based on security flags
+        preview_steps = []
+        security_flags = trace.get("_security_flags", [])
+        flagged_steps = {}
+        for flag in security_flags:
+            si = flag.get("step_index", -1)
+            if si not in flagged_steps:
+                flagged_steps[si] = []
+            flagged_steps[si].append(flag)
+
+        steps = trace.get("steps", [])
+        total_fields = 0
+        redacted_fields = 0
+
+        for i, step in enumerate(steps):
+            total_fields += 1  # content
+            if step.get("tool_calls"):
+                total_fields += len(step["tool_calls"])
+            if step.get("observations"):
+                total_fields += len(step["observations"])
+
+            if i in flagged_steps:
+                redactions = []
+                for flag in flagged_steps[i]:
+                    redactions.append({
+                        "field": f"steps[{i}].content",
+                        "reason": flag.get("reason", "security flag"),
+                        "before": (step.get("content") or "")[:80] + "...",
+                        "after": "[REDACTED]",
+                    })
+                    redacted_fields += 1
+                if redactions:
+                    preview_steps.append({
+                        "step_index": i,
+                        "redactions": redactions,
+                    })
+
+        signal_kept = round(1.0 - (redacted_fields / max(total_fields, 1)), 2)
+
+        return jsonify({
+            "trace_id": trace_id,
+            "steps": preview_steps,
+            "signal_kept": signal_kept,
+        })
+
+    @app.route("/api/push", methods=["POST"])
+    def api_push():
+        """Push staged sessions to HF Hub."""
+        traces = _traces()
+
+        # Guard against pushing sample data
+        if _is_sample_data(traces, staging_path):
+            return jsonify({"error": "Cannot push sample data. Parse real sessions first."}), 400
+
+        req_data = request.get_json(silent=True) or {}
+        requested_commit_id = req_data.get("commit_id")
+        state = _get_state()
+
+        committed_entries = state.get_committed_traces()
+        if requested_commit_id:
+            group = state.get_commit_group(requested_commit_id)
+            if group is None:
+                return jsonify({"error": f"Unknown commit {requested_commit_id}"}), 404
+            committed_ids = set(group.trace_ids)
+        else:
+            committed_ids = set(committed_entries.keys())
+
+        committed = [t for t in traces if t["trace_id"] in committed_ids]
+        if not committed and not requested_commit_id:
+            committed = [t for t in traces if _get_review_status(t["trace_id"]) == "staged"]
+        if not committed:
+            return jsonify({"error": "No staged sessions to push"}), 400
+
+        # Try the real upload pipeline
+        try:
+            from ..publish.huggingface.upload import HFUploader
+            from opentraces_schema import TraceRecord
+
+            cfg = load_config()
+            if not cfg.hf_token:
+                for t in committed:
+                    state.set_trace_status(t["trace_id"], TraceStatus.UPLOADED)
+                return jsonify({
+                    "status": "pushed",
+                    "count": len(committed),
+                    "trace_ids": [t["trace_id"] for t in committed],
+                    "message": f"{len(committed)} committed session(s) queued. Set HF_TOKEN to push to Hub.",
+                    "needs_token": True,
+                })
+
+            records = [TraceRecord.model_validate(t) for t in committed]
+            ctx = _context()
+            username = ctx.get("username") or "unknown"
+            repo_id = ctx.get("remote") or f"{username}/opentraces"
+
+            uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
+            uploader.ensure_repo_exists()
+            result = uploader.upload_traces(records)
+
+            if result.success:
+                for t in committed:
+                    state.set_trace_status(t["trace_id"], TraceStatus.UPLOADED)
+                return jsonify({
+                    "status": "pushed",
+                    "count": result.trace_count,
+                    "shard": result.shard_name,
+                    "repo_url": result.repo_url,
+                    "message": f"Pushed {result.trace_count} committed session(s) to {repo_id}",
+                })
+            else:
+                return jsonify({"error": f"Upload failed: {result.error}"}), 500
+
+        except ImportError:
+            logger.debug("Upload module not available, queuing sessions", exc_info=True)
+            for t in committed:
+                state.set_trace_status(t["trace_id"], TraceStatus.UPLOADED)
+            return jsonify({
+                "status": "pushed",
+                "count": len(committed),
+                "trace_ids": [t["trace_id"] for t in committed],
+                "message": f"{len(committed)} committed session(s) queued (upload module not available)",
+            })
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    @app.route("/api/graph")
+    def api_graph():
+        """Commit graph with trace attribution (commit-primary or trace-primary)."""
+        from . import graph_api
+        try:
+            limit = int(request.args.get("limit", 20))
+        except (TypeError, ValueError):
+            limit = 20
+        try:
+            page = int(request.args.get("page", 1))
+        except (TypeError, ValueError):
+            page = 1
+        trace_id = request.args.get("trace") or None
+        since = request.args.get("since") or None
+        until = request.args.get("until") or None
+        show_entities = request.args.get("entities", "1") != "0"
+        try:
+            commits = graph_api.load_graph(
+                project_dir,
+                limit=limit, page=page, trace_id=trace_id,
+                since=since, until=until, show_entities=show_entities,
+            )
+        except Exception as e:
+            logger.exception("graph load failed")
+            return jsonify({"error": str(e), "commits": []}), 500
+        return jsonify({"commits": commits})
+
+    @app.route("/api/blame/<sha>")
+    def api_blame(sha: str):
+        """Forward blame for a commit: coverage + session + file breakdown."""
+        import re as _re
+        if not _re.match(r"^[0-9a-fA-F]{4,40}$", sha):
+            return jsonify({"error": "Invalid sha"}), 400
+        from . import graph_api
+        data = graph_api.load_blame(project_dir, sha)
+        if data is None:
+            return jsonify({"error": "No attribution for this commit"}), 404
+        return jsonify(data)
+
+    @app.route("/api/trace/<trace_id>/commits")
+    def api_trace_commits(trace_id: str):
+        """Inverse blame: which commits this trace contributed to."""
+        import re as _re
+        if not _re.match(r"^[a-fA-F0-9-]+$", trace_id):
+            return jsonify({"error": "Invalid trace id"}), 400
+        from . import graph_api
+        data = graph_api.load_inverse_blame(project_dir, trace_id)
+        return jsonify(data)
+
+    def _compute_stats(traces: list[dict[str, Any]]) -> dict[str, Any]:
+        """Compute dashboard statistics."""
+        total = len(traces)
+        staged = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "staged")
+        pushed = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "pushed")
+        rejected = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "rejected")
+        inbox = total - staged - pushed - rejected
+
+        total_tokens = sum(
+            t.get("metrics", {}).get("total_input_tokens", 0)
+            + t.get("metrics", {}).get("total_output_tokens", 0)
+            for t in traces
+        )
+        total_tool_calls = sum(
+            sum(len(s.get("tool_calls", [])) for s in t.get("steps", []))
+            for t in traces
+        )
+        total_cost = sum(
+            t.get("metrics", {}).get("estimated_cost_usd", 0) or 0
+            for t in traces
+        )
+        total_flags = sum(len(t.get("_security_flags", [])) for t in traces)
+
+        # Determine if security scanning was applied
+        security_tier = None
+        for t in traces:
+            scanned = t.get("security", {}).get("scanned")
+            if scanned is not None:
+                security_tier = "Scanned" if scanned else "Unscanned"
+                break
+
+        return {
+            "total": total,
+            "inbox": inbox,
+            "staged": staged,
+            "pushed": pushed,
+            "rejected": rejected,
+            "total_tokens": total_tokens,
+            "total_tool_calls": total_tool_calls,
+            "total_cost_usd": round(total_cost, 4),
+            "total_security_flags": total_flags,
+            "security_tier": security_tier,
+        }
+
+    return app

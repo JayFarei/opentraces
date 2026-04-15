@@ -58,22 +58,29 @@ def _command_path(ctx: click.Context) -> str:
 
 
 def _render_header(ctx: click.Context, formatter: click.HelpFormatter) -> None:
-    """Write the shared banner + title bar at the top of every help screen."""
-    # Lazy import: avoid a circular import during package initialization.
+    """Write the title bar (and, at the root, the banner) for help screens.
+
+    The ASCII banner + tagline only render for ``opentraces --help`` since
+    they're branding. Every subcommand/group gets just the highlighted
+    title bar, which is the space-efficient "you are here" anchor.
+    """
     from ..core.workflow import OPENTRACES_ASCII, OPENTRACES_TAGLINE
     from .. import __version__
 
-    formatter.write(click.style(OPENTRACES_ASCII, dim=True) + "\n")
-    formatter.write(
-        "\n  " + click.style(OPENTRACES_TAGLINE, bold=True)
-        + click.style(f"   v{__version__}", dim=True)
-        + "\n\n"
-    )
+    is_root = ctx.parent is None
+    if is_root:
+        formatter.write(click.style(OPENTRACES_ASCII, dim=True) + "\n")
+        formatter.write(
+            "\n  " + click.style(OPENTRACES_TAGLINE, bold=True)
+            + click.style(f"   v{__version__}", dim=True)
+            + "\n\n"
+        )
     path = _command_path(ctx)
     # Filled menu-title: reverse-video cyan bar. Click strips ANSI when
     # stdout is not a TTY, so the same output works in pipes.
     bar = click.style(f"  {path}  ", fg="black", bg="cyan", bold=True)
-    formatter.write("  " + bar + "\n\n")
+    prefix = "  " if is_root else ""
+    formatter.write(prefix + bar + "\n\n")
 
 
 class OpentracesCommand(click.Command):

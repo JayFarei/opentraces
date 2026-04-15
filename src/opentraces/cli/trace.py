@@ -15,7 +15,25 @@ import click
 
 from opentraces import cli as _cli
 from ._help import OpentracesCommand
+from ..core.trace_meta import short_trace_id
 from ..core.workflow import resolve_visible_stage, stage_label  # noqa: F401
+
+
+def _resolve_trace_id(trace_id: str) -> str | None:
+    """Resolve a short-id or ``t:`` prefix to the canonical full trace_id.
+
+    Returns the full id on a unique match, ``None`` on no match or
+    ambiguous prefix. Keeps reject/reset/discard behaviourally consistent
+    with show/resume/redact which already accept short forms.
+    """
+    from ..core.trace_meta import (
+        AmbiguousPrefixError,
+        resolve_trace_id_prefix,
+    )
+    try:
+        return resolve_trace_id_prefix(Path.cwd(), trace_id)
+    except (AmbiguousPrefixError, ValueError):
+        return None
 
 logger = logging.getLogger("opentraces.cli.trace")
 
@@ -69,22 +87,29 @@ def _load_project_state():
 def _load_trace_record(staging_dir: Path, trace_id: str):
     """Load a TraceRecord from staging by trace_id.
 
-    Accepts the full UUID or a unique prefix (>=4 chars) matching exactly
-    one staging file. Ambiguous prefixes return (None, None).
+    Accepts the full ``<agent>_<uuid>`` id or a unique prefix of either
+    the full id or its session-uuid portion (>=2 chars). Also strips the
+    ``t:`` CLI-ish form. Ambiguous or unknown prefixes return
+    ``(None, None)``.
     """
     from opentraces_schema import TraceRecord
 
-    # Exact file first (fast path for full UUIDs).
-    staging_file = staging_dir / f"{trace_id}.jsonl"
+    # Strip the `t:` decorative prefix from graph output.
+    probe = trace_id[2:] if trace_id[:2].lower() == "t:" else trace_id
+
+    # Exact file first (fast path for full ids).
+    staging_file = staging_dir / f"{probe}.jsonl"
     if not staging_file.exists():
-        # Prefix match fallback — only if user gave at least 4 chars.
-        if len(trace_id) < 4:
+        if len(probe) < 2:
             return None, staging_file
-        matches = list(staging_dir.glob(f"{trace_id}*.jsonl"))
+        # Match either a left-anchored prefix (full `<agent>_<uuid>` form)
+        # or anywhere-inside match that catches bare session-uuid prefixes
+        # like ``b0ea2e9e`` against files named ``claude-code_b0ea2e9e-*.jsonl``.
+        matches = sorted({*staging_dir.glob(f"{probe}*.jsonl"),
+                          *staging_dir.glob(f"*_{probe}*.jsonl")})
         if not matches:
             return None, staging_file
         if len(matches) > 1:
-            # Ambiguous prefix.
             return None, staging_file
         staging_file = matches[0]
 
@@ -198,7 +223,7 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
         if len(task) > 80:
             task = task[:79] + "…"
         return (
-            f"{s['trace_id'][:8]}",
+            short_trace_id(s['trace_id']),
             f"[dim]{s['relative_time']}[/]",
             task,
         )
@@ -239,14 +264,31 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
     })
 
 
-@click.command("show", cls=OpentracesCommand)
+@click.command(
+    "show",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces show abc12",
+        "opentraces show abc12 --verbose",
+        "opentraces show abc12 --markdown",
+    ],
+    see_also=[
+        ("opentraces list", "browse trace ids."),
+        ("opentraces resume", "reopen the session behind a trace."),
+    ],
+)
 @click.argument("trace_id")
-@click.option("--verbose", is_flag=True, default=False, help="Show full step content (default: truncated to 500 chars)")
+@click.option("--verbose", is_flag=True, default=False, help="Show full step content (default: truncated to 500 chars).")
 @click.option("--markdown", is_flag=True, default=False,
               help="Emit the trace wrapped in random-token boundaries with "
                    "a historical-context preamble.")
 def trace_show(trace_id: str, verbose: bool, markdown: bool) -> None:
-    """Show full detail for a trace."""
+    """Show full detail for a trace.
+
+    Prints the prompt, steps, tool calls, and outcome for a single trace.
+    Default output truncates long step content; use ``--verbose`` to
+    unlimit and ``--markdown`` to pipe into an LLM-friendly wrapper.
+    """
     state, staging_dir = _load_project_state()
     record, staging_file = _load_trace_record(staging_dir, trace_id)
 
@@ -310,7 +352,7 @@ def trace_show(trace_id: str, verbose: bool, markdown: bool) -> None:
         # session identifier (foreign concept). The label makes that explicit.
         human_echo(
             f"{_cli._dim('Source session:')} {record.session_id[:18]}…  "
-            f"{_cli._dim(f'(opentraces resume {record.trace_id[:8]})')}"
+            f"{_cli._dim(f'(opentraces resume {short_trace_id(record.trace_id)})')}"
         )
 
     # Reverse-view: which commits did this trace produce?
@@ -360,7 +402,7 @@ def _trace_commit_impl(trace_id: str) -> None:
         sys.exit(6)
 
     # Build a commit message from the trace task description
-    message = trace_id[:12]
+    message = short_trace_id(trace_id, 12)
     try:
         if entry.file_path:
             from opentraces_schema import TraceRecord
@@ -373,7 +415,7 @@ def _trace_commit_impl(trace_id: str) -> None:
 
     from ..core.review import commit_single
     commit_id = commit_single(state, trace_id, message)
-    human_echo(f"Committed: {trace_id[:8]} (commit {commit_id})")
+    human_echo(f"Committed: {short_trace_id(trace_id)} (commit {commit_id})")
 
     emit_json({
         "status": "ok",
@@ -385,12 +427,28 @@ def _trace_commit_impl(trace_id: str) -> None:
     })
 
 
-@click.command("reject", cls=OpentracesCommand)
+@click.command(
+    "reject",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces reject abc12",
+    ],
+    see_also=[
+        ("opentraces reset", "bring a rejected trace back to Inbox."),
+        ("opentraces discard", "permanently delete it instead."),
+    ],
+)
 @click.argument("trace_id")
 def trace_reject(trace_id: str) -> None:
-    """Reject a trace (kept local only, not pushed)."""
+    """Reject a trace (kept local only, not pushed).
+
+    Use reject when a trace has content you don't want to share but want
+    to keep on disk for reference. To push it later, reset first.
+    """
     from ..core.state import TraceStatus
 
+    full_id = _resolve_trace_id(trace_id) or trace_id
+    trace_id = full_id
     state, staging_dir = _load_project_state()
     entry = state.get_trace(trace_id)
     if entry is None:
@@ -400,7 +458,7 @@ def trace_reject(trace_id: str) -> None:
 
     from ..core.review import reject_trace
     reject_trace(state, trace_id, with_session_kwarg=False)
-    human_echo(f"Rejected: {trace_id[:8]}")
+    human_echo(f"Rejected: {short_trace_id(trace_id)}")
 
     emit_json({
         "status": "ok",
@@ -409,12 +467,28 @@ def trace_reject(trace_id: str) -> None:
     })
 
 
-@click.command("reset", cls=OpentracesCommand)
+@click.command(
+    "reset",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces reset abc12",
+    ],
+    see_also=[
+        ("opentraces add", "stage it for push once it's back in Inbox."),
+        ("opentraces list", "see what's currently in each stage."),
+    ],
+)
 @click.argument("trace_id")
 def trace_reset(trace_id: str) -> None:
-    """Reset a trace back to Inbox."""
+    """Reset a trace back to Inbox.
+
+    Reverses reject, approve, or add. Only legal from APPROVED, REJECTED,
+    STAGED, or COMMITTED. Already-uploaded traces can't be reset.
+    """
     from ..core.state import TraceStatus
 
+    full_id = _resolve_trace_id(trace_id) or trace_id
+    trace_id = full_id
     state, staging_dir = _load_project_state()
     entry = state.get_trace(trace_id)
     if entry is None:
@@ -432,7 +506,7 @@ def trace_reset(trace_id: str) -> None:
 
     from ..core.review import reset_to_staged
     reset_to_staged(state, trace_id)
-    human_echo(f"Reset to inbox: {trace_id[:8]}")
+    human_echo(f"Reset to inbox: {short_trace_id(trace_id)}")
 
     emit_json({
         "status": "ok",
@@ -441,17 +515,34 @@ def trace_reset(trace_id: str) -> None:
     })
 
 
-@click.command("discard", cls=OpentracesCommand)
+@click.command(
+    "discard",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces discard abc12",
+        "opentraces discard abc12 --yes",
+    ],
+    see_also=[
+        ("opentraces reject", "keep the file but mark it local-only."),
+    ],
+)
 @click.argument("trace_id")
-@click.option("--yes", "confirmed", is_flag=True, help="Skip confirmation")
+@click.option("--yes", "confirmed", is_flag=True, help="Skip confirmation.")
 def trace_discard(trace_id: str, confirmed: bool) -> None:
-    """Permanently delete a staged trace."""
+    """Permanently delete a staged trace.
+
+    Destructive: removes the trace file and state entry from disk.
+    Prompts unless ``--yes`` is passed. For a soft keep-local use
+    ``opentraces reject``.
+    """
     import re as _re
 
-    if not _re.match(r'^[a-f0-9-]+$', trace_id):
+    if not _re.match(r'^[a-f0-9-:]+$', trace_id):
         click.echo("Invalid trace ID format.")
         sys.exit(2)
 
+    full_id = _resolve_trace_id(trace_id) or trace_id
+    trace_id = full_id
     state, staging_dir = _load_project_state()
     staging_file = staging_dir / f"{trace_id}.jsonl"
 
@@ -461,14 +552,14 @@ def trace_discard(trace_id: str, confirmed: bool) -> None:
         sys.exit(6)
 
     if not confirmed and _is_interactive_terminal():
-        if not click.confirm(f"Permanently delete {trace_id[:8]}?"):
+        if not click.confirm(f"Permanently delete {short_trace_id(trace_id)}?"):
             click.echo("Cancelled.")
             return
 
     from ..core.review import discard_trace
     discard_trace(state, trace_id, staging_file=staging_file)
 
-    human_echo(f"Discarded: {trace_id[:8]}")
+    human_echo(f"Discarded: {short_trace_id(trace_id)}")
 
     emit_json({
         "status": "ok",
@@ -486,7 +577,18 @@ def trace_discard(trace_id: str, confirmed: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-@click.command("resume", cls=OpentracesCommand)
+@click.command(
+    "resume",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces resume abc12",
+        "opentraces resume abc12 --dry-run",
+    ],
+    see_also=[
+        ("opentraces show", "inspect the trace before resuming."),
+        ("opentraces list", "browse trace ids."),
+    ],
+)
 @click.argument("trace_id")
 @click.option("--dry-run", "dry_run", is_flag=True,
               help="Print the resume command instead of exec'ing it.")

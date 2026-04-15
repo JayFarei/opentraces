@@ -1,0 +1,70 @@
+import type { Theme } from "../tokens";
+import { F } from "../tokens";
+
+function Fmt({ text, t }: { text: string; t: Theme }) {
+  const parts: React.ReactNode[] = [];
+  let rem = text, k = 0;
+  while (rem.length > 0) {
+    const bm = rem.match(/\*\*(.+?)\*\*/);
+    const cm = rem.match(/`(.+?)`/);
+    let pick: { tp: "b" | "c"; m: RegExpMatchArray; i: number } | null = null;
+    let pickI = Infinity;
+    if (bm && bm[0] && rem.indexOf(bm[0]) < pickI) {
+      pick = { tp: "b", m: bm, i: rem.indexOf(bm[0]) }; pickI = pick.i;
+    }
+    if (cm && cm[0] && rem.indexOf(cm[0]) < pickI) {
+      pick = { tp: "c", m: cm, i: rem.indexOf(cm[0]) }; pickI = pick.i;
+    }
+    if (!pick) { parts.push(<span key={k++}>{rem}</span>); break; }
+    if (pickI > 0) parts.push(<span key={k++}>{rem.slice(0, pickI)}</span>);
+    const inner = pick.m[1] ?? "";
+    if (pick.tp === "b") {
+      parts.push(<span key={k++} style={{ color: t.text, fontWeight: 600 }}>{inner}</span>);
+    } else {
+      parts.push(
+        <span key={k++} style={{
+          fontFamily: F.code, fontSize: 11, color: t.cyan,
+          background: `${t.cyan}10`, padding: "1px 4px",
+        }}>{inner}</span>,
+      );
+    }
+    rem = rem.slice(pickI + (pick.m[0]?.length ?? 0));
+  }
+  return <>{parts}</>;
+}
+
+export function RichText({ text, t }: { text: string; t: Theme }) {
+  return (
+    <div>
+      {text.split("\n").map((line, li) => {
+        const num = line.match(/^(\d+)\.\s(.*)$/);
+        if (num) {
+          return (
+            <div key={li} style={{ display: "flex", gap: 6, marginBottom: 2 }}>
+              <span style={{ color: t.textDim, minWidth: 16, textAlign: "right" }}>{num[1]}.</span>
+              <span><Fmt text={num[2] ?? ""} t={t} /></span>
+            </div>
+          );
+        }
+        if (line.startsWith("- ")) {
+          return (
+            <div key={li} style={{ display: "flex", gap: 6, paddingLeft: 4, marginBottom: 2 }}>
+              <span style={{ color: t.textDim }}>-</span>
+              <span><Fmt text={line.slice(2)} t={t} /></span>
+            </div>
+          );
+        }
+        const bh = line.match(/^\*\*(.+?)\*\*$/);
+        if (bh) {
+          return (
+            <div key={li} style={{ color: t.text, fontWeight: 600, marginTop: 10, marginBottom: 4 }}>
+              <Fmt text={bh[1] ?? ""} t={t} />
+            </div>
+          );
+        }
+        if (!line.trim()) return <div key={li} style={{ height: 10 }} />;
+        return <div key={li} style={{ marginBottom: 2 }}><Fmt text={line} t={t} /></div>;
+      })}
+    </div>
+  );
+}

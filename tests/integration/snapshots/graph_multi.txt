@@ -1,5 +1,5 @@
-┊╭┄t:traceone  [10 lines · scattered] <final>
-┊├┄t:tracetwo  [5 lines · scattered] <provisional>
-┊├┄t:tracethr  [3 lines · scattered] <final>
+┊╭┄s:traceone  [10 lines · scattered] <final>
+┊├┄s:tracetwo  [5 lines · scattered] <provisional>
+┊├┄s:tracethr  [3 lines · scattered] <final>
 ┊●   c:{sha7}  add a  100%
 ├╯

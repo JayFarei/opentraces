@@ -1,124 +1,169 @@
-import type {
-  AppContext,
-  TraceListItem,
-  TraceRecord,
-  RedactionPreview,
-} from "../types/trace";
+const API = "";
 
-const API_BASE = ""; // proxied by Vite dev server
-
-async function request<T>(
-  path: string,
-  options?: RequestInit,
-): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
     headers: { "Content-Type": "application/json" },
-    ...options,
+    ...init,
   });
   if (!res.ok) {
     const body = await res.text().catch(() => res.statusText);
-    throw new Error(`${String(res.status)} ${path}: ${body}`);
+    throw new Error(`${res.status} ${path}: ${body}`);
   }
   return res.json() as Promise<T>;
 }
 
-interface RawTrace {
+async function pingLifecycle(clientId: string): Promise<void> {
+  await fetch(`${API}/api/_lifecycle/ping`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId }),
+  });
+}
+
+async function quitLifecycle(clientId: string): Promise<void> {
+  await fetch(`${API}/api/_lifecycle/quit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId }),
+  });
+}
+
+function disconnectLifecycle(clientId: string): void {
+  const path = `${API}/api/_lifecycle/disconnect?client_id=${encodeURIComponent(clientId)}`;
+  if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+    navigator.sendBeacon(path, "");
+    return;
+  }
+  void fetch(path, { method: "POST", keepalive: true }).catch(() => {});
+}
+
+export interface TraceListItem {
   trace_id: string;
   task: string;
   agent: string;
   model: string | null;
   steps: number;
-  security_flags: number;
-  _stage: string;
-  status: string;
-  timestamp: string;
   tool_calls: number;
+  timestamp: string;
+  status: string;
+  _stage: "inbox" | "staged" | "pushed" | "rejected" | "blocked";
+  security_flags: number;
   project: string;
+  llm_review?: { status?: string; shareable?: boolean };
 }
 
-const VALID_STAGES = new Set(["inbox", "staged", "pushed", "rejected"]);
+export interface AppContext {
+  project_name: string;
+  remote: string | null;
+  review_policy: string;
+  push_policy: string;
+  authenticated: boolean;
+  username: string | null;
+}
 
-function mapTrace(raw: RawTrace): TraceListItem {
-  const rawStage = raw._stage ?? "inbox";
-  return {
-    trace_id: raw.trace_id,
-    task_description: raw.task ?? "",
-    agent_name: raw.agent ?? "unknown",
-    model: raw.model ?? "unknown",
-    step_count: raw.steps ?? 0,
-    flag_count: raw.security_flags ?? 0,
-    stage: (VALID_STAGES.has(rawStage) ? rawStage : "inbox") as TraceListItem["stage"],
-    timestamp: raw.timestamp ?? "",
+export interface TraceStep {
+  step_index: number;
+  role: "user" | "agent" | "system";
+  content: string | null;
+  reasoning_content?: string | null;
+  model?: string | null;
+  tool_calls?: { tool_call_id?: string; tool_name: string; input: unknown; duration_ms?: number }[];
+  observations?: { source_call_id?: string; tool_name?: string; content?: string; output_summary?: string; error?: string | null }[];
+  timestamp?: string;
+}
+
+export interface TraceRecord {
+  trace_id: string;
+  task: { description: string };
+  agent: { name: string; model: string };
+  steps: TraceStep[];
+  timestamp_start: string;
+  metrics: {
+    total_steps: number;
+    total_input_tokens: number;
+    total_output_tokens: number;
+    estimated_cost_usd: number;
   };
+  _security_flags?: { type: string; reason: string; severity: string }[];
+  _stage?: string;
 }
 
-export async function fetchTraces(): Promise<TraceListItem[]> {
-  const raw = await request<RawTrace[]>("/api/traces");
-  return raw.map(mapTrace);
+export interface GraphTrace {
+  id: string;
+  trace_id: string;
+  canonical: boolean;
+  lines: number;
+  short_name: string | null;
+  changes?: string;
+  fns?: string;
+  info?: string;
 }
 
-export async function fetchAppContext(): Promise<AppContext> {
-  return request<AppContext>("/api/context");
+export interface GraphCommit {
+  id: string;
+  sha: string;
+  msg: string;
+  timestamp: string;
+  pct: number;
+  coverage_role: "green" | "yellow" | "red";
+  traces: GraphTrace[];
 }
 
-export async function fetchTrace(traceId: string): Promise<TraceRecord> {
-  return request<TraceRecord>(`/api/trace/${traceId}/detail`);
+export interface BlameSession {
+  id: string;
+  trace_id: string;
+  name: string;
+  lines: number;
+  pct: string;
+  model: string;
+  entities: string;
+  canonical: boolean;
 }
 
-export async function addTrace(traceId: string): Promise<void> {
-  await request<unknown>(`/api/trace/${traceId}/add`, { method: "POST" });
+export interface BlamePayload {
+  sha: string;
+  id: string;
+  msg: string;
+  pct: number;
+  coverage: string;
+  attributed: string;
+  fileCount: number;
+  sessions: BlameSession[];
+  files: { path: string; total: number; attr: number }[];
 }
 
-export async function rejectTrace(traceId: string): Promise<void> {
-  await request<unknown>(`/api/trace/${traceId}/reject`, { method: "POST" });
+export interface InverseBlame {
+  trace: { id: string; trace_id: string; name: string; lines: number; model: string };
+  commits: { id: string; sha: string; msg: string; linesInCommit: number; totalCommitLines: number; pct: string }[];
+  files: { path: string; lines: number }[];
 }
 
-export async function redactStep(
-  traceId: string,
-  stepIndex: number,
-): Promise<void> {
-  await request<unknown>(
-    `/api/trace/${traceId}/step/${String(stepIndex)}/redact`,
-    { method: "POST" },
-  );
-}
-
-export async function addTraces(
-  traceIds: string[],
-  message: string,
-): Promise<{ commit_id: string | null; session_count: number }> {
-  return request<{ commit_id: string | null; session_count: number }>(
-    "/api/add",
-    {
-      method: "POST",
-      body: JSON.stringify({ trace_ids: traceIds, message }),
-    },
-  );
-}
-
-export async function pushCommit(
-  commitId?: string,
-): Promise<{ hf_commit_sha: string }> {
-  return request<{ hf_commit_sha: string }>("/api/push", {
-    method: "POST",
-    body: JSON.stringify(commitId ? { commit_id: commitId } : {}),
-  });
-}
-
-export async function setRemote(
-  remote: string,
-): Promise<{ status: string; remote: string }> {
-  return request<{ status: string; remote: string }>("/api/remote", {
-    method: "POST",
-    body: JSON.stringify({ remote }),
-  });
-}
-
-export async function fetchRedactionPreview(
-  traceId: string,
-  tier: number,
-): Promise<RedactionPreview> {
-  return request<RedactionPreview>(
-    `/api/trace/${traceId}/redaction-preview?tier=${String(tier)}`,
-  );
-}
+export const api = {
+  traces: () => req<TraceListItem[]>("/api/traces"),
+  context: () => req<AppContext>("/api/context"),
+  lifecyclePing: (clientId: string) => pingLifecycle(clientId),
+  lifecycleDisconnect: (clientId: string) => disconnectLifecycle(clientId),
+  quit: (clientId: string) => quitLifecycle(clientId),
+  trace: (id: string) => req<TraceRecord>(`/api/trace/${id}/detail`),
+  graph: (params: { limit?: number; page?: number; trace?: string; entities?: boolean } = {}) => {
+    const q = new URLSearchParams();
+    if (params.limit) q.set("limit", String(params.limit));
+    if (params.page) q.set("page", String(params.page));
+    if (params.trace) q.set("trace", params.trace);
+    if (params.entities === false) q.set("entities", "0");
+    return req<{ commits: GraphCommit[] }>(`/api/graph?${q.toString()}`);
+  },
+  blame: (sha: string) => req<BlamePayload>(`/api/blame/${sha}`),
+  inverseBlame: (traceId: string) => req<InverseBlame>(`/api/trace/${traceId}/commits`),
+  addTrace: (id: string) => req<unknown>(`/api/trace/${id}/add`, { method: "POST" }),
+  unstage: (id: string) => req<unknown>(`/api/trace/${id}/unstage`, { method: "POST" }),
+  reject: (id: string) => req<unknown>(`/api/trace/${id}/reject`, { method: "POST" }),
+  push: (commitId?: string) =>
+    req<{ status?: string; count?: number; message?: string; error?: string }>(
+      "/api/push", { method: "POST", body: JSON.stringify(commitId ? { commit_id: commitId } : {}) },
+    ),
+  addBatch: (ids: string[], message: string) =>
+    req<{ commit_id: string | null }>("/api/add", {
+      method: "POST", body: JSON.stringify({ trace_ids: ids, message }),
+    }),
+};

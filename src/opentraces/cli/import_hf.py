@@ -10,6 +10,7 @@ import click
 
 from opentraces import cli as _cli
 from . import main
+from ..core.trace_meta import short_trace_id
 
 logger = logging.getLogger("opentraces.cli.import_hf")
 
@@ -267,7 +268,7 @@ def import_hf(
                 task_desc = record.task.description or record.session_id
                 state.create_commit_group(
                     [result.record.trace_id],
-                    task_desc[:80] if task_desc else result.record.trace_id[:12],
+                    task_desc[:80] if task_desc else short_trace_id(result.record.trace_id, 12),
                 )
             else:
                 state.set_trace_status(

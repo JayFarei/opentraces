@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import fcntl
 import logging
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -127,15 +128,19 @@ class ScanReport:
 # --------------------------------------------------------------------------- #
 
 def _trace_id_for(session_id: str, generation: int) -> str:
-    """Deterministic trace_id from (session, generation).
+    """Mint a fresh, opaque trace_id per the schema contract.
 
-    Generation 1 omits the suffix so it matches the historical
-    ``claude-code_<session>`` format already used elsewhere in the
-    codebase. Later generations append ``_g<N>``.
+    ``trace_id`` is an opentraces-canonical random UUID (see
+    ``field_intent.yaml``), deliberately independent of any upstream-agent
+    identifier. The upstream ``session_id`` lives in its own field on the
+    record; do not encode it in the trace_id.
+
+    Idempotent re-ingest does not rely on a deterministic trace_id: the
+    caller guards via ``state.latest_generation(session_id)`` before
+    minting, so the same transcript re-parsed still no-ops. Generation
+    numbers are tracked in the session record, not in the id string.
     """
-    if generation == 1:
-        return f"claude-code_{session_id}"
-    return f"claude-code_{session_id}_g{generation}"
+    return str(uuid.uuid4())
 
 
 def _lock_path_for(project_dir: Path, session_id: str) -> Path:
@@ -292,6 +297,7 @@ def _ingest_locked(
     if latest_gen is None:
         # Brand new session. Generation 1.
         next_generation = 1
+        trace_id = _trace_id_for(session_id, next_generation)
     else:
         current_status = _current_trace_status(state, latest_gen.trace_id)
         if current_status in _TERMINAL_STATUSES:
@@ -299,10 +305,12 @@ def _ingest_locked(
             next_generation = latest_gen.generation + 1
             supersedes = latest_gen.trace_id
             supersedes_reason = "resume"
+            trace_id = _trace_id_for(session_id, next_generation)
         else:
+            # Refresh in place: keep the existing canonical trace_id so the
+            # record's identity is stable across re-ingest.
             next_generation = latest_gen.generation
-
-    trace_id = _trace_id_for(session_id, next_generation)
+            trace_id = latest_gen.trace_id
 
     # Parse. The parser returns None if the quality gate filters out the
     # session (no meaningful content yet). We treat that as a clean skip

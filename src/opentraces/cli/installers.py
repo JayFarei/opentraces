@@ -13,6 +13,7 @@ import click
 from opentraces import cli as _cli
 from . import main
 from ..core.config import save_config  # noqa: F401
+from ..core.trace_meta import short_trace_id
 
 
 def load_config():
@@ -280,7 +281,7 @@ def _run_setup_wizard() -> None:
 def blame_cmd(commit: str, json_out: bool) -> None:
     """Resolve a commit to the traces behind it.
 
-    COMMIT is any git ref — a sha (short or full), branch name, or `HEAD~N`.
+    COMMIT is any git ref: a sha (short or full), branch name, or `HEAD~N`.
     Traces are linked via `refs/notes/opentraces` written by the post-commit
     hook (install with ``opentraces setup git``).
     """
@@ -381,7 +382,7 @@ def resume_cmd(trace_id: str, do_exec: bool) -> None:
 
     human_echo(f"{_cli._dim('session:')} {target.session_id}")
     human_echo(f"{_cli._dim('run:')}     {_cli._bold(target.command)}")
-    human_echo(f"{_cli._dim('or:')}      opentraces resume {trace_id[:8]} --exec")
+    human_echo(f"{_cli._dim('or:')}      opentraces resume {short_trace_id(trace_id)} --exec")
     emit_json({
         "trace_id": target.trace_id,
         "session_id": target.session_id,
@@ -1275,13 +1276,28 @@ def setup_review_policy_cmd(
     })
 
 
-@main.command("doctor")
+@main.command(
+    "doctor",
+    examples=[
+        "opentraces doctor",
+        "opentraces doctor --security",
+    ],
+    see_also=[
+        ("opentraces setup", "install or configure a missing integration."),
+        ("opentraces status", "project-level snapshot instead of pipeline."),
+    ],
+)
 @click.option(
     "--security", "security_only", is_flag=True,
     help="Show only the security pipeline subview (versions + tiers).",
 )
 def doctor_cmd(security_only: bool) -> None:
-    """Report security pipeline and integration health."""
+    """Report security pipeline and integration health.
+
+    Probes every configured integration (hooks, scanners, LLM review,
+    post-processors) and reports versions, tier status, and any
+    actionable failures. Exits non-zero if a required tier is broken.
+    """
     from ..core import doctor
 
     cfg = load_config()
@@ -1775,7 +1791,7 @@ def _persist_llm_verdicts(staging_dir: Path, outcome, state) -> None:
               default="all",
               help="Which traces to review: 'all' (every trace in staging; default), "
                    "'inbox' (Inbox-stage only, pre-add), "
-                   "'staged' (Staged-stage only — second line of defence before push)")
+                   "'staged' (Staged-stage only, second line of defence before push).")
 @click.option("--trace", "trace_ids", multiple=True,
               help="Target specific trace(s) by id (full or short prefix). "
                    "Repeatable. Overrides --scope when set.")
@@ -1993,7 +2009,7 @@ def setup_entity_parser(force: bool) -> None:
 
     The entity parser is a separate binary (distributed via the opentraces
     release channel) that turns a commit diff into a structured entity
-    change list — added/modified/renamed/deleted functions, classes, etc.
+    change list: added/modified/renamed/deleted functions, classes, etc.
     It powers the richer side of `opentraces blame` and the per-commit
     entity cache under ~/.opentraces/projects/<slug>/entities/.
 

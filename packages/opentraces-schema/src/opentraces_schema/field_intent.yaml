@@ -3,11 +3,15 @@ schema_version:
   good_example: ''
   failure_modes: []
 trace_id:
-  description: Random UUID
-  good_example: ''
+  description: Opentraces-canonical random UUIDv4. Opaque, independent of any
+    upstream-agent identifier. Must not encode session_id, agent name, or any
+    other capture-layer detail.
+  good_example: '0dd1e942-e155-489a-858d-b31c82380c0c'
   failure_modes: []
 session_id:
-  description: Claude Code session ID
+  description: Upstream-agent session identifier (e.g. Claude Code session id).
+    Kept separate from trace_id so consumers can treat trace_id as an opaque
+    canonical handle and session_id as the link back to the originating runtime.
   good_example: ''
   failure_modes: []
 content_hash:

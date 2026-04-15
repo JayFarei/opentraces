@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ...core.trace_meta import short_trace_id
+
 
 # --------------------------------------------------------------------------- #
 # Glyph alphabet (8 connectors + 2 commit dots). Everything else is illegal.
@@ -115,6 +117,15 @@ class TraceContribution:
     # Post-043 enrichment (looked up via core.trace_meta when available).
     short_name: str | None = None
     turn_count: int | None = None
+    # Inbox membership: True when ``trace_id`` has a corresponding entry in
+    # the opentraces project state (i.e. the session was ingested and has a
+    # canonical trace record). False when the attribution was derived from a
+    # raw Claude Code session JSONL that never reached our inbox — either a
+    # live mid-conversation session, one filtered out by the parse quality
+    # gate, one that predates ``ot init``, or one that was since discarded.
+    # The renderer uses this to distinguish ``t:<uuid>`` (canonical, clickable
+    # via ``ot show``) from ``s:<session>`` (attribution-only, not in inbox).
+    canonical: bool = False
 
 
 @dataclass
@@ -355,15 +366,19 @@ def _render_trace_header(trace: TraceContribution, first: bool,
     """
     key = "stack_header" if first else "stack_continue"
     prefix, _ = PREFIX[key]
-    short_tid = trace.trace_id[:8] if trace.trace_id else "?"
-    id_plain = f"t:{short_tid}"
+    short_tid = short_trace_id(trace.trace_id)
+    # Canonical (ingested) traces use ``t:``; attribution-only sessions use
+    # ``s:`` so the reader can tell at a glance which rows are clickable via
+    # ``ot show`` (canonical) and which live only in the attribution cache.
+    handle_kind = "t" if trace.canonical else "s"
+    id_plain = f"{handle_kind}:{short_tid}"
 
     # Commit-primary compact entity-summary mode: columnar layout.
     #   <prefix> <handle_10w> <state_14w>  <sep>  <summary>
     if entity_summary is not None:
         state_col, summary_col = entity_summary
         from .colors import render_handle  # local import to dodge cycles
-        handle = render_handle("t", trace.trace_id or "?",
+        handle = render_handle(handle_kind, trace.trace_id or "?",
                                use_color=opts.color)
         # Plain width of handle = len("t:XXXXXXXX") = 10 chars.
         # State column right-pad to 14. State may overflow (diffuse state);
@@ -700,12 +715,32 @@ def _paginate(commits: list[Commit], opts: RenderOptions) -> list[Commit]:
 
 def _attach_attribution(commits: list[Commit], project_cwd: Path,
                         show_entities: bool) -> list[Commit]:
-    """Read AttributionCache + optionally entity cache for each commit."""
+    """Read AttributionCache + optionally entity cache for each commit.
+
+    Also builds a ``canonical_ids`` set from the project state so each
+    ``TraceContribution`` can be tagged as canonical (ingested into the
+    opentraces inbox) vs attribution-only (seen by the hook but never
+    landed in the inbox; see ``TraceContribution.canonical`` docstring).
+    The renderer branches on this flag to render ``t:<uuid>`` for
+    canonical traces and ``s:<session>`` for attribution-only ones.
+    """
     try:
         from opentraces.core.cache import AttributionCache
     except Exception:
         return commits
     cache = AttributionCache(project_cwd)
+
+    # Membership set for canonical tagging. A trace_id is canonical iff it
+    # has a state.json entry — the single source of truth for "the user has
+    # this trace in their inbox right now."
+    canonical_ids: set[str] = set()
+    try:
+        from opentraces.core.config import get_project_state_path
+        from opentraces.core.state import StateManager
+        state = StateManager(state_path=get_project_state_path(project_cwd))
+        canonical_ids = set(state._state.get("traces", {}).keys())  # noqa: SLF001
+    except Exception:
+        canonical_ids = set()
     for c in commits:
         data = cache.read_attribution(c.sha)
         if not data:
@@ -772,6 +807,7 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
                 missing_ratio=m_ratio,
                 short_name=short_name,
                 turn_count=turn_count,
+                canonical=tid in canonical_ids,
             ))
         c.traces = contribs
         # Populate compact entity summaries via join_entities_to_traces.

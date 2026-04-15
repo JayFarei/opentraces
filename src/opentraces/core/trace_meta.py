@@ -127,6 +127,22 @@ def _strip_prefix(s: str) -> str:
     return s
 
 
+def short_trace_id(trace_id: str | None, length: int = 8) -> str:
+    """Short display form of a ``trace_id``.
+
+    Trace ids are opaque random UUIDs per the schema contract, so the
+    first ``length`` characters give a human-friendly short handle that
+    ``resolve_trace_id_prefix`` accepts directly. For legacy records
+    carrying the deprecated ``<agent>_<session_uuid>`` form, we still
+    strip the agent prefix so display stays meaningful during the
+    migration window.
+    """
+    if not trace_id:
+        return "?"
+    core = trace_id.split("_", 1)[1] if "_" in trace_id else trace_id
+    return core[:length]
+
+
 def _first_line(path: Path) -> dict | None:
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:

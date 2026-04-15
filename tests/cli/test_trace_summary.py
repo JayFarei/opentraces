@@ -132,7 +132,7 @@ def test_compact_diffuse_with_dominant():
     c = TraceContribution("t1", 3, 0.1,
                           overlap_case="diffuse", dominant_by="b73af9c8")
     state, summary = summarize_contribution_compact(c)
-    assert state == "[3 lines \u00b7 diffuse, t:b7 dominates]"
+    assert state == "[3 lines \u00b7 diffuse, b73af9c8 dominates]"
     assert summary == ""
 
 

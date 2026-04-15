@@ -341,7 +341,14 @@ def summarize_contribution_compact(
         return (f"[{n} lines \u00b7 scattered]", "")
     if case == "diffuse":
         dom = getattr(contrib, "dominant_by", None)
-        tag = f"t:{dom[:2]}" if dom else "another trace"
+        # Note: no ``t:`` prefix — this is an informational reference inside
+        # the bracketed state note, not a clickable handle. Using the handle
+        # form here made the bracket look like a second styled handle and
+        # invited users to paste it into ``ot show`` even though the
+        # bracket is just descriptive metadata. Plain short id reads cleanly
+        # alongside the dim-grey bracket paint applied by _paint_state.
+        from opentraces.core.trace_meta import short_trace_id as _short
+        tag = _short(dom) if dom else "another trace"
         n = contrib.line_count
         return (f"[{n} lines \u00b7 diffuse, {tag} dominates]", "")
     if case == "phantom":

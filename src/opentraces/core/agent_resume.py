@@ -17,6 +17,8 @@ from pathlib import Path
 
 import click
 
+from .trace_meta import short_trace_id
+
 
 def resume_claude_code(
     session_id: str,
@@ -54,7 +56,7 @@ def resume_claude_code(
         try:
             label = short_name or "untitled"
             click.echo(
-                f"Resuming claude-code session for trace {trace_id[:8]} ({label})",
+                f"Resuming claude-code session for trace {short_trace_id(trace_id)} ({label})",
                 err=True,
             )
         except Exception:

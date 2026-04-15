@@ -11,6 +11,7 @@ import click
 from opentraces import cli as _cli
 from . import main
 from .. import __version__  # noqa: F401
+from ..core.trace_meta import short_trace_id
 from ..core.workflow import resolve_visible_stage
 
 logger = logging.getLogger("opentraces.cli.inspect")
@@ -50,9 +51,22 @@ def _auth_identity(*a, **k):
 # stats and context: aggregate views for agent consumption
 # ---------------------------------------------------------------------------
 
-@main.command()
+@main.command(
+    examples=[
+        "opentraces stats",
+    ],
+    see_also=[
+        ("opentraces status", "compact snapshot of inbox + remote."),
+        ("opentraces assess", "score trace quality."),
+    ],
+)
 def stats() -> None:
-    """Show aggregate statistics for the current inbox."""
+    """Show aggregate statistics for the current inbox.
+
+    Rolls up every local trace into counts, token totals, cost
+    estimates, and a model breakdown. Useful for a one-shot "what have
+    I captured" answer.
+    """
     from ..core.config import (
         get_project_traces_dir, get_project_state_path, project_is_opted_in,
     )
@@ -404,7 +418,7 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
                 except Exception:
                     label = "(untitled)"
                 body.append(
-                    f"[tier.orphan]○[/] [trace.id]{rec.trace_id[:8]}[/]  "
+                    f"[tier.orphan]○[/] [trace.id]{short_trace_id(rec.trace_id)}[/]  "
                     f"{_truncate(label, 70)}"
                 )
             stacks.append((head, body))
@@ -438,7 +452,7 @@ def _render_graph(mode: str, limit: int, cwd: Path) -> str:
             if rec.metrics and rec.metrics.estimated_cost_usd:
                 cost_part = f" · ${rec.metrics.estimated_cost_usd:.2f}"
             head = (
-                f"[trace.id]{rec.trace_id[:8]}[/]  "
+                f"[trace.id]{short_trace_id(rec.trace_id)}[/]  "
                 f"{_truncate(label, 60)}  "
                 f"[stack.label][{steps}s{cost_part}][/]"
             )
@@ -529,7 +543,16 @@ def graph_cmd(mode: str, limit: int, no_pager: bool) -> None:
     emit_json({"status": "ok", "mode": mode, "limit": limit})
 
 
-@main.command()
+@main.command(
+    examples=[
+        "opentraces log",
+        "opentraces log --limit 0",
+    ],
+    see_also=[
+        ("opentraces list", "list every local trace, staged or not."),
+        ("opentraces status", "compact snapshot of inbox + remote."),
+    ],
+)
 @click.option(
     "--limit",
     type=int,
@@ -538,7 +561,12 @@ def graph_cmd(mode: str, limit: int, no_pager: bool) -> None:
     help="Show at most N days of history. Use 0 for no limit.",
 )
 def log(limit: int) -> None:
-    """List uploaded traces grouped by date."""
+    """List uploaded traces grouped by date.
+
+    Walks the UPLOADED stage only, so this is the post-push history:
+    what you've already shared upstream, ordered newest first by push
+    date.
+    """
     from ..core.state import StateManager, TraceStatus
     from ..core.config import project_is_opted_in
     from datetime import datetime

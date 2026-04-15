@@ -88,7 +88,15 @@ def render_handle(kind: str, full_id: str, *,
                   use_color: bool, shortcut_len: int = 2) -> str:
     """Render a 3-part ``t:b73af9c8`` style handle.
 
-    - ``kind`` is ``"t"`` or ``"c"`` (trace vs commit). Case-insensitive.
+    - ``kind`` is one of:
+        * ``"t"`` — canonical opentraces trace_id (ingested, clickable
+          via ``ot show``). Rendered with the bright trace palette.
+        * ``"c"`` — commit sha. Yellow palette.
+        * ``"s"`` — attribution-only upstream session id (NOT in the
+          opentraces inbox). Dimmed so users can see at a glance that
+          this id won't resolve via ``ot show``. See
+          ``TraceContribution.canonical`` for the semantic split.
+      Case-insensitive. Unknown kinds fall back to ``"t"``.
     - ``full_id`` is the full hash/id; only the first ~10 chars are used.
     - Layout: ``<kind>:`` (ID_PREFIX) + ``<first-N>`` (ID_SHORTCUT) +
       ``<rest>`` (COMMIT_ID / TRACE_ID), emitted as a single contiguous
@@ -97,10 +105,19 @@ def render_handle(kind: str, full_id: str, *,
       one token, which matches how users paste it back on the command line.
     """
     k = (kind or "").lower()[:1]
-    if k not in ("t", "c"):
+    if k not in ("t", "c", "s"):
         k = "t"
-    head_role = Role.COMMIT_ID_SHORTCUT if k == "c" else Role.TRACE_ID_SHORTCUT
-    tail_role = Role.COMMIT_ID if k == "c" else Role.TRACE_ID
+    if k == "c":
+        head_role = Role.COMMIT_ID_SHORTCUT
+        tail_role = Role.COMMIT_ID
+    elif k == "s":
+        # Attribution-only session id: no dedicated palette, reuse DIM so
+        # the whole handle reads as muted next to canonical ``t:`` rows.
+        head_role = Role.DIM
+        tail_role = Role.DIM
+    else:
+        head_role = Role.TRACE_ID_SHORTCUT
+        tail_role = Role.TRACE_ID
     # Take 2 for shortcut, then up to 6 more for tail (total 8 chars).
     fid = full_id or ""
     shortcut = fid[:shortcut_len]
