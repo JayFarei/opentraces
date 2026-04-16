@@ -92,17 +92,35 @@ export function toTurns(steps: TraceStep[]): ConvTurn[] {
 
 export function traceMeta(trace: {
   agent?: { name?: string; model?: string };
-  metrics?: { total_input_tokens?: number; total_output_tokens?: number; estimated_cost_usd?: number; total_steps?: number };
+  metrics?: {
+    total_input_tokens?: number;
+    total_output_tokens?: number;
+    total_cache_read_tokens?: number;
+    estimated_cost_usd?: number;
+    total_steps?: number;
+  };
   steps?: TraceStep[];
   _security_flags?: { severity: string }[];
+  security?: { redactions_applied?: number };
   timestamp_start?: string;
 }) {
   const steps = trace.steps || [];
   const tools = steps.reduce((a, s) => a + (s.tool_calls?.length ?? 0), 0);
-  const tin = trace.metrics?.total_input_tokens ?? 0;
+  // Claude Code pushes almost all context through the prompt cache, so
+  // per-step input_tokens is tiny (new material only) while
+  // cache_read_tokens carries the re-used prompt. Summing just
+  // total_input_tokens under-reports by 2-4 orders of magnitude. Use
+  // input + cache_read so the "in" figure matches what the model saw.
+  const tin = (trace.metrics?.total_input_tokens ?? 0)
+            + (trace.metrics?.total_cache_read_tokens ?? 0);
   const tout = trace.metrics?.total_output_tokens ?? 0;
   const cost = trace.metrics?.estimated_cost_usd ?? 0;
-  const flags = trace._security_flags?.length ?? 0;
+  // "flags" = total items the scanner flagged (residual + auto-redacted).
+  // _security_flags is the residual list — auto-redaction drives that to
+  // zero on clean sessions, so summing with redactions_applied gives the
+  // honest "how many items did the pipeline touch" count.
+  const flags = (trace._security_flags?.length ?? 0)
+              + (trace.security?.redactions_applied ?? 0);
   const started = trace.timestamp_start
     ? new Date(trace.timestamp_start).toLocaleString(undefined, {
         month: "short", day: "numeric", hour: "numeric", minute: "2-digit",

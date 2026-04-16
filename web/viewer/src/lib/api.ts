@@ -70,6 +70,9 @@ export interface TraceStep {
   tool_calls?: { tool_call_id?: string; tool_name: string; input: unknown; duration_ms?: number }[];
   observations?: { source_call_id?: string; tool_name?: string; content?: string; output_summary?: string; error?: string | null }[];
   timestamp?: string;
+  parent_step?: number | null;
+  call_type?: "main" | "subagent" | "warmup" | null;
+  subagent_trajectory_ref?: string | null;
 }
 
 export interface TraceRecord {
@@ -82,10 +85,40 @@ export interface TraceRecord {
     total_steps: number;
     total_input_tokens: number;
     total_output_tokens: number;
+    total_cache_read_tokens?: number;
+    total_cache_creation_tokens?: number;
     estimated_cost_usd: number;
+  };
+  security?: {
+    scanned?: boolean;
+    flags_reviewed?: number;
+    redactions_applied?: number;
+    classifier_version?: string;
   };
   _security_flags?: { type: string; reason: string; severity: string }[];
   _stage?: string;
+}
+
+export interface TraceTreeNode {
+  id: string;
+  parent_id: string | null;
+  kind: "step" | "tool_call" | "observation" | "subagent_ref" | "compaction";
+  step_index: number | null;
+  timestamp: string | null;
+  preview: string;
+  label: string | null;
+  on_active_path: boolean;
+  entity_ref: Record<string, unknown> | null;
+  role?: "user" | "agent" | "system" | null;
+  children: TraceTreeNode[];
+}
+
+export interface ResumeResponse {
+  argv: string[];
+  new_session_id: string;
+  truncated_at_line: number;
+  parent_session_id: string;
+  parent_step_id: string;
 }
 
 export interface GraphTrace {
@@ -145,6 +178,12 @@ export const api = {
   lifecycleDisconnect: (clientId: string) => disconnectLifecycle(clientId),
   quit: (clientId: string) => quitLifecycle(clientId),
   trace: (id: string) => req<TraceRecord>(`/api/trace/${id}/detail`),
+  traceTree: (id: string) => req<{ tree: TraceTreeNode[] }>(`/api/traces/${id}/tree`),
+  resumeTrace: (id: string, atStep: string) =>
+    req<ResumeResponse>(`/api/traces/${id}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ at_step: atStep }),
+    }),
   graph: (params: { limit?: number; page?: number; trace?: string; entities?: boolean } = {}) => {
     const q = new URLSearchParams();
     if (params.limit) q.set("limit", String(params.limit));

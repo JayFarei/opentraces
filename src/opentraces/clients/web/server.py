@@ -523,7 +523,14 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
                 "timestamp": t.get("timestamp_start"),
                 "status": _get_review_status(trace_id),
                 "_stage": resolve_visible_stage(status_enum),
-                "security_flags": len(t.get("_security_flags", [])),
+                # Count residual + auto-redacted items so the list badge
+                # matches the "flags" figure in the preview header. Counting
+                # only residuals under-reports on clean auto-redacted
+                # sessions (which are the common case).
+                "security_flags": (
+                    len(t.get("_security_flags", []))
+                    + int((t.get("security") or {}).get("redactions_applied") or 0)
+                ),
                 "project": t.get("metadata", {}).get("project", "unknown"),
                 # Plan 032: surface cached LLM review verdict so reviewers
                 # can see at a glance whether a session has been reviewed.
@@ -919,9 +926,13 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         rejected = sum(1 for t in traces if _get_review_status(t["trace_id"]) == "rejected")
         inbox = total - staged - pushed - rejected
 
+        # "in" on the TUI/viewer includes cache_read (see conversation.ts
+        # traceMeta); keep the aggregate consistent so per-session totals
+        # add up to what this stat reports.
         total_tokens = sum(
-            t.get("metrics", {}).get("total_input_tokens", 0)
-            + t.get("metrics", {}).get("total_output_tokens", 0)
+            (t.get("metrics", {}) or {}).get("total_input_tokens", 0)
+            + (t.get("metrics", {}) or {}).get("total_cache_read_tokens", 0)
+            + (t.get("metrics", {}) or {}).get("total_output_tokens", 0)
             for t in traces
         )
         total_tool_calls = sum(
@@ -932,7 +943,13 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             t.get("metrics", {}).get("estimated_cost_usd", 0) or 0
             for t in traces
         )
-        total_flags = sum(len(t.get("_security_flags", [])) for t in traces)
+        # Residual + redactions_applied, matching the per-trace "flags"
+        # figure on the preview and the list badge.
+        total_flags = sum(
+            len(t.get("_security_flags", []) or [])
+            + int((t.get("security") or {}).get("redactions_applied") or 0)
+            for t in traces
+        )
 
         # Determine if security scanning was applied
         security_tier = None
