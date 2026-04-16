@@ -33,7 +33,11 @@ def _init_project(project: Path) -> None:
 
 
 def _make_trace(trace_id: str, description: str, *, steps: list[dict] | None = None,
-                ts: str = "2026-04-15T10:00:00Z") -> dict:
+                ts: str = "2026-01-15T10:00:00Z") -> dict:
+    # The default timestamp is intentionally well in the past (> 2h), so the
+    # "recently touched" glyph never renders in fixtures that omit ``ts``.
+    # Tests that exercise the recently-touched path should pass an explicit
+    # recent ``ts``.
     return {
         "trace_id": trace_id,
         "schema_version": "0.2.0",

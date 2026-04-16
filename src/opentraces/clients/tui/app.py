@@ -368,26 +368,35 @@ class SecurityInfoModal(ModalScreen[None]):
 
 
 class PushModal(ModalScreen[str | None]):
-    """Prompt the user for push mode: LLM review, ignore, or cancel."""
+    """Prompt the user for push mode: LLM review, skip review, or cancel.
+
+    The ``i`` binding was previously used for "Ignore and push"; renamed
+    to ``s`` ("Skip review") to avoid visual collision with the global
+    ``i`` info shortcut, which is what users see in their keybar behind
+    the modal.
+    """
 
     BINDINGS = (
         Binding("l", "choose('llm')", "LLM review then push"),
-        Binding("i", "choose('ignore')", "Ignore and push"),
+        Binding("s", "choose('ignore')", "Skip review and push"),
         Binding("escape", "choose('cancel')", "Cancel"),
     )
 
-    def __init__(self, remote: str | None) -> None:
+    def __init__(self, remote: str | None, staged_count: int = 0) -> None:
         super().__init__()
         self.remote = remote
+        self.staged_count = staged_count
 
     def compose(self) -> ComposeResult:
         remote_line = self.remote or "no remote set"
+        n = self.staged_count
+        title = f"Push {n} staged trace{'s' if n != 1 else ''}"
         yield Vertical(
-            Static("[bold]Push staged traces[/bold]", id="push-title"),
+            Static(f"[bold]{title}[/bold]", id="push-title"),
             Static(f"[dim]remote[/dim]  [bright_blue]{remote_line}[/bright_blue]"),
             Static(""),
-            Static("[bold]L[/bold]  LLM review then push  [dim]opentraces push --llm-review[/dim]"),
-            Static("[bold]I[/bold]  Ignore and push        [dim]opentraces push[/dim]"),
+            Static("[bold]L[/bold]  LLM review then push    [dim]opentraces push --llm-review[/dim]"),
+            Static("[bold]S[/bold]  Skip review and push   [dim]opentraces push[/dim]"),
             Static(""),
             Static("[dim]Esc to cancel[/dim]"),
             id="push-modal-body",
@@ -1497,7 +1506,10 @@ class OpenTracesApp(App):
 
             self.push_screen(PushRunnerModal(choice, self.project_dir), after_run)
 
-        self.push_screen(PushModal(self.remote_name), after_choice)
+        self.push_screen(
+            PushModal(self.remote_name, staged_count=len(self.by_stage["staged"])),
+            after_choice,
+        )
 
     # --- events --------------------------------------------------------
 
