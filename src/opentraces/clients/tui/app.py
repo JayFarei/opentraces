@@ -1001,18 +1001,42 @@ class OpenTracesApp(App):
         agent = trace.get("agent", {}).get("name", "unknown")
         model = str(trace.get("agent", {}).get("model", "unknown")).split("/")[-1]
         steps = trace.get("steps", [])
-        total_steps = trace.get("metrics", {}).get("total_steps", len(steps))
+        metrics = trace.get("metrics", {}) or {}
+        total_steps = metrics.get("total_steps", len(steps))
         tool_calls = sum(len(s.get("tool_calls", [])) for s in steps)
-        flags = len(trace.get("_security_flags", []))
-        tokens_in = trace.get("metrics", {}).get("total_input_tokens", 0) or 0
-        tokens_out = trace.get("metrics", {}).get("total_output_tokens", 0) or 0
-        cost = trace.get("metrics", {}).get("estimated_cost_usd")
+
+        # "flags" previously showed residual tier-1 findings — which drops
+        # to 0 when the scanner auto-redacts everything, hiding the fact
+        # that the pipeline did work. Now we show redactions_applied
+        # (what the pipeline removed) and only flip to red when there are
+        # residual findings that still need human review.
+        sec_top = trace.get("security") or {}
+        residual = len(trace.get("_security_flags") or [])
+        redactions = int(sec_top.get("redactions_applied") or 0)
+        if residual:
+            flag_str = f"[red]{residual} to review[/red]"
+        elif redactions:
+            flag_str = f"{redactions} redacted"
+        else:
+            flag_str = "0"
+
+        # Claude Code pushes almost all context through the prompt cache,
+        # so step.input_tokens stays tiny (just new material) while
+        # step.cache_read_tokens holds the re-used prompt. The honest
+        # "what the model saw" figure is input + cache_read. Sum them.
+        new_in = int(metrics.get("total_input_tokens", 0) or 0)
+        cache_read = int(metrics.get("total_cache_read_tokens", 0) or 0)
+        total_in = new_in + cache_read
+        tokens_out = int(metrics.get("total_output_tokens", 0) or 0)
+        cost = metrics.get("estimated_cost_usd")
         started = _format_started(trace.get("timestamp_start"))
 
         cost_str = f"${cost:.2f}" if isinstance(cost, (int, float)) else "—"
-        # Flags stay red only when non-zero — one of the few places color
-        # carries real signal (a security flag is something to look at).
-        flag_str = f"[red]{flags}[/red]" if flags else "0"
+        # Fractional cache hit (what share of `in` came from cache).
+        cache_pct: str = ""
+        if total_in > 0 and cache_read > 0:
+            pct = round(100 * cache_read / total_in)
+            cache_pct = f" [dim]({pct}% cached)[/dim]"
 
         # NBSP ("\u00A0") binds each label to its value so the wrapper never
         # breaks "agent  claude-code" across two lines. Regular double
@@ -1027,7 +1051,7 @@ class OpenTracesApp(App):
             f"[dim]steps[/dim]{nb}{total_steps}  "
             f"[dim]tools[/dim]{nb}{tool_calls}  "
             f"[dim]flags[/dim]{nb}{flag_str}  "
-            f"[dim]in[/dim]{nb}{tokens_in:,}  "
+            f"[dim]in[/dim]{nb}{total_in:,}{cache_pct}  "
             f"[dim]out[/dim]{nb}{tokens_out:,}  "
             f"[dim]cost[/dim]{nb}{cost_str}  "
             f"[dim]started[/dim]{nb}{started}"

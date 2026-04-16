@@ -288,11 +288,13 @@ async def test_bracket_keys_page_preview_from_inbox(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_header_shows_in_out_only_not_cache(tmp_path, monkeypatch):
-    """The trace header keeps the top in/out figure even when the new
-    cache_read / cache_creation token fields (plan 046) are present —
-    we explicitly *don't* surface cache numbers in the TUI, that's
-    reserved for power-user views."""
+async def test_header_in_sums_input_and_cache_read(tmp_path, monkeypatch):
+    """The trace header's ``in`` figure shows input + cache_read — the
+    honest "tokens the model saw on your behalf" total. Previously we
+    showed only the new/uncached input, which was suspiciously tiny for
+    Claude Code sessions because almost all context comes through the
+    prompt cache. A trailing ``(N% cached)`` tag surfaces the cache
+    share so the user knows it's not all fresh input."""
     project = tmp_path / "proj"
     _init_project(project)
     staging = project / "traces"
@@ -313,12 +315,11 @@ async def test_header_shows_in_out_only_not_cache(tmp_path, monkeypatch):
         await pilot.pause()
         stream = app.query_one("#trace-stream")
         header = "".join(seg.text for strip in stream.lines[:2] for seg in strip)
-        assert "12,345" in header, header
+        # in = 12345 + 999111 = 1,011,456.
+        assert "1,011,456" in header, header
         assert "6,789" in header, header
-        # Cache numbers from the new fields must NOT leak into the header.
-        assert "999,111" not in header
-        assert "999111" not in header
-        assert "22,222" not in header
+        # Cache share renders as "(99% cached)" — 999111 / 1011456 ≈ 98.78%.
+        assert "cached" in header, header
 
 
 @pytest.mark.asyncio
