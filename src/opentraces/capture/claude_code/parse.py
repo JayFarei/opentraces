@@ -35,7 +35,6 @@ from opentraces_schema import (
     TraceRecord,
     VCS,
 )
-
 from ...quality.parse_gate import meets_quality_threshold
 
 logger = logging.getLogger(__name__)
@@ -81,6 +80,12 @@ class ClaudeCodeParser:
 
     agent_name = "claude-code"
 
+    def __init__(self) -> None:
+        # Populated during parse_session / _parse_steps: step_index ->
+        # {entry_uuid, line_no, session_file_relpath}. Callers that care
+        # (ingest) persist this to local state; others ignore it.
+        self.step_anchors: dict[int, dict] = {}
+
     def discover_sessions(self, projects_path: Path) -> Iterator[Path]:
         """Yield paths to all session JSONL files."""
         if not projects_path.exists():
@@ -102,7 +107,17 @@ class ClaudeCodeParser:
         session_path: Path,
         byte_offset: int = 0,
     ) -> TraceRecord | None:
-        """Parse a Claude Code session file into a TraceRecord."""
+        """Parse a Claude Code session file into a TraceRecord.
+
+        Also populates ``self.step_anchors`` — a ``{step_index: anchor}``
+        map the caller can persist to local state. Anchors are captured
+        here (the parser is the only place that knows which raw JSONL
+        line produced each step) but deliberately kept out of the
+        ``TraceRecord`` so the public schema stays portable.
+        """
+        # Reset per-call — the parser instance may be reused.
+        self.step_anchors = {}
+
         lines = self._read_lines(session_path, byte_offset)
         if lines is None:
             return None
@@ -480,7 +495,9 @@ class ClaudeCodeParser:
         if seen_request_keys is None:
             seen_request_keys = set()
 
-        for line in lines:
+        session_relpath = self._session_relpath(session_path)
+
+        for line_no, line in enumerate(lines):
             line_type = line.get("type")
 
             if line_type not in ("user", "assistant"):
@@ -527,6 +544,11 @@ class ClaudeCodeParser:
                     if _is_synthetic_user_message(content_blocks):
                         continue
                     step_index += 1
+                    self.step_anchors[step_index] = {
+                        "entry_uuid": line.get("uuid"),
+                        "line_no": line_no,
+                        "session_file_relpath": session_relpath,
+                    }
                     steps.append(Step(
                         step_index=step_index,
                         role="user",
@@ -683,6 +705,11 @@ class ClaudeCodeParser:
                 continue
 
             step_index += 1
+            self.step_anchors[step_index] = {
+                "entry_uuid": line.get("uuid"),
+                "line_no": line_no,
+                "session_file_relpath": session_relpath,
+            }
             step = Step(
                 step_index=step_index,
                 role=mapped_role,
@@ -722,6 +749,13 @@ class ClaudeCodeParser:
             )
 
         return steps, system_prompts
+
+    @staticmethod
+    def _session_relpath(session_path: Path) -> str | None:
+        try:
+            return str(session_path.resolve().relative_to((Path.home() / ".claude" / "projects").resolve()))
+        except Exception:
+            return None
 
     def _load_subagent(
         self,

@@ -23,7 +23,8 @@ Each generation records:
   - ``supersedes_reason``: "resume" | "schema_bump" | "manual" | None
   - ``created_at``: ISO timestamp
 
-Migration: schema v3 -> v4 just initialises an empty ``sessions`` dict.
+Migration: schema v4 -> v5 initialises ``step_labels`` and keeps the
+sessions dict additive.
 """
 
 from __future__ import annotations
@@ -50,20 +51,21 @@ def state_path(tmp_path):
 # --------------------------------------------------------------------------- #
 
 class TestSchemaVersion:
-    def test_schema_version_is_v4(self) -> None:
-        assert STATE_SCHEMA_VERSION == "4"
+    def test_schema_version_is_v5(self) -> None:
+        assert STATE_SCHEMA_VERSION == "5"
 
     def test_fresh_state_has_empty_sessions_dict(self, state_path) -> None:
         state = StateManager(state_path=state_path)
         state.save()
         raw = json.loads(state_path.read_text())
-        assert raw["state_version"] == "4"
+        assert raw["state_version"] == "5"
         assert raw["sessions"] == {}
+        assert raw["step_labels"] == {}
 
-    def test_v3_state_migrates_to_v4_with_empty_sessions(self, state_path) -> None:
-        """An on-disk v3 state must load, migrate to v4, and retain its data."""
+    def test_v4_state_migrates_to_v5_with_empty_step_labels(self, state_path) -> None:
+        """An on-disk v4 state must load, migrate to v5, and retain its data."""
         state_path.write_text(json.dumps({
-            "state_version": "3",
+            "state_version": "4",
             "processed_files": {"/some/path.jsonl": {
                 "file_path": "/some/path.jsonl",
                 "inode": 1,
@@ -81,8 +83,9 @@ class TestSchemaVersion:
         state.save()
 
         raw = json.loads(state_path.read_text())
-        assert raw["state_version"] == "4"
+        assert raw["state_version"] == "5"
         assert raw["sessions"] == {}
+        assert raw["step_labels"] == {}
         # legacy fields preserved
         assert raw["traces"]["tA"]["trace_id"] == "tA"
         assert raw["last_backfilled_commit"] == "abc"
@@ -113,6 +116,8 @@ class TestSessionUpsert:
         assert rec.observed_mtime == pytest.approx(123.4)
         assert rec.session_end_seen is False
         assert rec.post_commit_triggered is False
+        assert rec.parent_session_id is None
+        assert rec.parent_step_id is None
         assert rec.generations == []
 
     def test_upsert_existing_session_updates_observed_fields(self, state_path) -> None:
@@ -132,6 +137,21 @@ class TestSessionUpsert:
         rec = state.get_session("sess-1")
         assert rec.observed_size == 2500
         assert rec.observed_mtime == pytest.approx(200.0)
+
+    def test_upsert_session_records_parent_lineage(self, state_path) -> None:
+        state = StateManager(state_path=state_path)
+        state.upsert_session(
+            session_id="sess-2",
+            source_path="/abs/bar.jsonl",
+            observed_size=2000,
+            observed_mtime=456.7,
+            parent_session_id="sess-1",
+            parent_step_id="s4",
+        )
+        rec = state.get_session("sess-2")
+        assert rec is not None
+        assert rec.parent_session_id == "sess-1"
+        assert rec.parent_step_id == "s4"
 
     def test_set_session_end_seen_flag(self, state_path) -> None:
         state = StateManager(state_path=state_path)
@@ -228,3 +248,23 @@ class TestGenerations:
         assert gen is not None
         assert gen.trace_id == "cc_sess-1_g1"
         assert gen.schema_version == "0.3.0"
+
+
+class TestStepLabels:
+    def test_step_labels_default_empty(self, state_path) -> None:
+        state = StateManager(state_path=state_path)
+        assert state.get_step_labels("trace-1") == {}
+
+    def test_set_step_label_persists(self, state_path) -> None:
+        state = StateManager(state_path=state_path)
+        state.set_step_label("trace-1", "s2", "decision point")
+        assert state.get_step_labels("trace-1") == {"s2": "decision point"}
+
+        reloaded = StateManager(state_path=state_path)
+        assert reloaded.get_step_labels("trace-1") == {"s2": "decision point"}
+
+    def test_set_step_label_empty_clears_label(self, state_path) -> None:
+        state = StateManager(state_path=state_path)
+        state.set_step_label("trace-1", "s2", "keep")
+        state.set_step_label("trace-1", "s2", "")
+        assert state.get_step_labels("trace-1") == {}

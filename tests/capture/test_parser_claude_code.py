@@ -165,6 +165,36 @@ class TestClaudeCodeParser:
         assert record.metrics.total_input_tokens > 0
         assert record.metrics.total_output_tokens > 0
 
+    def test_parser_collects_step_anchors(self, tmp_path):
+        """Anchors are captured on the parser instance for local state,
+        not embedded in the trace record (schema stays portable)."""
+        lines = _make_minimal_session()
+        lines[0]["uuid"] = "line-user-001"
+        lines[1]["uuid"] = "line-assistant-001"
+        lines[3]["uuid"] = "line-assistant-002"
+        session_file = _write_session(tmp_path, lines)
+
+        parser = ClaudeCodeParser()
+        record = parser.parse_session(session_file)
+
+        assert record is not None
+        assert len(record.steps) >= 2
+
+        # Steps themselves carry no anchor field.
+        for step in record.steps:
+            assert not hasattr(step, "source_anchor") or getattr(
+                step, "source_anchor", None
+            ) is None
+
+        # Parser exposes the anchor map keyed by step_index.
+        anchors = parser.step_anchors
+        assert anchors[1]["entry_uuid"] == "line-user-001"
+        assert anchors[1]["line_no"] == 0
+        assert anchors[1]["session_file_relpath"] is None
+
+        assert anchors[2]["entry_uuid"] == "line-assistant-001"
+        assert anchors[2]["line_no"] == 1
+
     def test_snippet_extraction_from_read(self, tmp_path):
         lines = _make_minimal_session()
         session_file = _write_session(tmp_path, lines)

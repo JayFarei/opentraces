@@ -335,6 +335,11 @@ def _ingest_locked(
     # etc.) all see the same ID.
     record.trace_id = trace_id
 
+    # Persist the parser's step anchors to local state. Anchors power
+    # `opentraces resume --at-step` and live outside the schema because
+    # they point into ~/.claude/projects/ on the capture machine.
+    state.set_step_anchors(trace_id, getattr(parser, "step_anchors", {}) or {})
+
     resolved_cfg = cfg or load_config()
     processed = process_trace(record, project_dir, resolved_cfg)
     final_record = processed.record

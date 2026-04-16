@@ -590,9 +590,14 @@ def trace_discard(trace_id: str, confirmed: bool) -> None:
     ],
 )
 @click.argument("trace_id")
+@click.option(
+    "--at-step",
+    "at_step",
+    help="Fork a new Claude Code session from a specific step id (for example: s42).",
+)
 @click.option("--dry-run", "dry_run", is_flag=True,
               help="Print the resume command instead of exec'ing it.")
-def trace_resume(trace_id: str, dry_run: bool) -> None:
+def trace_resume(trace_id: str, at_step: str | None, dry_run: bool) -> None:
     """Resume the upstream agent session that produced a trace.
 
     Accepts the full trace_id or a ``t:XX`` / ``XX`` prefix (>=2 chars).
@@ -604,6 +609,7 @@ def trace_resume(trace_id: str, dry_run: bool) -> None:
         AmbiguousPrefixError,
     )
     from ..core.agent_resume import resume_claude_code, print_generic_hint
+    from ..capture.claude_code.resume import ResumeError, resolve_at_step
 
     state, staging_dir = _load_project_state()
     project_dir = Path.cwd()
@@ -653,6 +659,34 @@ def trace_resume(trace_id: str, dry_run: bool) -> None:
         sys.exit(6)
 
     if agent_name in ("claude-code", "claude_code", "claude"):
+        if at_step:
+            try:
+                target = resolve_at_step(
+                    full_id,
+                    at_step,
+                    staging_dir,
+                    project_cwd=project_dir,
+                    state=state,
+                    materialize=not dry_run,
+                )
+            except ResumeError as exc:
+                click.echo(exc.message, err=True)
+                sys.exit(6)
+
+            if dry_run:
+                click.echo(" ".join(target.argv))
+                click.echo(
+                    f"would truncate {target.truncated_at_line} lines -> new session {target.new_session_id}"
+                )
+                sys.exit(0)
+
+            rc = resume_claude_code(
+                target.new_session_id,
+                project_cwd=project_dir,
+                dry_run=False,
+            )
+            sys.exit(rc)
+
         rc = resume_claude_code(session_id, project_cwd=project_dir,
                                 dry_run=dry_run)
         sys.exit(rc)

@@ -34,3 +34,4 @@ tmp/
 .spec
 .agents/skills/agent-browser
 .claude/skills/agent-browser
+.agents/skills

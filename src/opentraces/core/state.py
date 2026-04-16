@@ -29,7 +29,7 @@ from typing import Any
 # NOTE: config.py imports workflow.py which imports state.py — to avoid the
 # import cycle we defer the config import inside TraceLock.
 
-STATE_SCHEMA_VERSION = "4"
+STATE_SCHEMA_VERSION = "5"
 
 
 class UnknownRemoteError(KeyError):
@@ -122,6 +122,8 @@ class SessionRecord:
     observed_mtime: float
     session_end_seen: bool = False
     post_commit_triggered: bool = False
+    parent_session_id: str | None = None
+    parent_step_id: str | None = None
     generations: list[GenerationRecord] = field(default_factory=list)
 
 
@@ -156,9 +158,16 @@ class StateManager:
                 "use get_project_state_path(project_dir)"
             )
         self._state_path = state_path
-        self._state: dict[str, Any] = {"processed_files": {}, "traces": {}, "commit_groups": {},
-             "last_backfilled_commit": None, "last_backfill_at": None,
-             "sessions": {}}
+        self._state: dict[str, Any] = {
+            "processed_files": {},
+            "traces": {},
+            "commit_groups": {},
+            "last_backfilled_commit": None,
+            "last_backfill_at": None,
+            "sessions": {},
+            "step_labels": {},
+            "step_anchors": {},
+        }
         self._load()
 
     def _load(self) -> None:
@@ -169,8 +178,16 @@ class StateManager:
                 if "commit_groups" not in self._state:
                     self._state["commit_groups"] = {}
             except (json.JSONDecodeError, OSError):
-                self._state = {"processed_files": {}, "traces": {}, "commit_groups": {},
-             "last_backfilled_commit": None, "last_backfill_at": None}
+                self._state = {
+                    "processed_files": {},
+                    "traces": {},
+                    "commit_groups": {},
+                    "last_backfilled_commit": None,
+                    "last_backfill_at": None,
+                    "sessions": {},
+                    "step_labels": {},
+                    "step_anchors": {},
+                }
         self._migrate()
 
     def _migrate(self) -> None:
@@ -203,6 +220,16 @@ class StateManager:
         # v3 -> v4 (live-session ingestion): add ``sessions`` dict. Empty
         # on migration; first scan populates it from on-disk JSONLs.
         self._state.setdefault("sessions", {})
+
+        # v4 -> v5 (plan 048): add per-trace step labels + step anchors.
+        # step_anchors is a local-only lookup from (trace_id, step_index)
+        # to the raw-session line that produced the step. It powers
+        # `opentraces resume --at-step` and is intentionally kept out of
+        # the public schema — the anchor is machine-local (points into
+        # ~/.claude/projects/) and adapter-specific (Claude Code line
+        # identifiers), so it does not belong in a portable trace record.
+        self._state.setdefault("step_labels", {})
+        self._state.setdefault("step_anchors", {})
 
         self._state["state_version"] = STATE_SCHEMA_VERSION
 
@@ -269,6 +296,17 @@ class StateManager:
             }
         self._state["traces"][trace_id]["status"] = status.value
         self._state["traces"][trace_id].update(kwargs)
+        # Self-heal: if this entry lacks a file_path (happens when the
+        # entry is first minted outside the ingest pipeline — e.g. a
+        # stage/commit on an orphan staging file whose ingest state was
+        # wiped) and a matching <traces>/<trace_id>.jsonl exists, wire
+        # the path in. Without this, push silently drops the trace with
+        # "No valid traces to upload."
+        entry = self._state["traces"][trace_id]
+        if not entry.get("file_path"):
+            candidate = self._state_path.parent / "traces" / f"{trace_id}.jsonl"
+            if candidate.exists():
+                entry["file_path"] = str(candidate)
         self.save()
 
     def get_traces_by_status(self, status: TraceStatus) -> list[TraceStagingEntry]:
@@ -466,6 +504,8 @@ class StateManager:
             observed_mtime=raw.get("observed_mtime", 0.0),
             session_end_seen=raw.get("session_end_seen", False),
             post_commit_triggered=raw.get("post_commit_triggered", False),
+            parent_session_id=raw.get("parent_session_id"),
+            parent_step_id=raw.get("parent_step_id"),
             generations=gens,
         )
 
@@ -475,6 +515,9 @@ class StateManager:
         source_path: str,
         observed_size: int,
         observed_mtime: float,
+        *,
+        parent_session_id: str | None = None,
+        parent_step_id: str | None = None,
     ) -> None:
         sessions = self._state.setdefault("sessions", {})
         existing = sessions.get(session_id)
@@ -486,12 +529,71 @@ class StateManager:
                 "observed_mtime": observed_mtime,
                 "session_end_seen": False,
                 "post_commit_triggered": False,
+                "parent_session_id": parent_session_id,
+                "parent_step_id": parent_step_id,
                 "generations": [],
             }
         else:
             existing["source_path"] = source_path
             existing["observed_size"] = observed_size
             existing["observed_mtime"] = observed_mtime
+            existing["parent_session_id"] = parent_session_id
+            existing["parent_step_id"] = parent_step_id
+        self.save()
+
+    def get_step_labels(self, trace_id: str) -> dict[str, str]:
+        labels = self._state.setdefault("step_labels", {}).get(trace_id, {})
+        if not isinstance(labels, dict):
+            return {}
+        return {
+            str(step_id): str(label)
+            for step_id, label in labels.items()
+            if isinstance(step_id, str) and isinstance(label, str)
+        }
+
+    def set_step_label(self, trace_id: str, step_id: str, label: str | None) -> None:
+        labels = self._state.setdefault("step_labels", {})
+        trace_labels = labels.setdefault(trace_id, {})
+        clean = (label or "").strip()
+        if clean:
+            trace_labels[step_id] = clean
+        else:
+            trace_labels.pop(step_id, None)
+        if not trace_labels:
+            labels.pop(trace_id, None)
+        self.save()
+
+    # --- Step source anchors (plan 048, local-only) ---
+    #
+    # Maps (trace_id, step_index) to the raw-session line that produced
+    # the step, for `opentraces resume --at-step`. Deliberately lives in
+    # local state and NOT in the public schema: the anchor is machine-
+    # local and adapter-specific.
+    def get_step_anchor(self, trace_id: str, step_index: int) -> dict | None:
+        anchors = self._state.setdefault("step_anchors", {}).get(trace_id, {})
+        if not isinstance(anchors, dict):
+            return None
+        raw = anchors.get(str(step_index))
+        if not isinstance(raw, dict):
+            return None
+        return raw
+
+    def set_step_anchors(self, trace_id: str, anchors: dict[int, dict]) -> None:
+        """Replace the full anchor map for a trace.
+
+        Called once per ingest. Passing an empty mapping clears the trace's
+        anchors (adapters that do not emit anchors get an empty dict for
+        free, which is the desired no-op).
+        """
+        root = self._state.setdefault("step_anchors", {})
+        if not anchors:
+            root.pop(trace_id, None)
+        else:
+            root[trace_id] = {
+                str(idx): dict(anchor)
+                for idx, anchor in anchors.items()
+                if isinstance(anchor, dict)
+            }
         self.save()
 
     def set_session_flag(self, session_id: str, flag: str, value: bool) -> None:

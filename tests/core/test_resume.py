@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
-import importlib
+import json
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
+
+
+# Stable dashed UUID for --at-step tests. Dashes matter: ``claude --resume``
+# matches on the session filename, and every Claude session file is UUID-
+# with-dashes (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.jsonl). The no-dash
+# hex form is invisible to Claude's session discovery.
+_FAKE_NEW_SESSION = uuid.UUID("11111111-2222-3333-4444-555555555555")
+_FAKE_NEW_SESSION_STR = str(_FAKE_NEW_SESSION)
 
 
 @pytest.fixture
@@ -39,18 +48,48 @@ def resume_project(tmp_path, monkeypatch):
     traces_dir.mkdir(parents=True, exist_ok=True)
 
     # Minimal TraceRecord with a claude-code agent.
+    source_session = project / "source-session.jsonl"
+    source_session.write_text(
+        "\n".join([
+            json.dumps({"type": "user", "uuid": "line-001", "message": {"role": "user", "content": "start"}}),
+            json.dumps({"type": "assistant", "uuid": "line-002", "message": {"role": "assistant", "content": [{"type": "text", "text": "inspect"}]}}),
+            json.dumps({"type": "assistant", "uuid": "line-003", "message": {"role": "assistant", "content": [{"type": "text", "text": "patch"}]}}),
+        ]) + "\n"
+    )
+
     record = {
-        "schema_version": "0.2.1",
+        "schema_version": "0.3.0",
         "trace_id": "b73af9c8-full-id-1234",
         "session_id": "ff00aa11-sess-id-5678",
         "agent": {"name": "claude-code", "model": "claude-opus"},
         "task": {"description": "do a thing"},
         "timestamp_start": "2026-04-14T00:00:00Z",
         "timestamp_end": "2026-04-14T00:05:00Z",
-        "steps": [],
+        "steps": [
+            {
+                "step_index": 1,
+                "role": "user",
+                "content": "start",
+                "call_type": "main",
+                "parent_step": None,
+            },
+            {
+                "step_index": 2,
+                "role": "agent",
+                "content": "inspect",
+                "call_type": "main",
+                "parent_step": 1,
+            },
+            {
+                "step_index": 3,
+                "role": "agent",
+                "content": "patch",
+                "call_type": "main",
+                "parent_step": 2,
+            },
+        ],
         "metrics": {},
     }
-    import json
     (traces_dir / "b73af9c8-full-id-1234.jsonl").write_text(
         json.dumps(record) + "\n"
     )
@@ -64,6 +103,21 @@ def resume_project(tmp_path, monkeypatch):
         "status": "parsed",
         "created_at": 0.0,
     }
+    st.upsert_session(
+        session_id="ff00aa11-sess-id-5678",
+        source_path=str(source_session),
+        observed_size=source_session.stat().st_size,
+        observed_mtime=source_session.stat().st_mtime,
+    )
+    # Anchors live in local state (plan 048), not on the trace record.
+    st.set_step_anchors(
+        "b73af9c8-full-id-1234",
+        {
+            1: {"entry_uuid": "line-001", "line_no": 0, "session_file_relpath": None},
+            2: {"entry_uuid": "line-002", "line_no": 1, "session_file_relpath": None},
+            3: {"entry_uuid": "line-003", "line_no": 2, "session_file_relpath": None},
+        },
+    )
     st.save()
 
     yield project
@@ -138,3 +192,109 @@ def test_resume_execvp_invoked_without_dry_run(runner, resume_project):
     assert args[0] == "/usr/local/bin/claude"
     assert args[1] == ["/usr/local/bin/claude", "--resume", "ff00aa11-sess-id-5678"]
     assert result.exit_code == 1
+
+
+def test_resume_at_step_dry_run_prints_new_session_and_truncation(runner, resume_project, monkeypatch):
+    from opentraces.cli import main
+
+    fake_home = resume_project / "fake-home"
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    with patch("shutil.which", return_value="/usr/local/bin/claude"), \
+         patch("uuid.uuid4", return_value=_FAKE_NEW_SESSION):
+        result = runner.invoke(main, ["resume", "t:b7", "--at-step", "s2", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert f"claude --resume {_FAKE_NEW_SESSION_STR}" in result.output
+    assert "would truncate 2 lines" in result.output
+    assert f"new session {_FAKE_NEW_SESSION_STR}" in result.output
+
+
+def test_resume_at_step_materializes_new_session_and_execs(runner, resume_project, monkeypatch):
+    from opentraces.cli import main
+    from opentraces.core.repo_identity import encode_claude_path
+
+    fake_home = resume_project / "fake-home"
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    with patch("shutil.which", return_value="/usr/local/bin/claude"), \
+         patch("uuid.uuid4", return_value=_FAKE_NEW_SESSION), \
+         patch("os.execvp") as exec_mock, \
+         patch("os.chdir"):
+        result = runner.invoke(main, ["resume", "t:b7", "--at-step", "s2"])
+
+    new_session_path = (
+        fake_home / ".claude" / "projects" / encode_claude_path(resume_project) / f"{_FAKE_NEW_SESSION_STR}.jsonl"
+    )
+    assert new_session_path.exists()
+    lines = [json.loads(line) for line in new_session_path.read_text().splitlines()]
+    assert lines[0]["type"] == "opentraces_resume_parent"
+    assert lines[0]["parentSessionId"] == "ff00aa11-sess-id-5678"
+    assert lines[0]["parentStepId"] == "s2"
+    assert lines[1]["uuid"] == "line-001"
+    assert lines[2]["uuid"] == "line-002"
+    assert len(lines) == 3
+
+    args, _ = exec_mock.call_args
+    assert args[0] == "/usr/local/bin/claude"
+    assert args[1] == ["/usr/local/bin/claude", "--resume", _FAKE_NEW_SESSION_STR]
+    assert result.exit_code == 1
+
+
+def test_resume_at_step_falls_back_to_anchor_session_path(
+    runner,
+    resume_project,
+    monkeypatch,
+):
+    """If the state's session record is missing (fresh state, purged cache),
+    resolve_at_step must still find the source JSONL by combining the
+    anchor's ``session_file_relpath`` with ``~/.claude/projects/``."""
+    from opentraces.cli import main
+    from opentraces.core.config import (
+        get_project_state_path,
+        get_projects_path,
+        load_config,
+    )
+    from opentraces.core.repo_identity import encode_claude_path
+    from opentraces.core.state import StateManager
+
+    fake_home = resume_project / "fake-home"
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    source_session = (
+        get_projects_path(load_config())
+        / encode_claude_path(resume_project)
+        / "ff00aa11-sess-id-5678.jsonl"
+    )
+    source_session.parent.mkdir(parents=True, exist_ok=True)
+    source_session.write_text(
+        "\n".join([
+            json.dumps({"type": "user", "uuid": "line-001", "message": {"role": "user", "content": "start"}}),
+            json.dumps({"type": "assistant", "uuid": "line-002", "message": {"role": "assistant", "content": [{"type": "text", "text": "inspect"}]}}),
+            json.dumps({"type": "assistant", "uuid": "line-003", "message": {"role": "assistant", "content": [{"type": "text", "text": "patch"}]}}),
+        ]) + "\n"
+    )
+
+    # Re-seed anchors with a session_file_relpath — the fallback path the
+    # resolver falls back to when state.get_session(...) is missing.
+    state = StateManager(get_project_state_path(resume_project))
+    relpath = f"{encode_claude_path(resume_project)}/ff00aa11-sess-id-5678.jsonl"
+    state.set_step_anchors(
+        "b73af9c8-full-id-1234",
+        {
+            1: {"entry_uuid": "line-001", "line_no": 0, "session_file_relpath": relpath},
+            2: {"entry_uuid": "line-002", "line_no": 1, "session_file_relpath": relpath},
+            3: {"entry_uuid": "line-003", "line_no": 2, "session_file_relpath": relpath},
+        },
+    )
+    state._state["sessions"].pop("ff00aa11-sess-id-5678", None)
+    state.save()
+
+    fallback_uuid = uuid.UUID("22222222-3333-4444-5555-666666666666")
+    with patch("shutil.which", return_value="/usr/local/bin/claude"), \
+         patch("uuid.uuid4", return_value=fallback_uuid):
+        result = runner.invoke(main, ["resume", "t:b7", "--at-step", "s2", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert f"claude --resume {fallback_uuid}" in result.output
+    assert "would truncate 2 lines" in result.output
