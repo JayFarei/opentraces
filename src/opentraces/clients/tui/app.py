@@ -24,6 +24,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.theme import Theme
+
 from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -1143,6 +1147,73 @@ class OpenTracesApp(App):
             stream.write("[dim]i — show security pipeline[/dim]")
             stream.write("")
 
+    # Named-style overrides for role-tinted markdown. Rich's ``Markdown``
+    # renderer looks up every element (``markdown.text``, ``markdown.h1``,
+    # ``markdown.code`` …) against the active console theme. We keep the
+    # structural styles (code, code_block, table) at their Rich defaults
+    # so fenced blocks stay syntax-highlighted and inline code keeps its
+    # cyan pill, but override the prose-bearing entries so the turn body
+    # still reads as "this block is the user/agent talking" at a glance.
+    _MD_THEME_USER = Theme({
+        "markdown.text":       USER_BODY,
+        "markdown.paragraph":  USER_BODY,
+        "markdown.list_item":  USER_BODY,
+        "markdown.item":       USER_BODY,
+        "markdown.strong":     f"bold {USER_BODY}",
+        "markdown.emph":       f"italic {USER_BODY}",
+    }, inherit=True)
+    _MD_THEME_AGENT = Theme({
+        "markdown.text":       AGENT_BODY,
+        "markdown.paragraph":  AGENT_BODY,
+        "markdown.list_item":  AGENT_BODY,
+        "markdown.item":       AGENT_BODY,
+        "markdown.strong":     f"bold {AGENT_BODY}",
+        "markdown.emph":       f"italic {AGENT_BODY}",
+    }, inherit=True)
+
+    def _write_markdown_body(
+        self, stream: RichLog, content: str, role: str,
+    ) -> None:
+        """Render ``content`` as markdown (bold, headers, tables, fenced
+        code, inline code, lists) with role-tinted prose.
+
+        Reserved for user/agent turn bodies only — tool_call/tool_result/
+        error content goes through ``_write_body`` which leaves raw JSON
+        and ANSI-sanitized output untouched. The theme override tints
+        just the text-bearing nodes (paragraph / list_item / strong /
+        emph); code, tables, and code_blocks stay in Rich's default
+        palette so the reader still sees a cyan pill for ``foo`` and a
+        syntax-highlighted block for triple-backtick fences.
+
+        Implementation: RichLog doesn't expose its internal console, and
+        Rich's Markdown resolves named styles (``markdown.text`` etc.)
+        against the console theme at render time. So we build a
+        throw-away Console with the role theme, capture Markdown to
+        Text segments, and hand those to ``stream.write`` — which
+        accepts any Rich renderable.
+        """
+        if not content:
+            return
+        theme = self._MD_THEME_USER if role == "user" else self._MD_THEME_AGENT
+        width = max(40, (stream.size.width or 80) - 2)
+        con = Console(
+            width=width,
+            theme=theme,
+            force_terminal=True,
+            color_system="truecolor",
+            record=True,
+            file=None,
+            legacy_windows=False,
+        )
+        with con.capture() as _captured:
+            con.print(Markdown(content, code_theme="monokai"))
+        # ``export_text(styles=True)`` would give us ANSI; instead,
+        # replay the recorded segments so RichLog keeps structured
+        # styling and wraps cleanly on its own terms.
+        from rich.text import Text
+        text = Text.from_ansi(_captured.get())
+        stream.write(text)
+
     def _write_body(self, stream: RichLog, content: str, color: str) -> None:
         text = content or ""
         for line in text.splitlines() or [""]:
@@ -1152,25 +1223,26 @@ class OpenTracesApp(App):
         for it in items:
             if it["type"] == "user":
                 stream.write(f"[{self.USER_COLOR} bold]── User ──[/{self.USER_COLOR} bold]")
-                self._write_body(stream, it.get("content") or "", self.USER_BODY)
+                self._write_markdown_body(stream, it.get("content") or "", "user")
             else:
                 hdr = f"[{self.AGENT_COLOR} bold]── Agent ──[/{self.AGENT_COLOR} bold]"
                 if it.get("tool_count"):
                     hdr += f"  [dim]{it['tool_count']} tools: {escape(it['tool_summary'])}[/dim]"
                 stream.write(hdr)
-                self._write_body(stream, it.get("content") or "", self.AGENT_BODY)
+                self._write_markdown_body(stream, it.get("content") or "", "agent")
             stream.write("")
 
     def _write_full(self, stream: RichLog, items: list[dict[str, Any]]) -> None:
         for it in items:
             et = it["event_type"]
             body_color = "default"
+            md_role: str | None = None  # set for user/agent text only
             if et == "user_message":
                 stream.write(f"[{self.USER_COLOR} bold]── User ──[/{self.USER_COLOR} bold]")
-                body_color = self.USER_BODY
+                md_role = "user"
             elif et == "agent_text":
                 stream.write(f"[{self.AGENT_COLOR} bold]── Agent ──[/{self.AGENT_COLOR} bold]")
-                body_color = self.AGENT_BODY
+                md_role = "agent"
             elif et == "tool_call":
                 name = it.get("tool_name", "?")
                 c = _tool_color(name)
@@ -1187,7 +1259,10 @@ class OpenTracesApp(App):
             elif et == "error":
                 stream.write(f"[{self.ERROR_COLOR} bold]── Error ──[/{self.ERROR_COLOR} bold]")
                 body_color = self.ERROR_COLOR
-            self._write_body(stream, it.get("content") or "", body_color)
+            if md_role is not None:
+                self._write_markdown_body(stream, it.get("content") or "", md_role)
+            else:
+                self._write_body(stream, it.get("content") or "", body_color)
             stream.write("")
 
     # --- keybar --------------------------------------------------------
