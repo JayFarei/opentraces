@@ -65,11 +65,9 @@ def test_plan_043_did_not_add_required_fields() -> None:
         for name, field in TraceRecord.model_fields.items()
         if field.is_required()
     }
-    # Pre-plan-043 required fields (from schema v0.4.0). Plan 043 makes
-    # no schema changes, so this set should be unchanged.
-    # Pinned at the schema set from opentraces-schema v0.4.x, which is what
-    # shipped before plan 043. Updating this set must only happen under an
-    # explicit schema bump, not as a side effect of enrichment work.
+    # Required set pinned to the opentraces-schema 0.3.0 surface.
+    # Plan 043 is forbidden from adding required fields; updating this
+    # set must only happen under an explicit schema bump.
     allowed = {"trace_id", "schema_version", "session_id", "agent"}
     extra = required - allowed
     assert not extra, (

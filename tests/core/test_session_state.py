@@ -176,8 +176,8 @@ class TestGenerations:
             generation=1,
             captured_size=500,
             captured_mtime=100.0,
-            schema_version="0.4.0",
-            security_version="0.4.0",
+            schema_version="0.3.0",
+            security_version="0.3.0",
             status_at_capture="inbox",
             supersedes=None,
             supersedes_reason=None,
@@ -194,15 +194,15 @@ class TestGenerations:
         state = self._seed(state_path)
         state.append_generation("sess-1", GenerationRecord(
             trace_id="cc_sess-1_g1", generation=1, captured_size=500,
-            captured_mtime=100.0, schema_version="0.4.0",
-            security_version="0.4.0", status_at_capture="uploaded",
+            captured_mtime=100.0, schema_version="0.3.0",
+            security_version="0.3.0", status_at_capture="uploaded",
             supersedes=None, supersedes_reason=None,
             created_at="2026-04-15T07:00:00Z",
         ))
         state.append_generation("sess-1", GenerationRecord(
             trace_id="cc_sess-1_g2", generation=2, captured_size=800,
-            captured_mtime=200.0, schema_version="0.4.0",
-            security_version="0.4.0", status_at_capture="inbox",
+            captured_mtime=200.0, schema_version="0.3.0",
+            security_version="0.3.0", status_at_capture="inbox",
             supersedes="cc_sess-1_g1", supersedes_reason="resume",
             created_at="2026-04-15T09:00:00Z",
         ))
@@ -217,8 +217,8 @@ class TestGenerations:
         state = self._seed(state_path)
         state.append_generation("sess-1", GenerationRecord(
             trace_id="cc_sess-1_g1", generation=1, captured_size=500,
-            captured_mtime=100.0, schema_version="0.4.0",
-            security_version="0.4.0", status_at_capture="inbox",
+            captured_mtime=100.0, schema_version="0.3.0",
+            security_version="0.3.0", status_at_capture="inbox",
             supersedes=None, supersedes_reason=None,
             created_at="2026-04-15T07:00:00Z",
         ))
@@ -227,4 +227,4 @@ class TestGenerations:
         gen = reloaded.latest_generation("sess-1")
         assert gen is not None
         assert gen.trace_id == "cc_sess-1_g1"
-        assert gen.schema_version == "0.4.0"
+        assert gen.schema_version == "0.3.0"

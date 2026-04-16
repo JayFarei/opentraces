@@ -376,7 +376,7 @@ async def test_security_info_surfaces_auto_redactions(tmp_path, monkeypatch):
         "scanned": True,
         "flags_reviewed": 436,
         "redactions_applied": 45,
-        "classifier_version": "0.4.0",
+        "classifier_version": "0.3.0",
     }
     (staging / f"{t['trace_id']}.jsonl").write_text(json.dumps(t) + "\n")
 
@@ -404,7 +404,7 @@ async def test_trufflehog_block_labels_correctly(tmp_path, monkeypatch):
     t = _make_trace("trace_th_blocked_001", "has a box api key")
     # Modern capture leaves metadata.security null when TH blocked inline.
     t["security"] = {"scanned": True, "flags_reviewed": 10,
-                     "redactions_applied": 0, "classifier_version": "0.4.0"}
+                     "redactions_applied": 0, "classifier_version": "0.3.0"}
     (staging / f"{t['trace_id']}.jsonl").write_text(json.dumps(t) + "\n")
     from opentraces.core.config import get_project_state_path
     sm = StateManager(state_path=get_project_state_path(project))

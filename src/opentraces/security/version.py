@@ -5,4 +5,4 @@ Tracks changes to detection logic (regex patterns, entropy thresholds,
 classifier heuristics, anonymization rules).
 """
 
-SECURITY_VERSION = "0.4.0"
+SECURITY_VERSION = "0.3.0"

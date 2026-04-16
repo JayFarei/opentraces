@@ -6,74 +6,81 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
-## [0.4.0] - 2026-04-13
+## [0.3.0] - 2026-04-16
 
-### Removed
-- `Intent` model and `TraceRecord.intent` field. The session-level summary
-  mechanism added in 0.3.0 is retired; in-repo use was judged flawed and no
-  replacement is planned at this layer.
-- `intent` from the `TraceRecord.compute_content_hash()` exclude set (the
-  field is gone, so the exclusion is moot). Re-hashing a trace whose
-  source JSON on disk still carries a populated `intent` block will now
-  produce a different content hash than 0.3.0 would have, since the
-  excluded field no longer exists to be stripped. For traces that never
-  had Intent populated, hashes are unchanged.
+First public schema release since `0.2.0`. A coherent single bump that folds
+together the commit-correlation and richer-attribution work from this cycle.
 
-### Compatibility
-- Traces on disk with populated `intent` blocks still load — Pydantic's
-  default `extra="ignore"` silently drops the unknown field.
-- Consumers reading `record.intent` must be updated; the attribute no
-  longer exists on `TraceRecord`.
-
-## [0.3.0] - 2026-04-12
+An `Intent` model was introduced and withdrawn internally during this cycle.
+It does not ship. Traces written with a populated `intent` block during
+internal development still load against this schema — Pydantic's default
+`extra="ignore"` silently drops the unknown field.
 
 ### Added
-- `Intent` model — session-level summary block, parallel to `Task` and `Outcome`.
-  Optional fields: `title`, `summary`, `source` (closed enum: `llm_hook` /
-  `post_processor` / `user`), `model`. See `RATIONALE-0.3.0.md` for the Task
-  vs Intent split.
-- `TraceRecord.intent: Intent | None` — absent on traces captured before
-  Intent enrichment ran or when `intent.mode=off`.
-- `GitLink` model — evidence-graded link between a trace and a commit/revision
-  (plan 041). `tier`: `tool_emitted` | `tool_emitted_with_divergence` |
-  `overlapping` | `orphan`. Optional lazy-computed `commit_reachable` and
-  `content_alive` liveness booleans. Supports `vcs_type="jj"` for Jujutsu.
-- `TraceRecord.git_links: list[GitLink]` — many-to-many link between traces
-  and commits.
+
+**Commit correlation (plan 041)**
+
+- `GitLink` model — evidence-graded link between a trace and a
+  commit/revision. Tiers: `tool_emitted` | `tool_emitted_with_divergence`
+  | `overlapping` | `orphan`. Optional lazy-computed `commit_reachable`
+  and `content_alive` liveness booleans. Supports `vcs_type="jj"` for
+  Jujutsu.
+- `TraceRecord.git_links: list[GitLink]` — many-to-many link between
+  traces and commits. A trace can link to many commits (rebase, squash,
+  long session); a commit can link to many traces (cherry-pick,
+  composition).
 - `TraceRecord.lifecycle: Literal["provisional", "final"]` — RFC #25.
-  `provisional` is the default; promoted to `final` once a post-commit hook
-  correlates the trace to a revision.
-- `Task.repository_url: str | None` — canonical remote URL (RFC #22).
+  `provisional` is the default; promoted to `final` once a post-commit
+  hook correlates the trace to a revision.
+
+**Richer attribution**
+
 - `Attribution.revision: dict | None` — `{vcs_type, revision}` pin for
   attribution data.
-- `Attribution.unaccounted_files: list[str] | None` — surfaces Bash-applied
-  edits absent from tool-call attribution.
+- `Attribution.unaccounted_files: list[str] | None` — surfaces
+  Bash-applied edits absent from tool-call attribution, at low confidence.
 - `AttributionRange.original: dict | None` — pre-divergence
-  `{start_line, end_line, content_hash}` (RFC #5).
-- `AttributionRange.change_type: Literal["addition","modification","deletion"]` —
-  default `addition` (RFC #11).
-- `AttributionRange.contributor: dict | None` — per-range contributor override
-  for stamping `mixed` on divergent ranges.
-- `AttributionConversation.ids: dict[str, str | list[str]] | None` — provider-
-  native conversation identifiers (RFC #9).
-- `AttributionConversation.related: list[dict] | None` — `{type, url}` baseline
-  vocabulary (RFC #16) for plan/issue/PR links.
+  `{start_line, end_line, content_hash}` (RFC #5). Populated when a
+  formatter or human rewrote the agent's output after the fact.
+- `AttributionRange.change_type: Literal["addition", "modification", "deletion"]`
+  — default `addition` (RFC #11).
+- `AttributionRange.contributor: dict | None` — per-range contributor
+  override for stamping `mixed` on divergent ranges.
+- `AttributionConversation.ids: dict[str, str | list[str]] | None` —
+  provider-native conversation identifiers (RFC #9).
+- `AttributionConversation.related: list[dict] | None` — `{type, url}`
+  baseline vocabulary (RFC #16) for plan / issue / PR links.
+
+**Task, identity, metrics**
+
+- `Task.repository_url: str | None` — canonical remote URL alongside
+  `owner/repo` (RFC #22).
+- `TraceRecord.generation_index: int` — monotonic generation counter
+  per `session_id`. Generations are replacement snapshots, not stitchable
+  supersets; later generations may have different redactions, enrichments,
+  or security-pipeline output. Consumers resolving "latest" should group
+  by `session_id` and take `max(generation_index)`.
+- `Metrics.total_cache_read_tokens: int` — session-level aggregate.
+- `Metrics.total_cache_creation_tokens: int` — session-level aggregate.
 
 ### Changed
-- `TraceRecord.compute_content_hash()` now excludes `intent` alongside
-  `content_hash` and `trace_id`, so re-running summarization does not change
-  the identity of an otherwise-unchanged trace.
+
+- `Attribution.experimental` semantics clarified: now `True` when any
+  range is low-confidence or a fallback line resolution was used;
+  `False` when every range is high-confidence (hook- or diff-sourced).
+  Previously blanket-`True` across `0.1.x` / `0.2.x`.
 
 ### Compatibility
-- Additive: traces written against 0.2.x load cleanly with `intent=None`.
-- Unknown extra fields remain silently ignored (Pydantic v2 default), matching
-  prior behavior.
 
-## [0.1.1] - 2026-03-29
-
-### Changed
-- `SCHEMA_VERSION` bumped from `0.1.0` to `0.1.1` (patch release aligned with CLI v0.1.1).
-  No model changes; version bump only.
+- Additive wrt `0.2.x`: traces written against `0.2.x` load cleanly with
+  `lifecycle="provisional"`, `generation_index=0`, `git_links=[]`, and
+  null-valued new Attribution fields.
+- Traces written during internal development with a populated `intent`
+  block still load — Pydantic `extra="ignore"` drops the unknown field.
+  Content hashes computed by those in-flight versions are not reproducible
+  from disk under 0.3.0, because the excluded-field set has changed; this
+  only affects traces that (a) were written by the internal 0.3.0 / 0.4.0
+  / 0.5.0 cycles and (b) are now re-hashed against `SCHEMA_VERSION=0.3.0`.
 
 ## [0.2.0] - 2026-04-01
 
@@ -93,6 +100,12 @@ schema-specific semantics described in VERSION-POLICY.md.
 - `Outcome` docstring updated to describe devtime vs runtime field sets and
   how `execution_context` should guide consumers choosing which fields to read.
 - `SCHEMA_VERSION` bumped from `0.1.1` to `0.2.0`.
+
+## [0.1.1] - 2026-03-29
+
+### Changed
+- `SCHEMA_VERSION` bumped from `0.1.0` to `0.1.1` (patch release aligned with CLI v0.1.1).
+  No model changes; version bump only.
 
 ## [0.1.0] - 2026-03-27
 

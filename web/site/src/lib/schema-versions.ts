@@ -235,11 +235,9 @@ const v020: SchemaVersion = {
 
 const v030: SchemaVersion = {
   version: "0.3.0",
-  date: "2026-04-12",
-  summary: "Adds optional Intent block, commit-anchored evidence tiers (GitLink), lifecycle, and richer Attribution. New 'enrich', 'notes', 'blame', 'setup git', and 'export --format agent-trace' CLI surfaces.",
+  date: "2026-04-16",
+  summary: "Commit-anchored evidence tiers (GitLink), lifecycle, and richer Attribution. New notes, blame, setup git, and export --format agent-trace CLI surfaces, plus a flat git-style command restructure.",
   highlights: [
-    "Intent: optional top-level block parallel to Task and Outcome",
-    "intent.source is a closed enum: llm_hook | post_processor | user",
     "GitLink: evidence-graded link from trace to commit (tool_emitted | tool_emitted_with_divergence | overlapping | orphan)",
     "TraceRecord.lifecycle: provisional (pre-correlation) | final (revision-anchored)",
     "Attribution.revision pins a block to a commit; unaccounted_files surfaces Bash-applied edits",
@@ -249,9 +247,8 @@ const v030: SchemaVersion = {
     "Task.repository_url: canonical remote URL alongside owner/repo",
     "AttributionRange.content_hash format now murmur3:<32-hex> (replaces md5-truncated-8) for cross-tool line-range matching; top-level TraceRecord.content_hash remains SHA-256 for dedup",
     "Post-commit hook correlates trace to revision; PostToolUse hook captures diff as it happens",
-    "opentraces notes <ref>, opentraces blame <file>:<line>, opentraces setup git, session list --by-commit",
-    "opentraces export --format agent-trace; session show --markdown (prompt-injection-safe)",
-    "compute_content_hash excludes intent so re-summarizing does not change trace identity",
+    "opentraces notes <ref>, opentraces blame <file>:<line>, opentraces setup git, list --by-commit",
+    "opentraces export --format agent-trace; show --markdown (prompt-injection-safe)",
   ],
   models: v020.models.map((m) => {
     if (m.id === "trace-record") {
@@ -265,7 +262,6 @@ const v030: SchemaVersion = {
                 ? { ...f, description: "SHA-256 hex of the serialized record, used for cross-contributor dedup at upload time. Unchanged by 0.3.0." }
                 : f
           ),
-          { name: "intent", type: "Intent | null", required: false, description: "LLM- or user-supplied session summary. Excluded from content_hash." },
           { name: "lifecycle", type: "string", required: false, description: '"provisional" (pre-commit-correlation) or "final" (revision-anchored). Default provisional.' },
           { name: "git_links", type: "GitLink[]", required: false, description: "Evidence-graded links to commits/revisions this trace contributed to." },
         ],
@@ -292,16 +288,6 @@ const v030: SchemaVersion = {
     }
     return m;
   }).concat([
-    {
-      id: "intent", title: "Intent",
-      desc: "Optional session-level summary. Populated by the on_stop hook, opentraces enrich, a post-processor, or hand-edited by the user.",
-      fields: [
-        { name: "title",   type: "string | null", required: false, description: "Short (~12 word) session label." },
-        { name: "summary", type: "string | null", required: false, description: "One- to three-sentence description of the session." },
-        { name: "source",  type: "string | null", required: false, description: '"llm_hook", "post_processor", or "user". Filter on this to keep or discard machine-generated intent.' },
-        { name: "model",   type: "string | null", required: false, description: "Model id that produced the intent (empty when source is user)." },
-      ],
-    },
     {
       id: "git-link", title: "GitLink",
       desc: "Evidence-graded link between a trace and a commit/revision. A trace can link to many commits (rebase, squash, long session); a commit can link to many traces (cherry-pick, composition).",
@@ -342,37 +328,8 @@ const v030: SchemaVersion = {
   ]),
 };
 
-const v040: SchemaVersion = {
-  version: "0.4.0",
-  date: "2026-04-13",
-  summary: "Removes the Intent block (and the `ot enrich` command that drove it). Existing traces with a populated intent field still load (silently dropped).",
-  highlights: [
-    "Intent model and TraceRecord.intent field removed",
-    "`opentraces enrich` command removed; post-processors now run pre-upload during `opentraces push`",
-    "compute_content_hash no longer excludes intent (field is gone)",
-    "On-disk traces with populated intent blocks still load — Pydantic extra='ignore' drops the unknown field",
-  ],
-  models: v030.models
-    .filter((m) => m.id !== "intent")
-    .map((m) => {
-      if (m.id === "trace-record") {
-        return {
-          ...m,
-          fields: m.fields
-            .filter((f) => f.name !== "intent")
-            .map((f) =>
-              f.name === "schema_version"
-                ? { ...f, description: 'e.g. "0.4.0"' }
-                : f
-            ),
-        };
-      }
-      return m;
-    }),
-};
-
 /* All versions, newest first. Add new versions here. */
-export const versions: SchemaVersion[] = [v040, v030, v020, v011, v010];
+export const versions: SchemaVersion[] = [v030, v020, v011, v010];
 
 export const latestVersion = versions[0].version;
 
