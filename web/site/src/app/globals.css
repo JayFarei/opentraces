@@ -1457,6 +1457,15 @@ tr:hover td { background: var(--surface-hover); }
   .privacy-grid { grid-template-columns: 1fr; }
 }
 
+/* ═══ Attribution Panels (blame | graph side by side) ═══ */
+@media (max-width: 768px) {
+  .attr-panels { flex-direction: column; }
+  .attr-pane-blame {
+    border-right: none !important;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
 /* ═══ Explorer Responsive ═══ */
 .insights-grid {
   display: grid;
