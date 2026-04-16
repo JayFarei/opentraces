@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..text import graph_renderer as _gr
+from ..text.trace_tree import build_tree
 
 
 _PCT_GREEN = 70
@@ -30,45 +31,6 @@ def _coverage_role(pct: int) -> str:
     if pct >= _PCT_YELLOW:
         return "yellow"
     return "red"
-
-
-def _changes_for(c: _gr.Commit, trace_id: str) -> str | None:
-    """Extract compact change-count string (e.g. '+3 ~8 fns') from entity_summaries."""
-    if not c.entity_summaries:
-        return None
-    pair = c.entity_summaries.get(trace_id)
-    if not pair:
-        return None
-    counts, _names = pair
-    counts = (counts or "").strip()
-    return counts if counts and counts != "\u2014" else None
-
-
-def _fns_for(c: _gr.Commit, trace_id: str) -> str | None:
-    """Full comma-separated entity names for a trace in a commit.
-
-    Prefers ``entity_breakdowns`` (full per-file list) over
-    ``entity_summaries`` (truncated with ``[...]``) — the web viewer has
-    space to show the complete list.
-    """
-    if c.entity_breakdowns and trace_id in c.entity_breakdowns:
-        names: list[str] = []
-        seen: set[str] = set()
-        for _fpath, entries in c.entity_breakdowns[trace_id]:
-            for _ct, _et, name in entries:
-                if name and name not in seen:
-                    seen.add(name)
-                    names.append(name)
-        if names:
-            return ", ".join(names)
-    if not c.entity_summaries:
-        return None
-    pair = c.entity_summaries.get(trace_id)
-    if not pair:
-        return None
-    _counts, names_s = pair
-    names_s = (names_s or "").strip()
-    return names_s or None
 
 
 def _full_entities_text(c: _gr.Commit, trace_id: str) -> str:
@@ -109,8 +71,7 @@ def serialize_commits(commits: list[_gr.Commit]) -> list[dict[str, Any]]:
             pct = _pct(c.traces[0].attributed_ratio)
         traces_out: list[dict[str, Any]] = []
         for t in c.traces:
-            changes = _changes_for(c, t.trace_id)
-            fns = _fns_for(c, t.trace_id)
+            changes = _entity_summary_text(c, t.trace_id)
             row: dict[str, Any] = {
                 "id": _gr.short_trace_id(t.trace_id) if hasattr(_gr, "short_trace_id") else t.trace_id[:8],
                 "trace_id": t.trace_id,
@@ -120,10 +81,6 @@ def serialize_commits(commits: list[_gr.Commit]) -> list[dict[str, Any]]:
             }
             if changes:
                 row["changes"] = changes
-            if fns:
-                row["fns"] = fns
-            if not changes and not fns:
-                row["info"] = f"[{t.line_count} lines]"
             traces_out.append(row)
         out.append({
             "id": c.short_sha,
@@ -150,6 +107,25 @@ def load_graph(cwd: Path, *, limit: int, page: int, trace_id: str | None,
     )
     commits = _gr.load_commits_from_repo(cwd, opts)
     return serialize_commits(commits)
+
+
+def serialize_tree(record: Any, step_labels: dict[str, str] | None = None) -> list[dict[str, Any]]:
+    def _node_to_dict(node) -> dict[str, Any]:
+        return {
+            "id": node.id,
+            "parent_id": node.parent_id,
+            "kind": node.kind,
+            "step_index": node.step_index,
+            "timestamp": node.timestamp,
+            "preview": node.preview,
+            "label": node.label,
+            "on_active_path": node.on_active_path,
+            "entity_ref": node.entity_ref,
+            "role": node.role,
+            "children": [_node_to_dict(child) for child in node.children],
+        }
+
+    return [_node_to_dict(node) for node in build_tree(record, step_labels=step_labels)]
 
 
 def _trace_meta(cwd: Path, trace_id: str) -> tuple[str | None, str | None]:

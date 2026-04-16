@@ -81,8 +81,6 @@ export function App() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key === "Escape" && modal) { setModal(null); return; }
       if (modal) return;
-      if (e.key === "g" && view === "review") { /* top */ }
-      if (e.key === "b" && view === "graph") { setView("review"); }
       if (e.key === "q") {
         e.preventDefault();
         if (closing) return;
@@ -135,20 +133,11 @@ export function App() {
     ? [
         ["j/k", "move"],
         ["space", "add/remove"],
-        ["p", "push"],
-        ["r", "reject"],
-        ["g/G", "top/bot"],
-        ["[/]", "page"],
-        ["i", "sec info"],
-        ["?", "help"],
         ["q", "quit"],
       ]
     : [
         ["j/k", "navigate"],
         ["enter", "blame"],
-        ["b", "back"],
-        ["f", "filter"],
-        ["?", "help"],
         ["q", "quit"],
       ];
 
@@ -183,7 +172,7 @@ export function App() {
         <PushModal t={t} onClose={() => setModal(null)} remote={ctxQ.data?.remote ?? null} />
       )}
       {modal === "info" && (
-        <SecurityInfoModal t={t} onClose={() => setModal(null)} remote={ctxQ.data?.remote ?? null} />
+        <SecurityInfoModal t={t} onClose={() => setModal(null)} ctx={ctxQ.data ?? null} />
       )}
     </div>
   );

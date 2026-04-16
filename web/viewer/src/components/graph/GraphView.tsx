@@ -120,9 +120,10 @@ export function GraphView({
                       <div
                         key={tr.trace_id + ti}
                         style={{
-                          display: "flex", alignItems: "flex-start", gap: 8,
+                          display: "flex", alignItems: "center", gap: 8,
                           fontFamily: F.code, fontSize: 11, lineHeight: 1.6,
                           padding: "2px 0",
+                          minWidth: 0,
                         }}
                       >
                         <span style={{ color: t.textDim, minWidth: 10, flex: "0 0 auto" }}>
@@ -162,25 +163,15 @@ export function GraphView({
                         ) : (
                           <span style={{ color, flex: "0 0 auto" }}>{tr.id}</span>
                         )}
-                        <div style={{
-                          display: "flex",
-                          flexWrap: "wrap",
-                          gap: 6,
-                          alignItems: "center",
-                          flex: 1,
-                          minWidth: 0,
-                        }}>
-                          {tr.changes ? <SemanticDiffCounts text={tr.changes} t={t} compact /> : null}
-                          {tr.fns ? (
-                            <span style={{
-                              color: t.textDim,
-                              minWidth: 0,
-                              overflowWrap: "anywhere",
-                              wordBreak: "break-word",
-                            }}>{tr.fns}</span>
-                          ) : null}
-                          {tr.info ? <span style={{ color: t.textDim, fontSize: 10 }}>{tr.info}</span> : null}
-                        </div>
+                        {tr.changes ? (
+                          <div style={{
+                            display: "flex", gap: 4, alignItems: "center",
+                            marginLeft: "auto", flex: "0 0 auto",
+                            whiteSpace: "nowrap", overflow: "hidden",
+                          }}>
+                            <SemanticDiffCounts text={tr.changes} t={t} compact />
+                          </div>
+                        ) : null}
                       </div>
                     );
                   })}

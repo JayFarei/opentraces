@@ -2,10 +2,11 @@ import { useEffect } from "react";
 import type { Theme } from "../../tokens";
 import { F } from "../../tokens";
 import { Label } from "../Panel";
+import type { AppContext } from "../../lib/api";
 
 export function SecurityInfoModal({
-  t, onClose, remote,
-}: { t: Theme; onClose: () => void; remote: string | null }) {
+  t, onClose, ctx,
+}: { t: Theme; onClose: () => void; ctx: AppContext | null }) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.preventDefault(); onClose(); }
@@ -13,6 +14,13 @@ export function SecurityInfoModal({
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
   }, [onClose]);
+
+  const remote = ctx?.remote ?? null;
+  const th = ctx?.security?.trufflehog;
+  const lr = ctx?.security?.llm_review;
+
+  const thEnabled = !!th?.enabled;
+  const lrEnabled = !!lr?.enabled;
 
   return (
     <div
@@ -44,11 +52,29 @@ export function SecurityInfoModal({
           </div>
           <div>
             <Label t={t} style={{ marginBottom: 4 }}>TIER 1.5 · TRUFFLEHOG</Label>
-            <div><span style={{ color: t.textMuted }}>●</span> Opt-in — <span style={{ color: t.cyan }}>opentraces setup trufflehog</span></div>
+            {thEnabled ? (
+              <div>
+                <span style={{ color: t.green }}>●</span> Enabled
+                {th?.version && <span style={{ color: t.textDim }}> — {th.version}</span>}
+              </div>
+            ) : (
+              <div>
+                <span style={{ color: t.textMuted }}>●</span> Opt-in — <span style={{ color: t.cyan }}>opentraces setup trufflehog</span>
+              </div>
+            )}
           </div>
           <div>
             <Label t={t} style={{ marginBottom: 4 }}>TIER 2 · LLM REVIEW</Label>
-            <div><span style={{ color: t.textMuted }}>●</span> Opt-in — <span style={{ color: t.cyan }}>opentraces llm-review</span></div>
+            {lrEnabled ? (
+              <div>
+                <span style={{ color: t.green }}>●</span> Enabled
+                {lr?.model && <span style={{ color: t.textDim }}> — {lr.model}</span>}
+              </div>
+            ) : (
+              <div>
+                <span style={{ color: t.textMuted }}>●</span> Opt-in — <span style={{ color: t.cyan }}>opentraces llm-review</span>
+              </div>
+            )}
           </div>
           <div>
             <Label t={t} style={{ marginBottom: 4 }}>PUSH TARGET</Label>

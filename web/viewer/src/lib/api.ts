@@ -59,6 +59,10 @@ export interface AppContext {
   push_policy: string;
   authenticated: boolean;
   username: string | null;
+  security?: {
+    trufflehog: { enabled: boolean; version: string | null };
+    llm_review: { enabled: boolean; model: string };
+  };
 }
 
 export interface TraceStep {
@@ -95,6 +99,24 @@ export interface TraceRecord {
     redactions_applied?: number;
     classifier_version?: string;
   };
+  metadata?: {
+    security?: {
+      trufflehog?: {
+        status: "clean" | "findings";
+        version: string;
+        scanned_at: string;
+        findings_count: number;
+      };
+      trufflehog_findings?: { detector: string; verified: boolean; line: number; source_file: string }[];
+    };
+    llm_review?: {
+      status?: string;
+      shareable?: string;
+      missed_sensitive_data?: string;
+      model?: string;
+    };
+  };
+  block_reason?: string | null;
   _security_flags?: { type: string; reason: string; severity: string }[];
   _stage?: string;
 }
@@ -197,12 +219,21 @@ export const api = {
   addTrace: (id: string) => req<unknown>(`/api/trace/${id}/add`, { method: "POST" }),
   unstage: (id: string) => req<unknown>(`/api/trace/${id}/unstage`, { method: "POST" }),
   reject: (id: string) => req<unknown>(`/api/trace/${id}/reject`, { method: "POST" }),
-  push: (commitId?: string) =>
-    req<{ status?: string; count?: number; message?: string; error?: string }>(
-      "/api/push", { method: "POST", body: JSON.stringify(commitId ? { commit_id: commitId } : {}) },
-    ),
+  push: (opts: { commitId?: string; llmReview?: boolean } = {}) => {
+    const body: Record<string, unknown> = {};
+    if (opts.commitId) body.commit_id = opts.commitId;
+    if (opts.llmReview) body.llm_review = true;
+    return req<{
+      status?: string; count?: number; message?: string; error?: string;
+      log?: string; stage?: string; trace_ids?: string[];
+    }>("/api/push", { method: "POST", body: JSON.stringify(body) });
+  },
   addBatch: (ids: string[], message: string) =>
     req<{ commit_id: string | null }>("/api/add", {
       method: "POST", body: JSON.stringify({ trace_ids: ids, message }),
     }),
+  refresh: () =>
+    req<{ status: string; new: number; updated: number; skipped: number; errors: number; total: number }>(
+      "/api/refresh", { method: "POST" },
+    ),
 };
