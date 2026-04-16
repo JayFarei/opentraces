@@ -220,7 +220,7 @@ export function ConversationView({
                   }}
                 >
                 <div style={{ fontFamily: F.code, fontSize: 11, color: t.cyan, marginBottom: 4 }}>
-                  ▸ {toolCall.tool_name}
+                  ▸ s{step.step_index} · {toolCall.tool_name}
                 </div>
                 <pre style={{
                   margin: 0, padding: "8px 10px",
@@ -250,7 +250,7 @@ export function ConversationView({
                   }}
                 >
                 <div style={{ fontFamily: F.code, fontSize: 11, color: observation.error ? t.red : t.textMuted, marginBottom: 4 }}>
-                  {observation.error ? "✗" : "◂"} {observation.tool_name || "result"}{observation.error ? ` — ${observation.error}` : ""}
+                  {observation.error ? "✗" : "◂"} s{step.step_index} · {observation.tool_name || "result"}{observation.error ? ` — ${observation.error}` : ""}
                 </div>
                 <pre style={{
                   margin: 0, padding: "8px 10px",
@@ -286,7 +286,7 @@ export function ConversationView({
                     background: t.bgAlt,
                     padding: "8px 10px",
                   }}>
-                    ↳ subagent {step.subagent_trajectory_ref.slice(0, 8)}
+                    ↳ s{step.step_index} · subagent {step.subagent_trajectory_ref.slice(0, 8)}
                   </div>
                 </div>
               );

@@ -21,6 +21,7 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
     typeof window === "undefined" ? 1440 : window.innerWidth
   ));
   const [treePanelOpen, setTreePanelOpen] = useState(false);
+  const [treeExpanded, setTreeExpanded] = useState(false);
 
   const q = useQuery({
     queryKey: ["trace", traceId],
@@ -64,6 +65,7 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
 
   useEffect(() => {
     setTreePanelOpen(false);
+    setTreeExpanded(false);
   }, [traceId, treeDocked]);
 
   const handleTreeSelect = (nodeId: string, stepIndex: number | null) => {
@@ -74,10 +76,13 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
   };
 
   const handleActiveStepChange = (stepIndex: number) => {
+    const stepNodeId = traceStepNodeId(stepIndex);
     setActiveStepIndex((current) => (current === stepIndex ? current : stepIndex));
     setSelectedNodeId((current) => {
-      const stepNodeId = traceStepNodeId(stepIndex);
-      return current === stepNodeId ? current : stepNodeId;
+      if (!current) return stepNodeId;
+      if (current === stepNodeId) return current;
+      if (current.startsWith(`${stepNodeId}-`)) return current;
+      return stepNodeId;
     });
   };
 
@@ -188,6 +193,8 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
                     roots={treeQ.data?.tree ?? []}
                     selectedNodeId={selectedNodeId}
                     activePathNodeId={activePathNodeId}
+                    layout={treeExpanded ? "expanded" : "compact"}
+                    onToggleLayout={() => setTreeExpanded((current) => !current)}
                     onSelectNode={handleTreeSelect}
                   />
                   {conversationPane}
@@ -200,6 +207,7 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
                   selectedNodeId={selectedNodeId}
                   activePathNodeId={activePathNodeId}
                   presentation="panel"
+                  layout="expanded"
                   onSelectNode={(nodeId, stepIndex) => {
                     handleTreeSelect(nodeId, stepIndex);
                     setTreePanelOpen(false);

@@ -517,6 +517,138 @@ describe("trace preview scroll sync", () => {
     expect(view.queryByText("resume")).toBeNull();
   });
 
+  test("the compact rail allows selecting a row by clicking anywhere on the line", () => {
+    const onSelectNode = vi.fn();
+    const view = render(
+      <TraceTree
+        t={DARK}
+        traceId="trace-1"
+        roots={tree}
+        selectedNodeId={null}
+        activePathNodeId={null}
+        layout="compact"
+        onSelectNode={onSelectNode}
+      />,
+    );
+
+    const row = view.container.querySelector('[data-node-id="s1"]') as HTMLDivElement;
+    fireEvent.click(row);
+
+    expect(onSelectNode).toHaveBeenCalledWith("s1", 1);
+  });
+
+  test("the docked map starts compact and expands into the full text tree", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      value: 1440,
+      configurable: true,
+      writable: true,
+    });
+
+    const trace: TraceRecord = {
+      trace_id: "trace-1",
+      task: { description: "test trace" },
+      agent: { name: "claude-code", model: "claude-opus" },
+      steps: [
+        { step_index: 1, role: "user", content: "first prompt" },
+        { step_index: 2, role: "agent", content: "first reply" },
+        { step_index: 3, role: "user", content: "second prompt" },
+      ],
+      timestamp_start: "2026-04-16T10:00:00Z",
+      metrics: {
+        total_steps: 3,
+        total_input_tokens: 120,
+        total_output_tokens: 40,
+        estimated_cost_usd: 0.12,
+      },
+      security: {
+        redactions_applied: 0,
+      },
+      _security_flags: [],
+      _stage: "inbox",
+    };
+    const promptTree: TraceTreeNode[] = [{
+      id: "s1",
+      parent_id: null,
+      kind: "step",
+      step_index: 1,
+      timestamp: null,
+      preview: "user: first prompt",
+      label: null,
+      on_active_path: false,
+      entity_ref: null,
+      role: "user",
+      children: [
+        {
+          id: "s2",
+          parent_id: "s1",
+          kind: "step",
+          step_index: 2,
+          timestamp: null,
+          preview: "agent: first reply",
+          label: null,
+          on_active_path: false,
+          entity_ref: null,
+          role: "agent",
+          children: [
+            {
+              id: "s2-tc0",
+              parent_id: "s2",
+              kind: "tool_call",
+              step_index: 2,
+              timestamp: null,
+              preview: "tool: Read",
+              label: null,
+              on_active_path: false,
+              entity_ref: null,
+              role: null,
+              children: [],
+            },
+          ],
+        },
+      ],
+    }];
+
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/trace/trace-1/detail")) return ok(trace);
+      if (url.endsWith("/api/traces/trace-1/tree")) return ok({ tree: promptTree });
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+
+    const view = renderWithQueryClient(<TracePreview t={DARK} traceId="trace-1" />);
+
+    await waitFor(() => expect(view.container.querySelector('[data-testid="trace-tree-compact"]')).toBeTruthy());
+    const compactTree = view.container.querySelector('[data-testid="trace-tree-compact"]') as HTMLDivElement;
+    expect(compactTree.textContent).toContain("map");
+    expect(compactTree.textContent).not.toContain("first prompt");
+    expect(view.container.querySelector('input[placeholder="search map"]')).toBeNull();
+
+    fireEvent.click(view.getByTestId("trace-tree-layout-toggle"));
+
+    await waitFor(() => expect(view.container.querySelector('[data-testid="trace-tree-expanded"]')).toBeTruthy());
+    expect(view.container.querySelector('input[placeholder="search map"]')).toBeTruthy();
+    expect((view.container.querySelector('[data-testid="trace-tree-expanded"]') as HTMLDivElement).textContent).toContain("first prompt");
+  });
+
+  test("tool and result blocks carry the parent step id in the preview", () => {
+    const view = render(
+      <ConversationView
+        t={DARK}
+        traceId="trace-1"
+        steps={steps}
+        activeStepIndex={2}
+        selectedNodeId="s2-tc0"
+        scrollTargetNodeId={null}
+        onScrollTargetConsumed={() => {}}
+        onActiveStepChange={() => {}}
+      />,
+    );
+
+    expect(view.container).toHaveTextContent("s2 · Read");
+    expect(view.container).toHaveTextContent("◂ s2 · Read");
+    expect(view.container).toHaveTextContent("s2 · subagent");
+  });
+
   test("the mobile map replaces the conversation pane and closes after selection", async () => {
     Object.defineProperty(window, "innerWidth", {
       value: 900,
