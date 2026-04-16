@@ -429,7 +429,7 @@ class PushRunnerModal(ModalScreen[None]):
         yield Vertical(
             Static(f"[bold]{title}[/bold]", id="push-runner-title"),
             FocusableLog(id="push-runner-log", markup=False, wrap=True, highlight=False),
-            Static("[dim]Esc to close once finished[/dim]", id="push-runner-hint"),
+            Static("[dim]Running... (this can take a minute on first push)[/dim]", id="push-runner-hint"),
             id="push-runner-body",
         )
 
@@ -457,6 +457,11 @@ class PushRunnerModal(ModalScreen[None]):
         # the staged set, then push with the gate. Running the gate alone
         # (the old behavior) aborted immediately on fresh staged traces
         # because they had no verdict yet.
+        # Pass ``-y`` so any click.confirm() in push (notably the remote
+        # schema-migration gate at cli/publish.py:116) takes the default
+        # instead of blocking forever reading stdin. This matches what a
+        # user hitting enter at the CLI would do. Users who want the
+        # prompt behavior should run ``opentraces push`` in a terminal.
         if self.mode == "llm":
             rc_review = self._run_step(
                 log, [str(script), "llm-review", "--scope", "staged"],
@@ -468,15 +473,27 @@ class PushRunnerModal(ModalScreen[None]):
                     "\n[aborting push — llm-review did not succeed]",
                 )
                 self._done = True
+                self._mark_done()
                 return
-            push_cmd = [str(script), "push", "--llm-review"]
-            push_header = "→ opentraces push --llm-review"
+            push_cmd = [str(script), "push", "--llm-review", "-y"]
+            push_header = "→ opentraces push --llm-review -y"
         else:
-            push_cmd = [str(script), "push"]
-            push_header = "→ opentraces push"
+            push_cmd = [str(script), "push", "-y"]
+            push_header = "→ opentraces push -y"
 
         self._run_step(log, push_cmd, header=push_header)
         self._done = True
+        self._mark_done()
+
+    def _mark_done(self) -> None:
+        """Flip the hint from 'Running...' to 'Done'."""
+        try:
+            hint = self.query_one("#push-runner-hint", Static)
+            self.app.call_from_thread(
+                hint.update, "[dim]Done — Esc to close[/dim]"
+            )
+        except Exception:
+            pass
 
     def _run_step(self, log: RichLog, cmd: list[str], *, header: str) -> int:
         self.app.call_from_thread(log.write, f"\n{header}")
@@ -484,6 +501,7 @@ class PushRunnerModal(ModalScreen[None]):
             proc = subprocess.Popen(
                 cmd,
                 cwd=str(self.project_dir),
+                stdin=subprocess.DEVNULL,  # belt-and-braces: any missed prompt fails fast
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
