@@ -381,21 +381,44 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     # Load trace records from staging files, track which ones loaded successfully
     records = []
     loaded_trace_ids = set()
+    missing_file_path: list[str] = []
+    missing_on_disk: list[str] = []
+    load_errors: list[tuple[str, str]] = []
     for entry in traces_to_upload:
-        if entry.file_path:
-            staging_file = Path(entry.file_path)
-            if staging_file.exists():
-                try:
-                    data = staging_file.read_text().strip()
-                    record = TraceRecord.model_validate_json(data)
-                    records.append(record)
-                    loaded_trace_ids.add(entry.trace_id)
-                except Exception as e:
-                    click.echo(f"  Error loading {entry.trace_id}: {e}", err=True)
+        if not entry.file_path:
+            missing_file_path.append(entry.trace_id)
+            continue
+        staging_file = Path(entry.file_path)
+        if not staging_file.exists():
+            missing_on_disk.append(entry.trace_id)
+            continue
+        try:
+            data = staging_file.read_text().strip()
+            record = TraceRecord.model_validate_json(data)
+            records.append(record)
+            loaded_trace_ids.add(entry.trace_id)
+        except Exception as e:
+            click.echo(f"  Error loading {entry.trace_id}: {e}", err=True)
+            load_errors.append((entry.trace_id, str(e)))
 
     if not records:
-        click.echo("No valid traces to upload.")
-        return
+        # Distinguish "load failure" from "nothing to push" — there were
+        # committed entries, none of them loaded. Exit non-zero so the
+        # web viewer / any caller doesn't mistake it for a successful push.
+        total = len(traces_to_upload)
+        click.echo(f"No valid traces to upload ({total} committed entry/entries could not be loaded).")
+        if missing_file_path:
+            click.echo(f"  {len(missing_file_path)} entry/entries missing file_path (state drift).")
+        if missing_on_disk:
+            click.echo(f"  {len(missing_on_disk)} staging file(s) not found on disk.")
+        if load_errors:
+            click.echo(f"  {len(load_errors)} file(s) failed schema validation.")
+        emit_json(error_response(
+            "UPLOAD_LOAD_FAILED", "upload",
+            f"{total} committed trace(s) could not be loaded",
+            "Check file_path in state.json and the staging directory; re-run 'opentraces _scan' to rehydrate.",
+        ))
+        sys.exit(4)
 
     # Run configured post-processor chain — one pre-upload pass.
     from ..core.config import ProjectConfig as _ProjectConfig
