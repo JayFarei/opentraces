@@ -90,6 +90,20 @@ export function toTurns(steps: TraceStep[]): ConvTurn[] {
   return turns;
 }
 
+function fmtTokens(n: number): string {
+  // Compact human-readable token count: 73, 8.7K, 12K, 1.0M, 73M.
+  // Mirrors the TUI helper in clients/tui/app.py so both surfaces use
+  // the same compact notation.
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) {
+    const v = n / 1000;
+    return v < 10 ? `${v.toFixed(1)}K` : `${Math.trunc(v)}K`;
+  }
+  const v = n / 1_000_000;
+  return v < 10 ? `${v.toFixed(1)}M` : `${Math.trunc(v)}M`;
+}
+
+
 export function traceMeta(trace: {
   agent?: { name?: string; model?: string };
   metrics?: {
@@ -132,8 +146,8 @@ export function traceMeta(trace: {
     steps: trace.metrics?.total_steps ?? steps.length,
     tools,
     flags,
-    tokensIn: tin.toLocaleString(),
-    tokensOut: tout.toLocaleString(),
+    tokensIn: fmtTokens(tin),
+    tokensOut: fmtTokens(tout),
     cost: `$${cost.toFixed(2)}`,
     started,
   };
