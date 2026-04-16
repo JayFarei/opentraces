@@ -17,6 +17,7 @@ import json
 import logging
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -229,7 +230,9 @@ def scan_trace_jsonl(jsonl_path: Path, verify: bool = False) -> TruffleHogReport
     flag is ``True`` iff any finding surfaced.
     """
     version = require_trufflehog()
+    t0 = time.monotonic()
     findings = scan_file(jsonl_path, verify=verify)
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
 
     # Dedupe preserving first occurrence order.
     seen: set[tuple[str, str, bool]] = set()
@@ -240,6 +243,11 @@ def scan_trace_jsonl(jsonl_path: Path, verify: bool = False) -> TruffleHogReport
             continue
         seen.add(key)
         unique.append(finding)
+
+    logger.info(
+        "trufflehog scanned %s in %dms (version=%s, findings=%d, verify=%s)",
+        jsonl_path, elapsed_ms, version, len(unique), verify,
+    )
 
     return TruffleHogReport(
         findings=unique,

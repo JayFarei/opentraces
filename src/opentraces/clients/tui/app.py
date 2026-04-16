@@ -297,6 +297,7 @@ class SecurityInfoModal(ModalScreen[None]):
         flags_reviewed = int(sec_top.get("flags_reviewed") or 0)
         th_findings = sec_meta.get("trufflehog_findings") \
             or sec_meta.get("tier_1_5_findings")
+        th_status = (sec_meta.get("trufflehog") or {})
         lr = meta_all.get("llm_review") or {}
         lr_status = lr.get("status")
         lr_shareable = lr.get("shareable")
@@ -324,16 +325,21 @@ class SecurityInfoModal(ModalScreen[None]):
         else:
             regex_line = f"{pending_dot()} [bold]Regex / entropy[/bold]  not scanned yet"
 
-        # Tier 1.5 (TruffleHog). Findings may live on the trace
-        # metadata (modern captures) OR be reflected only in the state
-        # block_reason (older captures that blocked inline). Prefer the
-        # state signal when it's present — it's what actually gated the
-        # trace, regardless of whether the metadata round-tripped.
+        # Tier 1.5 (TruffleHog). Prefer the explicit status marker written
+        # by the pipeline (records both clean runs and findings). Fall back
+        # to the legacy finding list or the state block_reason for traces
+        # captured before the marker was added.
         br = (self.block_reason or "").strip()
         th_from_state = br.lower().startswith("trufflehog")
+        th_marker_status = th_status.get("status")
+        th_version = th_status.get("version") or ""
         if th_findings:
             th_line = (f"{bad_dot()} [bold]TruffleHog[/bold]  "
                        f"{len(th_findings)} finding(s)")
+        elif th_marker_status == "clean":
+            version_tail = f" [dim]({escape(th_version)})[/dim]" if th_version else ""
+            th_line = (f"{ok_dot()} [bold]TruffleHog[/bold]  "
+                       f"scanned, no findings{version_tail}")
         elif th_from_state:
             tail = br.split(":", 1)[1].strip() if ":" in br else br
             th_line = (f"{bad_dot()} [bold]TruffleHog[/bold]  "

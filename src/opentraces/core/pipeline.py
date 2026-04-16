@@ -80,6 +80,46 @@ def _run_trufflehog_on_record(
             pass
 
 
+def _persist_trufflehog_result(
+    record: TraceRecord,
+    report: TruffleHogReport | None,
+) -> int:
+    """Record the Tier 1.5 outcome on ``record.metadata.security``.
+
+    Always writes a status marker when ``report`` is not ``None`` — even
+    on clean scans — so the TUI can distinguish "scanned, no findings"
+    from "never scanned." Returns the redaction count applied when
+    findings were present (zero otherwise) so callers can fold it into
+    the running total.
+    """
+    if report is None:
+        return 0
+
+    sec_meta = record.metadata.setdefault("security", {})
+    th_redacted = 0
+    if report.findings:
+        from ..security.scanner import apply_trufflehog_redactions
+        th_redacted = apply_trufflehog_redactions(record, report.findings)
+        sec_meta["trufflehog_findings"] = [
+            {
+                "detector": f.detector_name,
+                "verified": bool(f.verified),
+                "line": f.line_number,
+                "source_file": f.source_file,
+            }
+            for f in report.findings
+        ]
+        sec_meta["trufflehog_redactions_applied"] = th_redacted
+
+    sec_meta["trufflehog"] = {
+        "status": "findings" if report.findings else "clean",
+        "version": report.trufflehog_version,
+        "scanned_at": report.scanned_at,
+        "findings_count": len(report.findings),
+    }
+    return th_redacted
+
+
 def _enrich_from_steps(
     record: TraceRecord, project_name: str | None = None,
 ) -> None:
@@ -178,34 +218,17 @@ def process_trace(
     # 5b. Tier 1.5 — TruffleHog. Opt-in via config, suppressible per-invocation
     # via skip_trufflehog=True. Findings used to BLOCK the trace; now we
     # redact the matches in place (same posture as Tier 1) and persist the
-    # finding provenance so the TUI can show what was caught. Unverified
-    # detectors stay opt-out of blocking — no point gating the user on a
-    # pattern-only match when we have a deterministic mitigation.
+    # finding provenance so the TUI can show what was caught. Always
+    # writes a status marker when the tier ran, so the TUI can show
+    # "scanned, no findings" instead of defaulting to "not run".
     trufflehog_report = _run_trufflehog_on_record(record, cfg, skip_trufflehog)
-    if trufflehog_report is not None and trufflehog_report.findings:
-        from ..security.scanner import apply_trufflehog_redactions
-        th_redacted = apply_trufflehog_redactions(
-            record, trufflehog_report.findings
+    th_redacted = _persist_trufflehog_result(record, trufflehog_report)
+    if th_redacted:
+        record.security.redactions_applied = (
+            (record.security.redactions_applied or 0) + th_redacted
         )
-        if th_redacted:
-            record.security.redactions_applied = (
-                (record.security.redactions_applied or 0) + th_redacted
-            )
-            redaction_count += th_redacted
-            needs_review = True
-        # Persist the per-finding detail on metadata so the TUI / CLI
-        # can show which detectors fired and whether they were verified.
-        sec_meta = record.metadata.setdefault("security", {})
-        sec_meta["trufflehog_findings"] = [
-            {
-                "detector": f.detector_name,
-                "verified": bool(f.verified),
-                "line": f.line_number,
-                "source_file": f.source_file,
-            }
-            for f in trufflehog_report.findings
-        ]
-        sec_meta["trufflehog_redactions_applied"] = th_redacted
+        redaction_count += th_redacted
+        needs_review = True
 
     # 6. Classifier
     classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
@@ -250,31 +273,15 @@ def process_imported_trace(
     # security matches (secrets, credentials), not just redaction counts.
     needs_review = bool(pass1.matches or pass2.matches)
 
-    # 3b. Tier 1.5 — TruffleHog. Redact matches in place; persist findings
-    # to metadata. Mirrors the process_trace path.
+    # 3b. Tier 1.5 — TruffleHog. Mirrors the process_trace path.
     trufflehog_report = _run_trufflehog_on_record(record, cfg, skip_trufflehog)
-    if trufflehog_report is not None and trufflehog_report.findings:
-        from ..security.scanner import apply_trufflehog_redactions
-        th_redacted = apply_trufflehog_redactions(
-            record, trufflehog_report.findings
+    th_redacted = _persist_trufflehog_result(record, trufflehog_report)
+    if th_redacted:
+        record.security.redactions_applied = (
+            (record.security.redactions_applied or 0) + th_redacted
         )
-        if th_redacted:
-            record.security.redactions_applied = (
-                (record.security.redactions_applied or 0) + th_redacted
-            )
-            redaction_count += th_redacted
-            needs_review = True
-        sec_meta = record.metadata.setdefault("security", {})
-        sec_meta["trufflehog_findings"] = [
-            {
-                "detector": f.detector_name,
-                "verified": bool(f.verified),
-                "line": f.line_number,
-                "source_file": f.source_file,
-            }
-            for f in trufflehog_report.findings
-        ]
-        sec_meta["trufflehog_redactions_applied"] = th_redacted
+        redaction_count += th_redacted
+        needs_review = True
 
     # 4. Classifier (FIX-10: set flags_reviewed)
     classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
