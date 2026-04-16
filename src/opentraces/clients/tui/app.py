@@ -66,6 +66,17 @@ def escape(text: str) -> str:
     return text.replace("[", "\\[")
 
 
+def _fmt_tokens(n: int) -> str:
+    """Compact human-readable token count: 73, 8.7K, 12K, 1.0M, 73M."""
+    if n < 1000:
+        return str(n)
+    if n < 1_000_000:
+        v = n / 1000
+        return f"{v:.1f}K" if v < 10 else f"{int(v)}K"
+    v = n / 1_000_000
+    return f"{v:.1f}M" if v < 10 else f"{int(v)}M"
+
+
 def _is_recently_touched(ts_end: str | None, window_seconds: int = 7200) -> bool:
     """True if ``ts_end`` is within the last ``window_seconds`` (default 2h).
 
@@ -1032,11 +1043,6 @@ class OpenTracesApp(App):
         started = _format_started(trace.get("timestamp_start"))
 
         cost_str = f"${cost:.2f}" if isinstance(cost, (int, float)) else "—"
-        # Fractional cache hit (what share of `in` came from cache).
-        cache_pct: str = ""
-        if total_in > 0 and cache_read > 0:
-            pct = round(100 * cache_read / total_in)
-            cache_pct = f" [dim]({pct}% cached)[/dim]"
 
         # NBSP ("\u00A0") binds each label to its value so the wrapper never
         # breaks "agent  claude-code" across two lines. Regular double
@@ -1051,8 +1057,8 @@ class OpenTracesApp(App):
             f"[dim]steps[/dim]{nb}{total_steps}  "
             f"[dim]tools[/dim]{nb}{tool_calls}  "
             f"[dim]flags[/dim]{nb}{flag_str}  "
-            f"[dim]in[/dim]{nb}{total_in:,}{cache_pct}  "
-            f"[dim]out[/dim]{nb}{tokens_out:,}  "
+            f"[dim]in[/dim]{nb}{_fmt_tokens(total_in)}  "
+            f"[dim]out[/dim]{nb}{_fmt_tokens(tokens_out)}  "
             f"[dim]cost[/dim]{nb}{cost_str}  "
             f"[dim]started[/dim]{nb}{started}"
         )

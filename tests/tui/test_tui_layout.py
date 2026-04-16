@@ -289,12 +289,12 @@ async def test_bracket_keys_page_preview_from_inbox(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_header_in_sums_input_and_cache_read(tmp_path, monkeypatch):
-    """The trace header's ``in`` figure shows input + cache_read — the
-    honest "tokens the model saw on your behalf" total. Previously we
-    showed only the new/uncached input, which was suspiciously tiny for
-    Claude Code sessions because almost all context comes through the
-    prompt cache. A trailing ``(N% cached)`` tag surfaces the cache
-    share so the user knows it's not all fresh input."""
+    """The trace header's ``in`` figure shows input + cache_read
+    (Claude Code routes almost all context through the prompt cache, so
+    the raw input_tokens alone would read as suspiciously tiny). Numbers
+    render in compact K/M form and the cache percentage is intentionally
+    omitted — it's near-100% for every Claude Code session and adds
+    noise rather than signal."""
     project = tmp_path / "proj"
     _init_project(project)
     staging = project / "traces"
@@ -315,11 +315,13 @@ async def test_header_in_sums_input_and_cache_read(tmp_path, monkeypatch):
         await pilot.pause()
         stream = app.query_one("#trace-stream")
         header = "".join(seg.text for strip in stream.lines[:2] for seg in strip)
-        # in = 12345 + 999111 = 1,011,456.
-        assert "1,011,456" in header, header
-        assert "6,789" in header, header
-        # Cache share renders as "(99% cached)" — 999111 / 1011456 ≈ 98.78%.
-        assert "cached" in header, header
+        # in = 12345 + 999111 = 1,011,456 -> "1.0M"
+        assert "1.0M" in header, header
+        # out = 6789 -> "6.8K"
+        assert "6.8K" in header, header
+        # Cache share no longer rendered in the header.
+        assert "cached" not in header, header
+        assert "%" not in header, header
 
 
 @pytest.mark.asyncio
