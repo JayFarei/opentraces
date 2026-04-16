@@ -390,13 +390,16 @@ class PushModal(ModalScreen[str | None]):
     def compose(self) -> ComposeResult:
         remote_line = self.remote or "no remote set"
         n = self.staged_count
-        title = f"Push {n} staged trace{'s' if n != 1 else ''}"
+        suffix = "" if n == 1 else "s"
         yield Vertical(
-            Static(f"[bold]{title}[/bold]", id="push-title"),
+            Static(
+                f"[bold]Push [{BLUE_ACCENT}]{n}[/{BLUE_ACCENT}] staged trace{suffix}[/bold]",
+                id="push-title",
+            ),
             Static(f"[dim]remote[/dim]  [bright_blue]{remote_line}[/bright_blue]"),
             Static(""),
-            Static("[bold]L[/bold]  LLM review then push    [dim]opentraces push --llm-review[/dim]"),
-            Static("[bold]S[/bold]  Skip review and push   [dim]opentraces push[/dim]"),
+            Static("[bold]L[/bold]  Local LLM review then push   [dim]opentraces push --llm-review[/dim]"),
+            Static("[bold]S[/bold]  Skip review and push         [dim]opentraces push[/dim]"),
             Static(""),
             Static("[dim]Esc to cancel[/dim]"),
             id="push-modal-body",
@@ -622,11 +625,11 @@ SecurityInfoModal {
     padding: 1 2;
 }
 #push-modal-body {
-    width: 60;
+    width: 78;
     height: auto;
     background: ansi_default;
     border: round ansi_bright_blue;
-    padding: 1 2;
+    padding: 2 3;
 }
 
 PushRunnerModal {
