@@ -41,6 +41,82 @@ class CommitBlameHit:
     url: str | None
 
 
+def diff_line_set(cwd: Path, sha: str) -> dict[str, set[int]]:
+    """Return ``{post_image_path: {new_file_line_numbers}}`` for the commit.
+
+    The per-path-per-line version of :func:`diff_line_count`. Produces
+    the exact set of new-file lines the commit introduced, so callers
+    can intersect with a per-file, per-line attribution map and derive
+    "of the lines this commit added/modified, how many are attributed
+    to trace X." The intersection sums ≤ ``diff_line_count`` by
+    construction, which keeps per-trace percentages honest (no more
+    whole-file/diff-denominator mismatches).
+
+    Implementation: ``git diff --unified=0 <sha>^..<sha>`` emits hunk
+    headers ``@@ -<old> +<new_start>,<new_count> @@`` with zero
+    context. We scan for ``+++ b/<path>`` lines to track the file,
+    then each ``@@`` adds ``range(new_start, new_start + new_count)``
+    to the path's set. No parsing of hunk bodies needed.
+
+    Edge cases handled:
+    - Binary files: git emits ``Binary files differ``; no ``@@`` lines,
+      so the path is not added to the result. Correct.
+    - Deletion-only hunks (``new_count == 0``): empty range; skipped.
+    - Merge commits: ``<sha>^..<sha>`` resolves to the first parent,
+      matching :func:`diff_line_count`'s implicit first-parent choice.
+    - Renames: ``+++ b/<newpath>`` is used, so the destination path
+      carries the attribution set. The old path is absent (no new-file
+      content survives under its name).
+
+    Returns ``{}`` for: initial commits (no parent), unknown SHAs, any
+    subprocess failure. Callers treat empty as "denominator unknown".
+    """
+    try:
+        out = subprocess.run(
+            ["git", "diff", "--unified=0", f"{sha}^..{sha}"],
+            cwd=cwd, capture_output=True, text=True, check=False,
+        )
+    except FileNotFoundError:
+        return {}
+    if out.returncode != 0:
+        return {}
+
+    result: dict[str, set[int]] = {}
+    current: str | None = None
+    for line in out.stdout.splitlines():
+        if line.startswith("+++ b/"):
+            current = line[6:]
+            if current == "/dev/null":
+                current = None
+            else:
+                result.setdefault(current, set())
+        elif line.startswith("@@ ") and current is not None:
+            # ``@@ -<old>[,<count>] +<new_start>[,<new_count>] @@ ...``
+            plus_token = None
+            for part in line.split(" "):
+                if part.startswith("+"):
+                    plus_token = part[1:]
+                    break
+            if not plus_token:
+                continue
+            try:
+                if "," in plus_token:
+                    start_str, count_str = plus_token.split(",", 1)
+                    start = int(start_str)
+                    count = int(count_str)
+                else:
+                    start = int(plus_token)
+                    count = 1
+            except ValueError:
+                continue
+            if count <= 0:
+                continue
+            for n in range(start, start + count):
+                result[current].add(n)
+    # Drop empty buckets (pure deletion into a path never touched otherwise).
+    return {p: lines for p, lines in result.items() if lines}
+
+
 def diff_line_count(cwd: Path, sha: str) -> int:
     """Count of added (insertion) lines in the commit's diff.
 

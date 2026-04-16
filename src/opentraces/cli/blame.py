@@ -287,17 +287,49 @@ def _iter_trace_blocks(
     contribs = join_entities_to_traces(project_cwd, sha)
     by_tid = {c.trace_id: c for c in contribs}
 
-    # Per-trace % is diff-scoped so it reads consistently with the headline
-    # "Coverage: N% of diff (M/D lines)" rather than the whole-file blame
-    # denominator. Falls back to whole-file when diff_line_count can't
-    # compute (merge commits, missing shas, binary-only diffs).
+    # Per-trace % is diff-scoped: we count the *new-file lines this commit
+    # introduced* that are attributed to each trace, and divide by the
+    # commit's diff size. This makes the per-trace % read in the same unit
+    # as the "Coverage: N% of diff" headline. When ``diff_line_set`` is
+    # empty (deletion-only / rename-only / mode-only / binary-only / merge
+    # commits) there are no post-image lines to attribute, so the per-
+    # trace view is rendered as "coverage unavailable" rather than fake
+    # percentages against a whole-file denominator.
     diff_total = 0
+    diff_set: dict[str, set[int]] = {}
     try:
-        from ..enrichment.git.blame import diff_line_count
+        from ..enrichment.git.blame import diff_line_count, diff_line_set
         diff_total = diff_line_count(project_cwd, sha)
+        diff_set = diff_line_set(project_cwd, sha)
     except Exception:
         diff_total = 0
-    pct_denom = diff_total if diff_total > 0 else total
+        diff_set = {}
+
+    # Cross-reference the cached per-line attribution against the diff's
+    # new-file line-number set to derive per-trace diff-scoped counts.
+    per_trace_diff_count: dict[str, int] = {}
+    if diff_set:
+        from ..core.cache import AttributionCache
+        from ..core.entity_join import _inflate_lines
+        cache = AttributionCache(project_cwd)
+        files_data = data.get("files") or {}
+        for path, line_numbers in diff_set.items():
+            finfo = files_data.get(path)
+            if not isinstance(finfo, dict):
+                continue
+            lines = _inflate_lines(cache, finfo)
+            if not lines:
+                continue
+            # Build an n -> trace_id lookup once per file.
+            by_n = {
+                int(ln.get("n") or 0): ln.get("trace_id")
+                for ln in lines
+                if isinstance(ln, dict) and ln.get("n") is not None
+            }
+            for n in line_numbers:
+                tid = by_n.get(n)
+                if tid:
+                    per_trace_diff_count[tid] = per_trace_diff_count.get(tid, 0) + 1
 
     # Build the inbox-membership set so each trace row can pick the right
     # handle prefix: ``t:`` for canonical (ingested) traces that resolve via
@@ -343,10 +375,7 @@ def _iter_trace_blocks(
         body_prefix = f"{body_spine_v}   " if not is_last else "    "
 
         tid = tr.get("trace_id") or ""
-        lc = int(tr.get("line_count") or 0)
-        # Cap at diff_total so overlapping per-trace attributions never
-        # push an individual trace over 100% of the diff.
-        pct = int(round((min(lc, pct_denom) / pct_denom) * 100)) if pct_denom else 0
+        lc_whole = int(tr.get("line_count") or 0)
         from ..core.trace_meta import short_trace_id as _short_tid
         short_id = _short_tid(tid)
         meta = resolve_trace_meta(project_cwd, tid)
@@ -359,14 +388,47 @@ def _iter_trace_blocks(
         id_paint = render_handle(handle_kind, tid, use_color=color)
         bullet = paint(Role.TRACE_ID, TRACE_BULLET, use_color=color)
         name_paint = paint(Role.TRACE_NAME, short_name, use_color=color)
-        pct_paint = paint(
-            coverage_role(float(pct)), f"{pct}%", use_color=color,
-        )
         model_paint = paint(Role.DIM, model, use_color=color)
+
+        # Three display modes for the "lines · %" column, picked per commit:
+        #
+        # 1. diff-scoped (preferred): we know the commit's diff; show
+        #    "<diff_lines> of <diff_total> diff lines · <pct>%" with a
+        #    muted "(<whole-file>)" suffix for context. Sums cleanly.
+        # 2. no-diff-signal fallback (diff_total == 0): deletion-only /
+        #    rename-only / mode-only / binary-only / merge / initial-commit.
+        #    Show "(coverage unavailable)" and dim the whole-file count as
+        #    context rather than pretending a percentage exists.
+        # 3. diff-available but this trace owns nothing in the diff: show
+        #    "0 of <diff_total> diff lines · 0%" so the reader can see the
+        #    trace was present on the touched files but didn't author any
+        #    of the new-file lines.
+        if diff_total > 0:
+            lc_diff = per_trace_diff_count.get(tid, 0)
+            pct = int(round((lc_diff / diff_total) * 100)) if diff_total else 0
+            pct_paint = paint(
+                coverage_role(float(pct)), f"{pct}%", use_color=color,
+            )
+            lines_text = f"{lc_diff} of {diff_total} diff lines . {pct_paint}"
+            if lc_whole and lc_whole != lc_diff:
+                lines_text += "  " + paint(
+                    Role.DIM, f"({lc_whole} file-wide)", use_color=color,
+                )
+        else:
+            unavailable = paint(
+                Role.DIM, "(coverage unavailable)", use_color=color,
+            )
+            if lc_whole:
+                lines_text = (
+                    unavailable + "  "
+                    + paint(Role.DIM, f"{lc_whole} file-wide", use_color=color)
+                )
+            else:
+                lines_text = unavailable
 
         header = (
             f"{tee}{body_dash2} {bullet} {id_paint}   {name_paint}  "
-            f"{lc} lines . {pct_paint}"
+            f"{lines_text}"
         )
         if model:
             header += f"   {model_paint}"
@@ -375,8 +437,8 @@ def _iter_trace_blocks(
         contrib = by_tid.get(tid)
         if contrib is None:
             from ..core.entity_join import TraceContribution as _TC
-            contrib = _TC(trace_id=tid, line_count=lc,
-                          line_ratio=(lc / total) if total else 0.0)
+            contrib = _TC(trace_id=tid, line_count=lc_whole,
+                          line_ratio=(lc_whole / total) if total else 0.0)
 
         if verbose_entities:
             bullets = summarize_contribution_verbose(contrib)

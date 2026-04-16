@@ -286,3 +286,116 @@ def test_unknown_sha_exits_2(tmp_path, monkeypatch):
         blame_cmd, ["deadbeefdeadbeef", "--no-color", "--project", str(tmp_path)],
     )
     assert r.exit_code == 2
+
+
+def test_per_trace_counts_are_diff_scoped(tmp_path, monkeypatch):
+    """The per-trace "N of D diff lines · X%" column counts only the
+    lines in the commit's diff, not whole-file attribution.
+
+    Two traces share a file; each owns specific lines. The diff modifies
+    one line only. The expected per-trace rendering credits the trace
+    that owns the modified line with 1/1 (100%) and the other with 0/1
+    (0%), even though whole-file file-wide counts disagree."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # Seed commit.
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=tmp_path, check=True)
+    (tmp_path / "x.txt").write_text("a\nb\nc\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp_path, check=True)
+    # Second commit: modify line 2 only.
+    (tmp_path / "x.txt").write_text("a\nBB\nc\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "tweak"], cwd=tmp_path, check=True)
+    sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True,
+    ).strip()
+    import uuid as _uuid
+    from opentraces.core.config import _write_marker
+    _write_marker(tmp_path, _uuid.uuid4().hex, {})
+
+    # Two traces in the attribution cache: trace-A owns lines 1+3
+    # (whole-file dominant), trace-B owns line 2 (the modified line).
+    cache = AttributionCache(tmp_path)
+    cache.write_attribution(sha, {
+        "commit_sha": sha,
+        "version": 1,
+        "coverage": {"attributed": 3, "total": 3, "ratio": 1.0},
+        "traces": [
+            {"trace_id": "trace-AAAA", "line_count": 2,
+             "files": ["x.txt"], "lifecycle": "final"},
+            {"trace_id": "trace-BBBB", "line_count": 1,
+             "files": ["x.txt"], "lifecycle": "final"},
+        ],
+        "files": {
+            "x.txt": {
+                "total": 3,
+                "lines": [
+                    {"n": 1, "trace_id": "trace-AAAA", "consistency": "attributed"},
+                    {"n": 2, "trace_id": "trace-BBBB", "consistency": "attributed"},
+                    {"n": 3, "trace_id": "trace-AAAA", "consistency": "attributed"},
+                ],
+            },
+        },
+    })
+
+    r = CliRunner().invoke(
+        blame_cmd, [sha, "--no-color", "--project", str(tmp_path)],
+    )
+    assert r.exit_code == 0, r.output
+    # trace-B wrote the only diff line.
+    assert "0 of 1 diff lines" in r.output  # trace-A contributed none to THIS commit
+    assert "1 of 1 diff lines" in r.output  # trace-B authored the change
+
+
+def test_deletion_only_commit_shows_unavailable(tmp_path, monkeypatch):
+    """Deletion-only commits have no post-image lines to attribute. The
+    per-trace column renders "(coverage unavailable)" rather than a
+    misleading 0% against a whole-file denominator."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=tmp_path, check=True)
+    (tmp_path / "x.txt").write_text("a\nb\nc\n")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp_path, check=True)
+    # Deletion-only commit.
+    (tmp_path / "x.txt").unlink()
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "delete"], cwd=tmp_path, check=True)
+    sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True,
+    ).strip()
+    import uuid as _uuid
+    from opentraces.core.config import _write_marker
+    _write_marker(tmp_path, _uuid.uuid4().hex, {})
+
+    cache = AttributionCache(tmp_path)
+    # Deletion-only: the file is ``missing_from_audit`` but we still list
+    # a trace row so the reader sees *who* the touched-file attribution
+    # pointed at. No line array because the file is gone post-commit.
+    cache.write_attribution(sha, {
+        "commit_sha": sha,
+        "version": 1,
+        "coverage": {"attributed": 0, "total": 3, "ratio": 0.0},
+        "traces": [
+            {"trace_id": "trace-AAAA", "line_count": 3,
+             "files": ["x.txt"], "lifecycle": "final"},
+        ],
+        "files": {
+            "x.txt": {"status": "missing_from_audit", "total_lines": 0,
+                      "by_trace": {}},
+        },
+    })
+
+    r = CliRunner().invoke(
+        blame_cmd, [sha, "--no-color", "--project", str(tmp_path)],
+    )
+    assert r.exit_code == 0, r.output
+    # No diff lines → per-trace renders as unavailable.
+    assert "(coverage unavailable)" in r.output
+    # Whole-file context preserved for diagnostic value.
+    assert "3 file-wide" in r.output

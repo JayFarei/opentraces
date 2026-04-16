@@ -169,6 +169,19 @@ def load_snapshots_for_project(project_cwd: Path) -> list[Snapshot]:
 
 
 def _load_working_tree_events(project_cwd: Path) -> list[Snapshot]:
+    """Load working-tree sweeps as synthetic ``Snapshot`` records.
+
+    Each event may carry a ``trace_id`` field populated by the watcher
+    when a session was live at sweep time — in that case we credit the
+    session (per the mission-decided tradeoff: agent-initiated Bash
+    effects during a live session attribute to that session). Events
+    without a trace_id fall back to the ``watcher`` pseudo-actor.
+
+    Known ambiguity: the watcher cannot distinguish a concurrent human
+    Bash edit from an agent-initiated one during a live session window.
+    We accept this misattribution in exchange for the common case (agent
+    Bash >> concurrent human Bash). See ``kb/archive/blame-loop/``.
+    """
     f = _watcher_state_file(project_cwd)
     if not f.exists():
         return []
@@ -1420,9 +1433,17 @@ def attribute_commit(project_cwd: Path, commit_ref: str,
             continue
 
         try:
+            # ``-M`` detects moves within a file; ``-C -C`` finds copies
+            # of blocks across files, including ones introduced via rename.
+            # Without these, a session that moves or extracts its own code
+            # into a helper file loses credit — the move-target looks like
+            # newly-written content when the bytes are actually preserved.
+            # The cost is O(similarity-search per blamed hunk); measurable
+            # on very large files but invisible for this project's sizes.
             blame = git("-C", str(project_cwd),
                         "-c", f"diff.algorithm={DIFF_ALGORITHM}",
-                        "blame", "--line-porcelain", audit_tip, "--", rel)
+                        "blame", "--line-porcelain", "-M", "-C", "-C",
+                        audit_tip, "--", rel)
         except RuntimeError as e:
             per_file[rel] = {"status": "blame_failed", "error": str(e)[:200]}
             continue
