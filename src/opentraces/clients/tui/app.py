@@ -1021,13 +1021,19 @@ class OpenTracesApp(App):
         # that the pipeline did work. Now we show redactions_applied
         # (what the pipeline removed) and only flip to red when there are
         # residual findings that still need human review.
+        # "flags" = total items the scanner flagged (auto-redacted +
+        # still-residual). Red when any are unredacted and still need
+        # human review; default color otherwise. We drop the "redacted"
+        # / "to review" words — color carries the signal and the bare
+        # number keeps the header compact.
         sec_top = trace.get("security") or {}
         residual = len(trace.get("_security_flags") or [])
         redactions = int(sec_top.get("redactions_applied") or 0)
+        total_flags = residual + redactions
         if residual:
-            flag_str = f"[red]{residual} to review[/red]"
-        elif redactions:
-            flag_str = f"{redactions} redacted"
+            flag_str = f"[red]{total_flags}[/red]"
+        elif total_flags:
+            flag_str = str(total_flags)
         else:
             flag_str = "0"
 
