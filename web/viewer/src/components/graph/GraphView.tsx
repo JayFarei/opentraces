@@ -4,6 +4,7 @@ import type { Theme } from "../../tokens";
 import { F, pctColor, trunc, traceColor } from "../../tokens";
 import { Panel } from "../Panel";
 import { ForwardBlame, ClaudeLogo } from "./ForwardBlame";
+import { SemanticDiffCounts } from "./SemanticDiffSummary";
 import { api } from "../../lib/api";
 import type { GraphCommit } from "../../lib/api";
 
@@ -77,12 +78,22 @@ export function GraphView({
             return (
               <div
                 key={c.sha}
+                data-testid={`graph-commit-${c.sha}`}
                 onClick={() => setSelIdx(ci)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  setSelIdx(ci);
+                }}
+                role="button"
+                tabIndex={0}
+                aria-pressed={isSel}
                 style={{
                   borderBottom: `1px solid ${t.border}`,
                   background: isSel ? `${t.cyan}10` : "transparent",
                   borderLeft: isSel ? `2px solid ${t.cyan}` : "2px solid transparent",
                   cursor: "pointer",
+                  outline: "none",
                 }}
               >
                 <div style={{
@@ -108,30 +119,68 @@ export function GraphView({
                     return (
                       <div
                         key={tr.trace_id + ti}
-                        onClick={(e) => { e.stopPropagation(); if (tr.canonical) gotoTrace(tr.trace_id); }}
                         style={{
-                          display: "flex", alignItems: "center", gap: 8,
+                          display: "flex", alignItems: "flex-start", gap: 8,
                           fontFamily: F.code, fontSize: 11, lineHeight: 1.6,
-                          cursor: tr.canonical ? "pointer" : "default",
+                          padding: "2px 0",
                         }}
                       >
-                        <span style={{ color: t.textDim, minWidth: 10 }}>
+                        <span style={{ color: t.textDim, minWidth: 10, flex: "0 0 auto" }}>
                           {ti === c.traces.length - 1 ? "└" : "├"}
                         </span>
                         <div style={{
                           width: 14, height: 14, minWidth: 14, borderRadius: "50%",
                           background: `${color}15`, border: `1px solid ${color}30`,
                           display: "flex", alignItems: "center", justifyContent: "center",
+                          flex: "0 0 auto",
                         }}><ClaudeLogo size={7} color={`${color}CC`} /></div>
-                        <span style={{ color }}>{tr.id}</span>
-                        {tr.changes && <span style={{ color: t.textMuted }}>{tr.changes}</span>}
-                        {tr.fns && (
-                          <span style={{
-                            color: t.textDim, flex: 1, minWidth: 0,
-                            whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-                          }}>{tr.fns}</span>
+                        {tr.canonical ? (
+                          <button
+                            data-testid={`graph-trace-link-${tr.trace_id}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelIdx(ci);
+                              gotoTrace(tr.trace_id);
+                            }}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              padding: 0,
+                              margin: 0,
+                              color,
+                              cursor: "pointer",
+                              fontFamily: F.code,
+                              fontSize: 11,
+                              textDecoration: "underline",
+                              textDecorationColor: `${color}40`,
+                              textUnderlineOffset: 2,
+                              flex: "0 0 auto",
+                            }}
+                          >
+                            {tr.id}
+                          </button>
+                        ) : (
+                          <span style={{ color, flex: "0 0 auto" }}>{tr.id}</span>
                         )}
-                        {tr.info && <span style={{ color: t.textDim, fontSize: 10 }}>{tr.info}</span>}
+                        <div style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: 6,
+                          alignItems: "center",
+                          flex: 1,
+                          minWidth: 0,
+                        }}>
+                          {tr.changes ? <SemanticDiffCounts text={tr.changes} t={t} compact /> : null}
+                          {tr.fns ? (
+                            <span style={{
+                              color: t.textDim,
+                              minWidth: 0,
+                              overflowWrap: "anywhere",
+                              wordBreak: "break-word",
+                            }}>{tr.fns}</span>
+                          ) : null}
+                          {tr.info ? <span style={{ color: t.textDim, fontSize: 10 }}>{tr.info}</span> : null}
+                        </div>
                       </div>
                     );
                   })}
@@ -176,7 +225,13 @@ export function GraphView({
             </div>
           )}
           {selected && blameQ.data && (
-            <ForwardBlame t={t} blame={blameQ.data} mode={mode} onSelectTrace={gotoTrace} />
+            <ForwardBlame
+              t={t}
+              blame={blameQ.data}
+              mode={mode}
+              onSelectTrace={gotoTrace}
+              commitMsgFallback={selected.msg}
+            />
           )}
         </div>
       </Panel>

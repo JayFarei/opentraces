@@ -1,6 +1,7 @@
 import type { Theme } from "../../tokens";
 import { F, pctColor, traceColor } from "../../tokens";
 import type { BlamePayload } from "../../lib/api";
+import { SemanticDiffSummary, parseSemanticDiffSummary } from "./SemanticDiffSummary";
 
 function ClaudeLogo({ size = 14, color }: { size?: number; color: string }) {
   const n = 13, cx = 16, cy = 16;
@@ -25,11 +26,14 @@ function ClaudeLogo({ size = 14, color }: { size?: number; color: string }) {
 }
 
 export function ForwardBlame({
-  t, blame, mode, onSelectTrace,
+  t, blame, mode, onSelectTrace, commitMsgFallback,
 }: {
   t: Theme; blame: BlamePayload; mode: "dark" | "light";
   onSelectTrace: (traceId: string) => void;
+  commitMsgFallback?: string;
 }) {
+  const commitMsg = blame.msg?.trim() || commitMsgFallback || "(no subject)";
+
   return (
     <div style={{ fontFamily: F.code, fontSize: 12, lineHeight: 1.7 }}>
       <div style={{ marginBottom: 16 }}>
@@ -40,7 +44,7 @@ export function ForwardBlame({
             color: t.yellow, fontWeight: 600, textDecoration: "underline",
             textDecorationColor: `${t.yellow}40`, textUnderlineOffset: 2,
           }}>{blame.id}</span>
-          <span style={{ color: t.text, fontWeight: 500 }}>{blame.msg || "(no subject)"}</span>
+          <span data-testid="graph-blame-commit-msg" style={{ color: t.text, fontWeight: 500 }}>{commitMsg}</span>
         </div>
         <div style={{ color: t.textMuted, fontSize: 11, paddingLeft: 18, marginTop: 2 }}>
           Coverage: <span style={{ color: pctColor(blame.pct, t) }}>{blame.coverage}</span>{" "}
@@ -52,6 +56,7 @@ export function ForwardBlame({
 
       {blame.sessions.map((s, i) => {
         const dc = traceColor(s.trace_id, mode);
+        const entityParts = parseSemanticDiffSummary(s.entities);
         return (
           <div
             key={s.trace_id + i}
@@ -81,8 +86,13 @@ export function ForwardBlame({
               {s.model && <span style={{ color: t.cyan, fontSize: 11 }}>{s.model}</span>}
             </div>
             {s.entities && (
-              <div style={{ color: t.textMuted, fontSize: 11, paddingLeft: 26, marginTop: 1 }}>
-                {s.entities}
+              <div style={{ fontSize: 11, paddingLeft: 26, marginTop: 4, minWidth: 0 }}>
+                <SemanticDiffSummary
+                  text={s.entities}
+                  t={t}
+                  compact
+                  stacked={entityParts.length > 1}
+                />
               </div>
             )}
           </div>
