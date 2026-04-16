@@ -20,7 +20,8 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
   const [viewportWidth, setViewportWidth] = useState(() => (
     typeof window === "undefined" ? 1440 : window.innerWidth
   ));
-  const [treeDrawerOpen, setTreeDrawerOpen] = useState(false);
+  const [treePanelOpen, setTreePanelOpen] = useState(false);
+
   const q = useQuery({
     queryKey: ["trace", traceId],
     queryFn: () => api.trace(traceId!),
@@ -62,16 +63,54 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
   }, [traceId, trace, firstStepNodeId, firstStepIndex]);
 
   useEffect(() => {
-    if (treeDocked) setTreeDrawerOpen(false);
-  }, [treeDocked, traceId]);
+    setTreePanelOpen(false);
+  }, [traceId, treeDocked]);
+
+  const handleTreeSelect = (nodeId: string, stepIndex: number | null) => {
+    setSelectedNodeId(nodeId);
+    if (stepIndex == null) return;
+    setActiveStepIndex(stepIndex);
+    setScrollTargetNodeId(nodeId);
+  };
+
+  const handleActiveStepChange = (stepIndex: number) => {
+    setActiveStepIndex((current) => (current === stepIndex ? current : stepIndex));
+    setSelectedNodeId((current) => {
+      const stepNodeId = traceStepNodeId(stepIndex);
+      return current === stepNodeId ? current : stepNodeId;
+    });
+  };
+
+  const conversationPane = trace ? (
+    <div
+      data-testid="trace-preview-conversation-pane"
+      style={{ flex: 1, minWidth: 0, minHeight: 0, height: "100%" }}
+    >
+      <ConversationView
+        t={t}
+        steps={trace.steps || []}
+        traceId={trace.trace_id}
+        activeStepIndex={activeStepIndex}
+        selectedNodeId={selectedNodeId}
+        scrollTargetNodeId={scrollTargetNodeId}
+        onScrollTargetConsumed={() => setScrollTargetNodeId(null)}
+        onActiveStepChange={handleActiveStepChange}
+      />
+    </div>
+  ) : null;
 
   return (
     <Panel n={5} label="Trace Preview" t={t} style={{ flex: 1, minHeight: 0 }}>
       {trace && meta ? (
         <>
           <div style={{
-            padding: "0 18px 10px", fontFamily: F.code, fontSize: 11,
-            display: "flex", flexWrap: "wrap", gap: 8, lineHeight: 1.8,
+            padding: "0 18px 10px",
+            fontFamily: F.code,
+            fontSize: 11,
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 8,
+            lineHeight: 1.8,
             borderBottom: `1px solid ${t.border}`,
           }}>
             {[
@@ -92,9 +131,12 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
             ))}
           </div>
           <div style={{
-            display: "flex", gap: 16, padding: "0 18px",
+            display: "flex",
+            gap: 16,
+            padding: "0 18px",
             borderBottom: `1px solid ${t.border}`,
-            fontFamily: F.code, fontSize: 12,
+            fontFamily: F.code,
+            fontSize: 12,
             alignItems: "center",
           }}>
             {(["conv", "blame"] as const).map((id) => (
@@ -102,7 +144,8 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
                 key={id}
                 onClick={() => setTab(id)}
                 style={{
-                  padding: "8px 0", cursor: "pointer",
+                  padding: "8px 0",
+                  cursor: "pointer",
                   color: tab === id ? t.text : t.textMuted,
                   borderBottom: tab === id ? `1px solid ${t.accent}` : "1px solid transparent",
                   fontWeight: tab === id ? 500 : 400,
@@ -113,19 +156,20 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
             ))}
             {tab === "conv" && hasTree && !treeDocked ? (
               <button
-                onClick={() => setTreeDrawerOpen((current) => !current)}
+                data-testid="trace-map-toggle"
+                onClick={() => setTreePanelOpen((current) => !current)}
                 style={{
                   marginLeft: "auto",
                   border: `1px solid ${t.border}`,
-                  background: treeDrawerOpen ? `${t.cyan}12` : t.bgAlt,
-                  color: treeDrawerOpen ? t.text : t.textMuted,
+                  background: treePanelOpen ? `${t.cyan}12` : t.bgAlt,
+                  color: treePanelOpen ? t.text : t.textMuted,
                   fontFamily: F.code,
                   fontSize: 11,
                   padding: "4px 8px",
                   cursor: "pointer",
                 }}
               >
-                ☰ map
+                {treePanelOpen ? "conversation" : "map"}
               </button>
             ) : null}
           </div>
@@ -135,93 +179,49 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
             overflow: tab === "conv" ? "hidden" : "auto",
             padding: "16px 18px",
           }}>
-            {tab === "conv"
-              ? (
-                <div style={{ display: "flex", gap: 16, minHeight: "100%", height: "100%", position: "relative" }}>
-                  {hasTree && treeDocked ? (
-                    <TraceTree
-                      t={t}
-                      traceId={trace.trace_id}
-                      roots={treeQ.data?.tree ?? []}
-                      selectedNodeId={selectedNodeId}
-                      activePathNodeId={activePathNodeId}
-                      onSelectNode={(nodeId, stepIndex) => {
-                        setSelectedNodeId(nodeId);
-                        if (stepIndex == null) return;
-                        setActiveStepIndex(stepIndex);
-                        setScrollTargetNodeId(nodeId);
-                      }}
-                    />
-                  ) : null}
-                  <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
-                    <ConversationView
-                      t={t}
-                      steps={trace.steps || []}
-                      traceId={trace.trace_id}
-                      activeStepIndex={activeStepIndex}
-                      selectedNodeId={selectedNodeId}
-                      scrollTargetNodeId={scrollTargetNodeId}
-                      onScrollTargetConsumed={() => setScrollTargetNodeId(null)}
-                      onActiveStepChange={(stepIndex) => {
-                        setActiveStepIndex((current) => (current === stepIndex ? current : stepIndex));
-                        setSelectedNodeId((current) => {
-                          const stepNodeId = traceStepNodeId(stepIndex);
-                          return current === stepNodeId ? current : stepNodeId;
-                        });
-                      }}
-                    />
-                  </div>
-                  {hasTree && !treeDocked && treeDrawerOpen ? (
-                    <>
-                      <button
-                        onClick={() => setTreeDrawerOpen(false)}
-                        aria-label="Close conversation map"
-                        style={{
-                          position: "absolute",
-                          inset: 0,
-                          border: "none",
-                          background: "rgba(0, 0, 0, 0.36)",
-                          cursor: "pointer",
-                          padding: 0,
-                        }}
-                      />
-                      <div style={{
-                        position: "absolute",
-                        left: 0,
-                        top: 0,
-                        bottom: 0,
-                        width: "min(420px, calc(100% - 24px))",
-                        zIndex: 1,
-                      }}>
-                        <TraceTree
-                          t={t}
-                          traceId={trace.trace_id}
-                          roots={treeQ.data?.tree ?? []}
-                          selectedNodeId={selectedNodeId}
-                          activePathNodeId={activePathNodeId}
-                          onSelectNode={(nodeId, stepIndex) => {
-                            setSelectedNodeId(nodeId);
-                            if (stepIndex != null) {
-                              setActiveStepIndex(stepIndex);
-                              setScrollTargetNodeId(nodeId);
-                            }
-                            setTreeDrawerOpen(false);
-                          }}
-                          presentation="drawer"
-                          onClose={() => setTreeDrawerOpen(false)}
-                        />
-                      </div>
-                    </>
-                  ) : null}
+            {tab === "conv" ? (
+              treeDocked ? (
+                <div style={{ display: "flex", gap: 16, minHeight: "100%", height: "100%" }}>
+                  <TraceTree
+                    t={t}
+                    traceId={trace.trace_id}
+                    roots={treeQ.data?.tree ?? []}
+                    selectedNodeId={selectedNodeId}
+                    activePathNodeId={activePathNodeId}
+                    onSelectNode={handleTreeSelect}
+                  />
+                  {conversationPane}
                 </div>
+              ) : treePanelOpen && hasTree ? (
+                <TraceTree
+                  t={t}
+                  traceId={trace.trace_id}
+                  roots={treeQ.data?.tree ?? []}
+                  selectedNodeId={selectedNodeId}
+                  activePathNodeId={activePathNodeId}
+                  presentation="panel"
+                  onSelectNode={(nodeId, stepIndex) => {
+                    handleTreeSelect(nodeId, stepIndex);
+                    setTreePanelOpen(false);
+                  }}
+                />
+              ) : (
+                conversationPane
               )
-              : <InverseBlameView t={t} traceId={trace.trace_id} />}
+            ) : (
+              <InverseBlameView t={t} traceId={trace.trace_id} />
+            )}
           </div>
         </>
       ) : (
         <div style={{
-          flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
-          fontFamily: F.code, fontSize: 12, color: t.textMuted,
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: F.code,
+          fontSize: 12,
+          color: t.textMuted,
         }}>
           {traceId ? (q.isError ? "failed to load trace" : "loading…") : "no trace selected"}
         </div>

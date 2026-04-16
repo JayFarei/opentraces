@@ -1,6 +1,6 @@
 import type { TraceTreeNode } from "./api";
 
-export type FilterMode = "default" | "no-tools" | "user-only" | "labeled-only" | "all";
+export type FilterMode = "everything" | "user-only" | "agent-only";
 
 export interface FlatTreeNode {
   node: TraceTreeNode;
@@ -59,16 +59,12 @@ function passes(node: TraceTreeNode, filterMode: FilterMode, search: string): bo
   const tokens = search.toLowerCase().split(/\s+/).filter(Boolean);
   if (tokens.length && !tokens.every((token) => text.includes(token))) return false;
   switch (filterMode) {
-    case "no-tools":
-      return node.kind !== "tool_call" && node.kind !== "observation";
+    case "everything":
+      return true;
     case "user-only":
       return node.kind === "step" && node.role === "user";
-    case "labeled-only":
-      return Boolean(node.label);
-    case "all":
-    case "default":
-    default:
-      return true;
+    case "agent-only":
+      return node.kind === "step" && node.role === "agent";
   }
 }
 

@@ -1,14 +1,49 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Theme } from "../../tokens";
 import { F } from "../../tokens";
-import { api, type TraceTreeNode } from "../../lib/api";
+import type { TraceTreeNode } from "../../lib/api";
 import { flattenTree, type FilterMode, traceStepNodeId } from "../../lib/traceTree";
 
 const FILTER_OPTIONS: Array<{ value: FilterMode; label: string }> = [
-  { value: "default", label: "everything" },
-  { value: "no-tools", label: "no tools" },
-  { value: "user-only", label: "prompts only" },
+  { value: "everything", label: "all" },
+  { value: "user-only", label: "prompts" },
 ];
+
+function buildParentMap(nodes: TraceTreeNode[]): Map<string, string | null> {
+  const parents = new Map<string, string | null>();
+  const walk = (node: TraceTreeNode) => {
+    parents.set(node.id, node.parent_id ?? null);
+    node.children.forEach(walk);
+  };
+  nodes.forEach(walk);
+  return parents;
+}
+
+function buildOwnerStepMap(nodes: TraceTreeNode[]): Map<string, string | null> {
+  const owners = new Map<string, string | null>();
+  const walk = (node: TraceTreeNode, ownerStepId: string | null) => {
+    const nextOwnerStepId = node.kind === "step" ? node.id : ownerStepId;
+    owners.set(node.id, nextOwnerStepId);
+    node.children.forEach((child) => walk(child, nextOwnerStepId));
+  };
+  nodes.forEach((node) => walk(node, null));
+  return owners;
+}
+
+function buildPromptDescendantCounts(nodes: TraceTreeNode[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  const walk = (node: TraceTreeNode): number => {
+    let total = 0;
+    node.children.forEach((child) => {
+      total += walk(child);
+      if (child.kind === "step" && child.role === "user") total += 1;
+    });
+    counts.set(node.id, total);
+    return total;
+  };
+  nodes.forEach(walk);
+  return counts;
+}
 
 export function TraceTree({
   t,
@@ -18,7 +53,6 @@ export function TraceTree({
   activePathNodeId,
   onSelectNode,
   presentation = "rail",
-  onClose,
 }: {
   t: Theme;
   traceId: string;
@@ -26,35 +60,55 @@ export function TraceTree({
   selectedNodeId: string | null;
   activePathNodeId: string | null;
   onSelectNode: (nodeId: string, stepIndex: number | null) => void;
-  presentation?: "rail" | "drawer";
-  onClose?: () => void;
+  presentation?: "rail" | "panel";
 }) {
-  const [filterMode, setFilterMode] = useState<FilterMode>("default");
+  const [filterMode, setFilterMode] = useState<FilterMode>("everything");
   const [search, setSearch] = useState("");
   const [folded, setFolded] = useState<Set<string>>(new Set());
   const [detailStepId, setDetailStepId] = useState<string | null>(null);
-  const [resumeInfo, setResumeInfo] = useState<string | null>(null);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const scrollRef = useRef<HTMLDivElement>(null);
+  const parents = useMemo(() => buildParentMap(roots), [roots]);
+  const ownerStepIds = useMemo(() => buildOwnerStepMap(roots), [roots]);
+  const promptDescendantCounts = useMemo(() => buildPromptDescendantCounts(roots), [roots]);
+  const isPromptMode = filterMode === "user-only";
 
   const rows = useMemo(
     () => flattenTree(roots, activePathNodeId, folded, filterMode, search, {
-      detailStepId,
+      detailStepId: detailStepId ?? null,
       promoteActiveSiblings: false,
     }),
-    [roots, activePathNodeId, detailStepId, folded, filterMode, search],
+    [activePathNodeId, detailStepId, filterMode, folded, roots, search],
   );
 
-  useEffect(() => {
-    if (!selectedNodeId) return;
-    rowRefs.current.get(selectedNodeId)?.scrollIntoView({ block: "nearest" });
-  }, [selectedNodeId, rows.length]);
+  const focusedRowId = useMemo(() => {
+    const visibleIds = new Set(rows.map((row) => row.node.id));
+    const pickVisibleAncestor = (startId: string | null) => {
+      let current = startId;
+      while (current) {
+        if (visibleIds.has(current)) return current;
+        current = parents.get(current) ?? null;
+      }
+      return null;
+    };
+    return pickVisibleAncestor(selectedNodeId) ?? pickVisibleAncestor(activePathNodeId);
+  }, [activePathNodeId, parents, rows, selectedNodeId]);
 
   useEffect(() => {
-    setDetailStepId(null);
+    if (!focusedRowId) return;
+    rowRefs.current.get(focusedRowId)?.scrollIntoView({ block: "nearest" });
+  }, [focusedRowId, rows.length]);
+
+  useEffect(() => {
     setFolded(new Set());
+    setDetailStepId(null);
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }, [traceId]);
+
+  useEffect(() => {
+    setFolded(new Set());
+    setDetailStepId(null);
+  }, [filterMode]);
 
   const toggleFold = (nodeId: string) => {
     setFolded((current) => {
@@ -65,63 +119,22 @@ export function TraceTree({
     });
   };
 
-  const onResume = async (stepId: string) => {
-    const result = await api.resumeTrace(traceId, stepId);
-    setResumeInfo(`${result.argv.join(" ")}\ntruncated ${result.truncated_at_line} lines`);
-  };
-
-  const isDrawer = presentation === "drawer";
+  const isPanel = presentation === "panel";
 
   return (
     <div style={{
-      width: isDrawer ? "100%" : 390,
-      minWidth: isDrawer ? 0 : 360,
-      borderRight: isDrawer ? "none" : `1px solid ${t.border}`,
-      borderLeft: isDrawer ? `1px solid ${t.borderStrong}` : "none",
-      paddingRight: isDrawer ? 0 : 12,
+      width: isPanel ? "100%" : 390,
+      minWidth: isPanel ? 0 : 360,
+      height: "100%",
+      borderRight: isPanel ? "none" : `1px solid ${t.border}`,
+      paddingRight: isPanel ? 0 : 12,
       display: "flex",
       flexDirection: "column",
       gap: 10,
       minHeight: 0,
-      background: isDrawer ? t.panelBg : "transparent",
-      boxShadow: isDrawer ? "0 0 0 1px rgba(0,0,0,0.18), -20px 0 40px rgba(0,0,0,0.28)" : "none",
+      background: "transparent",
     }}>
-      {isDrawer ? (
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 10,
-          padding: "4px 0 0",
-        }}>
-          <span style={{
-            fontFamily: F.code,
-            fontSize: 11,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            color: t.textMuted,
-          }}>
-            conversation map
-          </span>
-          {onClose ? (
-            <button
-              onClick={onClose}
-              style={{
-                border: `1px solid ${t.border}`,
-                background: t.bgAlt,
-                color: t.textMuted,
-                fontFamily: F.code,
-                fontSize: 11,
-                cursor: "pointer",
-                padding: "4px 8px",
-              }}
-            >
-              close
-            </button>
-          ) : null}
-        </div>
-      ) : null}
-      <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <input
           value={search}
           onChange={(event) => setSearch(event.target.value)}
@@ -137,14 +150,16 @@ export function TraceTree({
           }}
         />
         <select
+          data-testid="trace-tree-filter"
           value={filterMode}
           onChange={(event) => setFilterMode(event.target.value as FilterMode)}
           style={{
             border: `1px solid ${t.border}`,
             background: t.bgAlt,
-            color: t.text,
+            color: t.textMuted,
             fontFamily: F.code,
             fontSize: 11,
+            padding: "8px 10px",
           }}
         >
           {FILTER_OPTIONS.map((option) => (
@@ -153,16 +168,29 @@ export function TraceTree({
         </select>
       </div>
       <div ref={scrollRef} data-testid="trace-tree-scroll" style={{ overflow: "auto", minHeight: 0, paddingRight: 6 }}>
-        {rows.map((row) => {
+        {rows.length === 0 ? (
+          <div style={{
+            padding: "8px 4px",
+            fontFamily: F.code,
+            fontSize: 11,
+            color: t.textMuted,
+          }}>
+            {isPromptMode ? "no prompts match" : "no rows match"}
+          </div>
+        ) : rows.map((row) => {
           const stepId = row.node.step_index !== null ? traceStepNodeId(row.node.step_index) : null;
           const isStep = row.node.kind === "step" && stepId !== null;
-          const resumeStepId = isStep ? stepId : null;
-          const selected = selectedNodeId === row.node.id;
-          const detailCount = isStep ? row.node.children.filter((child) => child.kind !== "step").length : 0;
-          const detailOpen = isStep && detailStepId === row.node.id;
-          const compactPreview = row.node.preview.replace(/\s+/g, " ").trim();
+          const selected = focusedRowId === row.node.id;
+          const compactPreview = isPromptMode
+            ? row.node.preview.replace(/^user:\s*/i, "").replace(/\s+/g, " ").trim()
+            : row.node.preview.replace(/\s+/g, " ").trim();
           const markerCount = Math.min(row.indent, 4);
           const overflowDepth = Math.max(0, row.indent - markerCount);
+          const promptCount = promptDescendantCounts.get(row.node.id) ?? 0;
+          const branchCount = isPromptMode ? promptCount : row.node.children.length;
+          const detailCount = isStep ? row.node.children.filter((child) => child.kind !== "step").length : 0;
+          const detailOpen = isStep && detailStepId === row.node.id;
+          const ownerStepId = ownerStepIds.get(row.node.id) ?? null;
           const nodeBadge = isStep
             ? null
             : row.node.kind === "tool_call"
@@ -172,6 +200,7 @@ export function TraceTree({
                 : row.node.kind === "subagent_ref"
                   ? "branch"
                   : row.node.kind;
+
           return (
             <div
               key={row.node.id}
@@ -189,7 +218,7 @@ export function TraceTree({
               }}
             >
               <div style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 0 }}>
-                {row.node.children.length > 0 ? (
+                {branchCount > 0 ? (
                   <button
                     onClick={() => toggleFold(row.node.id)}
                     style={{
@@ -228,8 +257,10 @@ export function TraceTree({
                 </div>
                 <button
                   onClick={() => {
-                    if (isStep) setDetailStepId(row.node.id);
-                    else if (stepId) setDetailStepId(stepId);
+                    if (filterMode === "everything") {
+                      if (isStep) setDetailStepId(row.node.id);
+                      else if (ownerStepId) setDetailStepId(ownerStepId);
+                    }
                     onSelectNode(row.node.id, row.node.step_index);
                   }}
                   style={{
@@ -248,39 +279,79 @@ export function TraceTree({
                     padding: 0,
                   }}
                 >
-                  {nodeBadge ? (
-                    <span style={{
-                      color: selected ? t.text : t.textMuted,
-                      background: selected ? `${t.cyan}18` : t.bgAlt,
-                      border: `1px solid ${selected ? t.cyan : t.border}`,
-                      padding: "1px 5px",
-                      whiteSpace: "nowrap",
-                    }}>
-                      {nodeBadge}
-                    </span>
-                  ) : null}
-                  {!isStep && stepId ? (
-                    <span style={{
-                      color: selected ? t.text : t.textDim,
-                      border: `1px solid ${selected ? t.cyan : t.border}`,
-                      background: selected ? `${t.cyan}18` : t.bgAlt,
-                      padding: "1px 5px",
-                      whiteSpace: "nowrap",
-                    }}>
-                      {stepId}
-                    </span>
-                  ) : null}
-                  {isStep && detailCount > 0 ? (
-                    <span style={{
-                      color: detailOpen ? t.text : t.textMuted,
-                      border: `1px solid ${detailOpen ? t.cyan : t.border}`,
-                      background: detailOpen ? `${t.cyan}18` : t.bgAlt,
-                      padding: "1px 5px",
-                      whiteSpace: "nowrap",
-                    }}>
-                      {detailOpen ? "open" : `+${detailCount}`}
-                    </span>
-                  ) : null}
+                  {isPromptMode ? (
+                    <>
+                      {stepId ? (
+                        <span style={{
+                          color: selected ? t.text : t.textMuted,
+                          background: selected ? `${t.cyan}18` : t.bgAlt,
+                          border: `1px solid ${selected ? t.cyan : t.border}`,
+                          padding: "1px 5px",
+                          whiteSpace: "nowrap",
+                        }}>
+                          {stepId}
+                        </span>
+                      ) : null}
+                      {promptCount > 0 ? (
+                        <span style={{
+                          color: selected ? t.text : t.textDim,
+                          border: `1px solid ${selected ? t.cyan : t.border}`,
+                          background: selected ? `${t.cyan}18` : t.bgAlt,
+                          padding: "1px 5px",
+                          whiteSpace: "nowrap",
+                        }}>
+                          +{promptCount}
+                        </span>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      {isStep && stepId ? (
+                        <span style={{
+                          color: selected ? t.text : t.textMuted,
+                          background: selected ? `${t.cyan}18` : t.bgAlt,
+                          border: `1px solid ${selected ? t.cyan : t.border}`,
+                          padding: "1px 5px",
+                          whiteSpace: "nowrap",
+                        }}>
+                          {stepId}
+                        </span>
+                      ) : null}
+                      {nodeBadge ? (
+                        <span style={{
+                          color: selected ? t.text : t.textMuted,
+                          background: selected ? `${t.cyan}18` : t.bgAlt,
+                          border: `1px solid ${selected ? t.cyan : t.border}`,
+                          padding: "1px 5px",
+                          whiteSpace: "nowrap",
+                        }}>
+                          {nodeBadge}
+                        </span>
+                      ) : null}
+                      {!isStep && stepId ? (
+                        <span style={{
+                          color: selected ? t.text : t.textDim,
+                          border: `1px solid ${selected ? t.cyan : t.border}`,
+                          background: selected ? `${t.cyan}18` : t.bgAlt,
+                          padding: "1px 5px",
+                          whiteSpace: "nowrap",
+                        }}>
+                          {stepId}
+                        </span>
+                      ) : null}
+                      {isStep && detailCount > 0 ? (
+                        <span style={{
+                          color: detailOpen ? t.text : t.textMuted,
+                          border: `1px solid ${detailOpen ? t.cyan : t.border}`,
+                          background: detailOpen ? `${t.cyan}18` : t.bgAlt,
+                          padding: "1px 5px",
+                          whiteSpace: "nowrap",
+                        }}>
+                          {detailOpen ? "open" : `+${detailCount}`}
+                        </span>
+                      ) : null}
+                    </>
+                  )}
                   {row.node.label ? (
                     <span style={{
                       color: t.yellow,
@@ -302,38 +373,11 @@ export function TraceTree({
                     {compactPreview}
                   </span>
                 </button>
-                {resumeStepId ? (
-                  <button
-                    onClick={() => void onResume(resumeStepId)}
-                    style={{
-                      border: `1px solid ${t.border}`,
-                      background: t.bgAlt,
-                      color: t.textMuted,
-                      fontFamily: F.code,
-                      fontSize: 10,
-                      cursor: "pointer",
-                    }}
-                  >
-                    resume
-                  </button>
-                ) : null}
               </div>
             </div>
           );
         })}
       </div>
-      {resumeInfo ? (
-        <div style={{
-          border: `1px solid ${t.border}`,
-          background: t.bgAlt,
-          padding: 10,
-          fontFamily: F.code,
-          fontSize: 11,
-          whiteSpace: "pre-wrap",
-        }}>
-          {resumeInfo}
-        </div>
-      ) : null}
     </div>
   );
 }

@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
 
 import "@testing-library/jest-dom/vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { TraceStep, TraceTreeNode } from "../../lib/api";
+import type { TraceRecord, TraceStep, TraceTreeNode } from "../../lib/api";
 import { DARK } from "../../tokens";
 import { ConversationView } from "./ConversationView";
+import { TracePreview } from "./TracePreview";
 import { TraceTree } from "./TraceTree";
 
 type RectShape = {
@@ -43,6 +46,24 @@ function trackRect(node: Element, initial: RectShape) {
       current = next;
     },
   };
+}
+
+function renderWithQueryClient(ui: ReactNode) {
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
+
+function ok(body: unknown): Response {
+  return {
+    ok: true,
+    json: async () => body,
+  } as Response;
 }
 
 const steps: TraceStep[] = [
@@ -256,19 +277,19 @@ describe("trace preview scroll sync", () => {
     expect(scrollContainer.scrollTop).toBe(0);
   });
 
-  test("the tree auto-follows the currently active row", async () => {
+  test("the tree auto-follows the selected prompt row", async () => {
     const view = render(
       <TraceTree
         t={DARK}
         traceId="trace-1"
         roots={tree}
         selectedNodeId={null}
-        activePathNodeId="s2"
+        activePathNodeId={null}
         onSelectNode={() => {}}
       />,
     );
 
-    const row = view.container.querySelector('[data-node-id="s2"]') as HTMLDivElement;
+    const row = view.container.querySelector('[data-node-id="s1"]') as HTMLDivElement;
     const scrollSpy = vi.fn();
     Object.defineProperty(row, "scrollIntoView", { value: scrollSpy, configurable: true });
 
@@ -277,8 +298,8 @@ describe("trace preview scroll sync", () => {
         t={DARK}
         traceId="trace-1"
         roots={tree}
-        selectedNodeId="s2"
-        activePathNodeId="s2"
+        selectedNodeId="s1"
+        activePathNodeId="s1"
         onSelectNode={() => {}}
       />,
     );
@@ -286,14 +307,14 @@ describe("trace preview scroll sync", () => {
     await waitFor(() => expect(scrollSpy).toHaveBeenCalledWith({ block: "nearest" }));
   });
 
-  test("selection changes do not reorder the tree when the active leaf stays fixed", () => {
-    const branchTree: TraceTreeNode[] = [{
+  test("hidden agent selections fall back to the nearest visible prompt ancestor", async () => {
+    const nestedTree: TraceTreeNode[] = [{
       id: "s1",
       parent_id: null,
       kind: "step",
       step_index: 1,
       timestamp: null,
-      preview: "root",
+      preview: "user: root",
       label: null,
       on_active_path: false,
       entity_ref: null,
@@ -305,12 +326,86 @@ describe("trace preview scroll sync", () => {
           kind: "step",
           step_index: 2,
           timestamp: null,
-          preview: "active branch",
+          preview: "agent: hidden child",
           label: null,
           on_active_path: false,
           entity_ref: null,
           role: "agent",
           children: [],
+        },
+      ],
+    }];
+
+    const view = render(
+      <TraceTree
+        t={DARK}
+        traceId="trace-1"
+        roots={nestedTree}
+        selectedNodeId={null}
+        activePathNodeId={null}
+        onSelectNode={() => {}}
+      />,
+    );
+
+    const filter = view.container.querySelector('[data-testid="trace-tree-filter"]') as HTMLSelectElement;
+    fireEvent.change(filter, { target: { value: "user-only" } });
+
+    const row = view.container.querySelector('[data-node-id="s1"]') as HTMLDivElement;
+    expect(row.style.background).toBe("transparent");
+
+    view.rerender(
+      <TraceTree
+        t={DARK}
+        traceId="trace-1"
+        roots={nestedTree}
+        selectedNodeId="s2"
+        activePathNodeId="s2"
+        onSelectNode={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect((view.container.querySelector('[data-node-id="s1"]') as HTMLDivElement).style.background).not.toBe("transparent"));
+  });
+
+  test("selection changes do not reorder the prompt map when the active leaf stays fixed", () => {
+    const branchTree: TraceTreeNode[] = [{
+      id: "s1",
+      parent_id: null,
+      kind: "step",
+      step_index: 1,
+      timestamp: null,
+      preview: "user: root",
+      label: null,
+      on_active_path: false,
+      entity_ref: null,
+      role: "user",
+      children: [
+        {
+          id: "s2",
+          parent_id: "s1",
+          kind: "step",
+          step_index: 2,
+          timestamp: null,
+          preview: "agent: active branch",
+          label: null,
+          on_active_path: false,
+          entity_ref: null,
+          role: "agent",
+          children: [
+            {
+              id: "s4",
+              parent_id: "s2",
+              kind: "step",
+              step_index: 4,
+              timestamp: null,
+              preview: "user: follow-up",
+              label: null,
+              on_active_path: false,
+              entity_ref: null,
+              role: "user",
+              children: [],
+            },
+          ],
         },
         {
           id: "s3",
@@ -318,7 +413,7 @@ describe("trace preview scroll sync", () => {
           kind: "step",
           step_index: 3,
           timestamp: null,
-          preview: "older branch",
+          preview: "agent: sibling branch",
           label: null,
           on_active_path: false,
           entity_ref: null,
@@ -339,8 +434,11 @@ describe("trace preview scroll sync", () => {
       />,
     );
 
+    const filter = view.container.querySelector('[data-testid="trace-tree-filter"]') as HTMLSelectElement;
+    fireEvent.change(filter, { target: { value: "user-only" } });
+
     const ids = () => [...view.container.querySelectorAll("[data-node-id]")].map((node) => node.getAttribute("data-node-id"));
-    expect(ids()).toEqual(["s1", "s2", "s3"]);
+    expect(ids()).toEqual(["s1", "s4"]);
 
     view.rerender(
       <TraceTree
@@ -353,17 +451,17 @@ describe("trace preview scroll sync", () => {
       />,
     );
 
-    expect(ids()).toEqual(["s1", "s2", "s3"]);
+    expect(ids()).toEqual(["s1", "s4"]);
   });
 
-  test("step details stay hidden until that step is explicitly selected", () => {
+  test("the web tree exposes all and prompts filters", () => {
     const detailTree: TraceTreeNode[] = [{
       id: "s1",
       parent_id: null,
       kind: "step",
       step_index: 1,
       timestamp: null,
-      preview: "root",
+      preview: "user: root",
       label: null,
       on_active_path: false,
       entity_ref: null,
@@ -388,7 +486,7 @@ describe("trace preview scroll sync", () => {
           kind: "step",
           step_index: 2,
           timestamp: null,
-          preview: "next",
+          preview: "agent: next",
           label: null,
           on_active_path: false,
           entity_ref: null,
@@ -409,31 +507,114 @@ describe("trace preview scroll sync", () => {
       />,
     );
 
+    const filter = view.container.querySelector('[data-testid="trace-tree-filter"]') as HTMLSelectElement;
     const ids = () => [...view.container.querySelectorAll("[data-node-id]")].map((node) => node.getAttribute("data-node-id"));
+    const options = [...filter.querySelectorAll("option")].map((option) => option.textContent?.trim());
+    expect(options).toEqual(["all", "prompts"]);
     expect(ids()).toEqual(["s1", "s2"]);
-
-    const rowButtons = view.container.querySelector('[data-node-id="s1"]')?.querySelectorAll("button");
-    const mainButton = rowButtons?.[1];
-    expect(mainButton).toBeTruthy();
-    if (!mainButton) throw new Error("expected the step row to expose a select button");
-    fireEvent.click(mainButton);
-
-    expect(ids()).toEqual(["s1", "s1-tc0", "s2"]);
+    fireEvent.change(filter, { target: { value: "user-only" } });
+    expect(ids()).toEqual(["s1"]);
+    expect(view.queryByText("resume")).toBeNull();
   });
 
-  test("the web tree exposes only simplified filter labels", () => {
-    const view = render(
-      <TraceTree
-        t={DARK}
-        traceId="trace-1"
-        roots={tree}
-        selectedNodeId="s1"
-        activePathNodeId="s1"
-        onSelectNode={() => {}}
-      />,
-    );
+  test("the mobile map replaces the conversation pane and closes after selection", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      value: 900,
+      configurable: true,
+      writable: true,
+    });
 
-    const options = [...view.container.querySelectorAll("option")].map((option) => option.textContent?.trim());
-    expect(options).toEqual(["everything", "no tools", "prompts only"]);
+    const trace: TraceRecord = {
+      trace_id: "trace-1",
+      task: { description: "test trace" },
+      agent: { name: "claude-code", model: "claude-opus" },
+      steps: [
+        { step_index: 1, role: "user", content: "first prompt" },
+        { step_index: 2, role: "agent", content: "first reply" },
+        { step_index: 3, role: "user", content: "second prompt" },
+      ],
+      timestamp_start: "2026-04-16T10:00:00Z",
+      metrics: {
+        total_steps: 3,
+        total_input_tokens: 120,
+        total_output_tokens: 40,
+        estimated_cost_usd: 0.12,
+      },
+      security: {
+        redactions_applied: 0,
+      },
+      _security_flags: [],
+      _stage: "inbox",
+    };
+    const promptTree: TraceTreeNode[] = [{
+      id: "s1",
+      parent_id: null,
+      kind: "step",
+      step_index: 1,
+      timestamp: null,
+      preview: "user: first prompt",
+      label: null,
+      on_active_path: false,
+      entity_ref: null,
+      role: "user",
+      children: [
+        {
+          id: "s2",
+          parent_id: "s1",
+          kind: "step",
+          step_index: 2,
+          timestamp: null,
+          preview: "agent: first reply",
+          label: null,
+          on_active_path: false,
+          entity_ref: null,
+          role: "agent",
+          children: [
+            {
+              id: "s3",
+              parent_id: "s2",
+              kind: "step",
+              step_index: 3,
+              timestamp: null,
+              preview: "user: second prompt",
+              label: null,
+              on_active_path: false,
+              entity_ref: null,
+              role: "user",
+              children: [],
+            },
+          ],
+        },
+      ],
+    }];
+
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/trace/trace-1/detail")) return ok(trace);
+      if (url.endsWith("/api/traces/trace-1/tree")) return ok({ tree: promptTree });
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+
+    const view = renderWithQueryClient(<TracePreview t={DARK} traceId="trace-1" />);
+
+    await waitFor(() => expect(view.container.querySelector('[data-testid="conversation-scroll"]')).toBeTruthy());
+    expect(view.container.querySelector('[data-testid="trace-preview-conversation-pane"]')).toHaveStyle({ height: "100%" });
+    expect(view.container.querySelector('[data-testid="trace-tree-scroll"]')).toBeNull();
+
+    fireEvent.click(view.getByTestId("trace-map-toggle"));
+
+    await waitFor(() => expect(view.container.querySelector('[data-testid="trace-tree-scroll"]')).toBeTruthy());
+    expect(view.container.querySelector('[data-testid="conversation-scroll"]')).toBeNull();
+    expect(view.getByTestId("trace-map-toggle")).toHaveTextContent("conversation");
+
+    const rowButtons = view.container.querySelector('[data-node-id="s3"]')?.querySelectorAll("button");
+    const mainButton = rowButtons?.[rowButtons.length - 1];
+    expect(mainButton).toBeTruthy();
+    if (!mainButton) throw new Error("expected a prompt row button");
+    fireEvent.click(mainButton);
+
+    await waitFor(() => expect(view.container.querySelector('[data-testid="conversation-scroll"]')).toBeTruthy());
+    expect(view.container.querySelector('[data-testid="trace-tree-scroll"]')).toBeNull();
+    expect(view.getByTestId("trace-map-toggle")).toHaveTextContent("map");
   });
 });

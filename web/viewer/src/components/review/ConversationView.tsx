@@ -155,7 +155,7 @@ export function ConversationView({
     <div
       ref={containerRef}
       data-testid="conversation-scroll"
-      style={{ height: "100%", overflow: "auto", paddingRight: 8 }}
+      style={{ height: "100%", overflowY: "auto", overflowX: "hidden", paddingRight: 8 }}
     >
       {(steps || []).map((step) => {
         const isUser = step.role === "user";
@@ -175,6 +175,8 @@ export function ConversationView({
               padding: "8px 10px",
               background: stepSelected ? `${t.cyan}10` : "transparent",
               borderLeft: `2px solid ${stepSelected ? t.cyan : t.border}`,
+              minWidth: 0,
+              overflowX: "hidden",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
@@ -214,6 +216,7 @@ export function ConversationView({
                     padding: selected ? "6px 8px" : 0,
                     background: selected ? `${t.cyan}10` : "transparent",
                     borderLeft: `2px solid ${selected ? t.cyan : "transparent"}`,
+                    minWidth: 0,
                   }}
                 >
                 <div style={{ fontFamily: F.code, fontSize: 11, color: t.cyan, marginBottom: 4 }}>
@@ -223,8 +226,9 @@ export function ConversationView({
                   margin: 0, padding: "8px 10px",
                   fontFamily: F.code, fontSize: 11, color: t.textSec,
                   background: `${t.cyan}08`, border: `1px solid ${t.border}`,
-                  whiteSpace: "pre-wrap", wordBreak: "break-all",
-                  maxHeight: 260, overflow: "auto",
+                  whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word",
+                  boxSizing: "border-box", width: "100%", maxWidth: "100%", minWidth: 0,
+                  maxHeight: 260, overflowY: "auto", overflowX: "hidden",
                 }}>{JSON.stringify(toolCall.input, null, 2)}</pre>
               </div>
               );
@@ -242,6 +246,7 @@ export function ConversationView({
                     padding: selected ? "6px 8px" : 0,
                     background: selected ? `${t.cyan}10` : "transparent",
                     borderLeft: `2px solid ${selected ? t.cyan : "transparent"}`,
+                    minWidth: 0,
                   }}
                 >
                 <div style={{ fontFamily: F.code, fontSize: 11, color: observation.error ? t.red : t.textMuted, marginBottom: 4 }}>
@@ -251,8 +256,9 @@ export function ConversationView({
                   margin: 0, padding: "8px 10px",
                   fontFamily: F.code, fontSize: 11, color: t.textMuted,
                   background: t.bgAlt, border: `1px solid ${t.border}`,
-                  whiteSpace: "pre-wrap", wordBreak: "break-all",
-                  maxHeight: 260, overflow: "auto",
+                  whiteSpace: "pre-wrap", overflowWrap: "anywhere", wordBreak: "break-word",
+                  boxSizing: "border-box", width: "100%", maxWidth: "100%", minWidth: 0,
+                  maxHeight: 260, overflowY: "auto", overflowX: "hidden",
                 }}>{observation.content || observation.output_summary || "(empty)"}</pre>
               </div>
               );
@@ -269,6 +275,7 @@ export function ConversationView({
                     padding: selected ? "6px 8px" : 0,
                     background: selected ? `${t.cyan}10` : "transparent",
                     borderLeft: `2px solid ${selected ? t.cyan : "transparent"}`,
+                    minWidth: 0,
                   }}
                 >
                   <div style={{

@@ -76,24 +76,28 @@ const tree: TraceTreeNode[] = [{
 
 describe("flattenTree", () => {
   test("promotes the active path and keeps labels searchable", () => {
-    expect(ids(flattenTree(tree, "s4", new Set(), "default", ""))).toEqual(["s1", "s4", "s2", "s2-subagent", "s3-tc0"]);
-    expect(ids(flattenTree(tree, "s4", new Set(), "labeled-only", ""))).toEqual(["s4"]);
-    expect(ids(flattenTree(tree, "s4", new Set(), "default", "decision"))).toEqual(["s4"]);
+    expect(ids(flattenTree(tree, "s4", new Set(), "everything", ""))).toEqual(["s1", "s4", "s2", "s2-subagent", "s3-tc0"]);
+    expect(ids(flattenTree(tree, "s4", new Set(), "everything", "decision"))).toEqual(["s4"]);
   });
 
-  test("hides tool rows in no-tools mode and folded descendants", () => {
-    expect(ids(flattenTree(tree, "s4", new Set(), "no-tools", ""))).toEqual(["s1", "s4", "s2", "s2-subagent"]);
-    expect(ids(flattenTree(tree, "s4", new Set(["s2"]), "default", ""))).toEqual(["s1", "s4", "s2", "s3-tc0"]);
+  test("conversation filters target prompts and agent replies", () => {
+    expect(ids(flattenTree(tree, "s4", new Set(), "user-only", ""))).toEqual(["s1"]);
+    expect(ids(flattenTree(tree, "s4", new Set(), "agent-only", ""))).toEqual(["s4", "s2"]);
+    expect(ids(flattenTree(tree, "s4", new Set(["s2"]), "everything", ""))).toEqual(["s1", "s4", "s2", "s3-tc0"]);
   });
 
   test("can keep the default list to steps-only until a step is expanded", () => {
-    expect(ids(flattenTree(tree, "s4", new Set(), "default", "", {
+    expect(ids(flattenTree(tree, "s4", new Set(), "everything", "", {
       detailStepId: null,
       promoteActiveSiblings: false,
     }))).toEqual(["s1", "s2", "s4"]);
-    expect(ids(flattenTree(tree, "s4", new Set(), "default", "", {
+    expect(ids(flattenTree(tree, "s4", new Set(), "everything", "", {
       detailStepId: "s1",
       promoteActiveSiblings: false,
     }))).toEqual(["s1", "s3-tc0", "s2", "s4"]);
+    expect(ids(flattenTree(tree, "s4", new Set(), "agent-only", "", {
+      detailStepId: "s2",
+      promoteActiveSiblings: false,
+    }))).toEqual(["s2", "s4"]);
   });
 });
