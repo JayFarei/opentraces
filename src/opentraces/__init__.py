@@ -33,4 +33,4 @@ def _prefer_workspace_schema_path() -> None:
 
 _prefer_workspace_schema_path()
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
