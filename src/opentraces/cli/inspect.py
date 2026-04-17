@@ -543,14 +543,38 @@ def graph_cmd(mode: str, limit: int, no_pager: bool) -> None:
     emit_json({"status": "ok", "mode": mode, "limit": limit})
 
 
+def _log_fmt_tokens(n: int) -> str:
+    if not n:
+        return ""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M tokens"
+    if n >= 1000:
+        return f"{n / 1000:.1f}k tokens"
+    return f"{n} tokens"
+
+
+def _log_short_model(m: str) -> str:
+    if not m:
+        return "—"
+    for prefix in ("claude-", "anthropic/"):
+        if m.startswith(prefix):
+            m = m[len(prefix):]
+            break
+    if len(m) > 20:
+        m = m[:19] + "…"
+    return m
+
+
 @main.command(
     examples=[
         "opentraces log",
+        "opentraces log --verbose",
         "opentraces log --limit 0",
     ],
     see_also=[
         ("opentraces list", "list every local trace, staged or not."),
         ("opentraces status", "compact snapshot of inbox + remote."),
+        ("opentraces stats", "aggregate token and cost totals."),
     ],
 )
 @click.option(
@@ -560,12 +584,23 @@ def graph_cmd(mode: str, limit: int, no_pager: bool) -> None:
     show_default=True,
     help="Show at most N days of history. Use 0 for no limit.",
 )
-def log(limit: int) -> None:
-    """List uploaded traces grouped by date.
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Expand each day into per-trace rows with model, tokens, and task description (reads each trace file).",
+)
+def log(limit: int, verbose: bool) -> None:
+    """List the recent traces that have been pushed, grouped by date.
 
-    Walks the UPLOADED stage only, so this is the post-push history:
-    what you've already shared upstream, ordered newest first by push
-    date.
+    Default output is one row per day with the push count, destination
+    remote(s), and the local time range of pushes. Pass ``--verbose`` to
+    expand each day into per-trace rows with trace id, model, token
+    count, and task description; the verbose view reads each trace
+    file so it is slower on large inboxes.
+
+    Only the UPLOADED stage is walked, so in-progress Inbox or staged
+    work is ignored.
     """
     from ..core.state import StateManager, TraceStatus
     from ..core.config import get_project_state_path, project_is_opted_in
@@ -580,33 +615,136 @@ def log(limit: int) -> None:
     uploaded = state.get_traces_by_status(TraceStatus.UPLOADED)
 
     if not uploaded:
-        click.echo("No traces have been pushed yet.")
+        human_echo("No traces have been pushed yet.")
+        emit_json({"status": "ok", "limit": limit, "days": [], "total_days": 0})
         return
 
-    # Group by date
-    by_date: dict[str, int] = {}
+    buckets: dict[str, list] = {}
     for entry in uploaded:
+        dt = None
         if entry.uploaded_at:
             try:
-                dt = datetime.fromisoformat(entry.uploaded_at)
-                date_str = dt.strftime("%Y-%m-%d")
+                parsed = datetime.fromisoformat(entry.uploaded_at.replace("Z", "+00:00"))
+                dt = parsed.astimezone()
             except Exception:
-                date_str = "unknown"
-        else:
-            date_str = datetime.fromtimestamp(entry.created_at).strftime("%Y-%m-%d")
-        by_date[date_str] = by_date.get(date_str, 0) + 1
+                dt = None
+        if dt is None:
+            dt = datetime.fromtimestamp(entry.created_at)
+        date_str = dt.strftime("%Y-%m-%d")
+        buckets.setdefault(date_str, []).append((dt, entry))
 
-    dates = sorted(by_date.keys(), reverse=True)
+    dates = sorted(buckets.keys(), reverse=True)
     total_days = len(dates)
     if limit > 0 and total_days > limit:
         dates = dates[:limit]
 
+    records_cache: dict[str, object] = {}
+    if verbose:
+        from opentraces_schema import TraceRecord
+
+        for date_str in dates:
+            for _, entry in buckets[date_str]:
+                try:
+                    path = Path(entry.file_path) if entry.file_path else None
+                    if path and path.exists():
+                        first_line = path.read_text().strip().splitlines()[0]
+                        records_cache[entry.trace_id] = TraceRecord.model_validate_json(first_line)
+                except Exception:
+                    continue
+
+    days_payload: list[dict] = []
     for date_str in dates:
-        count = by_date[date_str]
-        click.echo(f"{date_str}  pushed {count} sessions")
+        entries = sorted(buckets[date_str], key=lambda x: x[0])
+        count = len(entries)
+
+        remotes_seen: dict[str, int] = {}
+        for _, entry in entries:
+            for remote_name in (entry.uploaded_to or {}):
+                remotes_seen[remote_name] = remotes_seen.get(remote_name, 0) + 1
+        remote_str = ", ".join(f"→ {r}" for r in remotes_seen) if remotes_seen else "→ (no remote)"
+
+        first_time = entries[0][0].strftime("%H:%M")
+        last_time = entries[-1][0].strftime("%H:%M")
+        time_range = first_time if first_time == last_time else f"{first_time}–{last_time}"
+
+        day_tokens = 0
+        day_cost = 0.0
+        trace_rows: list[dict] = []
+        if verbose:
+            for dt, entry in entries:
+                record = records_cache.get(entry.trace_id)
+                model = ""
+                task_desc = ""
+                tokens = 0
+                cost = 0.0
+                if record is not None:
+                    if getattr(record, "agent", None) is not None:
+                        model = record.agent.model or ""
+                    if getattr(record, "task", None) is not None and record.task.description:
+                        task_desc = record.task.description.strip().splitlines()[0]
+                    if getattr(record, "metrics", None) is not None:
+                        tokens = (record.metrics.total_input_tokens or 0) + (record.metrics.total_output_tokens or 0)
+                        cost = record.metrics.estimated_cost_usd or 0.0
+                day_tokens += tokens
+                day_cost += cost
+                trace_rows.append({
+                    "dt": dt,
+                    "trace_id": entry.trace_id,
+                    "model": model,
+                    "task": task_desc,
+                    "tokens": tokens,
+                    "cost": cost,
+                })
+
+        header = f"{date_str}  {count} pushed   {remote_str}   {time_range}"
+        if verbose:
+            extras = []
+            tok_fmt = _log_fmt_tokens(day_tokens)
+            if tok_fmt:
+                extras.append(tok_fmt)
+            if day_cost:
+                extras.append(f"~${day_cost:.2f}")
+            if extras:
+                header += f"   ({', '.join(extras)})"
+        human_echo(header)
+
+        if verbose:
+            for row in trace_rows:
+                short_id = row["trace_id"][:8]
+                time_str = row["dt"].strftime("%H:%M")
+                model_str = _log_short_model(row["model"])
+                task_str = row["task"][:60].rstrip()
+                tok_str = _log_fmt_tokens(row["tokens"])
+                line = f"  {short_id}  {time_str}  {model_str:<18}  {task_str}"
+                if tok_str:
+                    line += f"   [{tok_str}]"
+                human_echo(line.rstrip())
+
+        days_payload.append({
+            "date": date_str,
+            "count": count,
+            "remotes": list(remotes_seen.keys()),
+            "first_pushed_at": entries[0][0].isoformat(),
+            "last_pushed_at": entries[-1][0].isoformat(),
+            "tokens": day_tokens if verbose else None,
+            "cost_usd": round(day_cost, 4) if verbose else None,
+            "traces": [
+                {
+                    "trace_id": r["trace_id"],
+                    "pushed_at": r["dt"].isoformat(),
+                    "model": r["model"],
+                    "task": r["task"],
+                    "tokens": r["tokens"],
+                    "cost_usd": round(r["cost"], 4),
+                }
+                for r in trace_rows
+            ] if verbose else None,
+        })
 
     if limit > 0 and total_days > limit:
-        click.echo(f"\n... {total_days - limit} older day(s) hidden. Use --limit 0 to show all.")
+        human_echo(f"\n... {total_days - limit} older day(s) hidden. Use --limit 0 to show all.")
+
+    emit_json({"status": "ok", "limit": limit, "days": days_payload, "total_days": total_days})
 
 
 @main.command(hidden=True)

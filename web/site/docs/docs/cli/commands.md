@@ -758,14 +758,32 @@ Rolls up every local trace into counts, token totals, cost estimates, and a mode
 
 ```bash
 opentraces log
+opentraces log --verbose
 opentraces log --limit 0
 ```
 
 Lists the recent traces that have been pushed, grouped by date. Only the `pushed` stage is walked, so in-progress Inbox or staged work is ignored.
 
+Default output is one row per day with the push count, the destination remote(s), and the local time range of pushes:
+
+```
+2026-04-16  6 pushed   → origin   10:36–17:44
+2026-04-15  1 pushed   → origin   11:42
+```
+
+`--verbose` / `-v` expands each day into per-trace rows with a short trace id, push time, model, and the first line of the task description, with total tokens and an estimated cost per day. The verbose view reads each trace file so it is slower on large inboxes:
+
+```
+2026-04-16  6 pushed   → origin   10:36–17:44   (430.7k tokens, ~$225.90)
+  785ddc93  10:36  opus-4-6            fix(cli): restore opentraces log…   [62.6k tokens]
+  2cfe7e14  10:36  opus-4-6            docs: audit commands reference      [203.0k tokens]
+  …
+```
+
 | Flag | Description |
 |------|-------------|
 | `--limit INTEGER` | Max days of history to show. `0` for no limit. Default `30`. |
+| `-v, --verbose` | Expand each day into per-trace rows with model, token totals, and task description |
 
 ### `opentraces completions`
 
