@@ -29,6 +29,10 @@ class TruffleHogMissingError(RuntimeError):
     """Raised when the ``trufflehog`` binary is enabled-but-absent."""
 
 
+class TruffleHogScanError(RuntimeError):
+    """Raised when TruffleHog runs but does not complete successfully."""
+
+
 @dataclass(frozen=True)
 class TruffleHogFinding:
     """One detector hit from a TruffleHog JSON line."""
@@ -207,8 +211,19 @@ def scan_file(path: Path, verify: bool = False) -> list[TruffleHogFinding]:
             timeout=120,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning("trufflehog invocation failed: %s", exc)
-        return []
+        raise TruffleHogScanError(f"trufflehog invocation failed for {path}: {exc}") from exc
+
+    if result.returncode != 0:
+        details = (result.stderr or result.stdout or "").strip()
+        logger.warning(
+            "trufflehog exited %s while scanning %s: %s",
+            result.returncode,
+            path,
+            details or "<no output>",
+        )
+        raise TruffleHogScanError(
+            f"trufflehog exited with status {result.returncode} while scanning {path}"
+        )
 
     findings: list[TruffleHogFinding] = []
     for line in (result.stdout or "").splitlines():

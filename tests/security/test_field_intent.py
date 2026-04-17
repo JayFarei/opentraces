@@ -88,6 +88,34 @@ def test_missing_paths_full_spec_empty(tmp_path):
     assert missing_paths(full, FIELD_SPECS) == []
 
 
+def test_branch_schema_fields_are_in_inventory():
+    branch_paths = {
+        "execution_context",
+        "task.repository_url",
+        "outcome.terminal_state",
+        "outcome.reward",
+        "outcome.reward_source",
+        "attribution.revision",
+        "attribution.unaccounted_files",
+        "attribution.files[].conversations[].ids",
+        "attribution.files[].conversations[].related",
+        "attribution.files[].conversations[].ranges[].change_type",
+        "attribution.files[].conversations[].ranges[].original",
+        "attribution.files[].conversations[].ranges[].contributor",
+        "lifecycle",
+        "generation_index",
+        "git_links",
+        "git_links[].vcs_type",
+        "git_links[].revision",
+        "git_links[].repo_url",
+        "git_links[].branch",
+        "git_links[].tier",
+        "git_links[].commit_reachable",
+        "git_links[].content_alive",
+    }
+    assert branch_paths <= set(ALL_PATHS)
+
+
 # ---------------------------------------------------------------------------
 # generator: append-only behavior
 # ---------------------------------------------------------------------------

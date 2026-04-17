@@ -234,6 +234,8 @@ def process_trace(
     classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
     record.security.flags_reviewed = len(classifier_result.flags)
     record.security.classifier_version = SECURITY_VERSION
+    if classifier_result.flags:
+        needs_review = True
 
     # 7. Path anonymization
     anonymize_record(record, cfg)

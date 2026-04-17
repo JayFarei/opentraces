@@ -244,6 +244,9 @@ export function ReviewView({
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["traces"] });
       qc.invalidateQueries({ queryKey: ["context"] });
+      qc.invalidateQueries({ queryKey: ["trace"] });
+      qc.invalidateQueries({ queryKey: ["trace-tree"] });
+      qc.invalidateQueries({ queryKey: ["inverse-blame"] });
     },
   });
 

@@ -16,6 +16,13 @@ from __future__ import annotations
 
 import pytest
 
+from opentraces.cli.publish import (
+    _persist_push_target,
+    _resolve_push_target,
+    _resolve_push_visibility,
+)
+from opentraces.core.config import load_project_config, save_project_config
+from opentraces.core.paths import MARKER_FILENAME
 from opentraces.core.publish_flow import mark_uploaded
 from opentraces.core.state import StateManager, TraceStatus
 
@@ -90,6 +97,68 @@ class TestRoundTripWithPendingFor:
         mark_uploaded(state, ["a"], remote_name="origin")
         assert all(t.trace_id != "a" for t in state.pending_for("origin"))
         assert any(t.trace_id == "a" for t in state.pending_for("upstream"))
+
+
+class TestPublishTargetResolution:
+    def test_uses_active_remote_from_new_shape(self, tmp_path) -> None:
+        save_project_config(
+            tmp_path,
+            {
+                "review_policy": "review",
+                "push_policy": "manual",
+                "remotes": {
+                    "origin": {"url": "hf://alice/origin", "visibility": "private"},
+                    "alice/archive": {"url": "hf://alice/archive", "visibility": "public"},
+                },
+                "active_remote": "alice/archive",
+                "agents": ["claude-code"],
+            },
+        )
+
+        proj_config = load_project_config(tmp_path)
+        remote_name, repo_id = _resolve_push_target(proj_config, "alice")
+
+        assert remote_name == "alice/archive"
+        assert repo_id == "alice/archive"
+        assert _resolve_push_visibility(
+            proj_config,
+            remote_name,
+            default_visibility="private",
+            private=False,
+            public=False,
+        ) == "public"
+
+    def test_persists_selected_remote_without_collapsing_others(self, tmp_path) -> None:
+        save_project_config(
+            tmp_path,
+            {
+                "review_policy": "review",
+                "push_policy": "manual",
+                "remotes": {
+                    "origin": {"url": "hf://alice/origin", "visibility": "private"},
+                    "alice/archive": {"url": "hf://alice/archive", "visibility": "public"},
+                },
+                "active_remote": "alice/archive",
+                "agents": ["claude-code"],
+            },
+        )
+
+        proj_config = load_project_config(tmp_path)
+        _persist_push_target(
+            tmp_path,
+            proj_config,
+            "alice/archive",
+            "alice/archive",
+            "private",
+        )
+
+        marker = load_project_config(tmp_path)
+        assert marker["active_remote"] == "alice/archive"
+        assert marker["remotes"]["alice/archive"]["visibility"] == "private"
+        assert marker["remotes"]["origin"]["visibility"] == "private"
+
+        raw = (tmp_path / MARKER_FILENAME).read_text()
+        assert '"remote"' not in raw
 
 
 class TestBackwardCompatNoRemoteName:

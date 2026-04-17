@@ -24,10 +24,12 @@ class _Finding:
 
 
 def _make_record(*, description="", step_content="", tc_input_value="",
-                 obs_content="", snippet="", patch=""):
+                 obs_content="", obs_output_summary="", obs_error="",
+                 snippet="", patch="", outcome_description="", vcs_diff=""):
     from opentraces_schema import (
-        Agent, Observation, Snippet, Step, Task, ToolCall, TraceRecord,
+        Agent, Environment, Observation, Snippet, Step, Task, ToolCall, TraceRecord,
     )
+    from opentraces_schema.models import VCS
     rec = TraceRecord(
         trace_id="t-redact-th",
         session_id="s-redact-th",
@@ -42,13 +44,18 @@ def _make_record(*, description="", step_content="", tc_input_value="",
                                  input={"cmd": tc_input_value})]
             if tc_input_value else [],
             observations=[Observation(source_call_id="tc-0", content=obs_content,
-                                      status="ok")]
-            if obs_content else [],
+                                      output_summary=obs_output_summary or None,
+                                      error=obs_error or None)]
+            if (obs_content or obs_output_summary or obs_error) else [],
             snippets=[Snippet(file_path="foo.py", text=snippet)] if snippet else [],
         )
         rec.steps = [step]
     if patch:
         rec.outcome.patch = patch
+    if outcome_description:
+        rec.outcome.description = outcome_description
+    if vcs_diff:
+        rec.environment = Environment(vcs=VCS(diff=vcs_diff))
     return rec
 
 
@@ -66,19 +73,27 @@ def test_multiple_fields_are_walked():
         step_content="second AKIAIOSFODNN7EXAMPLE",
         tc_input_value="third AKIAIOSFODNN7EXAMPLE",
         obs_content="fourth AKIAIOSFODNN7EXAMPLE",
-        snippet="fifth AKIAIOSFODNN7EXAMPLE",
-        patch="sixth AKIAIOSFODNN7EXAMPLE",
+        obs_output_summary="fifth AKIAIOSFODNN7EXAMPLE",
+        obs_error="sixth AKIAIOSFODNN7EXAMPLE",
+        snippet="seventh AKIAIOSFODNN7EXAMPLE",
+        patch="eighth AKIAIOSFODNN7EXAMPLE",
+        outcome_description="ninth AKIAIOSFODNN7EXAMPLE",
+        vcs_diff="tenth AKIAIOSFODNN7EXAMPLE",
     )
     n = apply_trufflehog_redactions(rec, [_Finding(raw_match="AKIAIOSFODNN7EXAMPLE")])
-    assert n == 6
+    assert n == 10
     # Every surface got rewritten.
     for text in (
         rec.task.description,
         rec.steps[0].content,
         rec.steps[0].tool_calls[0].input["cmd"],
         rec.steps[0].observations[0].content,
+        rec.steps[0].observations[0].output_summary,
+        rec.steps[0].observations[0].error,
         rec.steps[0].snippets[0].text,
         rec.outcome.patch,
+        rec.outcome.description,
+        rec.environment.vcs.diff,
     ):
         assert "AKIAIOSFODNN7EXAMPLE" not in text
         assert "[REDACTED]" in text

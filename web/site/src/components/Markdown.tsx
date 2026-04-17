@@ -31,6 +31,7 @@ export default function Markdown({ content }: { content: string }) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           img({ src, alt }: any) {
             return (
+              // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={src}
                 alt={alt}

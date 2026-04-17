@@ -43,7 +43,7 @@ The current public root commands are:
 | `doctor` | Check security pipeline and integration health |
 | `completions` | Print or install shell completions |
 
-Two more commands are available but intentionally omitted from the default `--help` listing because they are advanced or typically driven by other surfaces: `backfill` (called by `watcher` and `init --import-existing`) and `watcher` (managed by `setup watcher`). Both are documented under [Advanced Commands](#advanced-commands) below.
+Three more commands are available but intentionally omitted from the default `--help` listing because they are advanced or typically driven by other surfaces: `backfill` (called by `watcher` and `init --import-existing`), `git-backfill` (retroactively correlates inbox traces to past commits after first install of the post-commit hook), and `watcher` (managed by `setup watcher`). All three are documented under [Advanced Commands](#advanced-commands) below.
 
 ## Authentication
 
@@ -626,23 +626,31 @@ Upgrades the opentraces CLI and refreshes project-side files (skill, hooks) wher
 
 ## Advanced Commands
 
-The first commands in this section (`blame`, `graph`, `resume`, `stats`, `log`, `completions`) are part of the default `--help` listing. `backfill` and `watcher` are not: they are real commands but are intentionally hidden from the default listing because they are usually driven by `watcher` and `setup watcher` respectively.
+The first commands in this section (`blame`, `graph`, `resume`, `stats`, `log`, `completions`) are part of the default `--help` listing. `backfill`, `git-backfill`, and `watcher` are not: they are real commands but are intentionally hidden from the default listing because they are usually driven by `watcher`, `setup git`, and `setup watcher` respectively.
 
 ### `opentraces blame`
 
 ```bash
-opentraces blame abc1234
-opentraces blame abc1234 src/main.py
-opentraces blame abc1234 --lines
-opentraces blame abc1234 --json
+opentraces blame abc1234                          # Commit-mode (bare SHA)
+opentraces blame c:abc1234 src/main.py            # Commit-mode, single file
+opentraces blame abc1234 --lines                  # Per-line view
+opentraces blame t:4dccb032                       # Trace-mode (canonical)
+opentraces blame s:92437382 --include-overlapping # Trace-mode (upstream session)
+opentraces blame abc1234 --json                   # Structured output
 ```
 
-Shows per-commit attribution for a commit SHA. Accepts a bare SHA or the `c:<sha>` prefixed form. Pass a path as the second positional argument to scope output to one file. Requires a populated attribution cache (run `opentraces backfill` if empty).
+Two modes, one argument:
+
+- **Commit-mode** (`c:<sha>` or bare SHA): which traces contributed to this commit. Uses the attribution cache for per-line detail and merges `refs/notes/opentraces` so hook-linked traces surface even when the attribution cache has no per-line data for that commit.
+- **Trace-mode** (`t:<trace-id>`, `s:<session-id>`, or a bare hyphenated UUID): which commits carry this trace's output. Merges attribution-cache rows (fine-grained) with the trace's `git_links` (hook-linked). Hook-linked rows carry only a tier badge, not per-line counts.
+
+Commit-mode requires a populated attribution cache — run `opentraces backfill` if empty. Trace-mode works from `git_links` alone, so it surfaces hook-linked commits even when per-line attribution hasn't been computed yet.
 
 | Flag | Description |
 |------|-------------|
-| `--lines` | Per-line output (git-blame-style) |
-| `--entities` | Expand entity changes (functions, classes) under each trace |
+| `--lines` | Per-line output (git-blame-style). Commit-mode only. |
+| `--entities` | Expand entity changes (functions, classes) under each trace. Commit-mode only. |
+| `--include-overlapping` | Trace-mode: include commits where files and timestamps overlap without direct tool-emit evidence. Off by default. |
 | `--project DIRECTORY` | Project directory, default CWD |
 | `--json` | Emit structured JSON instead of text |
 | `--no-color` | Disable ANSI colors |
@@ -690,6 +698,23 @@ Backfills per-commit attribution into the local cache. Walks new commits since t
 | `--json` | Emit a JSON payload instead of the human summary. |
 | `-v, --verbose` | Forward verbose logging to the audit builder. |
 | `--no-entities` | Skip the entity-parser pass (attribution only). |
+
+### `opentraces git-backfill`
+
+```bash
+opentraces git-backfill
+opentraces git-backfill --max-commits 2000 --window-hours 48
+opentraces git-backfill --json
+```
+
+Retroactively correlates inbox traces to past commits. Useful after a first-time install of the post-commit hook (the hook only sees commits after install) or after a period where the hook failed silently. Walks first-parent history, re-runs the live correlator, writes `refs/notes/opentraces`, and persists `git_links` onto each trace's JSONL file. Safe to re-run: notes dedupe on append and `git_links` dedupe before rewrite.
+
+| Flag | Description |
+|------|-------------|
+| `--project DIRECTORY` | Project directory, default CWD |
+| `--max-commits INTEGER` | Cap on first-parent commits to walk. Default `500`. |
+| `--window-hours FLOAT` | Match a trace to a commit if `timestamp_end` is within this many hours of the commit's date (either side). Default `24.0`. |
+| `--json` | Emit a JSON payload instead of the human summary |
 
 ### `opentraces watcher`
 

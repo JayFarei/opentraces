@@ -110,3 +110,28 @@ class TestContentAlive:
             )],
         )
         assert liveness.content_alive(attr, "HEAD", repo) is False
+
+    def test_absolute_path_under_repo_is_normalized(self, repo):
+        content = "line1\nLINE_ALIVE\n"
+        path = repo / "nested" / "a.py"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        _sh(["git", "add", "-A"], repo)
+        _sh(["git", "commit", "-qm", "c"], repo)
+
+        attr = Attribution(
+            experimental=False,
+            files=[AttributionFile(
+                path=str(path),
+                conversations=[AttributionConversation(
+                    contributor={"type": "ai"},
+                    ranges=[AttributionRange(
+                        start_line=2,
+                        end_line=2,
+                        content_hash=_hash("LINE_ALIVE"),
+                        confidence="high",
+                    )],
+                )],
+            )],
+        )
+        assert liveness.content_alive(attr, "HEAD", repo) is True

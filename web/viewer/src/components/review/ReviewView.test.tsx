@@ -114,4 +114,83 @@ describe("ReviewView", () => {
     fireEvent.keyDown(window, { key: "?" });
     await waitFor(() => expect(view.queryByText("Review help")).not.toBeInTheDocument());
   });
+
+  test("refresh invalidates the selected trace preview, tree, and inverse blame queries", async () => {
+    const counts = new Map<string, number>();
+    const inverseBlame = {
+      trace: {
+        id: "trace-gen-002",
+        trace_id: "trace-gen-002",
+        name: "Later generation trace",
+        lines: 3,
+        model: "anthropic/claude-opus-4-6",
+      },
+      commits: [
+        {
+          id: "commit-1",
+          sha: "sha-1",
+          msg: "feat: add trace",
+          linesInCommit: 2,
+          totalCommitLines: 4,
+          pct: "50%",
+          source: "attribution",
+          tier: "tool_emitted",
+        },
+      ],
+      files: [{ path: "app.py", lines: 3 }],
+    };
+
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      counts.set(url, (counts.get(url) ?? 0) + 1);
+      if (url.endsWith("/api/traces")) return ok(traces);
+      if (url.endsWith("/api/context")) {
+        return ok({
+          project_name: "demo",
+          remote: "owner/dataset",
+          review_policy: "review",
+          push_policy: "manual",
+          authenticated: false,
+          username: null,
+        });
+      }
+      if (url.endsWith("/api/trace/trace-gen-002/detail")) return ok(detail);
+      if (url.endsWith("/api/traces/trace-gen-002/tree")) return ok({ tree: [] });
+      if (url.endsWith("/api/trace/trace-gen-002/commits")) return ok(inverseBlame);
+      if (url.endsWith("/api/refresh")) return ok({ status: "ok", new: 0, updated: 0, skipped: 0, errors: 0, total: 0 });
+      throw new Error(`unexpected fetch ${url}`);
+    }));
+
+    const view = renderWithQueryClient(
+      <ReviewView
+        t={DARK}
+        wide
+        selectedId="trace-gen-002"
+        setSelectedId={() => {}}
+        openPush={() => {}}
+        openInfo={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(view.getByText("Later generation trace")).toBeInTheDocument());
+    await waitFor(() => expect(view.container.querySelector('[data-testid="trace-preview-conversation-pane"]')).toBeTruthy());
+    const blameTab = [...view.container.querySelectorAll("span")].find((node) => node.textContent === "blame");
+    expect(blameTab).toBeTruthy();
+    if (!blameTab) throw new Error("expected blame tab");
+    fireEvent.click(blameTab);
+    await waitFor(() => expect(view.getByText("COMMITS WITH LINE-LEVEL ATTRIBUTION")).toBeInTheDocument());
+
+    const refreshButton = view.container.querySelector('[aria-label="Refresh inbox"]');
+    expect(refreshButton).toBeTruthy();
+    if (!refreshButton) throw new Error("expected refresh button");
+    fireEvent.click(refreshButton);
+
+    await waitFor(() => {
+      expect(counts.get("/api/traces")).toBe(2);
+      expect(counts.get("/api/context")).toBe(2);
+      expect(counts.get("/api/trace/trace-gen-002/detail")).toBe(2);
+      expect(counts.get("/api/traces/trace-gen-002/tree")).toBe(2);
+      expect(counts.get("/api/trace/trace-gen-002/commits")).toBe(2);
+    });
+  });
 });

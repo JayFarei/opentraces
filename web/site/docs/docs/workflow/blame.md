@@ -1,21 +1,32 @@
 # Blame
 
-Blame resolves any commit or shipped line back to the agent session(s) that produced it.
+When agents write the code, `git blame` tells you the commit, not the prompt. `opentraces blame` closes that gap: given a commit it returns the sessions that produced the committed bytes; given a trace id it returns the commits that carry that session's output. See [How It Works](#how-it-works) for the mechanism.
 
-When agents write the code, `git blame` tells you the commit, not the prompt. `opentraces blame` closes that gap: every commit maps to the sessions whose `Edit`/`Write` tool calls produced its staged hunks, each link tagged with an evidence tier so consumers can filter by how tightly a session actually wrote the committed bytes.
+> **Experimental — not 100% accurate yet.** Attribution rests on three moving parts (capture hook, post-commit correlator, and watcher-driven audit refs) and any one of them falling behind produces incomplete or misleading results. Treat coverage numbers as best-effort until the pipeline stabilises, and cross-check against `opentraces doctor`, `opentraces graph`, and the raw `refs/notes/opentraces` notes when a number looks wrong.
 
 ## Prerequisites
 
-Blame needs two things:
+Blame needs three things to produce trustworthy output:
 
-1. **Capture hook installed.** Claude Code sessions are captured automatically after `opentraces init` (or `opentraces setup claude-code`).
-2. **Post-commit hook installed.** This attaches a note under `refs/notes/opentraces` linking each commit to the contributing traces.
+1. **Capture hook installed.** Claude Code sessions are captured automatically after `opentraces init` (or `opentraces setup claude-code`). Without this there is no audit ref to blame against.
+2. **Post-commit hook installed.** This attaches a note under `refs/notes/opentraces` linking each commit to the contributing traces at the moment the commit lands.
 
    ```bash
    opentraces setup git
    ```
 
-Old commits cannot be backfilled automatically, correlation starts with the first commit after install. Run `opentraces backfill --rebuild` to re-attribute everything from `HEAD` using cached tool-call data.
+3. **Watcher installed.** The background watcher polls the repo, rebuilds the attribution cache from the audit ref, and keeps the entity graph in sync. Running blame without the watcher means the cache can lag HEAD — percentages will read low, traces will read as orphans, and hook-linked commits will not pick up per-line attribution. Install it once per machine:
+
+   ```bash
+   opentraces setup watcher
+   ```
+
+   `opentraces doctor` surfaces the watcher status alongside capture and git-hook state; if any of the three is red, blame output should be treated as preliminary.
+
+Old commits cannot be backfilled by the hook — the hook only sees commits after install. Two escape hatches exist:
+
+- `opentraces backfill --rebuild` clears the per-line attribution cache and re-attributes everything reachable from `HEAD` using the stored tool-call data. Run this after a rebase, squash, or any time the on-disk cache drifts from the audit ref.
+- `opentraces git-backfill` walks first-parent history, re-runs the live correlator, and writes `refs/notes/opentraces` + per-trace `git_links` for any old commits the hook missed. Useful after a first-time install of the post-commit hook, or after a period where the hook was silently failing (for example, the pre-`0.3.0` PATH-silent-failure bug).
 
 ## Graph View
 
@@ -37,9 +48,9 @@ Reading the spine:
 | `c:<sha>` | Commit id (prefix-resolvable by `opentraces show`, `opentraces blame`) |
 | `s:<id>` | Session id (trace prefix) |
 | `+N ~M -K fns` | Added / modified / deleted functions or entities |
-| `100%` | Fraction of the commit's diff covered by traced Edit/Write tool calls |
+| `100%` | Fraction of the commit's diff covered by bytes recorded in the session's audit ref (Edit/Write tool calls plus reconstructed Bash effects) |
 
-Commits with no attached sessions (`c:7c3b1927 marketing skill`) appear as bare nodes — either pre-hook commits, or commits whose hunks came from non-tracked edits (manual rewrites, Bash codemods).
+Commits with no attached sessions (`c:7c3b1927 marketing skill`) appear as bare nodes — either pre-hook commits, or commits whose hunks came from mutations the reconstructor could not prove (see `pre-audit` under [How It Works](#how-it-works)).
 
 ### Graph flags
 
@@ -67,15 +78,39 @@ The output is four sections:
 3. **File list.** Every file in the commit with its attributed-vs-pre-audit line counts. `pre-audit` lines exist in the file but predate the attribution cache — they'll be fully attributed once `opentraces backfill --rebuild` runs.
 4. **Attribution cache reference** (when `--json` is passed): the audit ref and revision so consumers can round-trip back to raw evidence.
 
+Traces that the hook linked but whose per-line attribution isn't in the cache yet appear in a separate **Hook-linked traces** block below the per-trace rows; run `opentraces backfill` to promote them into the main breakdown.
+
 ### Blame flags
 
 ```bash
 opentraces blame <sha>                            # Commit-scoped summary
-opentraces blame <sha> <path>                     # Single-file slice
+opentraces blame c:<sha> <path>                   # Single-file slice
 opentraces blame <sha> <path> --lines             # Per-line (git-blame-style)
 opentraces blame <sha> --entities                 # Expand per-trace entity lists
 opentraces blame <sha> --json                     # Structured output for consumers
 ```
+
+## Blame for a Trace (inverse blame)
+
+Given a trace id instead of a commit, `opentraces blame` walks the relationship in the other direction: which commits carry this session's output.
+
+```bash
+opentraces blame t:2cfe7e14                       # Canonical (ingested) trace
+opentraces blame s:6606fc1f                       # Attribution-only session (upstream, pre-init, or forked)
+opentraces blame 2cfe7e14-…-full-uuid             # Bare hyphenated UUID auto-detects
+opentraces blame t:2cfe7e14 --include-overlapping # Include weak file+time links
+opentraces blame t:2cfe7e14 --json                # Structured output for consumers
+```
+
+The argument accepts either prefix form. `t:` resolves against canonical traces in the local inbox; `s:` resolves against the staging session ids or attribution-cache entries (useful for forks, or for sessions that never landed in the inbox). A bare hyphenated UUID auto-detects as a trace id; a bare hex string is treated as a commit first and falls back to trace resolution if the commit does not exist.
+
+Output is a trace header and a list of commits this trace contributed to:
+
+![opentraces blame t:2cfe7e14](/docs/assets/blame/blame-trace.png)
+
+Rows with line-level attribution show real line counts and a coverage percentage; hook-linked rows (where the post-commit hook recorded a link but the attribution cache doesn't yet have per-line data) show a tier badge instead. `--include-overlapping` additionally shows commits with only a weak file+timestamp overlap — off by default because that's coincidence rather than contribution.
+
+`--lines`, `--entities`, and a `PATH` argument are commit-mode only; trace-mode output is always summary-level.
 
 ## Web Viewer
 
@@ -83,7 +118,7 @@ opentraces blame <sha> --json                     # Structured output for consum
 
 ![opentraces web — graph / blame view](/docs/assets/blame/web-blame-view.png)
 
-The viewer is keyboard-first: `j`/`k` navigates commits, `enter` loads the blame panel, `q` quits.
+The viewer is keyboard-first: `j`/`k` navigates commits, `enter` loads the blame panel, `q` quits. The trace-side panel mirrors the CLI, with hook-linked commits collapsed under a `▸ N hook-linked commits (no line counts)` disclosure so the primary list stays dense with line-attributed rows.
 
 ## Evidence Tiers
 
@@ -91,7 +126,7 @@ Every `GitLink` from trace to commit is evidence-graded. Consumers can filter da
 
 | Tier | Meaning |
 |---|---|
-| `tool_emitted` | Hashes emitted by Edit/Write tool calls appear verbatim in the commit's staged hunks. Gold-standard signal. |
+| `tool_emitted` | Bytes recorded in the session's audit ref (from Edit/Write tool calls or reconstructed Bash effects) appear verbatim in the commit's staged hunks. Gold-standard signal. |
 | `tool_emitted_with_divergence` | File set lines up, but the committed bytes don't hash-match — a formatter, pre-commit hook, or human rewrote the output. Combine with `AttributionRange.original` for recovery. |
 | `overlapping` | File-set and time-window overlap only, no hash match. Treat as weakly linked. |
 | `orphan` | No viable commit link. Trace is kept, but don't claim authorship. |
@@ -139,12 +174,14 @@ audit history (refs/opentraces/audit/<project_id>)
     t:s3ghi   "Edit README.md"       by <trace_id>@opentraces.local
 ```
 
-Each time a session runs an Edit or Write tool call, the capture hook:
+Each time a session mutates a tracked file — through an `Edit`/`Write` tool call or through a Bash command whose effect the reconstructor can prove (redirects, heredocs, `mv`/`cp`/`rm`, `sed -i`, `echo`/`printf`/`cat` redirects) — the capture hook:
 
-1. **Snapshot → blob.** Captures the file's post-edit bytes. Content-addressed, so identical content never stores twice.
+1. **Snapshot → blob.** Captures the file's post-mutation bytes. Content-addressed, so identical content never stores twice.
 2. **Assemble → tree.** Combines touched files into a tree matching the project layout at that moment.
 3. **Seal → commit.** Writes a synthetic commit authored by `<trace_id>@opentraces.local` to `refs/opentraces/audit/<project_id>`. One commit per snapshot.
-4. **Correlate → notes.** When a real commit lands on `main`, the post-commit hook from `opentraces setup git` writes a note to `refs/notes/opentraces` linking the real commit to the audit commits whose bytes appear in its staged hunks.
+4. **Correlate → notes.** When a real commit lands on `main`, the post-commit hook from `opentraces setup git` writes a note to `refs/notes/opentraces` linking the real commit to the audit commits whose bytes appear in its staged hunks — whether the commit lands during the session or much later, as long as the session's stored bytes still show up.
+
+Bash mutations whose effect the reconstructor cannot prove deterministically (arbitrary scripts, binary producers, commands with external state) fall through to `pre-audit`: the file is tracked but the line's authorship is left unclaimed rather than fabricated.
 
 All four steps use native Git. Nothing lives in a parallel database, there is no custom file format, and no server roundtrip is required. `git log refs/opentraces/audit/<project_id>` just works, and `git notes --ref=refs/notes/opentraces show <sha>` shows the correlation directly.
 
@@ -158,7 +195,7 @@ git blame --line-porcelain <path> <audit_ref>
 
 ...run against the audit ref instead of `main`. Every line comes back attributed to the session that wrote it, because the author email is `<trace_id>@opentraces.local`. `opentraces blame` wraps this with the correlation from `refs/notes/opentraces` so you can start from either side — a commit SHA or a trace ID — and land on the other.
 
-The [evidence tiers](#evidence-tiers) above aren't subjective labels either. They're hash comparisons between the audit ref's tree and the real commit's tree. If the blobs match, the evidence is `tool_emitted`; if the file set matches but the bytes don't, a formatter or human rewrote the output and the tier becomes `tool_emitted_with_divergence`; and so on.
+The [evidence tiers](#evidence-tiers) above aren't subjective labels either: they're hash comparisons between the audit ref's tree and the real commit's tree.
 
 ### Where this is going: semantic attribution
 
@@ -180,6 +217,14 @@ opentraces blame <sha> src/auth.py   # Find the session(s)
 opentraces show s:<id>               # Read the prompt + reasoning
 ```
 
+### "Which commits carry this session's output?"
+
+```bash
+opentraces blame t:<trace-id>                        # Canonical inbox trace
+opentraces blame s:<session-id>                      # Upstream / fork / pre-init
+opentraces blame t:<trace-id> --include-overlapping  # Include weak file+time links
+```
+
 ### "Rebuild attribution after a rebase or squash"
 
 ```bash
@@ -187,6 +232,15 @@ opentraces backfill --rebuild
 ```
 
 This clears the cache and re-attributes every commit reachable from `HEAD` using the stored tool-call data. The underlying trace JSONL files are not modified — generations with the same `session_id` are replacement snapshots, not appends.
+
+### "I just installed the post-commit hook, link my older commits"
+
+```bash
+opentraces git-backfill
+opentraces git-backfill --max-commits 2000 --window-hours 48
+```
+
+Walks first-parent history and retro-correlates inbox traces against each commit. Writes `refs/notes/opentraces` and persists `git_links` onto the staged trace JSONLs so old commits start showing up in `ot graph`, `ot blame c:<sha>`, and `ot blame t:<id>`. Safe to re-run: notes dedupe on append and `git_links` dedupe before rewrite.
 
 ### "Filter a pushed dataset to tool-emitted traces"
 

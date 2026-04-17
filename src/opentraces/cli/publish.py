@@ -11,7 +11,7 @@ import click
 
 from opentraces import cli as _cli
 from . import main
-from ..core.config import load_project_config, save_config  # noqa: F401
+from ..core.config import load_project_config, save_config, save_project_config  # noqa: F401
 
 
 def load_config():
@@ -135,6 +135,111 @@ def _maybe_migrate_remote(uploader, target_version: str,
     for err in mig["errors"]:
         click.echo(f"  Warning: shard {err['shard']} migration failed: {err['error']}", err=True)
     return mig["migrated_records"] > 0
+
+
+def _normalize_repo_id(repo: str, username_hint: str | None = None) -> str:
+    """Normalize a repo reference to ``owner/name``."""
+    if "://" in repo:
+        repo = repo.split("://", 1)[1]
+    if "/" in repo or not username_hint:
+        return repo
+    return f"{username_hint}/{repo}"
+
+
+def _remote_repo_id(remote_name: str, remotes: dict) -> str | None:
+    """Return the dataset repo_id stored for *remote_name* if available."""
+    cfg = remotes.get(remote_name) or {}
+    url = cfg.get("url")
+    if isinstance(url, str) and url:
+        return url.split("://", 1)[1] if "://" in url else url
+    if remote_name and remote_name != "origin":
+        return remote_name
+    return None
+
+
+def _match_remote_key(remotes: dict, repo_id: str) -> str | None:
+    """Find the remote key that already points at *repo_id*."""
+    for name, cfg in remotes.items():
+        url = cfg.get("url") if isinstance(cfg, dict) else None
+        if name == repo_id:
+            return name
+        if isinstance(url, str):
+            normalized = url.split("://", 1)[1] if "://" in url else url
+            if normalized == repo_id:
+                return name
+    return None
+
+
+def _resolve_push_target(proj_config: dict, username: str, repo: str | None = None) -> tuple[str, str]:
+    """Return ``(remote_name, repo_id)`` for the current push/publish run."""
+    remotes = proj_config.get("remotes") or {}
+    active_remote = proj_config.get("active_remote")
+
+    if repo:
+        repo_id = _normalize_repo_id(repo, username)
+        remote_name = _match_remote_key(remotes, repo_id) or repo_id
+        return remote_name, repo_id
+
+    if active_remote and active_remote in remotes:
+        repo_id = _remote_repo_id(active_remote, remotes) or active_remote
+        return active_remote, repo_id
+
+    if len(remotes) == 1:
+        remote_name = next(iter(remotes))
+        repo_id = _remote_repo_id(remote_name, remotes) or remote_name
+        return remote_name, repo_id
+
+    fallback_repo = f"{username}/opentraces"
+    return fallback_repo, fallback_repo
+
+
+def _resolve_push_visibility(
+    proj_config: dict,
+    remote_name: str,
+    *,
+    default_visibility: str,
+    private: bool,
+    public: bool,
+) -> str:
+    """Return the visibility that should be used for this push/publish run."""
+    if public:
+        return "public"
+    if private:
+        return "private"
+
+    remotes = proj_config.get("remotes") or {}
+    remote_cfg = remotes.get(remote_name) or {}
+    visibility = remote_cfg.get("visibility")
+    if visibility in {"public", "private"}:
+        return visibility
+
+    proj_default = proj_config.get("default_visibility")
+    if proj_default in {"public", "private"}:
+        return proj_default
+    return default_visibility
+
+
+def _persist_push_target(
+    project_dir: Path,
+    proj_config: dict,
+    remote_name: str,
+    repo_id: str,
+    visibility: str,
+) -> None:
+    """Persist the chosen push target back into the new remotes shape."""
+    payload = dict(proj_config)
+    payload.pop("remote", None)
+    payload.pop("visibility", None)
+
+    remotes = dict(payload.get("remotes") or {})
+    remote_cfg = dict(remotes.get(remote_name) or {})
+    remote_cfg["url"] = f"hf://{repo_id}"
+    remote_cfg["visibility"] = visibility
+    remotes[remote_name] = remote_cfg
+    payload["remotes"] = remotes
+    if not payload.get("active_remote"):
+        payload["active_remote"] = remote_name
+    save_project_config(project_dir, payload)
 
 
 def error_response(*a, **k):
@@ -297,21 +402,27 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
         click.echo(f"Could not get HF username: {e}")
         sys.exit(4)
 
-    # Resolve repo_id: --repo flag > config remote > interactive selector > default
-    repo_id = _resolve_repo_id(username, repo)
-
-    # If no remote was configured, run the shared interactive selector
     proj_config = load_project_config(Path.cwd())
-    if not repo and not proj_config.get("remote"):
+    proj_config.pop("remote", None)
+    proj_config.pop("visibility", None)
+    remotes = proj_config.get("remotes") or {}
+    remote_name, repo_id = _resolve_push_target(proj_config, username, repo)
+
+    # If no remote was configured, run the shared interactive selector.
+    if not repo and not remotes:
         click.echo("No remote configured.")
-        identity = {"name": username}
         selected_repo, selected_vis = _choose_remote_interactively(f"{username}/{DEFAULT_REMOTE_NAME}")
         if selected_repo:
             repo_id = selected_repo
-            proj_config["remote"] = repo_id
-            proj_config["visibility"] = selected_vis or "private"
+            remote_name = _match_remote_key(remotes, repo_id) or repo_id
+            remotes[remote_name] = {
+                "url": f"hf://{repo_id}",
+                "visibility": selected_vis or "private",
+            }
+            proj_config["remotes"] = remotes
+            proj_config["active_remote"] = remote_name
             save_project_config(Path.cwd(), proj_config)
-            click.echo(f"Remote set to: {repo_id} ({proj_config['visibility']})\n")
+            click.echo(f"Remote set to: {repo_id} ({remotes[remote_name]['visibility']})\n")
         else:
             click.echo("No remote selected. Cannot push.")
             sys.exit(3)
@@ -325,9 +436,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
             # Save visibility to project config
             try:
                 proj_config = load_project_config(Path.cwd())
-                proj_config["remote"] = repo_id
-                proj_config["visibility"] = "public"
-                save_project_config(Path.cwd(), proj_config)
+                _persist_push_target(Path.cwd(), proj_config, remote_name, repo_id, "public")
             except OSError as e:
                 logger.debug("Could not save visibility config: %s", e)
 
@@ -437,16 +546,14 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
             processed_records.append(res.record)
         records = processed_records
 
-    # Determine visibility: --public/--private flags > project config > global config
-    if public:
-        is_private = False
-    elif private:
-        is_private = True
-    else:
-        proj_vis = proj_config.get("visibility")
-        is_private = (proj_vis or cfg.dataset_visibility) == "private"
-
-    visibility_label = "private" if is_private else "public"
+    visibility_label = _resolve_push_visibility(
+        proj_config,
+        remote_name,
+        default_visibility=cfg.dataset_visibility,
+        private=private,
+        public=public,
+    )
+    is_private = visibility_label == "private"
 
     try:
         with TraceLock(Path.cwd()):
@@ -493,11 +600,10 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                 if duplicate_trace_ids:
                     # Mark duplicates as uploaded (they exist on the remote)
                     from ..core.publish_flow import mark_uploaded as _mark_uploaded
-                    _active_remote = proj_config.get("active_remote") or "origin"
                     _mark_uploaded(
                         state,
                         (e.trace_id for e in traces_to_upload if e.trace_id in duplicate_trace_ids),
-                        remote_name=_active_remote,
+                        remote_name=remote_name,
                     )
                     click.echo(f"Skipped {len(duplicate_trace_ids)} duplicate trace(s) already on remote.")
 
@@ -527,11 +633,10 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                 # Per Step 3: thread the active remote name through so
                 # uploaded_to[<remote>] is recorded for per-remote replay.
                 from ..core.publish_flow import mark_uploaded as _mark_uploaded
-                _active_remote = proj_config.get("active_remote") or "origin"
                 _mark_uploaded(
                     state,
                     (e.trace_id for e in traces_to_upload if e.trace_id in loaded_trace_ids),
-                    remote_name=_active_remote,
+                    remote_name=remote_name,
                 )
 
                 # Print visibility-aware success message
@@ -544,9 +649,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
                 # Save remote URL and visibility to project config
                 try:
                     proj_config = load_project_config(Path.cwd())
-                    proj_config["remote"] = repo_id
-                    proj_config["visibility"] = visibility_label
-                    save_project_config(Path.cwd(), proj_config)
+                    _persist_push_target(Path.cwd(), proj_config, remote_name, repo_id, visibility_label)
                 except OSError as e:
                     logger.debug("Could not save post-upload config: %s", e)
 
@@ -569,9 +672,6 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     except RuntimeError as e:
         click.echo(f"Error: {e}")
         sys.exit(7)
-
-
-
 
 
 

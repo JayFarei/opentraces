@@ -594,7 +594,7 @@ describe("trace preview scroll sync", () => {
               id: "s2-tc0",
               parent_id: "s2",
               kind: "tool_call",
-              step_index: 2,
+              step_index: null,
               timestamp: null,
               preview: "tool: Read",
               label: null,
@@ -749,4 +749,5 @@ describe("trace preview scroll sync", () => {
     expect(view.container.querySelector('[data-testid="trace-tree-scroll"]')).toBeNull();
     expect(view.getByTestId("trace-map-toggle")).toHaveTextContent("map");
   });
+
 });

@@ -28,6 +28,7 @@ export function PushModal({
         onClose();
         return;
       }
+      if (stagedCount === 0) return;
       if (mode !== null) return;
       if (e.key === "l" || e.key === "L") {
         e.preventDefault();
@@ -41,7 +42,7 @@ export function PushModal({
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [mode, onClose, push]);
+  }, [mode, onClose, push, stagedCount]);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;

@@ -44,11 +44,13 @@ FIELD_SPECS: list[FieldSpec] = [
     FieldSpec("content_hash", "SHA-256 of record content", "generated", "always", []),
     FieldSpec("timestamp_start", "ISO 8601 start time", "parser", "always", ["analytics"]),
     FieldSpec("timestamp_end", "ISO 8601 end time", "parser", "always", ["analytics"]),
+    FieldSpec("execution_context", "devtime/runtime discriminator", "parser", "optional", ["rl"]),
 
     # --- Task ---
     FieldSpec("task.description", "First user message (<=500 chars)", "parser", "always", ["training", "domain"]),
     FieldSpec("task.source", "How the task was initiated", "parser", "optional", ["domain"]),
     FieldSpec("task.repository", "owner/repo format", "enrichment:git", "git_repo", ["domain"]),
+    FieldSpec("task.repository_url", "Canonical remote URL", "enrichment:git", "git_repo", ["domain"]),
     FieldSpec("task.base_commit", "Git SHA at task start", "enrichment:git", "git_repo", ["rl"]),
 
     # --- Agent ---
@@ -119,10 +121,20 @@ FIELD_SPECS: list[FieldSpec] = [
     FieldSpec("outcome.patch", "Unified diff from session", "enrichment:git", "has_commits", ["rl"]),
     FieldSpec("outcome.committed", "Whether session produced a commit", "enrichment:git", "git_repo", ["rl"]),
     FieldSpec("outcome.commit_sha", "Commit SHA", "enrichment:git", "has_commits", ["rl"]),
+    FieldSpec("outcome.terminal_state", "Runtime terminal state", "parser", "optional", ["rl"]),
+    FieldSpec("outcome.reward", "Runtime reward signal", "parser", "optional", ["rl"]),
+    FieldSpec("outcome.reward_source", "Runtime reward source", "parser", "optional", ["rl"]),
 
     # --- Attribution ---
     FieldSpec("attribution", "Agent Trace attribution block", "enrichment:attribution", "has_edits", ["domain", "rl"]),
+    FieldSpec("attribution.revision", "Pinned revision for attribution", "enrichment:git", "has_commits", ["domain", "rl"]),
+    FieldSpec("attribution.unaccounted_files", "Files changed outside tracked edit tools", "enrichment:attribution", "has_edits", ["domain"]),
     FieldSpec("attribution.files", "Attributed files list", "enrichment:attribution", "has_edits", ["domain"]),
+    FieldSpec("attribution.files[].conversations[].ids", "Provider-native conversation identifiers", "enrichment:attribution", "has_edits", []),
+    FieldSpec("attribution.files[].conversations[].related", "Related resources", "enrichment:attribution", "has_edits", []),
+    FieldSpec("attribution.files[].conversations[].ranges[].change_type", "Range change type", "enrichment:attribution", "has_edits", []),
+    FieldSpec("attribution.files[].conversations[].ranges[].original", "Pre-divergence range state", "enrichment:attribution", "has_edits", []),
+    FieldSpec("attribution.files[].conversations[].ranges[].contributor", "Per-range contributor override", "enrichment:attribution", "has_edits", []),
 
     # --- Metrics ---
     FieldSpec("metrics.total_steps", "Total step count", "enrichment:metrics", "always", ["analytics"]),
@@ -137,6 +149,16 @@ FIELD_SPECS: list[FieldSpec] = [
     FieldSpec("security.flags_reviewed", "Flags reviewed count", "security", "always", []),
     FieldSpec("security.redactions_applied", "Redactions applied count", "security", "always", []),
     FieldSpec("security.classifier_version", "Classifier version", "security", "optional", []),
+    FieldSpec("lifecycle", "Trace lifecycle marker", "generated", "always", []),
+    FieldSpec("generation_index", "Monotonic generation counter", "generated", "always", []),
+    FieldSpec("git_links", "Commit/revision links", "enrichment:git", "has_commits", ["domain", "rl"]),
+    FieldSpec("git_links[].vcs_type", "Revision system type", "enrichment:git", "has_commits", []),
+    FieldSpec("git_links[].revision", "Linked revision", "enrichment:git", "has_commits", []),
+    FieldSpec("git_links[].repo_url", "Linked repository URL", "enrichment:git", "has_commits", []),
+    FieldSpec("git_links[].branch", "Linked branch name", "enrichment:git", "has_commits", []),
+    FieldSpec("git_links[].tier", "Link confidence tier", "enrichment:git", "has_commits", []),
+    FieldSpec("git_links[].commit_reachable", "Whether revision is still reachable", "enrichment:git", "has_commits", []),
+    FieldSpec("git_links[].content_alive", "Whether content still appears at HEAD", "enrichment:git", "has_commits", []),
 
     # --- Dependencies ---
     FieldSpec("dependencies", "Package names from manifests", "enrichment:dependencies", "has_manifests", ["domain"]),

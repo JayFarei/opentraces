@@ -57,6 +57,20 @@ def test_quiet_tick_is_fast(tmp_path):
     assert r.error is None
 
 
+def test_jsonl_activity_probe_recurses_into_nested_subagent_files(
+    tmp_path, monkeypatch
+):
+    p = _init_project(tmp_path / "proj")
+    monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
+
+    corpus_dir = _wd._claude_jsonl_dir(p)
+    nested = corpus_dir / "main-session" / "subagents"
+    nested.mkdir(parents=True)
+    (nested / "sub-agent-1.jsonl").write_text("{}\n")
+
+    assert _wd._jsonl_activity_since(p, None) is True
+
+
 def test_non_enlisted_project_is_noop(tmp_path):
     root = tmp_path / "orphan"
     root.mkdir()

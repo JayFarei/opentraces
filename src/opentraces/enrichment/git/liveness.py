@@ -42,6 +42,22 @@ def _file_at(revision: str, path: str, cwd: Path | None) -> str | None:
     return out if code == 0 else None
 
 
+def _candidate_paths(path: str, cwd: Path | None) -> list[str]:
+    candidates: list[str] = [path]
+    if cwd is None:
+        return candidates
+    path_obj = Path(path)
+    if not path_obj.is_absolute():
+        return candidates
+    try:
+        rel = path_obj.resolve().relative_to(cwd.resolve()).as_posix()
+    except Exception:
+        return candidates
+    if rel not in candidates:
+        candidates.append(rel)
+    return candidates
+
+
 def content_alive(
     attribution: Attribution,
     head_ref: str = "HEAD",
@@ -59,15 +75,13 @@ def content_alive(
     when no range survives. Ranges without a content_hash are ignored.
     """
     for f in attribution.files:
-        content = _file_at(head_ref, f.path, cwd)
+        content = None
+        for candidate in _candidate_paths(f.path, cwd):
+            content = _file_at(head_ref, candidate, cwd)
+            if content is not None:
+                break
         if content is None:
-            # Try normalizing absolute → repo-relative paths.
-            for part in f.path.split("/")[::-1]:
-                content = _file_at(head_ref, f.path.split(part)[-1].lstrip("/"), cwd)
-                if content is not None:
-                    break
-            if content is None:
-                continue
+            continue
         lines = content.splitlines()
         for conv in f.conversations:
             for rng in conv.ranges:

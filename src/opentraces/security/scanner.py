@@ -289,6 +289,16 @@ def apply_redactions(record: TraceRecord) -> int:
                 if matches:
                     obs.content = redact_text(obs.content, matches)
                     total += len(matches)
+            if obs.output_summary:
+                matches = scan_text(obs.output_summary, include_entropy=False)
+                if matches:
+                    obs.output_summary = redact_text(obs.output_summary, matches)
+                    total += len(matches)
+            if obs.error:
+                matches = scan_text(obs.error, include_entropy=False)
+                if matches:
+                    obs.error = redact_text(obs.error, matches)
+                    total += len(matches)
 
         for snippet in step.snippets:
             if snippet.text:
@@ -297,10 +307,22 @@ def apply_redactions(record: TraceRecord) -> int:
                     snippet.text = redact_text(snippet.text, matches)
                     total += len(matches)
 
+    if record.outcome.description:
+        matches = scan_text(record.outcome.description)
+        if matches:
+            record.outcome.description = redact_text(record.outcome.description, matches)
+            total += len(matches)
+
     if record.outcome.patch:
         matches = scan_text(record.outcome.patch)
         if matches:
             record.outcome.patch = redact_text(record.outcome.patch, matches)
+            total += len(matches)
+
+    if record.environment.vcs.diff:
+        matches = scan_text(record.environment.vcs.diff)
+        if matches:
+            record.environment.vcs.diff = redact_text(record.environment.vcs.diff, matches)
             total += len(matches)
 
     return total
@@ -372,6 +394,16 @@ def apply_trufflehog_redactions(record: TraceRecord, findings) -> int:
                 if n:
                     obs.content = new
                     total += n
+            if obs.output_summary:
+                new, n = _redact(obs.output_summary)
+                if n:
+                    obs.output_summary = new
+                    total += n
+            if obs.error:
+                new, n = _redact(obs.error)
+                if n:
+                    obs.error = new
+                    total += n
         for snippet in step.snippets:
             if snippet.text:
                 new, n = _redact(snippet.text)
@@ -379,10 +411,22 @@ def apply_trufflehog_redactions(record: TraceRecord, findings) -> int:
                     snippet.text = new
                     total += n
 
+    if record.outcome.description:
+        new, n = _redact(record.outcome.description)
+        if n:
+            record.outcome.description = new
+            total += n
+
     if record.outcome.patch:
         new, n = _redact(record.outcome.patch)
         if n:
             record.outcome.patch = new
+            total += n
+
+    if record.environment.vcs.diff:
+        new, n = _redact(record.environment.vcs.diff)
+        if n:
+            record.environment.vcs.diff = new
             total += n
 
     return total

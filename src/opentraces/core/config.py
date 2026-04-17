@@ -253,6 +253,7 @@ def load_config() -> Config:
 
     if not CONFIG_PATH.exists():
         config = Config()
+        config.hf_token = _resolve_hf_token()
         save_config(config)
         return config
 
@@ -261,6 +262,7 @@ def load_config() -> Config:
     except (json.JSONDecodeError, OSError) as e:
         logger.warning("Could not read config %s: %s; using defaults", CONFIG_PATH, e)
         config = Config()
+        config.hf_token = _resolve_hf_token()
         save_config(config)
         return config
 
@@ -291,7 +293,11 @@ def load_config() -> Config:
 
 def _resolve_hf_token() -> str | None:
     """Resolve HF token from env > opentraces credentials > hf CLI cache."""
-    token = os.environ.get("HF_TOKEN")
+    token = os.environ.get("HF_TOKEN", "").strip()
+    if token:
+        return token
+
+    token = os.environ.get("HUGGINGFACE_TOKEN", "").strip()
     if token:
         return token
 

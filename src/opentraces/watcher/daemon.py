@@ -151,14 +151,14 @@ def _jsonl_activity_since(project_cwd: Path, threshold_iso: str | None) -> bool:
         return False
     if threshold_iso is None:
         # First probe ever; any file is "new".
-        return any(d.glob("*.jsonl"))
+        return any(d.rglob("*.jsonl"))
     try:
         threshold = datetime.datetime.fromisoformat(
             threshold_iso.replace("Z", "+00:00")
         ).timestamp()
     except (ValueError, TypeError):
         return True
-    for p in d.glob("*.jsonl"):
+    for p in d.rglob("*.jsonl"):
         try:
             if p.stat().st_mtime > threshold:
                 return True

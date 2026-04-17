@@ -104,7 +104,7 @@ export default function MachineView({ content }: { content: string }) {
               </a>
             ),
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            code({ children, className, ...rest }: any) {
+            code({ children, ...rest }: any) {
               const text = String(children);
               const isBlock =
                 rest.node?.position?.start?.line !== rest.node?.position?.end?.line ||

@@ -51,6 +51,7 @@ nav:
       - Parse: workflow/parsing.md
       - Review: workflow/review.md
       - Assess: workflow/quality.md
+      - Blame: workflow/blame.md
       - Push: workflow/pushing.md
       - Consume: workflow/consume.md
       - Export: workflow/export.md

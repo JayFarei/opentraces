@@ -187,8 +187,11 @@ def reject_trace(
     The CLI variant historically omitted the ``session_id`` kwarg; web_server
     and TUI both pass it. ``with_session_kwarg`` preserves that discrepancy.
     """
+    session_id = _session_id_for_trace(state, trace_id)
     if with_session_kwarg:
-        state.set_trace_status(trace_id, TraceStatus.REJECTED, session_id=trace_id)
+        state.set_trace_status(
+            trace_id, TraceStatus.REJECTED, session_id=session_id
+        )
     else:
         state.set_trace_status(trace_id, TraceStatus.REJECTED)
 
@@ -263,23 +266,43 @@ def commit_bulk(
     ids = list(trace_ids)
     commit_id = state.create_commit_group(trace_ids=ids, message=message)
     for sid in ids:
-        state.set_trace_status(sid, TraceStatus.COMMITTED, session_id=sid)
+        state.set_trace_status(
+            sid,
+            TraceStatus.COMMITTED,
+            session_id=_session_id_for_trace(state, sid),
+        )
     return commit_id
 
 
 def stage_trace(state: StateManager, trace_id: str) -> None:
     """Transition a trace to STAGED status (web stage route)."""
-    state.set_trace_status(trace_id, TraceStatus.STAGED, session_id=trace_id)
+    state.set_trace_status(
+        trace_id,
+        TraceStatus.STAGED,
+        session_id=_session_id_for_trace(state, trace_id),
+    )
 
 
 def unstage_trace(state: StateManager, trace_id: str) -> None:
     """Transition a trace back to PARSED status (web unstage route)."""
-    state.set_trace_status(trace_id, TraceStatus.PARSED, session_id=trace_id)
+    state.set_trace_status(
+        trace_id,
+        TraceStatus.PARSED,
+        session_id=_session_id_for_trace(state, trace_id),
+    )
 
 
 def reset_to_staged(state: StateManager, trace_id: str) -> None:
     """CLI reset flow: transition to STAGED (no session_id kwarg)."""
     state.set_trace_status(trace_id, TraceStatus.STAGED)
+
+
+def _session_id_for_trace(state: StateManager, trace_id: str) -> str:
+    """Return the real upstream session_id for an existing trace, if known."""
+    entry = state.get_trace(trace_id)
+    if entry is not None and entry.session_id:
+        return entry.session_id
+    return trace_id
 
 
 # ---------------------------------------------------------------------------

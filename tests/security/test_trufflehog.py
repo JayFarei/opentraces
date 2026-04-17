@@ -19,6 +19,7 @@ from opentraces.security.trufflehog import (
     TruffleHogFinding,
     TruffleHogMissingError,
     TruffleHogReport,
+    TruffleHogScanError,
     find_trufflehog,
     require_trufflehog,
     scan_file,
@@ -218,6 +219,26 @@ class TestScanTraceJsonl:
         assert report.blocked is False
         assert report.trufflehog_version
         assert report.scanned_at
+
+    def test_nonzero_exit_raises(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.setattr(shutil, "which", lambda _: "/bin/trufflehog")
+
+        def fake_run(cmd, **kwargs):
+            if "--version" in cmd:
+                r = subprocess.CompletedProcess(cmd, 0)
+                r.stdout = "trufflehog 3.94.3\n"
+                r.stderr = ""
+                return r
+            r = subprocess.CompletedProcess(cmd, 2)
+            r.stdout = ""
+            r.stderr = "trufflehog internal error"
+            return r
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        target = tmp_path / "trace.jsonl"
+        target.write_text("{}\n")
+        with pytest.raises(TruffleHogScanError):
+            scan_trace_jsonl(target)
 
     def test_findings_block_report(self, monkeypatch, tmp_path) -> None:
         monkeypatch.setattr(shutil, "which", lambda _: "/bin/trufflehog")

@@ -272,13 +272,16 @@ class StateManager:
         if prev is None:
             return True, 0
 
-        # File replaced (different inode) or modified
-        if stat.st_ino != prev.inode or stat.st_mtime > prev.mtime:
-            # If same inode but newer mtime, we can resume from offset
-            if stat.st_ino == prev.inode:
-                return True, prev.last_byte_offset
-            # Different inode means file was replaced, start from 0
+        # File replaced (different inode) or truncated in place.
+        if stat.st_ino != prev.inode:
             return True, 0
+
+        if stat.st_size < prev.last_byte_offset:
+            return True, 0
+
+        # Same inode, same-or-larger file: resume from the prior offset.
+        if stat.st_mtime > prev.mtime or stat.st_size > prev.last_byte_offset:
+            return True, prev.last_byte_offset
 
         return False, 0
 

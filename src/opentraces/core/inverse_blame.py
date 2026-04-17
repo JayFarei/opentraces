@@ -159,8 +159,8 @@ def compute(
             continue
         lines = int(match.get("line_count") or 0)
         total_lines += lines
-        diff_total = diff_line_count(project_cwd, sha) or 1
-        pct = _pct_int(lines / diff_total) if diff_total else 0
+        diff_total = diff_line_count(project_cwd, sha)
+        pct = _pct_int(lines / diff_total) if diff_total > 0 else 0
         by_sha[sha] = InverseBlameCommit(
             sha=sha,
             short_sha=sha[:8],

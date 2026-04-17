@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useSyncExternalStore } from "react";
 import Markdown from "./Markdown";
 import MachineView from "./MachineView";
 import AudienceToggle from "./AudienceToggle";
@@ -17,25 +17,36 @@ const FADE_IN_MS = 460;
 // Fade-out duration must match overlay-out keyframe in globals.css
 const FADE_OUT_MS = 600;
 
+function resolveInitialAudience(): Audience {
+  if (typeof window === "undefined") {
+    return "human";
+  }
+  const params = new URLSearchParams(window.location.search);
+  const fromUrl = params.get("view");
+  if (fromUrl === "machine") {
+    return "machine";
+  }
+  return localStorage.getItem("docs-audience") === "machine" ? "machine" : "human";
+}
+
 export default function DocsViewer({ content, skillContent }: Props) {
-  const [audience, setAudience] = useState<Audience>("human");
-  const [mounted, setMounted] = useState(false);
+  const [audience, setAudience] = useState<Audience>(resolveInitialAudience);
   const [overlay, setOverlay] = useState(false);
   const [overlayOut, setOverlayOut] = useState(false);
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
 
   useEffect(() => {
-    // URL param takes priority over localStorage
-    const params = new URLSearchParams(window.location.search);
-    const fromUrl = params.get("view") as Audience | null;
-    const stored = localStorage.getItem("docs-audience") as Audience | null;
-    const resolved = (fromUrl === "machine" ? "machine" : stored === "machine" ? "machine" : null);
-    if (resolved === "machine") {
-      setAudience("machine");
+    if (audience === "machine") {
       document.documentElement.setAttribute("data-audience", "machine");
       history.replaceState({}, "", "?view=machine");
+    } else {
+      document.documentElement.removeAttribute("data-audience");
     }
-    setMounted(true);
-  }, []);
+  }, [audience]);
 
   const handleChange = useCallback((next: Audience) => {
     if (next === audience) return;

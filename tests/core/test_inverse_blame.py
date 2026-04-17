@@ -183,6 +183,33 @@ class TestInverseBlame:
         assert commit.tier == "tool_emitted"
         assert commit.lines_in_commit == 0  # unknown, not fabricated
 
+    def test_zero_diff_commit_keeps_zero_denominator(self, tmp_path, ot_home, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        _init_repo(repo)
+        _opt_in(repo)
+
+        (repo / "old.txt").write_text("content\n")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
+        subprocess.run(["git", "mv", "old.txt", "new.txt"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "rename"], cwd=repo, check=True)
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo, text=True,
+        ).strip()
+
+        trace_id = "z" * 36
+        _write_attribution(repo, sha, [
+            {"trace_id": trace_id, "line_count": 2, "files": ["new.txt"]},
+        ])
+
+        result = _ib.compute(repo, trace_id)
+        assert len(result.commits) == 1
+        commit = result.commits[0]
+        assert commit.total_commit_lines == 0
+        assert commit.pct == 0
+
     def test_attribution_and_git_links_merge(self, tmp_path, ot_home, monkeypatch):
         """When a commit appears in both sources, attribution wins the
         line count and git_links contributes the tier annotation."""

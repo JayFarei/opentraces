@@ -195,6 +195,44 @@ class TestClaudeCodeParser:
         assert anchors[2]["entry_uuid"] == "line-assistant-001"
         assert anchors[2]["line_no"] == 1
 
+    def test_incremental_parse_keeps_first_appended_entry(self, tmp_path):
+        """Seeking to the prior EOF must not drop the first new JSONL line."""
+        session_file = _write_session(
+            tmp_path,
+            _make_minimal_session()[:1],
+            "incremental-session.jsonl",
+        )
+        byte_offset = session_file.stat().st_size
+        with session_file.open("a") as f:
+            f.write(json.dumps({
+                "type": "user",
+                "sessionId": "incremental-sess",
+                "timestamp": "2026-03-27T10:00:01Z",
+                "message": {"role": "user", "content": "resume from here"},
+            }) + "\n")
+            f.write(json.dumps({
+                "type": "assistant",
+                "sessionId": "incremental-sess",
+                "timestamp": "2026-03-27T10:00:02Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "tc_incremental", "name": "Bash",
+                         "input": {"command": "echo hello"}},
+                    ],
+                    "usage": {"input_tokens": 20, "output_tokens": 10},
+                },
+            }) + "\n")
+
+        parser = ClaudeCodeParser()
+        record = parser.parse_session(session_file, byte_offset=byte_offset)
+
+        assert record is not None
+        assert len(record.steps) == 2
+        assert record.steps[0].role == "user"
+        assert record.steps[0].content == "resume from here"
+        assert record.steps[1].tool_calls[0].tool_name == "Bash"
+
     def test_snippet_extraction_from_read(self, tmp_path):
         lines = _make_minimal_session()
         session_file = _write_session(tmp_path, lines)
@@ -582,6 +620,88 @@ class TestParentStepIntegrity:
         assert indices == list(range(1, len(record.steps) + 1)), (
             f"Step indices not sequential: {indices}"
         )
+
+    def test_step_anchors_follow_renumbered_subagent_steps(self, tmp_path):
+        """Sub-agent inlining must keep anchors aligned with final step ids."""
+        main_lines = [
+            {
+                "type": "user",
+                "sessionId": "main-sess",
+                "uuid": "main-user-1",
+                "timestamp": "2026-03-27T10:00:00Z",
+                "message": {"role": "user", "content": "Investigate the bug"},
+            },
+            {
+                "type": "assistant",
+                "sessionId": "main-sess",
+                "uuid": "main-assistant-1",
+                "timestamp": "2026-03-27T10:00:05Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tc_agent_1",
+                            "name": "Agent",
+                            "input": {
+                                "description": "explore the codebase",
+                                "subagent_type": "Explore",
+                            },
+                        },
+                    ],
+                    "usage": {"input_tokens": 100, "output_tokens": 50,
+                              "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+                },
+            },
+        ]
+
+        main_session_dir = tmp_path / "main-sess"
+        subagents_dir = main_session_dir / "subagents"
+        subagents_dir.mkdir(parents=True)
+        (subagents_dir / "sub-agent-1.meta.json").write_text(
+            json.dumps({"description": "explore the codebase"})
+        )
+
+        sub_lines = [
+            {
+                "type": "user",
+                "sessionId": "sub-agent-1",
+                "uuid": "sub-user-1",
+                "timestamp": "2026-03-27T10:00:06Z",
+                "message": {"role": "user", "content": "Explore the codebase"},
+            },
+            {
+                "type": "assistant",
+                "sessionId": "sub-agent-1",
+                "uuid": "sub-assistant-1",
+                "timestamp": "2026-03-27T10:00:07Z",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Found the bug"}],
+                    "usage": {"input_tokens": 50, "output_tokens": 30,
+                              "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+                },
+            },
+        ]
+        with open(subagents_dir / "sub-agent-1.jsonl", "w") as f:
+            for line in sub_lines:
+                f.write(json.dumps(line) + "\n")
+
+        main_file = _write_session(tmp_path, main_lines, "main-sess.jsonl")
+
+        parser = ClaudeCodeParser()
+        record = parser.parse_session(main_file)
+        assert record is not None
+        assert [s.step_index for s in record.steps] == [1, 2, 3, 4]
+
+        anchors = parser.step_anchors
+        assert anchors[1]["entry_uuid"] == "main-user-1"
+        assert anchors[1]["session_file_relpath"] is None
+        assert anchors[2]["entry_uuid"] == "sub-user-1"
+        assert anchors[2]["line_no"] == 0
+        assert anchors[3]["entry_uuid"] == "sub-assistant-1"
+        assert anchors[3]["line_no"] == 1
+        assert anchors[4]["entry_uuid"] == "main-assistant-1"
 
 
 class TestParserOnRealSessions:

@@ -418,3 +418,113 @@ class TestIngestGenerationIndex:
         # Content hashes must differ — even beyond the new turns,
         # generation_index itself is part of the hashed payload.
         assert gen1_hash != gen2_hash
+
+
+class TestReviewHelpers:
+    def test_review_helpers_preserve_existing_session_ids(
+        self, project_dir
+    ) -> None:
+        from opentraces.core.config import get_project_state_path
+        from opentraces.core.review import (
+            commit_bulk,
+            reject_trace,
+            stage_trace,
+            unstage_trace,
+        )
+
+        state = StateManager(state_path=get_project_state_path(project_dir))
+        seeded = [
+            ("trace-stage", "sess-stage", TraceStatus.PARSED),
+            ("trace-unstage", "sess-unstage", TraceStatus.STAGED),
+            ("trace-reject", "sess-reject", TraceStatus.STAGED),
+            ("trace-commit-a", "sess-commit-a", TraceStatus.STAGED),
+            ("trace-commit-b", "sess-commit-b", TraceStatus.STAGED),
+        ]
+        for trace_id, session_id, status in seeded:
+            state.set_trace_status(trace_id, status, session_id=session_id)
+
+        stage_trace(state, "trace-stage")
+        unstage_trace(state, "trace-unstage")
+        reject_trace(state, "trace-reject", with_session_kwarg=True)
+        commit_bulk(state, ["trace-commit-a", "trace-commit-b"], "bulk")
+
+        assert state.get_trace("trace-stage").session_id == "sess-stage"
+        assert state.get_trace("trace-unstage").session_id == "sess-unstage"
+        assert state.get_trace("trace-reject").session_id == "sess-reject"
+        assert state.get_trace("trace-commit-a").session_id == "sess-commit-a"
+        assert state.get_trace("trace-commit-b").session_id == "sess-commit-b"
+
+
+class TestProcessedFileOffsets:
+    def test_should_reprocess_resets_offset_after_truncation(
+        self, project_dir
+    ) -> None:
+        from opentraces.core.config import get_project_state_path
+        from opentraces.core.state import ProcessedFile
+
+        session_id = "sess-truncate"
+        path = _write_jsonl(project_dir, session_id, turns=3)
+        state = StateManager(state_path=get_project_state_path(project_dir))
+
+        stat = path.stat()
+        state.mark_file_processed(
+            ProcessedFile(
+                file_path=str(path),
+                inode=stat.st_ino,
+                mtime=stat.st_mtime,
+                last_byte_offset=stat.st_size,
+            )
+        )
+
+        # Rewrite the file in place with fewer bytes. The prior byte offset
+        # is now stale and must not be reused.
+        path.write_text(
+            "\n".join(json.dumps(line) for line in _turn(1, session_id)) + "\n"
+        )
+
+        should_process, offset = state.should_reprocess(str(path))
+        assert should_process is True
+        assert offset == 0
+
+
+class TestAutoReviewPromotion:
+    def test_classifier_flags_force_review_in_auto_policy(
+        self, project_dir, monkeypatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        from opentraces.core.config import Config, get_project_state_path
+        from opentraces.core.ingest import ingest_one_session
+
+        project_cfg = json.loads((project_dir / ".opentraces.json").read_text())
+        project_cfg["review_policy"] = "auto"
+        (project_dir / ".opentraces.json").write_text(json.dumps(project_cfg))
+
+        monkeypatch.setattr(
+            "opentraces.core.pipeline.two_pass_scan",
+            lambda record: (
+                SimpleNamespace(matches=[]),
+                SimpleNamespace(matches=[]),
+            ),
+        )
+        monkeypatch.setattr(
+            "opentraces.core.pipeline.apply_redactions",
+            lambda record: 0,
+        )
+        monkeypatch.setattr(
+            "opentraces.core.pipeline.classify_trace_record",
+            lambda record, sensitivity: SimpleNamespace(flags=["manual-review"]),
+        )
+
+        session_id = "sess-auto-review"
+        path = _write_jsonl(project_dir, session_id, turns=3)
+        result = ingest_one_session(path, project_dir, cfg=Config())
+
+        assert result.action == "new"
+
+        from opentraces.core.state import StateManager
+
+        state = StateManager(state_path=get_project_state_path(project_dir))
+        entry = state.get_trace(result.trace_id)
+        assert entry is not None
+        assert entry.status == TraceStatus.STAGED.value

@@ -85,6 +85,7 @@ class ClaudeCodeParser:
         # {entry_uuid, line_no, session_file_relpath}. Callers that care
         # (ingest) persist this to local state; others ignore it.
         self.step_anchors: dict[int, dict] = {}
+        self._step_anchor_rows: list[dict[str, Any]] = []
 
     def discover_sessions(self, projects_path: Path) -> Iterator[Path]:
         """Yield paths to all session JSONL files."""
@@ -117,6 +118,7 @@ class ClaudeCodeParser:
         """
         # Reset per-call — the parser instance may be reused.
         self.step_anchors = {}
+        self._step_anchor_rows = []
 
         lines = self._read_lines(session_path, byte_offset)
         if lines is None:
@@ -170,6 +172,14 @@ class ClaudeCodeParser:
         for step in steps:
             if step.parent_step is not None and step.parent_step in old_to_new:
                 step.parent_step = old_to_new[step.parent_step]
+
+        # Rebuild anchors in final step order. This keeps the local state
+        # aligned even when sub-agent inlining temporarily creates duplicate
+        # step indices before the final renumbering pass.
+        self.step_anchors = {
+            step.step_index: anchor
+            for step, anchor in zip(steps, self._step_anchor_rows)
+        }
 
         # Compute metrics then override estimated_cost_usd with actual when available
         metrics = self._compute_metrics(steps)
@@ -237,14 +247,28 @@ class ClaudeCodeParser:
         total = 0
 
         try:
-            with open(path, "r") as f:
+            with open(path, "rb") as f:
                 if byte_offset > 0:
-                    f.seek(byte_offset)
-                    # Discard partial line after seek (may have landed mid-UTF8)
-                    f.readline()
+                    f.seek(0, 2)
+                    file_size = f.tell()
+                    if byte_offset > file_size:
+                        byte_offset = file_size
+                    if byte_offset > 0:
+                        f.seek(byte_offset - 1)
+                        prev = f.read(1)
+                        f.seek(byte_offset)
+                        # Only skip the current line when the offset lands
+                        # in the middle of an existing line.
+                        if prev not in (b"\n", b"\r"):
+                            f.readline()
                 for raw_line in f:
                     total += 1
-                    raw_line = raw_line.strip()
+                    try:
+                        raw_line = raw_line.decode("utf-8").strip()
+                    except UnicodeDecodeError:
+                        errors += 1
+                        logger.warning(f"Corrupted line {total} in {path}")
+                        continue
                     if not raw_line:
                         continue
                     try:
@@ -544,7 +568,7 @@ class ClaudeCodeParser:
                     if _is_synthetic_user_message(content_blocks):
                         continue
                     step_index += 1
-                    self.step_anchors[step_index] = {
+                    anchor = {
                         "entry_uuid": line.get("uuid"),
                         "line_no": line_no,
                         "session_file_relpath": session_relpath,
@@ -557,6 +581,7 @@ class ClaudeCodeParser:
                         parent_step=parent_step_index,
                         call_type="subagent" if depth > 0 else "main",
                     ))
+                    self._step_anchor_rows.append(anchor)
                 continue
 
             # Process content blocks
@@ -705,7 +730,7 @@ class ClaudeCodeParser:
                 continue
 
             step_index += 1
-            self.step_anchors[step_index] = {
+            anchor = {
                 "entry_uuid": line.get("uuid"),
                 "line_no": line_no,
                 "session_file_relpath": session_relpath,
@@ -740,6 +765,7 @@ class ClaudeCodeParser:
                         step.subagent_trajectory_ref = subagent_ref
 
             steps.append(step)
+            self._step_anchor_rows.append(anchor)
 
         # Warn if too many unknown blocks
         if total_blocks > 0 and unknown_blocks / total_blocks > 0.2:

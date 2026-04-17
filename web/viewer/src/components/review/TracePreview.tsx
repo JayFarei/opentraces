@@ -6,11 +6,62 @@ import { Panel } from "../Panel";
 import { ConversationView } from "./ConversationView";
 import { InverseBlameView } from "./InverseBlame";
 import { TraceTree } from "./TraceTree";
+import type { TraceTreeNode } from "../../lib/api";
 import { api } from "../../lib/api";
 import { traceMeta } from "../../lib/conversation";
 import { traceStepNodeId } from "../../lib/traceTree";
 
 type Tab = "conv" | "blame";
+
+function indexTree(roots: TraceTreeNode[]) {
+  const nodes = new Map<string, TraceTreeNode>();
+  const parents = new Map<string, string | null>();
+
+  const walk = (node: TraceTreeNode, parentId: string | null) => {
+    nodes.set(node.id, node);
+    parents.set(node.id, parentId);
+    node.children.forEach((child) => walk(child, node.id));
+  };
+
+  roots.forEach((node) => walk(node, null));
+  return { nodes, parents };
+}
+
+function findOwningStep(
+  nodeId: string,
+  nodes: Map<string, TraceTreeNode>,
+  parents: Map<string, string | null>,
+): TraceTreeNode | null {
+  let current: string | null = nodeId;
+  while (current) {
+    const node = nodes.get(current) ?? null;
+    if (!node) return null;
+    if (node.kind === "step") return node;
+    current = parents.get(current) ?? null;
+  }
+  return null;
+}
+
+export function resolveTraceTreeSelection(
+  roots: TraceTreeNode[],
+  nodeId: string,
+  stepIndex: number | null,
+): { activeStepIndex: number; scrollTargetNodeId: string } | null {
+  if (stepIndex != null) {
+    return { activeStepIndex: stepIndex, scrollTargetNodeId: nodeId };
+  }
+
+  const { nodes, parents } = indexTree(roots);
+  const node = nodes.get(nodeId) ?? null;
+  if (!node) return null;
+  const ownerStep = findOwningStep(nodeId, nodes, parents);
+  if (!ownerStep || ownerStep.step_index == null) return null;
+
+  return {
+    activeStepIndex: ownerStep.step_index,
+    scrollTargetNodeId: node.kind === "compaction" ? ownerStep.id : node.id,
+  };
+}
 
 export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null }) {
   const [tab, setTab] = useState<Tab>("conv");
@@ -70,9 +121,10 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
 
   const handleTreeSelect = (nodeId: string, stepIndex: number | null) => {
     setSelectedNodeId(nodeId);
-    if (stepIndex == null) return;
-    setActiveStepIndex(stepIndex);
-    setScrollTargetNodeId(nodeId);
+    const resolved = resolveTraceTreeSelection(treeQ.data?.tree ?? [], nodeId, stepIndex);
+    if (!resolved) return;
+    setActiveStepIndex(resolved.activeStepIndex);
+    setScrollTargetNodeId(resolved.scrollTargetNodeId);
   };
 
   const handleActiveStepChange = (stepIndex: number) => {

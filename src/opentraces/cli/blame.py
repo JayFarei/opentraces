@@ -879,12 +879,18 @@ def _render_trace_blame(
         row = f"{tee}{body_dash2} {c_bullet} {c_handle}  {subj}"
 
         if commit.source == "attribution":
-            pct_role = coverage_role(float(commit.pct))
-            pct_paint = paint(pct_role, f"{commit.pct}%", use_color=color)
-            lines_text = (
-                f"{commit.lines_in_commit} of {commit.total_commit_lines} "
-                f"diff lines . {pct_paint}"
-            )
+            if commit.total_commit_lines > 0:
+                pct_role = coverage_role(float(commit.pct))
+                pct_paint = paint(pct_role, f"{commit.pct}%", use_color=color)
+                lines_text = (
+                    f"{commit.lines_in_commit} of {commit.total_commit_lines} "
+                    f"diff lines . {pct_paint}"
+                )
+            else:
+                lines_text = (
+                    f"{commit.lines_in_commit} attributed . "
+                    + paint(Role.DIM, "0 diff lines", use_color=color)
+                )
             row += f"  {lines_text}"
         else:
             # git_links tier badge — no reliable per-line count.
