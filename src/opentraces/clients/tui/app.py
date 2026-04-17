@@ -990,12 +990,7 @@ class OpenTracesApp(App):
             self.remote_name = None
             self.remote_visibility = None
 
-    def _reload_traces(
-        self,
-        keep_trace_id: str | None = None,
-        keep_focus_stage: str | None = None,
-        keep_focus_index: int | None = None,
-    ) -> None:
+    def _reload_traces(self, keep_trace_id: str | None = None) -> None:
         self.traces = [
             t for t in load_traces(self.staging_dir, limit=self.trace_limit)
             if t["trace_id"] not in self._pending_deletes
@@ -1022,24 +1017,6 @@ class OpenTracesApp(App):
         self._refresh_info_panel()
         for stage in STAGE_KEYS:
             self._refresh_stage_list(stage)
-
-        # Keyboard flow: a stage-toggle keeps the cursor in the list the user
-        # was driving (same numeric index, clamped). The trace that just moved
-        # is not followed across panes, so the user can keep flicking through
-        # inbox with space without losing their place.
-        if keep_focus_stage in STAGE_KEYS:
-            stage_items = self.by_stage[keep_focus_stage]
-            if stage_items:
-                idx = max(0, min(keep_focus_index or 0, len(stage_items) - 1))
-                lv = self.query_one(f"#{STAGE_IDS[keep_focus_stage]}", ListView)
-                lv.index = idx
-                self._set_active_stage(keep_focus_stage)
-                self._update_panel_counter(keep_focus_stage)
-                self._current_trace = stage_items[idx]
-                self._render_trace(stage_items[idx])
-                self.set_focus(lv)
-                return
-            # Source list is now empty — fall through to default selection.
 
         current = self._find_trace(keep_trace_id) if keep_trace_id else self._first_trace()
         if current:
@@ -1593,28 +1570,28 @@ class OpenTracesApp(App):
         except (ValueError, TypeError):
             return TraceStatus.STAGED
 
-    def action_toggle_stage(self) -> None:
+    async def action_toggle_stage(self) -> None:
         trace = self._focused_list_trace()
         if not trace:
             return
         trace_id = trace["trace_id"]
-        # Anchor the cursor to the list the user is driving, at its current
-        # index, so after the toggle they're sitting on the row that slid up
-        # into this position — not chased across to the destination pane.
         source_stage = self._focused_stage() or self._active_stage
-        source_index: int | None = None
-        if source_stage in STAGE_KEYS:
-            source_lv = self.query_one(f"#{STAGE_IDS[source_stage]}", ListView)
-            source_index = source_lv.index
+        if source_stage not in STAGE_KEYS:
+            return
+        source_lv = self.query_one(f"#{STAGE_IDS[source_stage]}", ListView)
+        source_index = source_lv.index or 0
+
         stage = get_stage(self.state, trace_id)
         prior = self._snapshot_status(trace_id)
         task_label = (trace.get("task", {}).get("description") or "trace")[:40]
         if stage == "inbox":
+            dest_stage = "staged"
             commit_single(self.state, trace_id, task_label)
             self._undo_stack.append(_UndoOp("stage", trace_id,
                                             f"stage '{task_label}'", prior))
             self.notify("Added to staged · u to undo", severity="information")
         elif stage == "staged":
+            dest_stage = "inbox"
             unstage_trace(self.state, trace_id)
             self._undo_stack.append(_UndoOp("unstage", trace_id,
                                             f"unstage '{task_label}'", prior))
@@ -1622,11 +1599,99 @@ class OpenTracesApp(App):
         else:
             self.notify("Only inbox/staged traces can be toggled", severity="warning")
             return
-        self._reload_traces(
-            keep_focus_stage=source_stage,
-            keep_focus_index=source_index,
-        )
+        await self._move_trace_row(trace, source_stage, dest_stage, source_index)
         self._refresh_keybar()
+
+    async def _move_trace_row(
+        self,
+        trace: dict[str, Any],
+        source_stage: str,
+        dest_stage: str,
+        source_index: int,
+    ) -> None:
+        """Incrementally shuffle one row from ``source_stage`` to ``dest_stage``.
+
+        Avoids the full-reload flicker: no disk read, no clear+rebuild across
+        all three lists. Only the source and destination lists mutate, and the
+        source cursor advances to whatever row slid up into ``source_index``.
+
+        Awaits the DOM mutations so by the time we pin the cursor, the source
+        list's children list is accurate — otherwise Textual applies the
+        ``-highlight`` class to the row being removed, and the new top row
+        reads as unhighlighted until the user nudges j/k.
+        """
+        trace_id = trace.get("trace_id")
+
+        # Update the in-memory groupings first — these are the source of truth
+        # the handlers read from.
+        src_items = self.by_stage[source_stage]
+        for i, t in enumerate(src_items):
+            if t.get("trace_id") == trace_id:
+                src_items.pop(i)
+                break
+
+        dest_items = self.by_stage[dest_stage]
+        key = trace.get("timestamp_end") or trace.get("timestamp_start") or ""
+        insert_at = len(dest_items)
+        for i, t in enumerate(dest_items):
+            tkey = t.get("timestamp_end") or t.get("timestamp_start") or ""
+            if key >= tkey:
+                insert_at = i
+                break
+        dest_items.insert(insert_at, trace)
+
+        source_lv = self.query_one(f"#{STAGE_IDS[source_stage]}", ListView)
+        dest_lv = self.query_one(f"#{STAGE_IDS[dest_stage]}", ListView)
+
+        # Build the destination row before we touch the DOM so both ops can
+        # be queued and awaited together — Textual batches them into one
+        # render pass, so the user sees a single transition rather than
+        # remove-then-insert flicker.
+        width_hint = max(36, dest_lv.size.width - 4 or 44)
+        new_row = TraceRow(
+            trace,
+            is_blocked=trace_id in self._blocked_ids,
+            width_hint=width_hint,
+        )
+        dest_children = list(dest_lv.children)
+        if insert_at < len(dest_children):
+            mount_await = dest_lv.mount(new_row, before=dest_children[insert_at])
+        else:
+            mount_await = dest_lv.append(new_row)
+
+        remove_await = None
+        for child in list(source_lv.children):
+            if isinstance(child, TraceRow) and child.trace.get("trace_id") == trace_id:
+                remove_await = child.remove()
+                break
+
+        if remove_await is not None:
+            await remove_await
+        if mount_await is not None:
+            await mount_await
+
+        remaining = len(src_items)
+        if remaining == 0:
+            source_lv.index = None
+            self._update_panel_counter(source_stage)
+            self._update_panel_counter(dest_stage)
+            fallback = self._first_trace()
+            if fallback:
+                self._select_trace(fallback)
+            else:
+                self._render_empty_detail()
+            return
+
+        next_idx = max(0, min(source_index, remaining - 1))
+        # Bounce through None so a numerically unchanged index still emits
+        # Highlighted — and so Textual reassigns the ``-highlight`` class to
+        # the row that now occupies ``next_idx``.
+        source_lv.index = None
+        source_lv.index = next_idx
+        self._set_active_stage(source_stage)
+        self._update_panel_counter(source_stage)
+        self._update_panel_counter(dest_stage)
+        self.set_focus(source_lv)
 
     def action_reject(self) -> None:
         trace = self._focused_list_trace()
@@ -1874,22 +1939,34 @@ class OpenTracesApp(App):
 
     @on(ListView.Highlighted)
     def on_any_highlighted(self, event: ListView.Highlighted) -> None:
-        item = event.item
         source_stage: str | None = None
         for stage, lid in STAGE_IDS.items():
             if event.list_view.id == lid:
                 source_stage = stage
                 break
-        if isinstance(item, TraceRow):
-            # Any row highlight on a non-active list promotes that list to
-            # active and clears the others — only one row in the left
-            # column is highlighted at a time.
-            if source_stage and source_stage != self._active_stage:
+        if source_stage is None:
+            return
+        # During an incremental stage-toggle, ``.remove()`` on the old row is
+        # async — the event may still carry the row that's about to leave the
+        # DOM. Trust ``self.by_stage`` (updated synchronously by
+        # ``_move_trace_row``) as the source of truth, and fall back to the
+        # event's item only when the in-memory view has nothing at that index.
+        lv = event.list_view
+        idx = lv.index
+        stage_items = self.by_stage.get(source_stage, [])
+        trace: dict[str, Any] | None = None
+        if idx is not None and 0 <= idx < len(stage_items):
+            trace = stage_items[idx]
+        elif isinstance(event.item, TraceRow):
+            trace = event.item.trace
+        if trace is not None:
+            # Highlighting a non-active list promotes it to active — only one
+            # row in the left column is ever the preview source.
+            if source_stage != self._active_stage:
                 self._set_active_stage(source_stage)
-            self._current_trace = item.trace
-            self._render_trace(item.trace)
-        if source_stage:
-            self._update_panel_counter(source_stage)
+            self._current_trace = trace
+            self._render_trace(trace)
+        self._update_panel_counter(source_stage)
 
     @on(ListView.Selected)
     def on_any_selected(self, event: ListView.Selected) -> None:
