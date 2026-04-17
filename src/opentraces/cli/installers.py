@@ -1394,15 +1394,59 @@ def _tier_row(tier: dict) -> None:
         line += f"  {_cli._dim(detail)}"
     human_echo(line)
 
+    # Setup info lines (e.g., LLM endpoint/env) render above the hints,
+    # at the same indent, so `doctor` exposes the full configuration.
+    pad = " " * (4 + 22 + 1)  # align under the state column
+    for info in _tier_info_lines(tier):
+        if info:
+            human_echo(f"{pad}{_cli._dim(info)}")
+
     # Actionable hints, only where applicable.
     hints = _tier_toggle_hint(state, tier)
     if hints:
-        pad = " " * (4 + 22 + 1)  # align under the state column
         if isinstance(hints, str):
             hints = [hints]
         for h in hints:
             if h:
                 human_echo(f"{pad}{_cli._dim(h)}")
+
+
+def _tier_info_lines(tier: dict) -> list[str]:
+    """Return read-only setup detail lines for this tier.
+
+    Currently only the LLM trace review tier exposes configuration worth
+    surfacing (endpoint, api-key env var, probe result), so other tiers
+    return an empty list.
+    """
+    if tier.get("name") != "LLM trace review":
+        return []
+    state = tier.get("state")
+    # Only show setup details when the user has opted in; the disabled
+    # row already carries an "enable:" hint and nothing else is configured.
+    if state in ("disabled", None):
+        return []
+    lines: list[str] = []
+    base_url = tier.get("base_url")
+    api_format = tier.get("api_format")
+    if base_url:
+        parts = [f"endpoint: {base_url}"]
+        if api_format:
+            parts.append(f"api: {api_format}")
+        lines.append(" — ".join(parts))
+    api_key_env = tier.get("api_key_env")
+    if api_key_env:
+        import os as _os
+        present = bool(_os.environ.get(api_key_env))
+        lines.append(
+            f"api key env: ${api_key_env} ({'set' if present else 'unset'})"
+        )
+    probe = tier.get("probe_status")
+    # `probe_status` already folds model/backend into the main row for the
+    # on-demand case; only surface it when it carries extra signal (model
+    # count, unreachable reason, etc.).
+    if probe and any(tok in probe for tok in ("models available", "UNREACHABLE", "not found", "not installed", "not set")):
+        lines.append(f"probe: {probe}")
+    return lines
 
 
 def _tier_toggle_hint(state: str, tier: dict) -> str | None:

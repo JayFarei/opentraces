@@ -348,6 +348,9 @@ def _security_tiers(
             "api_format": review_llm.get("api_format"),
             "backend": review_llm.get("backend"),
             "model": review_llm.get("model"),
+            "base_url": review_llm.get("base_url"),
+            "api_key_env": review_llm.get("api_key_env"),
+            "probe_status": review_llm.get("status"),
             "reachable": rl_reachable,
         },
         {

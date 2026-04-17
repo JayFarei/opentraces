@@ -345,6 +345,8 @@ Checks configured integrations, versions, and security tiers. It exits non-zero 
 |------|-------------|
 | `--security` | Show only the security pipeline view |
 
+For the LLM trace review tier, `doctor` also surfaces the active setup: backend and model, endpoint URL, API format, whether the configured `api_key_env` variable is set, and the probe result (e.g. model count, unreachable reason, or `not found` when the configured model is missing from the endpoint's catalog). Use this to confirm that `opentraces setup llm-review` wrote the expected values before running `opentraces llm-review`.
+
 ## Remote Management
 
 ### `opentraces remote`

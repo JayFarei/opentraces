@@ -60,6 +60,8 @@ opentraces llm-review --dry-run
 
 Use `opentraces push --llm-review` when you want upload to require a clean Tier 2 verdict on every staged trace.
 
+`opentraces doctor` (and `opentraces doctor --security`) shows the active Tier 2 setup alongside the tier state: the configured backend and model (e.g. `ollama / gemma4:latest`), the endpoint URL and API format, whether the `api_key_env` is set, and the probe result against that endpoint. If the probe lists available models but your configured model is missing, it is flagged as `not found` so you can fix the config or pull the model before running `opentraces llm-review`.
+
 ## Tier 3: Human Review
 
 Human review is always available through:

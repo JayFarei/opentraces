@@ -83,6 +83,18 @@ opentraces setup trufflehog --disable
 
 ### LLM Review Unreachable
 
+First check what `doctor` sees:
+
+```bash
+opentraces doctor --security
+```
+
+The LLM trace review row shows the configured backend and model, the endpoint URL, whether the `api_key_env` variable is set, and the probe result against that endpoint. Common signals:
+
+- `probe: ... not found` — the configured model is not in the endpoint's catalog (pull it or update the model name)
+- `probe: UNREACHABLE ...` — the endpoint did not respond (start the local server, check the URL)
+- `api key env: $VAR (unset)` — remote backend needs an API key that is not exported in this shell
+
 Re-test or reconfigure it:
 
 ```bash
