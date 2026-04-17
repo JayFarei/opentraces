@@ -42,12 +42,15 @@ git push origin main
 
 ### 3. Deploy to Vercel
 
-Run the deploy from the **repo root** (not `web/site/`), because Vercel resolves the root directory from its project settings:
+Run the deploy from the **repo root** (not `web/site/`), because Vercel resolves the root directory from its project settings. Always pin to the latest CLI and use `--archive=tgz` — the brew-installed `vercel` (41.x) fails with `Error: Upload aborted` against the current deploy endpoint, which requires v47.2.2+:
 
 ```bash
 cd /path/to/repo/root
-npx vercel --prod
+rm -rf web/site/.next kb/app/.next  # not in .vercelignore; bloats the archive
+npx vercel@latest --prod --yes --archive=tgz
 ```
+
+Confirmed working on 2026-04-17 for v0.3.0 deploy after two failed attempts with the older CLI. `--archive=tgz` uploads one tarball instead of uploading file-by-file, which also avoids a class of transient "Upload aborted" failures.
 
 ### 4. Verify
 
@@ -77,7 +80,9 @@ If you add a new file that the site reads at build time via a relative path like
 
 | Issue | Fix |
 |-------|-----|
-| "provided path does not exist" | You ran `vercel` from `web/site/`, run from repo root instead |
+| `Error: Upload aborted` repeating across many files | Brew-installed `vercel` CLI is too old. Use `npx vercel@latest --prod --yes --archive=tgz` |
+| `Your Vercel CLI version is outdated. This endpoint requires version 47.2.2 or later` | Same — switch to `vercel@latest` |
+| "provided path does not exist" (e.g. `web/site/web/site`) | You ran `vercel` from `web/site/`. Deploy from repo root — the project has `rootDirectory=web/site` server-side, so running from inside `web/site/` double-nests the path |
 | "Root Directory does not exist" | `.vercelignore` is excluding `web/site/`. Check ignore patterns, avoid `*` catch-all with negations |
 | Build fails on `version.json` | `next.config.ts` generates it at build time, check `src/opentraces/__init__.py` is not in `.vercelignore` |
 | Machine view empty on production | `skill/SKILL.md` excluded by `.vercelignore`, `getSkillContent()` returns `""` |
