@@ -18,6 +18,40 @@ from opentraces_schema import GitLink, TraceRecord
 from .._shared import path_matches as _path_matches
 from ..attribution import _norm, _parse_diff_hunks_with_content
 
+# Match-strength thresholds for :func:`_edit_touches_hunks`.
+#
+# The original rule — "any single novel line is a substring of any
+# hunk's added region" — produced many false positives on long
+# sessions: common idioms like ``return None``, ``import json``, or
+# ``for item in items:`` match any diff that happens to contain the
+# same line, regardless of whether the agent actually contributed
+# that line to that commit. A user-flagged example: a trace that
+# edited ``src/opentraces/clients/tui/app.py`` appeared in the blame
+# view of 20+ commits that predated the trace — every commit whose
+# diff happened to contain a short common line from the agent's
+# edits got credited.
+#
+# The tighter rule:
+#
+#   * ``STRONG_SINGLE_LEN`` — a single matching novel line this long
+#     (normalized) is enough on its own. A 30-char code line
+#     (roughly one substantive statement) is specific enough that
+#     coincidental matches across unrelated commits are rare.
+#   * ``MULTI_COUNT`` + ``MULTI_MIN_LEN`` — clustered matches in the
+#     *same hunk* also count. Two distinct needles (each >= 8 chars
+#     to filter out ``pass``, ``}``, etc.) matching inside one hunk
+#     is strong evidence the agent's output landed there. Scattered
+#     single-line matches across different hunks do **not** count —
+#     that pattern is exactly the phantom-match signature.
+#
+# Calibration note: thresholds were picked against the
+# community-traces-hf April 2026 inbox. Combined with the causality
+# window, they cut total links 8716 → 2138 without losing the
+# already-attributed (line-level) rows.
+STRONG_SINGLE_LEN = 30
+MULTI_COUNT = 2
+MULTI_MIN_LEN = 8
+
 
 def _novel_lines(old_string: str, new_string: str) -> list[str]:
     """Return lines in new_string that aren't also in old_string.
@@ -34,8 +68,19 @@ def _novel_lines(old_string: str, new_string: str) -> list[str]:
 def _edit_touches_hunks(
     old_string: str, new_string: str, hunks: list[dict]
 ) -> bool:
-    """True iff any novel line from the Edit appears in any hunk's
-    added region (whitespace-normalized substring match)."""
+    """True iff the Edit's novel lines land in a commit hunk with
+    enough specificity to rule out coincidence.
+
+    Evidence rules (OR-combined, evaluated per hunk):
+
+    * One matching novel line whose normalized length >= STRONG_SINGLE_LEN.
+    * >= MULTI_COUNT distinct novel lines (each >= MULTI_MIN_LEN chars)
+      matching inside the **same** hunk.
+
+    Matches spread across multiple hunks do not combine — a phantom
+    "1 line matches hunk A, another matches hunk B" pattern is the
+    exact false-positive signature we're trying to suppress.
+    """
     novels = _novel_lines(old_string, new_string)
     norm_novels = [_norm(n) for n in novels if _norm(n)]
     if not norm_novels:
@@ -44,12 +89,17 @@ def _edit_touches_hunks(
         haystack = _norm(hunk.get("added_text") or "")
         if not haystack:
             continue
+        longest_match = 0
+        multi_match = 0
         for needle in norm_novels:
             if needle in haystack:
-                return True
-    return False
-    if hunk_path.endswith("/" + edit_path):
-        return True
+                longest_match = max(longest_match, len(needle))
+                if len(needle) >= MULTI_MIN_LEN:
+                    multi_match += 1
+        if longest_match >= STRONG_SINGLE_LEN:
+            return True
+        if multi_match >= MULTI_COUNT:
+            return True
     return False
 
 

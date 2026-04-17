@@ -75,3 +75,25 @@ def parse_link(line: str) -> tuple[str, str | None] | None:
     trace_id = parts[0]
     url = parts[1] if len(parts) > 1 else None
     return (trace_id, url)
+
+
+def trace_ids_for_commit(sha: str, cwd: Path | None = None) -> list[str]:
+    """Return the ``trace_id``s recorded on ``sha``'s opentraces note.
+
+    Preserves the write-order of the note (which is the order hooks /
+    backfill appended them) so callers can render them chronologically.
+    Deduplicates on re-reads (idempotent writes can theoretically
+    produce duplicates on pathological notes).
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in read(sha, cwd):
+        parsed = parse_link(line)
+        if parsed is None:
+            continue
+        tid, _url = parsed
+        if tid in seen:
+            continue
+        seen.add(tid)
+        out.append(tid)
+    return out

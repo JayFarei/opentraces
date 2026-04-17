@@ -66,11 +66,17 @@ def _trace_with_attr(trace_id: str, file_path: str, new_string: str) -> TraceRec
 
 class TestLifecyclePromotion:
     def test_tool_emitted_promotes_to_final(self, repo):
-        (repo / "app.py").write_text("hi\nGREETING\n")
+        # Realistic agent-scale line — the correlator's specificity
+        # threshold rejects sub-30-char single-line matches to avoid
+        # phantom matches on common idioms. ``GREETING`` alone was
+        # fine under the old loose rule; keep a 30+ char line so the
+        # positive-case test still matches against the new threshold.
+        added = "def configure_greeting_dispatcher(app):"
+        (repo / "app.py").write_text(f"hi\n{added}\n")
         _sh(["git", "add", "-A"], repo)
         _sh(["git", "commit", "-qm", "c"], repo)
 
-        trace = _trace_with_attr("t-final", "app.py", "hi\nGREETING")
+        trace = _trace_with_attr("t-final", "app.py", f"hi\n{added}")
         post_commit.run(repo, [trace])
 
         # Phase 4 R35: after correlation, lifecycle → final, revision

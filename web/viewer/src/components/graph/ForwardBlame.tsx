@@ -33,12 +33,13 @@ export function ForwardBlame({
   commitMsgFallback?: string;
 }) {
   const commitMsg = blame.msg?.trim() || commitMsgFallback || "(no subject)";
+  const pctNum = typeof blame.pct === "number" ? blame.pct : 0;
 
   return (
     <div style={{ fontFamily: F.code, fontSize: 12, lineHeight: 1.7 }}>
       <div style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ color: pctColor(blame.pct, t) }}>●</span>
+          <span style={{ color: pctColor(pctNum, t) }}>●</span>
           <span style={{ color: t.textMuted }}>Commit:</span>
           <span style={{
             color: t.yellow, fontWeight: 600, textDecoration: "underline",
@@ -47,7 +48,7 @@ export function ForwardBlame({
           <span data-testid="graph-blame-commit-msg" style={{ color: t.text, fontWeight: 500 }}>{commitMsg}</span>
         </div>
         <div style={{ color: t.textMuted, fontSize: 11, paddingLeft: 18, marginTop: 2 }}>
-          Coverage: <span style={{ color: pctColor(blame.pct, t) }}>{blame.coverage}</span>{" "}
+          Coverage: <span style={{ color: pctColor(pctNum, t) }}>{blame.coverage}</span>{" "}
           attributed ({blame.attributed})&nbsp;&nbsp;
           {blame.sessions.length} trace{blame.sessions.length === 1 ? "" : "s"}&nbsp;&nbsp;
           {blame.fileCount} files
@@ -99,24 +100,67 @@ export function ForwardBlame({
         );
       })}
 
-      <div style={{ borderTop: `1px solid ${t.border}`, margin: "16px 0" }} />
-      <div style={{ marginBottom: 8, color: t.text, fontWeight: 500 }}>Files:</div>
-      <div style={{ fontSize: 11 }}>
-        {blame.files.map((f, i) => (
-          <div key={i} style={{ display: "flex", gap: 12, padding: "3px 0", alignItems: "baseline" }}>
-            <span style={{
-              color: t.textSec, flex: 1, minWidth: 0,
-              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
-            }}>{f.path}</span>
-            <span style={{ color: t.cyan, minWidth: 70, textAlign: "right", whiteSpace: "nowrap" }}>
-              {f.total} line(s)
-            </span>
-            <span style={{ color: t.textMuted, fontSize: 10, whiteSpace: "nowrap" }}>
-              ({f.attr} attributed)
+      {blame.hookLinked && blame.hookLinked.length > 0 && (
+        <>
+          <div style={{ borderTop: `1px solid ${t.border}`, margin: "16px 0" }} />
+          <div style={{ marginBottom: 8, color: t.text, fontWeight: 500 }}>
+            Hook-linked traces{" "}
+            <span style={{ color: t.textMuted, fontWeight: 400, fontSize: 11 }}>
+              (tool-emit evidence; no per-line attribution)
             </span>
           </div>
-        ))}
-      </div>
+          <div style={{ fontSize: 11 }}>
+            {blame.hookLinked.map((h) => {
+              const dc = traceColor(h.trace_id, mode);
+              return (
+                <div
+                  key={h.trace_id}
+                  onClick={() => onSelectTrace(h.trace_id)}
+                  style={{
+                    display: "flex", gap: 8, padding: "4px 0",
+                    alignItems: "baseline", cursor: "pointer", paddingLeft: 8,
+                  }}
+                >
+                  <div style={{
+                    width: 14, height: 14, minWidth: 14, borderRadius: "50%",
+                    background: `${dc}15`, border: `1px solid ${dc}35`,
+                  }} />
+                  <span style={{ color: t.textDim }}>t:</span>
+                  <span style={{
+                    color: t.yellow, textDecoration: "underline",
+                    textDecorationColor: `${t.yellow}40`, textUnderlineOffset: 2,
+                  }}>{h.id}</span>
+                  {h.name && <span style={{ color: t.green, fontWeight: 600 }}>{h.name}</span>}
+                  {h.model && <span style={{ color: t.cyan, fontSize: 10 }}>{h.model}</span>}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {blame.files.length > 0 && (
+        <>
+          <div style={{ borderTop: `1px solid ${t.border}`, margin: "16px 0" }} />
+          <div style={{ marginBottom: 8, color: t.text, fontWeight: 500 }}>Files:</div>
+          <div style={{ fontSize: 11 }}>
+            {blame.files.map((f, i) => (
+              <div key={i} style={{ display: "flex", gap: 12, padding: "3px 0", alignItems: "baseline" }}>
+                <span style={{
+                  color: t.textSec, flex: 1, minWidth: 0,
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                }}>{f.path}</span>
+                <span style={{ color: t.cyan, minWidth: 70, textAlign: "right", whiteSpace: "nowrap" }}>
+                  {f.total} line(s)
+                </span>
+                <span style={{ color: t.textMuted, fontSize: 10, whiteSpace: "nowrap" }}>
+                  ({f.attr} attributed)
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

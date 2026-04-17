@@ -493,6 +493,83 @@ def _iter_trace_blocks(
     return out
 
 
+def _hook_linked_only_trace_ids(
+    project_cwd: Path, sha: str, attribution_trace_ids: set[str],
+) -> list[str]:
+    """Return trace_ids linked via ``refs/notes/opentraces`` that are not
+    already present in the attribution cache. Empty on any failure.
+
+    Also filters out notes entries that overlap with attribution by
+    session_id (legacy caches key on session_id; the real trace_id in
+    notes may correspond to an attribution row keyed on session_id).
+    """
+    from ..enrichment.git import notes_store
+    from ..core.config import get_project_traces_dir
+    from ..core.inbox import load_trace_records
+
+    try:
+        tids = notes_store.trace_ids_for_commit(sha, project_cwd)
+    except Exception:
+        return []
+    if not tids:
+        return []
+
+    # Expand attribution IDs with matching session_ids from staging so
+    # we don't double-list a trace whose canonical trace_id is in notes
+    # but whose session_id is what the attribution cache knows.
+    attr_expanded: set[str] = set(attribution_trace_ids)
+    try:
+        staging = get_project_traces_dir(project_cwd)
+        if staging.exists():
+            for r in load_trace_records(staging):
+                sid = getattr(r, "session_id", "") or ""
+                if r.trace_id in attr_expanded:
+                    if sid:
+                        attr_expanded.add(sid)
+                elif sid and sid in attr_expanded:
+                    attr_expanded.add(r.trace_id)
+    except Exception:
+        pass
+
+    return [tid for tid in tids if tid not in attr_expanded]
+
+
+def _render_hook_linked_section(
+    project_cwd: Path, trace_ids: list[str], color: bool,
+) -> list[str]:
+    """Append a "Hook-linked traces (no per-line data)" section listing
+    notes-only trace_ids with best-effort short-name + model.
+    """
+    from ..core.trace_meta import resolve_trace_meta
+
+    if not trace_ids:
+        return []
+    rule = paint(Role.DIM, SPINE_H * 72, use_color=color)
+    out = ["", rule, ""]
+    out.append(
+        "Hook-linked traces "
+        + paint(
+            Role.DIM, "(tool-emit evidence; no per-line attribution)",
+            use_color=color,
+        )
+    )
+    out.append("")
+    for tid in trace_ids:
+        meta = resolve_trace_meta(project_cwd, tid)
+        name = (meta.short_name if meta and meta.short_name else "")
+        model = (meta.model if meta else None) or ""
+        handle = render_handle("t", tid, use_color=color)
+        name_p = paint(Role.TRACE_NAME, name, use_color=color) if name else ""
+        model_p = paint(Role.DIM, model, use_color=color) if model else ""
+        row = f"  {handle}"
+        if name:
+            row += f"   {name_p}"
+        if model:
+            row += f"   {model_p}"
+        out.append(row)
+    return out
+
+
 def _render_default(meta: tuple[str, str, str], data: dict,
                     project_cwd: Path, scope_file: str | None,
                     color: bool, *, show_entities: bool = False) -> str:
@@ -505,6 +582,15 @@ def _render_default(meta: tuple[str, str, str], data: dict,
         project_cwd, meta[0], data, color,
         verbose_entities=show_entities, scope_file=scope_file,
     ))
+
+    hook_linked = _hook_linked_only_trace_ids(
+        project_cwd, meta[0],
+        {t.get("trace_id") for t in traces if t.get("trace_id")},
+    )
+    if hook_linked:
+        lines.extend(_render_hook_linked_section(
+            project_cwd, hook_linked, color,
+        ))
 
     # Files block — simple, aligned, separated from the trace tree by a
     # dim horizontal rule so the two sections read as distinct groups.
@@ -603,11 +689,19 @@ def _build_json_payload(meta: tuple[str, str, str], data: dict,
             "total": int(finfo.get("total") or 0),
             "lines": inflated,
         }
+    hook_linked_ids = _hook_linked_only_trace_ids(
+        project_cwd, full_sha,
+        {t.get("trace_id") for t in (data.get("traces") or [])
+         if t.get("trace_id")},
+    )
     payload: dict = {
         "commit": {"sha": full_sha, "subject": subject, "timestamp": ts},
         "coverage": {"attributed": attributed, "total": total, "ratio": ratio},
         "traces": data.get("traces") or [],
         "files": files_out,
+        "hookLinked": [
+            {"trace_id": tid, "id": tid[:8]} for tid in hook_linked_ids
+        ],
     }
     # Legacy "entities" key — keep for back-compat.
     if include_entities:
@@ -714,6 +808,336 @@ def _maybe_prompt_first_run(project_dir: Path, sha: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Trace-mode (inverse blame) rendering
+# --------------------------------------------------------------------------- #
+
+def _render_trace_blame(
+    project_cwd: Path, trace_id: str, *,
+    color: bool,
+    include_overlapping: bool = False,
+) -> str:
+    """Inverse blame: commits a trace contributed to.
+
+    Mirrors the commit-centric layout: one header line (``◆ t:… short-name
+    model``), a coverage line summarising the result, then per-commit rows
+    with a magenta spine tying them to the trace header. Attribution-cache
+    rows show real line counts + percentages; git_links rows show a tier
+    badge (``tool-emitted`` / ``divergent``).
+    """
+    from ..core import inverse_blame as _ib
+
+    result = _ib.compute(project_cwd, trace_id,
+                         include_overlapping=include_overlapping)
+
+    lines: list[str] = []
+    t_bullet = paint(Role.TRACE_ID, TRACE_BULLET, use_color=color)
+    t_handle = render_handle("t", result.trace_id, use_color=color)
+    name_paint = paint(Role.TRACE_NAME, result.short_name or result.short_id,
+                       use_color=color)
+    model_paint = paint(Role.DIM, result.model, use_color=color) if result.model else ""
+
+    header = f"{t_bullet} Trace: {t_handle}  {name_paint}"
+    if result.model:
+        header += f"   {model_paint}"
+    lines.append(header)
+
+    n_att = len(result.attribution_commits)
+    n_links = len(result.git_link_commits)
+    total = n_att + n_links
+    summary_parts = [f"{total} commit{'' if total == 1 else 's'}"]
+    if n_att:
+        pct_covered = int(round(100 * sum(c.pct for c in result.attribution_commits) /
+                                (n_att * 100))) if n_att else 0
+        summary_parts.append(
+            f"{n_att} with line-level attribution"
+            + (f" ({result.total_lines} lines)" if result.total_lines else "")
+        )
+        # avoid confusing averages; users read per-row pcts below
+        _ = pct_covered
+    if n_links:
+        summary_parts.append(f"{n_links} hook-linked")
+
+    spine_v = _spine(SPINE_V, color)
+    lines.append(f"{spine_v} {' · '.join(summary_parts)}")
+
+    if total == 0:
+        lines.append(f"{spine_v}")
+        lines.append("  (no commits attributed to this trace yet)")
+        return "\n".join(lines) + "\n"
+
+    lines.append(spine_v)  # blank spine row before list
+
+    body_dash2 = _spine(SPINE_H * 2, color)
+    for idx, commit in enumerate(result.commits):
+        is_last = idx == total - 1
+        tee = _spine(SPINE_L if is_last else SPINE_T, color)
+        c_bullet = paint(Role.COMMIT_ID, COMMIT_BULLET, use_color=color)
+        c_handle = render_handle("c", commit.sha, use_color=color)
+        subj = paint(Role.COMMIT_SUBJECT, commit.subject or "(no subject)",
+                     use_color=color)
+
+        row = f"{tee}{body_dash2} {c_bullet} {c_handle}  {subj}"
+
+        if commit.source == "attribution":
+            pct_role = coverage_role(float(commit.pct))
+            pct_paint = paint(pct_role, f"{commit.pct}%", use_color=color)
+            lines_text = (
+                f"{commit.lines_in_commit} of {commit.total_commit_lines} "
+                f"diff lines . {pct_paint}"
+            )
+            row += f"  {lines_text}"
+        else:
+            # git_links tier badge — no reliable per-line count.
+            tier_text = {
+                "tool_emitted": "tool-emitted",
+                "tool_emitted_with_divergence": "divergent",
+                "overlapping": "overlapping",
+            }.get(commit.tier or "", commit.tier or "")
+            tier_role = {
+                "tool_emitted": Role.ADDED,
+                "tool_emitted_with_divergence": Role.MODIFIED,
+                "overlapping": Role.DIM,
+            }.get(commit.tier or "", Role.DIM)
+            tier_paint = paint(tier_role, tier_text, use_color=color)
+            row += f"  {tier_paint}"
+            if commit.total_commit_lines:
+                row += "  " + paint(
+                    Role.DIM,
+                    f"({commit.total_commit_lines} diff lines)",
+                    use_color=color,
+                )
+        lines.append(row)
+
+    if result.files:
+        rule = paint(Role.DIM, SPINE_H * 72, use_color=color)
+        lines.append("")
+        lines.append(rule)
+        lines.append("")
+        lines.append("Files touched by this trace:")
+        lines.append("")
+        pw = max(len(p) for p, _ in result.files)
+        for path, n in result.files[:20]:
+            lines.append(
+                f"  {paint(Role.DIM, path.ljust(pw), use_color=color)}  "
+                f"{n} line{'' if n == 1 else 's'}"
+            )
+        if len(result.files) > 20:
+            lines.append(f"  ... +{len(result.files) - 20} more")
+
+    return "\n".join(lines) + "\n"
+
+
+def _build_trace_json_payload(
+    project_cwd: Path, trace_id: str, *, include_overlapping: bool,
+) -> dict:
+    """JSON shape for ``ot blame t:<id> --json``. Matches the web payload
+    keys to keep one contract across surfaces."""
+    from ..core import inverse_blame as _ib
+
+    result = _ib.compute(project_cwd, trace_id,
+                         include_overlapping=include_overlapping)
+    return {
+        "trace": {
+            "id": result.short_id,
+            "trace_id": result.trace_id,
+            "name": result.short_name,
+            "lines": result.total_lines,
+            "model": result.model,
+        },
+        "commits": [
+            {
+                "id": c.short_sha,
+                "sha": c.sha,
+                "msg": c.subject,
+                "linesInCommit": c.lines_in_commit,
+                "totalCommitLines": c.total_commit_lines,
+                "pct": (f"{c.pct}%" if c.source == "attribution" else "-"),
+                "source": c.source,
+                "tier": c.tier,
+            }
+            for c in result.commits
+        ],
+        "files": [{"path": p, "lines": n} for p, n in result.files],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Argument → mode resolution
+# --------------------------------------------------------------------------- #
+
+def _resolve_attribution_cache_id(cwd: Path, prefix: str) -> str | None:
+    """Resolve ``prefix`` against the attribution cache's own ``trace_id``
+    field, which historically stores session_ids for v1/legacy entries.
+
+    Returns the full cache key on a unique match, raises
+    :class:`AmbiguousPrefixError` on multiple, ``None`` on no match.
+    """
+    from ..core.cache import AttributionCache
+    from ..core.trace_meta import AmbiguousPrefixError
+
+    p = (prefix or "").strip().lower()
+    if not p:
+        return None
+    cache = AttributionCache(cwd)
+    matches: set[str] = set()
+    for sha in cache.list_attributed_shas():
+        data = cache.read_attribution(sha)
+        if not data:
+            continue
+        for tr in (data.get("traces") or []):
+            tid = (tr.get("trace_id") or "").lower()
+            if tid.startswith(p):
+                matches.add(tr["trace_id"])
+    if len(matches) == 1:
+        return next(iter(matches))
+    if len(matches) > 1:
+        raise AmbiguousPrefixError(prefix, sorted(matches))
+    return None
+
+
+def _resolve_session_id_in_staging(cwd: Path, prefix: str) -> str | None:
+    """Find a staged trace by ``session_id`` prefix.
+
+    Multiple staged trace records often share one session_id (forks /
+    supersedes of the same Claude Code session). When a prefix matches
+    a single cohesive session — i.e. one unique full ``session_id`` —
+    we return the **session_id itself** so callers can ask ``compute()``
+    for the merged view across all forks. When the prefix points at a
+    specific canonical trace (session_id is unique to one record), we
+    return that trace_id instead.
+
+    Raises :class:`AmbiguousPrefixError` only when the prefix matches
+    two or more *distinct* session_ids (that's genuine ambiguity).
+    """
+    from ..core.config import get_project_traces_dir
+    from ..core.trace_meta import AmbiguousPrefixError
+
+    p = (prefix or "").strip().lower()
+    if not p:
+        return None
+    staging = get_project_traces_dir(cwd)
+    if not staging.exists():
+        return None
+    # Group by full session_id so forks of one session coalesce.
+    sid_to_tids: dict[str, set[str]] = {}
+    for path in staging.glob("*.jsonl"):
+        try:
+            with path.open() as f:
+                rec = _json.loads(f.readline())
+        except (OSError, ValueError):
+            continue
+        sid = str(rec.get("session_id") or "")
+        tid = str(rec.get("trace_id") or "")
+        if sid.lower().startswith(p) and tid:
+            sid_to_tids.setdefault(sid, set()).add(tid)
+    if not sid_to_tids:
+        return None
+    if len(sid_to_tids) > 1:
+        raise AmbiguousPrefixError(prefix, sorted(sid_to_tids))
+    # One session, possibly with multiple forks.
+    (sid, tids), = sid_to_tids.items()
+    if len(tids) == 1:
+        return next(iter(tids))
+    # Return the session_id — compute() will fan out to all forks.
+    return sid
+
+
+def _resolve_blame_target(cwd: Path, arg: str) -> tuple[str, str] | tuple[None, str]:
+    """Resolve ``arg`` to ``(mode, id)`` where mode is ``"commit"`` or
+    ``"trace"``. On failure returns ``(None, reason)``.
+
+    Resolution order:
+
+    * ``c:<sha>`` → commit-mode, require ``git rev-parse``.
+    * ``t:<id>`` → canonical trace-mode via ``resolve_trace_id_prefix``
+      (matches staged records' ``trace_id`` field).
+    * ``s:<id>`` → session/upstream trace-mode. Matches EITHER a staged
+      record's ``session_id`` (returning the canonical trace_id) OR an
+      attribution-cache-only entry whose key starts with the prefix.
+      ``compute()`` handles both forms uniformly downstream.
+    * Bare hyphenated UUID → try trace, then session/cache, then commit.
+    * Bare hex → try commit, then trace, then session/cache.
+
+    Ambiguity at any stage short-circuits with a typed error.
+    """
+    from ..core.trace_meta import AmbiguousPrefixError, resolve_trace_id_prefix
+
+    if not arg:
+        return (None, "empty argument")
+    low = arg.strip()
+    head = low[:2].lower()
+
+    if head == "c:":
+        sha = _resolve_sha(cwd, low)
+        if sha:
+            return ("commit", sha)
+        return (None, f"Unknown commit: {arg}")
+
+    if head == "t:":
+        try:
+            tid = resolve_trace_id_prefix(cwd, low)
+        except AmbiguousPrefixError as e:
+            return (None, str(e))
+        if tid:
+            return ("trace", tid)
+        return (None, f"Unknown trace: {arg}")
+
+    if head == "s:":
+        bare = low[2:]
+        # Try staging session_id match first (preferred — returns canonical
+        # trace_id). Fall back to attribution-cache prefix match for
+        # upstream sessions that never landed in the inbox.
+        try:
+            tid = _resolve_session_id_in_staging(cwd, bare)
+            if tid:
+                return ("trace", tid)
+            cache_id = _resolve_attribution_cache_id(cwd, bare)
+            if cache_id:
+                return ("trace", cache_id)
+        except AmbiguousPrefixError as e:
+            return (None, str(e))
+        return (None, f"Unknown session: {arg}")
+
+    def _try_trace_like() -> tuple[str, str] | None:
+        """Try trace_id → session_id → attribution cache, in that order."""
+        try:
+            tid = resolve_trace_id_prefix(cwd, low)
+            if tid:
+                return ("trace", tid)
+            sid_tid = _resolve_session_id_in_staging(cwd, low)
+            if sid_tid:
+                return ("trace", sid_tid)
+            cache_id = _resolve_attribution_cache_id(cwd, low)
+            if cache_id:
+                return ("trace", cache_id)
+        except AmbiguousPrefixError as e:
+            return ("ambiguous", str(e))
+        return None
+
+    if "-" in low:
+        found = _try_trace_like()
+        if found and found[0] == "ambiguous":
+            return (None, found[1])
+        if found:
+            return found
+        sha = _resolve_sha(cwd, low)
+        if sha:
+            return ("commit", sha)
+        return (None, f"Unknown id: {arg}")
+
+    # Bare hex — commit first (backward-compatible), then trace-like.
+    sha = _resolve_sha(cwd, low)
+    if sha:
+        return ("commit", sha)
+    found = _try_trace_like()
+    if found and found[0] == "ambiguous":
+        return (None, found[1])
+    if found:
+        return found
+    return (None, f"Unknown id: {arg}")
+
+
+# --------------------------------------------------------------------------- #
 # Click command
 # --------------------------------------------------------------------------- #
 
@@ -723,7 +1147,8 @@ def _maybe_prompt_first_run(project_dir: Path, sha: str) -> bool:
     context_settings={"ignore_unknown_options": False},
     examples=[
         "opentraces blame abc1234",
-        "opentraces blame abc1234 src/main.py",
+        "opentraces blame c:abc1234 src/main.py",
+        "opentraces blame t:4dccb032",
         "opentraces blame abc1234 --lines",
         "opentraces blame abc1234 --json",
     ],
@@ -732,16 +1157,21 @@ def _maybe_prompt_first_run(project_dir: Path, sha: str) -> bool:
         ("opentraces show", "view the full trace for an id."),
     ],
     option_groups=[
-        ("Scope", ["show_lines", "show_entities", "project_dir"]),
+        ("Scope", ["show_lines", "show_entities", "project_dir",
+                   "include_overlapping"]),
         ("Output", ["as_json", "no_color"]),
     ],
 )
 @click.argument("sha", required=True)
 @click.argument("path", required=False, default=None)
 @click.option("--lines", "show_lines", is_flag=True,
-              help="Per-line output (git-blame-style).")
+              help="Per-line output (git-blame-style). Commit-mode only.")
 @click.option("--entities", "show_entities", is_flag=True,
-              help="Expand entity changes under each trace.")
+              help="Expand entity changes under each trace. Commit-mode only.")
+@click.option("--include-overlapping", "include_overlapping", is_flag=True,
+              help="Trace-mode: include commits where files overlap without "
+                   "direct tool-emit evidence (off by default — coincidence, "
+                   "not contribution).")
 @click.option("--json", "as_json", is_flag=True,
               help="Emit structured JSON instead of text.")
 @click.option("--no-color", "no_color", is_flag=True,
@@ -750,31 +1180,67 @@ def _maybe_prompt_first_run(project_dir: Path, sha: str) -> bool:
                   exists=True, file_okay=False, dir_okay=True, path_type=Path),
               default=None, help="Project directory (default: CWD).")
 def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
-              as_json: bool, no_color: bool, project_dir: Path | None) -> None:
-    """Show per-commit attribution for SHA.
+              include_overlapping: bool, as_json: bool, no_color: bool,
+              project_dir: Path | None) -> None:
+    """Attribution between traces and commits.
 
-    Accepts a bare SHA or the ``c:<sha>`` prefixed form. Use ``-- <path>``
-    to scope output to one file.
+    Two modes, one argument:
+
+    * Commit-mode (``c:<sha>`` or bare sha): which traces contributed to
+      this commit. Uses the attribution cache for per-line detail.
+    * Trace-mode (``t:<trace-id>`` or a hyphenated UUID): which commits
+      carry this trace's output. Merges attribution-cache data
+      (fine-grained) with the trace's ``git_links`` (hook-linked).
+
+    ``--lines`` / ``--entities`` apply to commit-mode only.
     """
     cwd = Path(project_dir or Path.cwd()).resolve()
     color = detect_color(no_color, stream=sys.stdout) if not no_color else False
-    # Retain compat with existing tests: --no-color forces plain ASCII;
-    # otherwise we honour TTY detection + NO_COLOR env.
 
-    full_sha = _resolve_sha(cwd, sha)
-    if not full_sha:
-        click.echo(f"Unknown commit: {sha}", err=True)
+    mode, resolved = _resolve_blame_target(cwd, sha)
+    if mode is None:
+        click.echo(resolved, err=True)
         sys.exit(2)
 
+    if mode == "trace":
+        if show_lines or show_entities or path:
+            click.echo(
+                "--lines, --entities, and PATH are commit-mode only.",
+                err=True,
+            )
+            sys.exit(2)
+        if as_json:
+            payload = _build_trace_json_payload(
+                cwd, resolved, include_overlapping=include_overlapping,
+            )
+            click.echo(_json.dumps(payload, indent=2))
+            return
+        click.echo(
+            _render_trace_blame(
+                cwd, resolved, color=color,
+                include_overlapping=include_overlapping,
+            ),
+            nl=False,
+        )
+        return
+
+    full_sha = resolved  # commit-mode
     meta = _git_show_meta(cwd, full_sha)
     if not meta:
         click.echo(f"Unable to read commit metadata for {sha}", err=True)
         sys.exit(2)
 
     from ..core.cache import AttributionCache
+    from ..enrichment.git import notes_store
     cache = AttributionCache(cwd)
 
-    if not cache.has_attribution(full_sha):
+    # If attribution is absent BUT the commit carries hook-linked notes,
+    # render the notes-only view rather than prompting for backfill —
+    # backfill produces attribution-cache rows from file blame, which
+    # can't exist for hook-linked-only commits by construction.
+    notes_tids = notes_store.trace_ids_for_commit(full_sha, cwd)
+
+    if not cache.has_attribution(full_sha) and not notes_tids:
         ran = _maybe_prompt_first_run(cwd, full_sha)
         if not ran or not cache.has_attribution(full_sha):
             sys.exit(1)
@@ -794,7 +1260,6 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
         return
 
     if show_entities and entity_data_raw is None:
-        # Explicit message expected by test_entities_missing_cache_message.
         click.echo(
             _render_default(meta, data, cwd, path, color,
                             show_entities=False),

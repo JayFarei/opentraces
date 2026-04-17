@@ -177,21 +177,44 @@ export interface BlameSession {
   canonical: boolean;
 }
 
+export interface HookLinkedSession {
+  id: string;
+  trace_id: string;
+  name: string;
+  model: string;
+}
+
 export interface BlamePayload {
   sha: string;
   id: string;
   msg: string;
-  pct: number;
+  pct: number | string;  // "—" when attribution-free
   coverage: string;
   attributed: string;
   fileCount: number;
   sessions: BlameSession[];
   files: { path: string; total: number; attr: number }[];
+  hookLinked?: HookLinkedSession[];
 }
+
+export type InverseBlameCommitSource = "attribution" | "git_links";
+export type InverseBlameTier =
+  | "tool_emitted"
+  | "tool_emitted_with_divergence"
+  | null;
 
 export interface InverseBlame {
   trace: { id: string; trace_id: string; name: string; lines: number; model: string };
-  commits: { id: string; sha: string; msg: string; linesInCommit: number; totalCommitLines: number; pct: string }[];
+  commits: {
+    id: string;
+    sha: string;
+    msg: string;
+    linesInCommit: number;
+    totalCommitLines: number;
+    pct: string;
+    source: InverseBlameCommitSource;
+    tier: InverseBlameTier;
+  }[];
   files: { path: string; lines: number }[];
 }
 

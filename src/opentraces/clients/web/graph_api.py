@@ -162,15 +162,42 @@ def _entity_summary_text(c: _gr.Commit, trace_id: str) -> str:
 
 
 def load_blame(cwd: Path, sha: str) -> dict[str, Any] | None:
-    """Return the forward-blame payload for a single commit sha."""
+    """Return the forward-blame payload for a single commit sha.
+
+    Falls back to a notes-only view when the attribution cache has no
+    entry for the commit but ``refs/notes/opentraces`` does. This is
+    the symmetric case of the inverse-blame ``git_links`` merge —
+    commits the hook or backfill correlated to a trace but that never
+    received line-level attribution (the trace was hook-linked but
+    PostToolUse audit entries weren't captured).
+    """
     from ...core.cache import AttributionCache
+    from ...enrichment.git import notes_store
     from ...enrichment.git.blame import diff_line_count, resolve_sha
 
     full_sha = resolve_sha(sha, cwd) or sha
     cache = AttributionCache(cwd)
     data = cache.read_attribution(full_sha)
-    if not data:
+    notes_tids = notes_store.trace_ids_for_commit(full_sha, cwd)
+
+    if not data and not notes_tids:
         return None
+    if not data:
+        # Notes-only payload: bare shape the viewer can render.
+        diff_total = diff_line_count(cwd, full_sha) or 0
+        hook_sessions = _hook_linked_sessions(cwd, notes_tids)
+        return {
+            "sha": full_sha,
+            "id": full_sha[:8],
+            "msg": _commit_subject(cwd, full_sha),
+            "pct": 0,
+            "coverage": "—",
+            "attributed": f"0/{diff_total} lines",
+            "fileCount": 0,
+            "sessions": [],
+            "files": [],
+            "hookLinked": hook_sessions,
+        }
 
     cov = data.get("coverage") or {}
     attributed = int(cov.get("attributed") or 0)
@@ -222,6 +249,13 @@ def load_blame(cwd: Path, sha: str) -> dict[str, Any] | None:
         })
     sessions_out.sort(key=lambda s: -s["lines"])
 
+    attr_ids = {t.trace_id for t in stub.traces}
+    notes_only = [tid for tid in notes_tids if tid not in attr_ids]
+    # Also drop notes trace_ids whose session_id is already in
+    # attribution (legacy cache session_id leakage).
+    if notes_only:
+        notes_only = _filter_notes_by_session_overlap(cwd, notes_only, attr_ids)
+
     return {
         "sha": full_sha,
         "id": full_sha[:8],
@@ -232,74 +266,7 @@ def load_blame(cwd: Path, sha: str) -> dict[str, Any] | None:
         "fileCount": len(files_out),
         "sessions": sessions_out,
         "files": files_out,
-    }
-
-
-_SHA_RE = re.compile(r"^[0-9a-f]{4,40}$")
-
-
-def load_inverse_blame(cwd: Path, trace_id: str) -> dict[str, Any]:
-    """Return the set of commits a trace contributed to + aggregated files."""
-    from ...core.cache import AttributionCache
-    from ...enrichment.git.blame import diff_line_count
-
-    cache = AttributionCache(cwd)
-
-    commits_out: list[dict[str, Any]] = []
-    files_agg: dict[str, int] = {}
-    total_lines = 0
-    model: str | None = None
-    short_name: str | None = None
-
-    for sha in cache.list_attributed_shas():
-        data = cache.read_attribution(sha)
-        if not data:
-            continue
-        # Match on full id or prefix.
-        match = None
-        for tr in (data.get("traces") or []):
-            tid = tr.get("trace_id") or ""
-            if tid == trace_id or tid.startswith(trace_id):
-                match = tr
-                break
-        if not match:
-            continue
-        lines = int(match.get("line_count") or 0)
-        total_lines += lines
-        diff_total = diff_line_count(cwd, sha) or 1
-        pct = _pct(lines / diff_total) if diff_total else 0
-        # Resolve commit subject via git.
-        subject = _commit_subject(cwd, sha)
-        commits_out.append({
-            "id": sha[:8],
-            "sha": sha,
-            "msg": subject,
-            "linesInCommit": lines,
-            "totalCommitLines": diff_total,
-            "pct": f"{pct}%",
-        })
-        for f in (match.get("files") or []):
-            files_agg[f] = files_agg.get(f, 0) + lines  # approx, no per-file breakdown
-
-    sn, m = _trace_meta(cwd, trace_id)
-    short_name, model = sn, m
-
-    files_out = [{"path": p, "lines": n} for p, n in
-                 sorted(files_agg.items(), key=lambda kv: -kv[1])]
-
-    # Newest commits first (by sha ordering isn't chronological — rely on git).
-    commits_out.sort(key=lambda c: -c["linesInCommit"])
-
-    return {
-        "trace": {
-            "id": trace_id[:8],
-            "trace_id": trace_id,
-            "name": short_name or "",
-            "lines": total_lines,
-            "model": model or "",
-        },
-        "commits": commits_out,
-        "files": files_out,
+        "hookLinked": _hook_linked_sessions(cwd, notes_only),
     }
 
 
@@ -313,3 +280,83 @@ def _commit_subject(cwd: Path, sha: str) -> str:
         return out.stdout.strip() if out.returncode == 0 else ""
     except FileNotFoundError:
         return ""
+
+
+def _hook_linked_sessions(cwd: Path, trace_ids: list[str]) -> list[dict[str, Any]]:
+    """Resolve each hook-linked trace_id to a lightweight session row
+    with short_name + model when staged; otherwise just the id."""
+    out: list[dict[str, Any]] = []
+    for tid in trace_ids:
+        short_name, model = _trace_meta(cwd, tid)
+        out.append({
+            "id": tid[:8],
+            "trace_id": tid,
+            "name": short_name or "",
+            "model": model or "",
+        })
+    return out
+
+
+def _filter_notes_by_session_overlap(
+    cwd: Path, notes_tids: list[str], attr_ids: set[str],
+) -> list[str]:
+    """Drop notes trace_ids whose session_id is already in ``attr_ids``
+    (legacy attribution caches key on session_id rather than the
+    canonical trace_id, so notes + attribution can reference the same
+    underlying session under different ids)."""
+    from ...core.config import get_project_traces_dir
+    from ...core.inbox import load_trace_records
+
+    staging = get_project_traces_dir(cwd)
+    if not staging.exists():
+        return notes_tids
+    expanded: set[str] = set(attr_ids)
+    try:
+        for r in load_trace_records(staging):
+            sid = getattr(r, "session_id", "") or ""
+            if r.trace_id in expanded and sid:
+                expanded.add(sid)
+            if sid in expanded:
+                expanded.add(r.trace_id)
+    except Exception:
+        return notes_tids
+    return [tid for tid in notes_tids if tid not in expanded]
+
+
+_SHA_RE = re.compile(r"^[0-9a-f]{4,40}$")
+
+
+def load_inverse_blame(cwd: Path, trace_id: str) -> dict[str, Any]:
+    """HTTP-shaped payload for ``/api/trace/<id>/commits``.
+
+    Thin adapter over :func:`opentraces.core.inverse_blame.compute` — keeps
+    the JSON shape stable for the viewer while the canonical logic lives
+    in a surface-agnostic module shared with the CLI.
+    """
+    from ...core import inverse_blame as _ib
+
+    result = _ib.compute(cwd, trace_id)
+    commits_out = [
+        {
+            "id": c.short_sha,
+            "sha": c.sha,
+            "msg": c.subject,
+            "linesInCommit": c.lines_in_commit,
+            "totalCommitLines": c.total_commit_lines,
+            "pct": (f"{c.pct}%" if c.source == "attribution" else "-"),
+            "source": c.source,
+            "tier": c.tier,
+        }
+        for c in result.commits
+    ]
+    return {
+        "trace": {
+            "id": result.short_id,
+            "trace_id": result.trace_id,
+            "name": result.short_name,
+            "lines": result.total_lines,
+            "model": result.model,
+        },
+        "commits": commits_out,
+        "files": [{"path": p, "lines": n} for p, n in result.files],
+    }

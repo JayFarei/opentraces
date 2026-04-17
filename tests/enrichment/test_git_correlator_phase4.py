@@ -44,22 +44,30 @@ diff --git a/src/app.py b/src/app.py
     def test_match_wins_over_divergence(self):
         # Edit 1 matches the commit's content; Edit 2 is to a different
         # file whose commit content diverges. Tool_emitted wins.
+        #
+        # The agent's novel line needs to clear the correlator's
+        # specificity threshold (>= STRONG_SINGLE_LEN chars) to count
+        # as a match on its own — a real agent edit sets a 30+ char
+        # substantive statement; the 9-char ``GOOD_LINE`` fixture used
+        # before the threshold landed was unrealistically coarse.
         trace = _trace(
-            ("src/app.py", "o", "GOOD_LINE"),
-            ("src/other.py", "o", "WHAT_AGENT_WROTE"),
+            ("src/app.py", "old_body",
+             "def handle_request(self, request):\n    return request.json"),
+            ("src/other.py", "old_val", "WHAT_AGENT_WROTE"),
         )
         diff = """\
 diff --git a/src/app.py b/src/app.py
 --- a/src/app.py
 +++ b/src/app.py
-@@ -1,1 +1,1 @@
--o
-+GOOD_LINE
+@@ -1,1 +1,2 @@
+-old_body
++def handle_request(self, request):
++    return request.json
 diff --git a/src/other.py b/src/other.py
 --- a/src/other.py
 +++ b/src/other.py
 @@ -1,1 +1,1 @@
--o
+-old_val
 +FORMATTER_OUTPUT
 """
         links = correlate(trace, "abc", diff)

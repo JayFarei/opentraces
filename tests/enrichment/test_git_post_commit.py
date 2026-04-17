@@ -55,14 +55,17 @@ def repo(tmp_path):
 
 class TestPostCommit:
     def test_tool_emitted_trace_gets_note(self, repo):
-        # Agent's edit + matching commit.
-        (repo / "src" / "app.py").write_text("hello\nGREETING_LINE\n")
+        # Agent's edit + matching commit. Use a realistic 30+ char
+        # line so the correlator's specificity threshold treats it as
+        # strong evidence (see :mod:`enrichment.git.correlator`).
+        added = "def build_greeting_pipeline(config):"
+        (repo / "src" / "app.py").write_text(f"hello\n{added}\n")
         _sh(["git", "add", "-A"], repo)
         _sh(["git", "commit", "-qm", "add greeting"], repo)
 
         trace = _trace(
             "trace-alpha",
-            [("src/app.py", "hello", "hello\nGREETING_LINE")],
+            [("src/app.py", "hello", f"hello\n{added}")],
             datetime.now(timezone.utc),
         )
         results = post_commit.run(repo, [trace])

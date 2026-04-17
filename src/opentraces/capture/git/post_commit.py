@@ -12,7 +12,9 @@ falls within `window_hours` of now."
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -177,6 +179,43 @@ def run(
     return results
 
 
+def persist_trace_updates(staging: Path, traces: list) -> int:
+    """Rewrite each trace's JSONL file from its in-memory TraceRecord.
+
+    `run()` mutates `trace.git_links`, `trace.lifecycle`, and
+    `trace.attribution.revision` on successful correlation, but keeps the
+    mutation in-memory only. Without this writeback the trace's on-disk
+    record never gains its git_links, so inbox cards render empty
+    "no commits in blame" chips forever.
+
+    Safe to call even when the staging file is missing — skipped silently.
+    Returns the number of files successfully rewritten.
+    """
+    import json as _json
+    written = 0
+    for trace in traces:
+        path = staging / f"{trace.trace_id}.jsonl"
+        if not path.is_file():
+            continue
+        try:
+            payload = trace.model_dump_json()
+            _json.loads(payload)  # sanity: round-trip must parse
+        except Exception:
+            continue
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        try:
+            tmp.write_text(payload + "\n", encoding="utf-8")
+            os.replace(tmp, path)
+            written += 1
+        except OSError:
+            if tmp.exists():
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+    return written
+
+
 HOOK_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB, then rotate-by-truncate.
 
 
@@ -256,6 +295,11 @@ def run_for_repo(repo: Path, *, window_hours: int = 2) -> None:
             for tid, links in results
         ]
         entry["notes_written"] = bool(results)
+        if results:
+            by_tid = {t.trace_id: t for t in records}
+            entry["traces_persisted"] = persist_trace_updates(
+                staging, [by_tid[tid] for tid, _ in results if tid in by_tid],
+            )
         if not results:
             entry["reason"] = "all_candidates_orphan"
     except Exception as e:
@@ -309,3 +353,165 @@ def _stamp_divergence(trace) -> None:
                         "end_line": rng.end_line,
                         "content_hash": rng.content_hash,
                     }
+
+
+def _commit_timestamp(cwd: Path, sha: str) -> datetime | None:
+    """Author/committer date of `sha` as a tz-aware datetime, or None."""
+    code, out = _git(["show", "-s", "--format=%cI", sha], cwd)
+    if code != 0:
+        return None
+    return _parse_iso(out.strip())
+
+
+def _first_parent_shas(cwd: Path, *, max_commits: int) -> list[str]:
+    code, out = _git(
+        ["rev-list", "--first-parent", f"--max-count={max_commits}", "HEAD"],
+        cwd,
+    )
+    if code != 0:
+        return []
+    return [s for s in out.splitlines() if s.strip()]
+
+
+@dataclass
+class BackfillReport:
+    commits_scanned: int = 0
+    commits_correlated: int = 0
+    commits_skipped: int = 0
+    traces_linked: int = 0
+    traces_persisted: int = 0
+    tiers: dict[str, int] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+
+
+def backfill(
+    cwd: Path,
+    *,
+    max_commits: int = 500,
+    window_hours: float = 24.0,
+) -> BackfillReport:
+    """Walk recent first-parent history and retroactively correlate traces.
+
+    For each commit in the last `max_commits`, gathers inbox traces whose
+    `timestamp_end` falls within `window_hours` of the commit's commit
+    date, runs the correlator, writes notes on refs/notes/opentraces,
+    and persists `git_links` / lifecycle updates back to the trace JSONL
+    files. Idempotent on both axes: `notes_store.append` dedupes against
+    the existing note, and the in-memory dedup in `run()` avoids adding
+    duplicate (revision, tier) pairs before rewrite.
+
+    Window is wider than the live hook's 2h default because commits that
+    land long after a session's Stop hook still deserve retro-linking.
+    """
+    from ...core.config import get_project_traces_dir
+    from ...core.inbox import load_trace_records
+
+    cwd = Path(cwd).resolve()
+    report = BackfillReport()
+
+    staging = get_project_traces_dir(cwd)
+    if not staging.exists():
+        report.errors.append("no_staging_dir")
+        return report
+
+    # Load the full inbox once — we'll filter per-commit below. Loading
+    # all records up front avoids O(C*T) Pydantic validation when walking
+    # many commits against a large staging dir.
+    records = list(load_trace_records(staging))
+    if not records:
+        report.errors.append("empty_inbox")
+        return report
+    trace_times: list[tuple[datetime, object]] = []
+    for t in records:
+        ts = _parse_iso(t.timestamp_end)
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        trace_times.append((ts, t))
+
+    shas = _first_parent_shas(cwd, max_commits=max_commits)
+    report.commits_scanned = len(shas)
+    if not shas:
+        report.errors.append("no_commits")
+        return report
+
+    repo_url = remote_url(cwd)
+    branch = current_branch(cwd)
+
+    for sha in shas:
+        if is_merge_commit(cwd, sha):
+            report.commits_skipped += 1
+            continue
+        ts = _commit_timestamp(cwd, sha)
+        if ts is None:
+            report.commits_skipped += 1
+            continue
+
+        from ...enrichment.attribution import _parse_diff_hunks_with_content
+        diff = commit_diff(cwd, sha)
+        if diff is None:
+            report.commits_skipped += 1
+            continue
+        hunks = _parse_diff_hunks_with_content(diff)
+
+        # Filter candidates to those whose timestamp_end is within
+        # `window_hours` BEFORE the commit. A trace that ended after the
+        # commit landed cannot have contributed to it — and the old
+        # symmetric `abs(tts - ts) <= window` rule credited future
+        # sessions to past commits whenever an edit's novel line
+        # coincidentally matched a diff hunk (same common line in
+        # Python/TS — ``return False``, ``import json``, etc). A small
+        # `look_ahead` tolerance keeps commits that land a few minutes
+        # after the Stop hook (normal case for the live path).
+        window = timedelta(hours=window_hours)
+        look_ahead = timedelta(minutes=5)
+        candidates = [
+            t for (tts, t) in trace_times
+            if (ts - window) <= tts <= (ts + look_ahead)
+        ]
+        if not candidates:
+            continue
+
+        vcs_type = "git"
+        revision = sha
+
+        matched: list = []
+        lines_to_append: list[str] = []
+        for trace in candidates:
+            links = correlate(
+                trace, revision, diff,
+                repo_url=repo_url, branch=branch,
+                vcs_type=vcs_type, hunks=hunks,
+            )
+            if not links or links[0].tier == "orphan":
+                continue
+            existing = {(l.revision, l.tier) for l in trace.git_links}
+            for link in links:
+                if (link.revision, link.tier) not in existing:
+                    trace.git_links.append(link)
+            tier = links[0].tier
+            if tier in ("tool_emitted", "tool_emitted_with_divergence"):
+                trace.lifecycle = "final"
+                if trace.attribution is not None:
+                    trace.attribution.revision = {
+                        "vcs_type": vcs_type,
+                        "revision": revision,
+                    }
+            if tier == "tool_emitted_with_divergence":
+                _stamp_divergence(trace)
+
+            report.tiers[tier] = report.tiers.get(tier, 0) + 1
+            report.traces_linked += 1
+            matched.append(trace)
+            lines_to_append.append(notes_store.format_link(trace.trace_id))
+
+        if lines_to_append:
+            try:
+                notes_store.append(sha, lines_to_append, cwd)
+            except Exception as e:
+                report.errors.append(f"{sha[:8]}: notes: {type(e).__name__}: {e}")
+            report.commits_correlated += 1
+            report.traces_persisted += persist_trace_updates(staging, matched)
+
+    return report

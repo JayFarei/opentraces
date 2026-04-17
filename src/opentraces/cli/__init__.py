@@ -2571,6 +2571,12 @@ from .backfill import backfill_cmd as _backfill_cmd  # noqa: E402
 
 main.add_command(_backfill_cmd)
 
+# Retro-correlation of inbox traces to historical commits (git_links +
+# refs/notes/opentraces). Complements the live post-commit hook.
+from .git_backfill import git_backfill_cmd as _git_backfill_cmd  # noqa: E402
+
+main.add_command(_git_backfill_cmd)
+
 # Plan-043 phase 5 — `ot graph` GitButler-style renderer.
 from .graph import graph_cmd as _graph_cmd  # noqa: E402
 

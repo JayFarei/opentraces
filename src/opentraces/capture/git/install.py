@@ -11,8 +11,10 @@ Plan 041 R21.
 from __future__ import annotations
 
 import os
+import shutil
 import stat
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,15 +26,32 @@ CHAIN_BEGIN = "# >>> opentraces post-commit chain >>>"
 CHAIN_END = "# <<< opentraces post-commit chain <<<"
 NOTES_REFSPEC = f"+{NOTES_REF}:{NOTES_REF}"
 
-OWNED_HOOK_CONTENT = """\
+# The shim runs inside git's post-commit environment, which strips PATH
+# down to a minimal set. A bare `opentraces` call resolves to nothing in
+# that env, so the hook silently no-ops for every commit. Pin the python
+# interpreter that installed opentraces and invoke via `-m opentraces`
+# so the hook keeps working regardless of the shell's PATH.
+OWNED_HOOK_TEMPLATE = """\
 #!/usr/bin/env sh
 # Installed by opentraces. Plan 041. Safe to delete.
 # Runs the post-commit correlator and appends notes on refs/notes/opentraces.
 # Never blocks git commit: any failure exits 0.
 set +e
-opentraces _run-post-commit-hook "$(pwd)" >/dev/null 2>&1 || true
+"{python}" -m opentraces _run-post-commit-hook "$(pwd)" >/dev/null 2>&1 \\
+  || opentraces _run-post-commit-hook "$(pwd)" >/dev/null 2>&1 \\
+  || true
 exit 0
 """
+
+
+def _owned_hook_content() -> str:
+    """Render the shim with the current Python interpreter path baked in."""
+    python = sys.executable or shutil.which("python3") or "python3"
+    return OWNED_HOOK_TEMPLATE.format(python=python)
+
+
+# Back-compat for any caller that imported the constant directly.
+OWNED_HOOK_CONTENT = _owned_hook_content()
 
 
 def _git_dir(repo: Path) -> Path | None:
@@ -68,7 +87,7 @@ def install(repo: Path) -> bool:
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
     owned = hooks_dir / HOOK_FILENAME
-    owned.write_text(OWNED_HOOK_CONTENT)
+    owned.write_text(_owned_hook_content())
     _chmod_x(owned)
 
     pc = hooks_dir / "post-commit"
