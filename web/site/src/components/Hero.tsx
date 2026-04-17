@@ -7,7 +7,7 @@ import { AGENT_PROMPT } from "@/lib/agent-prompt";
 import pkg from "@/lib/version.json";
 import type { HeroMetricItem } from "@/lib/homepage-metrics";
 
-const tabLabels = ["init", "status", "review", "blame", "push", "consume"];
+const tabLabels = ["setup", "init", "status", "review", "blame", "push", "consume"];
 const AGENT_LINES = AGENT_PROMPT.split("\n").length;
 
 const installMethods = [
@@ -43,29 +43,65 @@ function MetricIcon({ icon }: { icon: HeroMetricItem["icon"] }) {
   );
 }
 
+function SetupContent() {
+  return (
+    <>
+      <span className="terminal-line"><span className="p">~$</span> <span className="c">opentraces setup</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <div className="rail-frame">
+        <span className="terminal-line rail-frame-label">
+          <span className="pill">opentraces</span>
+          <span className="di">  setup wizard v{pkg.version}</span>
+        </span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  claude-code    install hooks?     </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> Stop, PostCompact</span></span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  git            install hook?      </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> post-commit</span></span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  skill          install?           </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> registered</span></span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  watcher        install?           </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> powers blame</span></span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  entity-parser  install sem?       </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> richer diffs</span></span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  huggingface    log in?            </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span> <span className="s">alice-dev</span></span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  trufflehog     enable Tier 1.5?   </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> v3.63.1</span></span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  llm-review     configured?        </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> gemma4:latest</span></span>
+        <span className="terminal-line rail-frame-label">
+          <span className="di">Next steps</span>
+        </span>
+      </div>
+      <span className="terminal-line rail-frame-label">
+        <span className="di">{"\u2022"} </span>
+        <span className="c">cd my-project {"&&"} opentraces init</span>
+      </span>
+      <span className="terminal-line rail-frame-label">
+        <span className="di">{"\u2022"} </span>
+        <span className="c">opentraces doctor</span>
+      </span>
+    </>
+  );
+}
+
 function InitContent() {
   return (
     <>
       <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces init</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Authenticating with HuggingFace Hub...</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Open this URL in your browser:</span></span>
-      <span className="terminal-line"><span className="di">    </span><span className="s">https://hf.co/oauth/device</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  And enter code: </span><span className="n">K7R2-X9FN</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Waiting for authorization....... </span><span className="ok">done</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Authenticated as </span><span className="s">alice-dev</span></span>
-      <span className="terminal-line"><span className="di">  Token saved to ~/.opentraces/credentials</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Review policy?</span></span>
-      <span className="terminal-line"><span className="di">  [1] review</span>  <span className="di">sessions land in Inbox for you to review</span>  <span className="s">{"\u2190"}</span></span>
-      <span className="terminal-line"><span className="di">  [2] auto</span>    <span className="di">auto-approve safe traces into staged</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Created .opentraces.json</span></span>
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Installed agent session hook</span></span>
+      <div className="rail-frame">
+        <span className="terminal-line rail-frame-label">
+          <span className="pill">opentraces</span>
+          <span className="di">  init</span>
+        </span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  agent           claude-code              </span><span className="ok">{"\u2713"}</span><span className="di"> detected</span></span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  review policy   </span><span className="f">Review every trace</span><span className="di">       inbox gated</span></span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  huggingface     log in?                  </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span> <span className="s">alice-dev</span></span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  remote          </span><span className="s">jayfarei/opentraces</span><span className="di">      </span><span className="ok">{"\u2713"}</span><span className="di"> private</span></span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  import          42 existing traces       </span><span className="f">Import now</span>  <span className="ok">{"\u2713"}</span><span className="di"> 42 imported</span></span>
+        <span className="terminal-line rail-frame-label">
+          <span className="di">Initialized</span>
+        </span>
+      </div>
+      <span className="terminal-line rail-frame-label">
+        <span className="di">{"\u2022"} Created </span><span className="s">.opentraces.json</span>
+      </span>
+      <span className="terminal-line rail-frame-label">
+        <span className="di">{"\u2022"} Installed claude-code hook (Stop, PostCompact)</span>
+      </span>
     </>
   );
 }
@@ -128,9 +164,9 @@ function BlameContent() {
     <>
       <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces blame ac019172</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">{"\u250A"}</span></span>
+      <span className="terminal-line"><span className="di">{"\u2502"}</span></span>
       <span className="terminal-line">
-        <span className="di">{"\u250A\u256D\u2504"}</span>
+        <span className="di">{"\u251C\u2500 "}</span>
         <span className="n">s:6606fc1f</span>
         <span className="di">  </span>
         <span className="ok">+8</span>
@@ -141,7 +177,7 @@ function BlameContent() {
         <span className="di">server, graph_api, api +2</span>
       </span>
       <span className="terminal-line">
-        <span className="di">{"\u250A\u251C\u2504"}</span>
+        <span className="di">{"\u251C\u2500 "}</span>
         <span className="n">s:fe8fe3fd</span>
         <span className="di">  </span>
         <span className="ok">+6</span>
@@ -150,7 +186,7 @@ function BlameContent() {
         <span className="di">PushModal (+6)</span>
       </span>
       <span className="terminal-line">
-        <span className="di">{"\u250A\u251C\u2504"}</span>
+        <span className="di">{"\u251C\u2500 "}</span>
         <span className="n">s:5baac494</span>
         <span className="di">  </span>
         <span className="ok">+7</span>
@@ -159,12 +195,11 @@ function BlameContent() {
         <span className="di">ReviewView, TraceSecurityModal</span>
       </span>
       <span className="terminal-line">
-        <span className="di">{"\u250A\u25CF   "}</span>
+        <span className="di">{"\u2570\u2500\u25CF "}</span>
         <span className="f">c:ac019172</span>
         <span className="di">  feat(viewer): hover actions, two-stage push  </span>
         <span className="ok">100%</span>
       </span>
-      <span className="terminal-line"><span className="di">{"\u251C\u256F"}</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line">
         <span className="di">  3 sessions {"\u00B7"} tier=</span>
@@ -175,7 +210,7 @@ function BlameContent() {
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line">
         <span className="di">  next: </span>
-        <span className="c">opentraces show s:6606fc1f</span>
+        <span className="c">opentraces show 6606fc1f</span>
       </span>
     </>
   );
@@ -220,10 +255,10 @@ function ConsumeContent() {
   );
 }
 
-const tabContents = [InitContent, StatusContent, ReviewContent, BlameContent, PushContent, ConsumeContent];
+const tabContents = [SetupContent, InitContent, StatusContent, ReviewContent, BlameContent, PushContent, ConsumeContent];
 
 export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
-  const [activeTab, setActiveTab] = useState(2);
+  const [activeTab, setActiveTab] = useState(3);
   const [installIdx, setInstallIdx] = useState(0);
 
   const ActiveContent = tabContents[activeTab];
