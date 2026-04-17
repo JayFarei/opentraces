@@ -109,7 +109,7 @@ export default function Attribution() {
         <strong style={{ color: "var(--text)" }}>ot blame</strong> and <strong style={{ color: "var(--text)" }}>ot graph</strong> resolve every commit back to the traces that produced it — so you can see what worked and what didn't across your agent sessions.
       </p>
       <p className="section-sub" style={{ maxWidth: 620 }}>
-        Attribution runs at the <strong style={{ color: "var(--text)" }}>semantic-diff level</strong> — added functions, modified entities, renamed files — so agents can pull up the session behind any change in a few tokens.
+        <strong style={{ color: "var(--text)" }}>Attribution</strong> search can surface as a semantic diff — added functions, modified classes, renamed files — so agents can pull up the session behind any change in a fraction of the tokens a line-level view would cost.
       </p>
 
       <div className="terminal attr-terminal">
