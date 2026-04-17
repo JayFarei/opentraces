@@ -44,6 +44,17 @@ function MetricIcon({ icon }: { icon: HeroMetricItem["icon"] }) {
 }
 
 function SetupContent() {
+  const rows: [string, string, string][] = [
+    ["agent", "detect?", "claude-code"],
+    ["hooks", "install?", "Stop, PostCompact"],
+    ["git hook", "install?", "post-commit"],
+    ["skill", "install?", "registered"],
+    ["watcher", "install?", "powers blame"],
+    ["parser", "install?", "richer diffs"],
+    ["hf login", "log in?", "alice-dev"],
+    ["trufflehog", "Tier 1.5?", "v3.63.1"],
+    ["llm review", "enable?", "gemma4:latest"],
+  ];
   return (
     <>
       <span className="terminal-line"><span className="p">~$</span> <span className="c">opentraces setup</span></span>
@@ -53,15 +64,15 @@ function SetupContent() {
           <span className="pill">opentraces</span>
           <span className="di">  setup wizard v{pkg.version}</span>
         </span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  agent          detect?            </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span> <span className="s">claude-code</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  claude-code    install hooks?     </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> Stop, PostCompact</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  git            install hook?      </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> post-commit</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  skill          install?           </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> registered</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  watcher        install?           </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> powers blame</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  entity-parser  install sem?       </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> richer diffs</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  huggingface    log in?            </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span> <span className="s">alice-dev</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  trufflehog     enable Tier 1.5?   </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> v3.63.1</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  llm-review     configured?        </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> gemma4:latest</span></span>
+        {rows.map(([label, q, val]) => (
+          <span key={label} className="terminal-line wiz-row">
+            <span className="n wiz-bullet">{"\u25C7"}</span>
+            <span className="di wiz-label">{label}</span>
+            <span className="di wiz-q">{q}</span>
+            <span className="ok wiz-ok">{"\u2713"}</span>
+            <span className={label === "agent" || label === "hf login" ? "s wiz-val" : "di wiz-val"}>{val}</span>
+          </span>
+        ))}
         <span className="terminal-line rail-frame-label">
           <span className="di">Next steps</span>
         </span>
@@ -79,6 +90,14 @@ function SetupContent() {
 }
 
 function InitContent() {
+  type Row = { label: string; value: string; valCls: string; status?: string; statusCls?: string };
+  const rows: Row[] = [
+    { label: "agent", value: "claude-code", valCls: "di", status: "detected", statusCls: "di" },
+    { label: "policy", value: "review every trace", valCls: "f", status: "inbox gated", statusCls: "di" },
+    { label: "hf login", value: "alice-dev", valCls: "s", status: "✓", statusCls: "ok" },
+    { label: "remote", value: "jayfarei/opentraces", valCls: "s", status: "private", statusCls: "di" },
+    { label: "import", value: "42 traces", valCls: "f", status: "✓ imported", statusCls: "ok" },
+  ];
   return (
     <>
       <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces init</span></span>
@@ -88,11 +107,14 @@ function InitContent() {
           <span className="pill">opentraces</span>
           <span className="di">  init</span>
         </span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  agent           claude-code              </span><span className="ok">{"\u2713"}</span><span className="di"> detected</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  review policy   </span><span className="f">Review every trace</span><span className="di">       inbox gated</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  huggingface     log in?                  </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span> <span className="s">alice-dev</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  remote          </span><span className="s">jayfarei/opentraces</span><span className="di">      </span><span className="ok">{"\u2713"}</span><span className="di"> private</span></span>
-        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  import          42 existing traces       </span><span className="f">Import now</span>  <span className="ok">{"\u2713"}</span><span className="di"> 42 imported</span></span>
+        {rows.map((r) => (
+          <span key={r.label} className="terminal-line wiz-row">
+            <span className="n wiz-bullet">{"\u25C7"}</span>
+            <span className="di wiz-label">{r.label}</span>
+            <span className={`${r.valCls} wiz-val`}>{r.value}</span>
+            {r.status && <span className={`${r.statusCls} wiz-status`}>{r.status}</span>}
+          </span>
+        ))}
         <span className="terminal-line rail-frame-label">
           <span className="di">Initialized</span>
         </span>
@@ -101,7 +123,7 @@ function InitContent() {
         <span className="di">{"\u2022"} Created </span><span className="s">.opentraces.json</span>
       </span>
       <span className="terminal-line rail-frame-label">
-        <span className="di">{"\u2022"} Installed claude-code hook (Stop, PostCompact)</span>
+        <span className="di">{"\u2022"} Installed claude-code hook</span>
       </span>
     </>
   );
@@ -326,7 +348,6 @@ export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
               label,
               active: i === activeTab,
             }))}
-            title="opentraces — zsh"
             onTabClick={setActiveTab}
           >
             <ActiveContent />

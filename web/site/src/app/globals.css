@@ -783,6 +783,28 @@ html { color-scheme: light; }
 }
 .terminal-line { display: block; white-space: pre; }
 .terminal-line + .terminal-line-gap { margin-top: 8px; }
+
+/* Wizard row: flex-based column layout (replaces space-padded alignment so content reflows on mobile) */
+.terminal-line.wiz-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  white-space: normal;
+  padding-left: 3ch;
+  padding-right: 4px;
+}
+.wiz-bullet { flex: 0 0 auto; margin-left: -3ch; width: 2ch; }
+.wiz-label { flex: 0 0 8.5em; min-width: 0; }
+.wiz-q { flex: 0 0 auto; }
+.wiz-ok { flex: 0 0 auto; }
+.wiz-val { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wiz-status { flex: 0 0 auto; margin-left: auto; }
+@media (max-width: 600px) {
+  .terminal-line.wiz-row { gap: 6px; padding-left: 2.2ch; }
+  .wiz-bullet { margin-left: -2.2ch; }
+  .wiz-label { flex: 0 0 6.5em; }
+  .wiz-q { display: none; }
+}
 .terminal-tui-mockup {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -1490,6 +1512,8 @@ tr:hover td { background: var(--surface-hover); }
 }
 @media (max-width: 768px) {
   .privacy-grid { grid-template-columns: 1fr; }
+  .privacy-grid > * { min-width: 0; }
+  .privacy-grid .terminal-body { overflow-x: auto; }
 }
 
 /* ═══ Attribution (graph | blame, terminal-styled) ═══ */
@@ -1702,12 +1726,23 @@ a:hover .openmake-mark {
 /* ═══ Responsive ═══ */
 @media (max-width: 900px) {
   .hero-grid { grid-template-columns: 1fr; }
+  .hero-grid > * { min-width: 0; }
+  .hero-grid .terminal-body { overflow-x: auto; }
   .feature-grid, .use-grid { grid-template-columns: repeat(2, 1fr); }
   .metrics-grid { grid-template-columns: 1fr; }
   .feature-cell:nth-child(2n) { border-right: none; }
   .stats-row { grid-template-columns: repeat(3, 1fr); }
   .stat-cell:nth-child(3n) { border-right: none; }
   .stat-cell:not(:nth-last-child(-n+2)) { border-bottom: 1px solid var(--border); }
+}
+@media (max-width: 600px) {
+  .terminal { font-size: 11px; }
+  .terminal-bar { overflow-x: auto; scrollbar-width: none; gap: 8px; }
+  .terminal-bar::-webkit-scrollbar { display: none; }
+  .terminal-bar-left { flex-shrink: 0; gap: 10px; }
+  .terminal-bar > span:last-child { display: none; }
+  .hero-grid .terminal-body { font-size: 10.5px; padding: 12px; }
+  .hero-grid .terminal-body .rail-frame-label { padding-left: 2.2ch; }
 }
 @media (max-width: 600px) {
   .feature-grid, .use-grid { grid-template-columns: 1fr; }

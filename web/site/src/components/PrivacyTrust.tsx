@@ -146,10 +146,10 @@ export default function PrivacyTrust() {
               {redactionDemo.map((r) => (
                 <div key={r.label} style={{ marginBottom: 12 }}>
                   <div style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 3 }}>{r.label}</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                    <span style={{ color: "var(--red)", textDecoration: "line-through", opacity: 0.5, fontSize: 11 }}>{r.original}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", minWidth: 0 }}>
+                    <span style={{ color: "var(--red)", textDecoration: "line-through", opacity: 0.5, fontSize: 11, wordBreak: "break-all", minWidth: 0 }}>{r.original}</span>
                     <span style={{ color: "var(--text-dim)", fontSize: 10 }}>{"\u2192"}</span>
-                    <span style={{ color: "var(--green)", background: "var(--green-bg)", padding: "1px 6px", border: "1px solid var(--green-dim)", fontSize: 11 }}>{r.redacted}</span>
+                    <span style={{ color: "var(--green)", background: "var(--green-bg)", padding: "1px 6px", border: "1px solid var(--green-dim)", fontSize: 11, wordBreak: "break-all" }}>{r.redacted}</span>
                   </div>
                 </div>
               ))}
