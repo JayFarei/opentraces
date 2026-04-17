@@ -1,0 +1,103 @@
+name = "blame_entities_rendering"
+description = """
+Pre-populates attribution + entity caches, invokes
+`ot blame HEAD --entities --no-color`, and asserts entities are grouped by
+trace id with correct change-type glyphs (+ ~ → -).
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "src/foo.py"
+content = "def foo():\n    return 1\n"
+
+[[steps]]
+type = "commit"
+message = "add foo module"
+
+[[steps]]
+type = "write_attribution"
+ref = "HEAD"
+[steps.data]
+version = 1
+[steps.data.coverage]
+attributed = 2
+total = 2
+ratio = 1.0
+[[steps.data.traces]]
+trace_id = "tracexyz11111111"
+line_count = 2
+files = ["src/foo.py"]
+lifecycle = "final"
+[steps.data.files."src/foo.py"]
+total = 2
+lines = [
+  { n = 1, trace_id = "tracexyz11111111", consistency = "attributed" },
+  { n = 2, trace_id = "tracexyz11111111", consistency = "attributed" },
+]
+
+[[steps]]
+type = "write_entity_cache"
+ref = "HEAD"
+[[steps.data.entities]]
+change_type = "added"
+entity_kind = "function"
+entity_name = "foo"
+file = "src/foo.py"
+trace_id = "tracexyz11111111"
+[[steps.data.entities]]
+change_type = "modified"
+entity_kind = "class"
+entity_name = "Bar"
+file = "src/foo.py"
+trace_id = "tracexyz11111111"
+[[steps.data.entities]]
+change_type = "renamed"
+entity_kind = "function"
+entity_name = "qux"
+old_entity_name = "baz"
+file = "src/foo.py"
+trace_id = "tracexyz11111111"
+[[steps.data.entities]]
+change_type = "deleted"
+entity_kind = "function"
+entity_name = "old_fn"
+file = "src/foo.py"
+trace_id = "traceabc22222222"
+
+[[steps]]
+type = "invoke_cli"
+args = ["blame", "HEAD", "--entities", "--no-color"]
+
+[[assertions]]
+kind = "cli_returncode"
+equals = 0
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "tracexyz"
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "traceabc"
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "+ function foo"
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "~ class Bar"
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "renamed baz \u2192 qux"
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "- function deleted old_fn"

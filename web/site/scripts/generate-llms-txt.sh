@@ -32,8 +32,9 @@ for f in \
   "$DOCS_DIR/cli/troubleshooting.md" \
   "$DOCS_DIR/workflow/parsing.md" \
   "$DOCS_DIR/workflow/review.md" \
-  "$DOCS_DIR/workflow/pushing.md" \
   "$DOCS_DIR/workflow/quality.md" \
+  "$DOCS_DIR/workflow/blame.md" \
+  "$DOCS_DIR/workflow/pushing.md" \
   "$DOCS_DIR/workflow/consume.md" \
   "$DOCS_DIR/schema/overview.md" \
   "$DOCS_DIR/schema/trace-record.md" \
@@ -46,6 +47,7 @@ for f in \
   "$DOCS_DIR/security/scanning.md" \
   "$DOCS_DIR/integration/agent-setup.md" \
   "$DOCS_DIR/integration/ci-cd.md" \
+  "$DOCS_DIR/integration/post-processor-contract.md" \
   "$DOCS_DIR/contributing/development.md" \
   "$DOCS_DIR/contributing/schema-changes.md"; do
   if [ -f "$f" ]; then

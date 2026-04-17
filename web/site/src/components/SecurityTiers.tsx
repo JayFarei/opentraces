@@ -7,7 +7,7 @@ const tiers = [
     id: "auto",
     name: "auto",
     nameStyle: { color: "var(--accent)" },
-    desc: "Scan, redact, and push automatically. For open-source and personal projects.",
+    desc: "Scan, redact, and auto-approve safe traces into staged. Push still happens explicitly.",
     tag: null,
   },
   {

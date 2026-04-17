@@ -21,16 +21,16 @@ function CopyBox({ cmd, desc }: { cmd: string; desc: string }) {
 
 const terminalSteps = [
   { cmd: "pipx install opentraces", desc: "install the CLI" },
-  { cmd: "opentraces init", desc: "set review policy, create a private HF dataset, install agent hook" },
-  { cmd: "opentraces tui", desc: "open the inbox to review, commit, redact, or reject traces" },
-  { cmd: "opentraces push", desc: "sync committed traces to your HuggingFace dataset" },
+  { cmd: "opentraces setup && opentraces init", desc: "ensure the global install, then initialize an inbox in this project" },
+  { cmd: "opentraces web", desc: "review in the browser, stage what's safe to share" },
+  { cmd: "opentraces push", desc: "upload staged traces to your HuggingFace dataset" },
 ];
 
 const agentSteps = [
-  { cmd: "set up opentraces for this project", desc: "installs, authenticates, creates a private dataset, installs the hook" },
-  { cmd: "open my opentraces inbox and review my traces", desc: "deterministic scrubbing, then commit or reject in the TUI or browser" },
-  { cmd: "verify no information about $CLIENT leaks, then commit", desc: "agent checks redactions against your criteria before committing" },
-  { cmd: "push my committed traces to HuggingFace", desc: "syncs committed sessions to your private dataset" },
+  { cmd: "set up opentraces for this project", desc: "installs, authenticates, connects a dataset, and installs the hook" },
+  { cmd: "open my opentraces inbox and review my traces", desc: "review in the browser or TUI, then stage or reject traces" },
+  { cmd: "ensure $CLIENT is redacted and stage the safe traces", desc: "agent checks redactions against your criteria before upload" },
+  { cmd: "push my staged traces to HuggingFace", desc: "uploads the staged traces to your private dataset" },
 ];
 
 export default function GetStarted() {

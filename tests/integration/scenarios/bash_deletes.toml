@@ -1,0 +1,50 @@
+name = "bash_deletes"
+description = """
+Agent uses Bash with rm to delete an existing file. The file goes from
+present (in init commit) to absent (post-commit). Tests how attribution
+handles deletions — currently a known gap (no preimage blame), so we
+expect the file to be reported missing_from_audit at HEAD.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "obsolete.md"
+content = "to be deleted\n"
+
+[[steps]]
+type = "git"
+args = ["add", "obsolete.md"]
+
+[[steps]]
+type = "git"
+args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "add obsolete"]
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run: rm obsolete.md",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "delete obsolete"
+
+# Known gap: deletions show as missing_from_audit until preimage blame is added
+[[assertions]]
+file = "obsolete.md"
+status = "missing_from_audit"

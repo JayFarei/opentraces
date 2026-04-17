@@ -1,0 +1,56 @@
+name = "sed_inplace_edit"
+description = """
+Agent uses Bash + sed -i to modify an existing file in-place. Tests the
+watcher's ability to capture a Bash-mediated MUTATION (vs creation). Sed
+in-place is a common Bash pattern in real workflows.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "values.conf"
+content = """key1=alpha
+key2=bravo
+key3=charlie
+"""
+
+[[steps]]
+type = "git"
+args = ["add", "values.conf"]
+
+[[steps]]
+type = "git"
+args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "init values"]
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    """Use the Bash tool to run: sed -i '' 's/bravo/BRAVO_MODIFIED/' values.conf""",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "sed in-place"
+
+[[assertions]]
+file = "values.conf"
+trace = "a"
+lines_min = 1
+
+[[assertions]]
+file = "values.conf"
+total_lines = 3

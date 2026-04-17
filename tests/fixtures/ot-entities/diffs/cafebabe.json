@@ -1,0 +1,12 @@
+{
+  "entities": [
+    {
+      "change_type": "added",
+      "entity_kind": "function",
+      "entity_name": "smoke_test",
+      "file": "src/smoke.py",
+      "before": null,
+      "after": "def smoke_test():\n    return 42\n"
+    }
+  ]
+}

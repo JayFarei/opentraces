@@ -6,7 +6,7 @@ Version 1.1 / 2026-03-29
 
 ## Product Context
 
-opentraces is an open-source CLI for crowdsourcing AI coding agent session traces as structured JSONL datasets on Hugging Face Hub. Target users: ML researchers, training pipeline builders, open-source developers. Positioning: "The Commons for agent traces," open data on open infrastructure.
+opentraces is an open-source CLI for crowdsourcing AI coding agent traces as structured JSONL datasets on Hugging Face Hub. Target users: ML researchers, training pipeline builders, open-source developers. Positioning: "The Commons for agent traces," open data on open infrastructure.
 
 ---
 

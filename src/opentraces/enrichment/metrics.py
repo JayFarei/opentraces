@@ -12,16 +12,19 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
         "input": 3.0,
         "output": 15.0,
         "cache_read": 0.30,
+        "cache_write": 3.75,
     },
     "opus": {
         "input": 15.0,
         "output": 75.0,
         "cache_read": 1.50,
+        "cache_write": 18.75,
     },
     "haiku": {
         "input": 0.80,
         "output": 4.0,
         "cache_read": 0.08,
+        "cache_write": 1.00,
     },
 }
 
@@ -104,10 +107,12 @@ def compute_metrics(
         # Track per-tier usage (E1: use session model fallback when step.model is empty)
         tier = _detect_model_tier(step.model or model_fallback)
         if tier not in tier_tokens:
-            tier_tokens[tier] = {"input": 0, "output": 0, "cache_read": 0}
+            tier_tokens[tier] = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
         tier_tokens[tier]["input"] += usage.input_tokens
         tier_tokens[tier]["output"] += usage.output_tokens
         tier_tokens[tier]["cache_read"] += usage.cache_read_tokens
+        tier_tokens[tier].setdefault("cache_write", 0)
+        tier_tokens[tier]["cache_write"] += usage.cache_write_tokens
 
         # Track timestamps for duration
         if step.timestamp:
@@ -140,11 +145,14 @@ def compute_metrics(
         estimated_cost += tokens["input"] * tier_pricing.get("input", 0) / 1_000_000
         estimated_cost += tokens["output"] * tier_pricing.get("output", 0) / 1_000_000
         estimated_cost += tokens["cache_read"] * tier_pricing.get("cache_read", 0) / 1_000_000
+        estimated_cost += tokens.get("cache_write", 0) * tier_pricing.get("cache_write", 0) / 1_000_000
 
     return Metrics(
         total_steps=len(steps),
         total_input_tokens=total_input,
         total_output_tokens=total_output,
+        total_cache_read_tokens=total_cache_read,
+        total_cache_creation_tokens=total_cache_write,
         total_duration_s=total_duration_s,
         cache_hit_rate=cache_hit_rate,
         estimated_cost_usd=round(estimated_cost, 6) if estimated_cost > 0 else None,

@@ -1,0 +1,40 @@
+name = "watcher_quiet_tick_is_fast"
+description = "When nothing has changed, a watcher tick returns in under 50ms."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "a.py"
+content = "print('a1')\n"
+
+[[steps]]
+type = "commit"
+message = "add a"
+
+# Warm-up tick — populates cache + stamps last_watcher_run_at.
+[[steps]]
+type = "watcher_run_once"
+
+# Second tick — no new commits, no new JSONL activity. Should be <50ms.
+[[steps]]
+type = "watcher_run_once"
+
+[[assertions]]
+kind = "tick_field"
+name = "backfill_invoked"
+equals = false
+
+[[assertions]]
+kind = "tick_field"
+name = "new_commits"
+equals = 0
+
+[[assertions]]
+kind = "tick_field"
+name = "duration_ms"
+max = 50

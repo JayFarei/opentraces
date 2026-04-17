@@ -1,0 +1,49 @@
+name = "backfill_incremental"
+description = "First run backfills everything; a second run after a new commit processes only the new commit."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "a.py"
+content = "print('a1')\nprint('a2')\n"
+
+[[steps]]
+type = "commit"
+message = "add a"
+
+[[steps]]
+type = "run_backfill"
+mode = "rebuild"
+
+[[steps]]
+type = "write_file"
+path = "b.py"
+content = "print('b1')\n"
+
+[[steps]]
+type = "commit"
+message = "add b"
+
+[[steps]]
+type = "run_backfill"
+mode = "incremental"
+
+[[assertions]]
+kind = "report_field"
+name = "commits_processed"
+equals = 1
+
+[[assertions]]
+kind = "cache_file_exists"
+ref = "HEAD"
+exists = true
+
+[[assertions]]
+kind = "cache_file_exists"
+ref = "HEAD~1"
+exists = true

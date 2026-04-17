@@ -1,0 +1,33 @@
+name = "pre_session_content"
+description = """
+Trace appends two lines to README.md (which exists from the init commit).
+Validates that the original init-commit line stays attributed to pre-audit,
+not stolen by the trace that touched the file.
+"""
+
+[[steps]]
+type = "reset"
+initial_readme = "# trace attribution test sandbox\n"
+
+[[steps]]
+type = "claude"
+label = "appender"
+prompts = [
+    """Use the Edit tool to update README.md by appending two new lines after the existing heading: '## Test scenarios' on one line, then 'Validating attribution.' on the next.""",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "extend readme"
+
+[[assertions]]
+file = "README.md"
+trace = "appender"
+lines = 2
+tolerance = 1
+
+[[assertions]]
+file = "README.md"
+trace = "pre-audit"
+lines_min = 1

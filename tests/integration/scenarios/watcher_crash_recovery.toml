@@ -1,0 +1,58 @@
+name = "watcher_crash_recovery"
+description = "A tick that crashes mid-way recovers on the next tick with no duplicates."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "a.py"
+content = "print('a1')\n"
+
+[[steps]]
+type = "commit"
+message = "add a"
+
+[[steps]]
+type = "write_file"
+path = "b.py"
+content = "print('b1')\n"
+
+[[steps]]
+type = "commit"
+message = "add b"
+
+# Arm a crash right after the probe — the tick MUST NOT advance state.
+[[steps]]
+type = "simulate_crash_after"
+where = "after_probe"
+
+[[steps]]
+type = "watcher_run_once"
+
+# Next tick runs normally, recovers everything.
+[[steps]]
+type = "watcher_run_once"
+
+[[assertions]]
+kind = "cache_file_exists"
+ref = "HEAD"
+exists = true
+
+[[assertions]]
+kind = "cache_file_exists"
+ref = "HEAD~1"
+exists = true
+
+[[assertions]]
+kind = "state_field"
+name = "last_backfilled_commit"
+equals_head = true
+
+[[assertions]]
+kind = "tick_field"
+name = "backfill_invoked"
+equals = true

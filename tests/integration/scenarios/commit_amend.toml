@@ -1,0 +1,41 @@
+name = "commit_amend"
+description = """
+Trace writes a file, user commits, then user amends the commit (to
+fix the message). The commit SHA changes; the tree is identical.
+Attribution must still credit the trace for its lines — the audit
+history predates the amend and is immutable, so HEAD blame should
+still resolve through unchanged content back to the trace's audit
+commit.
+
+Realistic pattern: every careful committer `git commit --amend`s to
+fix typos in messages. Attribution must not be fragile to that.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Write tool to create release.md with these three lines:\nversion: 0.1.0\ndate: today\nstatus: draft",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "intial release notes (typo)"
+
+[[steps]]
+type = "git"
+args = ["commit", "--amend", "-m", "initial release notes"]
+
+# Three lines should still attribute to trace `a` despite the amend.
+[[assertions]]
+file = "release.md"
+trace = "a"
+lines = 3
+
+[[assertions]]
+file = "release.md"
+total_lines = 3

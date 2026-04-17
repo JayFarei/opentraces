@@ -9,9 +9,9 @@ const modes = [
     name: "Auto",
     label: "auto",
     color: "var(--accent)",
-    desc: "Traces are scanned, redacted, and synced automatically at the end of every agent session. Zero manual steps after init.",
+    desc: "Safe traces are scanned, redacted, and auto-approved into the staged set. Push is still explicit.",
     terminal: [
-      { p: "~$", c: "opentraces init", f: "--review-policy", s: "auto" },
+      { p: "~$", c: "ot init", f: "--review-policy", s: "auto" },
       { gap: true },
       { ok: "\u2713", di: " review policy: auto" },
       { ok: "\u2713", di: " created private dataset ", s: "jayfarei/opentraces" },
@@ -19,9 +19,9 @@ const modes = [
       { gap: true },
       { di: "--- end of Claude session ---" },
       { gap: true },
-      { di: "opentraces: scanning session..." },
+      { di: "ot: scanning session..." },
       { di: "auto-redacted ", n: "4", diEnd: " secrets (JWT, API key, email, DB URL)" },
-      { ok: "\u2713", di: " synced 1 session \u2192 ", s: "jayfarei/opentraces" },
+      { ok: "\u2713", di: " auto-approved 1 trace into ", s: "staged" },
     ],
   },
   {
@@ -29,29 +29,32 @@ const modes = [
     name: "Review",
     label: "review (default)",
     color: "var(--text)",
-    desc: "Sessions land in your local inbox. Open the TUI or web UI to approve or reject, then push to sync with the remote dataset.",
+    desc: "Traces land in your local inbox. Review in the TUI or browser, then stage and push the ones you want to share.",
     terminal: [
-      { p: "~$", c: "opentraces init" },
+      { p: "~$", c: "ot init" },
       { gap: true },
       { ok: "\u2713", di: " review policy: review (default)" },
       { ok: "\u2713", di: " installed agent session hook" },
       { gap: true },
-      { p: "~$", c: "opentraces tui" },
-      { di: "inbox: 8 sessions pending review" },
-      { di: "  commit / redact / reject each session" },
+      { p: "~$", c: "ot status" },
+      { di: "inbox: 8 traces pending review" },
+      { di: "  stage / redact / reject each trace" },
       { gap: true },
-      { p: "~$", c: "opentraces push" },
+      { p: "~$", c: "ot add --all" },
+      { di: "staged 6 traces" },
+      { gap: true },
+      { p: "~$", c: "ot push" },
       { di: "auto-redacted ", n: "3", diEnd: " secrets" },
-      { ok: "\u2713", di: " synced 6 committed sessions \u2192 ", s: "jayfarei/opentraces" },
+      { ok: "\u2713", di: " uploaded 6 staged traces \u2192 ", s: "jayfarei/opentraces" },
     ],
   },
 ];
 
 const redactionDemo = [
-  { label: "API key", original: "sk-proj-abc123def456ghi789...", redacted: "[REDACTED_API_KEY]" },
-  { label: "email", original: "jay@company.internal", redacted: "[REDACTED_EMAIL]" },
-  { label: "DB URL", original: "postgresql://admin:pass@db.internal:5432/prod", redacted: "[REDACTED_DB_URL]" },
-  { label: "path", original: "/Users/jayfarei/src/client-project/", redacted: "/Users/[REDACTED]/src/[REDACTED]/" },
+  { label: "API key", original: "sk-proj-abc123def456ghi789...", redacted: "[API_KEY_1]" },
+  { label: "email", original: "jay@company.internal", redacted: "[EMAIL_1]" },
+  { label: "DB URL", original: "postgresql://admin:pass@db.internal:5432/prod", redacted: "[DB_URL_1]" },
+  { label: "path", original: "/Users/jayfarei/src/client-project/", redacted: "/Users/user/src/client-project/" },
 ];
 
 interface TermLine {
@@ -99,11 +102,43 @@ export default function PrivacyTrust() {
 
       {/* Redaction demo as the hero visual */}
       <div className="privacy-grid">
-        <div>
+        <div style={{ display: "flex", flexDirection: "column" }}>
           <p className="section-sub" style={{ marginBottom: 20 }}>
-            19 regex patterns, Shannon entropy analysis, context-aware scanning. API keys, emails, database credentials, filesystem paths, all auto-redacted.
+            Layered scanning: 30+ regex patterns, Shannon entropy, optional TruffleHog (800+ detectors, opt-in), and optional local LLM review. Stable placeholders like [EMAIL_1] preserve referential meaning across a trace.
           </p>
-          <div style={{ border: "1px solid var(--border)", background: "var(--bg-alt)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+
+          {/* Pipeline flow: four connected boxes */}
+          <div style={{ display: "flex", alignItems: "stretch", flexWrap: "wrap", marginBottom: 20, fontFamily: "var(--font-mono)" }}>
+            {[
+              { n: "1", label: "regex" },
+              { n: "2", label: "entropy" },
+              { n: "3", label: "trufflehog" },
+              { n: "4", label: "llm review" },
+            ].map((step, i, arr) => (
+              <span key={step.n} style={{ display: "inline-flex", alignItems: "stretch", flex: "1 1 0", minWidth: 0 }}>
+                <div style={{
+                  flex: "1 1 0",
+                  minWidth: 0,
+                  border: "1px solid var(--border)",
+                  background: "var(--bg-alt)",
+                  padding: "8px 10px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                }}>
+                  <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em", textTransform: "uppercase" }}>step {step.n}</span>
+                  <span style={{ fontSize: 12, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{step.label}</span>
+                </div>
+                {i < arr.length - 1 && (
+                  <span style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20, color: "var(--text-dim)", fontSize: 12 }}>
+                    {"\u2192"}
+                  </span>
+                )}
+              </span>
+            ))}
+          </div>
+
+          <div style={{ border: "1px solid var(--border)", background: "var(--bg-alt)", fontFamily: "var(--font-mono)", fontSize: 12, marginTop: "auto" }}>
             <div style={{ padding: "8px 16px", borderBottom: "1px solid var(--border)", background: "var(--surface)", fontSize: 10, color: "var(--text-dim)", letterSpacing: "0.08em", textTransform: "uppercase" }}>
               redaction preview
             </div>
@@ -123,11 +158,11 @@ export default function PrivacyTrust() {
         </div>
 
         {/* Tier selector as companion, not hero */}
-        <div>
+        <div style={{ display: "flex", flexDirection: "column" }}>
           <div style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.7, marginBottom: 16 }}>
             Two ways to push traces to a dataset, configured per-project.
           </div>
-          <div style={{ display: "flex", gap: 0, marginBottom: 16, border: "1px solid var(--border)" }}>
+          <div style={{ display: "flex", gap: 0, marginBottom: 12, border: "1px solid var(--border)" }}>
             {modes.map((t) => (
               <button
                 key={t.id}
@@ -152,20 +187,20 @@ export default function PrivacyTrust() {
               </button>
             ))}
           </div>
+          <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 12, fontFamily: "var(--font-mono)", lineHeight: 1.6 }}>
+            {active.desc}
+          </div>
 
           {/* Terminal preview per tier */}
-          <div className="terminal">
+          <div className="terminal" style={{ marginTop: "auto" }}>
             <div className="terminal-bar">
               <span>{active.name.toLowerCase()} policy</span>
             </div>
-            <div className="terminal-body" style={{ height: 260, overflowY: "hidden" }}>
+            <div className="terminal-body" style={{ minHeight: 320, overflowY: "auto" }}>
               {active.terminal.map((line, i) => (
                 <TerminalLine key={i} line={line} />
               ))}
             </div>
-          </div>
-          <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8, fontFamily: "var(--font-mono)" }}>
-            {active.desc}
           </div>
         </div>
       </div>

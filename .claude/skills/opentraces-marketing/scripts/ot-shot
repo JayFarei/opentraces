@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# ot-shot — branded marketing screenshots of opentraces CLI output.
+#
+# Usage:
+#   ot-shot "<subcommand and args>"  [output.png]
+#
+# Environment overrides:
+#   WALLPAPER       preset name (see assets/wallpapers/) or full path to an image.
+#                   When unset, falls back to gradient fill.
+#   TAGLINE         sub-brand line (default: "share agent traces to open datasets")
+#   OT_BIN          path to opentraces binary (default: project venv)
+#   GRADIENT_FROM   gradient start color (used only when WALLPAPER is unset)
+#   GRADIENT_TO     gradient end color
+#   CANVAS_W / CANVAS_H    canvas size in px (default 1800x1200)
+#   CARD_WIDTH      freeze terminal window width in px (default 1280)
+#   CARD_OFFSET_Y   card Y offset from center when compositing (default 20)
+#   FONT_SIZE       code font size in pt (default 16)
+#   LINE_HEIGHT     line-height multiplier (default 1.3)
+#   BRAND_FONT / BRAND_FONT_BOLD   magick font names for the wordmark
+#   DISPLAY_CMD     footer command label override (default: "ot $CMD_ARGS")
+#   DESCRIPTION     footer description override (default: auto-extracted)
+#
+# Examples:
+#   ot-shot "graph --limit 8"
+#   WALLPAPER=ember ot-shot "doctor"
+#   WALLPAPER=~/Pictures/custom.jpg ot-shot "push --dry-run"
+#
+# Output:
+#   Default path is ~/Desktop/YYYY-MM-DD-HH-MM-<slugified-command>.png.
+#   The PNG is also copied to the macOS clipboard.
+#
+# Deps: freeze, magick (ImageMagick), the opentraces venv binary.
+
+set -euo pipefail
+
+CMD_ARGS="${1:-}"
+OUT="${2:-}"
+
+if [[ -z "$CMD_ARGS" ]]; then
+  echo "usage: ot-shot \"<subcommand and args>\" [output.png]" >&2
+  exit 1
+fi
+
+# Resolve the script's own directory so we can find bundled wallpapers
+# even when invoked via symlink from $PATH.
+SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || python3 -c "import os,sys;print(os.path.realpath(sys.argv[1]))" "$0")"
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+SKILL_DIR="$(dirname "$SCRIPT_DIR")"
+WALLPAPER_DIR="$SKILL_DIR/assets/wallpapers"
+
+# Default output: ~/Desktop/YYYY-MM-DD-HH-MM-<slug>.png
+if [[ -z "$OUT" ]]; then
+  SLUG="$(printf '%s' "$CMD_ARGS" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')"
+  OUT="$HOME/Desktop/$(date +%Y-%m-%d-%H-%M)-${SLUG}.png"
+fi
+
+# --- configurable knobs ---------------------------------------------------
+OT_BIN="${OT_BIN:-$HOME/src/tries/2026-03-27-community-traces-hf/.venv/bin/opentraces}"
+CARD_WIDTH="${CARD_WIDTH:-1280}"
+FONT_SIZE="${FONT_SIZE:-16}"
+LINE_HEIGHT="${LINE_HEIGHT:-1.3}"
+CANVAS_W="${CANVAS_W:-1800}"
+CANVAS_H="${CANVAS_H:-1200}"
+CARD_OFFSET_Y="${CARD_OFFSET_Y:-20}"
+GRADIENT_FROM="${GRADIENT_FROM:-#0F0F0F}"
+GRADIENT_TO="${GRADIENT_TO:-#1A1033}"
+BRAND_FONT="${BRAND_FONT:-JetBrainsMono-NF-Regular}"
+BRAND_FONT_BOLD="${BRAND_FONT_BOLD:-JetBrainsMono-NF-Bold}"
+TAGLINE="${TAGLINE:-share agent traces to open datasets}"
+WALLPAPER="${WALLPAPER:-}"
+DISPLAY_CMD="${DISPLAY_CMD:-ot ${CMD_ARGS}}"
+DESCRIPTION_OVERRIDE="${DESCRIPTION:-}"
+# --------------------------------------------------------------------------
+
+if [[ ! -x "$OT_BIN" ]]; then
+  echo "ot-shot: opentraces binary not found at $OT_BIN" >&2
+  echo "set OT_BIN=/path/to/opentraces and re-run." >&2
+  exit 2
+fi
+
+# Resolve WALLPAPER: bare name → skill-bundled preset; otherwise treat as path.
+WALLPAPER_PATH=""
+if [[ -n "$WALLPAPER" ]]; then
+  if [[ -f "$WALLPAPER" ]]; then
+    WALLPAPER_PATH="$WALLPAPER"
+  elif [[ -f "$WALLPAPER_DIR/${WALLPAPER}.png" ]]; then
+    WALLPAPER_PATH="$WALLPAPER_DIR/${WALLPAPER}.png"
+  elif [[ -f "$WALLPAPER_DIR/${WALLPAPER}" ]]; then
+    WALLPAPER_PATH="$WALLPAPER_DIR/${WALLPAPER}"
+  else
+    echo "ot-shot: wallpaper '$WALLPAPER' not found." >&2
+    echo "known presets:" >&2
+    ls -1 "$WALLPAPER_DIR" 2>/dev/null | sed 's/^/  /' >&2 || true
+    exit 3
+  fi
+fi
+
+# First token of CMD_ARGS is the subcommand name (for --help lookup).
+SUBCMD="${CMD_ARGS%% *}"
+
+# Pull the one-line description: first non-empty content line after "Usage:".
+DESCRIPTION="$DESCRIPTION_OVERRIDE"
+if [[ -z "$DESCRIPTION" ]]; then
+  DESCRIPTION="$(
+    "$OT_BIN" "$SUBCMD" --help 2>/dev/null \
+      | sed -n '/^Usage:/,$p' \
+      | awk 'BEGIN{skip=1} /^Usage:/{skip=1; next} /^$/{skip=0; next} skip==0 && NF {print; exit}' \
+      | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+  )"
+  DESCRIPTION="${DESCRIPTION:-opentraces CLI}"
+fi
+
+TMPDIR_RUN="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_RUN"' EXIT
+
+CARD="$TMPDIR_RUN/card.png"
+CANVAS="$TMPDIR_RUN/canvas.png"
+
+# 1. Render the CLI output as a transparent card.
+freeze \
+  --execute "$OT_BIN $CMD_ARGS" \
+  -W "$CARD_WIDTH" \
+  --font.size "$FONT_SIZE" \
+  --line-height "$LINE_HEIGHT" \
+  -p 32 -m 24 --window --border.radius 12 \
+  -b "#00000000" \
+  -o "$CARD" > /dev/null
+
+# 2. Paint the canvas (wallpaper or gradient), then overlay brand text.
+if [[ -n "$WALLPAPER_PATH" ]]; then
+  magick "$WALLPAPER_PATH" -resize "${CANVAS_W}x${CANVAS_H}^" \
+    -gravity center -extent "${CANVAS_W}x${CANVAS_H}" "$CANVAS"
+else
+  magick -size "${CANVAS_W}x${CANVAS_H}" \
+    gradient:"${GRADIENT_FROM}-${GRADIENT_TO}" "$CANVAS"
+fi
+
+magick "$CANVAS" \
+  -font "$BRAND_FONT" -pointsize 38 \
+  -fill "#B0B0B0" -draw "text 72,90 'open'" \
+  -font "$BRAND_FONT_BOLD" \
+  -fill "#E0E0E0" -draw "text 167,90 'traces'" \
+  -font "$BRAND_FONT" -pointsize 18 \
+  -fill "#888888" -draw "text 72,125 '${TAGLINE}'" \
+  -font "$BRAND_FONT" -pointsize 14 \
+  -fill "#F97316" -draw "text 72,$((CANVAS_H - 50)) '${DISPLAY_CMD}'" \
+  -fill "#B0B0B0" -draw "text 72,$((CANVAS_H - 25)) '${DESCRIPTION}'" \
+  "$CANVAS"
+
+# 3. Composite card onto canvas.
+magick "$CANVAS" "$CARD" -gravity center -geometry +0+"$CARD_OFFSET_Y" -composite "$OUT"
+
+# 4. Copy to macOS clipboard as PNG (best-effort).
+COPIED=""
+if command -v osascript >/dev/null 2>&1; then
+  if osascript -e "set the clipboard to (read (POSIX file \"$OUT\") as «class PNGf»)" \
+       >/dev/null 2>&1; then
+    COPIED=" (copied to clipboard)"
+  fi
+fi
+
+echo "wrote $OUT${COPIED}"

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef, FormEvent } from "react";
+import Image from "next/image";
 
 const HF_API = "https://huggingface.co/api";
 const VIEWER = "https://datasets-server.huggingface.co";
@@ -14,7 +15,7 @@ interface CacheEntry {
 }
 
 function cacheKey(query: string, isUser: boolean) {
-  return `ot:explorer:${isUser ? "u" : "c"}:${query}`;
+  return `ot:explorer:v2:${isUser ? "u" : "c"}:${query}`;
 }
 
 function readCache(key: string): CacheEntry | null {
@@ -51,7 +52,26 @@ interface DatasetStats {
   numTraces: number | null; // null = still loading
   downloads: number;
   lastModified: string;
+  type: "opentraces" | "raw";
+  schemaVersion: string | null;
+  hasStats: boolean;
+  agents: [string, number][];
+  models: [string, number][];
+  topDeps: [string, number][];
+  totalTokens: number | null;
+  avgSteps: number | null;
+  successRate: number | null;
 }
+
+const PAGE_SIZE = 10;
+
+function sortByTier(rows: DatasetStats[]): DatasetStats[] {
+  return [...rows].sort((a, b) => {
+    if (a.type !== b.type) return a.type === "opentraces" ? -1 : 1;
+    return (b.numTraces ?? 0) - (a.numTraces ?? 0);
+  });
+}
+
 
 interface TraceRow {
   [key: string]: unknown;
@@ -138,6 +158,7 @@ export default function Dashboard() {
   const [phase, setPhase] = useState<"loading" | "datasets" | "enriching" | "done">("loading");
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
   const fetchDatasets = useCallback(async (query: string, isUser: boolean) => {
@@ -162,16 +183,19 @@ export default function Dashboard() {
     const sig = controller.signal;
 
     try {
-      const tagBase = "tags=opentraces&sort=downloads&direction=-1&limit=50&full=true";
+      const agentTag = "filter=agent-traces&sort=downloads&direction=-1&limit=50&full=true";
+      const opentracesTag = "filter=opentraces&sort=downloads&direction=-1&limit=50&full=true";
       const searchBase = "sort=downloads&direction=-1&limit=50&full=true";
 
       const urls: string[] = [];
       if (isUser) {
-        urls.push(`${HF_API}/datasets?${tagBase}&author=${encodeURIComponent(query)}`);
+        urls.push(`${HF_API}/datasets?${agentTag}&author=${encodeURIComponent(query)}`);
+        urls.push(`${HF_API}/datasets?${opentracesTag}&author=${encodeURIComponent(query)}`);
         urls.push(`${HF_API}/datasets?search=${encodeURIComponent(query)}/opentraces&${searchBase}`);
         urls.push(`${HF_API}/datasets?author=${encodeURIComponent(query)}&search=opentraces&${searchBase}`);
       } else {
-        urls.push(`${HF_API}/datasets?${tagBase}`);
+        urls.push(`${HF_API}/datasets?${agentTag}`);
+        urls.push(`${HF_API}/datasets?${opentracesTag}`);
         urls.push(`${HF_API}/datasets?search=opentraces&${searchBase}`);
       }
 
@@ -203,6 +227,15 @@ export default function Dashboard() {
         numTraces: null, // loading
         downloads: ds.downloads,
         lastModified: ds.lastModified,
+        type: ds.tags?.includes("opentraces") ? "opentraces" : "raw",
+        schemaVersion: null,
+        hasStats: false,
+        agents: [],
+        models: [],
+        topDeps: [],
+        totalTokens: null,
+        avgSteps: null,
+        successRate: null,
       }));
       setDatasetStats(initial);
       setPhase("enriching");
@@ -212,11 +245,11 @@ export default function Dashboard() {
 
       // Fetch README for trace count + pre-computed stats block (written by dataset_card.py on each push)
       // Much lighter than fetching full JSONL shards — README is a few KB
-      async function fetchReadmeData(repoId: string, signal: AbortSignal): Promise<{ count: number; stats: ReadmeStats | null }> {
+      async function fetchReadmeData(repoId: string, signal: AbortSignal): Promise<{ count: number; stats: ReadmeStats | null; schemaVersion: string | null }> {
         try {
           const url = `https://huggingface.co/datasets/${repoId}/resolve/main/README.md`;
           const r = await fetch(url, { signal });
-          if (!r.ok) return { count: 0, stats: null };
+          if (!r.ok) return { count: 0, stats: null, schemaVersion: null };
           const text = await r.text();
 
           const countMatch = text.match(/\|\s*Total traces\s*\|\s*([\d,]+)\s*\|/i);
@@ -224,6 +257,9 @@ export default function Dashboard() {
 
           const tokensMatch = text.match(/\|\s*Total tokens\s*\|\s*([\d,]+)\s*\|/i);
           const tableTokens = tokensMatch ? parseInt(tokensMatch[1].replace(/,/g, ""), 10) : 0;
+
+          const versionMatch = text.match(/\|\s*Schema version\s*\|\s*([^\s|]+)\s*\|/i);
+          const schemaVersion = versionMatch ? versionMatch[1].trim() : null;
 
           let stats: ReadmeStats | null = null;
           const statsMatch = text.match(/<!--\s*opentraces:stats\s*(\{[\s\S]*?\})\s*(?:-->|<!--\s*opentraces:stats-end)/);
@@ -253,8 +289,8 @@ export default function Dashboard() {
             };
           }
 
-          return { count, stats };
-        } catch { return { count: 0, stats: null }; }
+          return { count, stats, schemaVersion };
+        } catch { return { count: 0, stats: null, schemaVersion: null }; }
       }
 
       // Stream /info results as they complete
@@ -279,26 +315,44 @@ export default function Dashboard() {
 
         enriched[idx] = { ...enriched[idx], numTraces: serverCount || null };
         if (!sig.aborted) {
-          setDatasetStats([...enriched].sort((a, b) => (b.numTraces ?? 0) - (a.numTraces ?? 0)));
+          setDatasetStats(sortByTier(enriched));
         }
 
         // Always fetch README — collects pre-computed stats block for community insights.
         // Also updates count display if datasets-server didn't index this dataset (JSONL-only).
         try {
-          const { count: rawCount, stats } = await fetchReadmeData(ds.id, sig);
+          const { count: rawCount, stats, schemaVersion } = await fetchReadmeData(ds.id, sig);
           if (sig.aborted) return;
           if (serverCount === 0) {
             enriched[idx] = { ...enriched[idx], numTraces: rawCount };
-            setDatasetStats([...enriched].sort((a, b) => (b.numTraces ?? 0) - (a.numTraces ?? 0)));
+            setDatasetStats(sortByTier(enriched));
+          }
+          if (schemaVersion) {
+            enriched[idx] = { ...enriched[idx], schemaVersion };
           }
           if (stats) {
+            const agents = Object.entries(stats.agent_counts).sort((a, b) => b[1] - a[1]) as [string, number][];
+            const models = Object.entries(stats.model_counts).sort((a, b) => b[1] - a[1]) as [string, number][];
+            enriched[idx] = {
+              ...enriched[idx],
+              type: "opentraces",
+              schemaVersion: schemaVersion ?? enriched[idx].schemaVersion,
+              hasStats: true,
+              agents,
+              models,
+              topDeps: stats.top_dependencies || [],
+              totalTokens: stats.total_tokens || null,
+              avgSteps: stats.avg_steps_per_session ?? null,
+              successRate: stats.success_rate ?? null,
+            };
+            setDatasetStats(sortByTier(enriched));
             collectedReadmeStats.push(stats);
             setReadmeStatsList([...collectedReadmeStats]);
           }
         } catch {
           if (serverCount === 0) {
             enriched[idx] = { ...enriched[idx], numTraces: 0 };
-            if (!sig.aborted) setDatasetStats([...enriched].sort((a, b) => (b.numTraces ?? 0) - (a.numTraces ?? 0)));
+            if (!sig.aborted) setDatasetStats(sortByTier(enriched));
           }
         }
       });
@@ -306,7 +360,7 @@ export default function Dashboard() {
       await Promise.allSettled(infoPromises);
       if (sig.aborted) return;
 
-      const finalStats = [...enriched].sort((a, b) => (b.numTraces ?? 0) - (a.numTraces ?? 0));
+      const finalStats = sortByTier(enriched);
       setDatasetStats(finalStats);
       writeCache(key, finalStats, [], collectedReadmeStats);
     } catch (e) {
@@ -329,6 +383,7 @@ export default function Dashboard() {
     if (!searchInput.trim()) return;
     setUsername(searchInput.trim());
     setMode("user");
+    setPage(0);
     fetchDatasets(searchInput.trim(), true);
   }
 
@@ -336,13 +391,14 @@ export default function Dashboard() {
     setMode("community");
     setUsername("");
     setSearchInput("");
+    setPage(0);
     fetchDatasets("opentraces", false);
   }
 
   const isLoading = phase === "loading";
   const showStructure = phase !== "loading" || datasetStats.length > 0;
 
-  // Compute stats
+  // Compute top-line stats
   const totalTraces = datasetStats.reduce((s, d) => s + (d.numTraces ?? 0), 0);
   const totalDownloads = datasetStats.reduce((s, d) => s + d.downloads, 0);
   const contributors = new Set(datasetStats.map(d => d.author)).size;
@@ -361,7 +417,7 @@ export default function Dashboard() {
       <div className="explorer-search">
         <div className="section-title" style={{ margin: 0 }}>Explorer</div>
         <div style={{ flex: 1 }} />
-        <form onSubmit={handleUserSearch} style={{ display: "flex", gap: 0 }}>
+        <form onSubmit={handleUserSearch} className="explorer-search-group">
           <input
             type="text"
             value={searchInput}
@@ -369,11 +425,7 @@ export default function Dashboard() {
             placeholder="HF username..."
             className="explorer-search-input"
           />
-          <button type="submit" style={{
-            fontFamily: "var(--font-mono)", fontSize: 11, padding: "8px 16px",
-            border: "1px solid var(--border)", background: "var(--surface)",
-            color: "var(--text-secondary)", cursor: "pointer",
-          }}>
+          <button type="submit" className="explorer-search-btn">
             search
           </button>
         </form>
@@ -392,7 +444,7 @@ export default function Dashboard() {
       <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 24, fontFamily: "var(--font-body)" }}>
         {mode === "user"
           ? `Showing datasets for ${username}.`
-          : "All public opentraces datasets on Hugging Face Hub."}
+          : "All public agent-traces datasets on Huggingface Hub."}
         {(isLoading || refreshing || phase === "enriching") && (
           <span style={{ marginLeft: 8 }}>
             <svg width="14" height="14" viewBox="0 0 14 14" style={{ verticalAlign: "middle", animation: "spin 1s linear infinite" }}>
@@ -434,7 +486,7 @@ export default function Dashboard() {
       {communityStats !== null && (
         <>
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase", marginBottom: 16 }}>
-            community stats (aggregated from {fmt(communityStats.total_traces)} traces)
+            community stats (aggregated from the opentraces community · {fmt(communityStats.total_traces)} traces)
           </div>
 
           <div className="insights-grid">
@@ -510,57 +562,137 @@ export default function Dashboard() {
       )}
 
       {/* Dataset list */}
-      {showStructure && datasetStats.length > 0 && (
+      {showStructure && datasetStats.length > 0 && (() => {
+        const totalPages = Math.max(1, Math.ceil(datasetStats.length / PAGE_SIZE));
+        const currentPage = Math.min(page, totalPages - 1);
+        const pageRows = datasetStats.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+        return (
         <div className="tbl-wrap">
-          <div className="tbl-head">
-            <span className="tbl-title">datasets</span>
-            <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
-              {datasetStats.length} found
-            </span>
-          </div>
           <table>
             <thead>
               <tr>
                 <th>dataset</th>
                 <th>contributor</th>
+                <th>schema</th>
                 <th>traces</th>
                 <th>downloads</th>
                 <th>last updated</th>
+                <th>agents · models</th>
               </tr>
             </thead>
             <tbody>
-              {datasetStats.map((d) => (
-                <tr key={d.repoId}>
-                  <td>
-                    <a href={`https://huggingface.co/datasets/${d.repoId}`} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>
-                      {d.repoId}
-                    </a>
-                  </td>
-                  <td>{d.author}</td>
-                  <td>{d.numTraces === null ? <Skeleton width={32} height={14} /> : d.numTraces > 0 ? fmt(d.numTraces) : "-"}</td>
-                  <td>{fmt(d.downloads)}</td>
-                  <td style={{ color: "var(--text-dim)" }}>{new Date(d.lastModified).toLocaleDateString()}</td>
-                </tr>
-              ))}
+              {pageRows.map((d) => {
+                const topAgent = d.agents[0];
+                const topModel = d.models[0];
+                const isOpen = d.type === "opentraces";
+                const premiumStats: string[] = [];
+                if (isOpen && d.hasStats) {
+                  if (d.totalTokens) premiumStats.push(`${fmt(d.totalTokens)} tokens`);
+                  if (d.avgSteps != null) premiumStats.push(`${d.avgSteps} avg steps`);
+                }
+                return (
+                  <tr key={d.repoId} style={isOpen ? { background: "color-mix(in srgb, var(--accent) 4%, transparent)" } : undefined}>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "flex-start" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          <a href={`https://huggingface.co/datasets/${d.repoId}`} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)", textDecoration: "none" }}>
+                            {d.repoId}
+                          </a>
+                          {premiumStats.length > 0 && (
+                            <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)", letterSpacing: "0.02em" }}>
+                              {premiumStats.join(" · ")}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td>{d.author}</td>
+                    <td>
+                      <span
+                        title={isOpen
+                          ? `Published via opentraces${d.schemaVersion ? ` (schema v${d.schemaVersion})` : " (schema-validated, stats block present)"}`
+                          : "Tagged agent-traces but not published through opentraces tooling"}
+                        style={{
+                          fontSize: 10,
+                          padding: "2px 6px",
+                          border: "1px solid var(--border)",
+                          color: isOpen ? "var(--accent)" : "var(--text-dim)",
+                          background: isOpen ? "var(--surface)" : "transparent",
+                          textTransform: "uppercase",
+                          letterSpacing: "0.05em",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {isOpen ? (d.schemaVersion ? `opentraces v${d.schemaVersion}` : "opentraces") : "raw"}
+                      </span>
+                    </td>
+                    <td>{d.numTraces === null ? <Skeleton width={32} height={14} /> : d.numTraces > 0 ? fmt(d.numTraces) : "-"}</td>
+                    <td>{fmt(d.downloads)}</td>
+                    <td style={{ color: "var(--text-dim)" }}>{new Date(d.lastModified).toLocaleDateString()}</td>
+                    <td style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                      {d.hasStats ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                          {topAgent && <span>{topAgent[0]}</span>}
+                          {topModel && <span style={{ color: "var(--text-dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 220, display: "inline-block" }}>{topModel[0]}</span>}
+                          {!topAgent && !topModel && <span style={{ color: "var(--text-dim)" }}>-</span>}
+                        </div>
+                      ) : (
+                        <span style={{ color: "var(--text-dim)" }} title="No opentraces stats block in README">not published via opentraces</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
+          {totalPages > 1 && (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderTop: "1px solid var(--border)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+              <button
+                onClick={() => setPage(Math.max(0, currentPage - 1))}
+                disabled={currentPage === 0}
+                style={{
+                  fontFamily: "var(--font-mono)", fontSize: 11, padding: "4px 12px",
+                  border: "1px solid var(--border)", background: "var(--surface)",
+                  color: currentPage === 0 ? "var(--text-dim)" : "var(--text-secondary)",
+                  cursor: currentPage === 0 ? "not-allowed" : "pointer",
+                }}
+              >
+                prev
+              </button>
+              <span style={{ color: "var(--text-dim)" }}>
+                {currentPage * PAGE_SIZE + 1}–{Math.min((currentPage + 1) * PAGE_SIZE, datasetStats.length)} of {datasetStats.length}
+              </span>
+              <button
+                onClick={() => setPage(Math.min(totalPages - 1, currentPage + 1))}
+                disabled={currentPage >= totalPages - 1}
+                style={{
+                  fontFamily: "var(--font-mono)", fontSize: 11, padding: "4px 12px",
+                  border: "1px solid var(--border)", background: "var(--surface)",
+                  color: currentPage >= totalPages - 1 ? "var(--text-dim)" : "var(--text-secondary)",
+                  cursor: currentPage >= totalPages - 1 ? "not-allowed" : "pointer",
+                }}
+              >
+                next
+              </button>
+            </div>
+          )}
         </div>
-      )}
+        );
+      })()}
 
       {/* Skeleton table while initial loading */}
       {isLoading && datasetStats.length === 0 && (
         <div className="tbl-wrap">
-          <div className="tbl-head">
-            <span className="tbl-title">datasets</span>
-          </div>
           <table>
             <thead>
               <tr>
                 <th>dataset</th>
                 <th>contributor</th>
+                <th>schema</th>
                 <th>traces</th>
                 <th>downloads</th>
                 <th>last updated</th>
+                <th>agents · models</th>
               </tr>
             </thead>
             <tbody>
@@ -568,9 +700,11 @@ export default function Dashboard() {
                 <tr key={i}>
                   <td><Skeleton width="80%" height={14} /></td>
                   <td><Skeleton width="60%" height={14} /></td>
+                  <td><Skeleton width={52} height={14} /></td>
                   <td><Skeleton width={32} height={14} /></td>
                   <td><Skeleton width={40} height={14} /></td>
                   <td><Skeleton width={70} height={14} /></td>
+                  <td><Skeleton width={120} height={14} /></td>
                 </tr>
               ))}
             </tbody>
@@ -586,6 +720,18 @@ export default function Dashboard() {
             : "No opentraces datasets found yet. Be the first!"}
           <br />
           <code style={{ color: "var(--accent)", marginTop: 8, display: "inline-block" }}>pipx install opentraces && opentraces init</code>
+        </div>
+      )}
+
+      {/* HF attribution */}
+      {showStructure && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 6, marginTop: 16, fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase" }}>
+          <span>data powered by</span>
+          <Image src="/hf-logo.svg" alt="Huggingface" width={14} height={14} className="hf-logo hf-logo-light" />
+          <Image src="/hf-logo-pirate.svg" alt="Huggingface" width={14} height={14} className="hf-logo hf-logo-dark" />
+          <a href="https://huggingface.co/datasets?other=agent-traces" target="_blank" rel="noopener noreferrer" style={{ color: "var(--text-secondary)", textDecoration: "none" }}>
+            Huggingface Hub
+          </a>
         </div>
       )}
     </section>

@@ -1,0 +1,45 @@
+name = "bash_overwrites"
+description = """
+Agent uses Bash with > overwrite redirect to replace an existing file's
+content. 635 real-world instances of > in mined data — the most common
+file-creating shell pattern.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "write_file"
+path = "config.txt"
+content = "old=value\n"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    """Use the Bash tool to run: printf 'new=value\\nset_by=agent\\n' > config.txt""",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "bash overwrite"
+
+[[assertions]]
+file = "config.txt"
+trace = "a"
+lines_min = 1
+
+[[assertions]]
+file = "config.txt"
+total_lines = 2

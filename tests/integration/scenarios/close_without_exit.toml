@@ -1,0 +1,37 @@
+name = "close_without_exit"
+description = """
+Agent edits, user closes the terminal without /exit (kills tmux session).
+Simulates the common 'just walked away' pattern. Watcher must capture the
+working-tree state since file-history's last snapshot won't be flushed.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+cleanup = "kill"   # tmux kill-session, not /exit
+prompts = [
+    "Use the Write tool to create note.md with exactly the line: written before close",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "close-without-exit"
+
+[[assertions]]
+file = "note.md"
+trace = "a"
+lines = 1

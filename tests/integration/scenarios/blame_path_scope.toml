@@ -1,0 +1,74 @@
+name = "blame_path_scope"
+description = """
+With two files attributed to different traces, invoking
+`ot blame HEAD -- src/foo.py --lines --no-color` must show only foo.py's
+lines and none from bar.py.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "src/foo.py"
+content = "print('foo1')\nprint('foo2')\n"
+
+[[steps]]
+type = "write_file"
+path = "src/bar.py"
+content = "print('bar1')\nprint('bar2')\n"
+
+[[steps]]
+type = "commit"
+message = "add foo and bar"
+
+[[steps]]
+type = "write_attribution"
+ref = "HEAD"
+[steps.data]
+version = 1
+[steps.data.coverage]
+attributed = 4
+total = 4
+ratio = 1.0
+[[steps.data.traces]]
+trace_id = "traceFOO11111111"
+line_count = 2
+files = ["src/foo.py"]
+lifecycle = "final"
+[[steps.data.traces]]
+trace_id = "traceBAR22222222"
+line_count = 2
+files = ["src/bar.py"]
+lifecycle = "final"
+[steps.data.files."src/foo.py"]
+total = 2
+lines = [
+  { n = 1, trace_id = "traceFOO11111111", consistency = "attributed" },
+  { n = 2, trace_id = "traceFOO11111111", consistency = "attributed" },
+]
+[steps.data.files."src/bar.py"]
+total = 2
+lines = [
+  { n = 1, trace_id = "traceBAR22222222", consistency = "attributed" },
+  { n = 2, trace_id = "traceBAR22222222", consistency = "attributed" },
+]
+
+[[steps]]
+type = "invoke_cli"
+args = ["blame", "HEAD", "src/foo.py", "--lines", "--no-color"]
+
+[[assertions]]
+kind = "cli_returncode"
+equals = 0
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "src/foo.py:"
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "traceFOO"

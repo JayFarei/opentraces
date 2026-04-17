@@ -2,13 +2,13 @@
 
 ## Project Overview
 
-Open schema + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses coding agent sessions, applies security scanning and redaction, enriches with attribution/git signals, and publishes as structured JSONL datasets.
+Open schema + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses coding agent traces, applies security scanning and redaction, enriches with attribution/git signals, and publishes as structured JSONL datasets.
 
 ## Stack
 
 - **Language**: Python 3.10+
 - **Schema**: `opentraces-schema` (standalone Pydantic v2 package in `packages/`)
-- **CLI**: Click-based (`src/opentraces/cli.py`)
+- **CLI**: Click-based (`src/opentraces/cli/`)
 - **Web review**: Flask (`src/opentraces/clients/web/`) + React SPA (`web/viewer/`)
 - **Marketing site**: Next.js (`web/site/`)
 - **Coming soon page**: Static HTML (`web/coming-soon/`)
@@ -29,16 +29,15 @@ pytest tests/ -v
 - `skill/` - Claude Code skill definition (skills.sh convention)
 - `packages/opentraces-schema/` - Standalone schema package (Pydantic models)
 - `packages/opentraces-ui/` - Design system (tokens, base, components, React wrappers, logo assets, DESIGN.md)
-- `src/opentraces/` - Main CLI package
-  - `parsers/` - Agent session parsers (claude_code.py, hermes.py)
-  - `hooks/` - Claude Code hook scripts (on_stop.py, on_compact.py) for session enrichment
+- `src/opentraces/` - Main CLI package (7 top-level folders after the phase-6 reorg):
+  - `cli/` - Command surface (split by workflow area)
+  - `core/` - Domain glue: config, paths, state, workflow, inbox, pipeline, processors, review, publish_flow
+  - `capture/` - Inbound boundary: parsers + hooks + installers per external system. `capture/claude_code/` (parse + hooks), `capture/hermes.py`, `capture/git/` (post-commit correlator + install).
+  - `publish/` - Outbound boundary: format serializers (`atif.py`, `agent_trace.py`) and destination publishers (`huggingface/` — sharded upload, dataset card, HF schema).
+  - `enrichment/` - Read-only enrichers: git signals, attribution, dependencies, metrics. `enrichment/git/` holds the plan-041 commit-correlation stack — `correlator.py`, `notes_store.py` (`refs/notes/opentraces` read/write), `blame.py` (file:line to trace), `liveness.py` (lazy `commit_reachable` / `content_alive`), `jj_support.py` (Jujutsu change-id fallback). Note: post-commit tier assignment lives in `capture/git/post_commit.py`.
+  - `quality/` - Trace quality assessment, persona rubrics, upload gates, parse gate
   - `security/` - Secret scanning, anonymization, classification (independently versioned via `SECURITY_VERSION`)
-  - `enrichment/` - Git signals, attribution, dependencies, metrics
-  - `quality/` - Trace quality assessment, persona rubrics, upload gates
-  - `exporters/` - ATIF export
-  - `upload/` - HF Hub sharded upload, dataset card generation
-  - `inbox.py` - Shared data access for all review clients
-  - `clients/` - Presentation layers (CLI, TUI, web backend)
+  - `clients/` - Presentation layers (TUI, web backend) — business logic lives in `core/`
 - `web/` - Web frontends
   - `viewer/` - React SPA trace review UI
   - `site/` - Next.js marketing site
@@ -55,7 +54,8 @@ pytest tests/ -v
 - Context-aware security scanning (different rules per field type)
 - Per-project review policy (auto/review) controlling whether traces need manual approval
 - Zero required annotation, all enrichment is deterministic
-- Security pipeline has its own `SECURITY_VERSION` in `security/version.py`, bump it when changing detection logic (regex patterns, entropy thresholds, classifier heuristics, anonymization rules)
+- Security pipeline has its own `SECURITY_VERSION` in `security/version.py` (currently `0.3.0`), bump it when changing detection logic (regex patterns, entropy thresholds, classifier heuristics, anonymization rules). Tiers: 1a regex, 1b entropy (always on); 1.5 TruffleHog, 1.8 LLM PII, 2 LLM semantic review (opt-in); 3 human inbox. Tier 1.5 findings are redacted in place and force review; parse errors and Tier 2 denials can move traces to `TraceStatus.BLOCKED`. Opt-in commands: `opentraces setup trufflehog`, `opentraces llm-review`, `opentraces push --llm-review`, and `opentraces doctor` for pipeline health.
+- Post-processors are declared per-project as an ordered list (`post_processors: [{name, command, args, env}]`). They run pre-upload during `opentraces push`, after security redaction. Contract: stdin = trace JSON, stdout = trace JSON, exit 0. Non-zero exit / missing binary / invalid output are non-fatal by default, promoted to hard errors under `--strict`. Byte-identical output = no-op. `opentraces doctor` probes configured processors.
 
 ## Testing
 

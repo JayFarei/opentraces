@@ -1,0 +1,49 @@
+name = "bf_append_no_watcher"
+description = """
+Backfill proof point: agent uses `>>` to append to a seeded file with
+watcher OFFLINE. Tests that the reconstruction reads the existing
+content from HEAD, appends the producer's output, and emits a
+snapshot whose content is (prior + appended).
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "log.txt"
+content = "2026-04-14 boot\n"
+
+[[steps]]
+type = "git"
+args = ["add", "log.txt"]
+
+[[steps]]
+type = "git"
+args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "seed log"]
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run: printf '2026-04-14 ok\\n' >> log.txt",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "append log line, watcher off"
+
+[[assertions]]
+file = "log.txt"
+trace = "a"
+lines = 1
+
+[[assertions]]
+file = "log.txt"
+trace = "pre-audit"
+lines = 1
+
+[[assertions]]
+file = "log.txt"
+total_lines = 2

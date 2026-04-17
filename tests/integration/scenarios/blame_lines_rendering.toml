@@ -1,0 +1,87 @@
+name = "blame_lines_rendering"
+description = """
+Pre-populates an attribution cache with a mix of attributed + pre-audit
+lines across two files, invokes `ot blame HEAD --lines --no-color`, and
+asserts every expected line, trace id, and pre-audit marker is present.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "src/foo.py"
+content = "print('a')\nprint('b')\nprint('c')\n"
+
+[[steps]]
+type = "write_file"
+path = "src/bar.py"
+content = "print('x')\nprint('y')\n"
+
+[[steps]]
+type = "commit"
+message = "add foo and bar"
+
+[[steps]]
+type = "write_attribution"
+ref = "HEAD"
+[steps.data]
+version = 1
+[steps.data.coverage]
+attributed = 3
+total = 5
+ratio = 0.6
+[[steps.data.traces]]
+trace_id = "tracexyz11111111"
+line_count = 2
+files = ["src/foo.py"]
+lifecycle = "final"
+[[steps.data.traces]]
+trace_id = "traceabc22222222"
+line_count = 1
+files = ["src/bar.py"]
+lifecycle = "provisional"
+[steps.data.files."src/foo.py"]
+total = 3
+lines = [
+  { n = 1, trace_id = "tracexyz11111111", consistency = "attributed" },
+  { n = 2, trace_id = "tracexyz11111111", consistency = "attributed" },
+  { n = 3, trace_id = "", consistency = "pre-audit" },
+]
+[steps.data.files."src/bar.py"]
+total = 2
+lines = [
+  { n = 1, trace_id = "traceabc22222222", consistency = "attributed" },
+  { n = 2, trace_id = "", consistency = "pre-audit" },
+]
+
+[[steps]]
+type = "invoke_cli"
+args = ["blame", "HEAD", "--lines", "--no-color"]
+
+[[assertions]]
+kind = "cli_returncode"
+equals = 0
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "src/foo.py:"
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "src/bar.py:"
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "tracexyz"
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "traceabc"
+
+[[assertions]]
+kind = "cli_stdout_matches"
+contains = "\u00b7"

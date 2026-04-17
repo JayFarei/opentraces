@@ -1,0 +1,27 @@
+name = "partial_commit"
+description = """
+Agent creates two files. User commits only ONE of them. Attribution should
+correctly cover the committed file; the un-committed file shouldn't appear
+in the audit query against HEAD.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    """Use the Write tool to create two files: keep.md with the line 'this stays' and skip.md with the line 'this stays uncommitted'.""",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "partial commit"
+files = ["keep.md"]   # skip.md remains untracked
+
+[[assertions]]
+file = "keep.md"
+trace = "a"
+lines = 1

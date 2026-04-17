@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { notFound } from "next/navigation";
 import { use } from "react";
@@ -46,7 +47,6 @@ export default function SchemaVersionPage({ params }: { params: Promise<{ versio
 
   if (!schema) notFound();
 
-  const isLatest = version === "latest" || schema.version === latestVersion;
   const displaySlug = version === "latest" ? "latest" : schema.version;
 
   return (
@@ -127,9 +127,18 @@ export default function SchemaVersionPage({ params }: { params: Promise<{ versio
           {schema.summary}
         </p>
         <p style={{ fontSize: 12, color: "var(--text-dim)", maxWidth: 560, margin: "8px 0 0" }}>
-          Read the full <a href="/docs/schema/overview" style={{ color: "var(--accent)" }}>schema documentation</a> for
-          design rationale and usage guides, or see <a href="/docs/contributing/schema-changes" style={{ color: "var(--accent)" }}>contributing to the schema</a> to
-          propose changes.
+          Read the full{" "}
+          <Link href="/docs/schema/overview" style={{ color: "var(--accent)" }}>
+            schema documentation
+          </Link>{" "}
+          for design rationale and usage guides, or see{" "}
+          <Link
+            href="/docs/contributing/schema-changes"
+            style={{ color: "var(--accent)" }}
+          >
+            contributing to the schema
+          </Link>{" "}
+          to propose changes.
         </p>
       </section>
 

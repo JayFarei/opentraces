@@ -1,0 +1,47 @@
+name = "bash_creates_files"
+description = """
+One trace uses Bash to create files (printf > path, not Write/Edit).
+Validates that the watcher's working-tree polling captures shell-mediated
+file creation that file-history alone misses.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "bash"
+prompts = [
+    """Use the Bash tool to run: mkdir -p data && for n in alpha bravo charlie; do printf 'name: %s\\n' "$n" > "data/$n.txt"; done""",
+    "done",
+]
+
+# give the watcher a moment to capture post-bash state before we commit
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "bash files"
+
+[[assertions]]
+file = "data/alpha.txt"
+trace = "bash"
+lines = 1
+
+[[assertions]]
+file = "data/bravo.txt"
+trace = "bash"
+lines = 1
+
+[[assertions]]
+file = "data/charlie.txt"
+trace = "bash"
+lines = 1

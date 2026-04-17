@@ -1,16 +1,25 @@
 # Push
 
-`opentraces push` uploads committed traces to Hugging Face Hub as sharded JSONL files. Only committed traces are uploaded — run `opentraces commit` first if needed.
+`opentraces push` uploads staged traces to Hugging Face Hub as a new JSONL shard. It never appends to an existing shard in place.
+
+If nothing is staged yet, review first and run:
+
+```bash
+opentraces add --all
+```
 
 ## Options
 
 ```bash
+opentraces push
 opentraces push --private
 opentraces push --public
 opentraces push --publish
 opentraces push --gated
-opentraces push --assess
+opentraces push --no-assess
 opentraces push --repo user/custom-dataset
+opentraces push --llm-review
+opentraces push --no-trufflehog
 ```
 
 | Flag | Default | Description |
@@ -19,10 +28,23 @@ opentraces push --repo user/custom-dataset
 | `--public` | off | Force public visibility |
 | `--publish` | off | Change an existing private dataset to public |
 | `--gated` | off | Enable gated access on the dataset |
-| `--assess` | off | Run quality assessment after upload and embed scores in dataset card |
+| `--assess / --no-assess` | on | Run quality scoring and include badges in the dataset card |
+| `--llm-review` | off | Require a clean Tier 2 LLM verdict on every staged trace before upload |
+| `--no-trufflehog` | off | One-shot override: skip Tier 1.5 TruffleHog for this push only |
 | `--repo` | `{username}/opentraces` | Target HF dataset repo |
+| `--migrate-remote / --no-migrate-remote` | prompt | Auto-migrate older schema shards on the remote |
+| `-y, --yes` | off | Skip interactive prompts, including migration confirmation |
 
-`--approved-only` is not part of the current CLI. The supported path is `commit -> push`.
+`--approved-only` is not part of the 0.3 CLI.
+
+## Security Gates
+
+Two optional gates can run at push time:
+
+- `--llm-review` blocks the upload unless every staged trace carries a clean completed Tier 2 verdict in `metadata.llm_review`.
+- `--no-trufflehog` is a one-shot escape hatch for projects where Tier 1.5 TruffleHog is enabled in config but you want to skip it just for this push. It does not change the persisted config.
+
+When `--llm-review` aborts, the CLI exits `3` and prints `opentraces llm-review` as the hint.
 
 ## How Upload Works
 
@@ -62,7 +84,11 @@ A machine-readable JSON block is embedded for programmatic consumers:
 
 ### Quality scorecard (`--assess`)
 
-`opentraces push --assess` runs quality scoring after upload and embeds the results in the dataset card. Here's what it looks like on a live dataset:
+Quality scoring is enabled by default during push. The resulting scorecard is embedded into the dataset card with badges, a persona breakdown, and a `quality.json` sidecar.
+
+Use `--no-assess` if you want to skip that pass for a particular upload.
+
+Here's what the scorecard looks like on a live dataset:
 
 [![Overall Quality 78.1%](https://img.shields.io/badge/Overall_Quality-78.1%25-ffc107)](https://opentraces.ai) [![Gate FAILING](https://img.shields.io/badge/Gate-FAILING-dc3545)](https://opentraces.ai) ![Conformance 88.4%](https://img.shields.io/badge/Conformance-88.4%25-28a745) ![Training 89.0%](https://img.shields.io/badge/Training-89.0%25-28a745) ![RL 73.4%](https://img.shields.io/badge/RL-73.4%25-ffc107) ![Analytics 55.7%](https://img.shields.io/badge/Analytics-55.7%25-fd7e14) ![Domain 84.1%](https://img.shields.io/badge/Domain-84.1%25-28a745)
 
@@ -78,14 +104,31 @@ The scorecard embeds per-persona scores as shields.io badges, a breakdown table 
 
 ## Push Behavior by Mode
 
-In `review` mode, you commit and push manually. In `auto` mode, clean traces are committed and pushed automatically after capture.
+In `review` mode, every trace waits in Inbox until a human stages it.
+
+In `auto` mode, clean traces are auto-approved into the `staged` set. Push is still explicit.
+
+## Remotes
+
+Use `opentraces remote` to manage which Hugging Face dataset this repo pushes to:
+
+```bash
+opentraces remote list
+opentraces remote add owner/dataset
+opentraces remote create owner/team-traces --private
+opentraces remote visibility owner/dataset --public
+opentraces remote remove owner/dataset
+```
+
+`push --repo owner/dataset` is a one-shot override for the destination. The project's active remote remains unchanged unless you update it through `opentraces remote`.
 
 ## Export
 
-Export to other formats is not part of the public workflow yet. The CLI exposes a hidden stub for future automation:
+Export is now part of the public CLI for staged traces:
 
 ```bash
-opentraces export --format atif  # not yet public
+opentraces export --format agent-trace
+opentraces export --format atif
 ```
 
-The schema package documents ATIF, ADP, and OTel field mappings in `packages/opentraces-schema/FIELD-MAPPINGS.md`. If you need to write a converter now, start from the `TraceRecord` / `Step` model definitions there.
+`agent-trace` emits Agent Trace JSONL. `atif` is present but still a lighter path. Start from the schema docs if you need a custom converter.

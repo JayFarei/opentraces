@@ -1,0 +1,53 @@
+name = "two_traces_different_files"
+description = """
+Two sequential claude sessions touch DIFFERENT files in one repo. Trace
+`a` writes alpha.md, `b` writes bravo.md. A single commit lands both.
+Attribution must credit each file to its own trace with zero
+cross-contamination. Covers the common pattern of an interrupted agent
+session being resumed in a fresh session on unrelated work.
+
+Self-tests already cover this shape synthetically
+(`two_sessions_different_files`); this is the end-to-end variant that
+exercises the full harness path.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Write tool to create alpha.md with the single line: from-a",
+    "done",
+]
+
+[[steps]]
+type = "claude"
+label = "b"
+prompts = [
+    "Use the Write tool to create bravo.md with the single line: from-b",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "alpha + bravo"
+
+[[assertions]]
+file = "alpha.md"
+trace = "a"
+lines = 1
+
+[[assertions]]
+file = "alpha.md"
+total_lines = 1
+
+[[assertions]]
+file = "bravo.md"
+trace = "b"
+lines = 1
+
+[[assertions]]
+file = "bravo.md"
+total_lines = 1

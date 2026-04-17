@@ -19,12 +19,12 @@ function resolveTheme(): "dark" | "light" {
 }
 
 export default function ThemeToggle() {
-  const [theme, setTheme] = useState<"dark" | "light" | null>(null);
+  const [theme, setTheme] = useState<"dark" | "light">(() =>
+    typeof window === "undefined" ? "light" : resolveTheme(),
+  );
 
   useEffect(() => {
-    const resolved = resolveTheme();
-    setTheme(resolved);
-    applyTheme(resolved);
+    applyTheme(theme);
 
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     function onSystemChange(e: MediaQueryListEvent) {
@@ -36,7 +36,7 @@ export default function ThemeToggle() {
     }
     mq.addEventListener("change", onSystemChange);
     return () => mq.removeEventListener("change", onSystemChange);
-  }, []);
+  }, [theme]);
 
   function toggle() {
     const next = theme === "dark" ? "light" : "dark";
@@ -45,10 +45,13 @@ export default function ThemeToggle() {
     localStorage.setItem("theme", next);
   }
 
-  if (!theme) return <button className="theme-toggle" aria-label="Toggle theme">&nbsp;</button>;
-
   return (
-    <button className="theme-toggle" onClick={toggle} aria-label="Toggle theme">
+    <button
+      className="theme-toggle"
+      onClick={toggle}
+      aria-label="Toggle theme"
+      suppressHydrationWarning
+    >
       {theme === "dark" ? "light" : "dark"}
     </button>
   );

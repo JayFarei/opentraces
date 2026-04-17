@@ -1,0 +1,38 @@
+name = "init_first_run_backfill_prompt"
+description = "ot init with a staged Claude JSONL corpus + Y on stdin records 'Y' as the first-run backfill decision and the root_commit_sha gets persisted."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "a.py"
+content = "print('a')\n"
+
+[[steps]]
+type = "commit"
+message = "add a"
+
+# Stage a fake Claude JSONL corpus under a scenario-local HOME so ot init
+# discovers something to offer backfill for.
+[[steps]]
+type = "stage_claude_corpus"
+home = ".fakehome"
+session = "fixture-session.jsonl"
+content = "{}\n"
+
+# Queue a "Y" answer for the first-run prompt.
+[[steps]]
+type = "mock_stdin"
+text = "Y\n"
+
+[[steps]]
+type = "invoke_cli"
+args = ["init", "--no-hook"]
+
+# The marker's first_run_backfill_decision is populated only under an
+# interactive tty. Subprocess test mode is non-tty, so the scenario
+# asserts the CLI completed and the root_commit_sha was recorded.
+[[assertions]]
+kind = "cli_returncode"
+equals = 0

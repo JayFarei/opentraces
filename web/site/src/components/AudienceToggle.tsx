@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 interface Props {
   audience: "human" | "machine";
@@ -8,10 +8,9 @@ interface Props {
 }
 
 export default function AudienceToggle({ audience, onChange }: Props) {
-  // Compute human href on mount so it's the clean pathname (no ?view=machine).
-  // Falls back to "?" on server render — suppressHydrationWarning handles the mismatch.
-  const [humanHref, setHumanHref] = useState("?");
-  useEffect(() => { setHumanHref(window.location.pathname); }, []);
+  const [humanHref] = useState(() =>
+    typeof window === "undefined" ? "?" : window.location.pathname,
+  );
 
   function handle(e: React.MouseEvent, next: "human" | "machine") {
     e.preventDefault();

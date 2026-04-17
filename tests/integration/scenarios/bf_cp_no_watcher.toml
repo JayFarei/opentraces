@@ -1,0 +1,46 @@
+name = "bf_cp_no_watcher"
+description = """
+Backfill proof point: agent copies a seeded file via `cp src dst` with
+watcher OFFLINE. Tests that the reconstruction carries source content
+to the destination path. The copy is a fresh authorship event for
+trace a at the destination, even though the bytes were originally
+authored by the seed — we credit the agent for deciding to place
+that content at the new path.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "template.yaml"
+content = "name: default\nversion: 1.0\n"
+
+[[steps]]
+type = "git"
+args = ["add", "template.yaml"]
+
+[[steps]]
+type = "git"
+args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "seed template"]
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run: cp template.yaml copy.yaml",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "cp template to copy, watcher off"
+
+[[assertions]]
+file = "copy.yaml"
+trace = "a"
+lines = 2
+
+[[assertions]]
+file = "copy.yaml"
+total_lines = 2

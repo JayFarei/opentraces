@@ -1,0 +1,27 @@
+name = "entity_adds_function"
+description = "Committing a new function populates the entity cache with an 'added' record."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "src/a.py"
+content = "def greet():\n    return 'hi'\n"
+
+[[steps]]
+type = "commit"
+message = "entity_adds_function"
+
+[[steps]]
+type = "run_backfill"
+mode = "rebuild"
+
+[[assertions]]
+kind = "entity_cache_has"
+ref = "HEAD"
+entity_name = "greet"
+change_type = "added"

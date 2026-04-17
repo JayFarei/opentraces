@@ -1,0 +1,9 @@
+[Unit]
+Description=opentraces background attribution watcher
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart={HOME}/.opentraces/bin/ot-watcher
+StandardOutput=append:{HOME}/.opentraces/logs/watcher.stdout.log
+StandardError=append:{HOME}/.opentraces/logs/watcher.stderr.log

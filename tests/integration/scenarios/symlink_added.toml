@@ -1,0 +1,52 @@
+name = "symlink_added"
+description = """
+Agent creates a regular file target.md and then a symlink link.md
+pointing to it. Tests that attribution handles symlinked paths
+sensibly: in the real commit git stores link.md as mode 120000 with
+content = target path (one "line"), but the watcher's
+`_working_tree_extras` uses `Path.is_file()` (which follows symlinks)
+so audit snapshots the symlink as a regular file with the TARGET's
+content. This mismatch may produce surprising per-line counts.
+
+We assert the current behavior so any future change is intentional.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Write tool to create target.md with exactly these two lines:\nalpha\nbravo",
+    "Now use the Bash tool to run: ln -s target.md link.md",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "add target and symlink"
+
+# Real file: clean, 2 lines from trace a.
+[[assertions]]
+file = "target.md"
+trace = "a"
+lines = 2
+
+# Symlink: in audit history the symlink is snapshot-captured as a
+# regular file (content follows the link target), so blame sees 2 lines.
+# If future symlink-aware handling changes this, revisit the assertion.
+[[assertions]]
+file = "link.md"
+trace = "a"
+lines_min = 1

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-const GH_URL = "https://github.com/jayfarei/opentraces";
+const GH_URL = "https://github.com/JayFarei/opentraces";
 
 function resolveTheme(): "dark" | "light" {
   const stored = localStorage.getItem("theme") as "dark" | "light" | null;
@@ -55,12 +55,12 @@ function StarIcon() {
 }
 
 export default function Nav({ stars }: { stars?: string }) {
-  const [theme, setTheme] = useState<"dark" | "light" | null>(null);
+  const [theme, setTheme] = useState<"dark" | "light">(() =>
+    typeof window === "undefined" ? "light" : resolveTheme(),
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   useEffect(() => {
-    const resolved = resolveTheme();
-    setTheme(resolved);
-    applyTheme(resolved);
+    applyTheme(theme);
 
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     function onSystemChange(e: MediaQueryListEvent) {
@@ -72,7 +72,7 @@ export default function Nav({ stars }: { stars?: string }) {
     }
     mq.addEventListener("change", onSystemChange);
     return () => mq.removeEventListener("change", onSystemChange);
-  }, []);
+  }, [theme]);
 
   function toggle() {
     document.body.style.transition = "background 0.15s, color 0.15s";
@@ -111,8 +111,13 @@ export default function Nav({ stars }: { stars?: string }) {
           github{stars && <span className="nav-star-badge">&thinsp;[<StarIcon />{stars}]</span>}<ExternalArrow />
         </a>
         <span className="nav-divider" style={{ color: "var(--border)" }}>|</span>
-        <button className="nav-theme-btn" onClick={toggle} aria-label="Toggle theme">
-          {theme === null ? null : theme === "dark" ? "light" : "dark"}
+        <button
+          className="nav-theme-btn"
+          onClick={toggle}
+          aria-label="Toggle theme"
+          suppressHydrationWarning
+        >
+          {theme === "dark" ? "light" : "dark"}
         </button>
       </div>
     </nav>

@@ -56,7 +56,7 @@ All paths relative to `web/site/docs/docs/`.
 | `schema/standards.md` | ATIF version, Agent Trace sponsors |
 | `schema/versioning.md` | "Current Version: 0.1.0", version check behavior |
 | `workflow/parsing.md` | Session file paths, enrichment pipeline steps (7 numbered) |
-| `workflow/review.md` | Stage vocabulary, TUI shortcuts, hidden `opentraces review` alias |
+| `workflow/review.md` | Stage vocabulary, TUI shortcuts |
 | `workflow/pushing.md` | Push flags, shard naming `traces-NNNN.jsonl` |
 | `workflow/export.md` | States export is not public yet — update when it ships |
 | `integration/agent-setup.md` | `opentraces _capture` hidden command signature |

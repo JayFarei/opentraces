@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from collections import defaultdict
 
 from opentraces_schema.models import (
@@ -13,74 +12,183 @@ from opentraces_schema.models import (
     Step,
 )
 
+from ._shared import content_hash as _content_hash
+from ._shared import line_count, path_matches
 from .snippets import extract_edited_lines
 
 
-def _content_hash(text: str) -> str:
-    """Compute a short content hash (md5 truncated to 8 hex chars, murmur3 stand-in)."""
-    return hashlib.md5(text.encode(), usedforsecurity=False).hexdigest()[:8]
+def _parse_diff_hunks_with_content(patch: str) -> dict[str, list[dict]]:
+    """Parse a unified diff into per-file hunks with added-line content.
 
+    Each hunk entry has:
+      - start_line, end_line: 1-indexed range of the new-file hunk span
+        (from `@@ -X,Y +start,count @@`).
+      - added_start, added_end: 1-indexed range covering only the `+`
+        lines within the hunk (excludes unchanged context).
+      - added_text: the concatenated `+` line content (leading `+` stripped,
+        trailing newline included).
 
-def _parse_diff_files(patch: str) -> dict[str, list[tuple[int, int]]]:
-    """Parse a unified diff and extract (start_line, end_line) hunks per file.
-
-    Returns a dict mapping file paths to lists of (start, end) line ranges
-    representing added/modified lines.
+    Used by build_attribution to match Edit tool calls against actual
+    committed hunks and pin diff-sourced ranges at high confidence.
     """
-    files: dict[str, list[tuple[int, int]]] = {}
-    current_file = None
+    files: dict[str, list[dict]] = {}
+    current_file: str | None = None
+    current_hunk: dict | None = None
+    new_line_cursor = 0  # 1-indexed position in the new file, within the current hunk.
+    added_lines: list[tuple[int, str]] = []  # (line_number, content)
+
+    def _flush_hunk() -> None:
+        nonlocal current_hunk, added_lines
+        if current_hunk is None or current_file is None:
+            return
+        if added_lines:
+            current_hunk["added_start"] = added_lines[0][0]
+            current_hunk["added_end"] = added_lines[-1][0]
+            current_hunk["added_text"] = "\n".join(content for _, content in added_lines)
+        else:
+            # Pure deletion hunk: no `+` lines. Skip — attribution cares
+            # about additions and modifications.
+            files[current_file].pop()
+        current_hunk = None
+        added_lines = []
 
     for line in patch.split("\n"):
         if line.startswith("+++ b/"):
+            _flush_hunk()
             current_file = line[6:]
-            if current_file not in files:
-                files[current_file] = []
+            files.setdefault(current_file, [])
         elif line.startswith("@@ "):
-            # Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
-            parts = line.split(" ")
-            for part in parts:
-                if part.startswith("+") and "," in part:
-                    try:
-                        start = int(part.split(",")[0][1:])
-                        count = int(part.split(",")[1])
-                        if current_file and count > 0:
-                            files[current_file].append((start, start + count - 1))
-                    except (ValueError, IndexError):
-                        pass
+            _flush_hunk()
+            if current_file is None:
+                continue
+            # Parse new-file range: `@@ -X,Y +A,B @@` or `@@ -X +A @@`.
+            plus_token = None
+            for part in line.split(" "):
+                if part.startswith("+"):
+                    plus_token = part[1:]
                     break
-                elif part.startswith("+") and part[1:].isdigit():
-                    try:
-                        start = int(part[1:])
-                        if current_file:
-                            files[current_file].append((start, start))
-                    except ValueError:
-                        pass
-                    break
+            if not plus_token:
+                continue
+            try:
+                if "," in plus_token:
+                    start_str, count_str = plus_token.split(",", 1)
+                    start = int(start_str)
+                    count = int(count_str)
+                else:
+                    start = int(plus_token)
+                    count = 1
+            except ValueError:
+                continue
+            if count <= 0:
+                continue
+            current_hunk = {
+                "start_line": start,
+                "end_line": start + count - 1,
+                "added_start": None,
+                "added_end": None,
+                "added_text": "",
+            }
+            files[current_file].append(current_hunk)
+            new_line_cursor = start
+        elif current_hunk is not None:
+            # Inside a hunk body. `+` = added (belongs in new file),
+            # ` ` = context (belongs in new file), `-` = deletion (skip).
+            if line.startswith("+") and not line.startswith("+++"):
+                added_lines.append((new_line_cursor, line[1:]))
+                new_line_cursor += 1
+            elif line.startswith(" "):
+                new_line_cursor += 1
+            elif line.startswith("-") and not line.startswith("---"):
+                # Deletion: no new-file line produced.
+                pass
+            # `\ No newline at end of file` and others: ignore.
 
+    _flush_hunk()
     return files
+
+
+def _norm(text: str) -> str:
+    """Normalize whitespace for content matching: strip trailing newlines
+    and collapse runs of whitespace so indent differences don't prevent
+    a diff hunk from claiming an Edit's new_string."""
+    return " ".join(text.split())
+
+
+def _match_edit_to_hunk(
+    new_string: str, hunks: list[dict]
+) -> dict | None:
+    """Find the hunk whose added-line content contains the Edit's new_string.
+
+    Returns the hunk dict (with added_start/added_end) or None.
+    Matching is whitespace-normalized; a hunk's `added_text` must contain
+    the Edit's whitespace-normalized `new_string` as a substring.
+    """
+    if not new_string.strip():
+        return None
+    needle = _norm(new_string)
+    if not needle:
+        return None
+    for hunk in hunks:
+        haystack = _norm(hunk.get("added_text") or "")
+        if not haystack:
+            continue
+        if needle in haystack:
+            return hunk
+    return None
 
 
 def build_attribution(
     steps: list[Step],
     outcome_patch: str | None = None,
+    *,
+    trace_id: str | None = None,
+    end_state_changed_files: list[str] | None = None,
+    hook_post_tool_use: dict[str, dict] | None = None,
 ) -> Attribution | None:
     """Derive attribution from Edit and Write tool calls in the steps.
 
     Logic:
-    1. Each Edit tool call maps to line ranges based on its input parameters.
-    2. Write tool calls (new files) attribute the entire file to that step.
-    3. If outcome_patch is provided, cross-reference against actual diff.
-    4. Multi-edit same file: track cumulative line shifts, later edits take precedence.
-    5. Confidence: "high" for single-edit files, "medium" for multi-edit no overlap,
-       "low" for overlapping edits.
+    1. Each Edit maps to a line range. Priority order for resolution:
+       - cumulative in-memory `str.find()` against prior Reads/Writes/Edits
+       - fallback to (1, new_string line count) when no prior content known
+    2. Write calls attribute the entire file to that step.
+    3. Confidence: "high" for single-edit files with known content,
+       "medium" for multi-edit no overlap, "low" for overlapping edits or
+       fallback-resolved ranges.
+    4. `experimental` is True iff any range is low-confidence or any edit
+       used the fallback resolution.
+    5. `trace_id` threads into the attribution URL as
+       `opentraces://<trace_id>/step_<N>`; defaults to "trace" when
+       omitted so imported data from older pipelines still validates.
 
     Returns None if no Edit/Write tool calls are found.
     """
-    # Collect all edit and write operations per file
-    # file_path -> list of (step_index, start_line, end_line, content_hash, is_overlap)
-    file_edits: dict[str, list[dict]] = defaultdict(list)
-    file_contents: dict[str, str] = {}  # Track cumulative file state for line shifts
+    trace_slug = trace_id or "trace"
 
+    # step_index -> model string (from Step.model). Used to stamp
+    # contributor.model_id per conversation.
+    step_models: dict[int, str | None] = {s.step_index: s.model for s in steps}
+
+    # Diff hunks indexed by file path. The patch's +++ headers use
+    # repo-relative paths; Edit tool calls often pass absolute paths,
+    # so we index by both the full path and its basename for matching.
+    patch_hunks: dict[str, list[dict]] = {}
+    if outcome_patch:
+        patch_hunks = _parse_diff_hunks_with_content(outcome_patch)
+
+    def _hunks_for(file_path: str) -> list[dict]:
+        if not patch_hunks:
+            return []
+        if file_path in patch_hunks:
+            return patch_hunks[file_path]
+        for path, hunks in patch_hunks.items():
+            if path_matches(file_path, path):
+                return hunks
+        return []
+
+    file_edits: dict[str, list[dict]] = defaultdict(list)
+    file_contents: dict[str, str] = {}
+    fallback_used = False
     found_any = False
 
     for step in steps:
@@ -96,28 +204,59 @@ def build_attribution(
                 if not file_path or not new_string:
                     continue
 
-                # Try to determine line range
                 current_content = file_contents.get(file_path)
                 start_line, end_line = extract_edited_lines(
                     old_string, new_string, current_content
                 )
 
-                # Update tracked content if we can
                 if current_content and old_string in current_content:
                     file_contents[file_path] = current_content.replace(
                         old_string, new_string, 1
                     )
 
-                # If we couldn't determine lines, use placeholder
+                used_fallback = False
+                diff_matched = False
+                hook_matched = False
+                hook_confidence: str | None = None
+
+                # hook-captured PostToolUse data is the primary
+                # source. When present for this tool_use_id, it is
+                # authoritative — it was read from disk at the exact
+                # moment the tool call completed.
+                hook_entry = None
+                if hook_post_tool_use and tc.tool_call_id:
+                    hook_entry = hook_post_tool_use.get(tc.tool_call_id)
+                if hook_entry and hook_entry.get("start_line") is not None:
+                    start_line = hook_entry["start_line"]
+                    end_line = hook_entry["end_line"]
+                    hook_matched = True
+                    hook_confidence = hook_entry.get("confidence") or "high"
+                else:
+                    # diff hunk is the second-priority source for
+                    # committed changes. If the Edit's new_string appears
+                    # in a hunk's + region for this file, use the hunk's
+                    # actual lines and stamp diff-sourced (high confidence).
+                    hunk = _match_edit_to_hunk(new_string, _hunks_for(file_path))
+                    if hunk is not None and hunk.get("added_start") is not None:
+                        start_line = hunk["added_start"]
+                        end_line = hunk["added_end"]
+                        diff_matched = True
+
                 if start_line is None:
                     start_line = 1
-                    end_line = max(1, new_string.count("\n") + 1)
+                    end_line = line_count(new_string)
+                    used_fallback = True
+                    fallback_used = True
 
                 file_edits[file_path].append({
                     "step_index": step.step_index,
                     "start_line": start_line,
                     "end_line": end_line,
                     "content_hash": _content_hash(new_string),
+                    "used_fallback": used_fallback,
+                    "diff_matched": diff_matched,
+                    "hook_matched": hook_matched,
+                    "hook_confidence": hook_confidence,
                 })
 
             elif tool_name == "write":
@@ -128,22 +267,17 @@ def build_attribution(
                 if not file_path:
                     continue
 
-                # Track file content for future edit lookups
                 file_contents[file_path] = content
-
-                line_count = max(1, content.count("\n") + (1 if content and not content.endswith("\n") else 0))
-
                 file_edits[file_path].append({
                     "step_index": step.step_index,
                     "start_line": 1,
-                    "end_line": line_count,
+                    "end_line": line_count(content),
                     "content_hash": _content_hash(content),
+                    "used_fallback": False,
                 })
 
             elif tool_name == "read":
-                # Track file content for line range calculation in future edits
                 file_path = tc.input.get("file_path", "")
-                # Look for content in observations
                 for obs in step.observations:
                     if obs.source_call_id == tc.tool_call_id and obs.content:
                         file_contents[file_path] = obs.content
@@ -151,20 +285,13 @@ def build_attribution(
     if not found_any:
         return None
 
-    # Build attribution files with confidence scoring
     attribution_files: list[AttributionFile] = []
-    unaccounted_hunks: list[str] = []
-
-    # Parse the outcome patch for cross-referencing
-    patch_files: dict[str, list[tuple[int, int]]] = {}
-    if outcome_patch:
-        patch_files = _parse_diff_files(outcome_patch)
+    any_low_confidence = False
 
     for file_path, edits in sorted(file_edits.items()):
-        # Determine confidence based on edit count and overlap
+        # Overlap + multi-edit detection drives confidence.
         has_overlap = False
         if len(edits) > 1:
-            # Check for overlapping ranges
             sorted_edits = sorted(edits, key=lambda e: e["start_line"])
             for i in range(1, len(sorted_edits)):
                 if sorted_edits[i]["start_line"] <= sorted_edits[i - 1]["end_line"]:
@@ -178,17 +305,30 @@ def build_attribution(
         else:
             confidence = "medium"
 
-        # Build ranges, with later edits taking precedence for overlaps
+        # Confidence precedence:
+        #   hook_matched  → hook's own confidence (high / medium / low)
+        #   diff_matched  → high (diff is authoritative post-commit)
+        #   used_fallback → low (we don't actually know where the edit landed)
+        #   else          → the overlap/multi-edit bucket computed above
         ranges: list[AttributionRange] = []
         for edit in edits:
+            if edit.get("hook_matched"):
+                eff_conf = edit.get("hook_confidence") or "high"
+            elif edit.get("diff_matched"):
+                eff_conf = "high"
+            elif edit["used_fallback"]:
+                eff_conf = "low"
+            else:
+                eff_conf = confidence
+            if eff_conf == "low":
+                any_low_confidence = True
             ranges.append(AttributionRange(
                 start_line=edit["start_line"],
                 end_line=edit["end_line"],
                 content_hash=edit["content_hash"],
-                confidence=confidence,
+                confidence=eff_conf,
             ))
 
-        # Build conversation entries (one per unique step)
         step_indices = sorted(set(e["step_index"] for e in edits))
         conversations: list[AttributionConversation] = []
 
@@ -196,9 +336,13 @@ def build_attribution(
             step_ranges = [
                 r for r, e in zip(ranges, edits) if e["step_index"] == si
             ]
+            contributor: dict[str, str] = {"type": "ai"}
+            model_id = step_models.get(si)
+            if model_id:
+                contributor["model_id"] = model_id
             conversations.append(AttributionConversation(
-                contributor={"type": "ai"},
-                url=f"opentraces://trace/step_{si}",
+                contributor=contributor,
+                url=f"opentraces://{trace_slug}/step_{si}",
                 ranges=step_ranges,
             ))
 
@@ -207,14 +351,44 @@ def build_attribution(
             conversations=conversations,
         ))
 
-    # Cross-reference with patch if provided
-    if patch_files:
-        attributed_paths = {f.path for f in attribution_files}
-        for pf in patch_files:
-            if pf not in attributed_paths:
-                unaccounted_hunks.append(pf)
+    # experimental iff any low-confidence range or any fallback.
+    experimental = any_low_confidence or fallback_used
+
+    # surface files changed on disk or in the commit that no
+    # Edit/Write tool call attributed — typically Bash-applied edits
+    # (sed -i, codemods). Inputs:
+    #   - outcome_patch: per-file paths from the commit diff.
+    #   - end_state_changed_files: paths from a Stop hook `git diff HEAD`.
+    # Matching against attributed paths is suffix-aware because Edit
+    # tool calls frequently pass absolute paths while patch/hook
+    # output is repo-relative.
+    attributed_paths = [f.path for f in attribution_files]
+
+    def _is_attributed(path: str) -> bool:
+        return any(path_matches(ap, path) for ap in attributed_paths)
+
+    candidate_paths: list[str] = []
+    if outcome_patch:
+        for pf in _parse_diff_hunks_with_content(outcome_patch).keys():
+            if pf not in candidate_paths:
+                candidate_paths.append(pf)
+    if end_state_changed_files:
+        for pf in end_state_changed_files:
+            if pf and pf not in candidate_paths:
+                candidate_paths.append(pf)
+
+    unaccounted = [p for p in candidate_paths if not _is_attributed(p)]
+    unaccounted_files: list[str] | None
+    if outcome_patch is None and not end_state_changed_files:
+        # No signal at all → leave the field unset so consumers don't
+        # misread "empty list" as "we checked and nothing was
+        # unaccounted."
+        unaccounted_files = None
+    else:
+        unaccounted_files = unaccounted or None
 
     return Attribution(
-        experimental=True,
+        experimental=experimental,
         files=attribution_files,
+        unaccounted_files=unaccounted_files,
     )

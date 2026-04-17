@@ -1,0 +1,12 @@
+{
+  "entities": [
+    {
+      "change_type": "deleted",
+      "entity_kind": "function",
+      "entity_name": "old_helper",
+      "file": "src/a.py",
+      "before": "def old_helper():\n    return None\n",
+      "after": null
+    }
+  ]
+}

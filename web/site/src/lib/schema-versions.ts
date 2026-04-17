@@ -233,8 +233,116 @@ const v020: SchemaVersion = {
   })),
 };
 
+const v030: SchemaVersion = {
+  version: "0.3.0",
+  date: "2026-04-16",
+  summary: "Commit-anchored evidence tiers (GitLink), lifecycle, richer Attribution, and generation-indexed supersedes. New blame, graph, backfill, pull, and export --format agent-trace CLI surfaces, plus a flat git-style command restructure.",
+  highlights: [
+    "GitLink: evidence-graded link from trace to commit (tool_emitted | tool_emitted_with_divergence | overlapping | orphan)",
+    "TraceRecord.lifecycle: provisional (pre-correlation) | final (revision-anchored)",
+    "TraceRecord.generation_index: monotonic per-session replacement counter for pull + supersedes resolution",
+    "Metrics.total_cache_read_tokens + total_cache_creation_tokens: session-level prompt-cache aggregates",
+    "Attribution.revision pins a block to a commit; unaccounted_files surfaces Bash-applied edits",
+    "AttributionRange.original captures pre-divergence state when a formatter rewrote agent output",
+    "AttributionRange.change_type: addition | modification | deletion; per-range contributor override",
+    "AttributionConversation.ids (provider-native msg ids) and .related (plan / issue / pr links)",
+    "Task.repository_url: canonical remote URL alongside owner/repo",
+    "AttributionRange.content_hash format now murmur3:<32-hex> (replaces md5-truncated-8) for cross-tool line-range matching; top-level TraceRecord.content_hash remains SHA-256 for dedup",
+    "Post-commit hook correlates trace to revision; PostToolUse hook captures edits as they happen",
+    "opentraces blame <sha> [path], opentraces graph, opentraces backfill, opentraces setup git, list --by-commit",
+    "opentraces pull owner/dataset --parser hermes (importer), opentraces export --format agent-trace; show --markdown (prompt-injection-safe)",
+  ],
+  models: v020.models.map((m) => {
+    if (m.id === "trace-record") {
+      return {
+        ...m,
+        fields: [
+          ...m.fields.map((f) =>
+            f.name === "schema_version"
+              ? { ...f, description: 'e.g. "0.3.0"' }
+              : f.name === "content_hash"
+                ? { ...f, description: "SHA-256 hex of the serialized record, used for cross-contributor dedup at upload time. Unchanged by 0.3.0." }
+                : f
+          ),
+          { name: "lifecycle", type: "string", required: false, description: '"provisional" (pre-commit-correlation) or "final" (revision-anchored). Default provisional.' },
+          { name: "git_links", type: "GitLink[]", required: false, description: "Evidence-graded links to commits/revisions this trace contributed to." },
+          { name: "generation_index", type: "int", required: false, description: "Monotonic per-session_id generation counter. Consumers resolving 'latest' should group by session_id and take max(generation_index)." },
+        ],
+      };
+    }
+    if (m.id === "metrics") {
+      return {
+        ...m,
+        fields: [
+          ...m.fields,
+          { name: "total_cache_read_tokens", type: "int", required: false, description: "Session-level prompt-cache read aggregate." },
+          { name: "total_cache_creation_tokens", type: "int", required: false, description: "Session-level prompt-cache write aggregate." },
+        ],
+      };
+    }
+    if (m.id === "task") {
+      return {
+        ...m,
+        fields: [
+          ...m.fields,
+          { name: "repository_url", type: "string", required: false, description: "Canonical remote URL, e.g. https://github.com/org/repo" },
+        ],
+      };
+    }
+    if (m.id === "attribution") {
+      return {
+        ...m,
+        fields: [
+          ...m.fields,
+          { name: "revision", type: "dict", required: false, description: "Pins this block to a revision. Keys: vcs_type ('git'|'jj'), revision." },
+          { name: "unaccounted_files", type: "string[]", required: false, description: "Files changed at commit time with no tracked Edit/Write source (e.g. Bash sed edits). Low confidence." },
+        ],
+      };
+    }
+    return m;
+  }).concat([
+    {
+      id: "git-link", title: "GitLink",
+      desc: "Evidence-graded link between a trace and a commit/revision. A trace can link to many commits (rebase, squash, long session); a commit can link to many traces (cherry-pick, composition).",
+      fields: [
+        { name: "vcs_type",         type: "string",  required: true,  description: '"git" or "jj".' },
+        { name: "revision",         type: "string",  required: true,  description: "Commit SHA or jj change id." },
+        { name: "repo_url",         type: "string",  required: false, description: "Canonical remote URL." },
+        { name: "branch",           type: "string",  required: false, description: "Branch at correlation time." },
+        { name: "tier",             type: "string",  required: true,  description: '"tool_emitted" (Edit hashes match committed hunks), "tool_emitted_with_divergence" (file overlap but bytes diverge), "overlapping" (file-set overlap, no hash match), or "orphan".' },
+        { name: "commit_reachable", type: "boolean", required: false, description: "Computed lazily on read; false if commit was force-pushed away." },
+        { name: "content_alive",    type: "boolean", required: false, description: "Computed lazily on read; false if agent's hashes no longer appear at HEAD." },
+      ],
+    },
+    {
+      id: "attribution-range", title: "AttributionRange",
+      desc: "A range of lines attributed to an agent conversation.",
+      fields: [
+        { name: "start_line",    type: "int",    required: true,  description: "First attributed line (1-indexed)." },
+        { name: "end_line",      type: "int",    required: true,  description: "Last attributed line (inclusive)." },
+        { name: "content_hash",  type: "string", required: false, description: "murmur3:<32-hex> for cross-refactor tracking." },
+        { name: "confidence",    type: "string", required: false, description: "high | medium | low." },
+        { name: "change_type",   type: "string", required: false, description: '"addition", "modification", or "deletion". Default "addition".' },
+        { name: "original",      type: "dict",   required: false, description: "Pre-divergence state when a formatter/human rewrote agent output. Keys: start_line, end_line, content_hash." },
+        { name: "contributor",   type: "dict",   required: false, description: "Per-range contributor override (used when the enclosing conversation is 'mixed')." },
+      ],
+    },
+    {
+      id: "attribution-conversation", title: "AttributionConversation",
+      desc: "Links attributed code ranges to the conversation that produced them.",
+      fields: [
+        { name: "contributor", type: "dict",                required: false, description: "e.g. {type: 'ai', model_id: 'anthropic/claude-sonnet-4'}" },
+        { name: "url",         type: "string",              required: false, description: "opentraces://trace_id/step_N" },
+        { name: "ids",         type: "dict",                required: false, description: "Provider-native conversation ids. e.g. {anthropic: 'msg_01xyz', openai: ['resp_1', 'resp_2']}" },
+        { name: "related",     type: "dict[]",              required: false, description: "Links to broader resources. Each entry: {type, url}. e.g. {type: 'plan', url: 'opentraces://t/plan_3'}" },
+        { name: "ranges",      type: "AttributionRange[]",  required: false, description: "Attributed line ranges." },
+      ],
+    },
+  ]),
+};
+
 /* All versions, newest first. Add new versions here. */
-export const versions: SchemaVersion[] = [v020, v011, v010];
+export const versions: SchemaVersion[] = [v030, v020, v011, v010];
 
 export const latestVersion = versions[0].version;
 

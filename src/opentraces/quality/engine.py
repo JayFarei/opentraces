@@ -572,7 +572,7 @@ def assess_multi_project(
         max_total: Total cap across all projects.
         personas: Custom persona list. If None, uses defaults.
     """
-    from ..parsers.claude_code import ClaudeCodeParser
+    from ..capture.claude_code import ClaudeCodeParser
     from ..enrichment.metrics import compute_metrics
     from ..enrichment.attribution import build_attribution
     from ..enrichment.git_signals import detect_commits_from_steps
@@ -625,7 +625,12 @@ def assess_multi_project(
                     record.steps, project_name=proj_basename,
                 )
                 record.dependencies = sorted(set(step_deps + import_deps))
-                record.attribution = build_attribution(record.steps)
+                meta_qe = record.metadata or {}
+                record.attribution = build_attribution(
+                    record.steps,
+                    trace_id=record.trace_id,
+                    hook_post_tool_use=meta_qe.get("hook_post_tool_use") or None,
+                )
                 # Detect commits from Bash tool calls in the session itself
                 step_outcome = detect_commits_from_steps(record.steps)
                 if step_outcome.committed:

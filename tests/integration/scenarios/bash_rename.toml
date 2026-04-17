@@ -1,0 +1,71 @@
+name = "bash_rename"
+description = """
+Agent uses Bash `mv` to rename an existing file. Old path disappears,
+new path appears with identical content. Tests attribution across a
+pure rename (git tracks as add+delete without --follow).
+
+The watcher's working-tree sweep picks up the new path and attributes
+its content to the active trace. The old path — which git records as
+deleted in the commit — remains present in the audit tree (audit only
+captures *additions*, not deletions), so the commit's delete side
+blames through to the pre-audit seed that introduced the content.
+
+This is correct semantically: renaming does not change line authorship.
+The seed-author keeps credit for original.md's content even after the
+agent moves it.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "original.md"
+content = "hello\nworld\n"
+
+[[steps]]
+type = "git"
+args = ["add", "original.md"]
+
+[[steps]]
+type = "git"
+args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "seed original"]
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run: mv original.md renamed.md",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "rename original.md to renamed.md"
+
+# renamed.md: 2 lines authored by trace `a` (watcher captured it).
+[[assertions]]
+file = "renamed.md"
+trace = "a"
+lines = 2
+
+# original.md: content authored by pre-audit (seed commit). The rename's
+# delete side of the commit does not reassign authorship.
+[[assertions]]
+file = "original.md"
+trace = "pre-audit"
+lines = 2
+
+[[assertions]]
+file = "original.md"
+total_lines = 2

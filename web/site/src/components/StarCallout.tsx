@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-const GH_URL = "https://github.com/jayfarei/opentraces";
+const GH_URL = "https://github.com/JayFarei/opentraces";
 
 export default function StarCallout() {
   const [pos, setPos] = useState<{ x: number; bottom: number } | null>(null);

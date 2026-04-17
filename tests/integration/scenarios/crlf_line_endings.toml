@@ -1,0 +1,46 @@
+name = "crlf_line_endings"
+description = """
+Agent writes a file with Windows-style `\\r\\n` line terminators.
+Tests that blame still counts lines correctly and that attribution
+routes through cleanly. Realistic: Windows developers, Electron
+configs, PowerShell scripts committed cross-platform.
+
+If `core.autocrlf` (locally or from .gitattributes) rewrote content
+on hash, the audit blob could diverge from HEAD and blame SHAs
+wouldn't match. We assert explicit 3-line attribution to confirm
+that doesn't happen in the spike's test environment.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run this exactly: printf 'alpha\\r\\nbravo\\r\\ncharlie\\r\\n' > win.txt",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "add CRLF-terminated file"
+
+[[assertions]]
+file = "win.txt"
+trace = "a"
+lines = 3
+
+[[assertions]]
+file = "win.txt"
+total_lines = 3

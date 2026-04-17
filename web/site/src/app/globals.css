@@ -115,6 +115,7 @@
 [data-theme="light"] .terminal-body .w { color: #92400E; }
 [data-theme="light"] .terminal-body .ok { color: #15803D; }
 [data-theme="light"] .terminal-body .di { color: var(--text-muted); }
+[data-theme="light"] .terminal-body .pill { background: #0E7490; color: #F2F1EF; }
 [data-theme="light"] .terminal-tab { color: var(--text-dim); }
 [data-theme="light"] .terminal-tab.active { color: var(--text); border-bottom-color: #C2410C; }
 [data-theme="light"] .btn-primary {
@@ -752,7 +753,35 @@ html { color-scheme: light; }
 .terminal-body .ok { color: var(--green); }
 .terminal-body .er { color: var(--red); }
 .terminal-body .di { color: var(--text-dim); }
-.terminal-line { display: block; }
+.terminal-body .pill {
+  background: var(--cyan);
+  color: var(--bg);
+  padding: 0 6px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+.terminal-body .rail-frame {
+  position: relative;
+}
+.terminal-body .rail-frame::before {
+  content: "";
+  position: absolute;
+  left: calc(0.5ch - 0.5px);
+  top: 0.95em;
+  bottom: 0.95em;
+  width: 1.3ch;
+  border-left: 1px solid var(--text-muted);
+  border-top: 1px solid var(--text-muted);
+  border-bottom: 1px solid var(--text-muted);
+  border-top-left-radius: 3px;
+  border-bottom-left-radius: 3px;
+  opacity: 0.65;
+  pointer-events: none;
+}
+.terminal-body .rail-frame-label {
+  padding-left: 3ch;
+}
+.terminal-line { display: block; white-space: pre; }
 .terminal-line + .terminal-line-gap { margin-top: 8px; }
 .terminal-tui-mockup {
   font-family: var(--font-mono);
@@ -865,6 +894,12 @@ section {
   font-size: 28px;
   letter-spacing: -0.02em;
   margin-bottom: 8px;
+  color: var(--text);
+}
+[data-theme="light"] .section-title {
+  color: #000000;
+  font-weight: 700;
+  letter-spacing: -0.04em;
 }
 .section-sub {
   font-size: 13px;
@@ -1457,6 +1492,60 @@ tr:hover td { background: var(--surface-hover); }
   .privacy-grid { grid-template-columns: 1fr; }
 }
 
+/* ═══ Attribution (graph | blame, terminal-styled) ═══ */
+.attr-terminal { padding: 0; }
+.attr-grid {
+  display: flex;
+  min-height: 0;
+}
+.attr-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.attr-pane-right {
+  border-left: 1px solid var(--border);
+}
+.attr-body {
+  padding: 12px 14px;
+  overflow: auto;
+  max-height: 520px;
+}
+.attr-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.75;
+}
+.attr-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+  white-space: nowrap;
+}
+.attr-tree,
+.attr-trunk {
+  white-space: pre;
+}
+.attr-ellip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+.attr-indent {
+  padding-left: 14px;
+}
+@media (max-width: 768px) {
+  .attr-grid { flex-direction: column; }
+  .attr-pane-right {
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+  .attr-body { max-height: none; }
+}
+
 /* ═══ Explorer Responsive ═══ */
 .insights-grid {
   display: grid;
@@ -1470,6 +1559,10 @@ tr:hover td { background: var(--surface-hover); }
   gap: 16px;
   margin-bottom: 32px;
 }
+.explorer-search-group {
+  display: flex;
+  gap: 0;
+}
 .explorer-search-input {
   font-family: var(--font-mono);
   font-size: 12px;
@@ -1479,6 +1572,25 @@ tr:hover td { background: var(--surface-hover); }
   background: var(--bg-alt);
   color: var(--text);
   width: 200px;
+}
+.explorer-search-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.explorer-search-input:focus,
+.explorer-search-input:focus-visible,
+.explorer-search-btn:focus,
+.explorer-search-btn:focus-visible {
+  outline: none;
+}
+.explorer-search-group:focus-within .explorer-search-input,
+.explorer-search-group:focus-within .explorer-search-btn {
+  border-color: var(--text-muted);
 }
 @media (max-width: 768px) {
   .insights-grid { grid-template-columns: 1fr; }
@@ -1515,6 +1627,18 @@ footer {
   color: var(--text-dim);
   display: flex;
   justify-content: space-between;
+}
+.openmake-mark {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: currentColor;
+  margin-right: 6px;
+  vertical-align: baseline;
+  transition: background 0.15s ease;
+}
+a:hover .openmake-mark {
+  background: #E63329;
 }
 
 /* ═══ Schema Page ═══ */

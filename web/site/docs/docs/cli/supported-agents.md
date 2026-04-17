@@ -1,51 +1,45 @@
 # Supported Agents
 
-opentraces currently ships with two live parsers: Claude Code and Hermes.
+0.3 separates live capture from import support.
 
 ## Current Support
 
-| Agent | Identifier | Category | Status |
-|-------|-----------|----------|--------|
-| Claude Code | `claude-code` | dev-time | Supported |
-| Hermes | `hermes` | run-time | Supported |
-| Cursor | `cursor` | dev-time | Planned |
-| Codex | `codex` | dev-time | Planned |
-| OpenCode | `opencode` | dev-time | Planned |
-| OpenClaw | `openclaw` | run-time | Planned |
-| NemoClaw | `nemoclaw` | run-time | Planned |
+| Mode | Identifier | Status | Notes |
+|------|------------|--------|-------|
+| Live capture | `claude-code` | Supported | Installed via `opentraces init` or `opentraces setup claude-code` |
+| Dataset import | `hermes` | Supported | Used with `opentraces pull --parser hermes` |
 
-## How Detection Works
+Planned adapters can follow the same contracts without changing the inbox, push, or schema layers.
 
-The parser registry is discovered at runtime from `src/opentraces/parsers/`.
+## Live Capture vs Import
 
-```python
-from opentraces.parsers import get_parsers
+Live capture adapters discover and parse session files on disk.
 
-supported = list(get_parsers().keys())
+Import adapters read external datasets or files and map them into `TraceRecord`.
+
+That distinction matters in the public CLI:
+
+```bash
+opentraces init --agent claude-code
+opentraces pull owner/dataset --parser hermes
 ```
 
-`opentraces init --agent ...` uses the same registry to validate agent selection.
+## Adapter Contracts
 
-## What Parsers Extract
+The capture layer exposes small protocols:
 
-All parsers normalize agent sessions into the opentraces schema with:
+- `SessionParser` for live agent session parsing
+- `FormatImporter` for file or dataset imports
+- `HookInstaller` for external integrations like Claude Code and git
 
-- user / agent / system steps
-- tool calls and observations
-- system prompt deduplication
-- snippets from edit/write activity
-- per-step token usage
-- sub-agent hierarchy when present
+This is why review, security, and push stay consistent even as new sources are added.
 
-## Adapter Contract
+## What Gets Normalized
 
-New parsers implement the `SessionParser` protocol:
+All supported sources are normalized into the same schema with:
 
-```python
-class SessionParser(Protocol):
-    agent_name: str
-    def discover_sessions(self, projects_path: Path) -> Iterator[Path]: ...
-    def parse_session(self, session_path: Path, byte_offset: int = 0) -> TraceRecord | None: ...
-```
-
-That keeps the parser surface small and lets new agents plug in without changing the review or upload workflow.
+- trace-level metadata
+- steps and reasoning content
+- tool calls and observations when the source provides them
+- outcomes and metrics
+- attribution and git links when available

@@ -1,0 +1,22 @@
+name = "baseline"
+description = "Single trace creates one file via Write. The simplest possible attribution."
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Write tool to create a file at hello.txt with exactly the line: hello world",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "baseline: hello.txt"
+
+[[assertions]]
+file = "hello.txt"
+trace = "a"
+lines = 1

@@ -1,16 +1,19 @@
 # TraceRecord
 
-The top-level record. One per JSONL line, one per agent session.
+The top-level record. One per JSONL line, one per agent trace.
 
 ## Identification
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `schema_version` | string | yes | Schema version, e.g. `"0.2.0"` |
+| `schema_version` | string | yes | Schema version, e.g. `"0.3.0"` |
 | `trace_id` | string (UUID) | yes | Unique identifier for this trace |
 | `session_id` | string | yes | Agent session reference |
 | `content_hash` | string | no | SHA-256 of the serialized record, populated when written |
 | `execution_context` | string | no | `"devtime"` (code-editing agent) or `"runtime"` (action-trajectory / RL agent). Null for pre-0.2 traces. |
+| `lifecycle` | string | no | `"provisional"` (session ended, not yet tied to a revision) or `"final"` (post-commit hook correlated this trace to a commit). Defaults to `"provisional"`. Added 0.3.0 (RFC #25). |
+| `git_links` | array\<GitLink\> | no | Evidence-graded links to commits/revisions this trace contributed to. A trace may link to many commits (rebase, squash, long session); a commit may link to many traces (cherry-pick, composition). Added 0.3.0. See [Outcome & Attribution](/docs/schema/outcome-attribution) for the evidence-tier taxonomy and `GitLink` fields. |
+| `generation_index` | integer | no | Monotonic per-`session_id` generation counter. Generations are replacement snapshots, not stitchable supersets: later generations may carry different redactions, enrichments, or security-pipeline output. Consumers resolving "latest" should group by `session_id` and take `max(generation_index)`. Added 0.3.0. |
 
 ## Timestamps
 
@@ -27,6 +30,7 @@ The top-level record. One per JSONL line, one per agent session.
     "description": "Fix the failing test in src/parser.ts",
     "source": "user_prompt",
     "repository": "owner/repo",
+    "repository_url": "https://github.com/owner/repo",
     "base_commit": "abc123def456..."
   }
 }
@@ -78,11 +82,11 @@ Deduplicated into a top-level lookup table. Steps reference prompts by hash.
 
 ## Tool Definitions
 
-The session-level tool schema list.
+The trace-level tool schema list.
 
 ## Dependencies
 
-Package names referenced during the session. Extracted from manifest files or tool calls.
+Package names referenced during the trace. Extracted from manifest files or tool calls.
 
 ```json
 {
@@ -98,12 +102,16 @@ Package names referenced during the session. Extracted from manifest files or to
     "total_steps": 42,
     "total_input_tokens": 1800000,
     "total_output_tokens": 34000,
+    "total_cache_read_tokens": 1650000,
+    "total_cache_creation_tokens": 82000,
     "total_duration_s": 780,
     "cache_hit_rate": 0.92,
     "estimated_cost_usd": 2.4
   }
 }
 ```
+
+`total_cache_read_tokens` and `total_cache_creation_tokens` are session-level cache aggregates added in 0.3.0 (prompt-cache hits + writes across steps).
 
 ## Security
 
@@ -127,3 +135,4 @@ Open-ended object for future extensions.
 - `content_hash` is filled in when the record is serialized with `to_jsonl_line()`
 - `task`, `environment`, `steps`, and the nested blocks all have defaults in the Python model
 - `security.scanned` confirms the security pipeline (scan, redact, classify) was applied
+- `task.repository_url` is the canonical remote URL (added 0.3.0, RFC #22). Prefer it over `repository` when normalizing across hosts.

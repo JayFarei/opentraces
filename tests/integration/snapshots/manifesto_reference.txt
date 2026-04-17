@@ -1,0 +1,11 @@
+╭┄zz [unstaged changes]
+┊     no changes
+┊
+┊╭┄g0 [A] [✓ upstream merges cleanly]
+┊●   601614c add A
+├╯
+┊
+┊╭┄(upstream) ⏫ 1 new commits
+┊● 67247ca add upstream-commit-message…
+┊┊
+├╯ 9fd740d [origin/main] 2000-01-02 add merge-base

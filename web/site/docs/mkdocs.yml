@@ -37,7 +37,7 @@ nav:
       - Supported Agents: cli/supported-agents.md
       - Troubleshooting: cli/troubleshooting.md
   - Security:
-      - Security Modes: security/tiers.md
+      - Security Tiers: security/tiers.md
       - Scanning & Redaction: security/scanning.md
       - Configuration: security/configuration.md
   - Schema:
@@ -51,11 +51,14 @@ nav:
       - Parse: workflow/parsing.md
       - Review: workflow/review.md
       - Assess: workflow/quality.md
+      - Blame: workflow/blame.md
       - Push: workflow/pushing.md
       - Consume: workflow/consume.md
+      - Export: workflow/export.md
   - Integration:
       - CI/CD & Automation: integration/ci-cd.md
       - Agent Setup: integration/agent-setup.md
+      - Post-Processor Contract: integration/post-processor-contract.md
   - Contributing:
       - Development: contributing/development.md
       - Schema Changes: contributing/schema-changes.md

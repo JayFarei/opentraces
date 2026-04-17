@@ -1,0 +1,53 @@
+name = "two_traces_two_commits_one_file"
+description = """
+Trace `a` writes a 10-line file and user commits. Trace `b` (a NEW
+session) edits one of those lines and user commits again. Attribution
+at HEAD must credit trace a for 9 unchanged lines and trace b for the
+1 tweaked line — proving audit history is correctly stitched across
+commits and sessions.
+
+This is `small_tweak`'s cousin but with the work split across two
+commits instead of one. Common real-world pattern: one session lands
+a draft, a later session lands a fix.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Write tool to create todo.md with EXACTLY these ten lines (no others):\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "first ten items"
+
+[[steps]]
+type = "claude"
+label = "b"
+prompts = [
+    "Use the Edit tool on todo.md to replace exactly `five` (one line) with `FIVE`. Do not change any other line.",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "tweak item 5"
+
+[[assertions]]
+file = "todo.md"
+trace = "a"
+lines = 9
+
+[[assertions]]
+file = "todo.md"
+trace = "b"
+lines = 1
+
+[[assertions]]
+file = "todo.md"
+total_lines = 10

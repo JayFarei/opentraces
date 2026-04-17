@@ -1,0 +1,46 @@
+name = "path_with_spaces"
+description = """
+Agent writes a file at a path containing spaces. Tests that the
+watcher's `git status --porcelain` parser handles git's quoting
+convention for paths with whitespace (git quotes them with double
+quotes). If the parser strips the quotes correctly, the working-tree
+extra is captured and attribution succeeds; if it doesn't, the file
+is skipped and attribution falls through to missing_from_audit.
+
+Realistic: plenty of repos have paths like `src/my feature/` or docs
+named `Release Notes.md`.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run: mkdir -p 'my dir' && printf 'hello\\nworld\\n' > 'my dir/notes.md'",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "add file under path with spaces"
+
+[[assertions]]
+file = "my dir/notes.md"
+trace = "a"
+lines = 2
+
+[[assertions]]
+file = "my dir/notes.md"
+total_lines = 2

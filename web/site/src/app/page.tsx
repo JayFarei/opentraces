@@ -2,6 +2,7 @@ import Nav from "@/components/Nav";
 import Hero from "@/components/Hero";
 import Features from "@/components/Features";
 import PrivacyTrust from "@/components/PrivacyTrust";
+import Attribution from "@/components/Attribution";
 import InfraDiagram from "@/components/InfraDiagram";
 import SchemaExplorer from "@/components/SchemaExplorer";
 import GetStarted from "@/components/GetStarted";
@@ -19,6 +20,7 @@ export default async function Home() {
         <Hero metrics={metrics} />
         <Features />
         <PrivacyTrust />
+        <Attribution />
         <InfraDiagram />
         <SchemaExplorer />
         <GetStarted />

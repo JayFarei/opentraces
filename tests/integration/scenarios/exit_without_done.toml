@@ -1,0 +1,38 @@
+name = "exit_without_done"
+description = """
+Agent edits a file, user exits WITHOUT sending the trailing 'done' prompt
+that would normally flush the snapshot. The watcher must catch the working-
+tree state independently. This is the dominant real-world pattern: 99.5% of
+analyzed sessions end without a clean assistant terminator.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+# Single prompt, no trailing 'done' to flush the per-prompt-boundary snapshot
+prompts = [
+    "Use the Write tool to create greet.txt with exactly the line: hi from agent",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "exit-without-done"
+
+# Watcher should have caught greet.txt via fs polling, attributed to trace a
+[[assertions]]
+file = "greet.txt"
+trace = "a"
+lines = 1

@@ -1,0 +1,37 @@
+name = "graph_single_trace_commit"
+description = """
+One commit with one attributed trace. `ot graph --limit 1 --no-color`
+emits the 3-line stack: trace header, commit dot line, close arc.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "a.py"
+content = "print('a1')\nprint('a2')\nprint('a3')\nprint('a4')\nprint('a5')\n"
+
+[[steps]]
+type = "commit"
+message = "add a"
+
+[[steps]]
+type = "write_attribution"
+ref = "HEAD"
+data = { version = 1, coverage = { attributed = 5, total = 5, ratio = 1.0 }, traces = [ { trace_id = "traceaaa11111111", line_count = 5, files = ["a.py"], lifecycle = "final" } ], files = {} }
+
+[[steps]]
+type = "invoke_cli"
+args = ["graph", "--limit", "1", "--no-color"]
+
+[[assertions]]
+kind = "cli_returncode"
+equals = 0
+
+[[assertions]]
+kind = "cli_stdout_matches_snapshot"
+fixture = "tests/integration/snapshots/graph_single.txt"

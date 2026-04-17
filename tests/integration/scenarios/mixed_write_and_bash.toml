@@ -1,0 +1,47 @@
+name = "mixed_write_and_bash"
+description = """
+Single trace uses BOTH the Write tool (file-history signal) and a Bash
+append (watcher signal) on the same file within one session. Exercises
+the spike's dual-capture design: file-history snapshots catch the Write,
+the watcher catches the Bash-mediated append. All lines must attribute
+to the same trace — no lines should leak to pre-audit or to a separate
+"watcher" trace_id. Realistic pattern: agent drafts a file, then uses
+Bash to append a generated timestamp or computed value.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "start_watcher"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Write tool to create notes.md with these exact three lines:\nalpha\nbravo\ncharlie",
+    "Now use the Bash tool to run: printf 'delta\\necho\\n' >> notes.md",
+    "done",
+]
+
+[[steps]]
+type = "wait"
+seconds = 2
+
+[[steps]]
+type = "stop_watcher"
+
+[[steps]]
+type = "commit"
+message = "mixed write + bash append"
+
+# All 5 lines should attribute to trace `a` via the combined
+# file-history + watcher signal.
+[[assertions]]
+file = "notes.md"
+trace = "a"
+lines = 5
+
+[[assertions]]
+file = "notes.md"
+total_lines = 5

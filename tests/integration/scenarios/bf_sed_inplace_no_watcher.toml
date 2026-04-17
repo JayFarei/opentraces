@@ -1,0 +1,49 @@
+name = "bf_sed_inplace_no_watcher"
+description = """
+Backfill proof point: agent uses `sed -i` to edit a seeded file with
+watcher OFFLINE. Tests the reconstruction's sed-substitution path.
+Agent changes exactly one of three lines; attribution should credit
+trace a for the 1 replaced line and the seed for the other 2.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "write_file"
+path = "app.conf"
+content = "port = 8080\nhost = localhost\ntls = off\n"
+
+[[steps]]
+type = "git"
+args = ["add", "app.conf"]
+
+[[steps]]
+type = "git"
+args = ["-c", "user.email=h@h", "-c", "user.name=H", "commit", "-q", "-m", "seed conf"]
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Bash tool to run: sed -i '' 's/tls = off/tls = on/' app.conf",
+    "done",
+]
+
+[[steps]]
+type = "commit"
+message = "sed substitution, watcher off"
+
+[[assertions]]
+file = "app.conf"
+trace = "a"
+lines_min = 1
+
+[[assertions]]
+file = "app.conf"
+trace = "pre-audit"
+lines_min = 2
+
+[[assertions]]
+file = "app.conf"
+total_lines = 3

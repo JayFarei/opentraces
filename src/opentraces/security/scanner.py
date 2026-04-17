@@ -77,6 +77,60 @@ _INPUT_TOOLS = {"bash", "write", "edit", "Write", "Edit", "Bash"}
 _RESULT_TOOLS = {"read", "grep", "glob", "Read", "Grep", "Glob"}
 
 
+# ---------------------------------------------------------------------------
+# Field-filter calibration (Part E of plan 032)
+#
+# Path suffixes and prefixes that never contain PII or secrets for an agent
+# trace. Used by Tier 1.8 (LLM PII detection) and any future scanner tiers
+# that walk the JSON tree by key path. The existing regex+entropy pipeline
+# is value-only and already ignores these in practice; exposing them as a
+# shared API keeps behaviour consistent across tiers.
+# ---------------------------------------------------------------------------
+
+_SAFE_FIELD_SUFFIXES: tuple[str, ...] = (
+    ".type",
+    ".id",
+    ".timestamp",
+    ".stopReason",
+    ".model",
+    ".provider",
+    ".parentId",
+    ".mimeType",
+)
+
+_SAFE_FIELD_PREFIXES: tuple[str, ...] = (
+    "usage.",
+    "message.usage.",
+)
+
+_BASE64_MIN_LEN: int = 256
+
+
+def is_safe_field_path(path: str) -> bool:
+    """Return True if ``path`` names a metadata field never containing PII."""
+    if not path:
+        return False
+    if any(path.endswith(suffix) for suffix in _SAFE_FIELD_SUFFIXES):
+        return True
+    if any(path.startswith(prefix) for prefix in _SAFE_FIELD_PREFIXES):
+        return True
+    return False
+
+
+def is_base64_blob(value: object, siblings: dict[str, object]) -> bool:
+    """Return True if ``value`` looks like inline base64 media data.
+
+    Heuristic: sibling ``mimeType`` key present and the string value is
+    at least ``_BASE64_MIN_LEN`` characters long. Used to skip inline
+    images and other binary blobs during scanning.
+    """
+    if not isinstance(value, str):
+        return False
+    if "mimeType" not in siblings:
+        return False
+    return len(value) >= _BASE64_MIN_LEN
+
+
 def _classify_tool(tool_name: str) -> FieldType:
     """Classify a tool name into input or result field type."""
     base = tool_name.split("__")[-1] if "__" in tool_name else tool_name
@@ -235,6 +289,16 @@ def apply_redactions(record: TraceRecord) -> int:
                 if matches:
                     obs.content = redact_text(obs.content, matches)
                     total += len(matches)
+            if obs.output_summary:
+                matches = scan_text(obs.output_summary, include_entropy=False)
+                if matches:
+                    obs.output_summary = redact_text(obs.output_summary, matches)
+                    total += len(matches)
+            if obs.error:
+                matches = scan_text(obs.error, include_entropy=False)
+                if matches:
+                    obs.error = redact_text(obs.error, matches)
+                    total += len(matches)
 
         for snippet in step.snippets:
             if snippet.text:
@@ -243,11 +307,127 @@ def apply_redactions(record: TraceRecord) -> int:
                     snippet.text = redact_text(snippet.text, matches)
                     total += len(matches)
 
+    if record.outcome.description:
+        matches = scan_text(record.outcome.description)
+        if matches:
+            record.outcome.description = redact_text(record.outcome.description, matches)
+            total += len(matches)
+
     if record.outcome.patch:
         matches = scan_text(record.outcome.patch)
         if matches:
             record.outcome.patch = redact_text(record.outcome.patch, matches)
             total += len(matches)
+
+    if record.environment.vcs.diff:
+        matches = scan_text(record.environment.vcs.diff)
+        if matches:
+            record.environment.vcs.diff = redact_text(record.environment.vcs.diff, matches)
+            total += len(matches)
+
+    return total
+
+
+def apply_trufflehog_redactions(record: TraceRecord, findings) -> int:
+    """Redact TruffleHog raw matches across the same fields Tier 1 covers.
+
+    TruffleHog hands us the exact matched substring (``finding.raw_match``)
+    so a plain string replacement is the right tool — TH detectors are
+    vendor-formatted strings (AWS keys, Box tokens, …) that collide with
+    benign text vanishingly rarely, and we don't need span arithmetic
+    because the secret shows up identically in every field that carries
+    it.
+
+    Returns the total number of replacements made. Same return shape as
+    :func:`apply_redactions` so callers can fold both counts into
+    ``record.security.redactions_applied``.
+    """
+    raw_matches = [f.raw_match for f in findings if getattr(f, "raw_match", None)]
+    if not raw_matches:
+        return 0
+    # Deduplicate; longest first so we don't prefix-redact a longer
+    # secret with a shorter one (e.g. AWS access + secret key pair).
+    raw_matches = sorted(set(raw_matches), key=len, reverse=True)
+    total = 0
+
+    def _redact(text: str) -> tuple[str, int]:
+        n = 0
+        for rm in raw_matches:
+            if rm and rm in text:
+                n += text.count(rm)
+                text = text.replace(rm, "[REDACTED]")
+        return text, n
+
+    for _hash, prompt_text in list(record.system_prompts.items()):
+        new, n = _redact(prompt_text)
+        if n:
+            record.system_prompts[_hash] = new
+            total += n
+
+    if record.task.description:
+        new, n = _redact(record.task.description)
+        if n:
+            record.task.description = new
+            total += n
+
+    for step in record.steps:
+        if step.content:
+            new, n = _redact(step.content)
+            if n:
+                step.content = new
+                total += n
+        if step.reasoning_content:
+            new, n = _redact(step.reasoning_content)
+            if n:
+                step.reasoning_content = new
+                total += n
+        for tc in step.tool_calls:
+            for key, val in list(tc.input.items()):
+                if isinstance(val, str):
+                    new, n = _redact(val)
+                    if n:
+                        tc.input[key] = new
+                        total += n
+        for obs in step.observations:
+            if obs.content:
+                new, n = _redact(obs.content)
+                if n:
+                    obs.content = new
+                    total += n
+            if obs.output_summary:
+                new, n = _redact(obs.output_summary)
+                if n:
+                    obs.output_summary = new
+                    total += n
+            if obs.error:
+                new, n = _redact(obs.error)
+                if n:
+                    obs.error = new
+                    total += n
+        for snippet in step.snippets:
+            if snippet.text:
+                new, n = _redact(snippet.text)
+                if n:
+                    snippet.text = new
+                    total += n
+
+    if record.outcome.description:
+        new, n = _redact(record.outcome.description)
+        if n:
+            record.outcome.description = new
+            total += n
+
+    if record.outcome.patch:
+        new, n = _redact(record.outcome.patch)
+        if n:
+            record.outcome.patch = new
+            total += n
+
+    if record.environment.vcs.diff:
+        new, n = _redact(record.environment.vcs.diff)
+        if n:
+            record.environment.vcs.diff = new
+            total += n
 
     return total
 

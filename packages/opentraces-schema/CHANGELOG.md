@@ -6,11 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
-## [0.1.1] - 2026-03-29
+## [0.3.0] - 2026-04-16
+
+First public schema release since `0.2.0`. A coherent single bump that folds
+together the commit-correlation and richer-attribution work from this cycle.
+
+### Added
+
+**Commit correlation (plan 041)**
+
+- `GitLink` model — evidence-graded link between a trace and a
+  commit/revision. Tiers: `tool_emitted` | `tool_emitted_with_divergence`
+  | `overlapping` | `orphan`. Optional lazy-computed `commit_reachable`
+  and `content_alive` liveness booleans. Supports `vcs_type="jj"` for
+  Jujutsu.
+- `TraceRecord.git_links: list[GitLink]` — many-to-many link between
+  traces and commits. A trace can link to many commits (rebase, squash,
+  long session); a commit can link to many traces (cherry-pick,
+  composition).
+- `TraceRecord.lifecycle: Literal["provisional", "final"]` — RFC #25.
+  `provisional` is the default; promoted to `final` once a post-commit
+  hook correlates the trace to a revision.
+
+**Richer attribution**
+
+- `Attribution.revision: dict | None` — `{vcs_type, revision}` pin for
+  attribution data.
+- `Attribution.unaccounted_files: list[str] | None` — surfaces
+  Bash-applied edits absent from tool-call attribution, at low confidence.
+- `AttributionRange.original: dict | None` — pre-divergence
+  `{start_line, end_line, content_hash}` (RFC #5). Populated when a
+  formatter or human rewrote the agent's output after the fact.
+- `AttributionRange.change_type: Literal["addition", "modification", "deletion"]`
+  — default `addition` (RFC #11).
+- `AttributionRange.contributor: dict | None` — per-range contributor
+  override for stamping `mixed` on divergent ranges.
+- `AttributionConversation.ids: dict[str, str | list[str]] | None` —
+  provider-native conversation identifiers (RFC #9).
+- `AttributionConversation.related: list[dict] | None` — `{type, url}`
+  baseline vocabulary (RFC #16) for plan / issue / PR links.
+
+**Task, identity, metrics**
+
+- `Task.repository_url: str | None` — canonical remote URL alongside
+  `owner/repo` (RFC #22).
+- `TraceRecord.generation_index: int` — monotonic generation counter
+  per `session_id`. Generations are replacement snapshots, not stitchable
+  supersets; later generations may have different redactions, enrichments,
+  or security-pipeline output. Consumers resolving "latest" should group
+  by `session_id` and take `max(generation_index)`.
+- `Metrics.total_cache_read_tokens: int` — session-level aggregate.
+- `Metrics.total_cache_creation_tokens: int` — session-level aggregate.
 
 ### Changed
-- `SCHEMA_VERSION` bumped from `0.1.0` to `0.1.1` (patch release aligned with CLI v0.1.1).
-  No model changes; version bump only.
+
+- `Attribution.experimental` semantics clarified: now `True` when any
+  range is low-confidence or a fallback line resolution was used;
+  `False` when every range is high-confidence (hook- or diff-sourced).
+  Previously blanket-`True` across `0.1.x` / `0.2.x`.
+
+### Compatibility
+
+- Additive wrt `0.2.x`: traces written against `0.2.x` load cleanly with
+  `lifecycle="provisional"`, `generation_index=0`, `git_links=[]`, and
+  null-valued new Attribution fields.
 
 ## [0.2.0] - 2026-04-01
 
@@ -30,6 +89,12 @@ schema-specific semantics described in VERSION-POLICY.md.
 - `Outcome` docstring updated to describe devtime vs runtime field sets and
   how `execution_context` should guide consumers choosing which fields to read.
 - `SCHEMA_VERSION` bumped from `0.1.1` to `0.2.0`.
+
+## [0.1.1] - 2026-03-29
+
+### Changed
+- `SCHEMA_VERSION` bumped from `0.1.0` to `0.1.1` (patch release aligned with CLI v0.1.1).
+  No model changes; version bump only.
 
 ## [0.1.0] - 2026-03-27
 

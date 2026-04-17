@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Fixture entity-parser binary for tests.
+
+Mimics the real `ot-entities` command surface:
+
+    ot-entities --version
+    ot-entities diff --commit <sha> [--repo <path>]
+
+Diff output comes from tests/fixtures/ot-entities/diffs/<sha>.json.
+For unknown SHAs we emit {"entities": []} so callers see "no data" rather
+than an error — matches the production binary's contract.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import subprocess
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+DIFFS = HERE / "diffs"
+VERSION = "ot-entities 0.3.19-fixture"
+
+
+def _resolve_sha(repo: Path | None, ref: str) -> str:
+    """If the caller passed a ref like 'HEAD' and we have a repo, resolve it.
+    Falls back to the ref itself so the fixture can be driven by test SHAs
+    directly without a git repo."""
+    if repo is None or not (repo / ".git").exists():
+        return ref
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", ref], cwd=str(repo), text=True
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ref
+
+
+def _commit_message(repo: Path, sha: str) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(repo), "log", "-1", "--format=%B", sha],
+            text=True,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
+def cmd_diff(args) -> int:
+    # sem operates on the current working directory when no repo flag is
+    # given. Our runner now relies on cwd=repo, so match that behaviour.
+    repo = Path(args.repo) if args.repo else Path.cwd()
+    sha = _resolve_sha(repo, args.commit)
+    # 1. exact sha match
+    candidate = DIFFS / f"{sha}.json"
+    # 2. sha prefix match
+    if not candidate.is_file():
+        matches = [p for p in DIFFS.glob("*.json") if sha.startswith(p.stem)]
+        if matches:
+            candidate = matches[0]
+    # 3. commit-message tag match — scenarios use distinctive messages like
+    #    "entity_adds_function" so the fixture can serve data without
+    #    knowing the dynamically-generated sha.
+    if not candidate.is_file() and repo is not None:
+        msg = _commit_message(repo, sha)
+        for p in DIFFS.glob("*.json"):
+            if p.stem in msg:
+                candidate = p
+                break
+    if not candidate.is_file():
+        json.dump({"entities": []}, sys.stdout)
+        return 0
+    sys.stdout.write(candidate.read_text())
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(prog="ot-entities")
+    p.add_argument("--version", action="store_true")
+    sub = p.add_subparsers(dest="cmd")
+
+    d = sub.add_parser("diff")
+    d.add_argument("--commit", required=True)
+    d.add_argument("--repo", default=None)
+    # sem accepts --format json; our runner passes it, so the fixture
+    # needs to accept (and ignore) it too.
+    d.add_argument("--format", default="json")
+
+    args = p.parse_args()
+
+    if args.version:
+        print(VERSION)
+        return 0
+    if args.cmd == "diff":
+        return cmd_diff(args)
+    p.print_help()
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

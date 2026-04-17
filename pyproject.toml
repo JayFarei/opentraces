@@ -10,9 +10,10 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
-    "opentraces-schema>=0.1.0",
+    "opentraces-schema>=0.3.0,<1.0.0",
     "click>=8.0",
     "huggingface_hub>=0.20.0",
+    "mmh3>=4.0",
     "pyclack-cli>=0.4.0",
     "requests>=2.31.0",
 ]
@@ -50,3 +51,7 @@ line-length = 100
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "real_repl: scenario drives a real claude REPL via tmux (opt-in via OT_REAL_REPL=1)",
+    "regression_gate: cherry-picked spike-regression scenarios (plan 043 no-regression gate)",
+]

@@ -1,0 +1,28 @@
+name = "multi_commits_one_session"
+description = """
+Agent makes edits, user commits, agent makes more edits, user commits again
+— all within ONE claude session. Tests that attribution works correctly
+across multiple commit boundaries within a single trace.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "claude"
+label = "a"
+prompts = [
+    "Use the Write tool to create part1.md with the line: first part",
+    """Now use the Bash tool to run: git add part1.md && git -c user.email=qa@qa -c user.name=QA commit -m 'first commit by agent'""",
+    "Now use the Write tool to create part2.md with the line: second part",
+    """Now use the Bash tool to run: git add part2.md && git -c user.email=qa@qa -c user.name=QA commit -m 'second commit by agent'""",
+    "done",
+]
+
+# No final commit step — the agent already committed twice
+# Attribute against HEAD (which is the second commit)
+
+[[assertions]]
+file = "part2.md"
+trace = "a"
+lines = 1

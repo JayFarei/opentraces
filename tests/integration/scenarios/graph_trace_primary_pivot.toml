@@ -1,0 +1,52 @@
+name = "graph_trace_primary_pivot"
+description = """
+Two commits contributed by the same pivot trace. `ot graph --trace <id>`
+switches to trace-primary mode: the spine is the trace, and each commit
+the trace touched is a `┊●` line with a `[N lines]` suffix.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "write_file"
+path = "a.py"
+content = "print(1)\n"
+
+[[steps]]
+type = "commit"
+message = "first"
+
+[[steps]]
+type = "write_attribution"
+ref = "HEAD"
+data = { version = 1, coverage = { attributed = 4, total = 4, ratio = 1.0 }, traces = [ { trace_id = "pivottraceid1234", line_count = 4, files = ["a.py"], lifecycle = "final" } ], files = {} }
+
+[[steps]]
+type = "write_file"
+path = "b.py"
+content = "print(2)\n"
+
+[[steps]]
+type = "commit"
+message = "second"
+
+[[steps]]
+type = "write_attribution"
+ref = "HEAD"
+data = { version = 1, coverage = { attributed = 7, total = 7, ratio = 1.0 }, traces = [ { trace_id = "pivottraceid1234", line_count = 7, files = ["b.py"], lifecycle = "final" } ], files = {} }
+
+[[steps]]
+type = "invoke_cli"
+args = ["graph", "--trace", "pivottraceid1234", "--no-color"]
+
+[[assertions]]
+kind = "cli_returncode"
+equals = 0
+
+[[assertions]]
+kind = "cli_stdout_matches_snapshot"
+fixture = "tests/integration/snapshots/graph_trace_primary.txt"
