@@ -11,11 +11,6 @@ schema-specific semantics described in VERSION-POLICY.md.
 First public schema release since `0.2.0`. A coherent single bump that folds
 together the commit-correlation and richer-attribution work from this cycle.
 
-An `Intent` model was introduced and withdrawn internally during this cycle.
-It does not ship. Traces written with a populated `intent` block during
-internal development still load against this schema — Pydantic's default
-`extra="ignore"` silently drops the unknown field.
-
 ### Added
 
 **Commit correlation (plan 041)**
@@ -75,12 +70,6 @@ internal development still load against this schema — Pydantic's default
 - Additive wrt `0.2.x`: traces written against `0.2.x` load cleanly with
   `lifecycle="provisional"`, `generation_index=0`, `git_links=[]`, and
   null-valued new Attribution fields.
-- Traces written during internal development with a populated `intent`
-  block still load — Pydantic `extra="ignore"` drops the unknown field.
-  Content hashes computed by those in-flight versions are not reproducible
-  from disk under 0.3.0, because the excluded-field set has changed; this
-  only affects traces that (a) were written by the internal 0.3.0 / 0.4.0
-  / 0.5.0 cycles and (b) are now re-hashed against `SCHEMA_VERSION=0.3.0`.
 
 ## [0.2.0] - 2026-04-01
 
