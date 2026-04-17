@@ -259,7 +259,7 @@ function ConsumeContent() {
 const tabContents = [SetupContent, InitContent, StatusContent, ReviewContent, BlameContent, PushContent, ConsumeContent];
 
 export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
-  const [activeTab, setActiveTab] = useState(3);
+  const [activeTab, setActiveTab] = useState(1);
   const [installIdx, setInstallIdx] = useState(0);
 
   const ActiveContent = tabContents[activeTab];
