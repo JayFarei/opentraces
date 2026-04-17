@@ -21,7 +21,7 @@ function CopyBox({ cmd, desc }: { cmd: string; desc: string }) {
 
 const terminalSteps = [
   { cmd: "pipx install opentraces", desc: "install the CLI" },
-  { cmd: "opentraces init", desc: "authenticate, connect a dataset, install the agent hook" },
+  { cmd: "opentraces setup && opentraces init", desc: "ensure the global install, then initialize an inbox in this project" },
   { cmd: "opentraces web", desc: "review in the browser, stage what's safe to share" },
   { cmd: "opentraces push", desc: "upload staged traces to your HuggingFace dataset" },
 ];
@@ -29,7 +29,7 @@ const terminalSteps = [
 const agentSteps = [
   { cmd: "set up opentraces for this project", desc: "installs, authenticates, connects a dataset, and installs the hook" },
   { cmd: "open my opentraces inbox and review my traces", desc: "review in the browser or TUI, then stage or reject traces" },
-  { cmd: "verify no information about $CLIENT leaks, then stage the safe traces", desc: "agent checks redactions against your criteria before upload" },
+  { cmd: "ensure $CLIENT is redacted and stage the safe traces", desc: "agent checks redactions against your criteria before upload" },
   { cmd: "push my staged traces to HuggingFace", desc: "uploads the staged traces to your private dataset" },
 ];
 

@@ -4,25 +4,19 @@ Open schema + CLI for capturing coding-agent traces, reviewing them locally, and
 
 opentraces is built around a simple rule: capture locally, review locally, push explicitly. The tool parses agent sessions into a stable schema, runs layered security scanning and redaction, enriches each trace with git and attribution signals, and uploads sharded JSONL to a dataset you control.
 
-## What 0.3 Adds
-
-- A flatter public CLI: `add`, `push`, `list`, `show`, `status`, `web`, `tui`, `remote`, `auth`, `setup`, `doctor`
-- Repo marker plus machine-local storage: `<repo>/.opentraces.json` and `~/.opentraces/projects/<slug>/...`
-- Better review surfaces in both the web viewer and TUI
-- Explicit remote management for Hugging Face datasets
-- Post-commit git correlation for `opentraces blame`
-- Optional Tier 1.5 TruffleHog and Tier 2 `llm-review`
-- Deterministic quality scoring with optional dataset-card badges
-
 ## Workflow
 
 ```bash
-pipx install opentraces
-opentraces auth login
-opentraces init
-opentraces web          # or: opentraces tui
-opentraces add --all
-opentraces push
+opentraces setup            # wire opentraces into your system
+opentraces init             # initialize the project marker
+opentraces web              # or: opentraces tui   — review the inbox
+opentraces blame <sha>      # or: opentraces graph  — inspect attribution
+opentraces add <id>         # stage a trace for the next push
+opentraces push             # upload staged traces
+opentraces reject <id>      # say no, keep local only
+opentraces redact <id>      # find-and-replace before re-pushing
+opentraces push             # upload
+opentraces pull             # import traces from a remote dataset
 ```
 
 `init` writes the committable project marker at `.opentraces.json`. Captured traces, runtime state, and upload bookkeeping stay machine-local under `~/.opentraces/projects/<slug>/`.

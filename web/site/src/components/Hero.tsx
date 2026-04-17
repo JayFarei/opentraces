@@ -53,6 +53,7 @@ function SetupContent() {
           <span className="pill">opentraces</span>
           <span className="di">  setup wizard v{pkg.version}</span>
         </span>
+        <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  agent          detect?            </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span> <span className="s">claude-code</span></span>
         <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  claude-code    install hooks?     </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> Stop, PostCompact</span></span>
         <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  git            install hook?      </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> post-commit</span></span>
         <span className="terminal-line"><span className="n">{"\u25C7"}</span><span className="di">  skill          install?           </span><span className="f">Yes</span>   <span className="ok">{"\u2713"}</span><span className="di"> registered</span></span>

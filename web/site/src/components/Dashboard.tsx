@@ -53,6 +53,7 @@ interface DatasetStats {
   downloads: number;
   lastModified: string;
   type: "opentraces" | "raw";
+  schemaVersion: string | null;
   hasStats: boolean;
   agents: [string, number][];
   models: [string, number][];
@@ -227,6 +228,7 @@ export default function Dashboard() {
         downloads: ds.downloads,
         lastModified: ds.lastModified,
         type: ds.tags?.includes("opentraces") ? "opentraces" : "raw",
+        schemaVersion: null,
         hasStats: false,
         agents: [],
         models: [],
@@ -243,11 +245,11 @@ export default function Dashboard() {
 
       // Fetch README for trace count + pre-computed stats block (written by dataset_card.py on each push)
       // Much lighter than fetching full JSONL shards — README is a few KB
-      async function fetchReadmeData(repoId: string, signal: AbortSignal): Promise<{ count: number; stats: ReadmeStats | null }> {
+      async function fetchReadmeData(repoId: string, signal: AbortSignal): Promise<{ count: number; stats: ReadmeStats | null; schemaVersion: string | null }> {
         try {
           const url = `https://huggingface.co/datasets/${repoId}/resolve/main/README.md`;
           const r = await fetch(url, { signal });
-          if (!r.ok) return { count: 0, stats: null };
+          if (!r.ok) return { count: 0, stats: null, schemaVersion: null };
           const text = await r.text();
 
           const countMatch = text.match(/\|\s*Total traces\s*\|\s*([\d,]+)\s*\|/i);
@@ -255,6 +257,9 @@ export default function Dashboard() {
 
           const tokensMatch = text.match(/\|\s*Total tokens\s*\|\s*([\d,]+)\s*\|/i);
           const tableTokens = tokensMatch ? parseInt(tokensMatch[1].replace(/,/g, ""), 10) : 0;
+
+          const versionMatch = text.match(/\|\s*Schema version\s*\|\s*([^\s|]+)\s*\|/i);
+          const schemaVersion = versionMatch ? versionMatch[1].trim() : null;
 
           let stats: ReadmeStats | null = null;
           const statsMatch = text.match(/<!--\s*opentraces:stats\s*(\{[\s\S]*?\})\s*(?:-->|<!--\s*opentraces:stats-end)/);
@@ -284,8 +289,8 @@ export default function Dashboard() {
             };
           }
 
-          return { count, stats };
-        } catch { return { count: 0, stats: null }; }
+          return { count, stats, schemaVersion };
+        } catch { return { count: 0, stats: null, schemaVersion: null }; }
       }
 
       // Stream /info results as they complete
@@ -316,11 +321,14 @@ export default function Dashboard() {
         // Always fetch README — collects pre-computed stats block for community insights.
         // Also updates count display if datasets-server didn't index this dataset (JSONL-only).
         try {
-          const { count: rawCount, stats } = await fetchReadmeData(ds.id, sig);
+          const { count: rawCount, stats, schemaVersion } = await fetchReadmeData(ds.id, sig);
           if (sig.aborted) return;
           if (serverCount === 0) {
             enriched[idx] = { ...enriched[idx], numTraces: rawCount };
             setDatasetStats(sortByTier(enriched));
+          }
+          if (schemaVersion) {
+            enriched[idx] = { ...enriched[idx], schemaVersion };
           }
           if (stats) {
             const agents = Object.entries(stats.agent_counts).sort((a, b) => b[1] - a[1]) as [string, number][];
@@ -328,6 +336,7 @@ export default function Dashboard() {
             enriched[idx] = {
               ...enriched[idx],
               type: "opentraces",
+              schemaVersion: schemaVersion ?? enriched[idx].schemaVersion,
               hasStats: true,
               agents,
               models,
@@ -408,7 +417,7 @@ export default function Dashboard() {
       <div className="explorer-search">
         <div className="section-title" style={{ margin: 0 }}>Explorer</div>
         <div style={{ flex: 1 }} />
-        <form onSubmit={handleUserSearch} style={{ display: "flex", gap: 0 }}>
+        <form onSubmit={handleUserSearch} className="explorer-search-group">
           <input
             type="text"
             value={searchInput}
@@ -416,11 +425,7 @@ export default function Dashboard() {
             placeholder="HF username..."
             className="explorer-search-input"
           />
-          <button type="submit" style={{
-            fontFamily: "var(--font-mono)", fontSize: 11, padding: "8px 16px",
-            border: "1px solid var(--border)", background: "var(--surface)",
-            color: "var(--text-secondary)", cursor: "pointer",
-          }}>
+          <button type="submit" className="explorer-search-btn">
             search
           </button>
         </form>
@@ -481,7 +486,7 @@ export default function Dashboard() {
       {communityStats !== null && (
         <>
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.1em", color: "var(--text-dim)", textTransform: "uppercase", marginBottom: 16 }}>
-            community stats (aggregated from {fmt(communityStats.total_traces)} traces)
+            community stats (aggregated from the opentraces community · {fmt(communityStats.total_traces)} traces)
           </div>
 
           <div className="insights-grid">
@@ -563,18 +568,12 @@ export default function Dashboard() {
         const pageRows = datasetStats.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
         return (
         <div className="tbl-wrap">
-          <div className="tbl-head">
-            <span className="tbl-title">datasets</span>
-            <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
-              {datasetStats.length} found · page {currentPage + 1} / {totalPages}
-            </span>
-          </div>
           <table>
             <thead>
               <tr>
                 <th>dataset</th>
                 <th>contributor</th>
-                <th>type</th>
+                <th>schema</th>
                 <th>traces</th>
                 <th>downloads</th>
                 <th>last updated</th>
@@ -610,7 +609,9 @@ export default function Dashboard() {
                     <td>{d.author}</td>
                     <td>
                       <span
-                        title={isOpen ? "Published via opentraces (schema-validated, stats block present)" : "Tagged agent-traces but not published through opentraces tooling"}
+                        title={isOpen
+                          ? `Published via opentraces${d.schemaVersion ? ` (schema v${d.schemaVersion})` : " (schema-validated, stats block present)"}`
+                          : "Tagged agent-traces but not published through opentraces tooling"}
                         style={{
                           fontSize: 10,
                           padding: "2px 6px",
@@ -619,9 +620,10 @@ export default function Dashboard() {
                           background: isOpen ? "var(--surface)" : "transparent",
                           textTransform: "uppercase",
                           letterSpacing: "0.05em",
+                          whiteSpace: "nowrap",
                         }}
                       >
-                        {isOpen ? "opentraces" : "raw"}
+                        {isOpen ? (d.schemaVersion ? `opentraces v${d.schemaVersion}` : "opentraces") : "raw"}
                       </span>
                     </td>
                     <td>{d.numTraces === null ? <Skeleton width={32} height={14} /> : d.numTraces > 0 ? fmt(d.numTraces) : "-"}</td>
@@ -681,15 +683,12 @@ export default function Dashboard() {
       {/* Skeleton table while initial loading */}
       {isLoading && datasetStats.length === 0 && (
         <div className="tbl-wrap">
-          <div className="tbl-head">
-            <span className="tbl-title">datasets</span>
-          </div>
           <table>
             <thead>
               <tr>
                 <th>dataset</th>
                 <th>contributor</th>
-                <th>type</th>
+                <th>schema</th>
                 <th>traces</th>
                 <th>downloads</th>
                 <th>last updated</th>

@@ -15,7 +15,7 @@ const devTimeAgents: Agent[] = [
 
 const runTimeAgents: Agent[] = [
   { name: "Hermes", ready: true },
-  { name: "Browser-Use", ready: false },
+  { name: "NemoClaw", ready: false },
   { name: "OpenClaw", ready: false },
   { name: "DeepAgents", ready: false },
 ];

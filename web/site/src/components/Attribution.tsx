@@ -98,8 +98,6 @@ function Counts({ c }: { c: GCount }) {
   );
 }
 
-const codeStyle = { fontFamily: "var(--font-mono)", color: "var(--text)" };
-
 // ── component ──────────────────────────────────────────────
 export default function Attribution() {
   return (
@@ -107,12 +105,11 @@ export default function Attribution() {
       <SectionRule label="attribution" />
       <div className="section-title">Who wrote this line of code?</div>
       <p className="section-sub" style={{ maxWidth: 620, marginBottom: 16 }}>
-        When agents write the code, <code style={codeStyle}>git blame</code> points at a session, not a person.{" "}
-        <code style={codeStyle}>ot blame</code> and <code style={codeStyle}>otd graph</code> resolve every commit back to the traces that produced it.
+        When agents write most of the code, <strong style={{ color: "var(--text)" }}>git blame</strong> points at a user, not a session id.{" "}
+        <strong style={{ color: "var(--text)" }}>ot blame</strong> and <strong style={{ color: "var(--text)" }}>ot graph</strong> resolve every commit back to the traces that produced it — so you can see what worked and what didn't across your agent sessions.
       </p>
       <p className="section-sub" style={{ maxWidth: 620 }}>
-        Attribution runs at the <strong style={{ color: "var(--text)" }}>semantic-diff level</strong> — added functions, modified entities, renamed files — not raw line counts. Each commit accounts for 100% of its diff, and agents reason about{" "}
-        <code style={codeStyle}>+14 ~4 -1 ↷1 fns</code> instead of re-reading hunks.
+        Attribution runs at the <strong style={{ color: "var(--text)" }}>semantic-diff level</strong> — added functions, modified entities, renamed files — so agents can pull up the session behind any change in a few tokens.
       </p>
 
       <div className="terminal attr-terminal">

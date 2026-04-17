@@ -98,6 +98,78 @@ Every `GitLink` from trace to commit is evidence-graded. Consumers can filter da
 
 The tier appears in `git_links[].tier` on every trace and in the `--json` output of `blame` and `graph`. See [Outcome & Attribution](/docs/schema/outcome-attribution) for the full evidence model and RFC references.
 
+## How It Works
+
+`opentraces blame` isn't a wrapper around `git blame`. It builds a parallel Git history — an *audit ref* — that records exactly what each session wrote, then blames against that. You don't need this section to use blame, but it helps when reading the raw refs, debugging coverage, or thinking about where semantic attribution is headed.
+
+### Git in four primitives
+
+Git is four stacked concepts. Knowing them makes everything else obvious.
+
+| Primitive | What it is |
+|---|---|
+| **Blob** | File content plus a hash. No name, no metadata. Content-addressable, so identical bytes dedupe automatically. |
+| **Tree** | A directory snapshot — a list of `(name, mode, blob-or-tree-hash)` entries. |
+| **Commit** | A pointer to a root tree plus metadata (author, message, parent(s)). Commits form a DAG through their parents. |
+| **Reference** | A named pointer to a commit. `main`, `HEAD`, `refs/notes/*` — all just names; updating a branch means moving the pointer. |
+
+Git stores **snapshots, not diffs**. A diff is two trees compared on demand. That matters for attribution: we don't need a parallel database to track who wrote what — we can build one out of the same primitives and run existing Git tools against it.
+
+### Why `git blame` alone isn't enough
+
+`git blame src/auth.py` tells you which commit last touched each line and who authored that commit. When an agent writes the code and a human commits it, blame still points at the human. The reasoning, the prompt, and the session context are all discarded at commit time.
+
+We need a second authorship layer: one where the author is the *session*, not the committer.
+
+### A parallel audit history
+
+opentraces builds that second layer out of the same primitives:
+
+```
+main branch (refs/heads/main)
+    c:abc123  "feat: auth flow"      by alice
+    c:def456  "fix: token refresh"   by bob
+    c:ghi789  "docs: update"         by alice
+        │
+        │   correlated via refs/notes/opentraces
+        ▼
+audit history (refs/opentraces/audit/<project_id>)
+    t:s1abc   "Edit src/auth.py"     by <trace_id>@opentraces.local
+    t:s2def   "Write src/token.py"   by <trace_id>@opentraces.local
+    t:s3ghi   "Edit README.md"       by <trace_id>@opentraces.local
+```
+
+Each time a session runs an Edit or Write tool call, the capture hook:
+
+1. **Snapshot → blob.** Captures the file's post-edit bytes. Content-addressed, so identical content never stores twice.
+2. **Assemble → tree.** Combines touched files into a tree matching the project layout at that moment.
+3. **Seal → commit.** Writes a synthetic commit authored by `<trace_id>@opentraces.local` to `refs/opentraces/audit/<project_id>`. One commit per snapshot.
+4. **Correlate → notes.** When a real commit lands on `main`, the post-commit hook from `opentraces setup git` writes a note to `refs/notes/opentraces` linking the real commit to the audit commits whose bytes appear in its staged hunks.
+
+All four steps use native Git. Nothing lives in a parallel database, there is no custom file format, and no server roundtrip is required. `git log refs/opentraces/audit/<project_id>` just works, and `git notes --ref=refs/notes/opentraces show <sha>` shows the correlation directly.
+
+### Blame derives from the audit ref
+
+With the audit graph in place, per-line attribution reduces to a familiar primitive:
+
+```bash
+git blame --line-porcelain <path> <audit_ref>
+```
+
+...run against the audit ref instead of `main`. Every line comes back attributed to the session that wrote it, because the author email is `<trace_id>@opentraces.local`. `opentraces blame` wraps this with the correlation from `refs/notes/opentraces` so you can start from either side — a commit SHA or a trace ID — and land on the other.
+
+The [evidence tiers](#evidence-tiers) above aren't subjective labels either. They're hash comparisons between the audit ref's tree and the real commit's tree. If the blobs match, the evidence is `tool_emitted`; if the file set matches but the bytes don't, a formatter or human rewrote the output and the tier becomes `tool_emitted_with_divergence`; and so on.
+
+### Where this is going: semantic attribution
+
+Line-level blame is the baseline. The next question — "did this *function* come from that session, even after it moved, got rebased, or was partially rewritten?" — is a three-way tree merge:
+
+- **base** = tree before the session ran
+- **ours** = base plus just that session's Edit ranges applied
+- **theirs** = the real committed tree
+
+The merge result tells you whether the committed code still carries the session's change, partially carries it (touched by a formatter, rebased, cherry-picked, or refactored), or diverged entirely. `AttributionRange.content_hash` is the hook we're preparing for this direction.
+
 ## Common Flows
 
 ### "Why did this line change?"
@@ -132,3 +204,4 @@ clean = ds.filter(
 - [Schema — Outcome & Attribution](/docs/schema/outcome-attribution) — `GitLink`, `Attribution.revision`, `AttributionRange`
 - [Schema — Versioning](/docs/schema/versioning) — schema 0.3.0 additive changes
 - [CLI Reference — `blame`, `graph`, `backfill`](/docs/cli/commands)
+- [Carol Nichols, "Taming Git complexity with Rust and Gitoxide" (FOSDEM 2026)](https://www.youtube.com/watch?v=iSAMvE3yzfc) — the four-primitive framing this page's "How It Works" section is built on.
