@@ -37,13 +37,13 @@ The current public root commands are:
 | `export` | Export staged traces to another format |
 | `log` | List uploaded traces grouped by date |
 | `stats` | Show aggregate inbox statistics |
-| `backfill` | Backfill per-commit attribution into the local cache |
-| `watcher` | Manage the background attribution watcher service |
 | `remote` | Manage dataset remotes |
 | `config` | Show or set config values |
 | `setup` | Install integrations like hooks, TruffleHog, and llm-review |
 | `doctor` | Check security pipeline and integration health |
 | `completions` | Print or install shell completions |
+
+Two more commands are available but intentionally omitted from the default `--help` listing because they are advanced or typically driven by other surfaces: `backfill` (called by `watcher` and `init --import-existing`) and `watcher` (managed by `setup watcher`). Both are documented under [Advanced Commands](#advanced-commands) below.
 
 ## Authentication
 
@@ -51,7 +51,6 @@ The current public root commands are:
 
 ```bash
 opentraces auth whoami
-opentraces auth status
 opentraces auth login
 opentraces auth logout
 ```
@@ -59,8 +58,8 @@ opentraces auth logout
 Subcommands:
 
 - `login` starts the browser device flow by default
-- `login --token` accepts a PAT for CI or headless environments
-- `status` is an alias for `whoami`
+- `login --token` switches to the CI / headless flow and prompts for a PAT (the flag is a boolean, not a value)
+- `whoami` reports the active HuggingFace identity
 - `logout` clears the stored Hugging Face credential
 
 ### `opentraces auth login`
@@ -72,7 +71,7 @@ opentraces auth login --token
 
 | Flag | Description |
 |------|-------------|
-| `--token` | Paste a PAT instead of using the browser flow |
+| `--token` | Boolean. Switches to the headless flow and prompts for a PAT instead of opening the browser device flow |
 
 ## Project Commands
 
@@ -101,9 +100,14 @@ Initializes the current repo, writes `.opentraces.json`, registers machine-local
 
 ```bash
 opentraces remove
+opentraces remove --all
 ```
 
-Removes opentraces from the current repo.
+Uninstalls the capture hook, deletes the `.opentraces.json` marker, unregisters the repo from the global registry, and removes the machine-local `~/.opentraces/projects/<slug>/` directory. Pushed datasets on Hugging Face are left untouched.
+
+| Flag | Description |
+|------|-------------|
+| `--all` | Also delete the audit ref (`refs/opentraces/audit/*`) and the trace-to-commit notes (`refs/notes/opentraces`) from this repository |
 
 ### `opentraces status`
 
@@ -192,19 +196,32 @@ Moves a trace back to Inbox.
 ### `opentraces redact`
 
 ```bash
-opentraces redact <trace-id>
-opentraces redact <trace-id> --step 3
+opentraces redact <trace-id> <pattern>
+opentraces redact <trace-id> "ACME_INTERNAL_TOKEN"
+opentraces redact <trace-id> "sk-[A-Za-z0-9]+" --regex
+opentraces redact <trace-id> "secret" --field observations --step 3
 ```
 
-Find and replace sensitive text in a stored trace.
+Find and replace text in a stored trace. `PATTERN` is a required positional argument; without `--regex` it is treated as a literal string.
+
+| Flag | Description |
+|------|-------------|
+| `--regex` | Treat `PATTERN` as a regular expression instead of a literal string |
+| `--field TEXT` | Limit the rewrite to one field (e.g. `prompt`, `observations`, `outcome`) |
+| `--step INTEGER` | Limit the rewrite to a specific step index |
 
 ### `opentraces discard`
 
 ```bash
+opentraces discard <trace-id>
 opentraces discard <trace-id> --yes
 ```
 
 Permanently deletes the local trace.
+
+| Flag | Description |
+|------|-------------|
+| `--yes` | Skip the interactive confirmation prompt |
 
 ### `opentraces web`
 
@@ -270,7 +287,7 @@ Imports traces from a Hugging Face dataset.
 
 | Flag | Description |
 |------|-------------|
-| `--parser TEXT` | Import format parser, currently `hermes` |
+| `--parser TEXT` | **Required.** Import format parser, currently `hermes` |
 | `--subset TEXT` | Dataset subset or config |
 | `--split TEXT` | Dataset split, default `train` |
 | `--limit INTEGER` | Max rows to import, `0` for all |
@@ -282,9 +299,15 @@ Imports traces from a Hugging Face dataset.
 ```bash
 opentraces export --format agent-trace
 opentraces export --format atif
+opentraces export --format atif --output /tmp/traces.jsonl
 ```
 
-Exports staged traces to another format.
+Exports staged traces to another format. If no traces are staged the command exits 0 with a notice and does not create the output file.
+
+| Flag | Description |
+|------|-------------|
+| `--format [atif&#124;agent-trace]` | **Required.** Target format |
+| `--output PATH` | Output file path. Default `./opentraces-export.jsonl` |
 
 ## Quality And Security
 
@@ -353,11 +376,13 @@ For the LLM trace review tier, `doctor` also surfaces the active setup: backend 
 
 ```bash
 opentraces remote list
+opentraces remote list -v
 opentraces remote add owner/dataset
 opentraces remote create owner/team-traces --private
 opentraces remote visibility owner/dataset --public
 opentraces remote remove owner/dataset
-opentraces remote delete owner/dataset
+opentraces remote remove owner/dataset --delete-remote --yes
+opentraces remote delete owner/dataset --yes
 ```
 
 Subcommands:
@@ -368,6 +393,40 @@ Subcommands:
 - `remove` disconnects a remote locally
 - `delete` deletes the remote dataset and disconnects it
 - `visibility` flips a remote between private and public
+
+Positional `REPO` is optional on `remove` and `delete` when exactly one remote is connected.
+
+#### `opentraces remote list`
+
+| Flag | Description |
+|------|-------------|
+| `-v` | Show full dataset URLs instead of the short `owner/name` form |
+
+#### `opentraces remote create`
+
+| Flag | Description |
+|------|-------------|
+| `--private / --public` | Visibility of the new dataset (default `--private`) |
+| `--gated` | Enable gated access on the new dataset |
+
+#### `opentraces remote visibility`
+
+| Flag | Description |
+|------|-------------|
+| `--private / --public` | Target visibility for the remote |
+
+#### `opentraces remote remove`
+
+| Flag | Description |
+|------|-------------|
+| `--delete-remote` | Also delete the upstream Hugging Face dataset, not just the local connection |
+| `--yes` | Skip the interactive confirmation prompt |
+
+#### `opentraces remote delete`
+
+| Flag | Description |
+|------|-------------|
+| `--yes` | Skip the interactive confirmation prompt |
 
 ## Configuration And Setup
 
@@ -470,7 +529,104 @@ opentraces setup review-policy --print
 
 `--auto` auto-approves safe traces into `staged`. Push remains explicit.
 
-## Other Commands
+| Flag | Description |
+|------|-------------|
+| `--review` | Set policy to `review` (manual approval required before push) |
+| `--auto` | Set policy to `auto` (safe traces are auto-staged; push remains explicit) |
+| `--print` | Print the current policy and exit without writing |
+| `--project` | Write to the project marker. Default for this command |
+
+### `opentraces setup claude-code`
+
+```bash
+opentraces setup claude-code
+opentraces setup claude-code --dry-run
+opentraces setup claude-code --remove
+```
+
+Installs (or removes) the Claude Code capture hooks into your Claude Code settings file.
+
+| Flag | Description |
+|------|-------------|
+| `--hooks-dir TEXT` | Directory to drop hook scripts into. Default `~/.claude/hooks/` |
+| `--settings-file TEXT` | Path to the Claude Code settings file. Default `~/.claude/settings.json` |
+| `--dry-run` | Print the planned hook changes without writing |
+| `--remove` | Uninstall previously-installed hooks |
+
+### `opentraces setup entity-parser`
+
+```bash
+opentraces setup entity-parser
+opentraces setup entity-parser --force
+```
+
+Downloads and verifies the `ot-entities` binary used to expand function/class changes in `blame` and `graph`.
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Re-download even if the binary is already installed |
+
+### `opentraces setup git`
+
+```bash
+opentraces setup git
+opentraces setup git --remove
+```
+
+Installs the post-commit correlator hook that attributes commits to traces.
+
+| Flag | Description |
+|------|-------------|
+| `--remove` | Uninstall the hook |
+
+### `opentraces setup skill`
+
+```bash
+opentraces setup skill
+opentraces setup skill --harness claude-code
+opentraces setup skill --remove
+```
+
+Installs the `opentraces` skill so Claude Code (and compatible harnesses) can drive the CLI.
+
+| Flag | Description |
+|------|-------------|
+| `--harness TEXT` | Target harness, repeatable (e.g. `claude-code`). Defaults to every supported harness |
+| `--remove` | Uninstall the skill |
+
+### `opentraces setup watcher`
+
+```bash
+opentraces setup watcher
+opentraces setup watcher --interval 600
+opentraces setup watcher --no-install
+opentraces setup watcher --uninstall
+```
+
+Installs (or removes) the background attribution watcher service. The watcher polls enlisted projects and runs `backfill` when new commits or Claude Code sessions appear.
+
+| Flag | Description |
+|------|-------------|
+| `--interval INTEGER` | Poll interval in seconds. Default `300` |
+| `--no-install` | Update config only; don't install the system service |
+| `--uninstall` | Remove the installed service |
+
+### `opentraces setup upgrade`
+
+```bash
+opentraces setup upgrade
+opentraces setup upgrade --skill-only
+```
+
+Upgrades the opentraces CLI and refreshes project-side files (skill, hooks) where relevant.
+
+| Flag | Description |
+|------|-------------|
+| `--skill-only` | Refresh only the installed skill, skip the CLI upgrade step |
+
+## Advanced Commands
+
+The first commands in this section (`blame`, `graph`, `resume`, `stats`, `log`, `completions`) are part of the default `--help` listing. `backfill` and `watcher` are not: they are real commands but are intentionally hidden from the default listing because they are usually driven by `watcher` and `setup watcher` respectively.
 
 ### `opentraces blame`
 
@@ -539,15 +695,41 @@ Backfills per-commit attribution into the local cache. Walks new commits since t
 
 ```bash
 opentraces watcher start
+opentraces watcher start --interval 600 --no-install
 opentraces watcher status
+opentraces watcher status --json
 opentraces watcher tick
+opentraces watcher tick --project /path/to/repo --json
 opentraces watcher stop
+opentraces watcher restart
 opentraces watcher uninstall
 ```
 
 Manages the background attribution watcher service (installed by `opentraces setup watcher`). The watcher polls enlisted projects and runs incremental `backfill` when new commits or Claude Code sessions appear.
 
 Subcommands: `start`, `stop`, `restart`, `status`, `tick` (one diagnostic pass), `uninstall`.
+
+#### `opentraces watcher start`
+
+| Flag | Description |
+|------|-------------|
+| `--interval INTEGER` | Poll interval in seconds. Default `300` |
+| `--no-install` | Start in foreground only; don't register the system service |
+
+#### `opentraces watcher status`
+
+| Flag | Description |
+|------|-------------|
+| `--json` | Emit structured JSON instead of the human summary |
+
+#### `opentraces watcher tick`
+
+| Flag | Description |
+|------|-------------|
+| `--project DIRECTORY` | Tick only the given project. Default: every enlisted project |
+| `--json` | Emit structured JSON instead of the human summary |
+
+`stop`, `restart`, and `uninstall` take no flags beyond `--help`.
 
 ### `opentraces resume`
 
@@ -579,7 +761,7 @@ opentraces log
 opentraces log --limit 0
 ```
 
-Lists uploaded traces grouped by date. Walks the `pushed` stage only.
+Lists the recent traces that have been pushed, grouped by date. Only the `pushed` stage is walked, so in-progress Inbox or staged work is ignored.
 
 | Flag | Description |
 |------|-------------|
@@ -590,7 +772,22 @@ Lists uploaded traces grouped by date. Walks the `pushed` stage only.
 ```bash
 opentraces completions install
 opentraces completions install zsh --alias otd
+opentraces completions install zsh --alias otd --alias ot --quiet
 opentraces completions uninstall
+opentraces completions uninstall zsh --quiet
 ```
 
-Prints or installs shell completion scripts.
+Prints or installs shell completion scripts. Both `install` and `uninstall` take an optional positional shell name (`bash`, `zsh`, or `fish`); if omitted, the current shell is detected automatically.
+
+#### `opentraces completions install`
+
+| Flag | Description |
+|------|-------------|
+| `--alias NAME` | Also bind completion to `NAME`. Repeatable (e.g. `--alias otd --alias ot`) |
+| `-q, --quiet` | Suppress the confirmation output |
+
+#### `opentraces completions uninstall`
+
+| Flag | Description |
+|------|-------------|
+| `-q, --quiet` | Suppress the confirmation output |

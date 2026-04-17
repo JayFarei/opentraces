@@ -111,10 +111,10 @@ class TestPreInitCommands:
         result = runner.invoke(main, ["auth", "logout"])
         assert result.exit_code == 0
 
-    def test_auth_status_unauthenticated(self, runner, monkeypatch):
+    def test_auth_whoami_unauthenticated(self, runner, monkeypatch):
         monkeypatch.setattr("opentraces.cli._auth_identity", lambda *a: None)
         monkeypatch.setattr("opentraces.cli.load_config", lambda: type("C", (), {"hf_token": None})())
-        result = runner.invoke(main, ["auth", "status"])
+        result = runner.invoke(main, ["auth", "whoami"])
         assert result.exit_code == 3 or "Not authenticated" in result.output
 
 
@@ -166,20 +166,11 @@ class TestPostInitCommands:
         result = runner.invoke(main, ["context"])
         assert result.exit_code == 0
 
-    def test_log(self, initialized_project, monkeypatch):
+    def test_log(self, initialized_project):
         project_dir, runner = initialized_project
-        from opentraces.core.config import get_project_state_path
-        from opentraces.core.state import StateManager as _OrigSM
-
-        state_path = get_project_state_path(project_dir)
-
-        class ProjectLocalSM(_OrigSM):
-            def __init__(self, state_path=None):
-                super().__init__(state_path=get_project_state_path(project_dir))
-
-        monkeypatch.setattr("opentraces.core.state.StateManager", ProjectLocalSM)
         result = runner.invoke(main, ["log"])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
+        assert "No traces have been pushed yet." in result.output
 
     def test_config_show(self, initialized_project):
         project_dir, runner = initialized_project

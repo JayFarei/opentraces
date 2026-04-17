@@ -568,14 +568,15 @@ def log(limit: int) -> None:
     date.
     """
     from ..core.state import StateManager, TraceStatus
-    from ..core.config import project_is_opted_in
+    from ..core.config import get_project_state_path, project_is_opted_in
     from datetime import datetime
 
-    if not project_is_opted_in(Path.cwd()):
+    project_dir = Path.cwd()
+    if not project_is_opted_in(project_dir):
         click.echo("Not an opentraces project. Run 'opentraces init' first.")
         sys.exit(3)
 
-    state = StateManager()
+    state = StateManager(state_path=get_project_state_path(project_dir))
     uploaded = state.get_traces_by_status(TraceStatus.UPLOADED)
 
     if not uploaded:
