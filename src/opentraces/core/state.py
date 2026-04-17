@@ -31,6 +31,10 @@ from typing import Any
 
 STATE_SCHEMA_VERSION = "5"
 
+# Sentinel for ``upsert_session`` kwargs that should default to "leave
+# untouched" rather than "overwrite with None". Module-private.
+_UNSET: Any = object()
+
 
 class UnknownRemoteError(KeyError):
     """Raised when a public lookup names a remote the project doesn't know.
@@ -516,9 +520,23 @@ class StateManager:
         observed_size: int,
         observed_mtime: float,
         *,
-        parent_session_id: str | None = None,
-        parent_step_id: str | None = None,
+        parent_session_id: str | None = _UNSET,
+        parent_step_id: str | None = _UNSET,
     ) -> None:
+        """Create or refresh a session record.
+
+        ``parent_session_id`` / ``parent_step_id`` use a sentinel default
+        (``_UNSET``) rather than ``None`` so that callers who don't know
+        about fork lineage (the ingest tick, which re-upserts on every
+        observed growth) leave existing lineage alone. Explicit ``None``
+        still clears — kept as an escape hatch, though no current caller
+        needs it.
+
+        Without the sentinel the first re-ingest of a forked session
+        would silently wipe ``parent_session_id`` / ``parent_step_id``,
+        breaking the resume-at-step provenance recorded during the
+        materialize step.
+        """
         sessions = self._state.setdefault("sessions", {})
         existing = sessions.get(session_id)
         if existing is None:
@@ -529,16 +547,22 @@ class StateManager:
                 "observed_mtime": observed_mtime,
                 "session_end_seen": False,
                 "post_commit_triggered": False,
-                "parent_session_id": parent_session_id,
-                "parent_step_id": parent_step_id,
+                "parent_session_id": (
+                    None if parent_session_id is _UNSET else parent_session_id
+                ),
+                "parent_step_id": (
+                    None if parent_step_id is _UNSET else parent_step_id
+                ),
                 "generations": [],
             }
         else:
             existing["source_path"] = source_path
             existing["observed_size"] = observed_size
             existing["observed_mtime"] = observed_mtime
-            existing["parent_session_id"] = parent_session_id
-            existing["parent_step_id"] = parent_step_id
+            if parent_session_id is not _UNSET:
+                existing["parent_session_id"] = parent_session_id
+            if parent_step_id is not _UNSET:
+                existing["parent_step_id"] = parent_step_id
         self.save()
 
     def get_step_labels(self, trace_id: str) -> dict[str, str]:

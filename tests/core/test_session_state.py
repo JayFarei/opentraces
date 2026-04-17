@@ -153,6 +153,119 @@ class TestSessionUpsert:
         assert rec.parent_session_id == "sess-1"
         assert rec.parent_step_id == "s4"
 
+    def test_upsert_session_preserves_fork_lineage_on_subsequent_update(
+        self, state_path
+    ) -> None:
+        """Regression: earlier versions overwrote parent_session_id /
+        parent_step_id with ``None`` on every re-upsert, silently wiping
+        the fork metadata recorded by resume-at-step as soon as the
+        normal ingest tick observed the forked JSONL had grown.
+        """
+        state = StateManager(state_path=state_path)
+
+        # resume-at-step records the fork.
+        state.upsert_session(
+            session_id="forked",
+            source_path="/abs/forked.jsonl",
+            observed_size=100,
+            observed_mtime=1.0,
+            parent_session_id="parent",
+            parent_step_id="s4",
+        )
+
+        # Ingest re-observes the forked session growing — passes no
+        # parent kwargs because it has no concept of fork lineage.
+        state.upsert_session(
+            session_id="forked",
+            source_path="/abs/forked.jsonl",
+            observed_size=500,
+            observed_mtime=2.0,
+        )
+
+        rec = state.get_session("forked")
+        assert rec is not None
+        assert rec.observed_size == 500  # fields the ingest tick cares about
+        assert rec.observed_mtime == 2.0
+        # Lineage survives untouched.
+        assert rec.parent_session_id == "parent"
+        assert rec.parent_step_id == "s4"
+
+    def test_upsert_session_lineage_persists_across_reload(
+        self, state_path
+    ) -> None:
+        """Sentinel-preserved lineage still round-trips through disk."""
+        state = StateManager(state_path=state_path)
+        state.upsert_session(
+            session_id="forked",
+            source_path="/abs/forked.jsonl",
+            observed_size=100,
+            observed_mtime=1.0,
+            parent_session_id="parent",
+            parent_step_id="s4",
+        )
+        state.upsert_session(
+            session_id="forked",
+            source_path="/abs/forked.jsonl",
+            observed_size=500,
+            observed_mtime=2.0,
+        )
+
+        reloaded = StateManager(state_path=state_path)
+        rec = reloaded.get_session("forked")
+        assert rec is not None
+        assert rec.parent_session_id == "parent"
+        assert rec.parent_step_id == "s4"
+
+    def test_upsert_session_explicit_none_still_clears_lineage(
+        self, state_path
+    ) -> None:
+        """Explicit ``None`` remains an escape hatch — the sentinel only
+        changes the default, not the ability to clear."""
+        state = StateManager(state_path=state_path)
+        state.upsert_session(
+            session_id="forked",
+            source_path="/abs/forked.jsonl",
+            observed_size=100,
+            observed_mtime=1.0,
+            parent_session_id="parent",
+            parent_step_id="s4",
+        )
+        state.upsert_session(
+            session_id="forked",
+            source_path="/abs/forked.jsonl",
+            observed_size=200,
+            observed_mtime=2.0,
+            parent_session_id=None,
+            parent_step_id=None,
+        )
+        rec = state.get_session("forked")
+        assert rec is not None
+        assert rec.parent_session_id is None
+        assert rec.parent_step_id is None
+
+    def test_upsert_session_partial_lineage_update(self, state_path) -> None:
+        """Callers can update one lineage field without touching the other."""
+        state = StateManager(state_path=state_path)
+        state.upsert_session(
+            session_id="forked",
+            source_path="/abs/forked.jsonl",
+            observed_size=100,
+            observed_mtime=1.0,
+            parent_session_id="parent",
+            parent_step_id="s4",
+        )
+        # Only parent_step_id is passed; parent_session_id must be left alone.
+        state.upsert_session(
+            session_id="forked",
+            source_path="/abs/forked.jsonl",
+            observed_size=200,
+            observed_mtime=2.0,
+            parent_step_id="s7",
+        )
+        rec = state.get_session("forked")
+        assert rec.parent_session_id == "parent"
+        assert rec.parent_step_id == "s7"
+
     def test_set_session_end_seen_flag(self, state_path) -> None:
         state = StateManager(state_path=state_path)
         state.upsert_session(

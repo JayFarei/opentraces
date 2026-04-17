@@ -298,3 +298,50 @@ def test_resume_at_step_falls_back_to_anchor_session_path(
     assert result.exit_code == 0, result.output
     assert f"claude --resume {fallback_uuid}" in result.output
     assert "would truncate 2 lines" in result.output
+
+
+def test_resume_at_step_fork_lineage_survives_ingest_tick(
+    runner, resume_project, monkeypatch
+):
+    """End-to-end: materialize a fork, then simulate the normal ingest
+    tick re-observing the forked session grow. The parent_session_id /
+    parent_step_id recorded at fork time must NOT be wiped by the ingest
+    upsert (which doesn't know about fork lineage and passes no parent
+    kwargs).
+    """
+    from opentraces.cli import main
+    from opentraces.core.config import get_project_state_path
+    from opentraces.core.state import StateManager
+
+    fake_home = resume_project / "fake-home"
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    fork_uuid = uuid.UUID("77777777-8888-9999-aaaa-bbbbbbbbbbbb")
+    with patch("shutil.which", return_value="/usr/local/bin/claude"), \
+         patch("uuid.uuid4", return_value=fork_uuid), \
+         patch("os.execvp"), \
+         patch("os.chdir"):
+        result = runner.invoke(main, ["resume", "t:b7", "--at-step", "s2"])
+    assert result.exit_code == 1  # execvp mocked, agent_resume returns 1
+
+    state = StateManager(get_project_state_path(resume_project))
+    forked = state.get_session(str(fork_uuid))
+    assert forked is not None
+    assert forked.parent_session_id == "ff00aa11-sess-id-5678"
+    assert forked.parent_step_id == "s2"
+
+    # Simulate the ingest watcher tick observing the forked JSONL grow.
+    # It has no idea this session is a fork and passes no parent kwargs.
+    state.upsert_session(
+        session_id=str(fork_uuid),
+        source_path=forked.source_path,
+        observed_size=forked.observed_size + 1234,
+        observed_mtime=forked.observed_mtime + 10,
+    )
+
+    reloaded = StateManager(get_project_state_path(resume_project))
+    after = reloaded.get_session(str(fork_uuid))
+    assert after is not None
+    assert after.observed_size == forked.observed_size + 1234
+    assert after.parent_session_id == "ff00aa11-sess-id-5678"
+    assert after.parent_step_id == "s2"
