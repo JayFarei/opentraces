@@ -68,10 +68,8 @@ def _fake_script_next_to_python(monkeypatch, tmp_path: Path) -> Path:
 
 
 def test_api_push_returns_400_when_nothing_committed(tmp_path):
-    # Seed only sample JSONL — no committed state. ``_is_sample_data``
-    # returns False because the JSONL file on disk matches the parsed
-    # trace list, but the state has no committed traces and no staged
-    # fallback, so we expect the 400 path.
+    # Seed only a PARSED JSONL — no committed state. State has no
+    # committed traces and no staged fallback, so we expect the 400 path.
     trace = {
         "schema_version": "0.3.0",
         "trace_id": TRACE_ID,
