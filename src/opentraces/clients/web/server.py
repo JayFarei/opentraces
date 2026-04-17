@@ -922,19 +922,26 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         })
 
     def _run_cli_push(
-        committed: list[dict[str, Any]],
         *,
         project_dir: Path,
+        llm_review: bool,
     ) -> Any:
-        """Run the CLI push pipeline (llm-review → push --llm-review) in subprocesses.
+        """Run the CLI push pipeline in subprocesses and report what transitioned.
 
-        Mirrors the TUI ``PushRunnerModal``. Captures combined stdout/stderr
-        and returns a JSON response with the log, so the web UI can show the
-        user what happened.
+        Mirrors the TUI ``PushRunnerModal``. When ``llm_review`` is True we
+        run ``opentraces llm-review --scope staged`` first and gate the push
+        with ``--llm-review``; otherwise we go straight to ``opentraces push -y``.
+        Trace counts come from a real COMMITTED-before/after diff, never from
+        optimistic local marking.
         """
         script = Path(sys.executable).parent / "opentraces"
         if not script.exists():
             return jsonify({
+                "status": "failed",
+                "stage": "push",
+                "count": 0,
+                "trace_ids": [],
+                "log": "",
                 "error": f"could not find 'opentraces' next to {sys.executable}",
             }), 500
 
@@ -959,39 +966,47 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             log_lines.append(f"[exit {proc.returncode}]")
             return proc.returncode
 
-        rc_review = run_step(
-            [str(script), "llm-review", "--scope", "staged"],
-            "→ opentraces llm-review --scope staged",
-        )
-        if rc_review != 0:
-            log_lines.append("")
-            log_lines.append("[aborting push — llm-review did not succeed]")
-            return jsonify({
-                "status": "failed",
-                "stage": "llm-review",
-                "count": 0,
-                "log": "\n".join(log_lines),
-                "error": "LLM review did not succeed",
-            }), 200
+        if llm_review:
+            rc_review = run_step(
+                [str(script), "llm-review", "--scope", "staged"],
+                "→ opentraces llm-review --scope staged",
+            )
+            if rc_review != 0:
+                log_lines.append("")
+                log_lines.append("[aborting push — llm-review did not succeed]")
+                return jsonify({
+                    "status": "failed",
+                    "stage": "llm-review",
+                    "count": 0,
+                    "log": "\n".join(log_lines),
+                    "error": "LLM review did not succeed",
+                }), 200
 
         # Snapshot the COMMITTED set from a FRESH state read (not the
         # web process's cached view, which can lag after a prior push).
         # We'll compare against a second fresh read after the subprocess
         # to see exactly which traces transitioned out of COMMITTED.
-        state_path = get_project_state_path(project_dir)
+        # Prefer the closure's _state_path — it already reflects the
+        # ``state_path`` override used by tests and keeps the subprocess
+        # and the web process reading the same file when the project is
+        # opted in under a custom layout.
+        diff_state_path = _state_path or get_project_state_path(project_dir)
         pre_committed = {
             e.trace_id for e in
-            StateManager(state_path=state_path).get_traces_by_status(TraceStatus.COMMITTED)
+            StateManager(state_path=diff_state_path).get_traces_by_status(TraceStatus.COMMITTED)
         }
 
-        rc_push = run_step(
-            [str(script), "push", "--llm-review", "-y"],
-            "→ opentraces push --llm-review -y",
-        )
+        if llm_review:
+            push_cmd = [str(script), "push", "--llm-review", "-y"]
+            push_header = "→ opentraces push --llm-review -y"
+        else:
+            push_cmd = [str(script), "push", "-y"]
+            push_header = "→ opentraces push -y"
+        rc_push = run_step(push_cmd, push_header)
 
         post_committed = {
             e.trace_id for e in
-            StateManager(state_path=state_path).get_traces_by_status(TraceStatus.COMMITTED)
+            StateManager(state_path=diff_state_path).get_traces_by_status(TraceStatus.COMMITTED)
         }
         actually_pushed = sorted(pre_committed - post_committed)
 
@@ -1063,61 +1078,12 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         if not committed:
             return jsonify({"error": "No staged sessions to push"}), 400
 
-        if llm_review:
-            return _run_cli_push(committed, project_dir=project_dir)
-
-        # Try the real upload pipeline
-        try:
-            from ..publish.huggingface.upload import HFUploader
-            from opentraces_schema import TraceRecord
-
-            cfg = load_config()
-            if not cfg.hf_token:
-                for t in committed:
-                    state.set_trace_status(t["trace_id"], TraceStatus.UPLOADED)
-                return jsonify({
-                    "status": "pushed",
-                    "count": len(committed),
-                    "trace_ids": [t["trace_id"] for t in committed],
-                    "message": f"{len(committed)} committed session(s) queued. Set HF_TOKEN to push to Hub.",
-                    "needs_token": True,
-                })
-
-            records = [TraceRecord.model_validate(t) for t in committed]
-            ctx = _context()
-            username = ctx.get("username") or "unknown"
-            repo_id = ctx.get("remote") or f"{username}/opentraces"
-
-            uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
-            uploader.ensure_repo_exists()
-            result = uploader.upload_traces(records)
-
-            if result.success:
-                for t in committed:
-                    state.set_trace_status(t["trace_id"], TraceStatus.UPLOADED)
-                _invalidate_cache()
-                return jsonify({
-                    "status": "pushed",
-                    "count": result.trace_count,
-                    "shard": result.shard_name,
-                    "repo_url": result.repo_url,
-                    "message": f"Pushed {result.trace_count} committed session(s) to {repo_id}",
-                })
-            else:
-                return jsonify({"error": f"Upload failed: {result.error}"}), 500
-
-        except ImportError:
-            logger.debug("Upload module not available, queuing sessions", exc_info=True)
-            for t in committed:
-                state.set_trace_status(t["trace_id"], TraceStatus.UPLOADED)
-            return jsonify({
-                "status": "pushed",
-                "count": len(committed),
-                "trace_ids": [t["trace_id"] for t in committed],
-                "message": f"{len(committed)} committed session(s) queued (upload module not available)",
-            })
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        # Delegate to the CLI subprocess in all cases — mirrors the TUI's
+        # PushRunnerModal and the LLM-review path here. The subprocess owns
+        # the HF upload, token resolution, and COMMITTED → UPLOADED
+        # transitions, so there's no in-process fail-open branch that can
+        # mark traces uploaded without actually publishing them.
+        return _run_cli_push(project_dir=project_dir, llm_review=llm_review)
 
     @app.route("/api/graph")
     def api_graph():
