@@ -297,26 +297,26 @@ Generate changelog from git log since previous CLI tag:
 git log --oneline $(git tag -l 'v[0-9]*' --sort=-v:refname | head -2 | tail -1)..HEAD
 ```
 
-Write user-facing bullet points (not raw commit messages). Then:
+Write user-facing bullet points (not raw commit messages). Then (note the outer fence is four backticks so the inner triple-backticks are literal — do NOT escape them):
 
-```bash
+````bash
 gh release create vCLI_VERSION \
   --title "opentraces vCLI_VERSION" \
   --notes "$(cat <<'EOF'
 ## Install
 
-\`\`\`bash
+```bash
 pipx install opentraces==CLI_VERSION
 # or
 brew install JayFarei/opentraces/opentraces
-\`\`\`
+```
 
 ## Changes
 
 - [generated changelog bullets]
 EOF
 )"
-```
+````
 
 This triggers `publish.yml` (PyPI) and `update-homebrew.yml` (tap formula) automatically.
 

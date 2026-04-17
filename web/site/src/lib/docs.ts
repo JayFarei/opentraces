@@ -43,7 +43,10 @@ async function fetchReleasesContent(): Promise<string> {
       month: "long",
       day: "numeric",
     });
-    const body = (r.body || "No release notes.").trim();
+    // Some historical release bodies carry backslash-escaped backticks
+    // (\`) because the skill template over-escaped fenced code blocks.
+    // Unescape them here so react-markdown sees real fences.
+    const body = (r.body || "No release notes.").trim().replace(/\\`/g, "`");
     return `## ${r.tag_name} — ${date}\n\n${body}`;
   });
 

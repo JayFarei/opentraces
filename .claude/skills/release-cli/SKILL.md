@@ -153,22 +153,24 @@ git push origin main --tags
 
 ### 8. Create GitHub Release
 
-```bash
+Note: the outer markdown fence is four backticks so the inner triple-backtick fences are literal. Do NOT backslash-escape the inner backticks when running this command — in a single-quoted heredoc they pass through as literal `\` characters and break the rendered release notes on the site.
+
+````bash
 gh release create vX.Y.Z --title "opentraces vX.Y.Z" --notes "$(cat <<'EOF'
 ## Install
 
-\`\`\`bash
+```bash
 pipx install opentraces==X.Y.Z
 # or
 brew install JayFarei/opentraces/opentraces
-\`\`\`
+```
 
 ## Changes since vPREVIOUS
 
 - [summarize key changes from git log since last tag]
 EOF
 )"
-```
+````
 
 Generate the changelog from `git log --oneline vPREVIOUS..HEAD` (where vPREVIOUS is the previous tag). Write concise, user-facing bullet points, not raw commit messages.
 
