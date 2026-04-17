@@ -867,7 +867,7 @@ def _resolve_username_prefix(name: str, username: str) -> str:
 
 
 async def _choose_remote_interactively_async(default_repo: str) -> tuple[str | None, str | None]:
-    """Select an existing dataset remote or create a new one.
+    """Select, link, or create a dataset remote.
 
     Returns (repo_id, visibility) where visibility is "private" or "public".
     Returns (None, None) if the user skips.
@@ -883,21 +883,28 @@ async def _choose_remote_interactively_async(default_repo: str) -> tuple[str | N
         from ..publish.huggingface.upload import HFUploader
 
         uploader = HFUploader(token=cfg.hf_token, repo_id="placeholder")
-        existing = uploader.list_opentraces_datasets(username)
+        user_datasets = uploader.list_user_datasets(username)
     except Exception:
-        existing = []
+        user_datasets = []
+
+    tagged = [d for d in user_datasets if d.get("tagged")]
+    untagged = [d for d in user_datasets if not d.get("tagged")]
+
+    default_name = default_repo.split("/")[-1] if "/" in default_repo else default_repo
 
     if _is_interactive_terminal():
         try:
-            from pyclack.prompts import select, text
+            from pyclack.prompts import confirm, select, text
             from pyclack.core import Option
 
-            # Step 1: show existing repos + create new + skip
-            options = []
-            for ds in existing:
+            options: list = []
+            for ds in tagged:
                 vis = "public \u26A0" if not ds.get("private", True) else "private"
-                options.append(Option(value=ds["id"], label=f"{ds['id']} ({vis})"))
-            options.append(Option(value="__new__", label=f"Create new dataset"))
+                options.append(Option(value=ds["id"], label=f"{ds['id']} ({vis})", hint="opentraces"))
+            for ds in untagged:
+                vis = "public \u26A0" if not ds.get("private", True) else "private"
+                options.append(Option(value=ds["id"], label=f"{ds['id']} ({vis})", hint="other"))
+            options.append(Option(value="__link__", label="Enter repo name..."))
             options.append(Option(value="__later__", label="Skip for now"))
 
             choice = await select("Choose a dataset remote", options)
@@ -905,8 +912,35 @@ async def _choose_remote_interactively_async(default_repo: str) -> tuple[str | N
             if choice == "__later__":
                 return None, None
 
-            if choice == "__new__":
-                # Step 2a: visibility (only for new repos)
+            if choice == "__link__":
+                typed = await text(
+                    f"Repo name (e.g. {username}/{default_name} or owner/name)",
+                    placeholder=f"{username}/{default_name}",
+                    default_value=f"{username}/{default_name}",
+                )
+                repo_id = _resolve_username_prefix((typed or "").strip(), username)
+
+                # Probe HF: exists → attach; missing → offer to create.
+                try:
+                    probed = _remote_probe(repo_id, cfg.hf_token)
+                except Exception:
+                    probed = None
+
+                if probed is not None:
+                    canonical = probed.get("id") or repo_id
+                    vis = "private" if probed.get("private") else "public"
+                    click.echo(f"  Connecting to existing {canonical} ({vis}).")
+                    return canonical, vis
+
+                should_create = await confirm(
+                    f"{repo_id} doesn't exist yet. Create it?",
+                    initial_value=True,
+                    active="Create",
+                    inactive="Cancel",
+                )
+                if not should_create:
+                    return None, None
+
                 visibility = await select(
                     "Visibility",
                     [
@@ -916,36 +950,21 @@ async def _choose_remote_interactively_async(default_repo: str) -> tuple[str | N
                     initial_value="private",
                 )
 
-                # Step 2b: name (just the repo part, username is auto-prefixed)
-                default_name = default_repo.split("/")[-1] if "/" in default_repo else default_repo
-                repo_name = await text(
-                    f"Dataset name ({username}/...)",
-                    placeholder=default_name,
-                    default_value=default_name,
-                )
-                repo_id = _resolve_username_prefix(repo_name, username)
-
-                # Actually create the dataset on HuggingFace *now* so the
-                # user sees namespace-permission errors up front rather
-                # than during their first push.
                 try:
                     created = _remote_create(repo_id, visibility == "private", cfg.hf_token)
                     if created:
                         click.echo(f"  Created {repo_id} on HuggingFace.")
                     else:
-                        click.echo(f"  {repo_id} already exists — connecting to it.")
+                        click.echo(f"  {repo_id} already exists, connecting to it.")
                 except Exception as e:
                     code, kind, message, hint = _classify_hf_repo_error(e, repo_id)
                     click.echo(f"  {message}")
                     if hint:
                         click.echo(f"    hint: {hint}")
-                    # Don't abort init — let the user finish setup with
-                    # the repo_id saved locally. Push will re-surface the
-                    # same error with the same guidance if unresolved.
                 return repo_id, visibility
 
-            # Existing repo selected: inherit visibility
-            selected_ds = next((ds for ds in existing if ds["id"] == choice), None)
+            # Existing repo selected (tagged or untagged): inherit visibility
+            selected_ds = next((ds for ds in user_datasets if ds["id"] == choice), None)
             vis = "public" if selected_ds and not selected_ds.get("private", True) else "private"
             return choice, vis
 
@@ -953,26 +972,48 @@ async def _choose_remote_interactively_async(default_repo: str) -> tuple[str | N
             pass
 
     # Fallback: plain click prompts
-    if existing:
-        click.echo("Existing opentraces datasets:")
-        for i, ds in enumerate(existing, start=1):
+    if user_datasets:
+        click.echo("Your HuggingFace datasets:")
+        for i, ds in enumerate(user_datasets, start=1):
             vis = "public \u26A0" if not ds.get("private", True) else "private"
-            click.echo(f"  {i}. {ds['id']} ({vis})")
-        click.echo(f"  {len(existing) + 1}. Create new")
-        click.echo(f"  {len(existing) + 2}. Skip for now")
-        choice_num = click.prompt("Choose", type=int, default=len(existing) + 1)
-        if choice_num <= len(existing):
-            selected_ds = existing[choice_num - 1]
+            badge = " [opentraces]" if ds.get("tagged") else ""
+            click.echo(f"  {i}. {ds['id']} ({vis}){badge}")
+        click.echo(f"  {len(user_datasets) + 1}. Enter repo name")
+        click.echo(f"  {len(user_datasets) + 2}. Skip for now")
+        choice_num = click.prompt("Choose", type=int, default=len(user_datasets) + 1)
+        if choice_num <= len(user_datasets):
+            selected_ds = user_datasets[choice_num - 1]
             vis = "public" if not selected_ds.get("private", True) else "private"
             return selected_ds["id"], vis
-        if choice_num == len(existing) + 2:
+        if choice_num == len(user_datasets) + 2:
             return None, None
 
-    # New repo flow
+    # Manual-entry (or no datasets at all): probe HF, attach or create.
+    typed = click.prompt(
+        f"Repo name (e.g. {username}/{default_name} or owner/name)",
+        default=f"{username}/{default_name}",
+    )
+    repo_id = _resolve_username_prefix((typed or "").strip(), username)
+    try:
+        probed = _remote_probe(repo_id, cfg.hf_token)
+    except Exception:
+        probed = None
+    if probed is not None:
+        canonical = probed.get("id") or repo_id
+        vis = "private" if probed.get("private") else "public"
+        click.echo(f"  Connecting to existing {canonical} ({vis}).")
+        return canonical, vis
+    if not click.confirm(f"{repo_id} doesn't exist yet. Create it?", default=True):
+        return None, None
     visibility = click.prompt("Visibility", type=click.Choice(["private", "public"]), default="private")
-    default_name = default_repo.split("/")[-1] if "/" in default_repo else default_repo
-    repo_name = click.prompt(f"Dataset name ({username}/...)", default=default_name)
-    repo_id = _resolve_username_prefix(repo_name, username)
+    try:
+        _remote_create(repo_id, visibility == "private", cfg.hf_token)
+        click.echo(f"  Created {repo_id} on HuggingFace.")
+    except Exception as e:
+        code, kind, message, hint = _classify_hf_repo_error(e, repo_id)
+        click.echo(f"  {message}")
+        if hint:
+            click.echo(f"    hint: {hint}")
     return repo_id, visibility
 
 
@@ -2946,7 +2987,9 @@ def _remote_probe(repo_id: str, token: str | None) -> dict | None:
     """Return dataset metadata dict if the repo exists on HF, None if not.
 
     Raises on transport errors so callers can distinguish "missing" from
-    "network broken".
+    "network broken". Includes the canonical ``id`` from HF so callers can
+    normalise casing (HF matching is case-insensitive but we want the
+    locally-persisted repo_id to match the upstream canonical form).
     """
     from huggingface_hub import HfApi
     try:
@@ -2959,7 +3002,10 @@ def _remote_probe(repo_id: str, token: str | None) -> dict | None:
         info = api.dataset_info(repo_id)
     except RepositoryNotFoundError:
         return None
-    return {"private": bool(getattr(info, "private", False))}
+    return {
+        "id": getattr(info, "id", repo_id),
+        "private": bool(getattr(info, "private", False)),
+    }
 
 
 def _remote_create(repo_id: str, private: bool, token: str | None) -> bool:

@@ -229,33 +229,37 @@ class HFUploader:
             gated=gated,
         )
 
-    def list_opentraces_datasets(self, username: str | None = None) -> list[dict]:
-        """List HuggingFace datasets tagged with 'opentraces'.
+    def list_user_datasets(self, username: str | None = None) -> list[dict]:
+        """List a user's HuggingFace datasets, flagging opentraces-tagged ones.
 
         If username is provided, only returns datasets owned by that user.
-        Returns a list of dicts with keys: id, tags, private, last_modified.
+        Returns a list of dicts with keys: id, tags, private, last_modified, tagged.
+        ``tagged`` is True when the dataset carries the 'opentraces' tag, so
+        callers can group or prioritise known opentraces inboxes.
+
+        Previously this method passed ``search="opentraces"`` to HF, which is a
+        name/description filter, not a tag filter; tagged datasets whose names
+        did not contain the string "opentraces" were silently dropped.
         """
         try:
             datasets = self.api.list_datasets(
-                search="opentraces",
                 author=username,
-                limit=50,
+                limit=100,
             )
 
             results = []
             for ds in datasets:
                 tags = list(ds.tags) if ds.tags else []
-                if "opentraces" not in tags:
-                    continue
                 results.append({
                     "id": ds.id,
                     "tags": tags,
                     "private": ds.private,
                     "last_modified": str(ds.last_modified) if ds.last_modified else None,
+                    "tagged": "opentraces" in tags,
                 })
             return results
         except Exception as e:
-            logger.warning("Failed to list opentraces datasets: %s", e)
+            logger.warning("Failed to list datasets for %s: %s", username, e)
             return []
 
     def get_existing_shards(self) -> list[str]:

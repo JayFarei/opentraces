@@ -16,9 +16,10 @@ from opentraces.core.config import Config
 
 
 class _FakeOption:
-    def __init__(self, value: str, label: str):
+    def __init__(self, value: str, label: str, hint: str | None = None):
         self.value = value
         self.label = label
+        self.hint = hint
 
 
 def test_current_project_session_dir_found(tmp_path, monkeypatch):
@@ -63,8 +64,12 @@ def test_choose_remote_interactively_async_inside_event_loop(monkeypatch):
     async def fake_text(_prompt, **kwargs):
         return "alice/opentraces"
 
+    async def fake_confirm(_prompt, **kwargs):
+        return True
+
     prompts_module.select = fake_select
     prompts_module.text = fake_text
+    prompts_module.confirm = fake_confirm
     core_module.Option = _FakeOption
 
     monkeypatch.setitem(sys.modules, "pyclack.prompts", prompts_module)
@@ -78,9 +83,9 @@ def test_choose_remote_interactively_async_inside_event_loop(monkeypatch):
             self.token = token
             self.repo_id = repo_id
 
-        def list_opentraces_datasets(self, username: str):
+        def list_user_datasets(self, username: str):
             assert username == "alice"
-            return [{"id": "alice/existing-traces", "private": True}]
+            return [{"id": "alice/existing-traces", "private": True, "tagged": True}]
 
     monkeypatch.setattr("opentraces.publish.huggingface.upload.HFUploader", FakeUploader)
 
