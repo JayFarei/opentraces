@@ -8,32 +8,38 @@ From local capture to a published Hugging Face shard.
 pipx install opentraces
 ```
 
-## 2. Authenticate
+## 2. Set Up
 
 ```bash
-opentraces auth login
+opentraces setup
 ```
 
-Use `opentraces auth login --token` or `HF_TOKEN` if you are running headless.
+`setup` is the machine-wide wizard. It walks each integration with one prompt, defaults in brackets:
+
+- **claude-code, git, skill** capture hooks [yes] — Stop/PostCompact hooks, post-commit correlator, and the Claude Code skill.
+- **watcher** [yes] — background incremental backfill after each commit, powers `opentraces blame`.
+- **entity-parser (sem)** [yes] — entity-level diffs for richer commit attribution.
+- **HuggingFace login** [yes] — device-code flow, needed before you can push. You can defer and run `opentraces auth login` later.
+- **trufflehog** (Tier 1.5) [no] — global secret-scanner toggle; findings redact in place and force review.
+- **llm-review** (Tier 2) [no] — global toggle for third-party LLM review; configure provider via `opentraces setup llm-review`.
+
+Per-project review policy and remote are not set here, they live in `opentraces init`.
 
 ## 3. Initialize the Project
 
 ```bash
-opentraces init --review-policy review
+opentraces init
 ```
 
-`init` wires the current repo into opentraces:
+`init` wires the current repo into opentraces and prompts you for:
 
-- writes the committable marker at `.opentraces.json`
-- registers machine-local storage under `~/.opentraces/projects/<slug>/`
-- installs the capture hook unless you pass `--no-hook`
-- optionally connects a Hugging Face remote
+- **Agents** to connect (e.g. `claude-code`).
+- **Review policy** — `review` every trace in the inbox, or `auto` (capture, sanitize, stage, push without review).
+- **HuggingFace login**, if you skipped it during setup.
+- **Remote dataset** — pick an existing `owner/repo` from your HuggingFace datasets, **create a new one** (init actually calls `create_repo` on the spot so you catch namespace errors now, not at first push), or skip for later. When creating, you also choose **visibility** (private by default).
+- **Import existing traces** — if this repo already has Claude Code sessions, `init` asks whether to import them now or start fresh.
 
-If this repo already has Claude Code traces, you can backfill them immediately:
-
-```bash
-opentraces init --import-existing
-```
+It also writes the committable marker at `.opentraces.json`, registers machine-local storage under `~/.opentraces/projects/<slug>/`, and installs the per-repo capture hook unless you pass `--no-hook`.
 
 ## 4. Inspect the Inbox
 
@@ -45,9 +51,9 @@ opentraces web
 
 The browser inbox shows each trace with timeline, review, and push flows. It is the richest surface for manual review and redaction.
 
-![Web inbox - timeline view](/docs/assets/web-timeline.png)
-
 ![Web inbox - review view](/docs/assets/web-review.png)
+
+![Web inbox - graph view](/docs/assets/web-graph.png)
 
 ### Terminal inbox
 

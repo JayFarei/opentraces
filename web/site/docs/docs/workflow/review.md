@@ -9,11 +9,38 @@ opentraces web
 opentraces web --port 6060 --no-open
 ```
 
-This starts the local Flask server for the current project's inbox. Use it when you want the richest review surface, detailed trace inspection, or the built-in push flow.
+`web` starts the local Flask server for the current project's inbox and opens the React viewer at `http://127.0.0.1:6000` (override with `--port`, pass `--no-open` to skip the browser launch). It is the richest review surface, with side-by-side trace inspection and a built-in push flow.
 
-![Web inbox - timeline view](/docs/assets/web-timeline.png)
+### Review tab
 
 ![Web inbox - review view](/docs/assets/web-review.png)
+
+The **review** tab shows the Inbox / Staged / Pushed columns on the left and the selected trace on the right. Switch between the `conversation` and `blame` tabs at the top of the preview to flip between the flattened chat stream and the commit-blame view for that trace.
+
+- `j` / `k` — move the inbox selection up / down
+- `space` — add the selected inbox trace to Staged, or remove it from Staged
+- `r` — refresh the inbox from the session files on disk
+- `?` — toggle the review help overlay (also shows the row-legend)
+- `q` — quit the local server (browser tab closes automatically)
+
+Per-row actions are visible on hover:
+
+- `+` — stage an inbox trace
+- `✕` — reject an inbox trace (kept local only)
+- `−` — unstage a staged trace back to the inbox
+- `i` — open the security-pipeline modal for that trace
+
+The **Push** button at the top of the Staged column opens the push modal. You can push directly, or run an optional Tier-2 LLM review first (requires `opentraces setup llm-review`). The header also exposes a global `i` (project-wide security info) and `?` (help).
+
+### Graph tab
+
+![Web inbox - graph view](/docs/assets/web-graph.png)
+
+The **graph** tab is the blame surface. It lists recent commits on the left; selecting one shows every trace that contributed lines to that commit, plus a per-file breakdown with attributed line counts. This is how you answer "which trace produced this code?" at commit-granularity.
+
+- `j` / `k` — move the commit selection
+- `enter` — jump to the blamed trace in the review tab
+- `q` — quit
 
 ## Terminal Inbox
 
@@ -23,36 +50,41 @@ opentraces tui --fullscreen
 opentraces tui --limit 0
 ```
 
-The TUI is the shell-native inbox. It loads the same trace set and exposes trace detail, security status, staging, rejection, discard, and push.
+The TUI is the shell-native inbox. It loads the same trace set and the same stage model (Inbox / Staged / Pushed) as the web viewer, and exposes trace detail, security status, staging, rejection, discard, and push without leaving the terminal.
 
 ![Terminal inbox](/docs/assets/tui.png)
 
-Current key bindings include:
+The layout is two columns — Info / Inbox / Staged / Pushed on the left, the selected trace's preview on the right. Numeric keys focus a pane directly.
 
-- `j` / `k` to move
-- `space` to select or stage
-- `p` to push
-- `d` to discard
-- `r` to refresh
-- `a` to toggle view
-- `u` to undo
-- `i` for security info
-- `?` for help
-- `q` to quit
+### Navigation
 
-### When you see `↑N`
+- `1` / `2` / `3` / `4` — focus Info / Inbox / Staged / Pushed
+- `5` — focus the trace preview
+- `tab` — cycle focus across the panes
+- `j` / `k` (or `↑` / `↓`) — move selection
+- `enter` — inspect the selected trace (focus the preview)
+- `g` / `G` — jump to top / bottom of the preview
+- `[` / `]` — page the preview up / down from any pane
+- `a` — toggle conversation view vs. full view
 
-In the TUI, `↑2`, `↑3`, and so on mean the current row is a newer trace
-from the same session replacing an older one.
+### Actions
 
-- Press `r` to refresh the inbox from the session files on disk.
-- If the session is still just growing in the inbox or staged flow, refresh updates the same trace in place.
-- If that session had already produced an older finalized trace and then kept going, refresh creates a newer trace generation for the same session instead.
-- Review and push the latest generation, not the older one.
+- `space` — add inbox→staged, or remove staged→inbox
+- `p` — open the push modal (LLM review or push now)
+- `r` — refresh (re-capture and reload)
+- `d` — discard the selected trace (deferred; actually deleted on quit)
+- `u` — undo the last reject / discard / stage move
+- `i` — open the security-pipeline modal for the selected trace
+- `?` — toggle the full help overlay
+- `q` — quit (flushes pending discards)
 
-This does **not** mean "there is a trace above this row in the list". It
-means "this session kept going after an older trace from it had already been
-captured".
+### Trace row legend
+
+- `·` — normal trace
+- `◐` (dim cyan) — recently touched in roughly the last 2 hours
+- `●` (yellow) — security findings still need review
+- `●` (red) — blocked trace
+- `↑N` (dim cyan) — session generation; `↑1` is the first captured trace for that session, `↑2+` means the same session kept going and this newer trace replaces an older one. Refresh pulls the latest; review and push the latest generation.
 
 ## CLI
 
