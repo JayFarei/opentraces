@@ -21,6 +21,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -989,7 +990,12 @@ class OpenTracesApp(App):
             self.remote_name = None
             self.remote_visibility = None
 
-    def _reload_traces(self, keep_trace_id: str | None = None) -> None:
+    def _reload_traces(
+        self,
+        keep_trace_id: str | None = None,
+        keep_focus_stage: str | None = None,
+        keep_focus_index: int | None = None,
+    ) -> None:
         self.traces = [
             t for t in load_traces(self.staging_dir, limit=self.trace_limit)
             if t["trace_id"] not in self._pending_deletes
@@ -1016,6 +1022,24 @@ class OpenTracesApp(App):
         self._refresh_info_panel()
         for stage in STAGE_KEYS:
             self._refresh_stage_list(stage)
+
+        # Keyboard flow: a stage-toggle keeps the cursor in the list the user
+        # was driving (same numeric index, clamped). The trace that just moved
+        # is not followed across panes, so the user can keep flicking through
+        # inbox with space without losing their place.
+        if keep_focus_stage in STAGE_KEYS:
+            stage_items = self.by_stage[keep_focus_stage]
+            if stage_items:
+                idx = max(0, min(keep_focus_index or 0, len(stage_items) - 1))
+                lv = self.query_one(f"#{STAGE_IDS[keep_focus_stage]}", ListView)
+                lv.index = idx
+                self._set_active_stage(keep_focus_stage)
+                self._update_panel_counter(keep_focus_stage)
+                self._current_trace = stage_items[idx]
+                self._render_trace(stage_items[idx])
+                self.set_focus(lv)
+                return
+            # Source list is now empty — fall through to default selection.
 
         current = self._find_trace(keep_trace_id) if keep_trace_id else self._first_trace()
         if current:
@@ -1363,9 +1387,9 @@ class OpenTracesApp(App):
         Implementation: RichLog doesn't expose its internal console, and
         Rich's Markdown resolves named styles (``markdown.text`` etc.)
         against the console theme at render time. So we build a
-        throw-away Console with the role theme, capture Markdown to
-        Text segments, and hand those to ``stream.write`` — which
-        accepts any Rich renderable.
+        throw-away Console with the role theme, send its direct output
+        to an in-memory sink, then replay the recorded ANSI into a Rich
+        ``Text`` object for ``stream.write``.
         """
         if not content:
             return
@@ -1377,16 +1401,12 @@ class OpenTracesApp(App):
             force_terminal=True,
             color_system="truecolor",
             record=True,
-            file=None,
+            file=StringIO(),
             legacy_windows=False,
         )
-        with con.capture() as _captured:
-            con.print(Markdown(content, code_theme="monokai"))
-        # ``export_text(styles=True)`` would give us ANSI; instead,
-        # replay the recorded segments so RichLog keeps structured
-        # styling and wraps cleanly on its own terms.
+        con.print(Markdown(content, code_theme="monokai"))
         from rich.text import Text
-        text = Text.from_ansi(_captured.get())
+        text = Text.from_ansi(con.export_text(styles=True))
         stream.write(text)
 
     def _write_body(self, stream: RichLog, content: str, color: str) -> None:
@@ -1578,6 +1598,14 @@ class OpenTracesApp(App):
         if not trace:
             return
         trace_id = trace["trace_id"]
+        # Anchor the cursor to the list the user is driving, at its current
+        # index, so after the toggle they're sitting on the row that slid up
+        # into this position — not chased across to the destination pane.
+        source_stage = self._focused_stage() or self._active_stage
+        source_index: int | None = None
+        if source_stage in STAGE_KEYS:
+            source_lv = self.query_one(f"#{STAGE_IDS[source_stage]}", ListView)
+            source_index = source_lv.index
         stage = get_stage(self.state, trace_id)
         prior = self._snapshot_status(trace_id)
         task_label = (trace.get("task", {}).get("description") or "trace")[:40]
@@ -1594,7 +1622,10 @@ class OpenTracesApp(App):
         else:
             self.notify("Only inbox/staged traces can be toggled", severity="warning")
             return
-        self._reload_traces(keep_trace_id=trace_id)
+        self._reload_traces(
+            keep_focus_stage=source_stage,
+            keep_focus_index=source_index,
+        )
         self._refresh_keybar()
 
     def action_reject(self) -> None:
