@@ -5,6 +5,19 @@ All notable changes to the opentraces CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-04-17
+
+- `flask` and `textual` promoted from the `[web]` / `[tui]` optional
+  extras into the base dependencies so `opentraces web` and
+  `opentraces tui` work immediately after `pip install opentraces` with
+  no extras required. The extras remain in place for backward
+  compatibility with existing install commands.
+- Site: home terminal on the landing page now defaults to the `init`
+  tab instead of `review`.
+
+No schema or security-pipeline changes (`SCHEMA_VERSION` and
+`SECURITY_VERSION` remain `0.3.0`).
+
 ## [0.3.0] - 2026-04-16
 
 First public release of the CLI since `0.2.1`. A coherent single bump that
