@@ -50,6 +50,8 @@ pip install -e ".[dev]"
 
 Use plain `pip install opentraces` only in CI or disposable environments.
 
+Both review surfaces (`opentraces web`, `opentraces tui`) ship in the default install, no extras required.
+
 ## Quick Start
 
 opentraces has a two-phase bootstrap: `setup` wires the machine once, `init` wires each repo.

@@ -20,7 +20,6 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e packages/opentraces-schema
 pip install -e ".[dev]"
-pip install flask gradio  # optional
 pytest tests/ -v
 ```
 
