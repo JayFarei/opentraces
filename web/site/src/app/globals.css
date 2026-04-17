@@ -865,6 +865,12 @@ section {
   font-size: 28px;
   letter-spacing: -0.02em;
   margin-bottom: 8px;
+  color: var(--text);
+}
+[data-theme="light"] .section-title {
+  color: #000000;
+  font-weight: 700;
+  letter-spacing: -0.04em;
 }
 .section-sub {
   font-size: 13px;
@@ -1457,13 +1463,58 @@ tr:hover td { background: var(--surface-hover); }
   .privacy-grid { grid-template-columns: 1fr; }
 }
 
-/* ═══ Attribution Panels (blame | graph side by side) ═══ */
+/* ═══ Attribution (graph | blame, terminal-styled) ═══ */
+.attr-terminal { padding: 0; }
+.attr-grid {
+  display: flex;
+  min-height: 0;
+}
+.attr-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.attr-pane-right {
+  border-left: 1px solid var(--border);
+}
+.attr-body {
+  padding: 12px 14px;
+  overflow: auto;
+  max-height: 520px;
+}
+.attr-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.75;
+}
+.attr-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+  white-space: nowrap;
+}
+.attr-tree,
+.attr-trunk {
+  white-space: pre;
+}
+.attr-ellip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+.attr-indent {
+  padding-left: 14px;
+}
 @media (max-width: 768px) {
-  .attr-panels { flex-direction: column; }
-  .attr-pane-blame {
-    border-right: none !important;
-    border-bottom: 1px solid var(--border);
+  .attr-grid { flex-direction: column; }
+  .attr-pane-right {
+    border-left: none;
+    border-top: 1px solid var(--border);
   }
+  .attr-body { max-height: none; }
 }
 
 /* ═══ Explorer Responsive ═══ */

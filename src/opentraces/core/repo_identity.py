@@ -23,7 +23,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .paths import PROJECTS_DIR
+from . import paths as _paths
 
 
 # --------------------------------------------------------------------------- #
@@ -92,10 +92,12 @@ class ProjectMatch:
     attributions_dir: Path
 
 
-def _iter_project_jsons(root: Path = PROJECTS_DIR):
+def _iter_project_jsons(root: Path | None = None):
     """Yield (slug, dict) for every ``project.json`` stored under the
     per-project dirs. Swallows read/parse errors — a single bad file
     shouldn't break discovery."""
+    if root is None:
+        root = _paths.PROJECTS_DIR
     if not root.is_dir():
         return
     for slug_dir in sorted(root.iterdir()):
@@ -122,7 +124,7 @@ def discover_matching_project(
     """
     if not root_sha:
         return None
-    root = projects_root if projects_root is not None else PROJECTS_DIR
+    root = projects_root if projects_root is not None else _paths.PROJECTS_DIR
     for slug, slug_dir, data in _iter_project_jsons(root):
         if data.get("root_commit_sha") != root_sha:
             continue

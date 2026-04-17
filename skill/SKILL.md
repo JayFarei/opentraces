@@ -6,575 +6,397 @@ description: >
   or agent activity to HuggingFace. Also use when user says
   "opentraces", "share this trace", "publish traces", "upload traces",
   "contribute traces", "donate traces", or asks about trace review,
-  redaction, commit, or push workflows. Proactively suggest this skill
+  redaction, staging, or push workflows. Proactively suggest this skill
   after completing significant agent traces where valuable work was done.
 ---
 
-# opentraces - Share Agent Traces to HuggingFace Hub
+# opentraces
 
 Open protocol + CLI for repo-local agent trace capture, review, and upload.
-After each agent trace, opentraces automatically captures your trace,
-runs security scanning, and stages it for review. You review, commit, and
-push to a HuggingFace dataset.
+
+After each captured agent session, opentraces parses the trace, runs security
+scanning and redaction, stores it locally, and exposes it through the web UI,
+TUI, and CLI. You review, stage, and push the traces you want to share.
+
+## Current 0.3 Model
+
+- Repo marker: `.opentraces.json`
+- Machine-local state: `~/.opentraces/projects/<slug>/...`
+- Public inbox commands: `list`, `show`, `add`, `reject`, `reset`, `redact`, `discard`
+- Upload vocabulary: `inbox`, `staged`, `pushed`, `rejected`, `blocked`
+- Live capture: Claude Code
+- Dataset import: `opentraces pull --parser hermes`
 
 ## Quick Reference
 
-### Getting Started
-```
-opentraces auth login                       # authenticate with HuggingFace (browser OAuth)
-opentraces auth login --token               # authenticate via token paste (headless/CI)
-opentraces init                        # initialize project (interactive)
-opentraces status                      # show inbox tree with stage counts
+### Setup
+
+```bash
+opentraces auth login
+opentraces auth login --token
+opentraces init
+opentraces init --review-policy review
+opentraces init --review-policy auto
+opentraces init --import-existing
 ```
 
-### Review & Publish
-```
-opentraces list                # list staged traces (default: all stages)
-opentraces list --by-commit    # group staged traces by git_links[].revision
-opentraces show <ID>           # full trace detail
-opentraces show <ID> --markdown # prompt-injection-safe render wrapped in random-token boundaries
-opentraces add <ID>         # commit a trace for push
-opentraces reject <ID>         # mark as rejected (never pushed)
-opentraces reset <ID>          # undo commit/reject, back to inbox
-opentraces redact <ID> <pattern>    # find-and-replace text (add --step N or --field PATH to scope)
-opentraces discard <ID> --yes  # permanently delete a trace
-opentraces add --all                # bulk commit all inbox traces
-opentraces push                        # upload committed traces to HF Hub (runs configured post-processors pre-upload)
-opentraces push --assess               # upload + run quality assessment after push
-opentraces push --llm-review           # block push unless every committed trace has a clean Tier 2 verdict
-opentraces push --no-trufflehog        # one-shot: skip Tier 1.5 TruffleHog for this push
-opentraces assess                      # score committed traces (local quality.json)
-opentraces assess --dataset owner/name # refresh quality.json on remote HF dataset
-opentraces llm-review                  # Tier 2 LLM semantic review over staged traces
-opentraces doctor                      # report security pipeline health, SECURITY_VERSION, configured post-processors
-opentraces setup                       # interactive wizard: walks every integration
-opentraces setup claude-code           # install Claude Code capture hooks
-opentraces setup claude-code --remove  # uninstall Claude Code hooks
-opentraces setup git                   # install the post-commit hook that correlates traces to commits
-opentraces setup git --remove          # remove the post-commit hook
-opentraces setup trufflehog            # install + enable Tier 1.5 TruffleHog scanning
-opentraces export --format agent-trace # export staged traces to Agent Trace v0.1.0 JSONL
-opentraces export --format agent-trace --output ./agent-trace.jsonl
-opentraces blame <commit>              # resolve a commit to the opentraces trace(s) behind it
-opentraces blame <commit> --json       # JSON form: {commit, traces:[{trace_id, session_id, url}]}
-opentraces pull <dataset_id> --parser <name>   # import traces from a HuggingFace dataset
+### Review And Publish
+
+```bash
+opentraces status
+opentraces list
+opentraces list --stage inbox
+opentraces show <TRACE_ID>
+opentraces show <TRACE_ID> --verbose
+opentraces show <TRACE_ID> --markdown
+opentraces add <TRACE_ID>
+opentraces add --all
+opentraces reject <TRACE_ID>
+opentraces reset <TRACE_ID>
+opentraces redact <TRACE_ID>
+opentraces discard <TRACE_ID> --yes
+opentraces web
+opentraces tui
+opentraces push
+opentraces push --llm-review
+opentraces llm-review --scope staged
+opentraces assess
+opentraces doctor
 ```
 
-### Inspect
-```
-opentraces stats                       # aggregate statistics (traces, tokens, cost)
-opentraces web                         # open browser inbox UI (port 5050)
-opentraces tui                         # open terminal inbox UI
-```
+### Remotes, Import, And Export
 
-### Settings
-```
-opentraces auth whoami                        # show active HF identity
-opentraces auth logout                      # clear stored credentials
-opentraces config show                 # display current config
-opentraces config set [OPTIONS]        # update config values
-opentraces remote                      # show current dataset remote
-opentraces remote add origin owner/name       # set HF dataset remote
-opentraces remote remove               # remove configured remote
-opentraces remove                      # remove opentraces from project
+```bash
+opentraces remote list
+opentraces remote add owner/dataset
+opentraces remote create owner/dataset --private
+opentraces remote visibility owner/dataset --public
+opentraces pull owner/dataset --parser hermes
+opentraces export --format agent-trace
+opentraces blame abc1234
+opentraces blame abc1234 src/auth.py
+opentraces graph
+opentraces backfill
 ```
 
 ## Onboarding
 
-When the user wants to set up opentraces, gather their preferences in
-conversation rather than relying on interactive prompts.
+### Step 1: Check Whether The Repo Is Already Initialized
 
-### Step 1: Check if already initialized
+Look for `.opentraces.json` in the repo root.
 
-Look for `.opentraces/config.json` in the project root. If it exists, run
-`opentraces context` to see the current state and skip to the core loop.
+If it exists, start with:
 
-### Step 2: Check authentication
+```bash
+opentraces status
+opentraces list --stage inbox
+```
+
+Do not look for `.opentraces/config.json`. That is old.
+
+### Step 2: Check Authentication
 
 ```bash
 opentraces auth whoami
 ```
 
-If not authenticated: `opentraces auth login` opens a browser for OAuth device-code
-flow. In headless or CI environments, use `opentraces auth login --token` to paste
-an HF token with write scope. The `HF_TOKEN` environment variable also works
-and takes highest priority.
+If not authenticated:
 
-### Step 3: Gather preferences
+- use `opentraces auth login` for the normal browser-based flow
+- use `opentraces auth login --token` in headless or CI environments
+- `HF_TOKEN` also works and takes precedence over stored credentials
 
-Ask the user for these three choices:
+### Step 3: Gather Preferences
 
-1. **Review policy**: `review` (you review each trace before push) or `auto`
-   (safe traces skip the inbox and commit automatically, then auto-push)
-2. **Remote**: a HuggingFace dataset repo in `owner/name` format, or skip
-3. **Existing traces**: if Claude Code trace logs already exist for this repo,
-   ask whether to import them now (`--import-existing`) or start fresh
-   (`--start-fresh`)
+Before running `init`, clarify:
 
-### Step 4: Run init with explicit flags
+1. Review policy: `review` or `auto`
+2. Remote dataset: connect now or later
+3. Existing traces: backfill with `--import-existing` or start fresh
+
+### Step 4: Initialize Explicitly
 
 Standard setup:
+
 ```bash
-opentraces init --agent claude-code --review-policy review --start-fresh
+opentraces init --agent claude-code --review-policy review --import-existing
 ```
 
-With remote and existing trace import:
+With an explicit remote:
+
 ```bash
-opentraces init --agent claude-code --review-policy review --import-existing --remote owner/dataset-name --private
+opentraces init --agent claude-code --review-policy review --remote owner/dataset --private
 ```
 
-Additional init flags:
-- `--public` / `--private`: dataset visibility (default: private)
-- `--no-hook`: skip installing the Claude Code SessionEnd hook
+`init` writes `.opentraces.json`, registers the repo in the global config,
+installs the Claude Code hook unless `--no-hook` is used, and installs the
+bundled skill into the project.
 
-Init creates `.opentraces/config.json`, `.opentraces/staging/`, installs the
-SessionEnd hook in `.claude/settings.json`, and copies this skill into
-`.agents/skills/opentraces/`.
+## Core Loop
 
-## The Core Loop
+### 1. Capture
 
-### 1. Capture (automatic)
+After `init`, Claude Code sessions are captured automatically. The pipeline:
 
-After `init`, a Claude Code `SessionEnd` hook runs `opentraces _capture`
-automatically when each Claude Code session ends. The capture pipeline
-parses the trace, runs enrichment (git signals, attribution, dependencies,
-metrics), applies security scanning and redaction, and stages the result
-as JSONL. Traces with fewer than 2 steps or zero tool calls are silently
-filtered out.
+1. discovers the session transcript
+2. parses it into `TraceRecord`
+3. filters trivial traces
+4. enriches with git, attribution, dependencies, and metrics
+5. runs security scanning and redaction
+6. places the trace into a visible stage
 
 ### 2. Review
 
-Check what landed in the inbox:
-```bash
-opentraces context                          # project state + suggested next action
-opentraces list --stage inbox       # list inbox traces
-opentraces show <TRACE_ID>          # inspect a specific trace
-```
-
-For each trace, decide: commit (commit for push), reject (keep local), or
-redact specific steps before committing.
-
-### 3. Commit
+Use any of these:
 
 ```bash
-opentraces add <TRACE_ID>        # commit one trace
-opentraces add --all                     # commit all inbox traces
-opentraces add --all -m "description"    # with custom commit message
+opentraces web
+opentraces tui
+opentraces list --stage inbox
+opentraces show <TRACE_ID>
 ```
+
+The visible stages are:
+
+- `inbox`
+- `staged`
+- `pushed`
+- `rejected`
+- `blocked`
+
+### 3. Stage
+
+```bash
+opentraces add <TRACE_ID>
+opentraces add --all
+```
+
+`add` stages Inbox traces for the next push. It refuses `blocked` and
+`rejected` traces.
 
 ### 4. Push
 
 ```bash
-opentraces push                             # upload committed traces
+opentraces push
 ```
 
-Each push creates a new JSONL shard on the remote (never appends to existing
-files). Content-hash deduplication skips traces already present on the remote.
-A dataset card (README.md) is auto-generated with CC-BY-4.0 license.
+Each push uploads staged traces as a new Hugging Face shard and refreshes the
+dataset card.
 
-## Trace Review
+## Review Operations
 
-### Listing and filtering
+### Inspecting Traces
 
 ```bash
-opentraces list                                 # all stages
-opentraces list --stage inbox                   # inbox only
-opentraces list --stage committed               # committed only
-opentraces list --model opus                    # filter by model substring
-opentraces list --agent claude-code --limit 10  # filter by agent, cap results
+opentraces list --stage inbox
+opentraces list --by-commit
+opentraces show <TRACE_ID>
+opentraces show <TRACE_ID> --verbose
+opentraces show <TRACE_ID> --markdown
 ```
 
-Valid stages: `inbox`, `committed`, `pushed`, `rejected`.
+Human `show` output truncates long step content by default. Use `--verbose`
+for the full terminal view, or `--json` for structured output.
 
-### Inspecting a trace
+### Editing State
 
 ```bash
-opentraces show <TRACE_ID>           # summary + truncated step content
-opentraces show <TRACE_ID> --verbose # full step content (can be large)
-opentraces --json trace show <TRACE_ID>    # full record as JSON (never truncated)
+opentraces add <TRACE_ID>
+opentraces reject <TRACE_ID>
+opentraces reset <TRACE_ID>
+opentraces redact <TRACE_ID>
+opentraces discard <TRACE_ID> --yes
 ```
 
-Human output truncates step content to 500 chars by default to protect context
-windows. Use `--verbose` for the full human view, or `--json` if you need to
-parse the complete record programmatically.
+Use:
 
-### Actions
+- `reject` to keep a trace local only
+- `reset` to move it back to Inbox
+- `redact` to rewrite sensitive text in place
+- `discard` to delete the local trace permanently
+
+## Push, Remotes, And Visibility
+
+### Push Options
 
 ```bash
-opentraces add <ID>       # commit for push
-opentraces reject <ID>       # mark rejected, kept local only
-opentraces reset <ID>        # undo commit or reject, back to inbox
-opentraces redact <ID> secret-text        # find-and-replace; add --step 3 to
-                                          # scope to a single step, --field PATH to
-                                          # scope to one field, --regex for patterns
-opentraces discard <ID> --yes     # permanently delete (--yes skips confirm)
+opentraces push --private
+opentraces push --public
+opentraces push --publish
+opentraces push --gated
+opentraces push --repo owner/dataset
+opentraces push --no-assess
+opentraces push --no-trufflehog
+opentraces push --llm-review
 ```
 
-`reset` works from committed or rejected states but cannot undo a pushed trace.
+Important behavior:
 
-### What to look for during review
+- `push` uploads `staged` traces, not “committed” traces
+- assessment runs by default during push
+- `push --llm-review` requires a clean Tier 2 verdict on every staged trace
+- `push --no-trufflehog` skips Tier 1.5 for one push only
 
-- Secrets that escaped automatic redaction (API keys, tokens, passwords)
-- Internal hostnames (*.internal, *.corp, *.local)
-- Customer data, PII, or identifiable information
-- Collaboration URLs with embedded tokens (Slack, Jira, Confluence)
-- Database connection strings
-- Traces too short or trivial to be useful
-
-## Commit & Push
-
-### Committing
+### Remote Management
 
 ```bash
-opentraces add --all                     # commit all inbox traces
-opentraces add --all -m "batch of fixes" # with message
+opentraces remote list
+opentraces remote add owner/dataset
+opentraces remote create owner/dataset --private
+opentraces remote visibility owner/dataset --public
+opentraces remote remove owner/dataset
+opentraces remote delete owner/dataset
 ```
 
-Commit creates a bundle of traces ready for upload. Auto-generates a message
-from the first few task descriptions if `-m` is not provided.
+Use `push --repo owner/dataset` as a one-shot override when you do not want to
+change the active remote permanently.
 
-### Pushing
+## Security And Quality
+
+### Security Tiers
+
+Current user-facing security layers:
+
+1. Regex patterns, always on
+2. Shannon entropy, always on
+3. TruffleHog, optional
+4. LLM trace review, optional and on demand
+5. Human review
+
+`SECURITY_VERSION` is currently `0.3.0`.
+
+### TruffleHog
 
 ```bash
-opentraces push                        # upload to configured remote
-opentraces push --private              # force private visibility
-opentraces push --public               # force public visibility
-opentraces push --gated                # enable gated access (auto-approve)
-opentraces push --repo owner/name      # override remote for this push
-opentraces push --publish              # flip existing private dataset to public
-                                       # (no upload, visibility change only)
+opentraces setup trufflehog
+opentraces setup trufflehog --enable
+opentraces setup trufflehog --disable
 ```
 
-Remote resolution: `--repo` flag > project config remote > interactive selector >
-`username/opentraces` fallback.
+Current behavior:
 
-### Push behavior
+- findings are redacted in place
+- findings force review before upload
+- `verify_secrets` stays off by default
 
-- Creates a new `data/traces-NNNN.jsonl` shard per push (never appends)
-- SHA-256 content-hash deduplication against existing remote shards
-- Auto-generates or updates dataset README card
-- Atomic: if upload fails, no partial data is left on the remote
-- Retry: 3 attempts with exponential backoff on network failure
-- File lock prevents concurrent pushes (exit code 7 if contention)
+### LLM Review
 
-## Quality Assessment
-
-`opentraces assess` scores committed (local) traces against quality rubrics and
-writes a `quality.json` sidecar with per-trace scores and an aggregate summary.
+Configure once:
 
 ```bash
-opentraces assess                        # score committed traces
-opentraces assess --judge                # use LLM judge for rubric scoring
-opentraces assess --judge-model sonnet   # judge model: haiku, sonnet, or opus
-opentraces assess --limit 20             # cap traces assessed in this run
-opentraces assess --compare-remote       # fetch remote quality.json and show delta
-opentraces assess --all-staged           # include inbox traces, not just committed
-opentraces assess --dataset owner/name   # assess remote HF dataset, update its
-                                         # README + quality.json without a new push
+opentraces setup llm-review
 ```
 
-`push --assess` runs quality automatically after upload and includes scores in
-the dataset card. `quality.json` is uploaded as a sidecar to the HF dataset repo
-after `assess --dataset` or `push --assess`. Dataset cards include shields.io
-quality scorecard badges when a `quality.json` is present.
-
-## Security
-
-Every captured trace passes through a security pipeline automatically.
-There is no "unfiltered" mode. The pipeline is versioned independently as
-`SECURITY_VERSION` (currently `0.4.0`) — bumps signal detection-logic changes.
-
-### Security tiers (Plan 032)
-
-| Tier | What it does | Default |
-|------|--------------|---------|
-| 1a | Regex rules for known secret shapes (API keys, tokens, DB URLs) | Always on |
-| 1b | Shannon-entropy heuristics on tool-input fields | Always on |
-| 1.5 | TruffleHog verified-secret scanner | Opt-in via `opentraces setup trufflehog` |
-| 1.8 | LLM-assisted PII detection | Opt-in |
-| 2 | LLM semantic review (per-trace shareability verdict) | Opt-in via `review-llm` |
-| 3 | Human review in the inbox | Controlled by review policy |
-
-Findings from Tier 1.5 move traces to the `BLOCKED` state; `BLOCKED` traces
-never reach upload. Run `opentraces doctor` to see which tiers are active.
-
-### What happens on capture
-
-1. **Secret scanning**: two-pass, context-aware. First pass scans each field
-   with rules tuned to the field type (tool inputs get entropy analysis, tool
-   results and reasoning do not, to reduce false positives). Second pass scans
-   the serialized JSONL bytes as a final catch-all.
-2. **Automatic redaction**: detected secrets are replaced with `[REDACTED]` in
-   the staged JSONL. Raw session files on disk are never modified.
-3. **Heuristic classification**: flags internal hostnames, AWS account IDs,
-   database connection strings, dense UUID sequences, and deep file paths.
-4. **Named-entity placeholders**: recognized entities are replaced with stable
-   named tokens like `[PERSON_1]`, `[EMAIL_2]`, and home-directory paths are
-   normalized to `USER_PATH` across platforms.
-5. **Path anonymization**: replaces usernames in file paths with hashed
-   prefixes across macOS, Linux, Windows, and WSL path formats.
-
-### Pipeline health: `opentraces doctor`
+Run it:
 
 ```bash
-opentraces doctor
+opentraces llm-review
+opentraces llm-review --scope inbox
+opentraces llm-review --scope staged
+opentraces llm-review --trace 8a3f1c
+opentraces llm-review --dry-run
 ```
 
-Reports `security_version`, `schema_version`, TruffleHog binary + enabled
-state, HF auth status, and configured post-processors. JSON
-payload is emitted under `doctor` with the same fields plus a nested
-`trufflehog: {enabled, binary_version, status}` and `review_llm: {enabled, backend, model, reachable, status}`.
-
-**Exit codes**: returns `3` when TruffleHog is enabled in config but the
-binary is not on PATH. Always safe to run non-destructively.
-
-### Tier 1.5 — TruffleHog
-
-```bash
-opentraces setup trufflehog            # interactive: install (brew/go) + enable
-opentraces setup trufflehog --enable   # agent/CI: flip on; fails TRUFFLEHOG_MISSING if binary absent
-opentraces setup trufflehog --disable  # turn the tier off (keeps binary)
-```
-
-When enabled, every capture and push runs TruffleHog over serialized trace
-bytes. Verified findings block the trace (status becomes `BLOCKED`).
-
-Errors:
-- `TRUFFLEHOG_MISSING` (exit 3): `--verify` ran but no binary found.
-- `TRUFFLEHOG_INSTALL_FAILED` (exit 4): no supported installer (`brew`,
-  `go install`) available.
-
-### Tier 2 — LLM semantic review
-
-A third-party LLM (local Ollama, LM Studio, or a hosted API) independently
-reviews staged traces for shareability before push. Config is **global**
-(one LLM per machine, shared across projects) and lives under
-`security.review_llm` in `~/.opentraces/config.json`.
-
-**Configure once (agent-friendly, non-interactive):**
-
-```bash
-# Local Ollama (zero-auth, recommended default):
-opentraces setup review-llm --provider openai \
-    --base-url http://localhost:11434/v1 --model gemma3n:e4b
-
-# Hosted via any OpenAI-compatible gateway (Groq shown):
-opentraces setup review-llm --provider openai \
-    --base-url https://api.groq.com/openai/v1 \
-    --model llama-3.3-70b-versatile --api-key-env GROQ_API_KEY
-
-# Native Anthropic SDK:
-opentraces setup review-llm --provider anthropic \
-    --model claude-haiku-4-5-20251001 --api-key-env ANTHROPIC_API_KEY
-
-# Test without writing, or dump current config as JSON:
-opentraces setup review-llm --test
-opentraces setup review-llm --print
-opentraces setup review-llm --disable
-```
-
-Run `opentraces setup review-llm` with no flags for an interactive
-preset picker (Ollama / LM Studio / vLLM / OpenAI / Groq / OpenRouter /
-Together / Anthropic / custom).
-
-**Run review over staged traces:**
-
-```bash
-opentraces llm-review                                # uses the configured LLM, every trace in staging
-opentraces llm-review --scope staged                 # STAGED only (pre-commit)
-opentraces llm-review --scope committed              # COMMITTED only — 2nd line of defence before push
-opentraces llm-review --trace 8a3f1c                 # one trace (short prefix ok); repeatable
-opentraces llm-review --provider fake                # offline stub, for tests
-opentraces llm-review --dry-run                      # estimate tokens + cost only
-opentraces llm-review --limit 5                      # cap traces reviewed
-opentraces llm-review --force                        # re-review cached verdicts
-opentraces llm-review --context-file AGENTS.md       # pass project README as context
-```
-
-**review-llm is slow.** Narrow what you run with `--scope` or `--trace`, cap with `--limit`. The typical 2nd-line-of-defence flow is `review-llm --scope committed` right before `push --llm-review`.
-
-Writes each verdict under `metadata.llm_review` on the staged trace:
-`{status, shareable, missed_sensitive_data, provider, model, base_url,
-reviewed_at, prompt_version, review_key, ...}`. The `review_key` binds
-the verdict to `content_hash + provider + base_url + model +
-prompt_version + context` so changing any of those invalidates the
-cache and re-reviews on next run. `--force` ignores the cache entirely.
-
-If Tier 1 / TruffleHog already blocked the trace, `review-llm` skips
-the LLM call and records a synthetic `shareable=no` verdict
-(`denied_before_llm: true`), no tokens spent on confirmed-bad
-traces.
-
-### Enforcing Tier 2 at push
+Gate a push on it:
 
 ```bash
 opentraces push --llm-review
 ```
 
-Aborts with exit code `3` and error code `LLM_REVIEW_BLOCKED` if any
-committed trace is missing a verdict, has `shareable="no"`, or has
-`missed_sensitive_data="yes"`. Fix by running `opentraces llm-review`,
-then retry.
-
-### Skipping Tier 1.5 for one push
+### Review Policy
 
 ```bash
-opentraces push --no-trufflehog
+opentraces setup review-policy --review
+opentraces setup review-policy --auto
+opentraces setup review-policy --print
 ```
 
-One-shot override — config stays unchanged; next push runs TruffleHog
-again as usual.
+`--auto` means safe traces are auto-approved into `staged`. It does not push
+automatically.
 
-### Tunables
+### Assessment
 
 ```bash
-opentraces config set --classifier-sensitivity high    # low, medium, or high
-opentraces config set --redact "MY_INTERNAL_DOMAIN"    # add custom redaction string
-opentraces config set --exclude /path/to/sensitive-repo # exclude a project entirely
+opentraces assess
+opentraces assess --judge
+opentraces assess --dataset owner/dataset
+opentraces assess --explain
 ```
 
-Custom redaction strings are appended (not replaced). Use for company-specific
-values that the generic scanner might miss.
+Local assess prefers staged traces first. `push` already runs assessment by
+default unless `--no-assess` is passed.
 
-### Review policies and security
+## Git Correlation And Attribution
 
-- `--review-policy review`: all traces land in inbox for manual review, commit and push manually
-- `--review-policy auto`: clean traces (no scan matches) are committed and pushed automatically.
-  Traces with any scan hits or redactions still land in inbox.
-
-Even with `auto` review policy, traces with detected issues require review.
-
-## Agent-Native Patterns
-
-### Machine-readable output
-
-Add `--json` to any command to suppress human-readable text and get only
-structured JSON:
+Install the git hook:
 
 ```bash
-opentraces --json context
-opentraces --json trace list --stage inbox
-opentraces --json push
+opentraces setup git
 ```
 
-JSON is emitted after the sentinel line `---OPENTRACES_JSON---`. When parsing
-programmatically, split on this sentinel and parse the text that follows.
-
-### Response shape
-
-Every JSON response includes:
-- `status`: `"ok"`, `"error"`, or `"needs_action"`
-- `next_steps`: array of suggested next actions (human-readable)
-- `next_command`: the single most likely next command to run
-
-### The context command
-
-`opentraces context` is the agent's "what should I do next?" command. It
-returns project config, auth status, counts per stage, and a `suggested_next`
-command. Start here when resuming work or uncertain about state.
-
-### Discovery commands (hidden, for automation)
+Then use:
 
 ```bash
-opentraces capabilities --json    # feature flags, supported agents, versions
-opentraces introspect             # full API schema + TraceRecord JSON schema
+opentraces list --by-commit
+opentraces blame abc1234
+opentraces blame abc1234 src/auth.py
+opentraces blame abc1234 src/auth.py --lines
+opentraces graph
+opentraces graph --trace abc12
+opentraces backfill
 ```
 
-### Machine/CI mode
+`blame` takes a commit SHA (bare or `c:<sha>`) and an optional path. Add
+`--lines` for git-blame-style per-line output. `graph` is commit-primary
+by default; pivot to a single trace with `--trace <id>`. Both require a
+populated attribution cache — run `opentraces backfill` when empty.
 
-Set `OPENTRACES_NO_TUI=1` to suppress TUI launch on bare `opentraces` invocation.
-Bare `opentraces` on a non-TTY stdout already falls back to help text automatically.
+## Import And Export
+
+### Import
 
 ```bash
-OPENTRACES_NO_TUI=1 opentraces         # prints help, never opens TUI
-opentraces --json context              # machine-readable project state
-opentraces capabilities --json         # feature flags + supported env vars
+opentraces pull owner/dataset --parser hermes
+opentraces pull owner/dataset --parser hermes --auto
+opentraces pull owner/dataset --parser hermes --limit 10 --dry-run
 ```
 
-### Exit codes
+Hermes is currently an import path, not a live-capture harness.
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | Needs review / quality gate not passed (pull partial failures) |
-| 2 | Usage error (bad flags, conflicting options) |
-| 3 | Auth/config error, blocked push (e.g. `LLM_REVIEW_BLOCKED`, `TRUFFLEHOG_MISSING`) |
-| 4 | Network or upload error |
-| 5 | Data corruption or invalid state |
-| 6 | Not found (trace ID, project, or resource) |
-| 7 | Lock contention (another process is pushing) |
-
-## Configuration
-
-### Viewing config
+### Export
 
 ```bash
-opentraces config show    # displays current config (tokens masked)
+opentraces export --format agent-trace
+opentraces export --format atif
 ```
 
-### Setting values
+## JSON Mode
+
+Prefer `--json` whenever another agent needs structured output:
 
 ```bash
-opentraces config set --classifier-sensitivity medium
-opentraces config set --redact "SENSITIVE_VALUE"
-opentraces config set --exclude /path/to/project
-opentraces config set --pricing-file /path/to/pricing.json
+opentraces --json status
+opentraces --json list --stage inbox
+opentraces --json show <TRACE_ID>
+opentraces --json config show
+opentraces --json blame abc1234
+opentraces --json backfill
 ```
-
-### Managing the remote
-
-```bash
-opentraces remote                          # show current remote and visibility
-opentraces remote add origin owner/dataset-name   # set remote
-opentraces remote add origin owner/name --public  # set with visibility
-opentraces remote remove                   # remove remote from config
-```
-
-If no `/` in the name, the authenticated username is prepended automatically.
 
 ## Troubleshooting
 
-| Error | Fix |
-|-------|-----|
-| "Not authenticated" / "No HF token found" | `opentraces auth login` |
-| "Not an opentraces project" / "Not initialized" | `opentraces init` in the project directory |
-| "No traces found" | Check that `~/.claude/projects/` has Claude Code session files |
-| Push fails with 403 | HF token lacks write scope, regenerate at huggingface.co/settings/tokens |
-| Lock contention (exit 7) | Another process is pushing, wait and retry |
-| "No traces ready for upload" | Run `opentraces add --all` first |
-| "All traces already exist on remote" | Content-hash dedup, nothing new to push |
-| Traces not appearing after agent run | Hook may not be installed, run `opentraces init` again |
+| Problem | Action |
+|---------|--------|
+| Not initialized | Run `opentraces init` |
+| No traces visible | Check `opentraces setup claude-code`, then `opentraces status` |
+| Traces blocked | Run `opentraces list --stage blocked` and inspect with `show` |
+| Push failing | Check `auth whoami`, `remote list`, and `doctor` |
+| TruffleHog enabled but missing | Run `opentraces setup trufflehog` or `--disable` |
+| llm-review unreachable | Run `opentraces setup llm-review --test` |
 
-Start debugging with `opentraces context` for a full project state snapshot.
-
-## Teardown
+When removing opentraces from a repo, use:
 
 ```bash
 opentraces remove
+opentraces remove --all
 ```
-
-Deletes the `.opentraces/` directory and removes the SessionEnd hook from
-`.claude/settings.json`. Does not touch remote datasets or uploaded data.
-To reinitialize: `opentraces init`.
-
-## Prerequisites
-
-- Python 3.10+
-- `pipx install opentraces`
-- HuggingFace account with write-scope token
-
-## Keeping Up To Date
-
-```bash
-opentraces setup upgrade              # upgrade CLI + refresh skill and hook
-opentraces setup upgrade --skill-only # just refresh the skill file and hook
-```
-
-`upgrade` detects how opentraces was installed (pipx, brew, pip, source)
-and runs the appropriate upgrade command, then refreshes the skill file
-and capture hook in the current project.
-
-## Further Context
-
-For full documentation, schema details, and design rationale beyond this
-skill file, fetch: https://www.opentraces.ai/llms.txt

@@ -22,6 +22,17 @@ if str(_SCHEMA_SRC) not in sys.path:
     sys.path.insert(0, str(_SCHEMA_SRC))
 
 
+# Eagerly import the modules we monkeypatch below so their module-init
+# values capture the real HOME. If deferred until inside the fixture body,
+# the first fixture invocation patches HOME first, then triggers the import,
+# which bakes the tmpdir path into the module's "original" state. monkeypatch
+# then reverts to that tmpdir path instead of the real HOME, and every later
+# test inherits the stale value — including scenario tests that override
+# this fixture with a no-op.
+from opentraces.core import paths as _paths  # noqa: E402
+from opentraces.core import config as _config  # noqa: E402
+
+
 @pytest.fixture(autouse=True)
 def _isolate_opentraces_global_state(tmp_path_factory, monkeypatch):
     home = tmp_path_factory.mktemp("home_isolated")
@@ -31,9 +42,6 @@ def _isolate_opentraces_global_state(tmp_path_factory, monkeypatch):
     opentraces_dir.mkdir()
     projects_dir = opentraces_dir / "projects"
     projects_dir.mkdir()
-
-    from opentraces.core import paths as _paths
-    from opentraces.core import config as _config
 
     for mod in (_paths, _config):
         monkeypatch.setattr(mod, "OPENTRACES_DIR", opentraces_dir)

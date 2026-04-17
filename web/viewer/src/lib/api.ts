@@ -48,6 +48,7 @@ export interface TraceListItem {
   status: string;
   _stage: "inbox" | "staged" | "pushed" | "rejected" | "blocked";
   security_flags: number;
+  generation_index: number;
   project: string;
   llm_review?: { status?: string; shareable?: boolean };
 }
@@ -81,6 +82,7 @@ export interface TraceStep {
 
 export interface TraceRecord {
   trace_id: string;
+  generation_index?: number;
   task: { description: string };
   agent: { name: string; model: string };
   steps: TraceStep[];

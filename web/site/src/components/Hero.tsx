@@ -7,7 +7,7 @@ import { AGENT_PROMPT } from "@/lib/agent-prompt";
 import pkg from "@/lib/version.json";
 import type { HeroMetricItem } from "@/lib/homepage-metrics";
 
-const tabLabels = ["init", "status", "review", "push", "consume"];
+const tabLabels = ["init", "status", "review", "blame", "push", "consume"];
 const AGENT_LINES = AGENT_PROMPT.split("\n").length;
 
 const installMethods = [
@@ -62,9 +62,9 @@ function InitContent() {
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  Review policy?</span></span>
       <span className="terminal-line"><span className="di">  [1] review</span>  <span className="di">sessions land in Inbox for you to review</span>  <span className="s">{"\u2190"}</span></span>
-      <span className="terminal-line"><span className="di">  [2] auto</span>    <span className="di">capture, sanitize, commit, and push automatically</span></span>
+      <span className="terminal-line"><span className="di">  [2] auto</span>    <span className="di">auto-approve safe traces into staged</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Created .opentraces/config.json</span></span>
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Created .opentraces.json</span></span>
       <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di"> Installed agent session hook</span></span>
     </>
   );
@@ -77,14 +77,14 @@ function StatusContent() {
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  my-project inbox</span></span>
       <span className="terminal-line"><span className="di">  review policy: </span><span className="s">review</span></span>
-      <span className="terminal-line"><span className="di">  remote: </span><span className="s">jayfarei/opentraces</span></span>
+      <span className="terminal-line"><span className="di">  remote: </span><span className="s">Jayfarei/opentraces</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  inbox </span><span className="n">3</span> <span className="di"> committed </span><span className="n">0</span> <span className="di"> pushed </span><span className="n">0</span></span>
+      <span className="terminal-line"><span className="di">  inbox </span><span className="n">3</span> <span className="di"> staged </span><span className="n">0</span> <span className="di"> pushed </span><span className="n">0</span></span>
       <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 2h ago    </span><span className="s">{"\u201C"}refactor auth middleware{"\u201D"}</span>   <span className="n">47</span> <span className="di">steps</span>  <span className="di">inbox</span></span>
       <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 5h ago    </span><span className="s">{"\u201C"}fix billing webhook{"\u201D"}</span>        <span className="n">23</span> <span className="di">steps</span>  <span className="w">1 flag {"\u26A0"}</span></span>
       <span className="terminal-line"><span className="di">  {"\u2514\u2500\u2500"} yesterday </span><span className="s">{"\u201C"}add settings page{"\u201D"}</span>          <span className="n">65</span> <span className="di">steps</span>  <span className="di">inbox</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  next: opentraces add --all</span></span>
+      <span className="terminal-line"><span className="di">  next: opentraces web</span></span>
     </>
   );
 }
@@ -123,14 +123,72 @@ function ReviewContent() {
   );
 }
 
+function BlameContent() {
+  return (
+    <>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces blame ac019172</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">{"\u250A"}</span></span>
+      <span className="terminal-line">
+        <span className="di">{"\u250A\u256D\u2504"}</span>
+        <span className="n">s:6606fc1f</span>
+        <span className="di">  </span>
+        <span className="ok">+8</span>
+        <span className="di"> </span>
+        <span className="w">~12</span>
+        <span className="di"> -2 fns  </span>
+        <span className="di">{" \u2502 "}</span>
+        <span className="di">server, graph_api, api +2</span>
+      </span>
+      <span className="terminal-line">
+        <span className="di">{"\u250A\u251C\u2504"}</span>
+        <span className="n">s:fe8fe3fd</span>
+        <span className="di">  </span>
+        <span className="ok">+6</span>
+        <span className="di"> ~1 fns      </span>
+        <span className="di">{" \u2502 "}</span>
+        <span className="di">PushModal (+6)</span>
+      </span>
+      <span className="terminal-line">
+        <span className="di">{"\u250A\u251C\u2504"}</span>
+        <span className="n">s:5baac494</span>
+        <span className="di">  </span>
+        <span className="ok">+7</span>
+        <span className="di"> ~1 fns      </span>
+        <span className="di">{" \u2502 "}</span>
+        <span className="di">ReviewView, TraceSecurityModal</span>
+      </span>
+      <span className="terminal-line">
+        <span className="di">{"\u250A\u25CF   "}</span>
+        <span className="f">c:ac019172</span>
+        <span className="di">  feat(viewer): hover actions, two-stage push  </span>
+        <span className="ok">100%</span>
+      </span>
+      <span className="terminal-line"><span className="di">{"\u251C\u256F"}</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line">
+        <span className="di">  3 sessions {"\u00B7"} tier=</span>
+        <span className="s">tool_emitted</span>
+        <span className="di"> {"\u00B7"} coverage=</span>
+        <span className="ok">100%</span>
+      </span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line">
+        <span className="di">  next: </span>
+        <span className="c">opentraces show s:6606fc1f</span>
+      </span>
+    </>
+  );
+}
+
 function PushContent() {
   return (
     <>
       <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces push</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Pushing 3 committed sessions (private)...</span></span>
+      <span className="terminal-line"><span className="di">  Pushing 3 staged traces (private)...</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Pushed {"\u2192"}</span> <span className="s">jayfarei/opentraces</span> <span className="di">(private)</span></span>
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Pushed {"\u2192"}</span> <span className="s">Jayfarei/opentraces</span> <span className="di">(private)</span></span>
       <span className="terminal-line"><span className="di">    135 steps {"\u00B7"} 42,891 tokens {"\u00B7"} $3.21 estimated</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">  Run </span><span className="c">opentraces push --publish</span><span className="di"> to make public.</span></span>
@@ -162,7 +220,7 @@ function ConsumeContent() {
   );
 }
 
-const tabContents = [InitContent, StatusContent, ReviewContent, PushContent, ConsumeContent];
+const tabContents = [InitContent, StatusContent, ReviewContent, BlameContent, PushContent, ConsumeContent];
 
 export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
   const [activeTab, setActiveTab] = useState(2);
@@ -180,7 +238,7 @@ export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
           <p className="hero-sub">
             When LLMs drive the logic, traces become the real source: the record of decisions, tool calls, and reasoning behind the outcome.
             <br /><br />
-            open<strong>traces</strong> lets you parse, sanitise and commit those sessions to HuggingFace Hub so you or others can build on real workflows, not synthetic benchmarks.
+            open<strong>traces</strong> lets you parse, sanitise, review, and push those sessions to HuggingFace Hub so you or others can build on real workflows, not synthetic benchmarks.
           </p>
           <div className="hero-install-tabs">
             {installMethods.map((m, i) => (

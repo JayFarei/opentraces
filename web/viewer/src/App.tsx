@@ -133,6 +133,8 @@ export function App() {
     ? [
         ["j/k", "move"],
         ["space", "add/remove"],
+        ["r", "refresh"],
+        ["?", "help"],
         ["q", "quit"],
       ]
     : [

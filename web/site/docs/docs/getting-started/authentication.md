@@ -2,23 +2,25 @@
 
 opentraces publishes to HuggingFace Hub. You need an HF account.
 
-## Token Login (Recommended)
-
-```bash
-opentraces auth login --token
-```
-
-Prompts for a HuggingFace access token. Generate one at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) with **write** scope. This is required for creating datasets and pushing traces.
-
 ## Browser Login
 
 ```bash
 opentraces auth login
 ```
 
-Opens a browser-based OAuth device code flow, similar to `gh auth login`. You'll see a short code to enter at huggingface.co.
+By default, `opentraces auth login` starts Hugging Face's OAuth device flow in your browser. This is the simplest path on a developer machine and supports the normal dataset workflow.
 
-> **Note:** OAuth tokens can write to existing dataset repos but cannot create new ones. If your dataset repo doesn't exist yet, use `opentraces auth login --token` with a write-access personal access token to create it.
+The CLI requests the scopes it needs to read, create, push, delete, and change visibility on datasets in namespaces you belong to.
+
+## Token Login
+
+```bash
+opentraces auth login --token
+```
+
+Use a personal access token when you are headless, on CI, or cannot complete the browser flow.
+
+Generate the token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
 
 ## Environment Variable
 
@@ -36,7 +38,8 @@ The CLI checks for `HF_TOKEN` automatically. Useful in CI pipelines where intera
 ## Verify
 
 ```bash
-opentraces auth
+opentraces auth whoami
+opentraces auth status
 ```
 
 Shows your authenticated HuggingFace username.
@@ -47,4 +50,4 @@ Shows your authenticated HuggingFace username.
 opentraces auth logout
 ```
 
-Clears stored credentials from `~/.opentraces/credentials.json`.
+Clears stored credentials from `~/.opentraces/credentials`.

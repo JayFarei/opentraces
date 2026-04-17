@@ -3,7 +3,7 @@
 ## Setup
 
 ```bash
-git clone https://github.com/jayfarei/opentraces
+git clone https://github.com/JayFarei/opentraces
 cd opentraces
 python3 -m venv .venv
 source .venv/bin/activate
@@ -21,68 +21,47 @@ pip install -e ".[release]"       # Build and publish tools (build, twine)
 ## Running Tests
 
 ```bash
-make test                         # or: ./.venv/bin/pytest -q
-make lint                         # ruff check
+pytest tests/ -v
 ```
 
 Some tests require real Claude Code trace data and are skipped by default. To run them, set the env var pointing to your project's Claude Code sessions directory:
 
 ```bash
 export OPENTRACES_TEST_PROJECT_DIR=~/.claude/projects/<your-project-slug>
-make test
+pytest tests/ -v
 ```
 
 The repository also has frontend test suites under `web/viewer/` and buildable docs under `web/site/`.
 
-## Building and Releasing
+## Layout
 
-The `Makefile` orchestrates the full build and release pipeline:
+Core directories:
 
-```bash
-make build            # Build viewer, schema, and CLI packages
-make version-check    # Show current versions
-make release          # Full pipeline: test, lint, build, publish to PyPI, tag
-```
+- `packages/opentraces-schema/` - standalone schema package
+- `packages/opentraces-ui/` - shared UI package and design system
+- `src/opentraces/cli/` - Click command surface
+- `src/opentraces/core/` - config, paths, workflow, state, review, inbox, publish flow
+- `src/opentraces/capture/` - live parsers, importers, and hook installers
+- `src/opentraces/publish/` - serializers and Hugging Face publishing
+- `src/opentraces/enrichment/` - git signals, attribution, dependencies, metrics
+- `src/opentraces/quality/` - scoring and upload gates
+- `src/opentraces/security/` - redaction and scanning pipeline
+- `src/opentraces/clients/` - TUI and web backend clients
+- `web/viewer/` - React trace review UI
+- `web/site/` - Next.js docs and marketing site
+- `tests/` - Python test suite
 
-The CLI version lives in `src/opentraces/__init__.py` (single source of truth). The schema version lives in `packages/opentraces-schema/src/opentraces_schema/version.py`.
-
-## Project Structure
-
-```
-packages/opentraces-schema/   Schema package (Pydantic v2 models)
-src/opentraces/               CLI package
-  cli.py                      Click-based CLI entry point
-  clients/                    TUI and Flask inbox clients
-  parsers/                    Agent trace parsers
-  security/                   Secret scanning and anonymization
-  enrichment/                 Git signals, attribution, metrics
-  quality/                    Trace quality assessment and rubrics
-  upload/                     Hugging Face upload helpers
-tests/                        Python test suite
-web/viewer/                   React inbox viewer (bundled in pip package)
-web/site/                     Next.js docs and marketing site
-Makefile                      Build, test, and release orchestration
-Formula/                      Homebrew formula template
-```
-
-## Key Files
-
-- `src/opentraces/cli.py` - CLI commands and hidden automation hooks
-- `src/opentraces/clients/web_server.py` - Flask inbox server that serves the React viewer
-- `src/opentraces/clients/tui.py` - Textual inbox client
-- `src/opentraces/pipeline.py` - Enrichment and security pipeline
-- `packages/opentraces-schema/src/opentraces_schema/models.py` - Pydantic schema models
+The CLI version lives in `src/opentraces/__init__.py`. The schema version lives in `packages/opentraces-schema/src/opentraces_schema/version.py`.
 
 ## Adding A Parser
 
-1. Create `src/opentraces/parsers/your_agent.py`
-2. Implement the `SessionParser` protocol in `src/opentraces/parsers/base.py`
-3. Register it in `src/opentraces/parsers/__init__.py`
+1. Create a capture adapter under `src/opentraces/capture/`
+2. Implement `SessionParser` or `FormatImporter` from `src/opentraces/capture/_base.py`
+3. Register it in `src/opentraces/capture/__init__.py`
 4. Add tests under `tests/`
 
 ## Notes
 
-- The current shipped parser is Claude Code
-- The inbox workflow is `web/tui/trace -> commit/reject/redact -> push`
-- Hidden commands still exist for compatibility and automation, but the public docs should use `web`, `tui`, `trace`, `commit`, and `push`
-- The React viewer (`web/viewer/dist`) is bundled into the pip package via `force-include` in `pyproject.toml`
+- The current live-capture adapter is Claude Code
+- Hermes currently ships as an import path via `opentraces pull --parser hermes`
+- The public inbox workflow is `web/tui/list/show -> add/reject/redact -> push`

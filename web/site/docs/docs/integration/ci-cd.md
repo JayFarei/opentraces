@@ -1,56 +1,77 @@
 # CI/CD & Automation
 
-Headless environments can use the same inbox and upload model, but the commands should be run explicitly.
+Use the same explicit workflow in automation that you use locally: initialize, inspect, stage, push.
 
 ## Authentication
+
+`HF_TOKEN` is the preferred CI path:
 
 ```bash
 export HF_TOKEN=hf_...
 ```
 
-or:
-
-```bash
-opentraces auth login --token
-```
-
-`HF_TOKEN` is the preferred path in CI.
+You do not need to run `opentraces auth login` when `HF_TOKEN` is already set in the environment.
 
 ## Recommended Pattern
 
-If you are running opentraces in automation, keep the steps explicit:
+For headless runs:
 
 ```bash
 opentraces init --review-policy review --remote my-org/opentraces --no-hook
 opentraces list
-opentraces add <trace-id>
 opentraces add --all
-opentraces push --private
+opentraces push --private --yes
 ```
 
-Your CI script should call `commit` and `push` directly.
+If the runner needs to import traces from another dataset first:
 
-## GitHub Actions
+```bash
+opentraces pull owner/dataset --parser hermes --auto
+opentraces push --private --yes
+```
+
+## Health Checks
+
+Run these before a gated push:
+
+```bash
+opentraces doctor
+opentraces doctor --security
+```
+
+If you rely on optional integrations, configure them explicitly in automation:
+
+```bash
+opentraces setup trufflehog --enable
+opentraces setup llm-review --enable
+```
+
+Those commands assume the required binary or endpoint is already available.
+
+## GitHub Actions Example
 
 ```yaml
 - name: Install opentraces
   run: pip install opentraces
 
-- name: Authenticate with Hugging Face
+- name: Initialize project
   env:
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  run: opentraces auth login --token
+  run: opentraces init --review-policy review --remote my-org/opentraces --no-hook
 
-- name: Commit and push traces
+- name: Stage traces
   env:
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  run: |
-    opentraces add --all
-    opentraces push --private
+  run: opentraces add --all
+
+- name: Push traces
+  env:
+    HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  run: opentraces push --private --yes
 ```
 
 ## Notes
 
 - Use `--private` for proprietary codebases
-- Use `--repo owner/dataset` if you want a shared team dataset
-- If you need to capture a specific Claude Code session directory yourself, wire the hidden `_capture` command into your own hook or runner
+- Use `--repo owner/dataset` or `--remote ...` for shared team datasets
+- Use `push --llm-review` only if llm-review is already configured and reachable on the runner

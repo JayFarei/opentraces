@@ -19,7 +19,7 @@ export const DOC_NAV: DocEntry[] = [
   { slug: "cli/troubleshooting", title: "Troubleshooting", group: "CLI" },
 
   // Security
-  { slug: "security/tiers", title: "Security Modes", group: "Security" },
+  { slug: "security/tiers", title: "Security Tiers", group: "Security" },
   { slug: "security/scanning", title: "Scanning & Redaction", group: "Security" },
   { slug: "security/configuration", title: "Configuration", group: "Security" },
 
@@ -35,6 +35,7 @@ export const DOC_NAV: DocEntry[] = [
   { slug: "workflow/parsing", title: "Parse", group: "Workflow" },
   { slug: "workflow/review", title: "Review", group: "Workflow" },
   { slug: "workflow/quality", title: "Assess", group: "Workflow" },
+  { slug: "workflow/blame", title: "Blame", group: "Workflow" },
   { slug: "workflow/pushing", title: "Push", group: "Workflow" },
   { slug: "workflow/consume", title: "Consume", group: "Workflow" },
   { slug: "workflow/export", title: "Export", group: "Workflow" },

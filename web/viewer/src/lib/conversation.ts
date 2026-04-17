@@ -163,3 +163,11 @@ export function relativeAge(iso?: string): string {
   if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
   return `${Math.round(sec / 86400)}d ago`;
 }
+
+export function isRecentlyTouched(iso?: string, windowSeconds = 7200): boolean {
+  if (!iso) return false;
+  const d = Date.parse(iso);
+  if (Number.isNaN(d)) return false;
+  const sec = (Date.now() - d) / 1000;
+  return sec >= 0 && sec <= windowSeconds;
+}

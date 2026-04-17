@@ -483,6 +483,97 @@ async def test_help_overlay_is_centered(staged_app):
 
 
 @pytest.mark.asyncio
+async def test_help_overlay_mentions_trace_row_legend(staged_app):
+    app, _, _ = staged_app
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        text = str(app.query_one("#help-card").render())
+        for label in (
+            "Trace Row Legend",
+            "recently touched",
+            "findings need review",
+            "blocked",
+            "same session resumed",
+            "pulls newer trace; push latest",
+        ):
+            assert label in text, text
+
+
+@pytest.mark.asyncio
+async def test_help_overlay_fits_short_terminal(staged_app):
+    app, _, _ = staged_app
+    width, height = 100, 24
+    async with app.run_test(size=(width, height)) as pilot:
+        await pilot.pause()
+        await pilot.press("question_mark")
+        await pilot.pause()
+        card = app.query_one("#help-card")
+        text = str(card.render())
+        assert "same session resumed" in text, text
+        assert card.region.height <= height, card.region
+
+
+@pytest.mark.asyncio
+async def test_refresh_modal_shows_live_counts(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+    t = _make_trace("trace_refresh_001", "refresh me")
+    (staging / f"{t['trace_id']}.jsonl").write_text(json.dumps(t) + "\n")
+
+    from opentraces.core import ingest as ingest_core
+    from opentraces.core.ingest import IngestResult, ScanReport
+
+    def fake_scan_project(project_dir, *, reparse=False, paths=None,
+                          cfg=None, on_result=None):
+        results = [
+            IngestResult(session_id="sess-new", action="new",
+                         trace_id="trace_new_001"),
+            IngestResult(session_id="sess-refresh", action="refreshed",
+                         trace_id="trace_refresh_001"),
+            IngestResult(session_id="sess-gen", action="new_generation",
+                         trace_id="trace_gen_002",
+                         supersedes="trace_gen_001"),
+            IngestResult(session_id="sess-noop", action="noop"),
+            IngestResult(session_id="sess-skip", action="skipped"),
+            IngestResult(session_id="sess-err", action="error",
+                         error="boom"),
+        ]
+        total = len(results)
+        for idx, result in enumerate(results, start=1):
+            if on_result is not None:
+                on_result(result, idx, total)
+        return ScanReport(project_dir=Path(project_dir), results=results)
+
+    monkeypatch.setattr(ingest_core, "scan_project", fake_scan_project)
+
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press("r")
+        await pilot.pause()
+        await pilot.pause()
+        stats = str(app.screen.query_one("#refresh-runner-stats").render())
+        log = app.screen.query_one("#refresh-runner-log")
+        rendered = "".join(
+            seg.text for strip in log.lines for seg in strip
+        )
+        assert "Sessions  6/6" in stats, stats
+        assert "New  1" in stats, stats
+        assert "Refreshed  1" in stats, stats
+        assert "New gen  1" in stats, stats
+        assert "No-op  1" in stats, stats
+        assert "Skipped  1" in stats, stats
+        assert "Errors  1" in stats, stats
+        assert "sess-gen" in rendered, rendered
+        assert "supersedes trace_ge" in rendered, rendered
+
+
+@pytest.mark.asyncio
 async def test_discard_is_deferred_and_undoable(tmp_path, monkeypatch):
     """Discard hides the trace but keeps the file. Undo restores it."""
     project = tmp_path / "proj"

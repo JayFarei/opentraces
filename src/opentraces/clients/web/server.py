@@ -57,6 +57,32 @@ def _coerce_status(val: TraceStatus | str | None) -> TraceStatus:
         return TraceStatus.PARSED
 
 
+def _trace_generation_index(
+    state: StateManager, trace: dict[str, Any], entry: Any | None,
+) -> int:
+    """Best-effort generation number for a trace list row."""
+    raw = trace.get("generation_index")
+    try:
+        generation = int(raw)
+    except (TypeError, ValueError):
+        generation = 0
+    if generation > 0:
+        return generation
+
+    session_id = str(trace.get("session_id") or (entry.session_id if entry else "") or "").strip()
+    if not session_id:
+        return 0
+    session = state.get_session(session_id)
+    if session is None:
+        return 0
+
+    trace_id = trace.get("trace_id")
+    for gen in reversed(session.generations):
+        if gen.trace_id == trace_id:
+            return int(gen.generation)
+    return 0
+
+
 
 
 def _generate_trace_id() -> str:
@@ -539,6 +565,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             trace_id = t["trace_id"]
             entry = state.get_trace(trace_id)
             status_enum = _coerce_status(entry.status if entry else None)
+            generation_index = _trace_generation_index(state, t, entry)
             sessions.append({
                 "trace_id": trace_id,
                 "task": (t.get("task", {}).get("description") or "")[:100],
@@ -553,9 +580,10 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
                 "tool_calls": sum(
                     len(s.get("tool_calls", [])) for s in t.get("steps", [])
                 ),
-                "timestamp": t.get("timestamp_start"),
+                "timestamp": t.get("timestamp_end") or t.get("timestamp_start"),
                 "status": _get_review_status(trace_id),
                 "_stage": resolve_visible_stage(status_enum),
+                "generation_index": generation_index,
                 # Count residual + auto-redacted items so the list badge
                 # matches the "flags" figure in the preview header. Counting
                 # only residuals under-reports on clean auto-redacted

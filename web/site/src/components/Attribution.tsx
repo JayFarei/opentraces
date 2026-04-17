@@ -1,308 +1,286 @@
-"use client";
-
-import { useState } from "react";
+import { Fragment, ReactNode } from "react";
 import SectionRule from "./SectionRule";
 
-type Trace = { short: string; lines: number[]; colorVar: string };
-
-const TRACES: Record<string, Trace> = {
-  "f706491a": {
-    short: "f706491a",
-    lines: [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20],
-    colorVar: "var(--cyan)",
-  },
-  "66717c54": {
-    short: "66717c54",
-    lines: [5, 15],
-    colorVar: "var(--accent)",
-  },
-};
-
-const TOTAL = 20;
-const FILE = "config/server.py";
-const LINE_WIDTHS = [68, 42, 85, 58, 34, 92, 66, 50, 78, 62, 40, 75, 53, 88, 32, 64, 80, 46, 72, 56];
-
-function getTrace(line: number): ({ id: string } & Trace) | null {
-  for (const [id, t] of Object.entries(TRACES)) {
-    if (t.lines.includes(line)) return { id, ...t };
-  }
-  return null;
-}
-
-function mix(color: string, pct: number): string {
-  return `color-mix(in oklab, ${color} ${pct}%, transparent)`;
-}
-
-// ── semantic diff pills (web/viewer convention) ──
-type DiffSym = "+" | "~" | "-" | "↷";
-type Count = { sym: DiffSym; n: number };
-
-const DIFF_COLOR: Record<DiffSym, string> = {
-  "+": "var(--green)",
-  "~": "var(--cyan)",
-  "-": "var(--red)",
-  "↷": "var(--yellow)",
-};
-
-function DiffPill({ sym, n }: Count) {
-  const color = DIFF_COLOR[sym];
-  return (
-    <span style={{
-      display: "inline-flex", alignItems: "center", gap: 2,
-      padding: "0 5px",
-      border: `1px solid ${mix(color, 40)}`,
-      background: mix(color, 10),
-      color,
-      fontFamily: "var(--font-mono)", fontSize: 10, lineHeight: 1.5,
-      whiteSpace: "nowrap",
-    }}>
-      <span style={{ fontWeight: 700 }}>{sym}</span>
-      <span>{n}</span>
-    </span>
-  );
-}
-
-function CovPill({ value }: { value: string }) {
-  const color = value === "100%" ? "var(--green)" : "var(--accent)";
-  return (
-    <span style={{
-      padding: "0 6px",
-      border: `1px solid ${mix(color, 40)}`,
-      background: mix(color, 10),
-      color,
-      fontFamily: "var(--font-mono)", fontSize: 10, lineHeight: 1.5,
-      fontWeight: 600, whiteSpace: "nowrap",
-    }}>{value}</span>
-  );
-}
-
-// ── graph data (trimmed) ──
+// ── Graph data ─────────────────────────────────────────────
+type GCount = { add?: number; mod?: number; del?: number; ren?: number };
 type GLine =
-  | { k: "trunk"; t: string }
-  | { k: "commit"; tree: string; hash: string; msg: string; cov?: string }
-  | { k: "sess"; tree: string; hash: string; counts?: Count[]; noun?: string; detail?: string };
-
-const cmt = (tree: string, hash: string, msg: string, cov?: string): GLine => ({ k: "commit", tree, hash, msg, cov });
-const ses = (tree: string, hash: string, counts: Count[] | undefined, noun?: string, detail?: string): GLine => ({ k: "sess", tree, hash, counts, noun, detail });
-const tr = (t: string): GLine => ({ k: "trunk", t });
+  | { kind: "trunk"; text: string }
+  | { kind: "commit"; tree: string; hash: string; msg: string; cov?: string }
+  | { kind: "sess"; tree: string; hash: string; counts?: GCount; noun?: string; detail?: string };
 
 const GRAPH: GLine[] = [
-  cmt("┊●   ", "7c3b1927", "marketing skill"),
-  tr("┊"),
-  ses("┊╭┄", "5baac494", [{ sym: "~", n: 1 }], undefined, "push"),
-  cmt("┊●   ", "6899f64c", "fix(publish): report failed loads", "100%"),
-  tr("├╯"),
-  tr("┊"),
-  ses("┊╭┄", "fa2fe980", [{ sym: "+", n: 14 }, { sym: "~", n: 4 }, { sym: "-", n: 1 }, { sym: "↷", n: 1 }], "fns"),
-  ses("┊├┄", "be59b9f8", [{ sym: "+", n: 7 }, { sym: "~", n: 10 }], "fns"),
-  ses("┊├┄", "0e7c776c", [{ sym: "+", n: 10 }, { sym: "~", n: 5 }], "fns"),
-  cmt("┊●   ", "83d26672", "feat(capture): resume sessions", "100%"),
-  tr("├╯"),
-  tr("┊"),
-  ses("┊╭┄", "6606fc1f", [{ sym: "+", n: 8 }, { sym: "~", n: 12 }, { sym: "-", n: 2 }], "fns"),
-  ses("┊├┄", "fe8fe3fd", [{ sym: "+", n: 6 }, { sym: "~", n: 1 }], "fns"),
-  cmt("┊●   ", "ac019172", "feat(viewer): hover actions", "100%"),
-  tr("├╯"),
-  tr("┊"),
-  ses("┊╭┄", "6606fc1f", [{ sym: "~", n: 2 }]),
-  cmt("┊●   ", "92c23ccc", "Refine trace map", "35%"),
-  tr("├╯"),
+  { kind: "sess", tree: "┊╭┄", hash: "5baac494", counts: { mod: 1 }, detail: "push" },
+  { kind: "commit", tree: "┊●   ", hash: "6899f64c", msg: "fix(publish): report failed loads", cov: "100%" },
+  { kind: "trunk", text: "├╯" },
+  { kind: "trunk", text: "┊" },
+  { kind: "sess", tree: "┊╭┄", hash: "fa2fe980", counts: { add: 14, mod: 4, del: 1, ren: 1 }, noun: "fns" },
+  { kind: "sess", tree: "┊├┄", hash: "be59b9f8", counts: { add: 7, mod: 10 }, noun: "fns", detail: "state, test_resume" },
+  { kind: "sess", tree: "┊├┄", hash: "0e7c776c", counts: { add: 10, mod: 5 }, noun: "fns", detail: "resume, parse" },
+  { kind: "commit", tree: "┊●   ", hash: "83d26672", msg: "feat(capture): resume sessions", cov: "100%" },
+  { kind: "trunk", text: "├╯" },
+  { kind: "trunk", text: "┊" },
+  { kind: "sess", tree: "┊╭┄", hash: "6606fc1f", counts: { add: 8, mod: 12, del: 2 }, noun: "fns", detail: "server, graph_api" },
+  { kind: "sess", tree: "┊├┄", hash: "fe8fe3fd", counts: { add: 6, mod: 1 }, noun: "fns", detail: "PushModal" },
+  { kind: "commit", tree: "┊●   ", hash: "ac019172", msg: "feat(viewer): hover actions", cov: "100%" },
+  { kind: "trunk", text: "├╯" },
+  { kind: "trunk", text: "┊" },
+  { kind: "sess", tree: "┊╭┄", hash: "6606fc1f", counts: { mod: 2 } },
+  { kind: "commit", tree: "┊●   ", hash: "92c23ccc", msg: "Refine trace map", cov: "35%" },
+  { kind: "trunk", text: "├╯" },
 ];
 
-// ── component ──
-export default function Attribution() {
-  const [hTrace, setHTrace] = useState<string | null>(null);
-  const [hLine, setHLine] = useState<number | null>(null);
-  const codeLines = Array.from({ length: TOTAL }, (_, i) => ({ n: i + 1, t: getTrace(i + 1) }));
+// ── Blame data — sums to 100% of the commit's diff ─────────
+const COMMIT = {
+  hash: "ac019172",
+  msg: "feat(viewer): hover actions, two-stage push",
+  diffLines: 94,
+  filesCount: 5,
+};
 
+type TraceRow = {
+  hash: string;
+  model: string;
+  lines: number;
+  pct: number;
+  added?: string[];
+  modified?: string[];
+};
+
+const TRACES: TraceRow[] = [
+  {
+    hash: "6606fc1f",
+    model: "claude-code",
+    lines: 45,
+    pct: 48,
+    added: ["server", "graph_api", "api"],
+    modified: ["__file_patterns__", "PushSelected"],
+  },
+  {
+    hash: "fe8fe3fd",
+    model: "claude-code",
+    lines: 30,
+    pct: 32,
+    added: ["PushModal", "PushModal.onOpen"],
+  },
+  {
+    hash: "5baac494",
+    model: "claude-code",
+    lines: 19,
+    pct: 20,
+    added: ["ReviewView", "TraceSecurityModal"],
+  },
+];
+
+const FILES = [
+  { path: "components/review/PushModal.tsx", lines: 45, edits: 12 },
+  { path: "components/modals/TraceSecurityModal.tsx", lines: 21, edits: 6 },
+  { path: "lib/conversation.ts", lines: 15, edits: 4 },
+  { path: "App.tsx", lines: 8, edits: 2 },
+  { path: "components/review/ReviewView.tsx", lines: 5, edits: 1 },
+];
+
+// ── helpers ────────────────────────────────────────────────
+function Counts({ c }: { c: GCount }) {
+  const items: ReactNode[] = [];
+  if (c.add) items.push(<span key="a" className="ok">+{c.add}</span>);
+  if (c.mod) items.push(<span key="m" className="n">~{c.mod}</span>);
+  if (c.del) items.push(<span key="d" className="er">-{c.del}</span>);
+  if (c.ren) items.push(<span key="r" className="w">↷{c.ren}</span>);
+  return (
+    <>
+      {items.map((node, i) => (
+        <span key={i}>
+          {i > 0 && " "}
+          {node}
+        </span>
+      ))}
+    </>
+  );
+}
+
+const codeStyle = { fontFamily: "var(--font-mono)", color: "var(--text)" };
+
+// ── component ──────────────────────────────────────────────
+export default function Attribution() {
   return (
     <section>
       <SectionRule label="attribution" />
       <div className="section-title">Who wrote this line of code?</div>
-      <p className="section-sub" style={{ maxWidth: 560 }}>
-        When agents write the code, <code style={{ fontFamily: "var(--font-mono)", color: "var(--text)" }}>git blame</code> points at a session, not a person.{" "}
-        <code style={{ fontFamily: "var(--font-mono)", color: "var(--text)" }}>ot blame</code> and{" "}
-        <code style={{ fontFamily: "var(--font-mono)", color: "var(--text)" }}>otd graph</code> resolve every line and commit back to the trace that produced it.
+      <p className="section-sub" style={{ maxWidth: 620, marginBottom: 16 }}>
+        When agents write the code, <code style={codeStyle}>git blame</code> points at a session, not a person.{" "}
+        <code style={codeStyle}>ot blame</code> and <code style={codeStyle}>otd graph</code> resolve every commit back to the traces that produced it.
+      </p>
+      <p className="section-sub" style={{ maxWidth: 620 }}>
+        Attribution runs at the <strong style={{ color: "var(--text)" }}>semantic-diff level</strong> — added functions, modified entities, renamed files — not raw line counts. Each commit accounts for 100% of its diff, and agents reason about{" "}
+        <code style={codeStyle}>+14 ~4 -1 ↷1 fns</code> instead of re-reading hunks.
       </p>
 
-      <div className="attr-panels" style={{ border: "1px solid var(--border)", display: "flex", background: "var(--bg)" }}>
-        <div className="attr-pane attr-pane-blame" style={{ flex: 1, minWidth: 0, borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column" }}>
-          <PaneHeader label="blame" hint={FILE} />
-          <BlameView codeLines={codeLines} hTrace={hTrace} setHTrace={setHTrace} hLine={hLine} setHLine={setHLine} />
-        </div>
-        <div className="attr-pane attr-pane-graph" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-          <PaneHeader label="graph" hint="--limit 5" />
-          <GraphView />
+      <div className="terminal attr-terminal">
+        <div className="attr-grid">
+          <div className="attr-pane">
+            <div className="terminal-bar">
+              <span>graph</span>
+              <span>opentraces graph --limit 4</span>
+            </div>
+            <div className="terminal-body attr-body">
+              <GraphView />
+            </div>
+          </div>
+          <div className="attr-pane attr-pane-right">
+            <div className="terminal-bar">
+              <span>blame</span>
+              <span>opentraces blame ac019172</span>
+            </div>
+            <div className="terminal-body attr-body">
+              <BlameView />
+            </div>
+          </div>
         </div>
       </div>
     </section>
   );
 }
 
-function PaneHeader({ label, hint }: { label: string; hint: string }) {
-  return (
-    <div style={{
-      display: "flex", justifyContent: "space-between", alignItems: "center",
-      padding: "8px 14px", borderBottom: "1px solid var(--border)",
-      fontFamily: "var(--font-mono)", fontSize: 12,
-    }}>
-      <span style={{ color: "var(--text)", fontWeight: 500 }}>{label}</span>
-      <span style={{ color: "var(--text-dim)", fontSize: 11 }}>{hint}</span>
-    </div>
-  );
-}
-
-// ── blame (file view only, no sessions sidebar) ──
-function BlameView({
-  codeLines,
-  hTrace,
-  setHTrace,
-  hLine,
-  setHLine,
-}: {
-  codeLines: { n: number; t: ({ id: string } & Trace) | null }[];
-  hTrace: string | null;
-  setHTrace: (v: string | null) => void;
-  hLine: number | null;
-  setHLine: (v: number | null) => void;
-}) {
-  return (
-    <div style={{ background: "var(--bg-alt)", flex: 1, display: "flex", padding: "8px 0", minWidth: 0 }}>
-      {/* color stripe */}
-      <div style={{ display: "flex", flexDirection: "column" }}>
-        {codeLines.map(({ n, t: trace }) => {
-          if (!trace) return <div key={n} style={{ width: 3, height: 22 }} />;
-          const hi = hTrace && trace.id === hTrace;
-          const dim = hTrace && trace.id !== hTrace;
-          const bg = dim ? mix(trace.colorVar, 10) : hi ? trace.colorVar : mix(trace.colorVar, 55);
-          return (
-            <div key={n}
-              onMouseEnter={() => { setHLine(n); setHTrace(trace.id); }}
-              onMouseLeave={() => { setHLine(null); setHTrace(null); }}
-              style={{ width: 3, height: 22, background: bg, transition: "all 0.1s", cursor: "pointer" }}
-            />
-          );
-        })}
-      </div>
-
-      {/* session id (shown on first line of each run) */}
-      <div style={{ display: "flex", flexDirection: "column", padding: "0 10px" }}>
-        {codeLines.map(({ n, t: trace }) => {
-          if (!trace) return <div key={n} style={{ height: 22, minWidth: 64 }} />;
-          const prev = codeLines[n - 2];
-          const isNew = !prev || prev.t?.id !== trace.id;
-          const dim = hTrace && trace.id !== hTrace;
-          return (
-            <div key={n}
-              onMouseEnter={() => { setHLine(n); setHTrace(trace.id); }}
-              onMouseLeave={() => { setHLine(null); setHTrace(null); }}
-              style={{
-                height: 22, display: "flex", alignItems: "center",
-                fontFamily: "var(--font-mono)", fontSize: 10,
-                color: dim ? "var(--text-dim)" : mix(trace.colorVar, 75),
-                minWidth: 64, cursor: "pointer", transition: "color 0.1s",
-              }}
-            >{isNew ? trace.short : ""}</div>
-          );
-        })}
-      </div>
-
-      {/* line numbers */}
-      <div style={{ display: "flex", flexDirection: "column", padding: "0 10px", userSelect: "none" }}>
-        {codeLines.map(({ n, t: trace }) => {
-          const dim = hTrace && trace && trace.id !== hTrace;
-          return (
-            <div key={n}
-              onMouseEnter={() => { setHLine(n); if (trace) setHTrace(trace.id); }}
-              onMouseLeave={() => { setHLine(null); setHTrace(null); }}
-              style={{
-                height: 22, display: "flex", alignItems: "center", justifyContent: "flex-end", minWidth: 20,
-                fontFamily: "var(--font-mono)", fontSize: 11,
-                color: dim ? "var(--text-dim)" : "var(--text-muted)",
-                transition: "color 0.1s", cursor: "pointer",
-              }}
-            >{n}</div>
-          );
-        })}
-      </div>
-
-      {/* code skeleton */}
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, padding: "0 16px", minWidth: 0 }}>
-        {codeLines.map(({ n, t: trace }) => {
-          if (!trace) return <div key={n} style={{ height: 22 }} />;
-          const dim = hTrace && trace.id !== hTrace;
-          const hi = hTrace && trace.id === hTrace;
-          const lineHov = hLine === n;
-          const w = LINE_WIDTHS[(n - 1) % LINE_WIDTHS.length];
-          const indent = [5, 15].includes(n) ? 24 : [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(n) ? 16 : 0;
-          return (
-            <div key={n}
-              onMouseEnter={() => { setHLine(n); setHTrace(trace.id); }}
-              onMouseLeave={() => { setHLine(null); setHTrace(null); }}
-              style={{
-                height: 22, display: "flex", alignItems: "center",
-                paddingLeft: indent, cursor: "pointer",
-                background: lineHov ? "var(--surface-hover)" : "transparent",
-                transition: "background 0.1s",
-              }}
-            >
-              <div style={{
-                height: 4, width: `${w}%`, maxWidth: 260,
-                background: dim ? mix(trace.colorVar, 6) : hi ? mix(trace.colorVar, 40) : mix(trace.colorVar, 18),
-                transition: "all 0.1s",
-              }} />
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── graph ──
+// ── graph: plain mono text, semantic colors only ──────────
 function GraphView() {
   return (
-    <div style={{ background: "var(--bg-alt)", flex: 1, padding: "10px 14px", overflow: "auto", minWidth: 0 }}>
+    <div className="attr-mono">
       {GRAPH.map((line, i) => {
-        if (line.k === "trunk") {
+        if (line.kind === "trunk") {
           return (
-            <div key={i} style={{ fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.8, color: "var(--text-dim)", whiteSpace: "pre" }}>
-              {line.t}
+            <div key={i} className="di attr-trunk">
+              {line.text}
             </div>
           );
         }
-        if (line.k === "commit") {
+        if (line.kind === "commit") {
+          // Commit = orange ●, orange c:, default-text hash — visually strong anchor.
+          const trunkOnly = line.tree.replace("●", "").replace(/ +$/, "");
           return (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.8, minHeight: 20, whiteSpace: "nowrap", minWidth: 0 }}>
-              <span style={{ color: "var(--text-dim)", whiteSpace: "pre" }}>{line.tree}</span>
-              <span style={{ color: "var(--accent)" }}>c:</span>
-              <span style={{ color: "var(--text)" }}>{line.hash}</span>
-              <span style={{ color: "var(--text-secondary)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", flex: "0 1 auto" }}>{line.msg}</span>
-              {line.cov && <CovPill value={line.cov} />}
-            </div>
-          );
-        }
-        // sess
-        return (
-          <div key={i} style={{ display: "flex", alignItems: "center", gap: 6, fontFamily: "var(--font-mono)", fontSize: 11, lineHeight: 1.8, minHeight: 20, whiteSpace: "nowrap", minWidth: 0 }}>
-            <span style={{ color: "var(--text-dim)", whiteSpace: "pre" }}>{line.tree}</span>
-            <span style={{ color: "var(--accent)" }}>s:</span>
-            <span style={{ color: "var(--text-muted)" }}>{line.hash}</span>
-            {line.counts && (
-              <span style={{ display: "inline-flex", gap: 3 }}>
-                {line.counts.map((c, j) => <DiffPill key={j} sym={c.sym} n={c.n} />)}
+            <div key={i} className="attr-row">
+              <span className="attr-tree">
+                <span className="di">{trunkOnly}</span>
+                <span className="f">●</span>
+                <span className="di">   </span>
               </span>
-            )}
-            {line.noun && <span style={{ color: "var(--text-muted)" }}>{line.noun}</span>}
+              <span className="f">c:</span>
+              <span>{line.hash}</span>
+              <span className="attr-ellip">{line.msg}</span>
+              {line.cov && (
+                <span className={line.cov === "100%" ? "ok" : "f"} style={{ marginLeft: "auto" }}>
+                  {line.cov}
+                </span>
+              )}
+            </div>
+          );
+        }
+        // Session — dim tree branch, cyan s:, yellow hash.
+        return (
+          <div key={i} className="attr-row">
+            <span className="di attr-tree">{line.tree}</span>
+            <span className="n">s:</span>
+            <span className="w">{line.hash}</span>
+            {line.counts && <Counts c={line.counts} />}
+            {line.noun && <span className="di">{line.noun}</span>}
             {line.detail && (
               <>
-                <span style={{ color: "var(--text-dim)" }}>│</span>
-                <span style={{ color: "var(--text-muted)", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", flex: "0 1 auto" }}>{line.detail}</span>
+                <span className="di">│</span>
+                <span className="w attr-ellip">{line.detail}</span>
               </>
             )}
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ── blame: commit header + spine linking to traces + files ─
+function BlameView() {
+  const totalLines = TRACES.reduce((s, t) => s + t.lines, 0);
+  const totalPct = TRACES.reduce((s, t) => s + t.pct, 0);
+
+  return (
+    <div className="attr-mono">
+      {/* Commit header: ● + commit HASH msg */}
+      <div className="attr-row">
+        <span className="attr-tree">
+          <span className="f">●</span>
+          <span className="di">  </span>
+        </span>
+        <span className="f" style={{ fontWeight: 500 }}>commit</span>
+        <span>{COMMIT.hash}</span>
+        <span className="attr-ellip">{COMMIT.msg}</span>
+      </div>
+      <div className="attr-row">
+        <span className="attr-tree di">│  </span>
+        <span className="di">
+          <span className="n">{COMMIT.diffLines}</span> diff lines · <span className="n">{TRACES.length}</span> traces · <span className="n">{COMMIT.filesCount}</span> files
+        </span>
+      </div>
+      <div className="attr-trunk di">│</div>
+
+      {/* Trace blocks on the spine */}
+      {TRACES.map((t, i) => {
+        const isLast = i === TRACES.length - 1;
+        const branch = isLast ? "╰" : "├";
+        const cont = isLast ? " " : "│";
+        return (
+          <Fragment key={i}>
+            <div className="attr-row">
+              <span className="attr-tree">
+                <span className="di">{branch}</span>
+                <span className="n">◆</span>
+              </span>
+              <span className="n">s:</span>
+              <span className="w">{t.hash}</span>
+              <span className="di">{t.model}</span>
+              <span className="di">·</span>
+              <span className="n">{t.lines}/{COMMIT.diffLines}</span>
+              <span className={t.pct === 100 ? "ok" : "f"} style={{ fontWeight: 500 }}>
+                {t.pct}%
+              </span>
+            </div>
+            {t.added && (
+              <div className="attr-row">
+                <span className="attr-tree di">{cont}  </span>
+                <span className="ok">+</span>
+                <span className="di">Added</span>
+                <span className="attr-ellip">{t.added.join(", ")}</span>
+              </div>
+            )}
+            {t.modified && (
+              <div className="attr-row">
+                <span className="attr-tree di">{cont}  </span>
+                <span className="n">~</span>
+                <span className="di">Modified</span>
+                <span className="attr-ellip">{t.modified.join(", ")}</span>
+              </div>
+            )}
+            {!isLast && <div className="attr-trunk di">│</div>}
+          </Fragment>
+        );
+      })}
+
+      {/* Total coverage summary */}
+      <div style={{ marginTop: 10 }}>
+        <span className="di">──── </span>
+        <span className="n">{totalLines}/{COMMIT.diffLines}</span>
+        <span className="di"> · </span>
+        <span className="ok" style={{ fontWeight: 600 }}>{totalPct}%</span>
+        <span className="di"> attributed ────</span>
+      </div>
+
+      <div className="di" style={{ marginTop: 10, marginBottom: 4 }}>files:</div>
+      {FILES.map((f, i) => (
+        <div key={i} className="attr-row">
+          <span className="attr-ellip" style={{ flex: "1 1 auto" }}>{f.path}</span>
+          <span className="n">{f.lines}L</span>
+          <span className="di">
+            (<span className="n">{f.edits}×</span> edits)
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

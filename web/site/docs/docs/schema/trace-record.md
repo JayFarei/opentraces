@@ -13,6 +13,7 @@ The top-level record. One per JSONL line, one per agent trace.
 | `execution_context` | string | no | `"devtime"` (code-editing agent) or `"runtime"` (action-trajectory / RL agent). Null for pre-0.2 traces. |
 | `lifecycle` | string | no | `"provisional"` (session ended, not yet tied to a revision) or `"final"` (post-commit hook correlated this trace to a commit). Defaults to `"provisional"`. Added 0.3.0 (RFC #25). |
 | `git_links` | array\<GitLink\> | no | Evidence-graded links to commits/revisions this trace contributed to. A trace may link to many commits (rebase, squash, long session); a commit may link to many traces (cherry-pick, composition). Added 0.3.0. See [Outcome & Attribution](/docs/schema/outcome-attribution) for the evidence-tier taxonomy and `GitLink` fields. |
+| `generation_index` | integer | no | Monotonic per-`session_id` generation counter. Generations are replacement snapshots, not stitchable supersets: later generations may carry different redactions, enrichments, or security-pipeline output. Consumers resolving "latest" should group by `session_id` and take `max(generation_index)`. Added 0.3.0. |
 
 ## Timestamps
 
@@ -101,12 +102,16 @@ Package names referenced during the trace. Extracted from manifest files or tool
     "total_steps": 42,
     "total_input_tokens": 1800000,
     "total_output_tokens": 34000,
+    "total_cache_read_tokens": 1650000,
+    "total_cache_creation_tokens": 82000,
     "total_duration_s": 780,
     "cache_hit_rate": 0.92,
     "estimated_cost_usd": 2.4
   }
 }
 ```
+
+`total_cache_read_tokens` and `total_cache_creation_tokens` are session-level cache aggregates added in 0.3.0 (prompt-cache hits + writes across steps).
 
 ## Security
 

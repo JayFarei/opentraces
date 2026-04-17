@@ -26,7 +26,7 @@ reports whether the binary resolves.
 
 ## Configuration
 
-Declared as an ordered list under a project's `.opentraces/config.json`:
+Declared as an ordered list under a project's `.opentraces.json`:
 
 ```json
 {
@@ -77,7 +77,7 @@ Make it executable (`chmod +x`), put it on `PATH`, and list it under
 
 ## Reference implementation
 
-`opentraces.processors.run_processor` / `run_chain`
-(`src/opentraces/processors.py`) drive every invocation. See
+`opentraces.core.processors.run_processor` / `run_chain`
+(`src/opentraces/core/processors.py`) drive every invocation. See
 `tests/test_processors.py` for the complete matrix of happy-path and
 failure-mode tests built against stub binaries.

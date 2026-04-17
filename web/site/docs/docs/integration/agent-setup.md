@@ -1,72 +1,70 @@
 # Agent Setup
 
-opentraces is designed to be driven by agents as well as by humans.
+opentraces is designed to be usable from both a shell and another coding agent.
 
-## What The CLI Emits
+## Project-Local Setup
 
-Most commands emit structured JSON with `next_steps` and `next_command`, so an agent can chain the workflow without parsing free-form text.
-
-## Setup by Agent
-
-`opentraces init` installs the capture hook for your agent and copies the bundled skill into `.agents/skills/opentraces/`. Pass `--agent` to specify which harness to connect.
-
-### Claude Code
+Inside a repo, the normal path is:
 
 ```bash
 opentraces auth login
-opentraces init --agent claude-code --review-policy review --start-fresh
+opentraces init --agent claude-code --review-policy review
 ```
 
-If the repo already has existing trace logs and you want them in the inbox immediately, switch `--start-fresh` to `--import-existing`.
+`init` writes `.opentraces.json`, registers the repo in the global config, installs the capture hook unless you opt out, and installs the bundled opentraces skill into the project.
 
-### Hook Enrichment
+## Claude Code
 
-For richer trace metadata, install the Claude Code capture hooks:
+Claude Code is the current live-capture adapter.
+
+For a full setup:
 
 ```bash
 opentraces setup claude-code
+opentraces setup git
+opentraces setup skill
 ```
 
-Or run `opentraces setup` with no arguments for an interactive wizard that walks every integration (Claude Code, git, trufflehog).
+What each integration does:
 
-This registers two hooks in `~/.claude/settings.json`:
-- **`on_stop`**, runs at trace end, captures context window state, token usage, and project metadata
-- **`on_compact`** (PostCompact event), captures context compaction events for long traces
+- `setup claude-code` installs the `Stop` and `PostCompact` hooks in `~/.claude/settings.json`
+- `setup git` installs the post-commit correlator that powers `opentraces blame`
+- `setup skill` installs the vendor-neutral skill under `~/.agents/skills/opentraces/` and links it into supported harnesses
 
-Hooks fire automatically on every agent run, no further action needed after `setup claude-code`.
+## Machine-Readable Agent Flows
 
-### Hermes
+Agents should prefer `--json` when they need structured output:
 
 ```bash
-opentraces auth login
-opentraces init --agent hermes --review-policy review --start-fresh
+opentraces --json status
+opentraces --json list --stage inbox
+opentraces --json show <trace-id>
+opentraces --json config show
 ```
 
-After setup, the current surfaces are:
+That avoids scraping human-oriented terminal layouts.
 
-- `opentraces web` for the browser inbox
-- `opentraces tui` for the terminal inbox
-- `opentraces list` for machine-readable review
-- `opentraces status` for the current inbox summary
-- `opentraces context` for a compact project snapshot
+## Review And Push By Agent
 
-## Hidden Capture Command
-
-The hook calls the hidden `_capture` command with a specific Claude Code session directory:
+A coding agent can drive the normal human workflow:
 
 ```bash
-opentraces _capture --session-dir /path/to/session --project-dir /path/to/project
+opentraces web
+opentraces add --all
+opentraces push
 ```
 
-That is the internal batch entry point for agent automation and tests.
-
-## Machine Discovery
-
-Hidden commands are still available for automation:
+Or the stricter security path:
 
 ```bash
-opentraces capabilities --json
-opentraces introspect
+opentraces llm-review --scope staged
+opentraces push --llm-review
 ```
 
-They expose versioning, feature discovery, and the current `TraceRecord` schema.
+## Dataset Import
+
+Hermes support is currently an import path, not a live-capture harness:
+
+```bash
+opentraces pull owner/dataset --parser hermes
+```

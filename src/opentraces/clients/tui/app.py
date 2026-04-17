@@ -176,10 +176,11 @@ def _tool_color(tool_name: str) -> str:
 class TraceRow(ListItem):
     """A single trace row: status dot · short id · task · relative time.
 
-    The leading dot is a 3-way status marker — red for LLM-blocked,
-    yellow for tier-1 findings that haven't yet risen to a block,
-    nothing otherwise. Tight space budget on a 52-col column means one
-    character is all we get; ``i`` on the row brings up the full
+    The leading marker is intentionally tiny, so the help overlay carries
+    the legend: red for blocked, yellow for residual findings, cyan half
+    dot for "recently touched", dim dot for normal rows. ``↑N`` is the
+    generation counter for the session: a newer trace from the same
+    session replacing an older one. ``i`` on the row brings up the full
     pipeline breakdown.
     """
 
@@ -228,7 +229,7 @@ class HelpOverlay(Vertical):
     """
 
     HELP = (
-        "[bold]Keybindings[/bold]\n\n"
+        "[bold]Keybindings[/bold]\n"
         "  [bold]1 2 3 4[/bold]   Focus Info / Inbox / Staged / Pushed\n"
         "  [bold]5[/bold]         Focus trace stream\n"
         "  [bold]j k[/bold] or [bold]↑ ↓[/bold]   Navigate\n"
@@ -244,6 +245,11 @@ class HelpOverlay(Vertical):
         "  [bold]i[/bold]         Security pipeline info for the selected trace\n"
         "  [bold]?[/bold]         Toggle this help\n"
         "  [bold]q[/bold]         Quit (flushes pending discards)\n"
+        "[bold]Trace Row Legend[/bold]\n"
+        "  [dim]·[/dim] normal   [cyan dim]◐[/cyan dim] recently touched (~2h)   "
+        "[yellow]●[/yellow] findings need review\n"
+        "  [red]●[/red] blocked  [cyan dim]↑N[/cyan dim] same session resumed; "
+        "[bold]r[/bold] pulls newer trace; push latest\n"
     )
 
     def __init__(self) -> None:
@@ -543,6 +549,149 @@ class PushRunnerModal(ModalScreen[None]):
             self.dismiss(None)
 
 
+class RefreshRunnerModal(ModalScreen[None]):
+    """Runs a generation-aware inbox refresh and surfaces live counts."""
+
+    BINDINGS = (Binding("escape", "dismiss_if_done", "Close"),)
+
+    def __init__(self, project_dir: Path, pre_snapshot: dict[str, str]) -> None:
+        super().__init__()
+        self.project_dir = project_dir
+        self.pre_snapshot = pre_snapshot
+        self._done = False
+        self._processed = 0
+        self._total = 0
+        self._counts: dict[str, int] = {
+            "new": 0,
+            "refreshed": 0,
+            "new_generation": 0,
+            "noop": 0,
+            "skipped": 0,
+            "error": 0,
+        }
+        self._current_session: str | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static("[bold]Refreshing inbox from session corpus[/bold]",
+                   id="refresh-runner-title"),
+            Static("", id="refresh-runner-stats", markup=True),
+            FocusableLog(id="refresh-runner-log", markup=False,
+                         wrap=True, highlight=False),
+            Static(
+                "[dim]Running... counts update as each session finishes.[/dim]",
+                id="refresh-runner-hint",
+            ),
+            id="refresh-runner-body",
+        )
+
+    def on_mount(self) -> None:
+        self._refresh_stats()
+        self.run_refresh()
+
+    def _refresh_stats(self) -> None:
+        total = self._total
+        current = self._current_session or "—"
+        body = (
+            f"[dim]Sessions[/dim]  {self._processed}/{total}\n"
+            f"[dim]New[/dim]  {self._counts['new']}    "
+            f"[dim]Refreshed[/dim]  {self._counts['refreshed']}    "
+            f"[dim]New gen[/dim]  {self._counts['new_generation']}\n"
+            f"[dim]No-op[/dim]  {self._counts['noop']}    "
+            f"[dim]Skipped[/dim]  {self._counts['skipped']}    "
+            f"[dim]Errors[/dim]  {self._counts['error']}\n"
+            f"[dim]Current[/dim]  {escape(current)}"
+        )
+        self.query_one("#refresh-runner-stats", Static).update(body)
+
+    def _set_total(self, total: int) -> None:
+        self._total = total
+        self._refresh_stats()
+
+    def _record_result(self, result: Any, done: int, total: int) -> None:
+        action = str(getattr(result, "action", "") or "")
+        if action in self._counts:
+            self._counts[action] += 1
+        self._processed = done
+        self._total = total
+        self._current_session = str(getattr(result, "session_id", "") or "—")
+        self._refresh_stats()
+
+        prefix = {
+            "new": "+",
+            "refreshed": "~",
+            "new_generation": "↑",
+            "noop": "·",
+            "skipped": "-",
+            "error": "!",
+        }.get(action, "?")
+        action_label = action.replace("_", " ") or "unknown"
+        tid = getattr(result, "trace_id", None)
+        sup = getattr(result, "supersedes", None)
+        err = getattr(result, "error", None)
+        bits = [
+            f"{prefix} {getattr(result, 'session_id', '?')}",
+            action_label,
+        ]
+        if tid:
+            bits.append(f"→ {str(tid)[:8]}")
+        if sup:
+            bits.append(f"supersedes {str(sup)[:8]}")
+        if err:
+            bits.append(f"({err})")
+        self.query_one("#refresh-runner-log", RichLog).write("  ".join(bits))
+
+    def _finish_run(self, report: Any) -> None:
+        self._done = True
+        self._current_session = None
+        self._refresh_stats()
+        finish = getattr(self.app, "_finish_refresh", None)
+        if callable(finish):
+            finish(self.pre_snapshot, report)
+        self.query_one("#refresh-runner-hint", Static).update(
+            "[dim]Done — Esc to close[/dim]"
+        )
+
+    def _finish_with_error(self, message: str) -> None:
+        self._done = True
+        self._current_session = None
+        self._counts["error"] += 1
+        self._refresh_stats()
+        self.query_one("#refresh-runner-log", RichLog).write(f"! refresh failed  ({message})")
+        self.query_one("#refresh-runner-hint", Static).update(
+            "[dim]Refresh failed — Esc to close[/dim]"
+        )
+        self.app.notify("Refresh failed", severity="error")
+
+    @work(thread=True, exclusive=True)
+    def run_refresh(self) -> None:
+        from ...core import ingest as ingest_core
+        from ...core.repo_identity import discover_claude_jsonl_corpus
+
+        try:
+            total = len(discover_claude_jsonl_corpus(self.project_dir))
+            self.app.call_from_thread(self._set_total, total)
+
+            def on_result(result: Any, done: int, total_count: int) -> None:
+                self.app.call_from_thread(
+                    self._record_result, result, done, total_count
+                )
+
+            report = ingest_core.scan_project(
+                self.project_dir,
+                on_result=on_result,
+            )
+        except Exception as exc:
+            logger.exception("Refresh scan failed")
+            self.app.call_from_thread(self._finish_with_error, str(exc))
+            return
+        self.app.call_from_thread(self._finish_run, report)
+
+    def action_dismiss_if_done(self) -> None:
+        if self._done:
+            self.dismiss(None)
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -645,7 +794,7 @@ HelpOverlay {
     max-height: 28;
     background: ansi_default;
     border: round ansi_bright_blue;
-    padding: 1 2;
+    padding: 0 2;
 }
 
 PushModal {
@@ -682,6 +831,26 @@ PushRunnerModal {
     padding: 1 2;
 }
 #push-runner-log {
+    height: 1fr;
+    background: ansi_default;
+    scrollbar-color: ansi_bright_black;
+}
+
+RefreshRunnerModal {
+    align: center middle;
+}
+#refresh-runner-body {
+    width: 90%;
+    height: 80%;
+    background: ansi_default;
+    border: round ansi_bright_blue;
+    padding: 1 2;
+}
+#refresh-runner-stats {
+    height: 4;
+    padding-bottom: 1;
+}
+#refresh-runner-log {
     height: 1fr;
     background: ansi_default;
     scrollbar-color: ansi_bright_black;
@@ -1446,77 +1615,78 @@ class OpenTracesApp(App):
         self.notify("Rejected · u to undo", severity="warning")
 
     def action_refresh(self) -> None:
-        """Re-capture sessions from disk, then rehydrate and report counts.
-
-        The heavy work (subprocess + state rebuild) runs on a worker
-        thread; the UI stays responsive. On completion we reuse
-        ``_rehydrate_after_external_write`` — same path the push flow
-        already uses when a subprocess has mutated state.json.
-        """
+        """Run a live inbox refresh with per-action counters."""
         pre_snapshot: dict[str, str] = {
             t.get("trace_id", ""): str(t.get("timestamp_end") or "")
             for t in self.traces
             if t.get("trace_id")
         }
-        self.notify("Refreshing: re-capturing sessions...", severity="information")
-        self._run_refresh_worker(pre_snapshot)
+        self.push_screen(RefreshRunnerModal(self.project_dir, pre_snapshot))
 
-    @work(thread=True, exclusive=True)
-    def _run_refresh_worker(self, pre_snapshot: dict[str, str]) -> None:
-        import subprocess
-        try:
-            subprocess.run(
-                [sys.executable, "-m", "opentraces", "_capture",
-                 "--project-dir", str(self.project_dir)],
-                cwd=str(self.project_dir),
-                check=False,
-                capture_output=True,
-                timeout=120,
-            )
-        except Exception:
-            logger.exception("Refresh capture failed")
-            self.call_from_thread(
-                self.notify, "Refresh failed (capture error)", severity="error"
-            )
-            return
-        self.call_from_thread(self._finish_refresh, pre_snapshot)
-
-    def _finish_refresh(self, pre_snapshot: dict[str, str]) -> None:
+    def _finish_refresh(self, pre_snapshot: dict[str, str], report: Any | None = None) -> None:
         self._rehydrate_after_external_write()
 
         remote_index = self._load_remote_index_if_fresh()
-        new_count = 0
-        updated_count = 0
         recently = 0
         supersedes_local = 0
         supersedes_remote = 0
         for trace in self.traces:
-            tid = trace.get("trace_id", "")
-            te = str(trace.get("timestamp_end") or "")
             gen = trace.get("generation_index") or 0
             sid = trace.get("session_id") or ""
-            if not tid:
-                continue
-            if tid not in pre_snapshot:
-                new_count += 1
-            elif pre_snapshot[tid] and te > pre_snapshot[tid]:
-                updated_count += 1
             if _is_recently_touched(trace.get("timestamp_end")):
                 recently += 1
-            if gen > 0 and sid:
+            if gen > 1 and sid:
                 supersedes_local += 1
                 if remote_index and remote_index.supersedes_remote(sid, gen):
                     supersedes_remote += 1
-        toast = (
-            f"Pulled +{new_count} new / ~{updated_count} updated · "
-            f"{recently} recently touched"
-        )
+
+        if report is None:
+            new_count = 0
+            updated_count = 0
+            for trace in self.traces:
+                tid = trace.get("trace_id", "")
+                te = str(trace.get("timestamp_end") or "")
+                if not tid:
+                    continue
+                if tid not in pre_snapshot:
+                    new_count += 1
+                elif pre_snapshot[tid] and te > pre_snapshot[tid]:
+                    updated_count += 1
+            toast = (
+                f"Pulled +{new_count} new / ~{updated_count} updated · "
+                f"{recently} recently touched"
+            )
+            severity = "information"
+        else:
+            created = int(getattr(report, "created", 0) or 0)
+            refreshed = int(getattr(report, "refreshed", 0) or 0)
+            new_generations = int(getattr(report, "new_generations", 0) or 0)
+            noops = int(getattr(report, "noops", 0) or 0)
+            skipped = int(getattr(report, "skipped", 0) or 0)
+            errored = int(getattr(report, "errored", 0) or 0)
+            parts = [
+                "Refresh complete",
+                f"{created} new",
+                f"{refreshed} refreshed",
+            ]
+            if new_generations:
+                parts.append(f"{new_generations} new gen")
+            if noops:
+                parts.append(f"{noops} unchanged")
+            if skipped:
+                parts.append(f"{skipped} skipped")
+            if errored:
+                parts.append(f"{errored} error(s)")
+            parts.append(f"{recently} recently touched")
+            toast = " · ".join(parts)
+            severity = "warning" if errored else "information"
+
         if supersedes_local:
             toast += (
                 f" · {supersedes_local} supersede earlier gen "
                 f"(remote {supersedes_remote} / local {supersedes_local - supersedes_remote})"
             )
-        self.notify(toast, severity="information")
+        self.notify(toast, severity=severity)
 
     def _load_remote_index_if_fresh(self, ttl_seconds: int = 900):
         """Return the cached RemoteIndex if present and younger than ``ttl_seconds``.

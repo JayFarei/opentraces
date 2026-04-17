@@ -14,16 +14,16 @@ const devTimeAgents: Agent[] = [
 ];
 
 const runTimeAgents: Agent[] = [
-  { name: "Claude Code", ready: true },
   { name: "Hermes", ready: true },
+  { name: "Browser-Use", ready: false },
   { name: "OpenClaw", ready: false },
   { name: "DeepAgents", ready: false },
 ];
 
-const pipelineSteps = ["init", "capture", "parse", "enrich", "correlate", "sanitise"];
+const pipelineSteps = ["init", "capture", "parse", "enrich", "sanitise"];
 const pushModes = [
-  { name: "auto", label: "capture, commit, push automatically" },
-  { name: "review", label: "human inbox, commit, push (default)" },
+  { name: "auto", label: "capture, redact, auto-stage safe traces" },
+  { name: "review", label: "human inbox, stage, push (default)" },
 ];
 
 const useCases = [

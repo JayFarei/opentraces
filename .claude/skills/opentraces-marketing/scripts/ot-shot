@@ -13,9 +13,12 @@
 #   GRADIENT_TO     gradient end color
 #   CANVAS_W / CANVAS_H    canvas size in px (default 1800x1200)
 #   CARD_WIDTH      freeze terminal window width in px (default 1280)
+#   CARD_OFFSET_Y   card Y offset from center when compositing (default 20)
 #   FONT_SIZE       code font size in pt (default 16)
 #   LINE_HEIGHT     line-height multiplier (default 1.3)
 #   BRAND_FONT / BRAND_FONT_BOLD   magick font names for the wordmark
+#   DISPLAY_CMD     footer command label override (default: "ot $CMD_ARGS")
+#   DESCRIPTION     footer description override (default: auto-extracted)
 #
 # Examples:
 #   ot-shot "graph --limit 8"
@@ -60,12 +63,15 @@ FONT_SIZE="${FONT_SIZE:-16}"
 LINE_HEIGHT="${LINE_HEIGHT:-1.3}"
 CANVAS_W="${CANVAS_W:-1800}"
 CANVAS_H="${CANVAS_H:-1200}"
+CARD_OFFSET_Y="${CARD_OFFSET_Y:-20}"
 GRADIENT_FROM="${GRADIENT_FROM:-#0F0F0F}"
 GRADIENT_TO="${GRADIENT_TO:-#1A1033}"
 BRAND_FONT="${BRAND_FONT:-JetBrainsMono-NF-Regular}"
 BRAND_FONT_BOLD="${BRAND_FONT_BOLD:-JetBrainsMono-NF-Bold}"
 TAGLINE="${TAGLINE:-share agent traces to open datasets}"
 WALLPAPER="${WALLPAPER:-}"
+DISPLAY_CMD="${DISPLAY_CMD:-ot ${CMD_ARGS}}"
+DESCRIPTION_OVERRIDE="${DESCRIPTION:-}"
 # --------------------------------------------------------------------------
 
 if [[ ! -x "$OT_BIN" ]]; then
@@ -95,13 +101,16 @@ fi
 SUBCMD="${CMD_ARGS%% *}"
 
 # Pull the one-line description: first non-empty content line after "Usage:".
-DESCRIPTION="$(
-  "$OT_BIN" "$SUBCMD" --help 2>/dev/null \
-    | sed -n '/^Usage:/,$p' \
-    | awk 'BEGIN{skip=1} /^Usage:/{skip=1; next} /^$/{skip=0; next} skip==0 && NF {print; exit}' \
-    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
-)"
-DESCRIPTION="${DESCRIPTION:-opentraces CLI}"
+DESCRIPTION="$DESCRIPTION_OVERRIDE"
+if [[ -z "$DESCRIPTION" ]]; then
+  DESCRIPTION="$(
+    "$OT_BIN" "$SUBCMD" --help 2>/dev/null \
+      | sed -n '/^Usage:/,$p' \
+      | awk 'BEGIN{skip=1} /^Usage:/{skip=1; next} /^$/{skip=0; next} skip==0 && NF {print; exit}' \
+      | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+  )"
+  DESCRIPTION="${DESCRIPTION:-opentraces CLI}"
+fi
 
 TMPDIR_RUN="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_RUN"' EXIT
@@ -136,12 +145,12 @@ magick "$CANVAS" \
   -font "$BRAND_FONT" -pointsize 18 \
   -fill "#888888" -draw "text 72,125 '${TAGLINE}'" \
   -font "$BRAND_FONT" -pointsize 14 \
-  -fill "#F97316" -draw "text 72,$((CANVAS_H - 50)) 'ot ${CMD_ARGS}'" \
+  -fill "#F97316" -draw "text 72,$((CANVAS_H - 50)) '${DISPLAY_CMD}'" \
   -fill "#B0B0B0" -draw "text 72,$((CANVAS_H - 25)) '${DESCRIPTION}'" \
   "$CANVAS"
 
 # 3. Composite card onto canvas.
-magick "$CANVAS" "$CARD" -gravity center -geometry +0+20 -composite "$OUT"
+magick "$CANVAS" "$CARD" -gravity center -geometry +0+"$CARD_OFFSET_Y" -composite "$OUT"
 
 # 4. Copy to macOS clipboard as PNG (best-effort).
 COPIED=""

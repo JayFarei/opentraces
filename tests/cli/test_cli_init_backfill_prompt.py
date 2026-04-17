@@ -45,8 +45,7 @@ def initialized_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(_cfg, "PROJECTS_DIR", fake_home / ".opentraces" / "projects")
     monkeypatch.setattr(_cfg, "OPENTRACES_DIR", fake_home / ".opentraces")
     monkeypatch.setattr(_cfg, "CONFIG_PATH", fake_home / ".opentraces" / "config.json")
-    # repo_identity imports PROJECTS_DIR at module level too.
-    monkeypatch.setattr(ri, "PROJECTS_DIR", fake_home / ".opentraces" / "projects")
+    # repo_identity now reads _paths.PROJECTS_DIR lazily, so the patch above covers it.
 
     repo = tmp_path / "repo"
     repo.mkdir()

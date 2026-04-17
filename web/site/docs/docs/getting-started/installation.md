@@ -18,7 +18,7 @@ brew install JayFarei/opentraces/opentraces
 npx skills add jayfarei/opentraces
 ```
 
-Installs the opentraces skill via [skills.sh](https://skills.sh) so your coding agent can drive the full workflow (init, review, push) conversationally. Works with Claude Code, Cursor, Codex, and any agent that supports skills. `opentraces init` also auto-installs the skill when you initialize a project.
+Installs the opentraces skill via [skills.sh](https://skills.sh) so your coding agent can drive the init, review, and push workflow conversationally. `opentraces init` also installs the bundled skill into the current project.
 
 ## Copy to your agent
 
@@ -33,7 +33,7 @@ The agent installs the CLI, authenticates, and initializes. `init` handles the s
 ## From Source
 
 ```bash
-git clone https://github.com/jayfarei/opentraces
+git clone https://github.com/JayFarei/opentraces
 cd opentraces
 python3 -m venv .venv
 source .venv/bin/activate
@@ -45,6 +45,7 @@ pip install -e ".[dev]"
 
 ```bash
 opentraces --version
+opentraces --help
 ```
 
 ## System Requirements
@@ -59,23 +60,31 @@ Python 3.10 or later is required.
 
 ## Upgrading
 
-The preferred in-project upgrade path is:
+From inside an initialized project, the preferred path is:
 
 ```bash
 opentraces setup upgrade
 ```
 
-Auto-detects whether you installed via pipx, brew, or pip and upgrades accordingly. Also refreshes the skill file and capture hook in the current project.
+This detects whether you installed via `pipx`, Homebrew, pip, or source, upgrades the CLI, and refreshes the project skill or capture hook files.
 
-If you are outside a project context, use the direct package manager command instead:
+Outside a project context, upgrade with the package manager you originally used:
 
 ```bash
+pipx upgrade opentraces
+# or
+brew upgrade JayFarei/opentraces/opentraces
+# or
 pip install --upgrade opentraces
 ```
 
 ## Uninstalling
 
 ```bash
+pipx uninstall opentraces
+# or
+brew uninstall opentraces
+# or
 pip uninstall opentraces
 ```
 

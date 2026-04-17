@@ -33,6 +33,7 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
   "attribution": { },
   "lifecycle": "provisional",
   "git_links": [ ],
+  "generation_index": 0,
   "metadata": { }
 }
 ```

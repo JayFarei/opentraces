@@ -1,6 +1,6 @@
 # Export
 
-`opentraces export` serializes the locally staged traces into another interchange format. It reads from `.opentraces/staging/` and writes a single JSONL file.
+`opentraces export` serializes the locally staged traces into another interchange format. It reads from the current project's machine-local trace store and writes a single JSONL file.
 
 ```bash
 opentraces export --format agent-trace
@@ -33,7 +33,7 @@ head -n 1 opentraces-export.jsonl | python3 -m json.tool | head -40
 
 ## ATIF
 
-`--format atif` is a **stub**. The command exits successfully but writes no records; the schema package keeps the mapping tables in `packages/opentraces-schema/FIELD-MAPPINGS.md` as the source of truth for third-party converters.
+`--format atif` is present but still the lighter path. The schema package keeps the mapping tables in `packages/opentraces-schema/FIELD-MAPPINGS.md` as the source of truth for third-party converters.
 
 A public round-trip ATIF converter is tracked on the roadmap.
 

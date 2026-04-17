@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-const GH_URL = "https://github.com/jayfarei/opentraces";
+const GH_URL = "https://github.com/JayFarei/opentraces";
 
 function resolveTheme(): "dark" | "light" {
   const stored = localStorage.getItem("theme") as "dark" | "light" | null;

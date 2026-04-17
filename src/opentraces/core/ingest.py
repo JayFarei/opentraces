@@ -39,6 +39,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from opentraces_schema import SCHEMA_VERSION
 
@@ -117,6 +118,10 @@ class ScanReport:
     @property
     def noops(self) -> int:
         return sum(1 for r in self.results if r.action == "noop")
+
+    @property
+    def skipped(self) -> int:
+        return sum(1 for r in self.results if r.action == "skipped")
 
     @property
     def errored(self) -> int:
@@ -472,6 +477,7 @@ def scan_project(
     reparse: bool = False,
     paths: list[Path] | None = None,
     cfg: Config | None = None,
+    on_result: Callable[[IngestResult, int, int], None] | None = None,
 ) -> ScanReport:
     """Scan every Claude Code JSONL associated with ``project_dir``.
 
@@ -489,7 +495,8 @@ def scan_project(
     resolved_cfg = cfg or load_config()
     report = ScanReport(project_dir=project_dir)
 
-    for jsonl in candidates:
+    total = len(candidates)
+    for idx, jsonl in enumerate(candidates, start=1):
         try:
             result = ingest_one_session(
                 jsonl, project_dir, reparse=reparse, cfg=resolved_cfg
@@ -503,5 +510,10 @@ def scan_project(
                 error=f"{type(e).__name__}: {e}",
             )
         report.results.append(result)
+        if on_result is not None:
+            try:
+                on_result(result, idx, total)
+            except Exception:  # pragma: no cover - callback is best-effort.
+                logger.exception("scan_project progress callback failed")
 
     return report

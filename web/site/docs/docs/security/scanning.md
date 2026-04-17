@@ -55,8 +55,8 @@ A heuristic classifier runs on top of scanning and redaction. It flags:
 ## Custom Redaction
 
 ```bash
-opentraces config set --redact "INTERNAL_API_KEY"
-opentraces config set --redact "corp-secret-prefix-"
+opentraces config set custom_redact_strings INTERNAL_API_KEY --append
+opentraces config set custom_redact_strings corp-secret-prefix- --append
 ```
 
-Custom redaction strings are treated as literal matches wherever they appear in trace content.
+Custom redaction strings are treated as literal matches wherever they appear in trace content. `--append` adds to the existing list instead of replacing it.

@@ -69,8 +69,8 @@ def setup_group(ctx: click.Context) -> None:
       git           post-commit hook that correlates each commit to the
                     trace that produced it (via refs/notes/opentraces),
                     powering `opentraces blame` and git-linked uploads.
-      trufflehog    Tier 1.5 secret scanner, any finding blocks upload
-                    until resolved.
+      trufflehog    Tier 1.5 secret scanner. Findings redact in place
+                    and force review before push.
       llm-review    Tier 2 third-party LLM reviewer for staged traces,
                     used by `opentraces llm-review` and `push --llm-review`.
 
@@ -222,7 +222,7 @@ def _run_setup_wizard() -> None:
         if _wizard_confirm(
             "enable trufflehog (Tier 1.5) globally?",
             default=False,
-            hint="blocks upload on any secret finding; global setting",
+            hint="redacts findings in place and forces review; global setting",
         ):
             if th_version is None:
                 ok, method = install_binary()
@@ -642,7 +642,7 @@ def _pick_install_method_interactive() -> str | None:
         )
         human_echo(
             "Install it manually from https://github.com/trufflesecurity/trufflehog "
-            "and re-run 'opentraces setup trufflehog --verify'."
+            "and re-run 'opentraces setup trufflehog --enable'."
         )
         return None
 
@@ -688,10 +688,10 @@ def _pick_install_method_interactive() -> str | None:
 def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool, scope_project: bool = False) -> None:
     """Enable Tier 1.5 secret scanning via TruffleHog.
 
-    Tier 1.5 runs the TruffleHog verified-secret scanner on every staged
-    and pushed trace. Any finding moves the trace to BLOCKED locally and
-    stops the upload, traces with verified secrets never leave the
-    machine. Complements the always-on Tier 1a regex + 1b entropy scans.
+    Tier 1.5 runs the TruffleHog scanner on every staged and pushed trace.
+    Findings are redacted in place, recorded in trace metadata, and force
+    review before upload. Complements the always-on Tier 1a regex + 1b
+    entropy scans.
 
     \b
     Flows:
@@ -806,7 +806,7 @@ def _render_trufflehog_success(version: str, *, already_present: bool,
         human_echo(f"  {_cli._dim(f'installed via {method}')}")
     human_echo("")
     human_echo(f"  {_cli._bold('From now on:')} every staged and pushed trace is scanned.")
-    human_echo(f"  {_cli._dim('Any TruffleHog finding blocks upload until resolved.')}")
+    human_echo(f"  {_cli._dim('Findings are redacted in place and require review before push.')}")
     human_echo("")
     human_echo(f"  {_cli._dim('disable:')}        opentraces setup trufflehog --disable")
     human_echo(f"  {_cli._dim('re-enable:')}      opentraces setup trufflehog --enable")
@@ -1217,7 +1217,7 @@ def setup_review_policy_cmd(
 
     \b
         opentraces setup review-policy --review   require manual approval
-        opentraces setup review-policy --auto     auto-approve safe traces
+        opentraces setup review-policy --auto     auto-approve safe traces into staged
         opentraces setup review-policy --print    show current value
 
     Equivalent to re-running ``opentraces init --review-policy ...`` but
@@ -1267,7 +1267,7 @@ def setup_review_policy_cmd(
         f"review policy: {_cli._dim(current)} → {_cli._bold(new_value)}"
     )
     if new_value == "auto":
-        human_echo(f"  {_cli._dim('safe traces will auto-approve; push straight through')}")
+        human_echo(f"  {_cli._dim('safe traces will auto-approve into staged; push remains explicit')}")
     else:
         human_echo(f"  {_cli._dim('every trace needs manual approval before push')}")
     emit_json({
@@ -1429,7 +1429,7 @@ def _tier_toggle_hint(state: str, tier: dict) -> str | None:
             f"reconfigure: {enable}" if enable else "",
         ]
     if state == "missing":
-        return f"fix: {enable} --verify"
+        return f"fix: {enable} --enable"
     if state == "unreachable":
         return f"reconfigure: {enable}"
     return None

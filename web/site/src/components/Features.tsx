@@ -3,39 +3,35 @@ import SectionRule from "./SectionRule";
 const features = [
   {
     title: "git for traces",
-    desc: "init, status, review, push. The workflow you already know, applied to agent sessions.",
+    desc: "init, status, review, push. The workflow you know, applied to agent sessions.",
   },
   {
     title: "security pipeline",
-    desc: "Layered scanning: regex + entropy, optional TruffleHog (800+ detectors), optional LLM PII pass, and optional local LLM session review. Named placeholders like [EMAIL_1] keep traces coherent after redaction.",
+    desc: "Regex + entropy + optional TruffleHog and LLM review. Stable placeholders like [EMAIL_1] keep traces coherent.",
   },
   {
     title: "auto or review",
-    desc: "Set per-project policy. Auto-push to a private dataset, or gate every session through the local inbox first.",
+    desc: "Per-project policy: auto-approve safe traces, or gate every session through the TUI or browser inbox.",
   },
   {
-    title: "traces inbox",
-    desc: "TUI and web interface to inspect redacted sessions. Approve, reject, or redact individual steps before pushing.",
+    title: "blame and graph",
+    desc: "Every shipped line back to the prompt behind it. ot blame and ot graph map commits to their agent sessions.",
   },
   {
     title: "schema depth",
-    desc: "Steps, tool calls, reasoning, sub-agent hierarchy, token usage, attribution, outcome, and security metadata in one record.",
+    desc: "Steps, tool calls, reasoning, sub-agents, tokens, attribution, outcome in one record.",
   },
   {
     title: "huggingface native",
-    desc: "Sharded JSONL on HF Hub. Load via datasets.load_dataset(), or mount large datasets as a virtual filesystem. No lock-in, take your data wherever you want.",
+    desc: "Sharded JSONL on HF Hub. Load via datasets.load_dataset() or mount it as a virtual filesystem. No lock-in.",
   },
   {
     title: "quality scoring",
-    desc: "Five persona rubrics score every trace. Upload gates enforce minimums. Re-score remotely with opentraces assess.",
+    desc: "Five persona rubrics score every trace. Upload gates enforce minimums. Re-score remotely with ot assess.",
   },
   {
     title: "content-hash dedup",
-    desc: "Reset your state, switch machines, re-push safely. murmur3 content hashing prevents duplicates on the remote.",
-  },
-  {
-    title: "commit-anchored",
-    desc: "Optional post-commit hook links each trace to the commit(s) it produced. Evidence tiers (tool_emitted, divergence, overlapping, orphan) let you filter by how tightly a session maps to shipped code. Blame any line back to its originating session.",
+    desc: "Reset state, switch machines, re-push safely. murmur3 hashing blocks duplicates on the remote.",
   },
   {
     title: "agent-native cli",

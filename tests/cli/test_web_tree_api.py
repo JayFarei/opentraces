@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 
 from opentraces.clients.web.server import create_app
-from opentraces.core.state import StateManager, TraceStatus
+from opentraces.core.state import GenerationRecord, StateManager, TraceStatus
 
 
-def _seed_trace(tmp_path):
+def _seed_trace(tmp_path, *, generation_index: int | None = None):
     trace = {
         "schema_version": "0.3.0",
         "trace_id": "trace-web-001",
@@ -30,6 +30,8 @@ def _seed_trace(tmp_path):
         ],
         "metrics": {},
     }
+    if generation_index is not None:
+        trace["generation_index"] = generation_index
     (tmp_path / "trace-web-001.jsonl").write_text(json.dumps(trace) + "\n")
     return trace
 
@@ -50,6 +52,45 @@ def test_web_tree_endpoint_serializes_trace_tree(tmp_path):
     assert payload["tree"][0]["id"] == "s1"
     assert payload["tree"][0]["children"][0]["label"] == "decision"
     assert payload["tree"][0]["children"][0]["children"][0]["kind"] == "subagent_ref"
+
+
+def test_web_traces_endpoint_includes_generation_index_from_state(tmp_path):
+    _seed_trace(tmp_path)
+    source_session = tmp_path / "sessions" / "source.jsonl"
+    source_session.parent.mkdir(parents=True, exist_ok=True)
+    source_session.write_text("{}\n")
+    state_path = tmp_path / "state.json"
+    state = StateManager(state_path=state_path)
+    state.set_trace_status("trace-web-001", TraceStatus.PARSED, session_id="sess-web-001")
+    state.upsert_session(
+        session_id="sess-web-001",
+        source_path=str(source_session),
+        observed_size=source_session.stat().st_size,
+        observed_mtime=source_session.stat().st_mtime,
+    )
+    state.append_generation(
+        "sess-web-001",
+        GenerationRecord(
+            trace_id="trace-web-001",
+            generation=2,
+            captured_size=source_session.stat().st_size,
+            captured_mtime=source_session.stat().st_mtime,
+            schema_version="0.3.0",
+            security_version="0.4.0",
+            status_at_capture=TraceStatus.PARSED.value,
+            supersedes="trace-web-000",
+            supersedes_reason="resume",
+        ),
+    )
+
+    app = create_app(staging_dir=str(tmp_path), state_path=str(state_path))
+    client = app.test_client()
+
+    response = client.get("/api/traces")
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload[0]["trace_id"] == "trace-web-001"
+    assert payload[0]["generation_index"] == 2
 
 
 def test_web_resume_endpoint_returns_copyable_command(tmp_path, monkeypatch):

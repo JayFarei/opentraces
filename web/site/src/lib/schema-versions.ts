@@ -236,19 +236,21 @@ const v020: SchemaVersion = {
 const v030: SchemaVersion = {
   version: "0.3.0",
   date: "2026-04-16",
-  summary: "Commit-anchored evidence tiers (GitLink), lifecycle, and richer Attribution. New notes, blame, setup git, and export --format agent-trace CLI surfaces, plus a flat git-style command restructure.",
+  summary: "Commit-anchored evidence tiers (GitLink), lifecycle, richer Attribution, and generation-indexed supersedes. New blame, graph, backfill, pull, and export --format agent-trace CLI surfaces, plus a flat git-style command restructure.",
   highlights: [
     "GitLink: evidence-graded link from trace to commit (tool_emitted | tool_emitted_with_divergence | overlapping | orphan)",
     "TraceRecord.lifecycle: provisional (pre-correlation) | final (revision-anchored)",
+    "TraceRecord.generation_index: monotonic per-session replacement counter for pull + supersedes resolution",
+    "Metrics.total_cache_read_tokens + total_cache_creation_tokens: session-level prompt-cache aggregates",
     "Attribution.revision pins a block to a commit; unaccounted_files surfaces Bash-applied edits",
     "AttributionRange.original captures pre-divergence state when a formatter rewrote agent output",
     "AttributionRange.change_type: addition | modification | deletion; per-range contributor override",
     "AttributionConversation.ids (provider-native msg ids) and .related (plan / issue / pr links)",
     "Task.repository_url: canonical remote URL alongside owner/repo",
     "AttributionRange.content_hash format now murmur3:<32-hex> (replaces md5-truncated-8) for cross-tool line-range matching; top-level TraceRecord.content_hash remains SHA-256 for dedup",
-    "Post-commit hook correlates trace to revision; PostToolUse hook captures diff as it happens",
-    "opentraces notes <ref>, opentraces blame <file>:<line>, opentraces setup git, list --by-commit",
-    "opentraces export --format agent-trace; show --markdown (prompt-injection-safe)",
+    "Post-commit hook correlates trace to revision; PostToolUse hook captures edits as they happen",
+    "opentraces blame <sha> [path], opentraces graph, opentraces backfill, opentraces setup git, list --by-commit",
+    "opentraces pull owner/dataset --parser hermes (importer), opentraces export --format agent-trace; show --markdown (prompt-injection-safe)",
   ],
   models: v020.models.map((m) => {
     if (m.id === "trace-record") {
@@ -264,6 +266,17 @@ const v030: SchemaVersion = {
           ),
           { name: "lifecycle", type: "string", required: false, description: '"provisional" (pre-commit-correlation) or "final" (revision-anchored). Default provisional.' },
           { name: "git_links", type: "GitLink[]", required: false, description: "Evidence-graded links to commits/revisions this trace contributed to." },
+          { name: "generation_index", type: "int", required: false, description: "Monotonic per-session_id generation counter. Consumers resolving 'latest' should group by session_id and take max(generation_index)." },
+        ],
+      };
+    }
+    if (m.id === "metrics") {
+      return {
+        ...m,
+        fields: [
+          ...m.fields,
+          { name: "total_cache_read_tokens", type: "int", required: false, description: "Session-level prompt-cache read aggregate." },
+          { name: "total_cache_creation_tokens", type: "int", required: false, description: "Session-level prompt-cache write aggregate." },
         ],
       };
     }

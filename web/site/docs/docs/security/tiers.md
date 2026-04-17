@@ -1,126 +1,101 @@
 # Security Tiers
 
-opentraces runs a layered security pipeline on every trace. Tiers 1a and 1b are always on and in-process. Tiers 1.5, 1.8, and 2 are optional and must be explicitly enabled. Tier 3 is human review.
+opentraces applies layered security scanning before traces are staged or pushed. The current pipeline version is `SECURITY_VERSION = 0.3.0`.
 
-The pipeline's internal version is exposed as `SECURITY_VERSION` (currently `0.4.0`, bumped when detection logic changes).
+Tip: run `opentraces doctor --security` to see the exact tiers, versions, and commands active in your current install.
 
-:::tip Check what's active for *your* install
-Run `opentraces doctor --security` for a focused view of every tier's current state on this machine, with versions and gating. Use `opentraces doctor` for the full health check (security + auth + post-processors + integrations).
-:::
+## Current User-Facing Tiers
 
-## Tier Model
+The current 0.3 CLI surfaces these layers:
 
 | Tier | Name | Status | What it does |
 |------|------|--------|--------------|
-| 1a | Regex patterns | always on, in-process | 28+ built-in detectors for known secret formats (API keys, tokens, private keys) |
-| 1b | Shannon entropy | always on, in-process | Flags high-entropy strings that look like secrets without matching a known pattern |
-| 1.5 | TruffleHog | optional, opt-in | 800+ third-party detectors, run locally with `--verify_secrets=false` (no outbound probes) |
-| 1.8 | LLM PII detection | optional | Per-field entity detection (PERSON, EMAIL, API_KEY, INTERNAL_URL, IP_ADDR, USER_PATH, CREDENTIAL, ORG_NAME, EMPLOYEE_ID, PHONE, SENSITIVE_DATA), SHA-256 cached |
-| 2 | LLM trace review | optional | Whole-trace semantic verdict across all tiers (see below) |
-| 3 | Human review | always available | TUI / web inbox / `opentraces trace` |
+| 1a | Regex patterns | always on | Built-in secret detectors for known token and key formats |
+| 1b | Shannon entropy | always on | Flags high-entropy strings that look like secrets |
+| 1.5 | TruffleHog | optional | Runs TruffleHog locally for broader secret detection |
+| 2 | LLM trace review | optional, on demand | Semantic review over the whole trace transcript |
+| 3 | Human review | always available | Web inbox, TUI, and CLI review before upload |
 
-### Tier 1.5 — TruffleHog
+## Tier 1a And 1b
 
-TruffleHog is **disabled by default**. Enable it with:
+Regex and entropy scanning are always on. They run locally during processing and rewrite sensitive content before traces surface in the inbox.
 
-```bash
-opentraces setup trufflehog            # install + enable
-opentraces setup trufflehog --verify   # verify existing binary + enable
-opentraces setup trufflehog --disable  # turn it off
-```
+## Tier 1.5: TruffleHog
 
-Once enabled in config (`security.trufflehog.enabled = true`), a missing binary is a **hard error**, not a silent skip. `opentraces doctor` reports this as `ENABLED-BUT-MISSING` and exits `3`.
-
-For ad-hoc bypass on a single push, use the one-shot override:
+Enable Tier 1.5 with:
 
 ```bash
-opentraces push --no-trufflehog
-```
-
-Verification of detected secrets against third-party APIs is forced off (`--verify_secrets=false`) — nothing is sent outbound.
-
-### Tier 1.8 — LLM PII detection
-
-Optional per-field PII detector. Entities must appear verbatim in the input; hallucinated entities are rejected. Redactions produce named placeholders via the EntityMap (see below) rather than opaque `[REDACTED]` markers.
-
-### Tier 2, LLM trace review
-
-Runs over the whole trace transcript after all field-level tiers. Transcript is chunked at 400k chars; per-chunk verdicts are aggregated pessimistically (`shareable`: `no` > `manual_review` > `yes`; `missed_sensitive_data`: `yes` > `maybe` > `no`). Cached on `sha256(content + model + prompt_version + context)`.
-
-Verdict shape:
-
-```json
-{
-  "shareable": "yes" | "no" | "manual_review",
-  "missed_sensitive_data": "yes" | "no" | "maybe",
-  "flagged_parts": [{"reason": "...", "evidence": "..."}],
-  "summary": "..."
-}
-```
-
-Run manually:
-
-```bash
-opentraces llm-review                         # ollama, default model
-opentraces llm-review --provider anthropic    # cloud model
-opentraces llm-review --dry-run               # just estimate cost
-```
-
-Gate `push` on a clean verdict for every committed trace:
-
-```bash
-opentraces push --llm-review
-```
-
-`push --llm-review` aborts (exit `3`) unless every committed trace has `metadata.llm_review.status == "complete"` with `shareable != "no"` and `missed_sensitive_data != "yes"`.
-
-### Tier 3 — Human review
-
-Unchanged. Use `opentraces web`, `opentraces tui`, or `opentraces trace` to inspect and edit staged traces. Traces can also enter the `BLOCKED` state (`block_reason = parse_error | trufflehog_finding | ...`) and require human action.
-
-## EntityMap — named placeholders
-
-Instead of `[REDACTED]`, the Tier 1.8 PII detector registers each hit into an `EntityMap` that emits stable named placeholders — `[PERSON_1]`, `[EMAIL_2]`, `[API_KEY_3]` — so the same entity always renders identically within a trace. `USER_PATH` entities normalize paths in place (`/Users/rlamers/` → `/Users/user/`) rather than producing a numbered placeholder, preserving structure for trace analysis.
-
-`EntityMap` supports `save(path)` / `load(path)` round-tripping via JSON; a persistent file is not yet exposed as a CLI flag, but reviewers see named placeholders in TUI and web today whenever Tier 1.8 runs.
-
-This makes redacted traces readable to both humans and agents while still stripping sensitive content.
-
-## Review Policy
-
-`opentraces init` still sets a project-level review policy:
-
-| Policy | Values | What it controls |
-|--------|--------|------------------|
-| `review_policy` | `review`, `auto` | Whether traces need manual review or are committed automatically |
-
-```bash
-opentraces init --review-policy review
-opentraces init --review-policy auto
-```
-
-In `review` mode, every trace lands in the inbox. In `auto` mode, clean traces are committed automatically; traces with scan hits or `BLOCKED` status still land in the inbox.
-
-## Review Flow
-
-```text
-Trace captured
-  -> Tier 1a (regex) + Tier 1b (entropy) — always on
-  -> Tier 1.5 TruffleHog — if enabled
-  -> Tier 1.8 LLM PII — if enabled
-  -> Tier 2 LLM trace review, if enabled (or run later via review-llm)
-  -> Inbox (review mode) or auto-committed (auto mode)
-  -> trace commit / reject / redact
-  -> opentraces push [--llm-review]
-```
-
-## Changing Settings
-
-```bash
-opentraces config set --redact "ACME_INTERNAL_TOKEN"
-opentraces config set --classifier-sensitivity high
 opentraces setup trufflehog
+opentraces setup trufflehog --enable
 opentraces setup trufflehog --disable
 ```
 
-See [Security Configuration](/docs/security/configuration) for the config file shape and [Scanning & Redaction](/docs/security/scanning) for the field-by-field security pipeline.
+Current behavior:
+
+- TruffleHog is opt-in
+- it runs locally with `verify_secrets = false`
+- findings are redacted in place
+- findings force human review before upload
+- `opentraces push --no-trufflehog` skips it for one push only
+
+Use `opentraces doctor --security` to confirm whether the binary is installed and enabled.
+
+## Tier 2: LLM Trace Review
+
+Configure the reviewer once:
+
+```bash
+opentraces setup llm-review
+```
+
+Then run it on demand:
+
+```bash
+opentraces llm-review
+opentraces llm-review --scope inbox
+opentraces llm-review --scope staged
+opentraces llm-review --trace 8a3f1c
+opentraces llm-review --dry-run
+```
+
+Use `opentraces push --llm-review` when you want upload to require a clean Tier 2 verdict on every staged trace.
+
+## Tier 3: Human Review
+
+Human review is always available through:
+
+```bash
+opentraces web
+opentraces tui
+opentraces list --stage inbox
+opentraces show <trace-id>
+opentraces redact <trace-id>
+```
+
+This is the final check for project-specific context, sensitive business details, and traces that are technically safe but not worth publishing.
+
+## Review Policy
+
+Each repo carries a review policy in `.opentraces.json`:
+
+```bash
+opentraces setup review-policy --review
+opentraces setup review-policy --auto
+```
+
+| Policy | Effect |
+|--------|--------|
+| `review` | Every trace lands in Inbox for manual review |
+| `auto` | Safe traces are auto-approved into `staged` |
+
+`auto` does not push automatically. Upload remains explicit.
+
+## What Can Still Block
+
+The user-facing pipeline is designed to redact and route most issues into review, but some failures still stop upload:
+
+- parse errors
+- missing required integrations you explicitly enabled
+- `push --llm-review` when staged traces lack a clean Tier 2 verdict
+
+Use `opentraces doctor` for pipeline failures and `opentraces list --stage blocked` for traces that still need intervention.

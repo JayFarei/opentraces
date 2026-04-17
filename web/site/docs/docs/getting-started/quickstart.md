@@ -1,6 +1,6 @@
 # Quick Start
 
-From local inbox to published dataset.
+From local capture to a published Hugging Face shard.
 
 ## 1. Install
 
@@ -11,22 +11,31 @@ pipx install opentraces
 ## 2. Authenticate
 
 ```bash
-opentraces auth login --token
+opentraces auth login
 ```
 
-Paste a HuggingFace access token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Use `HF_TOKEN` instead if you are running headless.
+Use `opentraces auth login --token` or `HF_TOKEN` if you are running headless.
 
 ## 3. Initialize the Project
 
 ```bash
-opentraces init --review-policy review --start-fresh
+opentraces init --review-policy review
 ```
 
-This creates `.opentraces/config.json`, `.opentraces/staging/`, the agent capture hook, and installs the opentraces skill into `.agents/skills/opentraces/`. If you omit the flags, `opentraces init` will prompt for the same choices interactively.
+`init` wires the current repo into opentraces:
 
-If your agent already has trace logs for this repo, pass `--import-existing` to pull that backlog into the inbox now. Use `--start-fresh` if you only want capture from your next connected agent run onward.
+- writes the committable marker at `.opentraces.json`
+- registers machine-local storage under `~/.opentraces/projects/<slug>/`
+- installs the capture hook unless you pass `--no-hook`
+- optionally connects a Hugging Face remote
 
-## 4. Open the Inbox
+If this repo already has Claude Code traces, you can backfill them immediately:
+
+```bash
+opentraces init --import-existing
+```
+
+## 4. Inspect the Inbox
 
 ### Web inbox
 
@@ -34,7 +43,7 @@ If your agent already has trace logs for this repo, pass `--import-existing` to 
 opentraces web
 ```
 
-The browser inbox shows a timeline of each trace's steps, tool calls, and reasoning. Switch to the review view to see context items grouped by source.
+The browser inbox shows each trace with timeline, review, and push flows. It is the richest surface for manual review and redaction.
 
 ![Web inbox - timeline view](/docs/assets/web-timeline.png)
 
@@ -46,20 +55,34 @@ The browser inbox shows a timeline of each trace's steps, tool calls, and reason
 opentraces tui
 ```
 
-The TUI shows traces, summary, and detail in a three-panel layout. Use keyboard shortcuts to navigate, commit, reject, or discard traces.
+The TUI is faster for shell-first review. It loads the same local inbox and exposes staging, rejection, discard, security details, and push.
 
 ![Terminal inbox](/docs/assets/tui.png)
 
-Use `trace list`, `trace commit`, `trace reject`, and `trace redact` if you prefer direct CLI control.
+CLI review is available too:
 
-## 5. Commit and Push
+```bash
+opentraces status
+opentraces list --stage inbox
+opentraces show <trace-id>
+opentraces redact <trace-id>
+```
+
+## 5. Stage Traces For Upload
 
 ```bash
 opentraces add --all
+```
+
+`add` moves Inbox traces into the visible `staged` set. `blocked` and `rejected` traces are refused until you fix or explicitly reject them.
+
+## 6. Push
+
+```bash
 opentraces push
 ```
 
-`commit` moves inbox traces to the committed stage. `push` uploads committed traces to `{username}/opentraces` on Hugging Face Hub as sharded JSONL and updates the dataset card.
+`push` uploads staged traces to the active remote as a new JSONL shard and refreshes the dataset card. By default it also runs quality scoring unless you pass `--no-assess`.
 
 ## What Happens Next
 
@@ -73,6 +96,7 @@ ds = load_dataset("your-name/opentraces")
 
 ## Next Steps
 
-- [Security Modes](/docs/security/tiers) - Review policy and security pipeline
-- [CLI Reference](/docs/cli/commands) - Full command reference
-- [Schema Overview](/docs/schema/overview) - What is stored in a trace record
+- [Inbox & Review](/docs/workflow/review) - Web, TUI, and CLI review flows
+- [Push](/docs/workflow/pushing) - Remotes, visibility, migrations, and gates
+- [Security Tiers](/docs/security/tiers) - Review policy and layered scanning
+- [CLI Reference](/docs/cli/commands) - Full 0.3 command surface

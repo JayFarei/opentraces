@@ -1,76 +1,106 @@
 # Troubleshooting
 
-## First Check
+## First Checks
+
+Start with:
 
 ```bash
 opentraces status
+opentraces doctor
+opentraces doctor --security
 ```
 
-`status` shows the inbox summary, review policy, agents, remote, and stage counts.
+`status` tells you what the current repo thinks is staged or waiting. `doctor` tells you whether required integrations are misconfigured.
 
-For a health check across versions, security tiers, auth, post-processors, and agent integrations:
+## Common Problems
 
-```bash
-opentraces doctor              # full report
-opentraces doctor --security   # just the security pipeline subview
-```
+### Not Initialized
 
-`doctor` exits `3` when a configured integration is broken (e.g. TruffleHog enabled but binary missing, review-LLM enabled but unreachable), making it suitable as a CI gate.
-
-## Common Issues
-
-### "No HF token found"
-
-Run:
+If the CLI says the repo is not initialized, run:
 
 ```bash
-opentraces auth login --token
-```
-
-Paste a write-access token from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Or export `HF_TOKEN` in your shell:
-
-```bash
-export HF_TOKEN=hf_...
-```
-
-### "Not initialized"
-
-Run `opentraces init` in the project directory. That creates `.opentraces/config.json` and `.opentraces/staging/`.
-
-### "No traces found"
-
-Claude Code session files live under `~/.claude/projects/`. If there are no session files, start a Claude Code conversation first.
-
-`opentraces discover` is a hidden diagnostic command if you need to inspect the raw Claude Code session directories.
-
-### Parse Errors
-
-If a specific trace looks wrong:
-
-```bash
-opentraces list
-opentraces show <trace-id>
-opentraces redact <trace-id> --step 3
-```
-
-### Push Fails With 403
-
-Your token does not have write access. OAuth device tokens (from `opentraces auth login`) cannot create or write to dataset repos. Re-authenticate with a personal access token:
-
-```bash
-opentraces auth login --token
-```
-
-Paste a token with **write** scope from [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens).
-
-### Resetting Local State
-
-```bash
-rm -rf .opentraces/
 opentraces init
 ```
 
-To clear credentials as well:
+The current repo marker is `.opentraces.json`, not `.opentraces/config.json`.
+
+### No Traces Showing Up
+
+Check:
+
+```bash
+opentraces status
+opentraces list --stage inbox
+opentraces setup claude-code
+```
+
+If you are using Claude Code, make sure the capture hooks are installed and that the repo has actual Claude Code session files under `~/.claude/projects/`.
+
+### Blocked Traces
+
+Inspect them with:
+
+```bash
+opentraces list --stage blocked
+opentraces show <trace-id>
+```
+
+Then either redact, reset, or reject as needed:
+
+```bash
+opentraces redact <trace-id>
+opentraces reset <trace-id>
+opentraces reject <trace-id>
+```
+
+### Push Fails
+
+Common causes:
+
+- no Hugging Face auth
+- no remote configured
+- `--llm-review` requested but staged traces do not have clean verdicts
+- a configured integration is broken
+
+Useful commands:
+
+```bash
+opentraces auth whoami
+opentraces remote list
+opentraces llm-review --scope staged
+opentraces doctor
+```
+
+### TruffleHog Enabled But Missing
+
+If `doctor` reports that TruffleHog is enabled but unavailable:
+
+```bash
+opentraces setup trufflehog
+# or
+opentraces setup trufflehog --disable
+```
+
+### LLM Review Unreachable
+
+Re-test or reconfigure it:
+
+```bash
+opentraces setup llm-review --test
+opentraces setup llm-review
+opentraces setup llm-review --disable
+```
+
+### Resetting A Repo
+
+To remove opentraces from the current repo cleanly:
+
+```bash
+opentraces remove
+opentraces remove --all
+```
+
+To clear the stored Hugging Face credential:
 
 ```bash
 opentraces auth logout

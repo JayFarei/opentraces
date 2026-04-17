@@ -37,7 +37,7 @@ nav:
       - Supported Agents: cli/supported-agents.md
       - Troubleshooting: cli/troubleshooting.md
   - Security:
-      - Security Modes: security/tiers.md
+      - Security Tiers: security/tiers.md
       - Scanning & Redaction: security/scanning.md
       - Configuration: security/configuration.md
   - Schema:

@@ -6,9 +6,10 @@ import { F, trunc } from "../../tokens";
 import { Panel } from "../Panel";
 import { TracePreview } from "./TracePreview";
 import { TraceSecurityModal } from "../modals/TraceSecurityModal";
+import { HelpModal } from "../modals/HelpModal";
 import { api } from "../../lib/api";
 import type { TraceListItem } from "../../lib/api";
-import { relativeAge } from "../../lib/conversation";
+import { isRecentlyTouched, relativeAge } from "../../lib/conversation";
 
 function RowActionButton({
   t, label, title, color, visible, onClick,
@@ -40,6 +41,39 @@ function RowActionButton({
   );
 }
 
+function TraceMarker({ t, item }: { t: Theme; item: TraceListItem }) {
+  const blocked = item._stage === "blocked";
+  const hasFlags = item.security_flags > 0;
+  if (blocked) return <span style={{ color: t.red, fontSize: 8 }}>●</span>;
+  if (hasFlags) return <span style={{ color: t.yellow, fontSize: 8 }}>●</span>;
+  if (isRecentlyTouched(item.timestamp)) {
+    return <span style={{ color: t.cyan, opacity: 0.75, fontSize: 9 }}>◐</span>;
+  }
+  return <span style={{ color: t.textDim, fontSize: 8 }}>·</span>;
+}
+
+function GenerationBadge({ t, generation }: { t: Theme; generation?: number }) {
+  const safeGeneration = generation ?? 0;
+  if (safeGeneration <= 0) return null;
+  const title = safeGeneration > 1
+    ? "Later generation from the same session replacing an older trace"
+    : "First captured trace for this session";
+  return (
+    <span
+      title={title}
+      style={{
+        fontFamily: F.code,
+        fontSize: 10,
+        color: t.cyan,
+        opacity: 0.75,
+        flex: "0 0 auto",
+      }}
+    >
+      ↑{safeGeneration}
+    </span>
+  );
+}
+
 function InboxRow({
   t, item, selected, wide, onSelect, onStage, onReject, onInfo,
 }: {
@@ -48,8 +82,6 @@ function InboxRow({
   onInfo: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  const blocked = item._stage === "blocked";
-  const hasFlags = item.security_flags > 0;
   return (
     <div
       onClick={onSelect}
@@ -62,7 +94,7 @@ function InboxRow({
         borderLeft: selected ? `2px solid ${t.cyan}` : "2px solid transparent",
       }}
     >
-      <span style={{ color: blocked ? t.red : hasFlags ? t.yellow : t.textDim, fontSize: 8 }}>●</span>
+      <TraceMarker t={t} item={item} />
       <span style={{
         fontFamily: F.code, fontSize: 11,
         color: selected ? t.cyan : t.accent, minWidth: 58,
@@ -72,17 +104,20 @@ function InboxRow({
         fontWeight: selected ? 600 : 400, flex: 1, minWidth: 0,
         whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
       }}>{trunc(item.task, wide ? 28 : 50)}</span>
-      {hover ? (
-        <div style={{ display: "flex", gap: 4, flex: "0 0 auto" }}>
-          <RowActionButton t={t} label="+" title="Stage" color={t.green} visible onClick={onStage} />
-          <RowActionButton t={t} label="✕" title="Reject" color={t.red} visible onClick={onReject} />
-          <RowActionButton t={t} label="i" title="Trace security" color={t.cyan} visible onClick={onInfo} />
-        </div>
-      ) : (
-        <span style={{ fontFamily: F.code, fontSize: 10, color: t.textDim }}>
-          {relativeAge(item.timestamp)}
-        </span>
-      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" }}>
+        {hover ? (
+          <div style={{ display: "flex", gap: 4, flex: "0 0 auto" }}>
+            <RowActionButton t={t} label="+" title="Stage" color={t.green} visible onClick={onStage} />
+            <RowActionButton t={t} label="✕" title="Reject" color={t.red} visible onClick={onReject} />
+            <RowActionButton t={t} label="i" title="Trace security" color={t.cyan} visible onClick={onInfo} />
+          </div>
+        ) : (
+          <span style={{ fontFamily: F.code, fontSize: 10, color: t.textDim }}>
+            {relativeAge(item.timestamp)}
+          </span>
+        )}
+        <GenerationBadge t={t} generation={item.generation_index} />
+      </div>
     </div>
   );
 }
@@ -107,6 +142,7 @@ function StagedRow({
         borderLeft: selected ? `2px solid ${t.cyan}` : "2px solid transparent",
       }}
     >
+      <TraceMarker t={t} item={item} />
       <span style={{ fontFamily: F.code, fontSize: 11, color: selected ? t.cyan : t.accent, minWidth: 58 }}>
         {item.trace_id.slice(0, 8)}
       </span>
@@ -115,13 +151,16 @@ function StagedRow({
         fontWeight: selected ? 600 : 400, flex: 1, minWidth: 0,
         whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
       }}>{trunc(item.task, 24)}</span>
-      {hover ? (
-        <RowActionButton t={t} label="−" title="Unstage" color={t.yellow} visible onClick={onUnstage} />
-      ) : (
-        <span style={{ fontFamily: F.code, fontSize: 10, color: t.textDim }}>
-          {relativeAge(item.timestamp)}
-        </span>
-      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" }}>
+        {hover ? (
+          <RowActionButton t={t} label="−" title="Unstage" color={t.yellow} visible onClick={onUnstage} />
+        ) : (
+          <span style={{ fontFamily: F.code, fontSize: 10, color: t.textDim }}>
+            {relativeAge(item.timestamp)}
+          </span>
+        )}
+        <GenerationBadge t={t} generation={item.generation_index} />
+      </div>
     </div>
   );
 }
@@ -170,6 +209,7 @@ export function ReviewView({
   const tracesQ = useQuery({ queryKey: ["traces"], queryFn: api.traces });
   const ctxQ = useQuery({ queryKey: ["context"], queryFn: api.context });
   const [secModalTraceId, setSecModalTraceId] = useState<string | null>(null);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const { inbox, staged, pushed } = useMemo(
     () => classify(tracesQ.data ?? []),
@@ -210,6 +250,17 @@ export function ReviewView({
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === "?") {
+        e.preventDefault();
+        setHelpOpen((current) => !current);
+        return;
+      }
+      if (helpOpen || secModalTraceId) return;
+      if (e.key === "r") {
+        e.preventDefault();
+        if (!refreshM.isPending) refreshM.mutate();
+        return;
+      }
       if (e.key === "j" || e.key === "ArrowDown") {
         e.preventDefault();
         // Enter the inbox from whichever pane we're in; from inbox, step down.
@@ -233,7 +284,17 @@ export function ReviewView({
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [inbox, inboxIdx, selectedTrace, setSelectedId, stageM, unstageM]);
+  }, [
+    helpOpen,
+    inbox,
+    inboxIdx,
+    refreshM,
+    secModalTraceId,
+    selectedTrace,
+    setSelectedId,
+    stageM,
+    unstageM,
+  ]);
 
   const ctx = ctxQ.data;
   const remote = ctx?.remote || "not set";
@@ -271,6 +332,10 @@ export function ReviewView({
             <RowActionButton
               t={t} label="i" title="Security info"
               color={t.cyan} visible onClick={() => openInfo()}
+            />
+            <RowActionButton
+              t={t} label="?" title="Review help"
+              color={t.cyan} visible onClick={() => setHelpOpen(true)}
             />
           </div>
         </div>
@@ -357,6 +422,7 @@ export function ReviewView({
                   borderLeft: sel ? `2px solid ${t.cyan}` : "2px solid transparent",
                 }}
               >
+                <TraceMarker t={t} item={s} />
                 <span style={{ fontFamily: F.code, fontSize: 11, color: sel ? t.cyan : t.textMuted, minWidth: 58 }}>
                   {s.trace_id.slice(0, 8)}
                 </span>
@@ -365,9 +431,12 @@ export function ReviewView({
                   fontWeight: sel ? 600 : 400, flex: 1,
                   whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                 }}>{trunc(s.task, 24)}</span>
-                <span style={{ fontFamily: F.code, fontSize: 10, color: t.textDim }}>
-                  {relativeAge(s.timestamp)}
-                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" }}>
+                  <span style={{ fontFamily: F.code, fontSize: 10, color: t.textDim }}>
+                    {relativeAge(s.timestamp)}
+                  </span>
+                  <GenerationBadge t={t} generation={s.generation_index} />
+                </div>
               </div>
             );
           })}
@@ -398,12 +467,16 @@ export function ReviewView({
       onClose={() => setSecModalTraceId(null)}
     />
   ) : null;
+  const helpModal = helpOpen ? (
+    <HelpModal t={t} onClose={() => setHelpOpen(false)} />
+  ) : null;
 
   if (!wide) {
     return (
       <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "18px 16px 8px", minHeight: 0, overflow: "auto" }}>
         {left}{right}
         {secModal}
+        {helpModal}
       </div>
     );
   }
@@ -411,6 +484,7 @@ export function ReviewView({
     <div style={{ flex: 1, display: "flex", padding: "20px 16px 8px", gap: 16, minHeight: 0, overflow: "hidden" }}>
       {left}{right}
       {secModal}
+      {helpModal}
     </div>
   );
 }

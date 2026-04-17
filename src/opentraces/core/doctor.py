@@ -275,7 +275,7 @@ def _security_tiers(
     - ``detail``: one-line status
     - ``enable_cmd`` / ``disable_cmd``: what the user can type to flip it
       (``None`` when not applicable, e.g. always-on tiers)
-    - ``blocks``: does this tier block upload on finding
+    - ``blocks``: does this tier hard-block upload on finding
     """
     # TruffleHog
     th_enabled = cfg.security.trufflehog.enabled
@@ -283,10 +283,10 @@ def _security_tiers(
         th_state, th_detail = "disabled", None
     elif trufflehog_version is None:
         th_state = "missing"
-        th_detail = "binary not found; run 'opentraces setup trufflehog --verify'"
+        th_detail = "binary not found; run 'opentraces setup trufflehog --enable'"
     else:
         th_state = "enabled"
-        th_detail = f"{trufflehog_version} — blocks on finding"
+        th_detail = f"{trufflehog_version} — redacts findings and forces review"
 
     # LLM trace review
     rl_enabled = bool(review_llm.get("enabled"))
@@ -335,7 +335,7 @@ def _security_tiers(
             "detail": th_detail,
             "enable_cmd": "opentraces setup trufflehog",
             "disable_cmd": "opentraces setup trufflehog --disable",
-            "blocks": True,
+            "blocks": False,
             "binary_version": trufflehog_version,
         },
         {
@@ -366,7 +366,7 @@ def _trufflehog_status(enabled: bool, version: str | None) -> str:
     if not enabled:
         return "disabled (opt in via 'opentraces setup trufflehog')"
     if version is None:
-        return "ENABLED-BUT-MISSING — run 'opentraces setup trufflehog --verify'"
+        return "ENABLED-BUT-MISSING — run 'opentraces setup trufflehog --enable'"
     return f"enabled ({version})"
 
 
