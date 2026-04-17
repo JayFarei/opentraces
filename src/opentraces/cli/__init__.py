@@ -2629,12 +2629,6 @@ def _auth_whoami() -> None:
     _auth_status_impl()
 
 
-@_auth_group.command("status")
-def _auth_status() -> None:
-    """Alias for ``whoami``, report whether we're authenticated."""
-    _auth_status_impl()
-
-
 # ---------------------------------------------------------------------------
 # Flat workflow verbs registered at root: add, list, show, reject, reset,
 # redact, discard. ot add refuses BLOCKED + REJECTED traces.

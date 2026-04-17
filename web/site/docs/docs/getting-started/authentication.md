@@ -39,7 +39,6 @@ The CLI checks for `HF_TOKEN` automatically. Useful in CI pipelines where intera
 
 ```bash
 opentraces auth whoami
-opentraces auth status
 ```
 
 Shows your authenticated HuggingFace username.

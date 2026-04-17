@@ -216,7 +216,6 @@ The CLI checks for `HF_TOKEN` automatically. Useful in CI pipelines where intera
 
 ```bash
 opentraces auth whoami
-opentraces auth status
 ```
 
 Shows your authenticated HuggingFace username.
@@ -389,7 +388,6 @@ The current public root commands are:
 
 ```bash
 opentraces auth whoami
-opentraces auth status
 opentraces auth login
 opentraces auth logout
 ```
@@ -398,7 +396,7 @@ Subcommands:
 
 - `login` starts the browser device flow by default
 - `login --token` accepts a PAT for CI or headless environments
-- `status` is an alias for `whoami`
+- `whoami` reports the active HuggingFace identity
 - `logout` clears the stored Hugging Face credential
 
 ### `opentraces auth login`

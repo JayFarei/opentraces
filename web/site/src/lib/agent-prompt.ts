@@ -6,7 +6,7 @@ If not installed, run: pipx install opentraces
 If already installed, run: opentraces setup upgrade
 
 Step 2 - Authenticate:
-Run \`opentraces auth status\` to check if already logged in.
+Run \`opentraces auth whoami\` to check if already logged in.
 If not authenticated, ask the user to run \`opentraces auth login\` themselves
 to authorize in the browser.
 If they are headless or on CI, use \`opentraces auth login --token\` with a
