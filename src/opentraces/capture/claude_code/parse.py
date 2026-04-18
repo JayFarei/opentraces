@@ -198,7 +198,7 @@ class ClaudeCodeParser:
             "permission_denials", "model_usage", "permission_mode",
             "mcp_servers", "hook_git_final", "hook_post_tool_use",
             "compaction_events",
-            "post_turn_summaries", "session_errors",
+            "post_turn_summaries", "away_summaries", "session_errors",
         ):
             val = metadata.get(key)
             if val is not None:
@@ -352,6 +352,18 @@ class ClaudeCodeParser:
                         "is_noteworthy": line.get("is_noteworthy"),
                         "title": line.get("title"),
                     })
+
+                elif subtype == "away_summary":
+                    # Mid-session "recap" lines Claude Code emits when the user
+                    # returns from a long churn. High-signal intent snapshots
+                    # ("what we're doing now, what's next"), preserved for
+                    # blame/story surfaces, never rewritten.
+                    content = line.get("content")
+                    if content:
+                        metadata.setdefault("away_summaries", []).append({
+                            "content": content,
+                            "timestamp": line.get("timestamp"),
+                        })
 
             # ----------------------------------------------------------------
             # type: 'result' (SDKResultMessage) - actual session outcome

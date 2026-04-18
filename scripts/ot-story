@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""ot-story: render a commit and the trace that produced it, side by side.
+
+Marketing / demo command. Takes a commit SHA and a trace ID, prints a
+two-column view:
+
+    LEFT    the commit (what git sees)
+    RIGHT   the trace (what produced it: intent, recaps, outcome)
+
+Meant to be screenshot via ``ot-shot "story <sha> <trace>"`` or captured
+directly with ``freeze``. Not part of the main CLI surface.
+
+Usage:
+    scripts/ot-story <commit_sha> <trace_id>
+
+Example:
+    scripts/ot-story d02ccdf9 efe83b9f
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import textwrap
+from typing import Any
+
+
+# --- ANSI --------------------------------------------------------------
+
+DIM = "\x1b[2m"
+BOLD = "\x1b[1m"
+RESET = "\x1b[0m"
+ORANGE = "\x1b[38;5;208m"      # matches site accent
+CYAN = "\x1b[38;5;80m"
+GREEN = "\x1b[38;5;115m"
+MUTED = "\x1b[38;5;244m"
+
+
+def c(color: str, text: str) -> str:
+    return f"{color}{text}{RESET}"
+
+
+# --- data fetch --------------------------------------------------------
+
+def git_commit(sha: str) -> dict[str, str]:
+    fmt = "%H%n%h%n%an%n%ad%n%s%n%b"
+    raw = subprocess.check_output(
+        ["git", "show", "-s", f"--format={fmt}", "--date=short", sha],
+        text=True,
+    )
+    lines = raw.rstrip("\n").split("\n", 5)
+    body = lines[5] if len(lines) > 5 else ""
+    return {
+        "sha": lines[0][:10],
+        "short": lines[1],
+        "author": lines[2],
+        "date": lines[3],
+        "subject": lines[4],
+        "body": body,
+    }
+
+
+def git_diffstat(sha: str) -> str:
+    raw = subprocess.check_output(
+        ["git", "show", "--stat", "--format=", sha], text=True,
+    ).strip()
+    return raw
+
+
+def ot_show(trace_id: str) -> dict[str, Any]:
+    raw = subprocess.check_output(
+        ["ot", "--json", "show", trace_id], text=True,
+    )
+    # The separator also appears inside observation content for traces that
+    # captured `ot` CLI output, so split on the newline-anchored variant to
+    # always land on the real JSON boundary, not an embedded echo.
+    sep = "\n---OPENTRACES_JSON---\n"
+    idx = raw.find(sep)
+    if idx == -1:
+        raise RuntimeError(f"no JSON boundary in ot show {trace_id} output")
+    payload = raw[idx + len(sep):]
+    return json.loads(payload)["trace"]
+
+
+# --- extraction --------------------------------------------------------
+
+def first_user_intent(trace: dict[str, Any]) -> str:
+    desc = (trace.get("task") or {}).get("description") or ""
+    return desc.strip()
+
+
+def first_agent_text(trace: dict[str, Any]) -> str:
+    for step in trace.get("steps") or []:
+        if step.get("role") == "agent" and step.get("content"):
+            return step["content"].strip()
+    return ""
+
+
+def last_agent_text(trace: dict[str, Any]) -> str:
+    last = ""
+    for step in trace.get("steps") or []:
+        if step.get("role") == "agent" and step.get("content"):
+            last = step["content"]
+    return last.strip()
+
+
+def away_summaries(trace: dict[str, Any]) -> list[dict[str, str]]:
+    return (trace.get("metadata") or {}).get("away_summaries") or []
+
+
+# --- layout ------------------------------------------------------------
+
+COL = 52  # width of each column, narrow enough that the pair fits
+          # comfortably in a 120-col freeze card without visual sprawl.
+
+
+def wrap(text: str, width: int = COL) -> list[str]:
+    out: list[str] = []
+    for para in text.splitlines() or [""]:
+        if not para:
+            out.append("")
+            continue
+        out.extend(textwrap.wrap(para, width=width) or [""])
+    return out
+
+
+def pad(s: str, width: int = COL) -> str:
+    visible = _visible_len(s)
+    if visible >= width:
+        return s
+    return s + " " * (width - visible)
+
+
+def _visible_len(s: str) -> int:
+    # naive ANSI strip
+    out = []
+    i = 0
+    while i < len(s):
+        if s[i] == "\x1b":
+            j = s.find("m", i)
+            if j == -1:
+                break
+            i = j + 1
+            continue
+        out.append(s[i])
+        i += 1
+    return len(out)
+
+
+def render_columns(left: list[str], right: list[str]) -> str:
+    n = max(len(left), len(right))
+    rows = []
+    for i in range(n):
+        l = left[i] if i < len(left) else ""
+        r = right[i] if i < len(right) else ""
+        rows.append(f"{pad(l)}  {c(DIM, '│')}  {r}")
+    return "\n".join(rows)
+
+
+def header_row(left_title: str, right_title: str) -> str:
+    return f"{pad(c(BOLD, left_title))}  {c(DIM, '│')}  {c(BOLD, right_title)}"
+
+
+def rule() -> str:
+    bar = "─" * COL
+    return f"{c(DIM, bar)}  {c(DIM, '│')}  {c(DIM, bar)}"
+
+
+# --- story -------------------------------------------------------------
+
+def _trim(lines: list[str], max_lines: int) -> list[str]:
+    """Cap a list of lines. Ellipsis is plain; caller colors it if needed."""
+    if len(lines) <= max_lines:
+        return lines
+    return lines[: max_lines - 1] + ["…"]
+
+
+def build_story(sha: str, trace_id: str) -> str:
+    commit = git_commit(sha)
+    trace = ot_show(trace_id)
+
+    # LEFT: commit card
+    left: list[str] = []
+    left.append(c(ORANGE, f"commit {commit['short']}"))
+    left.append(c(MUTED, f"{commit['author']}  ·  {commit['date']}"))
+    left.append("")
+    left.extend(wrap(c(BOLD, commit["subject"])))
+    if commit["body"].strip():
+        left.append("")
+        body = _trim(wrap(commit["body"].strip()), 6)
+        for ln in body:
+            left.append(c(MUTED, ln))
+    left.append("")
+    left.append(c(DIM, "─ diff ─"))
+    for ln in commit_diff_lines(sha, max_lines=5):
+        left.append(c(MUTED, ln[:COL]))
+
+    # RIGHT: trace story
+    right: list[str] = []
+    right.append(c(CYAN, f"trace {trace_id[:8]}"))
+    model = (trace.get("agent") or {}).get("model") or ""
+    if model:
+        right.append(c(MUTED, model))
+    right.append("")
+
+    right.append(c(BOLD, "▸ user said"))
+    for ln in _trim(wrap(first_user_intent(trace)), 8):
+        right.append(ln)
+    right.append("")
+
+    first = first_agent_text(trace)
+    if first:
+        right.append(c(BOLD, "▸ agent replied"))
+        for ln in _trim(wrap(first), 4):
+            right.append(c(MUTED, ln))
+        right.append("")
+
+    recaps = away_summaries(trace)
+    for i, r in enumerate(recaps, 1):
+        ts = (r.get("timestamp") or "").replace("T", " ")[:16]
+        label = "recap" if len(recaps) == 1 else f"recap {i}/{len(recaps)}"
+        right.append(c(BOLD, f"▸ {label}") + c(MUTED, f"   {ts}"))
+        # strip the trailing "(disable recaps in /config)" hint for a cleaner shot
+        content = (r.get("content") or "").split("(disable recaps")[0].strip()
+        for ln in _trim(wrap(content), 5):
+            right.append(c(GREEN, ln))
+        right.append("")
+
+    last = last_agent_text(trace)
+    if last:
+        right.append(c(BOLD, "▸ final message"))
+        for ln in _trim(wrap(last), 5):
+            right.append(c(MUTED, ln))
+
+    return "\n".join([
+        header_row("GIT SEES", "OPENTRACES SEES"),
+        rule(),
+        render_columns(left, right),
+    ])
+
+
+def commit_diff_lines(sha: str, max_lines: int = 6) -> list[str]:
+    raw = subprocess.check_output(
+        ["git", "show", "--stat", "--format=", sha], text=True,
+    ).strip().splitlines()
+    out = []
+    for ln in raw[:max_lines]:
+        out.append(ln)
+    if len(raw) > max_lines:
+        out.append(f"... ({len(raw) - max_lines} more)")
+    return out
+
+
+# --- entry -------------------------------------------------------------
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 3:
+        print("usage: ot-story <commit_sha> <trace_id>", file=sys.stderr)
+        return 2
+    sha, trace_id = argv[1], argv[2]
+    print(build_story(sha, trace_id))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
