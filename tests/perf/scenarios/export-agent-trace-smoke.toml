@@ -1,0 +1,9 @@
+name = "export-agent-trace-smoke"
+domain = "cli"
+lane = "smoke"
+adapter = "subprocess"
+target = "cli.export_agent_trace"
+fixture = "push_batch"
+tier = "small"
+repetitions = 3
+warmups = 1

@@ -1,0 +1,12 @@
+name = "graph-cli-smoke"
+domain = "core"
+lane = "smoke"
+adapter = "subprocess"
+target = "cli.graph"
+fixture = "stack"
+tier = "small"
+repetitions = 3
+warmups = 1
+
+[params]
+limit = 20

@@ -1,0 +1,49 @@
+{
+  "budget_updated": false,
+  "result": {
+    "cold_ms": 782.6315,
+    "extra": {},
+    "max_rss_delta_mb": 17.0,
+    "mean_ms": 782.6315,
+    "p50_ms": 782.6315,
+    "p95_ms": 782.6315,
+    "peak_rss_mb": 141.9375,
+    "python_heap_peak_mb": 22.923280715942383,
+    "samples": [
+      {
+        "duration_ms": 782.6315,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_tui_perf_tui_navigation_s0/tui-navigation-smoke/run-00/proj",
+          "scenario": "tui-navigation-smoke",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 141.9375,
+        "python_heap_peak_mb": 22.923280715942383,
+        "rss_after_mb": 141.890625,
+        "rss_before_mb": 124.890625,
+        "rss_delta_mb": 17.0
+      }
+    ]
+  },
+  "scenario": {
+    "adapter": "python",
+    "budget": {
+      "max_cold_ms": 1205.82,
+      "max_p50_ms": 1205.82,
+      "max_p95_ms": 1205.82,
+      "max_peak_rss_mb": 168.24,
+      "max_python_heap_peak_mb": 30.0,
+      "max_rss_delta_mb": 29.0
+    },
+    "domain": "tui",
+    "fixture": "stack",
+    "lane": "smoke",
+    "name": "tui-navigation-smoke",
+    "params": {},
+    "repetitions": 1,
+    "target": "tui.navigation",
+    "tier": "small",
+    "warmups": 0
+  }
+}

@@ -1,0 +1,9 @@
+name = "tui-navigation-smoke"
+domain = "tui"
+lane = "smoke"
+adapter = "python"
+target = "tui.navigation"
+fixture = "stack"
+tier = "small"
+repetitions = 1
+warmups = 0

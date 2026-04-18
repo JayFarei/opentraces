@@ -1,0 +1,9 @@
+name = "add-all-smoke"
+domain = "cli"
+lane = "smoke"
+adapter = "subprocess"
+target = "cli.add_all"
+fixture = "stack"
+tier = "small"
+repetitions = 3
+warmups = 1

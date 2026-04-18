@@ -1,0 +1,9 @@
+name = "blame-cli-smoke"
+domain = "core"
+lane = "smoke"
+adapter = "subprocess"
+target = "cli.blame"
+fixture = "stack"
+tier = "small"
+repetitions = 3
+warmups = 1

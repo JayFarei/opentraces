@@ -1,0 +1,12 @@
+name = "assess-local-smoke"
+domain = "cli"
+lane = "smoke"
+adapter = "subprocess"
+target = "cli.assess_local"
+fixture = "push_batch"
+tier = "small"
+repetitions = 3
+warmups = 1
+
+[params]
+limit = 12

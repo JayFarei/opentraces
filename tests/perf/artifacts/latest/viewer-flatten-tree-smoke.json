@@ -1,0 +1,63 @@
+{
+  "budget_updated": false,
+  "result": {
+    "cold_ms": 0.168,
+    "extra": {
+      "benchmark_id": "flattenTree",
+      "initial_p95_ms": 0.168,
+      "meta": {
+        "initialRows": 111,
+        "roots": 19,
+        "treeNodes": 347,
+        "updateRows": 14
+      },
+      "node_version": "v25.8.0",
+      "peak_heap_used_mb": 65.01848602294922,
+      "retained_heap_used_mb": 0.42194366455078125,
+      "update_p95_ms": 0.165
+    },
+    "max_rss_delta_mb": 0.015625,
+    "mean_ms": 0.156,
+    "p50_ms": 0.156,
+    "p95_ms": 0.165,
+    "peak_rss_mb": 278.859375,
+    "python_heap_peak_mb": null,
+    "samples": [
+      {
+        "duration_ms": 0.156,
+        "metadata": {
+          "benchmark": "flattenTree"
+        },
+        "peak_rss_mb": 278.859375,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      }
+    ]
+  },
+  "scenario": {
+    "adapter": "node",
+    "budget": {
+      "max_initial_p95_ms": 2.0,
+      "max_peak_heap_used_mb": 80.0,
+      "max_peak_rss_mb": 340.0,
+      "max_retained_heap_used_mb": 5.0,
+      "max_rss_delta_mb": 5.0,
+      "max_update_p95_ms": 2.0
+    },
+    "domain": "viewer",
+    "fixture": "viewer",
+    "lane": "smoke",
+    "name": "viewer-flatten-tree-smoke",
+    "params": {
+      "benchmark": "flattenTree",
+      "iterations": 8,
+      "warmup": 2
+    },
+    "repetitions": 1,
+    "target": "viewer.flattenTree",
+    "tier": "small",
+    "warmups": 0
+  }
+}

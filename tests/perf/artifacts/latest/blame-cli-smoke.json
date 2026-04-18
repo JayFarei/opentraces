@@ -1,0 +1,82 @@
+{
+  "budget_updated": false,
+  "result": {
+    "cold_ms": 212.819834,
+    "extra": {},
+    "max_rss_delta_mb": null,
+    "mean_ms": 212.01619466666668,
+    "p50_ms": 212.819834,
+    "p95_ms": 215.303334,
+    "peak_rss_mb": 42.484375,
+    "python_heap_peak_mb": null,
+    "samples": [
+      {
+        "duration_ms": 212.819834,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_core_perf_blame_cli_smoke0/blame-cli-smoke/run-01/proj",
+          "returncode": 0,
+          "scenario": "blame-cli-smoke",
+          "sha": "b008e573234845f05529aaccf12a3bd36ad49991",
+          "stdout_tail": "\u2570\u2500\u2500 \u25c6 t:small-tr   small-trace  1 of 2 diff lines . 50%   claude-opus-4-6\n    + Added chunks lines 4-4\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nFiles:\n\n  pkg/module_2.py  4 line(s)  (2 attributed)",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 42.0625,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      },
+      {
+        "duration_ms": 207.925416,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_core_perf_blame_cli_smoke0/blame-cli-smoke/run-02/proj",
+          "returncode": 0,
+          "scenario": "blame-cli-smoke",
+          "sha": "b92dab70e77d21f52658cbcc05bad7ee63c999ba",
+          "stdout_tail": "\u2570\u2500\u2500 \u25c6 t:small-tr   small-trace  1 of 2 diff lines . 50%   claude-opus-4-6\n    + Added chunks lines 4-4\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nFiles:\n\n  pkg/module_2.py  4 line(s)  (2 attributed)",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 42.484375,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      },
+      {
+        "duration_ms": 215.303334,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_core_perf_blame_cli_smoke0/blame-cli-smoke/run-03/proj",
+          "returncode": 0,
+          "scenario": "blame-cli-smoke",
+          "sha": "61817b6e97b82a4c473c0b0daafb92096595067c",
+          "stdout_tail": "\u2570\u2500\u2500 \u25c6 t:small-tr   small-trace  1 of 2 diff lines . 50%   claude-opus-4-6\n    + Added chunks lines 4-4\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\nFiles:\n\n  pkg/module_2.py  4 line(s)  (2 attributed)",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 41.796875,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      }
+    ]
+  },
+  "scenario": {
+    "adapter": "subprocess",
+    "budget": {
+      "max_p95_ms": 280.0,
+      "max_peak_rss_mb": 80.0
+    },
+    "domain": "core",
+    "fixture": "stack",
+    "lane": "smoke",
+    "name": "blame-cli-smoke",
+    "params": {},
+    "repetitions": 3,
+    "target": "cli.blame",
+    "tier": "small",
+    "warmups": 1
+  }
+}

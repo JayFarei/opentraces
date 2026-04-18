@@ -1,0 +1,9 @@
+name = "web-blame-smoke"
+domain = "web"
+lane = "smoke"
+adapter = "python"
+target = "web.api_blame"
+fixture = "stack"
+tier = "small"
+repetitions = 4
+warmups = 1

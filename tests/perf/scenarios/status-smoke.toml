@@ -1,0 +1,12 @@
+name = "status-smoke"
+domain = "cli"
+lane = "smoke"
+adapter = "subprocess"
+target = "cli.status"
+fixture = "stack"
+tier = "small"
+repetitions = 3
+warmups = 1
+
+[params]
+limit = 10

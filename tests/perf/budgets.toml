@@ -1,0 +1,178 @@
+[add-all-smoke]
+max_cold_ms = 179.18
+max_p50_ms = 178.83
+max_p95_ms = 179.18
+max_peak_rss_mb = 52.25
+
+[assess-local-smoke]
+max_cold_ms = 327.7
+max_p50_ms = 325.23
+max_p95_ms = 327.7
+max_peak_rss_mb = 80.27
+
+[blame-cli-smoke]
+max_p95_ms = 280.0
+max_peak_rss_mb = 80.0
+
+[blame-core-smoke]
+max_p95_ms = 40.0
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 1.0
+
+[export-agent-trace-smoke]
+max_cold_ms = 179.12
+max_p50_ms = 179.12
+max_p95_ms = 182.35
+max_peak_rss_mb = 53.71
+
+[graph-cli-smoke]
+max_p95_ms = 340.0
+max_peak_rss_mb = 80.0
+
+[graph-core-smoke]
+max_p95_ms = 100.0
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 1.0
+
+[inverse-blame-smoke]
+max_p95_ms = 35.0
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 1.0
+
+[push-smoke]
+max_p95_ms = 25.0
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 1.0
+
+[scan-project-smoke]
+max_p95_ms = 300.0
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 2.0
+
+[status-smoke]
+max_cold_ms = 195.04
+max_p50_ms = 198.55
+max_p95_ms = 201.64
+max_peak_rss_mb = 57.07
+
+[tui-navigation-smoke]
+max_cold_ms = 1205.82
+max_p50_ms = 1205.82
+max_p95_ms = 1205.82
+max_peak_rss_mb = 168.24
+max_python_heap_peak_mb = 30.0
+max_rss_delta_mb = 29.0
+
+[tui-review-actions-smoke]
+max_cold_ms = 2024.4
+max_p50_ms = 2024.4
+max_p95_ms = 2024.4
+max_peak_rss_mb = 222.27
+max_python_heap_peak_mb = 45.75
+max_rss_delta_mb = 23.44
+
+[tui-startup-smoke]
+max_cold_ms = 186.91
+max_p50_ms = 186.91
+max_p95_ms = 250.0
+max_peak_rss_mb = 231.93
+max_python_heap_peak_mb = 18.0
+max_rss_delta_mb = 10.0
+
+[viewer-flatten-tree-smoke]
+max_initial_p95_ms = 2.0
+max_peak_heap_used_mb = 80.0
+max_peak_rss_mb = 340.0
+max_retained_heap_used_mb = 5.0
+max_rss_delta_mb = 5.0
+max_update_p95_ms = 2.0
+
+[viewer-graph-view-smoke]
+max_initial_p95_ms = 200.0
+max_peak_heap_used_mb = 120.0
+max_peak_rss_mb = 480.0
+max_retained_heap_used_mb = 5.0
+max_rss_delta_mb = 8.0
+max_update_p95_ms = 25.0
+
+[viewer-review-view-smoke]
+max_initial_p95_ms = 360.0
+max_peak_heap_used_mb = 180.0
+max_peak_rss_mb = 520.0
+max_retained_heap_used_mb = 5.0
+max_rss_delta_mb = 10.0
+max_update_p95_ms = 70.0
+
+[watcher-active-smoke]
+max_p95_ms = 280.0
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 1.0
+
+[watcher-quiet-smoke]
+max_p95_ms = 50.0
+max_python_heap_peak_mb = 1.0
+max_rss_delta_mb = 1.0
+
+[web-blame-smoke]
+max_cold_ms = 42.27
+max_p50_ms = 42.27
+max_p95_ms = 46.2
+max_peak_rss_mb = 232.01
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 1.0
+
+[web-context-smoke]
+max_cold_ms = 5.29
+max_p50_ms = 5.15
+max_p95_ms = 5.55
+max_peak_rss_mb = 232.32
+max_python_heap_peak_mb = 0.62
+max_rss_delta_mb = 0.0
+
+[web-detail-smoke]
+max_cold_ms = 22.67
+max_p50_ms = 22.9
+max_p95_ms = 24.48
+max_peak_rss_mb = 232.38
+max_python_heap_peak_mb = 0.95
+max_rss_delta_mb = 0.02
+
+[web-graph-smoke]
+max_cold_ms = 111.38
+max_p50_ms = 110.42
+max_p95_ms = 118.9
+max_peak_rss_mb = 232.54
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 1.0
+
+[web-refresh-smoke]
+max_cold_ms = 310.59
+max_p50_ms = 313.27
+max_p95_ms = 314.91
+max_peak_rss_mb = 232.75
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 1.0
+
+[web-stats-smoke]
+max_cold_ms = 23.45
+max_p50_ms = 23.13
+max_p95_ms = 23.8
+max_peak_rss_mb = 232.75
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 1.0
+
+[web-trace-tree-smoke]
+max_cold_ms = 22.94
+max_p50_ms = 23.03
+max_p95_ms = 23.49
+max_peak_rss_mb = 232.75
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 1.0
+
+[web-traces-smoke]
+max_cold_ms = 25.6
+max_p50_ms = 23.95
+max_p95_ms = 25.6
+max_peak_rss_mb = 232.75
+max_python_heap_peak_mb = 2.0
+max_rss_delta_mb = 1.0

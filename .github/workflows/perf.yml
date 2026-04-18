@@ -1,0 +1,130 @@
+name: Perf
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  perf-smoke:
+    name: Perf Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      OT_PERF_ARTIFACTS_DIR: ${{ runner.temp }}/perf-artifacts
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONHASHSEED: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install test environment
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e packages/opentraces-schema
+          python -m pip install -e ".[dev]"
+
+      - name: Install viewer perf dependencies
+        working-directory: web/viewer
+        run: npm ci
+
+      - name: Run deterministic perf smoke lane
+        run: |
+          pytest -q tests/perf --perf-lane smoke
+          pytest -q \
+            tests/capture/test_on_tool_use_hook.py::TestHookRobustness::test_hook_runs_under_50ms_budget \
+            tests/capture/test_watcher_daemon.py::test_quiet_tick_is_fast
+
+      - name: Upload perf artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-smoke-artifacts
+          path: ${{ runner.temp }}/perf-artifacts
+
+  user-smoke:
+    name: User Smoke
+    runs-on: ubuntu-latest
+    needs: perf-smoke
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: probe
+        name: Probe optional user-smoke tools
+        run: |
+          has_tmux=false
+          if command -v tmux >/dev/null 2>&1; then
+            has_tmux=true
+          fi
+
+          has_agent_browser=false
+          if command -v agent-browser >/dev/null 2>&1; then
+            has_agent_browser=true
+          fi
+
+          if [ "$has_tmux" = true ] && [ "$has_agent_browser" = true ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "has_tmux=$has_tmux" >> "$GITHUB_OUTPUT"
+          echo "has_agent_browser=$has_agent_browser" >> "$GITHUB_OUTPUT"
+
+      - if: steps.probe.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - if: steps.probe.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - if: steps.probe.outputs.run == 'true'
+        name: Install test environment
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e packages/opentraces-schema
+          python -m pip install -e ".[dev]"
+
+      - if: steps.probe.outputs.run == 'true'
+        name: Build viewer assets for web smoke
+        working-directory: web/viewer
+        run: |
+          npm ci
+          npm run build
+
+      - if: steps.probe.outputs.run == 'true'
+        name: Load agent-browser skill metadata
+        run: agent-browser skills get agent-browser || true
+
+      - if: steps.probe.outputs.run == 'true'
+        name: Run opt-in user smoke tests
+        env:
+          OT_TUI_SMOKE: "1"
+          OT_WEB_SMOKE: "1"
+        run: |
+          pytest -q \
+            tests/e2e/test_tui_tmux_smoke.py \
+            tests/e2e/test_web_agent_browser_smoke.py
+
+      - if: steps.probe.outputs.run != 'true'
+        name: Skip user smoke tests
+        run: |
+          echo "Skipping user smoke tests."
+          echo "tmux available: ${{ steps.probe.outputs.has_tmux }}"
+          echo "agent-browser available: ${{ steps.probe.outputs.has_agent_browser }}"

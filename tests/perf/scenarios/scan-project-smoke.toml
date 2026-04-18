@@ -1,0 +1,9 @@
+name = "scan-project-smoke"
+domain = "watcher"
+lane = "smoke"
+adapter = "python"
+target = "ingest.scan_project"
+fixture = "scan_project"
+tier = "small"
+repetitions = 4
+warmups = 0

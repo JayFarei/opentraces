@@ -1,0 +1,14 @@
+name = "viewer-flatten-tree-smoke"
+domain = "viewer"
+lane = "smoke"
+adapter = "node"
+target = "viewer.flattenTree"
+fixture = "viewer"
+tier = "small"
+repetitions = 1
+warmups = 0
+
+[params]
+benchmark = "flattenTree"
+iterations = 8
+warmup = 2

@@ -1,0 +1,84 @@
+{
+  "budget_updated": false,
+  "result": {
+    "cold_ms": 144.399125,
+    "extra": {},
+    "max_rss_delta_mb": null,
+    "mean_ms": 145.03175000000002,
+    "p50_ms": 144.915792,
+    "p95_ms": 145.780333,
+    "peak_rss_mb": 43.1875,
+    "python_heap_peak_mb": null,
+    "samples": [
+      {
+        "duration_ms": 144.399125,
+        "metadata": {
+          "commit_count": 10,
+          "output_path": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_cli_perf_export_agent_tra0/export-agent-trace-smoke/run-01/opentraces-export.jsonl",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_cli_perf_export_agent_tra0/export-agent-trace-smoke/run-01/proj",
+          "returncode": 0,
+          "scenario": "export-agent-trace-smoke",
+          "stdout_tail": "\n---OPENTRACES_JSON---\n{\n  \"status\": \"ok\",\n  \"format\": \"agent-trace\",\n  \"count\": 24,\n  \"output\": \"/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_cli_perf_export_agent_tra0/export-agent-trace-smoke/run-01/opentraces-export.jsonl\"\n}",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 42.15625,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      },
+      {
+        "duration_ms": 144.915792,
+        "metadata": {
+          "commit_count": 10,
+          "output_path": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_cli_perf_export_agent_tra0/export-agent-trace-smoke/run-02/opentraces-export.jsonl",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_cli_perf_export_agent_tra0/export-agent-trace-smoke/run-02/proj",
+          "returncode": 0,
+          "scenario": "export-agent-trace-smoke",
+          "stdout_tail": "\n---OPENTRACES_JSON---\n{\n  \"status\": \"ok\",\n  \"format\": \"agent-trace\",\n  \"count\": 24,\n  \"output\": \"/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_cli_perf_export_agent_tra0/export-agent-trace-smoke/run-02/opentraces-export.jsonl\"\n}",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 43.046875,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      },
+      {
+        "duration_ms": 145.780333,
+        "metadata": {
+          "commit_count": 10,
+          "output_path": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_cli_perf_export_agent_tra0/export-agent-trace-smoke/run-03/opentraces-export.jsonl",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_cli_perf_export_agent_tra0/export-agent-trace-smoke/run-03/proj",
+          "returncode": 0,
+          "scenario": "export-agent-trace-smoke",
+          "stdout_tail": "\n---OPENTRACES_JSON---\n{\n  \"status\": \"ok\",\n  \"format\": \"agent-trace\",\n  \"count\": 24,\n  \"output\": \"/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_cli_perf_export_agent_tra0/export-agent-trace-smoke/run-03/opentraces-export.jsonl\"\n}",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 43.1875,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      }
+    ]
+  },
+  "scenario": {
+    "adapter": "subprocess",
+    "budget": {
+      "max_cold_ms": 179.12,
+      "max_p50_ms": 179.12,
+      "max_p95_ms": 182.35,
+      "max_peak_rss_mb": 53.71
+    },
+    "domain": "cli",
+    "fixture": "push_batch",
+    "lane": "smoke",
+    "name": "export-agent-trace-smoke",
+    "params": {},
+    "repetitions": 3,
+    "target": "cli.export_agent_trace",
+    "tier": "small",
+    "warmups": 1
+  }
+}

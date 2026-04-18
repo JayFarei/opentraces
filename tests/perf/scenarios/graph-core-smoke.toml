@@ -1,0 +1,13 @@
+name = "graph-core-smoke"
+domain = "core"
+lane = "smoke"
+adapter = "python"
+target = "graph.load"
+fixture = "stack"
+tier = "small"
+repetitions = 4
+warmups = 1
+
+[params]
+show_entities = true
+limit = 20

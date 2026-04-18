@@ -1,0 +1,9 @@
+name = "watcher-quiet-smoke"
+domain = "watcher"
+lane = "smoke"
+adapter = "python"
+target = "watcher.run_once"
+fixture = "watcher_quiet"
+tier = "small"
+repetitions = 5
+warmups = 1

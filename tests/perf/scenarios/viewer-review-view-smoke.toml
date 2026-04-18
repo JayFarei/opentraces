@@ -1,0 +1,14 @@
+name = "viewer-review-view-smoke"
+domain = "viewer"
+lane = "smoke"
+adapter = "node"
+target = "viewer.ReviewView"
+fixture = "viewer"
+tier = "small"
+repetitions = 1
+warmups = 0
+
+[params]
+benchmark = "ReviewView"
+iterations = 8
+warmup = 2

@@ -1,0 +1,91 @@
+{
+  "budget_updated": false,
+  "result": {
+    "cold_ms": 84.967542,
+    "extra": {},
+    "max_rss_delta_mb": 0.0,
+    "mean_ms": 88.056021,
+    "p50_ms": 88.626917,
+    "p95_ms": 89.742875,
+    "peak_rss_mb": 190.296875,
+    "python_heap_peak_mb": 0.7241277694702148,
+    "samples": [
+      {
+        "duration_ms": 84.967542,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_web_perf_web_graph_smoke_0/web-graph-smoke/run-02/proj",
+          "scenario": "web-graph-smoke",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 190.296875,
+        "python_heap_peak_mb": 0.6998395919799805,
+        "rss_after_mb": 190.25,
+        "rss_before_mb": 190.25,
+        "rss_delta_mb": 0.0
+      },
+      {
+        "duration_ms": 88.626917,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_web_perf_web_graph_smoke_0/web-graph-smoke/run-04/proj",
+          "scenario": "web-graph-smoke",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 190.296875,
+        "python_heap_peak_mb": 0.7093610763549805,
+        "rss_after_mb": 190.25,
+        "rss_before_mb": 190.25,
+        "rss_delta_mb": 0.0
+      },
+      {
+        "duration_ms": 89.742875,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_web_perf_web_graph_smoke_0/web-graph-smoke/run-06/proj",
+          "scenario": "web-graph-smoke",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 190.296875,
+        "python_heap_peak_mb": 0.7241277694702148,
+        "rss_after_mb": 190.25,
+        "rss_before_mb": 190.25,
+        "rss_delta_mb": 0.0
+      },
+      {
+        "duration_ms": 88.88675,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_web_perf_web_graph_smoke_0/web-graph-smoke/run-08/proj",
+          "scenario": "web-graph-smoke",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 190.296875,
+        "python_heap_peak_mb": 0.723902702331543,
+        "rss_after_mb": 190.25,
+        "rss_before_mb": 190.25,
+        "rss_delta_mb": 0.0
+      }
+    ]
+  },
+  "scenario": {
+    "adapter": "python",
+    "budget": {
+      "max_cold_ms": 111.38,
+      "max_p50_ms": 110.42,
+      "max_p95_ms": 118.9,
+      "max_peak_rss_mb": 232.54,
+      "max_python_heap_peak_mb": 2.0,
+      "max_rss_delta_mb": 1.0
+    },
+    "domain": "web",
+    "fixture": "stack",
+    "lane": "smoke",
+    "name": "web-graph-smoke",
+    "params": {},
+    "repetitions": 4,
+    "target": "web.api_graph",
+    "tier": "small",
+    "warmups": 1
+  }
+}

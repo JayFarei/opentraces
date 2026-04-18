@@ -1,0 +1,14 @@
+name = "viewer-graph-view-smoke"
+domain = "viewer"
+lane = "smoke"
+adapter = "node"
+target = "viewer.GraphView"
+fixture = "viewer"
+tier = "small"
+repetitions = 1
+warmups = 0
+
+[params]
+benchmark = "GraphView"
+iterations = 8
+warmup = 2

@@ -1,0 +1,49 @@
+{
+  "budget_updated": false,
+  "result": {
+    "cold_ms": 1505.878458,
+    "extra": {},
+    "max_rss_delta_mb": 21.25,
+    "mean_ms": 1505.878458,
+    "p50_ms": 1505.878458,
+    "p95_ms": 1505.878458,
+    "peak_rss_mb": 183.578125,
+    "python_heap_peak_mb": 36.727569580078125,
+    "samples": [
+      {
+        "duration_ms": 1505.878458,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_tui_perf_tui_review_actio0/tui-review-actions-smoke/run-00/proj",
+          "scenario": "tui-review-actions-smoke",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 183.578125,
+        "python_heap_peak_mb": 36.727569580078125,
+        "rss_after_mb": 183.53125,
+        "rss_before_mb": 162.28125,
+        "rss_delta_mb": 21.25
+      }
+    ]
+  },
+  "scenario": {
+    "adapter": "python",
+    "budget": {
+      "max_cold_ms": 2024.4,
+      "max_p50_ms": 2024.4,
+      "max_p95_ms": 2024.4,
+      "max_peak_rss_mb": 222.27,
+      "max_python_heap_peak_mb": 45.75,
+      "max_rss_delta_mb": 23.44
+    },
+    "domain": "tui",
+    "fixture": "stack",
+    "lane": "smoke",
+    "name": "tui-review-actions-smoke",
+    "params": {},
+    "repetitions": 1,
+    "target": "tui.review_actions",
+    "tier": "small",
+    "warmups": 0
+  }
+}
