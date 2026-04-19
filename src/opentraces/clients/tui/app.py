@@ -27,6 +27,7 @@ from typing import Any
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.text import Text
 from rich.theme import Theme
 
 from textual import events, on, work
@@ -193,26 +194,41 @@ class TraceRow(ListItem):
         self.trace = trace
         self.is_blocked = is_blocked
         self.width_hint = width_hint
+        self._label_parts = self._build_label_parts()
 
-    def compose(self) -> ComposeResult:
+    def _build_label_parts(self) -> tuple[tuple[str, str | None], ...]:
         task = _truncate(_session_label(self.trace), max(12, self.width_hint - 22))
         ts = _relative_time(self.trace.get("timestamp_end") or self.trace.get("timestamp_start"))
         sid = _short_id(self.trace["trace_id"])
         flags = len(self.trace.get("_security_flags", []))
         if self.is_blocked:
-            dot = "[red]●[/red]"
+            dot = ("●", "red")
         elif flags:
-            dot = "[yellow]●[/yellow]"
+            dot = ("●", "yellow")
         elif _is_recently_touched(self.trace.get("timestamp_end")):
-            dot = "[cyan dim]◐[/cyan dim]"
+            dot = ("◐", "cyan dim")
         else:
-            dot = "[dim]·[/dim]"
+            dot = ("·", "dim")
         gen = self.trace.get("generation_index") or 0
-        gen_tag = f"  [cyan dim]↑{gen}[/cyan dim]" if gen else ""
-        yield Static(
-            f"{dot} [dim]{sid}[/dim]  {escape(task)}  [dim]{ts}[/dim]{gen_tag}",
-            markup=True,
-            classes="trace-row",
+        parts: list[tuple[str, str | None]] = [
+            dot,
+            (" ", None),
+            (sid, "dim"),
+            ("  ", None),
+            (task, None),
+            ("  ", None),
+            (ts, "dim"),
+        ]
+        if gen:
+            parts.extend([
+                ("  ", None),
+                (f"↑{gen}", "cyan dim"),
+            ])
+        return tuple(parts)
+
+    def render(self) -> Text:
+        return Text.assemble(
+            *self._label_parts,
         )
 
 

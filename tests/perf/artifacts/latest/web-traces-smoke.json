@@ -1,69 +1,69 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 21.927083,
+    "cold_ms": 19.359291,
     "extra": {},
     "max_rss_delta_mb": 0.0,
-    "mean_ms": 21.07458325,
-    "p50_ms": 21.196042,
-    "p95_ms": 21.927083,
-    "peak_rss_mb": 206.171875,
-    "python_heap_peak_mb": 0.7577428817749023,
+    "mean_ms": 19.31512475,
+    "p50_ms": 19.317666,
+    "p95_ms": 19.720167,
+    "peak_rss_mb": 184.328125,
+    "python_heap_peak_mb": 0.7578153610229492,
     "samples": [
       {
-        "duration_ms": 21.927083,
+        "duration_ms": 19.359291,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-289/test_web_perf_web_traces_smoke0/web-traces-smoke/run-02/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-296/test_web_perf_web_traces_smoke0/web-traces-smoke/run-02/proj",
           "scenario": "web-traces-smoke",
           "trace_count": 24
         },
-        "peak_rss_mb": 206.171875,
-        "python_heap_peak_mb": 0.7451629638671875,
-        "rss_after_mb": 206.125,
-        "rss_before_mb": 206.125,
+        "peak_rss_mb": 184.328125,
+        "python_heap_peak_mb": 0.7574701309204102,
+        "rss_after_mb": 184.28125,
+        "rss_before_mb": 184.28125,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 21.196042,
+        "duration_ms": 19.720167,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-289/test_web_perf_web_traces_smoke0/web-traces-smoke/run-04/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-296/test_web_perf_web_traces_smoke0/web-traces-smoke/run-04/proj",
           "scenario": "web-traces-smoke",
           "trace_count": 24
         },
-        "peak_rss_mb": 206.171875,
-        "python_heap_peak_mb": 0.7373332977294922,
-        "rss_after_mb": 206.125,
-        "rss_before_mb": 206.125,
+        "peak_rss_mb": 184.328125,
+        "python_heap_peak_mb": 0.7474164962768555,
+        "rss_after_mb": 184.28125,
+        "rss_before_mb": 184.28125,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 19.334042,
+        "duration_ms": 18.863375,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-289/test_web_perf_web_traces_smoke0/web-traces-smoke/run-06/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-296/test_web_perf_web_traces_smoke0/web-traces-smoke/run-06/proj",
           "scenario": "web-traces-smoke",
           "trace_count": 24
         },
-        "peak_rss_mb": 206.171875,
-        "python_heap_peak_mb": 0.7576303482055664,
-        "rss_after_mb": 206.125,
-        "rss_before_mb": 206.125,
+        "peak_rss_mb": 184.328125,
+        "python_heap_peak_mb": 0.7576980590820312,
+        "rss_after_mb": 184.28125,
+        "rss_before_mb": 184.28125,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 21.841166,
+        "duration_ms": 19.317666,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-289/test_web_perf_web_traces_smoke0/web-traces-smoke/run-08/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-296/test_web_perf_web_traces_smoke0/web-traces-smoke/run-08/proj",
           "scenario": "web-traces-smoke",
           "trace_count": 24
         },
-        "peak_rss_mb": 206.171875,
-        "python_heap_peak_mb": 0.7577428817749023,
-        "rss_after_mb": 206.125,
-        "rss_before_mb": 206.125,
+        "peak_rss_mb": 184.328125,
+        "python_heap_peak_mb": 0.7578153610229492,
+        "rss_after_mb": 184.28125,
+        "rss_before_mb": 184.28125,
         "rss_delta_mb": 0.0
       }
     ]

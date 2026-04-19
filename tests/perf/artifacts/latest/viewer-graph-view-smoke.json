@@ -1,10 +1,10 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 146.953,
+    "cold_ms": 143.752,
     "extra": {
       "benchmark_id": "GraphView",
-      "initial_p95_ms": 146.953,
+      "initial_p95_ms": 143.752,
       "meta": {
         "blameSessionsPerCommit": 3,
         "commits": 26,
@@ -14,23 +14,23 @@
         "updatedCommit": "sha-0002"
       },
       "node_version": "v25.8.0",
-      "peak_heap_used_mb": 95.1205062866211,
-      "retained_heap_used_mb": 0.22594451904296875,
-      "update_p95_ms": 15.484
+      "peak_heap_used_mb": 95.08724212646484,
+      "retained_heap_used_mb": 0.2260284423828125,
+      "update_p95_ms": 15.084
     },
-    "max_rss_delta_mb": 0.890625,
-    "mean_ms": 14.296,
-    "p50_ms": 14.345,
-    "p95_ms": 15.484,
-    "peak_rss_mb": 379.328125,
+    "max_rss_delta_mb": 0.015625,
+    "mean_ms": 14.396,
+    "p50_ms": 14.73,
+    "p95_ms": 15.084,
+    "peak_rss_mb": 376.03125,
     "python_heap_peak_mb": null,
     "samples": [
       {
-        "duration_ms": 14.296,
+        "duration_ms": 14.396,
         "metadata": {
           "benchmark": "GraphView"
         },
-        "peak_rss_mb": 379.328125,
+        "peak_rss_mb": 376.03125,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,

@@ -12,23 +12,23 @@
         "updateRows": 14
       },
       "node_version": "v25.8.0",
-      "peak_heap_used_mb": 65.00718688964844,
-      "retained_heap_used_mb": 0.00054931640625,
-      "update_p95_ms": 0.206
+      "peak_heap_used_mb": 65.00540161132812,
+      "retained_heap_used_mb": 0.00185394287109375,
+      "update_p95_ms": 0.163
     },
     "max_rss_delta_mb": 0.0,
-    "mean_ms": 0.163,
-    "p50_ms": 0.154,
-    "p95_ms": 0.206,
-    "peak_rss_mb": 279.65625,
+    "mean_ms": 0.156,
+    "p50_ms": 0.155,
+    "p95_ms": 0.163,
+    "peak_rss_mb": 282.140625,
     "python_heap_peak_mb": null,
     "samples": [
       {
-        "duration_ms": 0.163,
+        "duration_ms": 0.156,
         "metadata": {
           "benchmark": "flattenTree"
         },
-        "peak_rss_mb": 279.65625,
+        "peak_rss_mb": 282.140625,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,

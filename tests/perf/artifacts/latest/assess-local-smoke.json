@@ -1,58 +1,58 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 270.702333,
+    "cold_ms": 262.225875,
     "extra": {},
     "max_rss_delta_mb": null,
-    "mean_ms": 270.1914023333333,
-    "p50_ms": 270.702333,
-    "p95_ms": 271.812791,
-    "peak_rss_mb": 64.625,
+    "mean_ms": 265.03751366666665,
+    "p50_ms": 262.225875,
+    "p95_ms": 272.332,
+    "peak_rss_mb": 64.9375,
     "python_heap_peak_mb": null,
     "samples": [
       {
-        "duration_ms": 270.702333,
+        "duration_ms": 262.225875,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-289/test_cli_perf_assess_local_smo0/assess-local-smoke/run-01/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-296/test_cli_perf_assess_local_smo0/assess-local-smoke/run-01/proj",
           "returncode": 0,
           "scenario": "assess-local-smoke",
           "stdout_tail": "      \"Trace small-tr analytics 36.8% below 60.0% minimum\",\n      \"Trace small-tr analytics 36.8% below 60.0% minimum\",\n      \"Trace small-tr analytics 36.8% below 60.0% minimum\",\n      \"Trace small-tr analytics 36.8% below 60.0% minimum\"\n    ]\n  },\n  \"remote_delta\": null\n}",
           "trace_count": 24
         },
-        "peak_rss_mb": 64.625,
+        "peak_rss_mb": 64.671875,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
         "rss_delta_mb": null
       },
       {
-        "duration_ms": 268.059083,
+        "duration_ms": 260.554666,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-289/test_cli_perf_assess_local_smo0/assess-local-smoke/run-02/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-296/test_cli_perf_assess_local_smo0/assess-local-smoke/run-02/proj",
           "returncode": 0,
           "scenario": "assess-local-smoke",
           "stdout_tail": "      \"Trace small-tr analytics 36.8% below 60.0% minimum\",\n      \"Trace small-tr analytics 36.8% below 60.0% minimum\",\n      \"Trace small-tr analytics 36.8% below 60.0% minimum\",\n      \"Trace small-tr analytics 36.8% below 60.0% minimum\"\n    ]\n  },\n  \"remote_delta\": null\n}",
           "trace_count": 24
         },
-        "peak_rss_mb": 64.484375,
+        "peak_rss_mb": 64.9375,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
         "rss_delta_mb": null
       },
       {
-        "duration_ms": 271.812791,
+        "duration_ms": 272.332,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-289/test_cli_perf_assess_local_smo0/assess-local-smoke/run-03/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-296/test_cli_perf_assess_local_smo0/assess-local-smoke/run-03/proj",
           "returncode": 0,
           "scenario": "assess-local-smoke",
           "stdout_tail": "      \"Trace small-tr analytics 36.8% below 60.0% minimum\",\n      \"Trace small-tr analytics 36.8% below 60.0% minimum\",\n      \"Trace small-tr analytics 36.8% below 60.0% minimum\",\n      \"Trace small-tr analytics 36.8% below 60.0% minimum\"\n    ]\n  },\n  \"remote_delta\": null\n}",
           "trace_count": 24
         },
-        "peak_rss_mb": 63.453125,
+        "peak_rss_mb": 63.75,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
