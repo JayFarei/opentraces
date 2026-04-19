@@ -172,6 +172,7 @@ class StateManager:
             "step_labels": {},
             "step_anchors": {},
         }
+        self._observed_mtime: float | None = None
         self._load()
 
     def _load(self) -> None:
@@ -192,7 +193,38 @@ class StateManager:
                     "step_labels": {},
                     "step_anchors": {},
                 }
+            try:
+                self._observed_mtime = self._state_path.stat().st_mtime
+            except OSError:
+                self._observed_mtime = None
+        else:
+            self._observed_mtime = None
         self._migrate()
+
+    def reload_if_changed(self) -> bool:
+        """Reload from disk if ``state.json`` has been externally modified.
+
+        Sweep-scoped sharing (scan_project reusing one StateManager across
+        sessions) is a perf win only when no external writer touches the
+        file; when one does, we must re-read to avoid ``save()`` clobbering
+        the external update on the next mutation. Cheap mtime check skips
+        the disk read when nothing has changed.
+
+        Returns True if a reload happened.
+        """
+        if not self._state_path.exists():
+            if self._observed_mtime is not None:
+                self._load()
+                return True
+            return False
+        try:
+            current = self._state_path.stat().st_mtime
+        except OSError:
+            return False
+        if current == self._observed_mtime:
+            return False
+        self._load()
+        return True
 
     def _migrate(self) -> None:
         """Migrate state from any older schema to STATE_SCHEMA_VERSION.
@@ -242,6 +274,10 @@ class StateManager:
         # Always stamp the current schema version on save.
         self._state["state_version"] = STATE_SCHEMA_VERSION
         self._state_path.write_text(json.dumps(self._state, indent=2, default=str))
+        try:
+            self._observed_mtime = self._state_path.stat().st_mtime
+        except OSError:
+            self._observed_mtime = None
 
     # --- Processed files tracking ---
 

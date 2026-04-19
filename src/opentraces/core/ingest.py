@@ -223,6 +223,8 @@ def ingest_one_session(
     reparse: bool = False,
     cfg: Config | None = None,
     git_signals_cache: GitSignalsCache | None = None,
+    state: StateManager | None = None,
+    review_policy: str | None = None,
 ) -> IngestResult:
     """Ingest a single Claude Code session JSONL into the project's inbox.
 
@@ -233,6 +235,11 @@ def ingest_one_session(
     ``reparse=True`` forces a re-derivation even if the file hasn't
     grown. Used by the ``_scan --reparse`` CLI path and by the schema-
     bump auto-upgrade (Phase 3) — not by the default watcher tick.
+
+    ``state`` and ``review_policy`` are optional sweep-scoped artifacts —
+    callers that drive many sessions in one sweep (``scan_project``) pass
+    pre-constructed values so each session avoids re-parsing ``state.json``
+    and ``.opentraces.json``. When omitted, each call loads them itself.
     """
     session_id = _session_id_from(jsonl_path)
 
@@ -245,6 +252,8 @@ def ingest_one_session(
                 reparse=reparse,
                 cfg=cfg,
                 git_signals_cache=git_signals_cache,
+                state=state,
+                review_policy=review_policy,
             )
     except Exception as e:  # noqa: BLE001
         logger.exception("ingest failed for %s", jsonl_path)
@@ -263,10 +272,19 @@ def _ingest_locked(
     reparse: bool,
     cfg: Config | None,
     git_signals_cache: GitSignalsCache | None,
+    state: StateManager | None = None,
+    review_policy: str | None = None,
 ) -> IngestResult:
     """Inner, flock-held ingest. Must not raise; caller wraps."""
 
-    state = StateManager(state_path=get_project_state_path(project_dir))
+    if state is None:
+        state = StateManager(state_path=get_project_state_path(project_dir))
+    else:
+        # Sweep-scoped manager: another process may have written
+        # ``state.json`` between our sessions. Cheap mtime-gated reload
+        # keeps the perf win when no external writer is active and
+        # preserves cross-process correctness when one is.
+        state.reload_if_changed()
 
     # Don't touch the disk if the source is gone — a user could have
     # rotated ~/.claude/projects/.
@@ -386,7 +404,8 @@ def _ingest_locked(
     # on top for auto mode so freshly-touched sessions don't churn
     # straight to COMMITTED; for Phase 1 the default review policy gives
     # STAGED → visible "inbox", which is what we want.
-    review_policy = _resolve_review_policy(project_dir)
+    if review_policy is None:
+        review_policy = _resolve_review_policy(project_dir)
     decided_status, block_reason = decide_post_parse_status(
         processed, review_policy=review_policy
     )
@@ -509,6 +528,13 @@ def scan_project(
     resolved_cfg = cfg or load_config()
     report = ScanReport(project_dir=project_dir)
     git_signals_cache = GitSignalsCache()
+    # Sweep-scoped state + review-policy cache. Avoids re-parsing
+    # ``state.json`` and ``.opentraces.json`` on every session in the
+    # sweep. Safe because ``scan_project`` is sequential — no external
+    # writer can interleave between sessions inside one sweep — and the
+    # ``_FileLock`` per-session still serialises concurrent scans.
+    shared_state = StateManager(state_path=get_project_state_path(project_dir))
+    shared_review_policy = _resolve_review_policy(project_dir)
 
     total = len(candidates)
     for idx, jsonl in enumerate(candidates, start=1):
@@ -519,6 +545,8 @@ def scan_project(
                 reparse=reparse,
                 cfg=resolved_cfg,
                 git_signals_cache=git_signals_cache,
+                state=shared_state,
+                review_policy=shared_review_policy,
             )
         except Exception as e:  # noqa: BLE001 — ingest_one_session already
             # wraps, but keep a belt here for the discovery path.

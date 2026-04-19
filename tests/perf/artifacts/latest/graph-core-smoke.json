@@ -1,70 +1,70 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 19.315584,
+    "cold_ms": 19.87225,
     "extra": {},
     "max_rss_delta_mb": 0.0625,
-    "mean_ms": 19.55548975,
-    "p50_ms": 19.315584,
-    "p95_ms": 20.156208,
-    "peak_rss_mb": 86.390625,
-    "python_heap_peak_mb": 0.49871826171875,
+    "mean_ms": 19.60781275,
+    "p50_ms": 19.788667,
+    "p95_ms": 20.026459,
+    "peak_rss_mb": 86.359375,
+    "python_heap_peak_mb": 0.4991121292114258,
     "samples": [
       {
-        "duration_ms": 19.315584,
+        "duration_ms": 19.87225,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-314/test_core_perf_graph_core_smok0/graph-core-smoke/run-02/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-365/test_core_perf_graph_core_smok0/graph-core-smoke/run-02/proj",
+          "scenario": "graph-core-smoke",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 86.21875,
+        "python_heap_peak_mb": 0.4991121292114258,
+        "rss_after_mb": 86.1875,
+        "rss_before_mb": 86.15625,
+        "rss_delta_mb": 0.03125
+      },
+      {
+        "duration_ms": 18.743875,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-365/test_core_perf_graph_core_smok0/graph-core-smoke/run-04/proj",
           "scenario": "graph-core-smoke",
           "trace_count": 24
         },
         "peak_rss_mb": 86.265625,
-        "python_heap_peak_mb": 0.4984302520751953,
+        "python_heap_peak_mb": 0.37868499755859375,
         "rss_after_mb": 86.21875,
-        "rss_before_mb": 86.171875,
-        "rss_delta_mb": 0.046875
-      },
-      {
-        "duration_ms": 19.616125,
-        "metadata": {
-          "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-314/test_core_perf_graph_core_smok0/graph-core-smoke/run-04/proj",
-          "scenario": "graph-core-smoke",
-          "trace_count": 24
-        },
-        "peak_rss_mb": 86.296875,
-        "python_heap_peak_mb": 0.49871826171875,
-        "rss_after_mb": 86.25,
-        "rss_before_mb": 86.234375,
+        "rss_before_mb": 86.203125,
         "rss_delta_mb": 0.015625
       },
       {
-        "duration_ms": 19.134042,
+        "duration_ms": 20.026459,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-314/test_core_perf_graph_core_smok0/graph-core-smoke/run-06/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-365/test_core_perf_graph_core_smok0/graph-core-smoke/run-06/proj",
+          "scenario": "graph-core-smoke",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 86.3125,
+        "python_heap_peak_mb": 0.38381195068359375,
+        "rss_after_mb": 86.28125,
+        "rss_before_mb": 86.21875,
+        "rss_delta_mb": 0.0625
+      },
+      {
+        "duration_ms": 19.788667,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-365/test_core_perf_graph_core_smok0/graph-core-smoke/run-08/proj",
           "scenario": "graph-core-smoke",
           "trace_count": 24
         },
         "peak_rss_mb": 86.359375,
-        "python_heap_peak_mb": 0.49852752685546875,
+        "python_heap_peak_mb": 0.4666414260864258,
         "rss_after_mb": 86.3125,
-        "rss_before_mb": 86.25,
-        "rss_delta_mb": 0.0625
-      },
-      {
-        "duration_ms": 20.156208,
-        "metadata": {
-          "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-314/test_core_perf_graph_core_smok0/graph-core-smoke/run-08/proj",
-          "scenario": "graph-core-smoke",
-          "trace_count": 24
-        },
-        "peak_rss_mb": 86.390625,
-        "python_heap_peak_mb": 0.4661283493041992,
-        "rss_after_mb": 86.359375,
-        "rss_before_mb": 86.328125,
-        "rss_delta_mb": 0.03125
+        "rss_before_mb": 86.296875,
+        "rss_delta_mb": 0.015625
       }
     ]
   },

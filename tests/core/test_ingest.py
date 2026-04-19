@@ -361,6 +361,52 @@ class TestScanProject:
         # and kill the scan.
         assert any(r.action in ("error", "skipped") for r in report.results)
 
+    def test_scan_reuses_sweep_scoped_state_and_policy(
+        self, project_dir, monkeypatch
+    ) -> None:
+        """Sweep creates the state + review-policy once, not per session."""
+        import opentraces.core.ingest as ingest_mod
+        from opentraces.core.ingest import scan_project
+        from opentraces.core.state import StateManager
+
+        p1 = _write_jsonl(project_dir, "sess-A", turns=3)
+        p2 = _write_jsonl(project_dir, "sess-B", turns=3)
+        monkeypatch.setattr(
+            "opentraces.core.ingest.discover_claude_jsonl_corpus",
+            lambda repo: [p1, p2],
+        )
+
+        state_ctor_count = 0
+        real_state_ctor = StateManager.__init__
+
+        def counting_ctor(self, *args, **kwargs):
+            nonlocal state_ctor_count
+            state_ctor_count += 1
+            return real_state_ctor(self, *args, **kwargs)
+
+        monkeypatch.setattr(StateManager, "__init__", counting_ctor)
+
+        policy_call_count = 0
+        real_resolve = ingest_mod._resolve_review_policy
+
+        def counting_resolve(project_dir):
+            nonlocal policy_call_count
+            policy_call_count += 1
+            return real_resolve(project_dir)
+
+        monkeypatch.setattr(
+            ingest_mod, "_resolve_review_policy", counting_resolve
+        )
+
+        report = scan_project(project_dir)
+        assert {r.action for r in report.results} == {"new"}
+        # One shared StateManager built by scan_project covers both sessions.
+        # (Tests in other threads may create additional managers — so we allow
+        # a small headroom but disallow the per-session pattern of 3+.)
+        assert state_ctor_count == 1
+        # Review policy resolved exactly once for the whole sweep.
+        assert policy_call_count == 1
+
 
 class TestIngestGenerationIndex:
     def test_ingest_generation_index_increments(self, project_dir) -> None:
