@@ -1,74 +1,74 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 19.835833,
+    "cold_ms": 21.768375,
     "extra": {},
-    "max_rss_delta_mb": 0.4375,
-    "mean_ms": 21.273947749999998,
-    "p50_ms": 21.412791,
-    "p95_ms": 22.134625,
-    "peak_rss_mb": 89.5,
-    "python_heap_peak_mb": 0.8219537734985352,
+    "max_rss_delta_mb": 0.328125,
+    "mean_ms": 21.81278125,
+    "p50_ms": 21.614417,
+    "p95_ms": 22.427542,
+    "peak_rss_mb": 88.859375,
+    "python_heap_peak_mb": 0.8221979141235352,
     "samples": [
       {
-        "duration_ms": 19.835833,
+        "duration_ms": 21.768375,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-392/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-02/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-406/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-02/proj",
           "scenario": "inverse-blame-smoke",
           "trace_count": 24,
           "trace_id": "small-trace-0000"
         },
-        "peak_rss_mb": 89.15625,
-        "python_heap_peak_mb": 0.8219537734985352,
-        "rss_after_mb": 89.109375,
-        "rss_before_mb": 88.671875,
-        "rss_delta_mb": 0.4375
+        "peak_rss_mb": 88.15625,
+        "python_heap_peak_mb": 0.8211660385131836,
+        "rss_after_mb": 88.15625,
+        "rss_before_mb": 88.046875,
+        "rss_delta_mb": 0.109375
       },
       {
-        "duration_ms": 22.134625,
+        "duration_ms": 21.440791,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-392/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-04/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-406/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-04/proj",
           "scenario": "inverse-blame-smoke",
           "trace_count": 24,
           "trace_id": "small-trace-0000"
         },
-        "peak_rss_mb": 89.15625,
-        "python_heap_peak_mb": 0.8219537734985352,
-        "rss_after_mb": 89.109375,
-        "rss_before_mb": 89.109375,
-        "rss_delta_mb": 0.0
+        "peak_rss_mb": 88.546875,
+        "python_heap_peak_mb": 0.8221979141235352,
+        "rss_after_mb": 88.546875,
+        "rss_before_mb": 88.21875,
+        "rss_delta_mb": 0.328125
       },
       {
-        "duration_ms": 21.412791,
+        "duration_ms": 21.614417,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-392/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-06/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-406/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-06/proj",
           "scenario": "inverse-blame-smoke",
           "trace_count": 24,
           "trace_id": "small-trace-0000"
         },
-        "peak_rss_mb": 89.5,
-        "python_heap_peak_mb": 0.8218011856079102,
-        "rss_after_mb": 89.453125,
-        "rss_before_mb": 89.109375,
-        "rss_delta_mb": 0.34375
+        "peak_rss_mb": 88.84375,
+        "python_heap_peak_mb": 0.8218574523925781,
+        "rss_after_mb": 88.84375,
+        "rss_before_mb": 88.546875,
+        "rss_delta_mb": 0.296875
       },
       {
-        "duration_ms": 21.712542,
+        "duration_ms": 22.427542,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-392/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-08/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-406/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-08/proj",
           "scenario": "inverse-blame-smoke",
           "trace_count": 24,
           "trace_id": "small-trace-0000"
         },
-        "peak_rss_mb": 89.5,
+        "peak_rss_mb": 88.859375,
         "python_heap_peak_mb": 0.8216886520385742,
-        "rss_after_mb": 89.453125,
-        "rss_before_mb": 89.453125,
-        "rss_delta_mb": 0.0
+        "rss_after_mb": 88.859375,
+        "rss_before_mb": 88.84375,
+        "rss_delta_mb": 0.015625
       }
     ]
   },

@@ -15,7 +15,13 @@ from typing import Any, Callable
 from .models import PerfResult, PerfSample, PerfScenario, percentile
 
 
-_RSS_POLL_INTERVAL_S = 0.01
+# 10 ms polling × ~100 ``ps`` subprocess calls per second interacts
+# pathologically with ``tracemalloc`` inside ``_measure_python_memory_once``:
+# a single TUI scenario's memory measurement took ~22 s at 10 ms, versus
+# ~1.4 s at 50 ms (Python 3.14, macOS 15). The 15× slowdown made TUI
+# ``repetitions>1`` run beyond a reasonable smoke-lane budget. Peak RSS
+# tracking across a sub-second callback does not need finer granularity.
+_RSS_POLL_INTERVAL_S = 0.05
 
 
 @dataclass(frozen=True)

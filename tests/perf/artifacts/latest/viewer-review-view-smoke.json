@@ -1,10 +1,10 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 277.092,
+    "cold_ms": 293.561,
     "extra": {
       "benchmark_id": "ReviewView",
-      "initial_p95_ms": 277.092,
+      "initial_p95_ms": 293.561,
       "meta": {
         "selectedTraceSteps": 112,
         "selectedTraceTreeNodes": 347,
@@ -13,23 +13,23 @@
         "updatedTraceTreeNodes": 396
       },
       "node_version": "v25.8.0",
-      "peak_heap_used_mb": 125.78083801269531,
-      "retained_heap_used_mb": 0.31569671630859375,
-      "update_p95_ms": 47.339
+      "peak_heap_used_mb": 127.28001403808594,
+      "retained_heap_used_mb": 0.24324798583984375,
+      "update_p95_ms": 49.095
     },
-    "max_rss_delta_mb": 0.921875,
-    "mean_ms": 46.154,
-    "p50_ms": 46.185,
-    "p95_ms": 47.339,
-    "peak_rss_mb": 386.3125,
+    "max_rss_delta_mb": 0.9375,
+    "mean_ms": 47.128,
+    "p50_ms": 47.425,
+    "p95_ms": 49.095,
+    "peak_rss_mb": 407.015625,
     "python_heap_peak_mb": null,
     "samples": [
       {
-        "duration_ms": 46.154,
+        "duration_ms": 47.128,
         "metadata": {
           "benchmark": "ReviewView"
         },
-        "peak_rss_mb": 386.3125,
+        "peak_rss_mb": 407.015625,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
