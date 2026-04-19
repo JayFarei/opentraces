@@ -3,12 +3,30 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { Theme } from "../../tokens";
 import { F, pctColor, trunc, traceColor } from "../../tokens";
 import { Panel } from "../Panel";
-import { ForwardBlame, ClaudeLogo } from "./ForwardBlame";
+import { ForwardBlame } from "./ForwardBlame";
 import { SemanticDiffCounts } from "./SemanticDiffSummary";
 import { api } from "../../lib/api";
 import type { GraphCommit } from "../../lib/api";
 
 const PAGE_SIZE = 10;
+
+function TraceSwatch({ color }: { color: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        color,
+        fontSize: 8,
+        lineHeight: 1,
+        minWidth: 10,
+        textAlign: "center",
+        flex: "0 0 auto",
+      }}
+    >
+      ●
+    </span>
+  );
+}
 
 export function GraphView({
   t, wide, mode, gotoTrace,
@@ -129,12 +147,7 @@ export function GraphView({
                         <span style={{ color: t.textDim, minWidth: 10, flex: "0 0 auto" }}>
                           {ti === c.traces.length - 1 ? "└" : "├"}
                         </span>
-                        <div style={{
-                          width: 14, height: 14, minWidth: 14, borderRadius: "50%",
-                          background: `${color}15`, border: `1px solid ${color}30`,
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                          flex: "0 0 auto",
-                        }}><ClaudeLogo size={7} color={`${color}CC`} /></div>
+                        <TraceSwatch color={color} />
                         {tr.canonical ? (
                           <button
                             data-testid={`graph-trace-link-${tr.trace_id}`}
