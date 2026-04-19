@@ -807,6 +807,43 @@ async def test_view_mode_toggle(staged_app):
 
 
 @pytest.mark.asyncio
+async def test_stage_toggle_flow_avoids_duplicate_same_trace_preview_renders(
+    tmp_path, monkeypatch,
+):
+    project = tmp_path / "proj"
+    _init_project(project)
+    staging = project / "traces"
+    staging.mkdir()
+    monkeypatch.chdir(project)
+
+    traces = [
+        _make_trace("trace_inbox_00", "inbox 0", ts="2026-04-15T10:00:00Z"),
+        _make_trace("trace_inbox_01", "inbox 1", ts="2026-04-14T10:00:00Z"),
+        _make_trace("trace_inbox_02", "inbox 2", ts="2026-04-13T10:00:00Z"),
+    ]
+    for trace in traces:
+        (staging / f"{trace['trace_id']}.jsonl").write_text(json.dumps(trace) + "\n")
+
+    rendered: list[str] = []
+    original_render = OpenTracesApp._render_trace
+
+    def counted_render(self, trace):
+        rendered.append(trace["trace_id"])
+        return original_render(self, trace)
+
+    monkeypatch.setattr(OpenTracesApp, "_render_trace", counted_render)
+
+    app = OpenTracesApp(staging_dir=staging)
+    async with app.run_test(size=(140, 40)) as pilot:
+        await pilot.pause()
+        for key in ("space", "3", "space", "u"):
+            await pilot.press(key)
+            await pilot.pause()
+
+    assert len(rendered) == 5
+
+
+@pytest.mark.asyncio
 async def test_counter_updates_on_navigate(tmp_path, monkeypatch):
     """With multiple inbox traces, navigating updates the i/N subtitle."""
     project = tmp_path / "proj"

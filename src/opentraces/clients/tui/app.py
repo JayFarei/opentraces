@@ -967,6 +967,7 @@ class OpenTracesApp(App):
         self._undo_stack: list[_UndoOp] = []
         self._pending_deletes: dict[str, Path] = {}
         self._blocked_ids: set[str] = set()
+        self._last_preview_key: tuple[int, str] | None = None
 
     # --- compose -------------------------------------------------------
 
@@ -1180,13 +1181,24 @@ class OpenTracesApp(App):
     def _render_empty_detail(self) -> None:
         stream = self.query_one("#trace-stream", RichLog)
         stream.clear()
+        self._last_preview_key = None
         stream.write(f"[bold bright_blue]{OPENTRACES_ASCII}[/bold bright_blue]")
         stream.write("")
         stream.write("[dim]No trace selected. This inbox is empty — run opentraces init and finish an agent run.[/dim]")
 
+    def _preview_render_key(self, trace: dict[str, Any]) -> tuple[int, str]:
+        return (id(trace), self._view_mode)
+
+    def _preview_is_current(self, trace: dict[str, Any]) -> bool:
+        current = self._current_trace
+        if current is None or current.get("trace_id") != trace.get("trace_id"):
+            return False
+        return self._last_preview_key == self._preview_render_key(trace)
+
     def _render_trace(self, trace: dict[str, Any]) -> None:
         stream = self.query_one("#trace-stream", RichLog)
         stream.clear()
+        self._last_preview_key = self._preview_render_key(trace)
         self._write_flag_callout(stream, trace)
         self._write_trace_header(stream, trace)
         stream.write("")
@@ -1981,7 +1993,8 @@ class OpenTracesApp(App):
             if source_stage != self._active_stage:
                 self._set_active_stage(source_stage)
             self._current_trace = trace
-            self._render_trace(trace)
+            if not self._preview_is_current(trace):
+                self._render_trace(trace)
         self._update_panel_counter(source_stage)
 
     @on(ListView.Selected)
