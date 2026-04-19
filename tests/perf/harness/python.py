@@ -162,12 +162,29 @@ def _build_tui_callable(fixture: PerfFixture, scenario: PerfScenario) -> tuple[C
                     await pilot.press(key)
                     await pilot.pause()
 
+    async def refresh() -> None:
+        # Exercises the `r` binding: push RefreshRunnerModal, let the
+        # worker-driven scan_project complete, pop the modal, and settle.
+        # Directly measures the TUI-initiated ingest path that iter-1
+        # (gnhf #8) made cheaper.
+        with _cwd(fixture.project_dir):
+            app = OpenTracesApp(staging_dir=fixture.staging_dir, limit=500)
+            async with app.run_test(size=(140, 40)) as pilot:
+                await pilot.pause()
+                await pilot.press("r")
+                # RefreshRunnerModal runs the scan on a worker. Pause
+                # until the worker finishes and the modal dismisses.
+                for _ in range(8):
+                    await pilot.pause()
+
     if scenario.target == "tui.startup":
         return lambda: asyncio.run(startup()), _metadata(fixture, scenario)
     if scenario.target == "tui.navigation":
         return lambda: asyncio.run(navigation()), _metadata(fixture, scenario)
     if scenario.target == "tui.review_actions":
         return lambda: asyncio.run(review_actions()), _metadata(fixture, scenario)
+    if scenario.target == "tui.refresh":
+        return lambda: asyncio.run(refresh()), _metadata(fixture, scenario)
     raise ValueError(f"unsupported tui target {scenario.target!r}")
 
 

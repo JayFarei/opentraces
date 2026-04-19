@@ -1,0 +1,9 @@
+name = "tui-refresh-smoke"
+domain = "tui"
+lane = "smoke"
+adapter = "python"
+target = "tui.refresh"
+fixture = "stack"
+tier = "small"
+repetitions = 1
+warmups = 0

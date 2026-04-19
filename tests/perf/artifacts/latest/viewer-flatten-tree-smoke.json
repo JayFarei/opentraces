@@ -1,10 +1,10 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 0.151,
+    "cold_ms": 0.179,
     "extra": {
       "benchmark_id": "flattenTree",
-      "initial_p95_ms": 0.151,
+      "initial_p95_ms": 0.179,
       "meta": {
         "initialRows": 111,
         "roots": 19,
@@ -12,23 +12,23 @@
         "updateRows": 14
       },
       "node_version": "v25.8.0",
-      "peak_heap_used_mb": 65.01155853271484,
-      "retained_heap_used_mb": 0.00185394287109375,
-      "update_p95_ms": 0.171
+      "peak_heap_used_mb": 65.00923919677734,
+      "retained_heap_used_mb": 0.00551605224609375,
+      "update_p95_ms": 0.163
     },
     "max_rss_delta_mb": 0.0,
-    "mean_ms": 0.155,
-    "p50_ms": 0.15,
-    "p95_ms": 0.171,
-    "peak_rss_mb": 276.0625,
+    "mean_ms": 0.157,
+    "p50_ms": 0.157,
+    "p95_ms": 0.163,
+    "peak_rss_mb": 283.015625,
     "python_heap_peak_mb": null,
     "samples": [
       {
-        "duration_ms": 0.155,
+        "duration_ms": 0.157,
         "metadata": {
           "benchmark": "flattenTree"
         },
-        "peak_rss_mb": 276.0625,
+        "peak_rss_mb": 283.015625,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,

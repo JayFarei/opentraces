@@ -1,0 +1,49 @@
+{
+  "budget_updated": false,
+  "result": {
+    "cold_ms": 439.822542,
+    "extra": {},
+    "max_rss_delta_mb": 7.328125,
+    "mean_ms": 439.822542,
+    "p50_ms": 439.822542,
+    "p95_ms": 439.822542,
+    "peak_rss_mb": 153.03125,
+    "python_heap_peak_mb": 11.778432846069336,
+    "samples": [
+      {
+        "duration_ms": 439.822542,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-392/test_tui_perf_tui_refresh_smok0/tui-refresh-smoke/run-00/proj",
+          "scenario": "tui-refresh-smoke",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 153.03125,
+        "python_heap_peak_mb": 11.778432846069336,
+        "rss_after_mb": 152.9375,
+        "rss_before_mb": 145.609375,
+        "rss_delta_mb": 7.328125
+      }
+    ]
+  },
+  "scenario": {
+    "adapter": "python",
+    "budget": {
+      "max_cold_ms": 700.0,
+      "max_p50_ms": 700.0,
+      "max_p95_ms": 700.0,
+      "max_peak_rss_mb": 260.0,
+      "max_python_heap_peak_mb": 20.0,
+      "max_rss_delta_mb": 25.0
+    },
+    "domain": "tui",
+    "fixture": "stack",
+    "lane": "smoke",
+    "name": "tui-refresh-smoke",
+    "params": {},
+    "repetitions": 1,
+    "target": "tui.refresh",
+    "tier": "small",
+    "warmups": 0
+  }
+}

@@ -1,28 +1,28 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 922.418709,
+    "cold_ms": 927.3285,
     "extra": {},
-    "max_rss_delta_mb": 16.171875,
-    "mean_ms": 922.418709,
-    "p50_ms": 922.418709,
-    "p95_ms": 922.418709,
-    "peak_rss_mb": 137.296875,
-    "python_heap_peak_mb": 17.77497386932373,
+    "max_rss_delta_mb": 17.453125,
+    "mean_ms": 927.3285,
+    "p50_ms": 927.3285,
+    "p95_ms": 927.3285,
+    "peak_rss_mb": 138.484375,
+    "python_heap_peak_mb": 17.755739212036133,
     "samples": [
       {
-        "duration_ms": 922.418709,
+        "duration_ms": 927.3285,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-365/test_tui_perf_tui_navigation_s0/tui-navigation-smoke/run-00/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-392/test_tui_perf_tui_navigation_s0/tui-navigation-smoke/run-00/proj",
           "scenario": "tui-navigation-smoke",
           "trace_count": 24
         },
-        "peak_rss_mb": 137.296875,
-        "python_heap_peak_mb": 17.77497386932373,
-        "rss_after_mb": 137.25,
-        "rss_before_mb": 121.078125,
-        "rss_delta_mb": 16.171875
+        "peak_rss_mb": 138.484375,
+        "python_heap_peak_mb": 17.755739212036133,
+        "rss_after_mb": 138.4375,
+        "rss_before_mb": 120.984375,
+        "rss_delta_mb": 17.453125
       }
     ]
   },

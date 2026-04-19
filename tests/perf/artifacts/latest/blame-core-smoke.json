@@ -1,73 +1,73 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 26.587,
+    "cold_ms": 25.531625,
     "extra": {},
-    "max_rss_delta_mb": 0.03125,
-    "mean_ms": 25.686573,
-    "p50_ms": 25.599875,
-    "p95_ms": 26.587,
-    "peak_rss_mb": 86.09375,
+    "max_rss_delta_mb": 0.015625,
+    "mean_ms": 25.57027075,
+    "p50_ms": 25.467916,
+    "p95_ms": 26.774792,
+    "peak_rss_mb": 87.0625,
     "python_heap_peak_mb": 0.4900035858154297,
     "samples": [
       {
-        "duration_ms": 26.587,
+        "duration_ms": 25.531625,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-365/test_core_perf_blame_core_smok0/blame-core-smoke/run-02/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-392/test_core_perf_blame_core_smok0/blame-core-smoke/run-02/proj",
           "scenario": "blame-core-smoke",
-          "sha": "a21c6688bb171c20a874662dcf8a24df235ef61b",
+          "sha": "9a3a1da8901dcad279b54f5c67394a5cbbab295f",
           "trace_count": 24
         },
-        "peak_rss_mb": 85.9375,
+        "peak_rss_mb": 87.03125,
         "python_heap_peak_mb": 0.4900035858154297,
-        "rss_after_mb": 85.90625,
-        "rss_before_mb": 85.890625,
+        "rss_after_mb": 86.984375,
+        "rss_before_mb": 86.96875,
         "rss_delta_mb": 0.015625
       },
       {
-        "duration_ms": 25.667792,
+        "duration_ms": 24.50675,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-365/test_core_perf_blame_core_smok0/blame-core-smoke/run-04/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-392/test_core_perf_blame_core_smok0/blame-core-smoke/run-04/proj",
           "scenario": "blame-core-smoke",
-          "sha": "a0f2a9c20c91335ca9db91724bca7ba854aa0da8",
+          "sha": "bd0ea982f80537793e3bac42e1601f11271b5e0f",
           "trace_count": 24
         },
-        "peak_rss_mb": 86.0,
-        "python_heap_peak_mb": 0.4404010772705078,
-        "rss_after_mb": 85.96875,
-        "rss_before_mb": 85.9375,
-        "rss_delta_mb": 0.03125
+        "peak_rss_mb": 87.03125,
+        "python_heap_peak_mb": 0.4402885437011719,
+        "rss_after_mb": 87.0,
+        "rss_before_mb": 86.984375,
+        "rss_delta_mb": 0.015625
       },
       {
-        "duration_ms": 24.891625,
+        "duration_ms": 25.467916,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-365/test_core_perf_blame_core_smok0/blame-core-smoke/run-06/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-392/test_core_perf_blame_core_smok0/blame-core-smoke/run-06/proj",
           "scenario": "blame-core-smoke",
-          "sha": "447d3851ba834804f6c79d9e44dae93506f5e36e",
+          "sha": "bac9edfc68862aa394ac723d87e7fcc427ad6325",
           "trace_count": 24
         },
-        "peak_rss_mb": 86.078125,
-        "python_heap_peak_mb": 0.4897594451904297,
-        "rss_after_mb": 86.03125,
-        "rss_before_mb": 86.03125,
+        "peak_rss_mb": 87.046875,
+        "python_heap_peak_mb": 0.4403247833251953,
+        "rss_after_mb": 87.0,
+        "rss_before_mb": 87.0,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 25.599875,
+        "duration_ms": 26.774792,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-365/test_core_perf_blame_core_smok0/blame-core-smoke/run-08/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-392/test_core_perf_blame_core_smok0/blame-core-smoke/run-08/proj",
           "scenario": "blame-core-smoke",
-          "sha": "20133470643b7fc3811adc1cf9d672aff4bd451f",
+          "sha": "7f7336003f9f5131fc90ca14bc491365b3b98d3c",
           "trace_count": 24
         },
-        "peak_rss_mb": 86.09375,
-        "python_heap_peak_mb": 0.44042110443115234,
-        "rss_after_mb": 86.046875,
-        "rss_before_mb": 86.03125,
+        "peak_rss_mb": 87.0625,
+        "python_heap_peak_mb": 0.4404773712158203,
+        "rss_after_mb": 87.015625,
+        "rss_before_mb": 87.0,
         "rss_delta_mb": 0.015625
       }
     ]

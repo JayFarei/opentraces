@@ -71,6 +71,17 @@ max_peak_rss_mb = 222.27
 max_python_heap_peak_mb = 45.75
 max_rss_delta_mb = 23.44
 
+[tui-refresh-smoke]
+# Baseline taken at p50/p95 ~445 ms and py_heap ~12 MB on a macOS host.
+# Budgets use a ~1.5× headroom to tolerate single-sample p95 jitter
+# while still gating against real regressions.
+max_cold_ms = 700.0
+max_p50_ms = 700.0
+max_p95_ms = 700.0
+max_peak_rss_mb = 260.0
+max_python_heap_peak_mb = 20.0
+max_rss_delta_mb = 25.0
+
 [tui-startup-smoke]
 max_cold_ms = 186.91
 max_p50_ms = 186.91

@@ -75,6 +75,7 @@ perf_scenarios = [
   "tui-startup-smoke",
   "tui-navigation-smoke",
   "tui-review-actions-smoke",
+  "tui-refresh-smoke",
 ]
 user_smoke_tests = ["tests/e2e/test_tui_tmux_smoke.py::test_tui_launches_and_quits_in_tmux"]
 live_tests = []
