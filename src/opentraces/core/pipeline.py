@@ -21,7 +21,12 @@ from ..enrichment.dependencies import (
     extract_dependencies_from_steps,
     infer_language_ecosystem,
 )
-from ..enrichment.git_signals import check_committed, detect_commits_from_steps, detect_vcs
+from ..enrichment.git_signals import (
+    GitSignalsCache,
+    check_committed,
+    detect_commits_from_steps,
+    detect_vcs,
+)
 from ..enrichment.metrics import compute_metrics
 from ..security import SECURITY_VERSION
 from ..security.anonymizer import anonymize_paths
@@ -172,6 +177,7 @@ def process_trace(
     project_dir: Path,
     cfg: Config,
     skip_trufflehog: bool = False,
+    git_signals_cache: GitSignalsCache | None = None,
 ) -> ProcessedTrace:
     """Run the full enrichment + security pipeline on a parsed trace.
 
@@ -188,11 +194,16 @@ def process_trace(
     and the count of redactions applied.
     """
     # 1. Git signals (project-dir-based VCS detection)
-    vcs = detect_vcs(project_dir)
+    vcs = detect_vcs(project_dir, cache=git_signals_cache)
     record.environment.vcs = vcs
     if vcs.type == "git" and record.timestamp_start:
         ts_end = record.timestamp_end or record.timestamp_start
-        outcome = check_committed(project_dir, record.timestamp_start, ts_end)
+        outcome = check_committed(
+            project_dir,
+            record.timestamp_start,
+            ts_end,
+            vcs=vcs,
+        )
         if outcome.committed:
             record.outcome = outcome
 

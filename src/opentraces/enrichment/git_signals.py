@@ -13,12 +13,34 @@ from __future__ import annotations
 
 import re
 import subprocess
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 from opentraces_schema.models import Outcome, Step, VCS
 
 MAX_VCS_DIFF_CHARS = 250_000
+
+
+@dataclass
+class GitSignalsCache:
+    """Request-scoped cache for repeated git metadata lookups.
+
+    Callers own the cache lifetime. ``scan_project`` creates one cache per
+    sweep so multiple sessions in the same repo reuse the same VCS probe
+    without leaking stale working-tree state across separate refreshes.
+    """
+
+    vcs_by_project: dict[Path, VCS] = field(default_factory=dict)
+
+    def get_vcs(self, project_path: Path) -> VCS | None:
+        cached = self.vcs_by_project.get(Path(project_path).resolve())
+        if cached is None:
+            return None
+        return cached.model_copy(deep=True)
+
+    def set_vcs(self, project_path: Path, vcs: VCS) -> None:
+        self.vcs_by_project[Path(project_path).resolve()] = vcs.model_copy(deep=True)
 
 
 def _run_git(args: list[str], cwd: Path) -> tuple[bool, str]:
@@ -46,35 +68,51 @@ def _truncate_diff(diff: str) -> str:
     return diff[:keep] + suffix
 
 
-def detect_vcs(project_path: Path) -> VCS:
+def detect_vcs(
+    project_path: Path,
+    *,
+    cache: GitSignalsCache | None = None,
+) -> VCS:
     """Detect VCS metadata from a project directory.
 
     Returns VCS with type="none" if not a git repo, or type="git" with
     base_commit and branch when available.
     """
     project_path = Path(project_path)
+    if cache is not None:
+        cached = cache.get_vcs(project_path)
+        if cached is not None:
+            return cached
 
     ok, _ = _run_git(["rev-parse", "--is-inside-work-tree"], project_path)
     if not ok:
-        return VCS(type="none")
+        vcs = VCS(type="none")
+        if cache is not None:
+            cache.set_vcs(project_path, vcs)
+        return vcs
 
     _, commit = _run_git(["rev-parse", "HEAD"], project_path)
     _, branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], project_path)
     _, diff = _run_git(["diff", "HEAD"], project_path)
     diff = _truncate_diff(diff) if diff else diff
 
-    return VCS(
+    vcs = VCS(
         type="git",
         base_commit=commit or None,
         branch=branch or None,
         diff=diff or None,
     )
+    if cache is not None:
+        cache.set_vcs(project_path, vcs)
+    return vcs
 
 
 def check_committed(
     project_path: Path,
     session_start: str | datetime,
     session_end: str | datetime,
+    *,
+    vcs: VCS | None = None,
 ) -> Outcome:
     """Check if the session produced a commit between session_start and session_end.
 
@@ -88,8 +126,11 @@ def check_committed(
     if isinstance(session_end, datetime):
         session_end = session_end.isoformat()
 
-    ok, _ = _run_git(["rev-parse", "--is-inside-work-tree"], project_path)
-    if not ok:
+    if vcs is None:
+        ok, _ = _run_git(["rev-parse", "--is-inside-work-tree"], project_path)
+        if not ok:
+            return Outcome(committed=False)
+    elif vcs.type != "git":
         return Outcome(committed=False)
 
     # Find commits made between session_start and session_end
@@ -239,5 +280,5 @@ def extract_git_signals(project_path: str | Path) -> tuple[VCS, Outcome]:
         datetime.now(timezone.utc).replace(hour=0, minute=0, second=0)
     ).isoformat()
 
-    outcome = check_committed(project_path, day_ago, now)
+    outcome = check_committed(project_path, day_ago, now, vcs=vcs)
     return vcs, outcome

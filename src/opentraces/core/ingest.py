@@ -44,6 +44,7 @@ from typing import Callable
 from opentraces_schema import SCHEMA_VERSION
 
 from ..capture.claude_code.parse import ClaudeCodeParser
+from ..enrichment.git_signals import GitSignalsCache
 from ..security import SECURITY_VERSION
 from .config import (
     Config,
@@ -221,6 +222,7 @@ def ingest_one_session(
     *,
     reparse: bool = False,
     cfg: Config | None = None,
+    git_signals_cache: GitSignalsCache | None = None,
 ) -> IngestResult:
     """Ingest a single Claude Code session JSONL into the project's inbox.
 
@@ -236,8 +238,14 @@ def ingest_one_session(
 
     try:
         with _FileLock(_lock_path_for(project_dir, session_id)):
-            return _ingest_locked(jsonl_path, project_dir, session_id,
-                                  reparse=reparse, cfg=cfg)
+            return _ingest_locked(
+                jsonl_path,
+                project_dir,
+                session_id,
+                reparse=reparse,
+                cfg=cfg,
+                git_signals_cache=git_signals_cache,
+            )
     except Exception as e:  # noqa: BLE001
         logger.exception("ingest failed for %s", jsonl_path)
         return IngestResult(
@@ -254,6 +262,7 @@ def _ingest_locked(
     *,
     reparse: bool,
     cfg: Config | None,
+    git_signals_cache: GitSignalsCache | None,
 ) -> IngestResult:
     """Inner, flock-held ingest. Must not raise; caller wraps."""
 
@@ -346,7 +355,12 @@ def _ingest_locked(
     state.set_step_anchors(trace_id, getattr(parser, "step_anchors", {}) or {})
 
     resolved_cfg = cfg or load_config()
-    processed = process_trace(record, project_dir, resolved_cfg)
+    processed = process_trace(
+        record,
+        project_dir,
+        resolved_cfg,
+        git_signals_cache=git_signals_cache,
+    )
     final_record = processed.record
     # process_trace may leave trace_id unchanged, but be defensive —
     # override after the fact so the staging filename matches the
@@ -494,12 +508,17 @@ def scan_project(
 
     resolved_cfg = cfg or load_config()
     report = ScanReport(project_dir=project_dir)
+    git_signals_cache = GitSignalsCache()
 
     total = len(candidates)
     for idx, jsonl in enumerate(candidates, start=1):
         try:
             result = ingest_one_session(
-                jsonl, project_dir, reparse=reparse, cfg=resolved_cfg
+                jsonl,
+                project_dir,
+                reparse=reparse,
+                cfg=resolved_cfg,
+                git_signals_cache=git_signals_cache,
             )
         except Exception as e:  # noqa: BLE001 — ingest_one_session already
             # wraps, but keep a belt here for the discovery path.

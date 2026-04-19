@@ -13,6 +13,7 @@ from opentraces_schema.models import (
     Step,
     TokenUsage,
     ToolCall,
+    VCS,
 )
 from opentraces.enrichment.attribution import build_attribution
 from opentraces.enrichment.dependencies import (
@@ -22,6 +23,7 @@ from opentraces.enrichment.dependencies import (
     infer_language_ecosystem,
 )
 from opentraces.enrichment.git_signals import (
+    GitSignalsCache,
     MAX_VCS_DIFF_CHARS,
     check_committed,
     detect_commits_from_steps,
@@ -156,6 +158,30 @@ class TestDetectVCS:
         assert len(vcs.diff) < len(large_diff)
         assert "[TRUNCATED opentraces.vcs.diff omitted_chars=25]" in vcs.diff
 
+    @patch("opentraces.enrichment.git_signals._run_git")
+    def test_reuses_request_scoped_cache(self, mock_run):
+        def side_effect(args, cwd):
+            if args[0] == "rev-parse" and "--is-inside-work-tree" in args:
+                return (True, "true")
+            if args[0] == "rev-parse" and "--abbrev-ref" in args:
+                return (True, "main")
+            if args[0] == "rev-parse" and "HEAD" in args:
+                return (True, "abc123def456")
+            if args[0] == "diff":
+                return (True, "some diff")
+            return (False, "")
+
+        mock_run.side_effect = side_effect
+        cache = GitSignalsCache()
+
+        first = detect_vcs(Path("/tmp/myrepo"), cache=cache)
+        second = detect_vcs(Path("/tmp/myrepo"), cache=cache)
+
+        assert first.type == "git"
+        assert second.type == "git"
+        assert mock_run.call_count == 4
+        assert first is not second
+
 
 class TestCheckCommitted:
     """Tests for check_committed."""
@@ -195,6 +221,26 @@ class TestCheckCommitted:
         assert outcome.committed is True
         assert outcome.commit_sha == "deadbeef1234"
         assert outcome.patch == "+added line"
+
+    @patch("opentraces.enrichment.git_signals._run_git")
+    def test_commit_found_with_known_vcs_skips_repo_probe(self, mock_run):
+        def side_effect(args, cwd):
+            if args[0] == "log":
+                return (True, "deadbeef1234")
+            if args[0] == "diff":
+                return (True, "+added line")
+            return (False, "")
+
+        mock_run.side_effect = side_effect
+        outcome = check_committed(
+            Path("/tmp"),
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+            vcs=VCS(type="git"),
+        )
+        assert outcome.committed is True
+        assert outcome.commit_sha == "deadbeef1234"
+        assert mock_run.call_args_list[0].args[0][0] == "log"
 
 
 class TestExtractGitSignals:
