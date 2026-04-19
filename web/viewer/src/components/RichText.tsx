@@ -1,7 +1,15 @@
 import type { Theme } from "../tokens";
 import { F } from "../tokens";
 
+function hasInlineFormatting(text: string): boolean {
+  return text.includes("**") || text.includes("`");
+}
+
 function Fmt({ text, t }: { text: string; t: Theme }) {
+  if (!hasInlineFormatting(text)) {
+    return <>{text}</>;
+  }
+
   const parts: React.ReactNode[] = [];
   let rem = text, k = 0;
   while (rem.length > 0) {
@@ -40,13 +48,14 @@ export function RichText({ text, t }: { text: string; t: Theme }) {
   return (
     <div style={{ width: "100%", minWidth: 0 }}>
       {text.split("\n").map((line, li) => {
+        const inlineFormatting = hasInlineFormatting(line);
         const num = line.match(/^(\d+)\.\s(.*)$/);
         if (num) {
           return (
             <div key={li} style={{ display: "flex", gap: 6, marginBottom: 2, width: "100%", minWidth: 0 }}>
               <span style={{ color: t.textDim, minWidth: 16, textAlign: "right" }}>{num[1]}.</span>
               <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word" }}>
-                <Fmt text={num[2] ?? ""} t={t} />
+                {inlineFormatting ? <Fmt text={num[2] ?? ""} t={t} /> : (num[2] ?? "")}
               </span>
             </div>
           );
@@ -56,7 +65,7 @@ export function RichText({ text, t }: { text: string; t: Theme }) {
             <div key={li} style={{ display: "flex", gap: 6, paddingLeft: 4, marginBottom: 2, width: "100%", minWidth: 0 }}>
               <span style={{ color: t.textDim }}>-</span>
               <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere", wordBreak: "break-word" }}>
-                <Fmt text={line.slice(2)} t={t} />
+                {inlineFormatting ? <Fmt text={line.slice(2)} t={t} /> : line.slice(2)}
               </span>
             </div>
           );
@@ -72,7 +81,7 @@ export function RichText({ text, t }: { text: string; t: Theme }) {
         if (!line.trim()) return <div key={li} style={{ height: 10 }} />;
         return (
           <div key={li} style={{ marginBottom: 2, overflowWrap: "anywhere", wordBreak: "break-word" }}>
-            <Fmt text={line} t={t} />
+            {inlineFormatting ? <Fmt text={line} t={t} /> : line}
           </div>
         );
       })}

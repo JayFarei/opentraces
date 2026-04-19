@@ -65,9 +65,6 @@ export function resolveTraceTreeSelection(
 
 export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null }) {
   const [tab, setTab] = useState<Tab>("conv");
-  const [activeStepIndex, setActiveStepIndex] = useState<number | null>(null);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [scrollTargetNodeId, setScrollTargetNodeId] = useState<string | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => (
     typeof window === "undefined" ? 1440 : window.innerWidth
   ));
@@ -86,13 +83,18 @@ export function TracePreview({ t, traceId }: { t: Theme; traceId: string | null 
   });
 
   const trace = q.data;
-  const meta = trace ? traceMeta(trace) : null;
-  const hasTree = (treeQ.data?.tree?.length ?? 0) > 0;
-  const treeDocked = viewportWidth >= 1280;
+  // Seed the first-step selection from cached query data so a hot mount does
+  // not pay for an immediate selection-reset rerender.
   const firstStepIndex = trace?.steps?.length
     ? trace.steps[0]?.step_index ?? null
     : null;
   const firstStepNodeId = firstStepIndex != null ? traceStepNodeId(firstStepIndex) : null;
+  const [activeStepIndex, setActiveStepIndex] = useState<number | null>(() => firstStepIndex);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(() => firstStepNodeId);
+  const [scrollTargetNodeId, setScrollTargetNodeId] = useState<string | null>(null);
+  const meta = trace ? traceMeta(trace) : null;
+  const hasTree = (treeQ.data?.tree?.length ?? 0) > 0;
+  const treeDocked = viewportWidth >= 1280;
   const activePathNodeId = activeStepIndex != null ? traceStepNodeId(activeStepIndex) : null;
 
   useEffect(() => {

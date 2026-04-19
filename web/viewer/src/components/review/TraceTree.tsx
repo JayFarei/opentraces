@@ -127,6 +127,10 @@ function buildPromptDescendantCounts(nodes: TraceTreeNode[]): Map<string, number
   return counts;
 }
 
+function clearFolded(current: Set<string>): Set<string> {
+  return current.size === 0 ? current : new Set();
+}
+
 export function TraceTree({
   t,
   traceId,
@@ -186,14 +190,14 @@ export function TraceTree({
   }, [focusedRowId, rows.length]);
 
   useEffect(() => {
-    setFolded(new Set());
-    setDetailStepId(null);
+    setFolded(clearFolded);
+    setDetailStepId((current) => (current === null ? current : null));
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }, [traceId]);
 
   useEffect(() => {
-    setFolded(new Set());
-    setDetailStepId(null);
+    setFolded(clearFolded);
+    setDetailStepId((current) => (current === null ? current : null));
   }, [filterMode]);
 
   const toggleFold = (nodeId: string) => {
@@ -343,6 +347,10 @@ export function TraceTree({
             onSelectNode(row.node.id, row.node.step_index);
           };
           const compactSelectable = isCompact && row.node.step_index !== null;
+          const markerWidth = isCompact ? 2 : 3;
+          const markerGap = 3;
+          const markerHeight = isCompact ? 10 : 12;
+          const markerColor = row.onActivePath ? t.cyan : t.borderStrong;
 
           return (
             <div
@@ -410,18 +418,19 @@ export function TraceTree({
                   </span>
                 )}
                 <div style={{ display: "flex", alignItems: "center", gap: 3, minWidth: 0, flex: "0 0 auto" }}>
-                  {Array.from({ length: markerCount }).map((_, index) => (
+                  {markerCount > 0 ? (
                     <span
-                      key={`${row.node.id}-depth-${index}`}
+                      aria-hidden="true"
                       style={{
-                        width: isCompact ? 2 : 3,
-                        height: isCompact ? 10 : 12,
+                        width: markerCount * markerWidth + Math.max(0, markerCount - 1) * markerGap,
+                        height: markerHeight,
                         borderRadius: 999,
-                        background: row.onActivePath ? t.cyan : `${t.borderStrong}`,
+                        background: `repeating-linear-gradient(to right, ${markerColor} 0 ${markerWidth}px, transparent ${markerWidth}px ${markerWidth + markerGap}px)`,
                         opacity: row.onActivePath ? 0.9 : 0.7,
+                        flex: "0 0 auto",
                       }}
                     />
-                  ))}
+                  ) : null}
                   {overflowDepth > 0 ? (
                     <span style={{ fontFamily: F.code, fontSize: 10, color: t.textDim }}>
                       +{overflowDepth}
