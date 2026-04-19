@@ -12,6 +12,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 from . import notes_store
 
@@ -117,7 +118,64 @@ def diff_line_set(cwd: Path, sha: str) -> dict[str, set[int]]:
     return {p: lines for p, lines in result.items() if lines}
 
 
-def diff_line_count(cwd: Path, sha: str) -> int:
+def diff_line_counts(cwd: Path, shas: Iterable[str]) -> dict[str, int]:
+    """Batch ``diff_line_count`` for multiple commits in one git subprocess.
+
+    Uses ``git show --numstat --format=%H`` so each commit starts with its full
+    SHA header, followed by its numstat rows. Unknown SHAs or subprocess
+    failures degrade to ``0`` for the affected commits.
+    """
+    ordered = [
+        sha.strip()
+        for sha in dict.fromkeys(shas)
+        if isinstance(sha, str) and sha.strip()
+    ]
+    if not ordered:
+        return {}
+
+    totals = {sha: 0 for sha in ordered}
+    def _parse(stdout: str) -> dict[str, int]:
+        current: str | None = None
+        parsed = {sha: 0 for sha in ordered}
+        for line in stdout.splitlines():
+            text = line.strip()
+            if text in parsed and "\t" not in line:
+                current = text
+                continue
+            if current is None:
+                continue
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            added = parts[0].strip()
+            if not added or added == "-":  # blank line or binary
+                continue
+            try:
+                parsed[current] += int(added)
+            except ValueError:
+                continue
+        return parsed
+
+    try:
+        out = subprocess.run(
+            ["git", "show", "--numstat", "--format=%H", *ordered],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return totals
+
+    if out.returncode == 0:
+        return _parse(out.stdout)
+
+    # Invalid / unreachable SHAs make a batched ``git show`` fail as a whole.
+    # Fall back to single-commit probes so valid SHAs still get real totals.
+    return {sha: _diff_line_count_single(cwd, sha) for sha in ordered}
+
+
+def _diff_line_count_single(cwd: Path, sha: str) -> int:
     """Count of added (insertion) lines in the commit's diff.
 
     Uses ``git show --numstat``. Binary files (shown as ``-\t-``) are
@@ -152,6 +210,11 @@ def diff_line_count(cwd: Path, sha: str) -> int:
         except ValueError:
             continue
     return total
+
+
+def diff_line_count(cwd: Path, sha: str) -> int:
+    """Count of added (insertion) lines in a single commit's diff."""
+    return _diff_line_count_single(cwd, sha)
 
 
 def blame_commit(ref: str, cwd: Path) -> tuple[str, list[CommitBlameHit]]:

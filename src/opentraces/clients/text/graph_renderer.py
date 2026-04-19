@@ -741,6 +741,12 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
         canonical_ids = set(state._state.get("traces", {}).keys())  # noqa: SLF001
     except Exception:
         canonical_ids = set()
+    diff_totals: dict[str, int] = {}
+    try:
+        from opentraces.enrichment.git.blame import diff_line_counts
+        diff_totals = diff_line_counts(project_cwd, (c.sha for c in commits))
+    except Exception:
+        diff_totals = {}
     for c in commits:
         data = cache.read_attribution(c.sha)
         if not data:
@@ -760,12 +766,7 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
         # commit's change, not the whole-file blame. Falls back to
         # whole-file when diff_line_count can't compute (merge commits,
         # missing shas, binary-only diffs).
-        diff_total = 0
-        try:
-            from opentraces.enrichment.git.blame import diff_line_count
-            diff_total = diff_line_count(project_cwd, c.sha)
-        except Exception:
-            diff_total = 0
+        diff_total = diff_totals.get(c.sha, 0)
         if diff_total > 0:
             a_ratio = min(attributed, diff_total) / diff_total
         else:

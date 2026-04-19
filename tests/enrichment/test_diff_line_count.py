@@ -8,7 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from opentraces.enrichment.git.blame import diff_line_count, diff_line_set
+from opentraces.enrichment.git.blame import (
+    diff_line_count,
+    diff_line_counts,
+    diff_line_set,
+)
 
 
 def _init_repo(tmp_path: Path) -> None:
@@ -67,6 +71,20 @@ def test_multi_file_sums_across_files(tmp_path):
     (tmp_path / "b.txt").write_text("alpha\nbeta\ngamma\n")
     sha = _commit(tmp_path, "add both")
     assert diff_line_count(tmp_path, sha) == 5
+
+
+def test_diff_line_counts_batches_multiple_commits(tmp_path):
+    _init_repo(tmp_path)
+    (tmp_path / "a.txt").write_text("one\ntwo\n")
+    first = _commit(tmp_path, "add a")
+    (tmp_path / "a.txt").write_text("ONE\ntwo\nthree\n")
+    second = _commit(tmp_path, "modify a")
+    counts = diff_line_counts(tmp_path, [first, second, "deadbeefdeadbeef"])
+    assert counts == {
+        first: 2,
+        second: 2,
+        "deadbeefdeadbeef": 0,
+    }
 
 
 # --------------------------------------------------------------------------- #
