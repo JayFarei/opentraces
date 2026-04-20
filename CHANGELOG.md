@@ -5,6 +5,81 @@ All notable changes to the opentraces CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-04-20
+
+### Fixed
+
+- Hugging Face dataset schema drift. The hand-maintained `dataset_infos.json`
+  features map in `publish/huggingface/schema.py` lagged behind `TraceRecord`,
+  so rows with `task.repository_url`, `metrics.total_cache_read_tokens`,
+  `metrics.total_cache_creation_tokens`, `generation_index`, or richer
+  `attribution.*` were rejected by HF's datasets-server with `CastError` /
+  `StreamingRowsError`. The features map now generates directly from the
+  Pydantic model on every push, so the declared schema tracks the shipped
+  rows automatically.
+
+### Added
+
+- **Push safety against remote version drift.** `ot push` now fetches the
+  remote `dataset_infos.json` during `ensure_repo_exists` and compares
+  versions. Remote schema newer than local fails with exit 3 and an
+  `ot setup upgrade` hint (never overwrite a newer declared schema).
+  Remote equal skips the re-upload (no more no-op commits per push).
+  Remote older / missing / malformed falls back to uploading the local
+  schema.
+- **Additive-evolution contract** documented in
+  `packages/opentraces-schema/VERSION-POLICY.md`. MINOR / PATCH bumps must
+  be additive; breaking changes require MAJOR plus a registered migration
+  in `opentraces_schema.migrations`. This is the invariant that makes
+  silent shard migration safe when a newer client pushes to an older
+  dataset.
+- **Migration guard** in `detect_outdated_shards` / `migrate_outdated_shards`.
+  Only rows strictly older than the local schema are rewritten; rows at or
+  above the local schema are preserved byte-identically so a brief client
+  downgrade cannot drop future fields.
+- **Capture: away_summary recaps** from Claude Code sessions are preserved
+  as mid-session intent snapshots instead of being dropped.
+- **Agent discovery surface on the marketing site**: `/sitemap.xml`, Agent
+  Skills discovery index under `/.well-known/agent-skills/`, Web Bot Auth
+  signing-directory stub, Content-Signal AI-usage preferences in
+  `robots.txt`, Link headers for discovery on the homepage, markdown
+  content negotiation on `/` and `/docs`, a WebMCP tool surface, and
+  explorer deep-links via `?u=<username>`.
+- **Performance harness** with regression smokes across CLI, TUI, viewer,
+  watcher, web, and push paths (internal; budgets tracked under
+  `tests/perf/`).
+
+### Internal
+
+- `[tool.hatch.build.targets.sdist.force-include]` now carries
+  `web/viewer/dist` into the sdist. The unanchored `dist/` gitignore rule
+  previously excluded the viewer bundle from sdists, so `python -m build`
+  (sdist → wheel) failed with "Forced include not found". CI's wheel-only
+  build path still worked, but `make build` and local test-PyPI dry-runs
+  now work end-to-end.
+- `datasets>=2.16.0` moved into the `[dev]` extra so the new HF Features
+  regression tests run under the documented `pip install -e ".[dev]"` setup.
+- `.gitignore` ignores `.venv-*/` and `.DS_Store` to keep stray artifacts
+  out of future sdists.
+
+No `SCHEMA_VERSION` change (`opentraces-schema` remains `0.3.0`).
+`SECURITY_VERSION` unchanged at `0.3.0`.
+
+## [0.3.2] - 2026-04-17
+
+### Fixed
+
+- `ot init` surfaces all user datasets during first-time setup and adds a
+  manual repo-entry path, so users with many datasets or unusual names can
+  still pick or type their target instead of being stuck behind the
+  auto-detect list.
+- Web review UI no longer falls back to sample data, so an empty inbox
+  renders as empty instead of showing placeholder traces.
+- Release-note fenced code blocks render correctly on the marketing site
+  and in the bundled agent skill.
+
+No `SCHEMA_VERSION` or `SECURITY_VERSION` changes.
+
 ## [0.3.1] - 2026-04-17
 
 - `flask` and `textual` promoted from the `[web]` / `[tui]` optional
