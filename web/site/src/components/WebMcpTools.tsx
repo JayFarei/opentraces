@@ -91,23 +91,24 @@ export default function WebMcpTools() {
       {
         name: "openExplorer",
         description:
-          "Navigate to the opentraces dataset explorer. Optionally pre-fill a search term via the URL fragment.",
+          "Navigate to the opentraces dataset explorer. Without arguments, shows the community view (all opentraces datasets). With a HuggingFace username, loads that user's opentraces datasets.",
         inputSchema: {
           type: "object",
           properties: {
-            query: {
+            username: {
               type: "string",
-              description: "Optional search term to pre-fill in the explorer.",
+              description:
+                "Optional HuggingFace username. When provided, the explorer filters to datasets by this author.",
             },
           },
         },
-        execute: ({ query }) => {
-          const q = typeof query === "string" ? query.trim() : "";
-          const url = q
-            ? `/explorer#q=${encodeURIComponent(q)}`
+        execute: ({ username }) => {
+          const u = typeof username === "string" ? username.trim() : "";
+          const url = u
+            ? `/explorer?u=${encodeURIComponent(u)}`
             : "/explorer";
           window.location.assign(url);
-          return { url };
+          return { url, username: u || null };
         },
       },
     ];

@@ -375,6 +375,16 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const u = params.get("u")?.trim();
+    if (u) {
+      setUsername(u);
+      setSearchInput(u);
+      setMode("user");
+      setPage(0);
+      fetchDatasets(u, true);
+      return;
+    }
     fetchDatasets("opentraces", false);
   }, [fetchDatasets]);
 
