@@ -6,8 +6,8 @@ Read these files at the start of each iteration:
 
 - `tests/perf/BASELINE.md`
 - `tests/perf/journeys.toml`
-- `perf-optimization/eval-rubric.md`
-- `perf-optimization/runbook.md`
+- `tests/perf/optimization/eval-rubric.md`
+- `tests/perf/optimization/runbook.md`
 
 Treat `tests/perf/BASELINE.md` as the authoritative starting baseline. The current primary hotspots are:
 

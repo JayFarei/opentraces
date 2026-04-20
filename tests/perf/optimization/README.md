@@ -6,17 +6,18 @@ The goal is to run up to 30 small optimization attempts that improve representat
 
 ## Documents
 
-- [Program plan](../kb/plans/052-gnhf-performance-optimization-program.md): why this exists and what "good" looks like.
+- [Program plan](../../../kb/plans/052-gnhf-performance-optimization-program.md): why this exists and what "good" looks like.
 - [GNHF objective](./gnhf-objective.md): the text to feed into `gnhf`.
 - [Eval rubric](./eval-rubric.md): how to score wins, losses, and regressions.
 - [Runbook](./runbook.md): exact setup, run, and verification commands.
 - [Iteration review template](./iteration-review-template.md): the review form for each attempt or batch.
+- [Assessment report](./assessment-2026-04-20.md): branch review covering perf materiality, regression risk, and maintainability.
 
 ## Source Of Truth
 
-- [Perf baseline](../tests/perf/BASELINE.md)
-- [Representative journeys](../tests/perf/journeys.toml)
-- [Budgets](../tests/perf/budgets.toml)
+- [Perf baseline](../BASELINE.md)
+- [Representative journeys](../journeys.toml)
+- [Budgets](../budgets.toml)
 
 ## Primary Target Set
 

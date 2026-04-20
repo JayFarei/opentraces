@@ -49,7 +49,7 @@ If these are not green, fix that first. Do not start the `gnhf` run from a drift
 Run a short validation pass before committing to all 30 iterations:
 
 ```bash
-cat perf-optimization/gnhf-objective.md | gnhf \
+cat tests/perf/optimization/gnhf-objective.md | gnhf \
   --agent codex \
   --max-iterations 3 \
   --stop-when "The weighted latency score is at least 40 percent better, the weighted memory score is at least 25 percent better, and perf smoke plus user smokes are green"
@@ -67,7 +67,7 @@ Review:
 When the short run looks sane:
 
 ```bash
-cat perf-optimization/gnhf-objective.md | gnhf \
+cat tests/perf/optimization/gnhf-objective.md | gnhf \
   --agent codex \
   --max-iterations 30 \
   --stop-when "The weighted latency score is at least 40 percent better, the weighted memory score is at least 25 percent better, and perf smoke plus user smokes are green"
@@ -90,7 +90,7 @@ Use worktrees only after the single-agent path is stable. If you split work, do 
 Example:
 
 ```bash
-cat perf-optimization/gnhf-objective.md | gnhf --agent codex --worktree --max-iterations 15
+cat tests/perf/optimization/gnhf-objective.md | gnhf --agent codex --worktree --max-iterations 15
 ```
 
 ## 7. Post-Run Validation
