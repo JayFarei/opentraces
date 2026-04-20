@@ -14,6 +14,20 @@ writeFileSync(resolve(__dirname, "src/lib/version.json"), JSON.stringify({ versi
 const nextConfig: NextConfig = {
   transpilePackages: ["@opentraces/ui"],
   allowedDevOrigins: ["gabrieles-mac-mini-1.taila1b059.ts.net"],
+  async headers() {
+    const linkHeader = [
+      '</docs>; rel="service-doc"; type="text/html"',
+      '</llms.txt>; rel="describedby"; type="text/plain"',
+      '</schema>; rel="describedby"; type="text/html"',
+      '<https://github.com/jayfarei/opentraces>; rel="via"',
+    ].join(", ");
+    return [
+      {
+        source: "/",
+        headers: [{ key: "Link", value: linkHeader }],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
