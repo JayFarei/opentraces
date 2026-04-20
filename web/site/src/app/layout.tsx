@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Space_Grotesk, IBM_Plex_Mono, JetBrains_Mono, Space_Mono } from "next/font/google";
 import "./globals.css";
+import WebMcpTools from "@/components/WebMcpTools";
 
 const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
@@ -70,7 +71,10 @@ export default function RootLayout({
         />
         <script data-site-id="opentraces.ai" src="https://analytics-agent.fareiunastrage.workers.dev/tracker.js" async />
       </head>
-      <body>{children}</body>
+      <body>
+        <WebMcpTools />
+        {children}
+      </body>
     </html>
   );
 }
