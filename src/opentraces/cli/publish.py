@@ -314,7 +314,7 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     )
     from ..core.inbox import load_traces
     from ..core.state import StateManager, TraceStatus, TraceLock
-    from ..publish.huggingface.upload import HFUploader
+    from ..publish.huggingface.upload import HFUploader, RemoteSchemaAheadError
     from ..publish.huggingface.dataset_card import generate_dataset_card
     from opentraces_schema import TraceRecord
 
@@ -560,6 +560,17 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
             uploader = HFUploader(token=cfg.hf_token, repo_id=repo_id)
             try:
                 uploader.ensure_repo_exists(private=is_private)
+            except RemoteSchemaAheadError as e:
+                message = (
+                    f"Remote dataset {repo_id} is on schema {e.remote_version}; "
+                    f"your client is on {e.local_version}."
+                )
+                hint = "Upgrade the CLI, then retry: ot setup upgrade"
+                click.echo(message, err=True)
+                click.echo(f"  hint: {hint}", err=True)
+                human_hint(hint)
+                emit_json(error_response("SCHEMA_AHEAD", "schema_ahead", message, hint))
+                sys.exit(3)
             except Exception as e:
                 code, kind, message, hint = _cli._classify_hf_repo_error(e, repo_id)
                 if kind == "unknown":

@@ -1,0 +1,23 @@
+{
+  "default": {
+    "description": "Fictional future-schema dataset used by push-scenario tests. The declared version (99.99.99) is guaranteed to be higher than any real opentraces-schema release, so _schema_version_relation() always classifies this as 'newer' regardless of how the package version moves.",
+    "citation": "",
+    "homepage": "https://huggingface.co/datasets/fake/newer",
+    "license": "",
+    "features": {
+      "schema_version": {"dtype": "string", "_type": "Value"},
+      "trace_id": {"dtype": "string", "_type": "Value"},
+      "session_id": {"dtype": "string", "_type": "Value"},
+      "imaginary_field": {"_type": "Json"}
+    },
+    "builder_name": "json",
+    "dataset_name": "newer",
+    "config_name": "default",
+    "version": {
+      "version_str": "99.99.99",
+      "major": 99,
+      "minor": 99,
+      "patch": 99
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "default": {
+    "description": "dataset_infos with no version block — simulates a remote whose schema stamp is unreadable (e.g. hand-edited, truncated, or written by a pre-versioning build). The uploader must treat this as 'unknown' and proceed to stamp a fresh schema rather than blocking or crashing.",
+    "features": {
+      "trace_id": {"dtype": "string", "_type": "Value"}
+    },
+    "builder_name": "json",
+    "dataset_name": "malformed",
+    "config_name": "default"
+  }
+}

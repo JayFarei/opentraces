@@ -21,7 +21,12 @@ from opentraces_schema.version import SCHEMA_VERSION
 from opentraces.cli import main
 from opentraces.core.config import Config, get_project_state_path, save_project_config
 from opentraces.core.state import StateManager, TraceStatus
-from opentraces.publish.huggingface.upload import HFUploader, RemoteShardError, UploadResult
+from opentraces.publish.huggingface.upload import (
+    HFUploader,
+    RemoteShardError,
+    UploadResult,
+    _schema_version_relation,
+)
 from opentraces.publish.huggingface.dataset_card import (
     AUTO_END,
     AUTO_START,
@@ -226,6 +231,28 @@ class TestEnsureRepo:
         )
         assert "user/dataset" in url
 
+    def test_ensure_repo_uploads_current_dataset_infos(self):
+        """ensure_repo_exists refreshes dataset_infos.json with current fields."""
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
+            mock_api = MockApi.return_value
+            mock_api.create_repo = MagicMock(
+                return_value="https://huggingface.co/datasets/user/dataset"
+            )
+            mock_api.update_repo_settings = MagicMock()
+            mock_api.upload_file = MagicMock()
+
+            uploader = HFUploader(token="fake-token", repo_id="user/dataset")
+            uploader.api = mock_api
+
+            uploader.ensure_repo_exists()
+
+        mock_api.upload_file.assert_called_once()
+        payload = json.loads(mock_api.upload_file.call_args.kwargs["path_or_fileobj"].decode("utf-8"))
+        features = payload["default"]["features"]
+        assert "generation_index" in features
+        assert "repository_url" in features["task"]
+        assert "total_cache_creation_tokens" in features["metrics"]
+
 
 class TestFetchRemoteContentHashes:
     def test_empty_repo_returns_empty_set(self):
@@ -329,6 +356,69 @@ class TestGetExistingShards:
 
         assert len(shards) == 2
         assert all(s.endswith(".jsonl") for s in shards)
+
+
+class TestSchemaMigration:
+    def test_schema_version_relation_orders_semver(self):
+        assert _schema_version_relation("0.2.0", "0.3.0") == "older"
+        assert _schema_version_relation("0.3.0", "0.3.0") == "equal"
+        assert _schema_version_relation("0.5.0", "0.3.0") == "newer"
+        assert _schema_version_relation("dev", "0.3.0") == "unknown"
+
+    def test_detect_outdated_shards_only_flags_older_versions(self, tmp_path):
+        shard_file = tmp_path / "shard.jsonl"
+        older = _make_trace(trace_id="old").model_dump(mode="json")
+        older["schema_version"] = "0.2.0"
+        newer = _make_trace(trace_id="new").model_dump(mode="json")
+        newer["schema_version"] = "0.5.0"
+        shard_file.write_text(json.dumps(older) + "\n" + json.dumps(newer) + "\n")
+
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
+            mock_api = MockApi.return_value
+            mock_api.list_repo_files = MagicMock(return_value=["data/traces_test.jsonl"])
+            mock_api.hf_hub_download = MagicMock(return_value=str(shard_file))
+
+            uploader = HFUploader(token="fake-token", repo_id="user/dataset")
+            uploader.api = mock_api
+
+            report = uploader.detect_outdated_shards("0.3.0")
+
+        assert report["version_counts"] == {"0.2.0": 1, "0.5.0": 1}
+        assert report["total_outdated"] == 1
+        assert report["shards"] == [
+            {
+                "path": "data/traces_test.jsonl",
+                "outdated_records": 1,
+                "versions": {"0.2.0": 1, "0.5.0": 1},
+            }
+        ]
+
+    def test_migrate_outdated_shards_preserves_newer_rows(self, tmp_path):
+        shard_file = tmp_path / "shard.jsonl"
+        older = _make_trace(trace_id="old").model_dump(mode="json")
+        older["schema_version"] = "0.2.0"
+        newer = _make_trace(trace_id="new").model_dump(mode="json")
+        newer["schema_version"] = "0.5.0"
+        newer["future_field"] = {"keep": "me"}
+        shard_file.write_text(json.dumps(older) + "\n" + json.dumps(newer) + "\n")
+
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
+            mock_api = MockApi.return_value
+            mock_api.list_repo_files = MagicMock(return_value=["data/traces_test.jsonl"])
+            mock_api.hf_hub_download = MagicMock(return_value=str(shard_file))
+            mock_api.upload_file = MagicMock()
+
+            uploader = HFUploader(token="fake-token", repo_id="user/dataset")
+            uploader.api = mock_api
+
+            result = uploader.migrate_outdated_shards("0.3.0")
+
+        assert result["migrated_records"] == 1
+        payload = mock_api.upload_file.call_args.kwargs["path_or_fileobj"].decode("utf-8")
+        lines = [json.loads(line) for line in payload.splitlines() if line.strip()]
+        assert lines[0]["schema_version"] == "0.3.0"
+        assert lines[1]["schema_version"] == "0.5.0"
+        assert lines[1]["future_field"] == {"keep": "me"}
 
 
 def _require_live_push_env() -> tuple[str, str]:

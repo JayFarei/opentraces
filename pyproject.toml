@@ -24,7 +24,7 @@ dependencies = [
 web = ["flask>=3.0"]
 tui = ["textual>=0.50.0"]
 import = ["datasets>=2.16.0"]
-dev = ["pytest>=8.0", "pytest-cov", "ruff"]
+dev = ["pytest>=8.0", "pytest-cov", "ruff", "datasets>=2.16.0"]
 release = ["build", "twine"]
 
 [project.scripts]
@@ -46,6 +46,15 @@ packages = ["src/opentraces"]
 [tool.hatch.build.targets.wheel.force-include]
 "skill/SKILL.md" = "opentraces/skill/SKILL.md"
 "web/viewer/dist" = "opentraces/static/viewer"
+
+# Hatch's sdist honours .gitignore by default, which excludes web/viewer/dist
+# (the compiled viewer bundle is gitignored because it's a build output). The
+# wheel build from an extracted sdist then fails because the force-include
+# above cannot find web/viewer/dist. Explicitly re-including the bundle here
+# keeps git history free of generated assets while letting the sdist carry
+# everything the wheel needs.
+[tool.hatch.build.targets.sdist.force-include]
+"web/viewer/dist" = "web/viewer/dist"
 
 [tool.ruff]
 target-version = "py310"
