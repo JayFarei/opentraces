@@ -138,6 +138,33 @@ def test_away_summary_does_not_become_a_user_step(tmp_path: Path) -> None:
     )
 
 
+def test_away_summary_preserves_verbatim_unicode_recap_text(tmp_path: Path) -> None:
+    """Recap text must survive exactly, including punctuation Claude emits."""
+    recap = (
+        "Commissioning research on opentraces attribution/lineage/replay for a "
+        "PhD team; produced kb/br/41 brief and iterated with senior-engineer "
+        "reviews into a full standalone post-review report covering product "
+        "framing, eight commit-timing scenarios, and content-first "
+        "correlation. Next: confirm whether to fold Parts I–IV into kb/br/41 "
+        "as §§15–18."
+    )
+    lines = [
+        _user_turn("2026-04-21T08:55:00Z", "continue the attribution brief"),
+        _assistant_tool_turn("2026-04-21T08:55:01Z", "tu_1"),
+        _tool_result("2026-04-21T08:55:02Z", "tu_1"),
+        _away_summary("2026-04-21T09:03:04Z", recap),
+    ]
+    session_path = _write(tmp_path, lines)
+
+    record = ClaudeCodeParser().parse_session(session_path)
+    assert record is not None
+
+    recaps = record.metadata.get("away_summaries") or []
+    assert len(recaps) == 1
+    assert recaps[0]["content"] == recap
+    assert recaps[0]["timestamp"] == "2026-04-21T09:03:04Z"
+
+
 def test_no_away_summary_key_when_absent(tmp_path: Path) -> None:
     """Sessions with no recaps must not materialize an empty key in metadata."""
     lines = [

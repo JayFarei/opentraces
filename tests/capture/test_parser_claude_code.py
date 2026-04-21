@@ -87,6 +87,12 @@ def _make_minimal_session() -> list[dict]:
     ]
 
 
+def _current_repo_session_dir() -> Path:
+    repo_root = Path(__file__).resolve().parents[2]
+    encoded = repo_root.resolve().as_posix().replace("/", "-")
+    return Path.home() / ".claude" / "projects" / encoded
+
+
 class TestClaudeCodeParser:
     def test_discover_sessions(self, tmp_path):
         project_dir = tmp_path / "project-1"
@@ -707,6 +713,11 @@ class TestParentStepIntegrity:
 class TestParserOnRealSessions:
     """Integration tests using real Claude Code sessions if available."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_opentraces_global_state(self):
+        """Use the real HOME for local-session parser smoke tests."""
+        yield
+
     @pytest.fixture
     def projects_path(self):
         path = Path.home() / ".claude" / "projects"
@@ -730,6 +741,52 @@ class TestParserOnRealSessions:
                 break
 
         assert parsed > 0, "Could not parse any sessions"
+
+    def test_recent_repo_sessions_round_trip_away_summaries(self):
+        session_dir = _current_repo_session_dir()
+        if not session_dir.exists():
+            pytest.skip("No Claude Code sessions for this repo")
+
+        recent_sessions = sorted(
+            session_dir.glob("*.jsonl"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        recap_sessions: list[tuple[Path, list[dict[str, str | None]]]] = []
+
+        for session in recent_sessions[:20]:
+            raw_recaps: list[dict[str, str | None]] = []
+            with session.open() as f:
+                for line in f:
+                    row = json.loads(line)
+                    if (
+                        row.get("type") == "system"
+                        and row.get("subtype") == "away_summary"
+                        and row.get("content")
+                    ):
+                        raw_recaps.append({
+                            "timestamp": row.get("timestamp"),
+                            "content": row["content"],
+                        })
+            if raw_recaps:
+                recap_sessions.append((session, raw_recaps))
+            if len(recap_sessions) >= 3:
+                break
+
+        if not recap_sessions:
+            pytest.skip("No away_summary records in recent repo sessions")
+
+        parser = ClaudeCodeParser()
+        for session, raw_recaps in recap_sessions:
+            record = parser.parse_session(session)
+            assert record is not None, f"failed to parse {session.name}"
+
+            parsed_recaps = record.metadata.get("away_summaries") or []
+            assert parsed_recaps == raw_recaps
+
+            user_texts = [step.content or "" for step in record.steps if step.role == "user"]
+            for recap in raw_recaps:
+                assert recap["content"] not in user_texts
 
 
 # ---------------------------------------------------------------------------
