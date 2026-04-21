@@ -1,10 +1,8 @@
 name: Perf
 
 on:
-  pull_request:
-  push:
-    branches:
-      - main
+  # Manually invoked only. Tests run locally pre-push; this workflow exists
+  # as scaffolding for an opt-in perf run, not as automated PR gating.
   workflow_dispatch:
 
 permissions:
@@ -16,7 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      OT_PERF_ARTIFACTS_DIR: ${{ runner.temp }}/perf-artifacts
+      # runner.temp is a step-only context; hard-code /tmp here so the
+      # env: block evaluates cleanly at the job level.
+      OT_PERF_ARTIFACTS_DIR: /tmp/perf-artifacts
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PYTHONHASHSEED: "0"
     steps:
@@ -52,7 +52,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: perf-smoke-artifacts
-          path: ${{ runner.temp }}/perf-artifacts
+          path: /tmp/perf-artifacts
 
   user-smoke:
     name: User Smoke
