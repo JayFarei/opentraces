@@ -287,7 +287,93 @@ class ClaudeCodeParser:
             )
             return None
 
+        # Stamp the original 0-indexed line position before any transforms,
+        # so anchors in TraceRecord keep pointing at the right raw JSONL
+        # line even after we collapse multi-fragment assistant turns.
+        for i, ln in enumerate(lines):
+            ln["_original_line_no"] = i
+
+        lines = self._coalesce_assistant_fragments(lines)
+
         return lines
+
+    def _coalesce_assistant_fragments(self, lines: list[dict]) -> list[dict]:
+        """Collapse assistant JSONL rows sharing (sessionId, requestId).
+
+        Claude Code serialises a single assistant API response as one JSONL
+        line when the response has one content-block type, but splits it
+        into multiple lines when the response mixes block types
+        (thinking+tool_use, text+tool_use, thinking+text+tool_use,
+        thinking+text). Each fragment gets a fresh ``uuid`` but all
+        fragments share the turn's ``requestId`` and carry the identical
+        ``message.usage`` block. Downstream code expects one Step per API
+        call, so we merge fragments here into a single synthetic row whose
+        ``message.content`` concatenates the fragments' content blocks in
+        original order.
+
+        Fragments are NOT guaranteed adjacent: a user ``tool_result`` row
+        can interleave between an assistant ``thinking`` fragment and the
+        following ``tool_use`` fragment that referenced it. We merge by
+        ``(sessionId, requestId)`` globally, not by adjacency, and we do
+        NOT use ``stop_reason`` as a flush signal because it is present on
+        every fragment.
+
+        Missing ``requestId`` on an assistant line → leave it untouched.
+        Older CC captures predated request-id emission.
+        """
+        # Group indices by (sessionId, requestId). First index wins as the
+        # representative row whose uuid / timestamp / line position we keep.
+        by_group: dict[tuple[str, str], list[int]] = {}
+        for idx, line in enumerate(lines):
+            if line.get("type") != "assistant":
+                continue
+            sid = line.get("sessionId")
+            rid = line.get("requestId")
+            if not (sid and rid):
+                continue
+            by_group.setdefault((sid, rid), []).append(idx)
+
+        drop: set[int] = set()
+        for indices in by_group.values():
+            if len(indices) <= 1:
+                continue
+            first_idx = indices[0]
+            first = lines[first_idx]
+
+            merged_content: list = []
+            last_usage: dict | None = None
+            last_stop: str | None = None
+
+            for i, idx in enumerate(indices):
+                frag_msg = lines[idx].get("message") or {}
+                frag_content = frag_msg.get("content")
+                if isinstance(frag_content, list):
+                    merged_content.extend(frag_content)
+                elif isinstance(frag_content, str) and frag_content:
+                    merged_content.append({"type": "text", "text": frag_content})
+                if frag_msg.get("usage"):
+                    last_usage = frag_msg["usage"]
+                if frag_msg.get("stop_reason"):
+                    last_stop = frag_msg["stop_reason"]
+                if i > 0:
+                    drop.add(idx)
+
+            # Rebuild the first fragment's message without mutating the
+            # caller's original dict — tests that feed in shared fixtures
+            # shouldn't see their inputs perturbed.
+            new_msg = dict(first.get("message") or {})
+            new_msg["content"] = merged_content
+            if last_usage is not None:
+                new_msg["usage"] = last_usage
+            if last_stop is not None:
+                new_msg["stop_reason"] = last_stop
+            new_first = dict(first)
+            new_first["message"] = new_msg
+            lines[first_idx] = new_first
+
+        if not drop:
+            return lines
+        return [ln for i, ln in enumerate(lines) if i not in drop]
 
     def _extract_metadata(self, lines: list[dict]) -> dict[str, Any]:
         """Extract session-level metadata from parsed lines."""
@@ -582,7 +668,7 @@ class ClaudeCodeParser:
                     step_index += 1
                     anchor = {
                         "entry_uuid": line.get("uuid"),
-                        "line_no": line_no,
+                        "line_no": line.get("_original_line_no", line_no),
                         "session_file_relpath": session_relpath,
                     }
                     steps.append(Step(
@@ -744,7 +830,7 @@ class ClaudeCodeParser:
             step_index += 1
             anchor = {
                 "entry_uuid": line.get("uuid"),
-                "line_no": line_no,
+                "line_no": line.get("_original_line_no", line_no),
                 "session_file_relpath": session_relpath,
             }
             step = Step(
