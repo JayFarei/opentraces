@@ -295,6 +295,23 @@ def test_research_only_trace_has_no_patch_status_without_failure(tmp_path: Path)
     assert payload["trace_slice"]["relation"] == "contains_no_patch_step"
     assert payload["source_events"][0]["event_type"] == "trace_snapshot_created"
 
+    human_result = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "explain",
+            "--trace",
+            "tr-research-only",
+            "--step",
+            "2",
+            "--project",
+            str(repo),
+        ],
+    )
+    assert human_result.exit_code == 0, human_result.output
+    assert "patch status: no_patch" in human_result.output
+    assert "relation: no_patch" in human_result.output
+
 
 def test_rebuild_round_trip_after_projection_delete(tmp_path: Path) -> None:
     repo = tmp_path

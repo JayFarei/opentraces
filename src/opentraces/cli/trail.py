@@ -112,6 +112,9 @@ def explain_cmd(
             f"  evidence: {payload.get('evidence_tier')} "
             f"({payload.get('evidence_firmness')})"
         )
+    elif payload.get("patch_status") == "no_patch":
+        click.echo("  patch status: no_patch")
+        click.echo("  relation: no_patch")
     else:
         click.echo("  relation: unknown")
         for limitation in payload.get("limitations") or []:
