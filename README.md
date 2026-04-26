@@ -173,8 +173,12 @@ lineage: append-only local `TrailEvent` batches under
 `refs/opentraces/local/events/v1`, plus rebuildable projections such as CLI
 explanations, doctor checks, and later search/dataset views.
 
-The initial surface supports exact patch explanations, snapshot diffs, and
-bounded chronological Patch Trail follow-up.
+The substrate ships exact patch explanations, snapshot diffs, bounded
+chronological Patch Trail follow-up, manual attach for hook-failure
+recovery, projection rebuild from canonical events, watcher-based
+backstop attribution, and adversarial reconciliation across Git
+rewrites.
+
 `opentraces trail explain --trace <id> --step <n>` rebuilds from the local
 event log and reports the Trace Snapshot references, Trace Patch identity, Git
 Anchor, evidence tier, firmness, source events, and any limitations.
@@ -183,6 +187,20 @@ captured snapshot trees and emits the resulting Trace Patch. The delayed Git
 Anchor reconciler can search a later commit for existing Trace Patches and
 record exact anchors, which can be queried from `--commit <sha>` or
 `<path>:<line>`.
+
+`opentraces trail attach --trace <id> --commit <sha>` retroactively
+connects a trace's evidence to a Git commit when the post-commit
+correlator missed (hook failure, daemon crash, out-of-order
+backfill). New events carry `capture_method=["manual_attach"]` so
+downstream consumers can distinguish manual from automatic capture.
+Source events are byte-identical after attach; the operation is fully
+append-only and idempotent.
+
+`opentraces trail rebuild` re-derives advisory snapshot refs from the
+canonical event log. The append-only event log is the source of truth;
+projections can be dropped and rebuilt without losing replayability,
+even after `git gc --prune=now --aggressive`, because batch commits
+embed snapshot trees as subtrees so Git GC cannot prune them.
 
 Trace-side history is the append-only sequence of snapshots, patches, searches,
 and anchors observed by OpenTraces. Git-side Patch Trails are computed from Git
@@ -195,14 +213,59 @@ later lost anchors. Each observation carries `observation_sequence` (global,
 contiguous), `anchor_trail_index` (per-anchor), `observed_commit_time`, and
 `anchor_descendant_count` so consumers can sort, group, or compute truncation
 gaps without re-walking Git. Use `--history-limit N` to bound how many commits
-per anchor are observed (default 500). Trail-construction limitations such as
-`patch_trail_history_truncated` land in `trail_limitations` at the response
-root; per-commit lookup limitations stay on each observation. These are
-intentionally separate from the Phase 5 capture-time `capture_limitations`
-vocabulary on TrailEvents. Phase 4 states are `alive_on_path`,
-`alive_transformed`, `reverted`, `lost`, and `unknown`. Rename, partial
-preservation, repair, and orphan reasoning are reserved for the Phase 5
-reconciler.
+per anchor are observed (default 500).
+
+Survival states. Phase 4 ships `alive_on_path`, `alive_transformed`,
+`reverted`, `lost`, and `unknown`. Phase 5 adds three computed states:
+`alive_moved` (rename detection via `git log -M --name-status`),
+`partially_preserved` (subset of authored lines survives elsewhere in
+the file), and `repaired` (a non-anchor committer touched the
+anchored range, detected via `git blame --line-porcelain`). The fourth
+Phase 5 state, `orphaned`, is reserved for reference-transaction
+observation and is deferred until installed-base demand justifies the
+hook surface.
+
+Watcher backstop. Phase 5 ships an agent-agnostic filesystem watcher
+that emits `filesystem_mutation_observed` events with `(path,
+before_blob, after_blob, observed_at_start, observed_at_end)` —
+intentionally no `trace_id` or `step_index`, because attribution is
+the reconciler's job, not the watcher's. The reconciler consumes those
+observations alongside `trace_step_window_opened` /
+`trace_step_window_closed` events shipped since Phase 2 and produces
+attribution under unambiguous conditions only: when the mutation
+interval is fully inside exactly one writer's *firm* step window, the
+existing `trace_patch_created` event is upgraded with
+`capture_method=["...", "watcher_backstop"]`. Ambiguity is recorded as
+a `capture_limitations` tag from the closed Phase 5 vocabulary
+(`concurrent_writer_overlap`, `unbounded_mutation_window`,
+`background_process_overlap`, `hook_only`, `hook_payload_state_mismatch`,
+`session_terminated_unexpectedly`, `watcher_buffer_overflow`). The
+reconciler is idempotent — re-running on the same event set produces
+the same attributions, keyed by `observation_event_id`.
+
+Trail-construction limitations such as `patch_trail_history_truncated`
+land in `trail_limitations` at the response root; per-commit lookup
+limitations stay on each observation. These are intentionally separate
+from the Phase 5 capture-time `capture_limitations` vocabulary on
+TrailEvents.
+
+Git rewrite handling. When `git commit --amend`, `rebase`, or `git
+reset` followed by re-commit produces a new SHA, the
+`supersede_anchors_for_rewrite` substrate emits
+`git_anchor_superseded` events tagged
+`capture_method=["post_rewrite_hook"]` and re-runs the anchor
+correlator against the new commit. Cherry-pick is *not* a rewrite —
+both commits coexist, both receive anchors. Wiring the post-rewrite
+hook into `.git/hooks/` is follow-up work; the substrate function is
+the canonical contract.
+
+Anchor identity tiers. The post-commit correlator tries
+`exact_range_hash` first (whitespace-collapsed substring match) and
+falls back to `structural_match` (line-level similarity above a 0.85
+ratio threshold) when the exact tier fails. Identity is preserved
+across formatter divergence — quote-style flips, minor refactors, and
+format-then-commit pipelines all anchor — but firmness drops from
+`firm` to `provisional` so consumers can filter on confidence.
 
 ## Docs
 
