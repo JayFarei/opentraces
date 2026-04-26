@@ -8,7 +8,12 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from opentraces.cli import main
-from opentraces.core.trails import TrailEventDraft, append_event_batch, reconcile_commit_anchors
+from opentraces.core.trails import (
+    TrailEventDraft,
+    append_event_batch,
+    read_events,
+    reconcile_commit_anchors,
+)
 from opentraces.core.trails.models import sha256_text
 
 
@@ -249,3 +254,89 @@ def test_many_trace_patches_in_one_commit(tmp_path: Path) -> None:
         "tr-alpha",
         "tr-beta",
     }
+
+
+def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    authored = "    return 'repeat-delayed-anchor-line-54-phase-three'\n"
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-repeat",
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": "tracepatch-sha256:repeat",
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    (repo / "app.py").write_text("def value():\n" + authored)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "apply repeated patch"], cwd=repo, check=True)
+    first_commit = _git(repo, "rev-parse", "HEAD")
+    assert [
+        anchor["trace_patch_id"]
+        for anchor in reconcile_commit_anchors(
+            repo, first_commit, writer="post-commit-correlator"
+        )
+    ] == ["tracepatch-sha256:repeat"]
+
+    (repo / "app.py").write_text(
+        "def value():\n    return 'intermediate-without-repeat-anchor'\n"
+    )
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "remove repeated patch"], cwd=repo, check=True)
+    middle_commit = _git(repo, "rev-parse", "HEAD")
+    assert reconcile_commit_anchors(
+        repo, middle_commit, writer="post-commit-correlator"
+    ) == []
+
+    (repo / "app.py").write_text("def value():\n" + authored)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "reapply repeated patch"], cwd=repo, check=True)
+    second_commit = _git(repo, "rev-parse", "HEAD")
+    assert [
+        anchor["trace_patch_id"]
+        for anchor in reconcile_commit_anchors(
+            repo, second_commit, writer="post-commit-correlator"
+        )
+    ] == ["tracepatch-sha256:repeat"]
+
+    anchor_events = [
+        event for event in read_events(repo)
+        if event.event_type == "git_anchor_created"
+        and event.payload["trace_patch_id"] == "tracepatch-sha256:repeat"
+    ]
+    assert {
+        event.payload["commit_id"]["hex"] for event in anchor_events
+    } == {first_commit, second_commit}
+
+    search_events = [
+        event for event in read_events(repo)
+        if event.event_type == "git_anchor_search_completed"
+        and event.payload["trace_patch_id"] == "tracepatch-sha256:repeat"
+    ]
+    assert [
+        event.payload["result"] for event in search_events
+    ] == ["anchored", "unknown", "anchored"]
+
+    result = CliRunner().invoke(
+        main,
+        ["trail", "explain", "--commit", second_commit, "--json", "--project", str(repo)],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["commit_sha"] == second_commit
+    assert payload["trace_patches"][0]["trace_patch_id"] == "tracepatch-sha256:repeat"

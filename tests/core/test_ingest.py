@@ -369,11 +369,45 @@ class TestIngestOneSession:
         commit = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=project_dir, text=True
         ).strip()
-        from opentraces.core.trails import reconcile_commit_anchors
 
-        anchors = reconcile_commit_anchors(project_dir, commit)
-        assert len(anchors) == 1
-        assert anchors[0]["trace_patch_id"] == patch_events[0].payload["trace_patch_id"]
+        hook = CliRunner().invoke(
+            main,
+            ["_run-post-commit-hook", str(project_dir)],
+        )
+        assert hook.exit_code == 0, hook.output
+
+        refreshed_events = [
+            event for event in read_events(project_dir)
+            if event.trace_id == result.trace_id
+        ]
+        search_events = [
+            event for event in refreshed_events
+            if event.event_type == "git_anchor_search_completed"
+        ]
+        anchor_events = [
+            event for event in refreshed_events
+            if event.event_type == "git_anchor_created"
+        ]
+        assert len(search_events) == 1
+        assert search_events[0].capture_method == ["post_commit_correlator"]
+        assert search_events[0].payload["result"] == "anchored"
+        assert search_events[0].payload["trace_patch_id"] == (
+            patch_events[0].payload["trace_patch_id"]
+        )
+        assert len(anchor_events) == 1
+        assert anchor_events[0].capture_method == ["post_commit_correlator"]
+        assert anchor_events[0].payload["trace_patch_id"] == (
+            patch_events[0].payload["trace_patch_id"]
+        )
+        assert anchor_events[0].payload["commit_id"]["hex"] == commit
+        assert anchor_events[0].payload["evidence_tier"] == "exact_range_hash"
+        log_entries = [
+            json.loads(line)
+            for line in (project_dir / ".git" / "opentraces-hook.log").read_text().splitlines()
+            if line.strip()
+        ]
+        assert log_entries[-1]["trail_anchors_created"] == 1
+        assert log_entries[-1]["trail_anchor_error"] is None
 
     def test_incomplete_hook_capture_emits_loss_event(self, project_dir, tmp_path) -> None:
         from opentraces.core.ingest import ingest_one_session

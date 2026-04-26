@@ -142,7 +142,7 @@ def run(
             continue
         # Attach the link for evidence regardless of tier. Deduplicate
         # against existing git_links by (revision, tier).
-        existing = {(l.revision, l.tier) for l in trace.git_links}
+        existing = {(link.revision, link.tier) for link in trace.git_links}
         for link in links:
             if (link.revision, link.tier) not in existing:
                 trace.git_links.append(link)
@@ -250,6 +250,23 @@ def _append_hook_log(repo: Path, entry: dict) -> None:
         pass
 
 
+def _reconcile_trail_anchors(repo: Path, sha: str | None, entry: dict) -> None:
+    """Best-effort Trace Trail anchor reconciliation for the current commit."""
+    if sha is None or is_merge_commit(repo, sha):
+        return
+    try:
+        from ...core.trails import reconcile_commit_anchors
+
+        anchors = reconcile_commit_anchors(
+            repo,
+            sha,
+            writer="post-commit-correlator",
+        )
+        entry["trail_anchors_created"] = len(anchors)
+    except Exception as e:
+        entry["trail_anchor_error"] = f"{type(e).__name__}: {e}"
+
+
 def run_for_repo(repo: Path, *, window_hours: int = 2) -> None:
     """Entrypoint for the installed post-commit shim.
 
@@ -265,6 +282,8 @@ def run_for_repo(repo: Path, *, window_hours: int = 2) -> None:
         "candidates": 0,
         "verdicts": [],
         "notes_written": False,
+        "trail_anchors_created": 0,
+        "trail_anchor_error": None,
         "error": None,
         "reason": None,
     }
@@ -278,6 +297,7 @@ def run_for_repo(repo: Path, *, window_hours: int = 2) -> None:
 
         staging = get_project_traces_dir(repo)
         if not staging.exists():
+            _reconcile_trail_anchors(repo, entry["sha"], entry)
             entry["reason"] = "no_staging_dir"
             return
         since = (
@@ -287,9 +307,11 @@ def run_for_repo(repo: Path, *, window_hours: int = 2) -> None:
         records = list(records)
         entry["candidates"] = len(records)
         if not records:
+            _reconcile_trail_anchors(repo, entry["sha"], entry)
             entry["reason"] = "no_traces_in_inbox_window"
             return
         results = run(repo, records)
+        _reconcile_trail_anchors(repo, entry["sha"], entry)
         entry["verdicts"] = [
             {"trace_id": tid, "tier": (links[0].tier if links else "orphan")}
             for tid, links in results
@@ -486,7 +508,7 @@ def backfill(
             )
             if not links or links[0].tier == "orphan":
                 continue
-            existing = {(l.revision, l.tier) for l in trace.git_links}
+            existing = {(link.revision, link.tier) for link in trace.git_links}
             for link in links:
                 if (link.revision, link.tier) not in existing:
                     trace.git_links.append(link)

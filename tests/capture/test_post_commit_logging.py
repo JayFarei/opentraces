@@ -9,8 +9,6 @@ import json
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from opentraces.capture.git.post_commit import _hook_log_path, run_for_repo
 
 
@@ -58,8 +56,6 @@ def test_exception_is_captured_in_log(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
 
     # Force the inbox loader to raise so we can verify the error path.
-    import opentraces.capture.git.post_commit as pc
-
     def _boom(*a, **kw):
         raise RuntimeError("synthetic failure")
 
@@ -80,6 +76,34 @@ def test_exception_is_captured_in_log(tmp_path, monkeypatch):
     assert len(entries) == 1
     assert entries[0]["error"]
     assert "synthetic failure" in entries[0]["error"]
+
+
+def test_trail_anchor_failure_is_logged_without_aborting_hook(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    repo = _init_repo(tmp_path)
+
+    import opentraces.core.trails as trails
+
+    def _boom(*a, **kw):
+        raise RuntimeError("synthetic anchor failure")
+
+    monkeypatch.setattr(trails, "reconcile_commit_anchors", _boom)
+    staging = tmp_path / ".opentraces" / "staging"
+    staging.mkdir(parents=True)
+    monkeypatch.setattr(
+        "opentraces.core.config.get_project_traces_dir",
+        lambda _repo: staging,
+        raising=False,
+    )
+
+    run_for_repo(repo)
+
+    entries = _read_log(repo)
+    assert len(entries) == 1
+    assert entries[0]["error"] is None
+    assert entries[0]["reason"] == "no_traces_in_inbox_window"
+    assert entries[0]["trail_anchors_created"] == 0
+    assert "synthetic anchor failure" in entries[0]["trail_anchor_error"]
 
 
 def test_log_rotates_when_past_cap(tmp_path, monkeypatch):
