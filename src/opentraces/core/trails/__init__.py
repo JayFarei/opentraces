@@ -20,6 +20,7 @@ from .explain import explain_commit, explain_file_line, explain_trace_step
 from .follow import follow_anchor, follow_patch
 from .models import GitObjectID, TrailEvent, TrailEventDraft
 from .reconciler import reconcile_watcher_observations
+from .rebuild import rebuild_projections
 from .snapshots import (
     SnapshotResult,
     StepTrailEmissionResult,
@@ -58,6 +59,7 @@ __all__ = [
     "follow_anchor",
     "follow_patch",
     "read_events",
+    "rebuild_projections",
     "reconcile_commit_anchors",
     "reconcile_watcher_observations",
     "verify_event_log",

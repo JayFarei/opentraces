@@ -339,3 +339,64 @@ def attach_cmd(
             f"  {anchor.get('git_anchor_id')} → {sha} {path} "
             f"({anchor.get('evidence_tier')})"
         )
+
+
+@trail_group.command(
+    "rebuild",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail rebuild",
+        "opentraces trail rebuild --json",
+    ],
+    see_also=[
+        ("opentraces trail explain", "show evidence chain for a trace step."),
+        ("opentraces doctor", "verify event log integrity."),
+    ],
+    option_groups=[
+        ("Scope", ["project_dir"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--project",
+    "project_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: CWD).",
+)
+def rebuild_cmd(as_json: bool, project_dir: Path | None) -> None:
+    """Re-derive Trace Trails advisory projections from the event log.
+
+    Snapshot refs under refs/opentraces/local/traces/... are advisory
+    indexes; the canonical store is the append-only event log. Use
+    rebuild after manual ref cleanup, branch surgery, or recovery from
+    a corrupted projection cache. The operation is idempotent.
+    """
+    from ..core.trails import rebuild_projections
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+    try:
+        summary = rebuild_projections(repo)
+    except ValueError as exc:
+        click.echo(f"Trace Trail event log is invalid: {exc}", err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to rebuild trail projections: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(summary, indent=2, sort_keys=True))
+        return
+
+    click.echo(
+        f"Rebuilt snapshot projections from {summary['snapshot_events_seen']} "
+        f"snapshot event(s):"
+    )
+    click.echo(f"  created:    {summary['snapshot_refs_created']}")
+    click.echo(f"  unchanged:  {summary['snapshot_refs_unchanged']}")
+    if summary["snapshot_refs_missing_object"]:
+        click.echo(
+            f"  missing:    {summary['snapshot_refs_missing_object']} "
+            f"(snapshot tree no longer in object database)"
+        )
