@@ -21,6 +21,7 @@ from .follow import follow_anchor, follow_patch
 from .models import GitObjectID, TrailEvent, TrailEventDraft
 from .reconciler import reconcile_watcher_observations
 from .rebuild import rebuild_projections
+from .supersede import supersede_anchors_for_rewrite
 from .snapshots import (
     SnapshotResult,
     StepTrailEmissionResult,
@@ -62,6 +63,7 @@ __all__ = [
     "rebuild_projections",
     "reconcile_commit_anchors",
     "reconcile_watcher_observations",
+    "supersede_anchors_for_rewrite",
     "verify_event_log",
     "write_worktree_tree",
 ]

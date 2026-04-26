@@ -162,6 +162,61 @@ def test_formatter_divergence_downgrades_firmness_not_identity(
     assert explanation["evidence_firmness"] == "provisional"
 
 
+def test_format_then_commit_records_provisional_firmness(tmp_path: Path) -> None:
+    """Plan §Verification Strategy fixture: format-then-commit.
+
+    The hook captured the patch with the agent's intended style. A
+    formatter ran in pre-commit (or as part of a Makefile target) and
+    rewrote the file with a structurally-different style. The commit
+    contains the formatted version. The substrate must still anchor
+    via the structural fallback with provisional firmness, so trace
+    maturity reflects the divergence honestly.
+    """
+    _init_repo(tmp_path)
+    target = tmp_path / "config.py"
+    before_text = "GREETING = 'old'\n"
+    target.write_text(before_text)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed config"], cwd=tmp_path, check=True
+    )
+    before_blob = GitObjectID(hex=_hash_object(tmp_path, before_text))
+
+    # Hook captured the agent's authored patch (single quotes,
+    # single-line statement).
+    hook_authored = "GREETING = 'hello world'\n"
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, hook_authored))
+    _emit_hook_patch(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        file_path="config.py",
+        trace_patch_id="tracepatch-sha256:fixture-format-then-commit",
+        before_blob=before_blob,
+        after_blob=after_blob,
+        authored_text=hook_authored,
+        affected_range={"start_line": 1, "end_line": 1},
+    )
+
+    # A formatter ran AFTER the hook and BEFORE the commit, rewriting
+    # quote style. The committed blob is the formatter's output.
+    target.write_text('GREETING = "hello world"\n')
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "format-then-commit"], cwd=tmp_path, check=True
+    )
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, text=True
+    ).strip()
+
+    created = reconcile_commit_anchors(tmp_path, head)
+    assert len(created) == 1
+    anchor = created[0]
+    assert anchor["evidence_tier"] == "structural_match"
+    assert anchor["evidence_firmness"] == "provisional"
+    assert "structural_match_below_exact_threshold" in anchor["limitations"]
+
+
 def test_unrelated_lines_do_not_anchor_via_structural_match(tmp_path: Path) -> None:
     """The structural fallback must not fabricate anchors.
 
