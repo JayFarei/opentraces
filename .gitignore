@@ -39,3 +39,4 @@ tmp/
 otd
 snapshot_report.html
 .DS_Store
+.sem
