@@ -7,10 +7,7 @@ expected exit codes. These are regression guards, not behavior tests.
 from __future__ import annotations
 
 import json
-import os
-import time
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
@@ -359,6 +356,7 @@ class TestMachineMode:
         monkeypatch.setattr("opentraces.cli._launch_tui_ui", lambda *a, **kw: launched.append(1))
         runner = CliRunner()
         result = runner.invoke(main, [])
+        assert result.exit_code == 0
         assert len(launched) == 0
 
 
@@ -653,7 +651,6 @@ class TestUpgrade:
 
     def test_upgrade_binary_not_found(self, initialized_project, monkeypatch):
         """Binary disappearing between detection and execution should exit 4."""
-        import subprocess
         project_dir, runner = initialized_project
         monkeypatch.setattr("opentraces.cli._detect_install_method", lambda: "brew")
 
@@ -831,6 +828,8 @@ class TestHooksCommands:
             "--settings-file", str(settings_file),
         ])
         assert result.exit_code == 0
+        assert (hooks_dir / "opentraces_on_pre_tool_use.py").exists()
+        assert (hooks_dir / "opentraces_on_tool_use.py").exists()
         assert (hooks_dir / "opentraces_on_stop.py").exists()
         assert (hooks_dir / "opentraces_on_compact.py").exists()
 
@@ -844,9 +843,13 @@ class TestHooksCommands:
         ])
         assert result.exit_code == 0
         settings = json.loads(settings_file.read_text())
+        assert "PreToolUse" in settings["hooks"]
+        assert "PostToolUse" in settings["hooks"]
         assert "Stop" in settings["hooks"]
         assert "PostCompact" in settings["hooks"]
         # Each event should have exactly one hook entry
+        assert len(settings["hooks"]["PreToolUse"]) == 1
+        assert len(settings["hooks"]["PostToolUse"]) == 1
         assert len(settings["hooks"]["Stop"]) == 1
         assert len(settings["hooks"]["PostCompact"]) == 1
 
@@ -862,6 +865,8 @@ class TestHooksCommands:
         runner.invoke(main, args)  # second run
 
         settings = json.loads(settings_file.read_text())
+        assert len(settings["hooks"]["PreToolUse"]) == 1
+        assert len(settings["hooks"]["PostToolUse"]) == 1
         assert len(settings["hooks"]["Stop"]) == 1
         assert len(settings["hooks"]["PostCompact"]) == 1
 

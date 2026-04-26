@@ -84,8 +84,26 @@ def _collect_object_ids(value: Any) -> list[GitObjectID]:
     return found
 
 
+def _safe_tree_entry_name(value: str) -> str:
+    return value.replace(":", "-").replace("/", "-")
+
+
+def _tree_oid_from_payload(cwd: Path, event: TrailEvent) -> GitObjectID | None:
+    tree_id = event.payload.get("tree_id")
+    if not tree_id:
+        return None
+    try:
+        oid = GitObjectID.model_validate(tree_id)
+    except Exception:
+        return None
+    if _object_type(cwd, oid) != "tree":
+        return None
+    return oid
+
+
 def _write_batch_tree(cwd: Path, events: list[TrailEvent], batch: dict[str, Any]) -> str:
     snapshot_tree_entries: list[tuple[str, str]] = []
+    boundary_tree_entries: list[tuple[str, str]] = []
     with tempfile.TemporaryDirectory(prefix="opentraces-trails-index-") as td:
         index_path = str(Path(td) / "index")
         env = os.environ.copy()
@@ -130,30 +148,39 @@ def _write_batch_tree(cwd: Path, events: list[TrailEvent], batch: dict[str, Any]
                     ],
                     env=env,
                 )
-            tree_id = event.payload.get("tree_id")
             snapshot_id = event.payload.get("snapshot_id")
-            if event.event_type == "trace_snapshot_created" and tree_id and snapshot_id:
-                try:
-                    oid = GitObjectID.model_validate(tree_id)
-                except Exception:
-                    oid = None
-                if oid and oid.hex not in retained_trees and _object_type(cwd, oid) == "tree":
+            oid = _tree_oid_from_payload(cwd, event)
+            if oid:
+                safe_event_id = _safe_tree_entry_name(event.event_id)
+                boundary_tree_entries.append(
+                    (f"{event.event_sequence:012d}-{safe_event_id}", oid.hex)
+                )
+            if event.event_type == "trace_snapshot_created" and oid and snapshot_id:
+                if oid.hex not in retained_trees:
                     retained_trees.add(oid.hex)
-                    safe_snapshot_id = str(snapshot_id).replace(":", "-")
+                    safe_snapshot_id = _safe_tree_entry_name(str(snapshot_id))
                     snapshot_tree_entries.append((safe_snapshot_id, oid.hex))
 
         base_tree = _git(cwd, ["write-tree"], env=env).stdout.strip()
 
-    if not snapshot_tree_entries:
+    if not snapshot_tree_entries and not boundary_tree_entries:
         return base_tree
 
-    snapshots_tree_input = "".join(
-        f"040000 tree {tree_hex}\t{name}\n"
-        for name, tree_hex in sorted(snapshot_tree_entries)
-    )
-    snapshots_tree = _git(cwd, ["mktree"], input=snapshots_tree_input).stdout.strip()
     root_entries = _git(cwd, ["ls-tree", base_tree]).stdout
-    root_entries += f"040000 tree {snapshots_tree}\tsnapshots\n"
+    if snapshot_tree_entries:
+        snapshots_tree_input = "".join(
+            f"040000 tree {tree_hex}\t{name}\n"
+            for name, tree_hex in sorted(snapshot_tree_entries)
+        )
+        snapshots_tree = _git(cwd, ["mktree"], input=snapshots_tree_input).stdout.strip()
+        root_entries += f"040000 tree {snapshots_tree}\tsnapshots\n"
+    if boundary_tree_entries:
+        trees_tree_input = "".join(
+            f"040000 tree {tree_hex}\t{name}\n"
+            for name, tree_hex in sorted(boundary_tree_entries)
+        )
+        trees_tree = _git(cwd, ["mktree"], input=trees_tree_input).stdout.strip()
+        root_entries += f"040000 tree {trees_tree}\ttrees\n"
     return _git(cwd, ["mktree"], input=root_entries).stdout.strip()
 
 

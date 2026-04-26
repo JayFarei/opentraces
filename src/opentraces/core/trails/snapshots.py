@@ -23,6 +23,14 @@ class SnapshotResult:
     ref: str
 
 
+@dataclass(frozen=True)
+class StepWindowOpenResult:
+    event_time: str
+    tree_id: dict[str, str]
+    git_head: dict[str, str] | None
+    event_id: str
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -83,7 +91,131 @@ def _create_snapshot_ref(repo: Path, ref: str, tree_hex: str) -> None:
     _git(repo, ["update-ref", ref, tree_hex])
 
 
-def append_step_snapshot(
+def _normalized_limitations(
+    capture_status: str = "captured",
+    limitations: list[str] | None = None,
+) -> list[str]:
+    out = list(limitations or [])
+    if capture_status != "captured":
+        out.append(capture_status)
+    return sorted(set(out))
+
+
+def _boundary_state(
+    repo: Path,
+    *,
+    event_time: str | None = None,
+    tree_id: dict[str, str] | None = None,
+    git_head: dict[str, str] | None = None,
+    claimed_tree_id: dict[str, str] | None = None,
+    limitations: list[str] | None = None,
+) -> tuple[str, dict[str, str], dict[str, str] | None, list[str]]:
+    verified_tree_id = tree_id or write_worktree_tree(repo)
+    verified_git_head = git_head if git_head is not None else _head_id(repo)
+    normalized = list(limitations or [])
+    if claimed_tree_id and claimed_tree_id != verified_tree_id:
+        normalized.append("hook_payload_state_mismatch")
+    return event_time or _utc_now(), verified_tree_id, verified_git_head, sorted(set(normalized))
+
+
+def _window_payload(
+    repo: Path,
+    *,
+    trace_id: str,
+    generation_index: int,
+    step_index: int,
+    agent_step_id: str,
+    tool_call_id: str,
+    tree_id: dict[str, str],
+    git_head: dict[str, str] | None,
+    event_time: str,
+    capture_method: list[str],
+    boundary_firmness: str,
+    limitations: list[str],
+    boundary: str,
+) -> dict[str, Any]:
+    return {
+        "trace_id": trace_id,
+        "generation_index": generation_index,
+        "step_index": step_index,
+        "agent_step_id": agent_step_id,
+        "tool_call_id": tool_call_id,
+        "worktree_root": str(repo),
+        "tree_id": tree_id,
+        "git_head": git_head,
+        "event_time": event_time,
+        "capture_method": capture_method,
+        "boundary_firmness": boundary_firmness,
+        "capture_limitations": limitations,
+        "boundary": boundary,
+    }
+
+
+def open_step_window(
+    repo: Path,
+    *,
+    trace_id: str,
+    step_index: int,
+    agent_step_id: str,
+    tool_call_id: str,
+    capture_method: list[str],
+    writer: str = "capture-claude-code",
+    generation_index: int = 0,
+    event_time: str | None = None,
+    tree_id: dict[str, str] | None = None,
+    git_head: dict[str, str] | None = None,
+    limitations: list[str] | None = None,
+    boundary_firmness: str = "firm",
+    claimed_tree_id: dict[str, str] | None = None,
+) -> StepWindowOpenResult:
+    """Append a pre-tool step-window event with verified boundary state."""
+    repo = repo.resolve()
+    event_time, tree_id, git_head, limitations = _boundary_state(
+        repo,
+        event_time=event_time,
+        tree_id=tree_id,
+        git_head=git_head,
+        claimed_tree_id=claimed_tree_id,
+        limitations=limitations,
+    )
+    events = append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_step_window_opened",
+                trace_id=trace_id,
+                generation_index=generation_index,
+                step_index=step_index,
+                event_time=event_time,
+                capture_method=capture_method,
+                payload=_window_payload(
+                    repo,
+                    trace_id=trace_id,
+                    generation_index=generation_index,
+                    step_index=step_index,
+                    agent_step_id=agent_step_id,
+                    tool_call_id=tool_call_id,
+                    tree_id=tree_id,
+                    git_head=git_head,
+                    event_time=event_time,
+                    capture_method=capture_method,
+                    boundary_firmness=boundary_firmness,
+                    limitations=limitations,
+                    boundary="opened",
+                ),
+            )
+        ],
+        writer=writer,
+    )
+    return StepWindowOpenResult(
+        event_time=event_time,
+        tree_id=tree_id,
+        git_head=git_head,
+        event_id=events[0].event_id,
+    )
+
+
+def close_step_window_with_snapshot(
     repo: Path,
     *,
     trace_id: str,
@@ -94,18 +226,24 @@ def append_step_snapshot(
     writer: str = "capture-claude-code",
     generation_index: int = 0,
     capture_status: str = "captured",
+    event_time: str | None = None,
+    tree_id: dict[str, str] | None = None,
+    git_head: dict[str, str] | None = None,
     limitations: list[str] | None = None,
     boundary_firmness: str = "firm",
     claimed_tree_id: dict[str, str] | None = None,
 ) -> SnapshotResult:
-    """Capture one post-step Trace Snapshot plus its bracketing window events."""
+    """Append a post-tool snapshot plus the matching close-window event."""
     repo = repo.resolve()
-    event_time = _utc_now()
-    tree_id = write_worktree_tree(repo)
-    git_head = _head_id(repo)
-    limitations = list(limitations or [])
-    if claimed_tree_id and claimed_tree_id != tree_id:
-        limitations.append("hook_payload_state_mismatch")
+    event_time, tree_id, git_head, boundary_limitations = _boundary_state(
+        repo,
+        event_time=event_time,
+        tree_id=tree_id,
+        git_head=git_head,
+        claimed_tree_id=claimed_tree_id,
+        limitations=limitations,
+    )
+    limitations = _normalized_limitations(capture_status, boundary_limitations)
     snapshot_id = _id(
         "snapshot",
         {
@@ -120,31 +258,9 @@ def append_step_snapshot(
         f"/snapshots/step_{step_index}"
     )
 
-    window_payload = {
-        "trace_id": trace_id,
-        "generation_index": generation_index,
-        "step_index": step_index,
-        "agent_step_id": agent_step_id,
-        "tool_call_id": tool_call_id,
-        "worktree_root": str(repo),
-        "git_head": git_head,
-        "event_time": event_time,
-        "capture_method": capture_method,
-        "boundary_firmness": boundary_firmness,
-        "capture_limitations": limitations,
-    }
     append_event_batch(
         repo,
         [
-            TrailEventDraft(
-                event_type="trace_step_window_opened",
-                trace_id=trace_id,
-                generation_index=generation_index,
-                step_index=step_index,
-                event_time=event_time,
-                capture_method=capture_method,
-                payload={**window_payload, "boundary": "opened"},
-            ),
             TrailEventDraft(
                 event_type="trace_snapshot_created",
                 trace_id=trace_id,
@@ -169,13 +285,84 @@ def append_step_snapshot(
                 step_index=step_index,
                 event_time=event_time,
                 capture_method=capture_method,
-                payload={**window_payload, "boundary": "closed"},
+                payload=_window_payload(
+                    repo,
+                    trace_id=trace_id,
+                    generation_index=generation_index,
+                    step_index=step_index,
+                    agent_step_id=agent_step_id,
+                    tool_call_id=tool_call_id,
+                    tree_id=tree_id,
+                    git_head=git_head,
+                    event_time=event_time,
+                    capture_method=capture_method,
+                    boundary_firmness=boundary_firmness,
+                    limitations=limitations,
+                    boundary="closed",
+                ),
             ),
         ],
         writer=writer,
     )
     _create_snapshot_ref(repo, ref, tree_id["hex"])
     return SnapshotResult(snapshot_id=snapshot_id, tree_id=tree_id, ref=ref)
+
+
+def append_step_snapshot(
+    repo: Path,
+    *,
+    trace_id: str,
+    step_index: int,
+    agent_step_id: str,
+    tool_call_id: str,
+    capture_method: list[str],
+    writer: str = "capture-claude-code",
+    generation_index: int = 0,
+    capture_status: str = "captured",
+    limitations: list[str] | None = None,
+    boundary_firmness: str = "firm",
+    claimed_tree_id: dict[str, str] | None = None,
+    opened_event_time: str | None = None,
+    opened_tree_id: dict[str, str] | None = None,
+    opened_git_head: dict[str, str] | None = None,
+    opened_capture_method: list[str] | None = None,
+    opened_limitations: list[str] | None = None,
+) -> SnapshotResult:
+    """Compatibility helper for callers that still close from one boundary.
+
+    New hook integrations should call ``open_step_window`` at PreToolUse and
+    ``close_step_window_with_snapshot`` at PostToolUse so the wall-clock
+    interval and pre/post tree IDs reflect the real tool execution.
+    """
+    open_step_window(
+        repo,
+        trace_id=trace_id,
+        step_index=step_index,
+        agent_step_id=agent_step_id,
+        tool_call_id=tool_call_id,
+        capture_method=opened_capture_method or capture_method,
+        writer=writer,
+        generation_index=generation_index,
+        event_time=opened_event_time,
+        tree_id=opened_tree_id,
+        git_head=opened_git_head,
+        limitations=opened_limitations,
+        boundary_firmness=boundary_firmness,
+    )
+    return close_step_window_with_snapshot(
+        repo,
+        trace_id=trace_id,
+        step_index=step_index,
+        agent_step_id=agent_step_id,
+        tool_call_id=tool_call_id,
+        capture_method=capture_method,
+        writer=writer,
+        generation_index=generation_index,
+        capture_status=capture_status,
+        limitations=limitations,
+        boundary_firmness=boundary_firmness,
+        claimed_tree_id=claimed_tree_id,
+    )
 
 
 def _snapshot_for_step(events: list, trace_id: str, step_index: int) -> tuple[dict, Any] | None:

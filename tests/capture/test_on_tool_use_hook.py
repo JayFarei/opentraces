@@ -19,7 +19,7 @@ def _invoke(module_main, payload: dict, monkeypatch) -> None:
 
 
 def _read_events(transcript: Path) -> list[dict]:
-    return [json.loads(l) for l in transcript.read_text().splitlines() if l.strip()]
+    return [json.loads(line) for line in transcript.read_text().splitlines() if line.strip()]
 
 
 class TestPostToolUseEdit:
@@ -145,7 +145,6 @@ class TestHookRobustness:
         assert exc.value.code == 0
 
     def test_missing_file_on_disk_does_not_crash(self, tmp_path, monkeypatch):
-        import pytest
         from opentraces.capture.claude_code.hooks.on_tool_use import main
 
         transcript = tmp_path / "s.jsonl"
@@ -185,8 +184,34 @@ class TestHookRobustness:
             _invoke(main, payload, monkeypatch)
         except SystemExit as exc:
             assert exc.code == 0
-        # Non-file-editing tools produce no transcript event.
-        assert _read_events(transcript) == []
+        events = _read_events(transcript)
+        assert len(events) == 1
+        assert events[0]["event"] == "PostToolUse"
+        assert events[0]["data"]["tool"] == "Bash"
+        assert events[0]["data"]["capture_status"] == "hook_only"
+        assert events[0]["data"]["limitations"] == ["hook_only"]
+
+    def test_bash_mutation_without_watcher_is_hook_only(self, tmp_path, monkeypatch):
+        from opentraces.capture.claude_code.hooks.on_tool_use import main
+
+        transcript = tmp_path / "s.jsonl"
+        transcript.write_text("")
+        payload = {
+            "transcript_path": str(transcript),
+            "tool_name": "Bash",
+            "tool_use_id": "toolu_bash",
+            "tool_input": {"command": "printf generated > generated.txt"},
+            "tool_response": {"stdout": "", "stderr": ""},
+        }
+
+        _invoke(main, payload, monkeypatch)
+
+        ev = _read_events(transcript)[0]
+        assert ev["event"] == "PostToolUse"
+        assert ev["data"]["tool_use_id"] == "toolu_bash"
+        assert ev["data"]["tool_input"]["command"] == "printf generated > generated.txt"
+        assert ev["data"]["capture_status"] == "hook_only"
+        assert "hook_only" in ev["data"]["limitations"]
 
     def test_hook_runs_under_50ms_budget(self, tmp_path, monkeypatch):
         from opentraces.capture.claude_code.hooks.on_tool_use import main

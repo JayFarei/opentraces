@@ -8,7 +8,13 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from opentraces.cli import main
-from opentraces.core.trails import append_step_snapshot, read_events, write_worktree_tree
+from opentraces.core.trails import (
+    append_step_snapshot,
+    close_step_window_with_snapshot,
+    open_step_window,
+    read_events,
+    write_worktree_tree,
+)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -29,28 +35,47 @@ def test_trail_diff_between_two_step_snapshots(tmp_path: Path) -> None:
     repo = tmp_path
     _init_repo(repo)
 
-    step1 = append_step_snapshot(
+    open_step_window(
+        repo,
+        trace_id="tr-diff",
+        step_index=1,
+        agent_step_id="s1",
+        tool_call_id="tool-read",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+    step1 = close_step_window_with_snapshot(
         repo,
         trace_id="tr-diff",
         step_index=1,
         agent_step_id="s1",
         tool_call_id="tool-read",
         capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:01Z",
         capture_status="hook_only",
-        limitations=["hook_only"],
+    )
+    before_edit_tree = write_worktree_tree(repo)
+    open_step_window(
+        repo,
+        trace_id="tr-diff",
+        step_index=2,
+        agent_step_id="s2",
+        tool_call_id="tool-edit",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:02Z",
     )
     (repo / "app.py").write_text(
         "def value():\n    return 'phase-two-snapshot-diff-line'\n",
     )
-    step2 = append_step_snapshot(
+    step2 = close_step_window_with_snapshot(
         repo,
         trace_id="tr-diff",
         step_index=2,
         agent_step_id="s2",
         tool_call_id="tool-edit",
         capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:03Z",
         capture_status="hook_only",
-        limitations=["hook_only"],
     )
 
     result = CliRunner().invoke(
@@ -97,7 +122,56 @@ def test_trail_diff_between_two_step_snapshots(tmp_path: Path) -> None:
         "trace_snapshot_created",
         "trace_step_window_closed",
     ]
-    assert all(event.capture_method == ["hook_posttooluse"] for event in events)
+    assert [event.capture_method for event in events] == [
+        ["hook_pretooluse"],
+        ["hook_posttooluse"],
+        ["hook_posttooluse"],
+        ["hook_pretooluse"],
+        ["hook_posttooluse"],
+        ["hook_posttooluse"],
+    ]
+    step2_open = events[3]
+    step2_close = events[5]
+    assert step2_open.event_time < step2_close.event_time
+    assert step2_open.payload["tree_id"] == before_edit_tree
+    assert step2_close.payload["tree_id"] == step2.tree_id
+    assert step2_open.payload["tree_id"] != step2_close.payload["tree_id"]
+    assert "hook_only" in events[4].payload["limitations"]
+    assert "hook_only" in step2_close.payload["capture_limitations"]
+
+
+def test_step_window_open_tree_survives_after_refs_deleted_and_gc_runs(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    open_result = open_step_window(
+        repo,
+        trace_id="tr-pre-gc",
+        step_index=1,
+        agent_step_id="s1",
+        tool_call_id="tool-write",
+        capture_method=["hook_pretooluse"],
+    )
+    (repo / "app.py").write_text("def value():\n    return 'post tree'\n")
+    close_step_window_with_snapshot(
+        repo,
+        trace_id="tr-pre-gc",
+        step_index=1,
+        agent_step_id="s1",
+        tool_call_id="tool-write",
+        capture_method=["hook_posttooluse"],
+    )
+
+    refs = subprocess.check_output(
+        ["git", "for-each-ref", "--format=%(refname)", "refs/opentraces/local/traces"],
+        cwd=repo,
+        text=True,
+    ).splitlines()
+    for ref in refs:
+        subprocess.run(["git", "update-ref", "-d", ref], cwd=repo, check=True)
+    subprocess.run(["git", "reflog", "expire", "--expire=now", "--all"], cwd=repo, check=True)
+    subprocess.run(["git", "gc", "--prune=now", "--aggressive"], cwd=repo, check=True)
+
+    subprocess.run(["git", "cat-file", "-e", open_result.tree_id["hex"]], cwd=repo, check=True)
 
 
 def test_snapshot_subtree_survives_after_advisory_refs_deleted_and_gc_runs(tmp_path: Path) -> None:

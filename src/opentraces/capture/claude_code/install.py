@@ -33,6 +33,8 @@ from .._base import HookInstallError, HookInstallResult, HookInstaller  # noqa: 
 HOOK_SCRIPTS_DIR = Path(__file__).parent / "hooks"
 
 EVENT_SCRIPTS: dict[str, str] = {
+    "PreToolUse": "on_pre_tool_use.py",
+    "PostToolUse": "on_tool_use.py",
     "Stop": "on_stop.py",
     "PostCompact": "on_compact.py",
 }

@@ -1,7 +1,6 @@
 """CLI installers/admin group: setup, blame, resume, doctor, llm-review."""
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -64,8 +63,8 @@ def setup_group(ctx: click.Context) -> None:
     Each subcommand installs one integration:
 
     \b
-      claude-code   Stop/PostCompact hooks that capture every Claude Code
-                    session transcript so `opentraces push` can parse it.
+      claude-code   PreToolUse/PostToolUse/Stop/PostCompact hooks that capture
+                    Claude Code step boundaries and session transcripts.
       git           post-commit hook that correlates each commit to the
                     trace that produced it (via refs/notes/opentraces),
                     powering `opentraces blame` and git-linked uploads.
@@ -1790,7 +1789,6 @@ def _persist_llm_verdicts(staging_dir: Path, outcome, state) -> None:
     silently failing the gate on every push attempt.
     """
     import json as _json
-    from ..core.state import TraceStatus  # local import — lives in a func module
 
     for result in outcome.results:
         tid = result.get("trace_id")

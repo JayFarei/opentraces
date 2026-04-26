@@ -1033,6 +1033,57 @@ class TestSessionEnrichmentLines:
         assert events[0]["messages_removed"] == 30
         assert events[0]["messages_kept"] == 8
 
+    def test_opentraces_hook_pretooluse_preserves_trail_boundary(self, tmp_path):
+        lines = _make_minimal_session() + [{
+            "type": "opentraces_hook",
+            "event": "PreToolUse",
+            "timestamp": "2026-03-27T10:01:00Z",
+            "data": {
+                "tool": "Bash",
+                "tool_use_id": "toolu_pre",
+                "tool_input": {"command": "echo hi"},
+                "trail": {
+                    "worktree_root": str(tmp_path),
+                    "tree_id": {"algo": "sha1", "hex": "a" * 40},
+                    "git_head": {"algo": "sha1", "hex": "b" * 40},
+                },
+            },
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        pre = record.metadata["hook_pre_tool_use"]["toolu_pre"]
+        assert pre["timestamp"] == "2026-03-27T10:01:00Z"
+        assert pre["tool"] == "Bash"
+        assert pre["tool_input"]["command"] == "echo hi"
+        assert pre["trail"]["tree_id"]["hex"] == "a" * 40
+
+    def test_opentraces_hook_posttooluse_preserves_trail_boundary(self, tmp_path):
+        lines = _make_minimal_session() + [{
+            "type": "opentraces_hook",
+            "event": "PostToolUse",
+            "timestamp": "2026-03-27T10:01:02Z",
+            "data": {
+                "tool": "Bash",
+                "tool_use_id": "toolu_post",
+                "capture_status": "hook_only",
+                "limitations": ["hook_only"],
+                "tool_input": {"command": "echo hi"},
+                "tool_response": {"stdout": "hi\n"},
+                "trail": {
+                    "worktree_root": str(tmp_path),
+                    "tree_id": {"algo": "sha1", "hex": "c" * 40},
+                    "git_head": {"algo": "sha1", "hex": "d" * 40},
+                },
+            },
+        }]
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+        assert record is not None
+        post = record.metadata["hook_post_tool_use"]["toolu_post"]
+        assert post["timestamp"] == "2026-03-27T10:01:02Z"
+        assert post["capture_status"] == "hook_only"
+        assert post["limitations"] == ["hook_only"]
+        assert post["trail"]["tree_id"]["hex"] == "c" * 40
+
     def test_hook_stop_permission_mode_fallback(self, tmp_path):
         """Hook Stop sets permission_mode when system/init is absent."""
         lines = _make_minimal_session() + [{

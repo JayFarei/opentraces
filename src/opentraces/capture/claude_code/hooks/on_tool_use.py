@@ -32,8 +32,10 @@ so the hook never blocks Claude Code.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import mmh3
 
@@ -129,6 +131,36 @@ def _handle_write(tool_input: dict) -> dict | None:
     }
 
 
+def _git_head(cwd: Path) -> dict[str, str] | None:
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=cwd,
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).strip()
+    except Exception:
+        return None
+    return {"algo": "sha1", "hex": sha}
+
+
+def _trail_state(cwd: str | None) -> dict:
+    if not cwd:
+        return {}
+    try:
+        from opentraces.core.trails import write_worktree_tree
+
+        root = Path(cwd).resolve()
+        return {
+            "worktree_root": str(root),
+            "tree_id": write_worktree_tree(root),
+            "git_head": _git_head(root),
+        }
+    except Exception:
+        return {}
+
+
 def _dual_emit_agent_trace(cwd: str | None, data: dict, session_id: str | None) -> None:
     """Plan 041 R37: append an Agent Trace-compatible attribution line
     to `.agent-trace/traces.jsonl` in the repo root so any opentraces-
@@ -183,13 +215,27 @@ def main() -> None:
     elif tool_name == "Write":
         data = _handle_write(tool_input)
     else:
-        sys.exit(0)
+        data = {
+            "tool": tool_name or "unknown",
+            "capture_status": "hook_only",
+            "limitations": ["hook_only"],
+        }
 
     if data is None:
-        sys.exit(0)
+        data = {
+            "tool": tool_name or "unknown",
+            "capture_status": "hook_only",
+            "limitations": ["posttooluse_no_file_range"],
+            "confidence": "low",
+        }
 
     data["tool_use_id"] = tool_use_id
     data["session_id"] = session_id
+    data["tool_input"] = tool_input
+    data["tool_response"] = payload.get("tool_response") or {}
+    trail_state = _trail_state(cwd)
+    if trail_state:
+        data["trail"] = trail_state
 
     line = json.dumps({
         "type": "opentraces_hook",
@@ -204,7 +250,8 @@ def main() -> None:
     except Exception:
         pass  # Never break Claude Code on our account
 
-    _dual_emit_agent_trace(cwd, data, session_id)
+    if data.get("file_path"):
+        _dual_emit_agent_trace(cwd, data, session_id)
 
 
 if __name__ == "__main__":

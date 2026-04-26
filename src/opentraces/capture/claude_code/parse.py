@@ -196,7 +196,8 @@ class ClaudeCodeParser:
         for key in (
             "slug", "stop_reason", "is_compacted", "num_turns",
             "permission_denials", "model_usage", "permission_mode",
-            "mcp_servers", "hook_git_final", "hook_post_tool_use",
+            "mcp_servers", "hook_git_final", "hook_pre_tool_use",
+            "hook_post_tool_use",
             "compaction_events",
             "post_turn_summaries", "away_summaries", "session_errors",
         ):
@@ -494,6 +495,15 @@ class ClaudeCodeParser:
                         "messages_removed": data.get("messages_removed"),
                         "messages_kept": data.get("messages_kept"),
                     })
+                elif event == "PreToolUse":
+                    tool_use_id = data.get("tool_use_id")
+                    if tool_use_id:
+                        metadata.setdefault("hook_pre_tool_use", {})[tool_use_id] = {
+                            "timestamp": line.get("timestamp"),
+                            "tool": data.get("tool"),
+                            "tool_input": data.get("tool_input") or {},
+                            "trail": data.get("trail") or {},
+                        }
                 elif event == "PostToolUse":
                     # primary source for attribution line ranges. Keyed
                     # by tool_use_id so build_attribution can look up
@@ -501,12 +511,18 @@ class ClaudeCodeParser:
                     tool_use_id = data.get("tool_use_id")
                     if tool_use_id:
                         metadata.setdefault("hook_post_tool_use", {})[tool_use_id] = {
+                            "timestamp": line.get("timestamp"),
                             "tool": data.get("tool"),
                             "file_path": data.get("file_path"),
                             "start_line": data.get("start_line"),
                             "end_line": data.get("end_line"),
                             "content_hash": data.get("content_hash"),
                             "confidence": data.get("confidence"),
+                            "capture_status": data.get("capture_status"),
+                            "limitations": data.get("limitations") or [],
+                            "tool_input": data.get("tool_input") or {},
+                            "tool_response": data.get("tool_response") or {},
+                            "trail": data.get("trail") or {},
                         }
 
             # Extract model from assistant message lines (fallback if init missing)
