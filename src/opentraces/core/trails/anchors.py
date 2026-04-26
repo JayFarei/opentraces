@@ -85,9 +85,22 @@ def reconcile_commit_anchors(
     commit_ref: str = "HEAD",
     *,
     writer: str = "post-commit-correlator",
+    capture_method: list[str] | None = None,
+    trace_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Search existing Trace Patches against a commit and append anchor events."""
+    """Search existing Trace Patches against a commit and append anchor events.
+
+    The post-commit correlator (Phase 3) calls this with the default
+    ``capture_method=["post_commit_correlator"]`` and no trace filter.
+    Phase 5's ``trail attach`` wraps this with
+    ``capture_method=["manual_attach"]`` and a ``trace_id`` filter so the
+    user can retroactively connect one trace's evidence to one commit
+    without rewriting source events for other traces.
+    """
     repo = repo.resolve()
+    effective_capture_method = (
+        list(capture_method) if capture_method else ["post_commit_correlator"]
+    )
     commit = _git(repo, "rev-parse", commit_ref)
     commit_id = {"algo": "sha1", "hex": commit}
     diff = _git(repo, "show", "--format=", "--no-color", "-U3", commit)
@@ -98,10 +111,16 @@ def reconcile_commit_anchors(
         for event in events
         if event.event_type == "git_anchor_created"
     }
+    existing_search_keys = {
+        (event.payload.get("trace_patch_id"), (event.payload.get("search_head") or {}).get("hex"))
+        for event in events
+        if event.event_type == "git_anchor_search_completed"
+    }
     patch_events = [
         event
         for event in events
         if event.event_type == "trace_patch_created"
+        and (trace_id is None or event.trace_id == trace_id)
     ]
 
     drafts: list[TrailEventDraft] = []
@@ -109,7 +128,14 @@ def reconcile_commit_anchors(
     for patch_event in patch_events:
         patch = patch_event.payload
         trace_patch_id = patch.get("trace_patch_id")
-        if not trace_patch_id or (trace_patch_id, commit) in existing_anchor_keys:
+        if not trace_patch_id:
+            continue
+        if (trace_patch_id, commit) in existing_anchor_keys:
+            continue
+        if (trace_patch_id, commit) in existing_search_keys:
+            # A prior search for this (patch, commit) already recorded a
+            # result; don't re-emit a duplicate search event. This keeps
+            # ``trail attach`` idempotent across repeat invocations.
             continue
         match = _find_exact_anchor(patch, hunks)
         anchor_payload = None
@@ -149,7 +175,7 @@ def reconcile_commit_anchors(
                 trace_id=patch_event.trace_id,
                 generation_index=patch_event.generation_index,
                 step_index=patch_event.step_index,
-                capture_method=["post_commit_correlator"],
+                capture_method=effective_capture_method,
                 payload={
                     "trace_patch_id": trace_patch_id,
                     "search_head": commit_id,
@@ -166,7 +192,7 @@ def reconcile_commit_anchors(
                     trace_id=patch_event.trace_id,
                     generation_index=patch_event.generation_index,
                     step_index=patch_event.step_index,
-                    capture_method=["post_commit_correlator"],
+                    capture_method=effective_capture_method,
                     payload=anchor_payload,
                 )
             )

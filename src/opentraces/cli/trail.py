@@ -255,3 +255,87 @@ def diff_cmd(
             click.echo(f"  limitation: {limitation}")
         return
     click.echo(payload["trace_patch"]["patch"], nl=False)
+
+
+@trail_group.command(
+    "attach",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail attach --trace tr_abc --commit HEAD",
+        "opentraces trail attach --trace tr_abc --commit abc1234 --json",
+    ],
+    see_also=[
+        ("opentraces trail explain", "show evidence chain for a trace step."),
+        ("opentraces blame", "show commit attribution."),
+    ],
+    option_groups=[
+        ("Scope", ["trace_id", "commit", "project_dir"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.option("--trace", "trace_id", required=True, help="Trace id to attach.")
+@click.option(
+    "--commit", "commit", required=True, help="Git commit to anchor against."
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--project",
+    "project_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: CWD).",
+)
+def attach_cmd(
+    trace_id: str,
+    commit: str,
+    as_json: bool,
+    project_dir: Path | None,
+) -> None:
+    """Retroactively connect a trace's evidence to a Git commit.
+
+    Use after hook failure or partial capture: attach searches the
+    trace's Trace Patches against the commit and appends
+    manual_attach-tagged Git Anchor events to the canonical event log.
+    Source TrailEvents are never rewritten; the operation is fully
+    append-only and idempotent.
+    """
+    from ..core.trails import attach_trace_to_commit
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+    try:
+        created = attach_trace_to_commit(repo, trace_id, commit)
+    except ValueError as exc:
+        click.echo(f"Trace Trail event log is invalid: {exc}", err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to attach trace: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "trace_id": trace_id,
+                    "commit_ref": commit,
+                    "created_anchors": created,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+
+    if not created:
+        click.echo(f"No new anchors for trace {trace_id} at {commit[:12]}.")
+        click.echo(
+            "  (already attached, no matching patches, or no exact-range match found)"
+        )
+        return
+    click.echo(f"Attached {len(created)} anchor(s) for trace {trace_id}:")
+    for anchor in created:
+        path = anchor.get("path") or "?"
+        sha = ((anchor.get("commit_id") or {}).get("hex") or commit)[:12]
+        click.echo(
+            f"  {anchor.get('git_anchor_id')} → {sha} {path} "
+            f"({anchor.get('evidence_tier')})"
+        )

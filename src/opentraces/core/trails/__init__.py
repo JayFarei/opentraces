@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .anchors import reconcile_commit_anchors
+from .attach import attach_trace_to_commit
 from .capture_limitations import (
     CAPTURE_LIMITATIONS,
     assert_known_capture_limitations,
@@ -44,6 +45,7 @@ __all__ = [
     "append_exact_patch_trail",
     "append_step_snapshot",
     "assert_known_capture_limitations",
+    "attach_trace_to_commit",
     "is_known_capture_limitation",
     "close_step_window_with_snapshot",
     "diff_step_snapshots",
