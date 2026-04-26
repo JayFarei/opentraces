@@ -108,10 +108,14 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
             "trace_id": trace_id,
             "step_id": f"step_{step_index}",
             "step_index": step_index,
+            "generation_index": None,
             "relation": "unknown",
             "patch_status": "unknown",
             "trace_patch_id": None,
             "git_anchor_id": None,
+            "containing_segment_id": None,
+            "trace_slice": None,
+            "resource_refs": {},
             "evidence_tier": "unknown",
             "evidence_firmness": "unknown",
             "limitations": ["no_trace_patch_event"],
@@ -147,7 +151,6 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
         evidence_tier = anchor.get("evidence_tier") or "unknown"
         evidence_firmness = anchor.get("evidence_firmness") or "unknown"
         git_anchor_id = anchor.get("git_anchor_id")
-        git_anchor = _git_anchor_view(anchor)
         if len(anchor_pairs) > 1:
             limitations.append("multiple_candidate_commits")
     else:
@@ -166,8 +169,11 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
         _git_anchor_view(anchor, containing_segment_id=containing_segment_id)
         for anchor, _event in anchor_pairs
     ]
-    if git_anchor is not None:
-        git_anchor["containing_segment_id"] = containing_segment_id
+    if anchor_pair:
+        git_anchor = _git_anchor_view(
+            anchor_pair[0],
+            containing_segment_id=containing_segment_id,
+        )
     affected_range = patch["affected_range"]
     return {
         "trace_id": trace_id,
