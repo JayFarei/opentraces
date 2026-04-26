@@ -454,3 +454,108 @@ def test_watcher_observation_alone_does_not_assign_attribution(
     # evidence, the reconciler refuses to fabricate attribution.
     patch_events = [e for e in events if e.event_type == "trace_patch_created"]
     assert patch_events == []
+
+
+def test_mutation_overlapping_two_writers_records_concurrent_writer_overlap(
+    tmp_path: Path,
+) -> None:
+    """Plan §Phase 5 edge fixture #2.
+
+    Two writers' firm step windows both fully contain one mutation; the
+    reconciler must record ``concurrent_writer_overlap`` and not pick a
+    winner. A third "open but never closed" window must be excluded from
+    the candidate set per ``_matching_windows`` requiring both endpoints.
+    """
+    _init_repo(tmp_path)
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "x\n"))
+
+    # Writer A: tr1 step 1, window 10:00:00 → 10:00:10
+    open_step_window(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tcA",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tcA",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+    )
+
+    # Writer B: tr2 step 1, window 10:00:02 → 10:00:09
+    open_step_window(
+        tmp_path,
+        trace_id="tr2",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tcB",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:02Z",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr2",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tcB",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:09Z",
+    )
+
+    # Writer C: opened but never closed. Must NOT count as a candidate.
+    open_step_window(
+        tmp_path,
+        trace_id="tr3",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tcC",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+
+    # Observation 10:00:03 → 10:00:08, fully inside both A and B (and C if
+    # it had a close, but C never closed).
+    append_filesystem_mutation_observed(
+        tmp_path,
+        path="shared.py",
+        observed_at_start="2026-04-26T10:00:03Z",
+        observed_at_end="2026-04-26T10:00:08Z",
+        after_blob_id=after_blob,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["concurrent_writer_overlap"] == 1
+    assert summary["attributed"] == 0
+    assert summary["unbounded_mutation_window"] == 0
+    assert summary["patches_upgraded"] == 0
+
+    events = read_events(tmp_path)
+    attributions = [
+        e for e in events if e.event_type == "watcher_observation_attributed"
+    ]
+    assert len(attributions) == 1
+    attribution = attributions[0]
+    assert attribution.payload["result"] == "ambiguous"
+    assert attribution.payload["capture_limitations"] == [
+        "concurrent_writer_overlap"
+    ]
+    assert attribution.trace_id is None
+    assert attribution.step_index is None
+
+    # Exactly two candidates — open-but-unclosed C is excluded.
+    candidates = attribution.payload["candidate_windows"]
+    assert len(candidates) == 2
+    candidate_keys = {
+        (c["trace_id"], c["generation_index"], c["step_index"]) for c in candidates
+    }
+    assert candidate_keys == {("tr1", 0, 1), ("tr2", 0, 1)}
+
+    patch_events = [e for e in events if e.event_type == "trace_patch_created"]
+    assert patch_events == []
