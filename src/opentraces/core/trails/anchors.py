@@ -12,7 +12,7 @@ from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
 from .event_log import append_event_batch, read_events
 from .models import GitObjectID, TrailEventDraft
 
-ANCHOR_ALGORITHMS_PHASE3 = ["exact_range_hash", "hunk_range_hash", "stable_patch_id"]
+ANCHOR_ALGORITHMS_PHASE3 = ["exact_range_hash"]
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> str:

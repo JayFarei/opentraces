@@ -186,6 +186,12 @@ def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:
     ]
     assert search_events
     assert search_events[0]["result"] == "unknown"
+    stored_search_events = [
+        event for event in read_events(repo)
+        if event.event_type == "git_anchor_search_completed"
+        and event.payload["trace_patch_id"] == "tracepatch-sha256:orphan"
+    ]
+    assert stored_search_events[0].payload["algorithms_attempted"] == ["exact_range_hash"]
 
 
 def test_many_trace_patches_in_one_commit(tmp_path: Path) -> None:
@@ -270,6 +276,8 @@ def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
                 capture_method=["hook_posttooluse"],
                 payload={
                     "trace_patch_id": "tracepatch-sha256:repeat",
+                    "snapshot_before_id": "snapshot-before-repeat",
+                    "snapshot_after_id": "snapshot-after-repeat",
                     "file_path": "app.py",
                     "affected_range": {"start_line": 2, "end_line": 2},
                     "authored_text": authored,
@@ -340,3 +348,27 @@ def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
     payload = json.loads(result.output)
     assert payload["commit_sha"] == second_commit
     assert payload["trace_patches"][0]["trace_patch_id"] == "tracepatch-sha256:repeat"
+
+    trace_result = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "explain",
+            "--trace",
+            "tr-repeat",
+            "--step",
+            "1",
+            "--json",
+            "--project",
+            str(repo),
+        ],
+    )
+    assert trace_result.exit_code == 0, trace_result.output
+    trace_payload = json.loads(trace_result.output)
+    assert [anchor["commit_sha"] for anchor in trace_payload["git_anchors"]] == [
+        first_commit,
+        second_commit,
+    ]
+    assert trace_payload["git_anchor"]["commit_sha"] == second_commit
+    assert trace_payload["git_anchor_id"] == trace_payload["git_anchors"][-1]["git_anchor_id"]
+    assert "multiple_candidate_commits" in trace_payload["limitations"]

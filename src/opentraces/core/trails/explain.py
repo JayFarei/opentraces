@@ -21,6 +21,22 @@ def _source_event(event: TrailEvent) -> dict[str, Any]:
     return out
 
 
+def _git_anchor_view(anchor: dict[str, Any]) -> dict[str, Any]:
+    evidence_tier = anchor.get("evidence_tier") or "unknown"
+    evidence_firmness = anchor.get("evidence_firmness") or "unknown"
+    return {
+        "git_anchor_id": anchor.get("git_anchor_id"),
+        "commit_id": anchor.get("commit_id"),
+        "commit_sha": (anchor.get("commit_id") or {}).get("hex"),
+        "path": anchor.get("path"),
+        "range": anchor.get("range"),
+        "blob_id": anchor.get("blob_id"),
+        "evidence_tier": evidence_tier,
+        "evidence_firmness": evidence_firmness,
+        "limitations": anchor.get("limitations") or [],
+    }
+
+
 def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, Any]:
     """Explain a trace step by rebuilding state from the local event log."""
     events = read_events(repo)
@@ -61,7 +77,11 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
     patch, patch_event = patch_pair
     before_pair = snapshots.get(patch["snapshot_before_id"])
     after_pair = snapshots.get(patch["snapshot_after_id"])
-    anchor_pair = next(iter(anchors_by_patch.get(patch["trace_patch_id"], [])), None)
+    anchor_pairs = sorted(
+        anchors_by_patch.get(patch["trace_patch_id"], []),
+        key=lambda pair: pair[1].event_sequence,
+    )
+    anchor_pair = anchor_pairs[-1] if anchor_pairs else None
     source_events = []
     if before_pair:
         source_events.append(_source_event(before_pair[1]))
@@ -75,24 +95,17 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
     git_anchor = None
     git_anchor_id = None
     limitations = list(patch.get("limitations") or [])
+    git_anchors = [_git_anchor_view(anchor) for anchor, _event in anchor_pairs]
     if anchor_pair:
         anchor, anchor_event = anchor_pair
-        source_events.append(_source_event(anchor_event))
+        source_events.extend(_source_event(event) for _anchor, event in anchor_pairs)
         relation = anchor.get("relation") or "anchored_in_git"
         evidence_tier = anchor.get("evidence_tier") or "unknown"
         evidence_firmness = anchor.get("evidence_firmness") or "unknown"
         git_anchor_id = anchor.get("git_anchor_id")
-        git_anchor = {
-            "git_anchor_id": git_anchor_id,
-            "commit_id": anchor.get("commit_id"),
-            "commit_sha": (anchor.get("commit_id") or {}).get("hex"),
-            "path": anchor.get("path"),
-            "range": anchor.get("range"),
-            "blob_id": anchor.get("blob_id"),
-            "evidence_tier": evidence_tier,
-            "evidence_firmness": evidence_firmness,
-            "limitations": anchor.get("limitations") or [],
-        }
+        git_anchor = _git_anchor_view(anchor)
+        if len(anchor_pairs) > 1:
+            limitations.append("multiple_candidate_commits")
     else:
         limitations.append("git_anchor_unknown")
 
@@ -115,6 +128,7 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
         "after_blob_id": patch.get("after_blob_id"),
         "git_anchor_id": git_anchor_id,
         "git_anchor": git_anchor,
+        "git_anchors": git_anchors,
         "limitations": limitations,
         "event_log_ref": EVENT_LOG_REF,
         "source_events": source_events,
