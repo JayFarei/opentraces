@@ -456,6 +456,101 @@ def test_watcher_observation_alone_does_not_assign_attribution(
     assert patch_events == []
 
 
+def test_mutation_outside_step_windows_records_unbounded_mutation_window(
+    tmp_path: Path,
+) -> None:
+    """Plan §Phase 5 edge fixture #3.
+
+    Three observations stress the interval-boundary semantics of
+    ``_interval_within``:
+
+    * After-close: ``obs.start > win.end`` → unattributed.
+    * Crosses-open: ``obs.start < win.start`` (even when ``obs.end ==
+      win.start``) → unattributed because the obs began before the window.
+    * Wider-than-window: obs spans the window (``obs.start <= win.start``
+      *and* ``obs.end > win.end``) → unattributed because containment is
+      unidirectional — the window must contain the observation, not the
+      reverse.
+
+    Together these pin that ``_interval_within`` is strict containment,
+    not bidirectional overlap. A sloppy implementation using
+    ``not (a.end < b.start or a.start > b.end)`` would falsely attribute
+    crosses-open and wider-than-window cases.
+    """
+    _init_repo(tmp_path)
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "x\n"))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:05Z",
+    )
+
+    after_close = append_filesystem_mutation_observed(
+        tmp_path,
+        path="late.txt",
+        observed_at_start="2026-04-26T10:00:05.000001Z",
+        observed_at_end="2026-04-26T10:00:06Z",
+        after_blob_id=after_blob,
+    )
+    crosses_open = append_filesystem_mutation_observed(
+        tmp_path,
+        path="early.txt",
+        observed_at_start="2026-04-26T09:59:59Z",
+        observed_at_end="2026-04-26T10:00:00Z",
+        after_blob_id=after_blob,
+    )
+    wider_than_window = append_filesystem_mutation_observed(
+        tmp_path,
+        path="wide.txt",
+        observed_at_start="2026-04-26T10:00:00Z",
+        observed_at_end="2026-04-26T10:00:06Z",
+        after_blob_id=after_blob,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["unbounded_mutation_window"] == 3
+    assert summary["attributed"] == 0
+    assert summary["concurrent_writer_overlap"] == 0
+    assert summary["patches_upgraded"] == 0
+
+    events = read_events(tmp_path)
+    attributions = [
+        e for e in events if e.event_type == "watcher_observation_attributed"
+    ]
+    assert len(attributions) == 3
+    assert {a.payload["result"] for a in attributions} == {"unattributed"}
+    for attribution in attributions:
+        assert attribution.payload["capture_limitations"] == [
+            "unbounded_mutation_window"
+        ]
+        assert attribution.trace_id is None
+        assert attribution.step_index is None
+
+    observation_ids_seen = {a.payload["observation_event_id"] for a in attributions}
+    assert observation_ids_seen == {
+        after_close.event_id,
+        crosses_open.event_id,
+        wider_than_window.event_id,
+    }
+
+    patch_events = [e for e in events if e.event_type == "trace_patch_created"]
+    assert patch_events == []
+
+
 def test_mutation_overlapping_two_writers_records_concurrent_writer_overlap(
     tmp_path: Path,
 ) -> None:
