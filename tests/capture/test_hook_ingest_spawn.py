@@ -3,10 +3,10 @@
 The Stop hook's primary job is still to append the opentraces_hook
 metadata line (git state at turn-end). Phase 2 adds a fire-and-forget
 ``opentraces _ingest-session <transcript>`` call so a fresh turn's
-content lands in the inbox in ~seconds rather than ~minutes. The
-subprocess is detached (start_new_session) so Claude Code never waits
-on it; failures are swallowed so a missing ``opentraces`` binary
-can't break the user's session.
+    content lands in the inbox in ~seconds rather than ~minutes. The
+    subprocess is detached (start_new_session) so Claude Code never waits
+    on it; failures are swallowed so ingestion issues can't break the
+    user's session.
 """
 
 from __future__ import annotations
@@ -51,10 +51,9 @@ class TestStopHookSpawnsIngest:
         """After writing the Stop metadata line, the hook must fire
         ``opentraces _ingest-session <path>`` as a detached subprocess.
 
-        We verify by intercepting ``shutil.which`` and ``subprocess.Popen``
-        at the hook's import scope — inspecting the command it would have
-        run. The real Popen is never invoked (no opentraces binary is
-        needed for the test).
+        We verify by intercepting ``subprocess.Popen`` at the hook's import
+        scope — inspecting the command it would have run. The real Popen is
+        never invoked.
         """
         transcript = tmp_path / "sess.jsonl"
         transcript.write_text("")  # start empty
@@ -71,9 +70,6 @@ class TestStopHookSpawnsIngest:
             def __init__(self, argv, **kwargs):
                 popen_calls.append(list(argv))
 
-        monkeypatch.setattr("shutil.which",
-                            lambda name: "/fake/bin/opentraces"
-                            if name == "opentraces" else None)
         monkeypatch.setattr("subprocess.Popen", _FakePopen)
 
         spec.loader.exec_module(mod)
@@ -100,19 +96,21 @@ class TestStopHookSpawnsIngest:
         # Subprocess spawn was attempted. Filter out the inner git calls
         # _git_info makes (it uses subprocess.check_output, which goes
         # through Popen too).
-        ingest_calls = [c for c in popen_calls if c and "opentraces" in c[0]]
+        ingest_calls = [
+            c for c in popen_calls
+            if "-m" in c and "opentraces" in c and "_ingest-session" in c
+        ]
         assert len(ingest_calls) == 1, (
             f"expected one Popen for _ingest-session, got {popen_calls}"
         )
         argv = ingest_calls[0]
-        assert argv[0] == "/fake/bin/opentraces"
-        assert "_ingest-session" in argv
+        assert argv[:4] == [sys.executable, "-m", "opentraces", "_ingest-session"]
         assert str(transcript) in argv
 
-    def test_hook_tolerates_missing_opentraces_binary(
+    def test_hook_tolerates_ingest_spawn_failure(
         self, tmp_path, monkeypatch
     ) -> None:
-        """When the CLI isn't on PATH, the hook must still write the
+        """When ingestion cannot spawn, the hook must still write the
         metadata line and exit 0 without raising."""
         transcript = tmp_path / "sess.jsonl"
         transcript.write_text("")
@@ -123,18 +121,13 @@ class TestStopHookSpawnsIngest:
         )
         mod = importlib.util.module_from_spec(spec)
 
-        monkeypatch.setattr("shutil.which", lambda _name: None)
-
-        # _git_info uses subprocess.check_output under the hood (which
-        # itself uses Popen) to read git state. Track those separately
-        # so we can assert "no OPENTRACES spawn" without also blocking
-        # git.
         real_popen = subprocess.Popen
-        popen_calls: list[list[str]] = []
 
         class _TrackedPopen(real_popen):
             def __init__(self, argv, **kwargs):
-                popen_calls.append(list(argv) if not isinstance(argv, str) else [argv])
+                normalized = list(argv) if not isinstance(argv, str) else [argv]
+                if "-m" in normalized and "opentraces" in normalized:
+                    raise OSError("simulated ingest spawn failure")
                 super().__init__(argv, **kwargs)
 
         monkeypatch.setattr("subprocess.Popen", _TrackedPopen)
@@ -153,8 +146,3 @@ class TestStopHookSpawnsIngest:
 
         written = transcript.read_text().strip().splitlines()
         assert len(written) == 1, "metadata line must still be written"
-
-        # No opentraces spawn attempted (binary unavailable).
-        ingest_calls = [c for c in popen_calls
-                        if c and "opentraces" in str(c[0])]
-        assert ingest_calls == []

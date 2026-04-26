@@ -57,6 +57,7 @@ line-length = 100
 testpaths = ["tests"]
 markers = [
     "real_repl: scenario drives a real claude REPL via tmux (opt-in via OT_REAL_REPL=1)",
+    "trail_real_repl: scenario drives real Claude/tmux and asserts Trace Trails CLI JSON (also opt-in via OT_TRAIL_REAL_REPL=1)",
     "regression_gate: cherry-picked spike-regression scenarios (plan 043 no-regression gate)",
     "perf: deterministic latency and memory performance harness",
     "user_smoke: opt-in tmux/browser user smoke coverage",

@@ -7,6 +7,8 @@ expected exit codes. These are regression guards, not behavior tests.
 from __future__ import annotations
 
 import json
+import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -869,6 +871,49 @@ class TestHooksCommands:
         assert len(settings["hooks"]["PostToolUse"]) == 1
         assert len(settings["hooks"]["Stop"]) == 1
         assert len(settings["hooks"]["PostCompact"]) == 1
+
+    def test_hooks_install_uses_current_python_interpreter(self, tmp_path, runner):
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        result = runner.invoke(main, [
+            "setup", "claude-code",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        assert result.exit_code == 0
+        settings = json.loads(settings_file.read_text())
+        expected_prefix = f"{shlex.quote(sys.executable)} "
+        for entries in settings["hooks"].values():
+            command = entries[0]["hooks"][0]["command"]
+            assert command.startswith(expected_prefix)
+
+    def test_hooks_install_replaces_stale_python3_hook_commands(self, tmp_path, runner):
+        hooks_dir = tmp_path / "hooks"
+        settings_file = tmp_path / "settings.json"
+        stale = f"python3 {hooks_dir}/opentraces_on_tool_use.py"
+        settings_file.write_text(json.dumps({
+            "hooks": {
+                "PostToolUse": [
+                    {"hooks": [{"type": "command", "command": stale}]},
+                    {"hooks": [{"type": "command", "command": "echo keep-me"}]},
+                ],
+            },
+        }))
+        result = runner.invoke(main, [
+            "setup", "claude-code",
+            "--hooks-dir", str(hooks_dir),
+            "--settings-file", str(settings_file),
+        ])
+        assert result.exit_code == 0
+        settings = json.loads(settings_file.read_text())
+        commands = [
+            hook["command"]
+            for entry in settings["hooks"]["PostToolUse"]
+            for hook in entry["hooks"]
+        ]
+        assert stale not in commands
+        assert "echo keep-me" in commands
+        assert any(command.startswith(f"{shlex.quote(sys.executable)} ") for command in commands)
 
     def test_hooks_install_merges_with_existing_hooks(self, tmp_path, runner):
         """Existing hooks in settings.json are preserved."""

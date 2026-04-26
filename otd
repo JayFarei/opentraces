@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # otd — dev-binary shim for the in-tree opentraces CLI.
 #
-# Invokes `python -m opentraces.cli` against the working-copy code, with
+# Invokes the in-tree opentraces Click entry point against working-copy code, with
 # no publish step. Use this everywhere a test or a manual check would
 # otherwise call `ot`; `otd` guarantees you're exercising the branch under
 # test, not a stale installed binary.
@@ -24,4 +24,4 @@ else
     PY="python3"
 fi
 
-exec "$PY" -c 'from opentraces.cli import main; raise SystemExit(main())' "$@"
+exec "$PY" -c 'from opentraces.cli import main; raise SystemExit(main(prog_name="otd"))' "$@"

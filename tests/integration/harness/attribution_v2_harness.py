@@ -137,6 +137,49 @@ def _run(cmd, cwd=None, env=None, check=True, verbose=False):
     return r
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+def _otd_path() -> Path:
+    return _repo_root() / "otd"
+
+
+def _json_from_stdout(stdout: str) -> dict:
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError:
+        idx = stdout.rfind("\n{")
+        if idx == -1:
+            idx = stdout.find("{")
+        if idx == -1:
+            raise
+        return json.loads(stdout[idx:])
+
+
+def _run_otd_json(state, args: list[str]) -> dict:
+    r = subprocess.run(
+        [str(_otd_path()), *args],
+        cwd=state.project_dir,
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        raise AssertionError(
+            f"otd {' '.join(args)} failed with {r.returncode}\n"
+            f"stdout={r.stdout[:500]!r}\nstderr={r.stderr[:500]!r}"
+        )
+    return _json_from_stdout(r.stdout)
+
+
+def _rev_parse(project_dir: Path, ref: str) -> str:
+    return subprocess.check_output(
+        ["git", "rev-parse", ref],
+        cwd=project_dir,
+        text=True,
+    ).strip()
+
+
 def _proj_dir_for(project_cwd: Path) -> Path:
     return Path.home() / ".claude" / "projects" / _enc(project_cwd)
 
@@ -183,7 +226,7 @@ class ClaudeContext:
                 if self.verbose:
                     print(f"  [{self.name}] welcome screen ready",
                           file=sys.stderr)
-                time.sleep(1.0)
+                time.sleep(3.0)
                 return
             # Trust prompt? Dismiss it.
             if not trust_handled and (
@@ -207,6 +250,7 @@ class ClaudeContext:
             print(f"  [{self.name}] → {short}", file=sys.stderr)
         _run([TMUX, "send-keys", "-t", self.name, "-l", text])
         _run([TMUX, "send-keys", "-t", self.name, "Enter"])
+        time.sleep(0.5)
         # Slash commands (/clear, /compact, etc.) are local UI actions that
         # don't produce assistant turns, so JSONL-growth detection never
         # triggers. Use a short fixed pause. For /clear specifically, the
@@ -241,7 +285,7 @@ class ClaudeContext:
             time.sleep(POLL_INTERVAL)
         raise TimeoutError(f"[{self.name}] prompt didn't complete in {timeout}s")
 
-    def _discover_jsonl(self, timeout: float = 30) -> None:
+    def _discover_jsonl(self, timeout: float = 60) -> None:
         proj = _proj_dir_for(self.project_dir)
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -346,6 +390,9 @@ class RunState:
     # Plan-043 phase 1 additions — populated by run_backfill / invoke_cli.
     backfill_reports: list = field(default_factory=list)
     last_cli: dict = field(default_factory=dict)
+    trail_selection: dict[str, dict] = field(default_factory=dict)
+    trail_no_patch_selection: dict[str, dict] = field(default_factory=dict)
+    trail_json: dict[str, dict] = field(default_factory=dict)
 
 
 # --- step implementations ---
@@ -511,6 +558,30 @@ def _step_run_backfill(state: RunState, params: dict) -> None:
     state.backfill_reports.append(report)
 
 
+def _step_trail_preflight(state: RunState, params: dict) -> None:
+    """Verify and optionally install the local dev CLI path for a real scenario."""
+    expected_version = params.get("expected_version")
+    version = _run([str(_otd_path()), "--version"], cwd=state.project_dir)
+    if expected_version and expected_version not in version.stdout:
+        raise AssertionError(
+            f"expected otd version containing {expected_version!r}, "
+            f"got {version.stdout.strip()!r}"
+        )
+    if params.get("setup_claude_code", True):
+        _run([str(_otd_path()), "setup", "claude-code"], cwd=state.project_dir)
+    if params.get("setup_git", True):
+        _run([str(_otd_path()), "setup", "git"], cwd=state.project_dir)
+        owned = state.project_dir / ".git" / "hooks" / "opentraces-post-commit"
+        if not owned.exists():
+            raise AssertionError(f"git hook was not installed at {owned}")
+    if params.get("doctor", False):
+        _run(
+            [str(_otd_path()), "doctor"],
+            cwd=state.project_dir,
+            check=bool(params.get("doctor_check", False)),
+        )
+
+
 def _step_invoke_cli(state: RunState, params: dict) -> None:
     """Run ``./otd <args...>`` via subprocess, capture stdout/stderr/exit.
 
@@ -537,6 +608,151 @@ def _step_invoke_cli(state: RunState, params: dict) -> None:
         "stderr": r.stderr,
         "returncode": r.returncode,
     }
+
+
+def _trace_ids_for_label(state: RunState, label: str) -> set[str]:
+    session_or_trace_ids = state.label_to_trace.get(label)
+    if not session_or_trace_ids:
+        raise AssertionError(
+            f"trace label {label!r} not resolved; known labels: "
+            f"{sorted(state.label_to_trace)}"
+        )
+    trace_ids = set(session_or_trace_ids)
+    try:
+        from opentraces.core.config import get_project_traces_dir
+
+        for path in get_project_traces_dir(state.project_dir).glob("*.jsonl"):
+            data = json.loads(path.read_text())
+            if data.get("session_id") in session_or_trace_ids and data.get("trace_id"):
+                trace_ids.add(data["trace_id"])
+    except Exception:
+        pass
+    return trace_ids
+
+
+def _read_trail_events(state: RunState):
+    from opentraces.core.trails import read_events
+
+    return read_events(state.project_dir)
+
+
+def _find_patch_event(events, trace_ids: set[str], params: dict):
+    file_path = params.get("file")
+    contains = params.get("contains")
+    for event in reversed(events):
+        if event.event_type != "trace_patch_created":
+            continue
+        if event.trace_id not in trace_ids:
+            continue
+        payload = event.payload
+        if file_path and payload.get("file_path") != file_path:
+            continue
+        if contains and contains not in json.dumps(payload, sort_keys=True):
+            continue
+        return event
+    return None
+
+
+def _latest_anchor_for_patch(events, trace_patch_id: str):
+    for event in reversed(events):
+        if event.event_type != "git_anchor_created":
+            continue
+        if event.payload.get("trace_patch_id") == trace_patch_id:
+            return event
+    return None
+
+
+def _wait_for_trail_patch(state: RunState, params: dict) -> tuple[object, object | None]:
+    label = params["trace"]
+    trace_ids = _trace_ids_for_label(state, label)
+    require_anchor = bool(params.get("require_anchor", False))
+    timeout = float(params.get("timeout", 30))
+    deadline = time.time() + timeout
+    last_event_count = 0
+    while time.time() < deadline:
+        events = _read_trail_events(state)
+        last_event_count = len(events)
+        patch_event = _find_patch_event(events, trace_ids, params)
+        if patch_event is not None:
+            anchor_event = _latest_anchor_for_patch(
+                events,
+                patch_event.payload["trace_patch_id"],
+            )
+            if not require_anchor or anchor_event is not None:
+                return patch_event, anchor_event
+        time.sleep(POLL_INTERVAL)
+    raise AssertionError(
+        f"no matching Trace Patch for trace={label!r} "
+        f"file={params.get('file')!r} contains={params.get('contains')!r} "
+        f"require_anchor={require_anchor} after {timeout}s "
+        f"(events={last_event_count})"
+    )
+
+
+def _selection_from_patch_event(patch_event, anchor_event=None) -> dict:
+    payload = patch_event.payload
+    affected = payload.get("affected_range") or {}
+    selected = {
+        "trace_id": patch_event.trace_id,
+        "step_index": patch_event.step_index,
+        "trace_patch_id": payload.get("trace_patch_id"),
+        "file_path": payload.get("file_path"),
+        "line": affected.get("start_line"),
+        "affected_range": affected,
+    }
+    if anchor_event is not None:
+        selected["git_anchor_id"] = anchor_event.payload.get("git_anchor_id")
+    return selected
+
+
+def _step_trail_select_patch(state: RunState, params: dict) -> None:
+    patch_event, anchor_event = _wait_for_trail_patch(state, params)
+    name = params.get("name", "selected")
+    state.trail_selection[name] = _selection_from_patch_event(patch_event, anchor_event)
+
+
+def _find_no_patch_step(events, trace_ids: set[str]):
+    patched_steps = {
+        (event.trace_id, event.step_index)
+        for event in events
+        if event.event_type == "trace_patch_created"
+    }
+    for event in reversed(events):
+        if event.trace_id not in trace_ids or event.step_index is None:
+            continue
+        if (event.trace_id, event.step_index) in patched_steps:
+            continue
+        if event.event_type in {
+            "trace_snapshot_created",
+            "trace_step_window_opened",
+            "trace_step_window_closed",
+            "trace_session_closed",
+        }:
+            return event
+    return None
+
+
+def _step_trail_select_no_patch_step(state: RunState, params: dict) -> None:
+    label = params["trace"]
+    trace_ids = _trace_ids_for_label(state, label)
+    timeout = float(params.get("timeout", 30))
+    deadline = time.time() + timeout
+    last_event_count = 0
+    while time.time() < deadline:
+        events = _read_trail_events(state)
+        last_event_count = len(events)
+        event = _find_no_patch_step(events, trace_ids)
+        if event is not None:
+            state.trail_no_patch_selection[label] = {
+                "trace_id": event.trace_id,
+                "step_index": event.step_index,
+            }
+            return
+        time.sleep(POLL_INTERVAL)
+    raise AssertionError(
+        f"no no-patch step found for trace={label!r} after {timeout}s "
+        f"(events={last_event_count})"
+    )
 
 
 def _step_mock_stdin(state: RunState, params: dict) -> None:
@@ -675,6 +891,9 @@ STEP_HANDLERS = {
     "stop_watcher": _step_stop_watcher,
     "init_opentraces": _step_init_opentraces,
     "run_backfill": _step_run_backfill,
+    "trail_preflight": _step_trail_preflight,
+    "trail_select_patch": _step_trail_select_patch,
+    "trail_select_no_patch_step": _step_trail_select_no_patch_step,
     "invoke_cli": _step_invoke_cli,
     "delete_cache_entry": _step_delete_cache_entry,
     "write_attribution": _step_write_attribution,
@@ -695,6 +914,16 @@ def execute_step(state: RunState, step: dict) -> None:
 
 # --- assertion implementation ---
 
+TRAIL_ASSERTION_KINDS = {
+    "trail_trace_step_explain",
+    "trail_commit_explain",
+    "trail_commit_excludes_selection",
+    "trail_commit_patch_count",
+    "trail_file_line_explain",
+    "trail_resolve_all_resource_refs",
+    "trail_no_patch_step",
+}
+
 def _resolve_trace(state: RunState, label: str) -> set[str] | None:
     if label == "pre-audit":
         return None  # signal special handling
@@ -708,6 +937,219 @@ def _attribution_for(state: RunState, ref: str = "HEAD") -> dict:
     return json.loads(r.stdout)
 
 
+def _trail_selection(state: RunState, name: str = "selected") -> dict:
+    if name not in state.trail_selection:
+        raise AssertionError(
+            f"trail selection {name!r} not found; known selections: "
+            f"{sorted(state.trail_selection)}"
+        )
+    return state.trail_selection[name]
+
+
+def _require_containing_segment(payload: dict, context: str) -> None:
+    if not payload.get("containing_segment_id"):
+        raise AssertionError(f"{context}: missing containing_segment_id")
+
+
+def _trail_trace_step_payload(state: RunState, selection_name: str = "selected") -> dict:
+    cache_key = f"trace_step:{selection_name}"
+    if cache_key in state.trail_json:
+        return state.trail_json[cache_key]
+    sel = _trail_selection(state, selection_name)
+    payload = _run_otd_json(
+        state,
+        [
+            "trail",
+            "explain",
+            "--trace",
+            str(sel["trace_id"]),
+            "--step",
+            str(sel["step_index"]),
+            "--json",
+        ],
+    )
+    state.trail_json[cache_key] = payload
+    return payload
+
+
+def _assert_trail_scenario(state: RunState, a: dict) -> str:
+    kind = a.get("kind")
+    selection_name = a.get("selection", "selected")
+    if kind == "trail_trace_step_explain":
+        sel = _trail_selection(state, selection_name)
+        payload = _trail_trace_step_payload(state, selection_name)
+        if payload.get("trace_patch_id") != sel.get("trace_patch_id"):
+            raise AssertionError(
+                "trail trace-step explain returned wrong patch: "
+                f"expected {sel.get('trace_patch_id')}, got {payload.get('trace_patch_id')}"
+            )
+        for field in ("relation", "patch_status", "evidence_tier"):
+            if field in a and payload.get(field) != a[field]:
+                raise AssertionError(
+                    f"trail trace-step {field}: expected {a[field]!r}, "
+                    f"got {payload.get(field)!r}"
+                )
+        if a.get("requires_containing_segment_id", False):
+            _require_containing_segment(payload, "trail trace-step explain")
+        if a.get("requires_git_anchor", True) and not payload.get("git_anchor_id"):
+            raise AssertionError("trail trace-step explain missing git_anchor_id")
+        if a.get("requires_no_git_anchor", False) and payload.get("git_anchor_id"):
+            raise AssertionError(
+                f"trail trace-step unexpectedly had git_anchor_id={payload.get('git_anchor_id')}"
+            )
+        if "requires_limitation" in a:
+            limitation = a["requires_limitation"]
+            limitations = payload.get("limitations") or []
+            if limitation not in limitations:
+                raise AssertionError(
+                    f"trail trace-step missing limitation {limitation!r}; "
+                    f"got {limitations!r}"
+                )
+        return (
+            "trail explain --trace/--step "
+            f"{payload.get('relation')} {payload.get('trace_patch_id')} ✓"
+        )
+
+    if kind == "trail_commit_explain":
+        sel = _trail_selection(state, selection_name)
+        ref = a.get("ref", "HEAD")
+        payload = _run_otd_json(
+            state,
+            ["trail", "explain", "--commit", ref, "--json"],
+        )
+        expected_sha = _rev_parse(state.project_dir, ref)
+        if payload.get("commit_sha") != expected_sha:
+            raise AssertionError(
+                f"trail commit explain sha: expected {expected_sha}, "
+                f"got {payload.get('commit_sha')}"
+            )
+        matches = [
+            patch for patch in payload.get("trace_patches", [])
+            if patch.get("trace_patch_id") == sel.get("trace_patch_id")
+        ]
+        if not matches:
+            raise AssertionError(
+                "trail commit explain did not include selected patch "
+                f"{sel.get('trace_patch_id')}; got {payload.get('trace_patches')!r}"
+            )
+        if a.get("requires_containing_segment_id", True):
+            _require_containing_segment(matches[0], "trail commit explain patch")
+        state.trail_json[f"commit:{selection_name}"] = payload
+        return f"trail explain --commit {expected_sha[:8]} includes selected patch ✓"
+
+    if kind == "trail_commit_excludes_selection":
+        sel = _trail_selection(state, selection_name)
+        ref = a.get("ref", "HEAD")
+        payload = _run_otd_json(
+            state,
+            ["trail", "explain", "--commit", ref, "--json"],
+        )
+        matches = [
+            patch for patch in payload.get("trace_patches", [])
+            if patch.get("trace_patch_id") == sel.get("trace_patch_id")
+        ]
+        if matches:
+            raise AssertionError(
+                "trail commit explain unexpectedly included selected patch "
+                f"{sel.get('trace_patch_id')} in {ref}"
+            )
+        state.trail_json[f"commit:{selection_name}:excluded"] = payload
+        return f"trail explain --commit {ref} excludes {sel.get('trace_patch_id')} ✓"
+
+    if kind == "trail_commit_patch_count":
+        ref = a.get("ref", "HEAD")
+        payload = _run_otd_json(
+            state,
+            ["trail", "explain", "--commit", ref, "--json"],
+        )
+        count = len(payload.get("trace_patches", []))
+        if "equals" in a and count != int(a["equals"]):
+            raise AssertionError(
+                f"trail commit patch count for {ref}: expected {a['equals']}, got {count}"
+            )
+        if "min" in a and count < int(a["min"]):
+            raise AssertionError(
+                f"trail commit patch count for {ref}: expected >= {a['min']}, got {count}"
+            )
+        state.trail_json[f"commit:{ref}:count"] = payload
+        return f"trail explain --commit {ref} patch count {count} ✓"
+
+    if kind == "trail_file_line_explain":
+        sel = _trail_selection(state, selection_name)
+        target = a.get("target") or f"{sel['file_path']}:{sel['line']}"
+        payload = _run_otd_json(state, ["trail", "explain", target, "--json"])
+        patch = payload.get("trace_patch") or {}
+        if patch.get("trace_patch_id") != sel.get("trace_patch_id"):
+            raise AssertionError(
+                "trail file-line explain returned wrong patch: "
+                f"expected {sel.get('trace_patch_id')}, got {patch.get('trace_patch_id')}"
+            )
+        if a.get("requires_containing_segment_id", True):
+            _require_containing_segment(payload, "trail file-line explain")
+        state.trail_json[f"file_line:{selection_name}"] = payload
+        return f"trail explain {target} resolves selected patch ✓"
+
+    if kind == "trail_resolve_all_resource_refs":
+        trace_payload = _trail_trace_step_payload(state, selection_name)
+        refs = trace_payload.get("resource_refs") or {}
+        expected = {
+            "trace_patch_trail": "trace_patch_trail",
+            "git_anchor": "git_anchor",
+            "file_line_origin": "file_line_origin",
+        }
+        for key, resource_type in expected.items():
+            uri = refs.get(key)
+            if not uri:
+                raise AssertionError(f"trace-step payload missing resource ref {key}")
+            payload = _run_otd_json(state, ["trail", "resolve", uri, "--json"])
+            if payload.get("resource_type") != resource_type:
+                raise AssertionError(
+                    f"trail resolve {key}: expected resource_type {resource_type!r}, "
+                    f"got {payload.get('resource_type')!r}"
+                )
+            if a.get("requires_containing_segment_id", True):
+                _require_containing_segment(payload, f"trail resolve {key}")
+            if payload.get("relation") == "unknown":
+                raise AssertionError(f"trail resolve {key} returned unknown: {payload!r}")
+            state.trail_json[f"resolve:{selection_name}:{key}"] = payload
+        return "trail resolve ot:// refs all resolved ✓"
+
+    if kind == "trail_no_patch_step":
+        label = a["trace"]
+        selected = state.trail_no_patch_selection.get(label)
+        if selected is None:
+            _step_trail_select_no_patch_step(state, {"trace": label, "timeout": 5})
+            selected = state.trail_no_patch_selection[label]
+        payload = _run_otd_json(
+            state,
+            [
+                "trail",
+                "explain",
+                "--trace",
+                str(selected["trace_id"]),
+                "--step",
+                str(selected["step_index"]),
+                "--json",
+            ],
+        )
+        expected_status = a.get("patch_status", "no_patch")
+        if payload.get("patch_status") != expected_status:
+            raise AssertionError(
+                f"trail no-patch status: expected {expected_status!r}, "
+                f"got {payload.get('patch_status')!r}"
+            )
+        if payload.get("relation") != "no_patch":
+            raise AssertionError(
+                f"trail no-patch relation: expected 'no_patch', got {payload.get('relation')!r}"
+            )
+        if a.get("requires_containing_segment_id", True):
+            _require_containing_segment(payload, "trail no-patch explain")
+        state.trail_json[f"no_patch:{label}"] = payload
+        return f"trail explain no-patch step {selected['trace_id']}:{selected['step_index']} ✓"
+
+    raise ValueError(f"unknown trail assertion kind: {kind!r}")
+
+
 def _assert_backfill_scenario(state: RunState, a: dict) -> str:
     """Assertions specific to plan-043 phase 1 backfill scenarios.
 
@@ -718,6 +1160,8 @@ def _assert_backfill_scenario(state: RunState, a: dict) -> str:
       - report_field: name=... equals=... on the last backfill report
     """
     kind = a.get("kind")
+    if kind in TRAIL_ASSERTION_KINDS:
+        return _assert_trail_scenario(state, a)
     if kind == "cache_file_exists":
         from opentraces.core.cache import AttributionCache
         ref = a.get("ref", "HEAD")
@@ -944,7 +1388,8 @@ def run_assertions(state: RunState, assertions: list[dict]) -> list[str]:
                     "cli_stderr_matches", "cli_returncode", "report_field",
                     "entity_cache_has", "cli_stdout_matches_snapshot",
                     "tick_field", "state_field",
-                    "json_field_exists", "json_field_equals"}
+                    "json_field_exists", "json_field_equals",
+                    *TRAIL_ASSERTION_KINDS}
     if all(a.get("kind") in phase1_kinds for a in assertions):
         return [_assert_backfill_scenario(state, a) for a in assertions]
     result = _attribution_for(state)

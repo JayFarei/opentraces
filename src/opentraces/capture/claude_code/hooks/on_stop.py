@@ -7,17 +7,15 @@ Two responsibilities, both best-effort and never-raising:
      capturing git state at the exact moment the turn ends. This data
      is not otherwise present in the JSONL and enriches commit/outcome
      signals in the parser.
-  2. Fire-and-forget ``opentraces _ingest-session <transcript>`` so the
+  2. Fire-and-forget ``python -m opentraces _ingest-session <transcript>`` so the
      fresh turn's content lands in the inbox in ~seconds rather than
      waiting on the 5-minute watcher tick. The subprocess is detached
      (``start_new_session=True``) so Claude Code never blocks on it;
-     a missing ``opentraces`` on PATH is silently skipped (the watcher
-     sweep picks it up later).
+     failures are swallowed (the watcher sweep picks it up later).
 
 Install via: opentraces setup claude-code
 """
 import json
-import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -136,18 +134,14 @@ def main() -> None:
 
 
 def _spawn_ingest(transcript_path: str, cwd: str) -> None:
-    """Fire-and-forget ``opentraces _ingest-session <path>``.
+    """Fire-and-forget ``python -m opentraces _ingest-session <path>``.
 
     Detached (start_new_session=True), stdio -> /dev/null, no wait. Any
-    failure — including opentraces missing from PATH — is silently
-    swallowed; the watcher sweep is the safety net.
+    failure is silently swallowed; the watcher sweep is the safety net.
     """
-    binary = shutil.which("opentraces")
-    if binary is None:
-        return
     try:
         devnull = subprocess.DEVNULL
-        argv = [binary, "_ingest-session", transcript_path]
+        argv = [sys.executable, "-m", "opentraces", "_ingest-session", transcript_path]
         if cwd:
             argv.extend(["--project", cwd])
         subprocess.Popen(

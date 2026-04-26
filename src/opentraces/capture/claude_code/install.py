@@ -25,6 +25,7 @@ import json
 import os
 import shlex
 import stat
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -126,6 +127,43 @@ def _already_registered(event_hooks: list, command: str) -> bool:
     return False
 
 
+def _hook_command(script: str) -> str:
+    return f"{shlex.quote(sys.executable)} {shlex.quote(script)}"
+
+
+def _prune_stale_opentraces_hooks(event_hooks: list, command: str) -> list:
+    """Drop older opentraces hook commands for this event while preserving others."""
+    kept = []
+    for entry in event_hooks:
+        if not isinstance(entry, dict):
+            kept.append(entry)
+            continue
+        inner = entry.get("hooks")
+        if isinstance(inner, list):
+            kept_inner = []
+            for hook in inner:
+                hook_command = hook.get("command") if isinstance(hook, dict) else None
+                if (
+                    isinstance(hook_command, str)
+                    and "opentraces_" in hook_command
+                    and hook_command != command
+                ):
+                    continue
+                kept_inner.append(hook)
+            if kept_inner:
+                kept.append({**entry, "hooks": kept_inner})
+            continue
+        entry_command = entry.get("command")
+        if (
+            isinstance(entry_command, str)
+            and "opentraces_" in entry_command
+            and entry_command != command
+        ):
+            continue
+        kept.append(entry)
+    return kept
+
+
 def plan_install(
     hooks_dir: Path | None = None,
     settings_file: Path | None = None,
@@ -157,8 +195,12 @@ def install(
 
     hooks_cfg = settings.setdefault("hooks", {})
     for p in plan:
-        command = f"python3 {shlex.quote(result.installed[p.event])}"
-        event_hooks = hooks_cfg.setdefault(p.event, [])
+        command = _hook_command(result.installed[p.event])
+        event_hooks = _prune_stale_opentraces_hooks(
+            hooks_cfg.setdefault(p.event, []),
+            command,
+        )
+        hooks_cfg[p.event] = event_hooks
         if _already_registered(event_hooks, command):
             continue
         event_hooks.append(
