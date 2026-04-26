@@ -390,3 +390,67 @@ def test_capture_limitations_vocabulary_is_closed() -> None:
     assert_known_capture_limitations(["hook_only", "watcher_buffer_overflow"])
     with pytest.raises(ValueError, match="unknown capture_limitations"):
         assert_known_capture_limitations(["something_made_up"])
+
+
+def test_watcher_observation_alone_does_not_assign_attribution(
+    tmp_path: Path,
+) -> None:
+    """Plan §Phase 5 edge fixture #1.
+
+    The watcher records a mutation with rich blob-id evidence, but no
+    step window has been opened. The reconciler must NOT fabricate
+    attribution. It records the gap as ``unbounded_mutation_window`` so
+    the omission stays queryable, and refuses to mint a
+    ``trace_patch_created`` from a watcher event alone.
+
+    Adversarial dimensions stressed:
+    * Observation gets an attribution row (not silently dropped).
+    * generation_index defaults to 0 on the unattributed envelope.
+    * ``attribution.trace_id is None`` and ``step_index is None`` ANSWER
+      the missing-context truthfully rather than picking a default.
+    * Even with non-null before+after blob ids, reconciler refuses to
+      synthesize a patch — the watcher only observes.
+    """
+    _init_repo(tmp_path)
+    before_blob = GitObjectID(hex=_hash_object(tmp_path, "before\n"))
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "after\n"))
+
+    obs = append_filesystem_mutation_observed(
+        tmp_path,
+        path="lonely.txt",
+        observed_at_start="2026-04-26T10:00:00Z",
+        observed_at_end="2026-04-26T10:00:01Z",
+        before_blob_id=before_blob,
+        after_blob_id=after_blob,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["observations_processed"] == 1
+    assert summary["unbounded_mutation_window"] == 1
+    assert summary["attributed"] == 0
+    assert summary["concurrent_writer_overlap"] == 0
+    assert summary["background_process_overlap"] == 0
+    assert summary["patches_upgraded"] == 0
+
+    events = read_events(tmp_path)
+    attributions = [
+        e for e in events if e.event_type == "watcher_observation_attributed"
+    ]
+    assert len(attributions) == 1
+    attribution = attributions[0]
+    assert attribution.payload["result"] == "unattributed"
+    assert attribution.payload["capture_limitations"] == [
+        "unbounded_mutation_window"
+    ]
+    assert attribution.trace_id is None
+    assert attribution.step_index is None
+    assert attribution.generation_index == 0
+    assert attribution.payload["observation_event_id"] == obs.event_id
+    assert attribution.payload["path"] == "lonely.txt"
+    assert "candidate_windows" not in attribution.payload
+    assert "upgraded_trace_patch_id" not in attribution.payload
+
+    # Watcher alone never mints a trace_patch_created. Even with rich blob
+    # evidence, the reconciler refuses to fabricate attribution.
+    patch_events = [e for e in events if e.event_type == "trace_patch_created"]
+    assert patch_events == []
