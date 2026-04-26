@@ -13,7 +13,7 @@ Every coding session leaves behind the data you actually want: prompts, tool cal
 3. Run regex, entropy, optional TruffleHog, and optional LLM review passes.
 4. Stage traces locally for review in the terminal, browser, or CLI inbox.
 5. Publish them as immutable JSONL shards to a Hugging Face dataset.
-6. Correlate traces to later commits via `blame` and `graph`, with evidence-tiered `GitLink` attribution (`tool_emitted`, `overlapping`, `orphan`), powered by an optional background watcher.
+6. Correlate traces to later commits via `blame`, `graph`, and Trace Trails.
 7. Export staged traces to downstream formats such as `atif` and `agent-trace`.
 8. Import existing datasets with `opentraces pull --parser hermes`, routed through the same security and staging flow.
 
@@ -80,6 +80,9 @@ Useful follow-ups:
 
 - `opentraces doctor` checks auth, integrations, and pipeline health.
 - `opentraces blame <sha>` and `opentraces graph` show commit-to-trace attribution (run `opentraces setup git` first to install the post-commit correlator).
+- `opentraces trail explain --trace <id> --step <n>` explains Trace Trails evidence rebuilt from the local Git event log.
+- `opentraces trail explain <path>:<line>` resolves a Git-side file line back to Trace Patch evidence when an exact anchor exists.
+- `opentraces trail diff --trace <id> --from-step <a> --to-step <b>` shows the Trace Patch between captured step snapshots.
 - `opentraces setup trufflehog` enables Tier 1.5 scanning.
 - `opentraces setup llm-review` configures Tier 2 semantic review.
 - `opentraces push --llm-review` gates uploads on a clean Tier 2 verdict.
@@ -160,6 +163,24 @@ The trace format lives in [`packages/opentraces-schema/`](packages/opentraces-sc
 - optional attribution and commit correlation data
 
 The schema is a superset of ATIF and borrows ideas from Agent Trace, ADP, and OTel GenAI. Current schema version: `0.3.0`.
+
+## Trace Trails
+
+Trace Trails are the user-facing evidence chain from a trace step to the Git
+history that accepted its patch. The technical substrate is VCS-anchored
+lineage: append-only local `TrailEvent` batches under
+`refs/opentraces/local/events/v1`, plus rebuildable projections such as CLI
+explanations, doctor checks, and later search/dataset views.
+
+The initial surface supports exact patch explanations and snapshot diffs.
+`opentraces trail explain --trace <id> --step <n>` rebuilds from the local
+event log and reports the Trace Snapshot references, Trace Patch identity, Git
+Anchor, evidence tier, firmness, source events, and any limitations.
+`opentraces trail diff --trace <id> --from-step <a> --to-step <b>` compares
+captured snapshot trees and emits the resulting Trace Patch. The delayed Git
+Anchor reconciler can search a later commit for existing Trace Patches and
+record exact anchors, which can be queried from `--commit <sha>` or
+`<path>:<line>`; Patch Trail survival states are intentionally later phases.
 
 ## Docs
 

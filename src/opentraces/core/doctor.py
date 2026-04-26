@@ -20,6 +20,29 @@ from ..security.trufflehog import find_trufflehog
 from ..security.version import SECURITY_VERSION
 
 
+# --- Trace Trails event-log panel (plan 054 phase 1) ----------------------
+
+def _trail_event_log_status(cwd: Path) -> dict[str, Any]:
+    """Report integrity for the canonical local Trace Trails event log."""
+    try:
+        from .trails import event_log_status
+
+        return event_log_status(cwd)
+    except Exception as exc:
+        return {
+            "ref": "refs/opentraces/local/events/v1",
+            "exists": False,
+            "head": None,
+            "batch_count": 0,
+            "event_count": 0,
+            "batch_parents_linear": False,
+            "content_hashes_valid": False,
+            "event_chain_valid": False,
+            "state": "error",
+            "errors": [str(exc)],
+        }
+
+
 # --- post-commit hook panel (plan 047) ------------------------------------
 
 def _post_commit_hook_status(cwd: Path) -> dict[str, Any]:
@@ -609,6 +632,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "attribution": _attribution_status(cwd),
         "watcher": _watcher_status(),
         "hooks": _hook_installers(),
+        "trail_event_log": _trail_event_log_status(cwd),
         "post_commit_hook": _post_commit_hook_status(cwd),
     }
 
@@ -625,4 +649,6 @@ def exit_code(report_data: dict[str, Any]) -> int:
             h.get("drift") or h.get("broken_harnesses")
         ):
             return 3
+    if (report_data.get("trail_event_log") or {}).get("state") in ("invalid", "error"):
+        return 3
     return 0

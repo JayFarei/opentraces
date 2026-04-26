@@ -1629,6 +1629,7 @@ def _render_doctor_human(report: dict) -> None:
     _attribution_section(report.get("attribution") or {})
     _watcher_section(report.get("watcher") or {})
     _hooks_section(report["hooks"])
+    _trail_event_log_section(report.get("trail_event_log") or {})
     human_echo("")
 
 
@@ -1681,6 +1682,35 @@ def _watcher_section(info: dict) -> None:
     last = info.get("last_run_at")
     if last:
         _row("ok", "last tick", last)
+
+
+def _trail_event_log_section(info: dict) -> None:
+    """Render Trace Trails event-log integrity."""
+    _section("Trace Trails")
+    state = info.get("state") or "missing"
+    ref = info.get("ref") or "refs/opentraces/local/events/v1"
+
+    if state == "missing":
+        _row("off", "event log", "missing", detail=ref)
+        return
+
+    kind = "ok" if state == "ok" else "err"
+    detail = ref
+    head = info.get("head")
+    if head:
+        detail = f"{ref} @ {head[:12]}"
+    _row(kind, "event log", state, detail=detail)
+    parents_ok = bool(info.get("batch_parents_linear"))
+    hashes_ok = bool(info.get("content_hashes_valid"))
+    chain_ok = bool(info.get("event_chain_valid"))
+    _row("ok" if parents_ok else "err", "batch parents", "linear" if parents_ok else "invalid")
+    _row("ok" if hashes_ok else "err", "content hashes", "valid" if hashes_ok else "invalid")
+    _row("ok" if chain_ok else "err", "event chain", "valid" if chain_ok else "invalid")
+    _row("ok", "batches", str(info.get("batch_count") or 0))
+    _row("ok", "events", str(info.get("event_count") or 0))
+
+    for error in (info.get("errors") or [])[:3]:
+        _row("err", "  ↳ error", str(error))
 
 
 def _render_doctor_security(report: dict) -> None:

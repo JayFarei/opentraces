@@ -1,0 +1,251 @@
+"""Trace Trails Phase 3 delayed Git Anchor coverage."""
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+from click.testing import CliRunner
+
+from opentraces.cli import main
+from opentraces.core.trails import TrailEventDraft, append_event_batch, reconcile_commit_anchors
+from opentraces.core.trails.models import sha256_text
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
+
+
+def _init_repo(repo: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+    (repo / "app.py").write_text("def value():\n    return 'old'\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
+
+
+def _oid(repo: Path, rev_path: str) -> dict[str, str]:
+    return {"algo": "sha1", "hex": _git(repo, "rev-parse", rev_path)}
+
+
+def test_post_commit_reconciler_adds_delayed_git_anchor(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    seed_sha = _git(repo, "rev-parse", "HEAD")
+    authored = "    return 'delayed-anchor-distinctive-line-54-phase-three'\n"
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-delayed",
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": "tracepatch-sha256:delayed",
+                    "snapshot_before_id": "snapshot-before-delayed",
+                    "snapshot_after_id": "snapshot-after-delayed",
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "before_blob_id": _oid(repo, f"{seed_sha}:app.py"),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    (repo / "app.py").write_text("def value():\n" + authored)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "delayed agent patch"], cwd=repo, check=True)
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+
+    created = reconcile_commit_anchors(repo, commit_sha, writer="post-commit-correlator")
+    assert [anchor["trace_patch_id"] for anchor in created] == ["tracepatch-sha256:delayed"]
+
+    trace_result = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "explain",
+            "--trace",
+            "tr-delayed",
+            "--step",
+            "1",
+            "--json",
+            "--project",
+            str(repo),
+        ],
+    )
+    assert trace_result.exit_code == 0, trace_result.output
+    trace_payload = json.loads(trace_result.output)
+    assert trace_payload["relation"] == "anchored_in_git"
+    assert trace_payload["git_anchor"]["commit_sha"] == commit_sha
+
+    commit_result = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "explain",
+            "--commit",
+            commit_sha,
+            "--json",
+            "--project",
+            str(repo),
+        ],
+    )
+    assert commit_result.exit_code == 0, commit_result.output
+    commit_payload = json.loads(commit_result.output)
+    assert commit_payload["commit_sha"] == commit_sha
+    assert commit_payload["trace_patches"][0]["trace_id"] == "tr-delayed"
+    assert commit_payload["trace_patches"][0]["trace_patch_id"] == "tracepatch-sha256:delayed"
+    assert commit_payload["trace_patches"][0]["evidence_tier"] == "exact_range_hash"
+    assert "git_anchor_search_completed" in [
+        event["event_type"] for event in commit_payload["source_events"]
+    ]
+
+    line_result = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "explain",
+            "app.py:2",
+            "--json",
+            "--project",
+            str(repo),
+        ],
+    )
+    assert line_result.exit_code == 0, line_result.output
+    line_payload = json.loads(line_result.output)
+    assert line_payload["target"] == "app.py:2"
+    assert line_payload["trace_patch"]["trace_id"] == "tr-delayed"
+    assert line_payload["trace_patch"]["trace_patch_id"] == "tracepatch-sha256:delayed"
+
+
+def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    authored = "    return 'missing-anchor-distinctive-line-54-phase-three'\n"
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-orphan",
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": "tracepatch-sha256:orphan",
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    (repo / "other.py").write_text("print('unrelated')\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "unrelated"], cwd=repo, check=True)
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+
+    assert reconcile_commit_anchors(repo, commit_sha, writer="post-commit-correlator") == []
+
+    commit_result = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "explain",
+            "--commit",
+            commit_sha,
+            "--json",
+            "--project",
+            str(repo),
+        ],
+    )
+    assert commit_result.exit_code == 0, commit_result.output
+    payload = json.loads(commit_result.output)
+    assert payload["trace_patches"] == []
+    search_events = [
+        event for event in payload["source_events"]
+        if event["event_type"] == "git_anchor_search_completed"
+    ]
+    assert search_events
+    assert search_events[0]["result"] == "unknown"
+
+
+def test_many_trace_patches_in_one_commit(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    (repo / "other.py").write_text("def other():\n    return 'old'\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "add other"], cwd=repo, check=True)
+    alpha = "    return 'alpha-delayed-anchor-line-54-phase-three'\n"
+    beta = "    return 'beta-delayed-anchor-line-54-phase-three'\n"
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-alpha",
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": "tracepatch-sha256:alpha",
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": alpha,
+                    "raw_authored_hash": sha256_text(alpha),
+                    "git_clean_hash": sha256_text(" ".join(alpha.split())),
+                    "limitations": [],
+                },
+            ),
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-beta",
+                step_index=2,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": "tracepatch-sha256:beta",
+                    "file_path": "other.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": beta,
+                    "raw_authored_hash": sha256_text(beta),
+                    "git_clean_hash": sha256_text(" ".join(beta.split())),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+    (repo / "app.py").write_text("def value():\n" + alpha)
+    (repo / "other.py").write_text("def other():\n" + beta)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "two delayed patches"], cwd=repo, check=True)
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+
+    created = reconcile_commit_anchors(repo, commit_sha, writer="post-commit-correlator")
+    assert {anchor["trace_patch_id"] for anchor in created} == {
+        "tracepatch-sha256:alpha",
+        "tracepatch-sha256:beta",
+    }
+
+    result = CliRunner().invoke(
+        main,
+        ["trail", "explain", "--commit", commit_sha, "--json", "--project", str(repo)],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert {patch["trace_id"] for patch in payload["trace_patches"]} == {
+        "tr-alpha",
+        "tr-beta",
+    }

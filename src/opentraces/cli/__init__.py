@@ -51,7 +51,7 @@ _json_mode = False
 # -- Grouped help formatting --------------------------------------------------
 
 COMMAND_SECTIONS = [
-    ("Core", ["add", "push", "pull", "list", "show", "status", "blame", "resume"]),
+    ("Core", ["add", "push", "pull", "list", "show", "status", "trail", "blame", "resume"]),
     (
         "Inbox",
         [
@@ -2627,6 +2627,11 @@ main.add_command(_graph_cmd)
 from .blame import blame_cmd as _blame_cmd  # noqa: E402
 
 main.add_command(_blame_cmd)
+
+# Plan-054 — Trace Trails VCS-anchored lineage.
+from .trail import trail_group as _trail_group  # noqa: E402
+
+main.add_command(_trail_group)
 
 # Plan-043 phase 3 — `ot watcher` background attribution watcher.
 from ._watcher_register import register_watcher_commands as _reg_watcher  # noqa: E402

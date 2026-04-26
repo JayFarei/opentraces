@@ -9,7 +9,7 @@ from click.testing import CliRunner
 from opentraces.cli import main
 
 
-CORE_VERBS = ["add", "push", "pull", "list", "show", "status", "blame", "resume"]
+CORE_VERBS = ["add", "push", "pull", "list", "show", "status", "trail", "blame", "resume"]
 INBOX_VERBS = [
     "reject", "reset", "redact", "discard", "llm-review", "export",
     "tui", "web", "stats", "log", "graph", "assess",
