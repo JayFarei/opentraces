@@ -13,9 +13,9 @@ from typing import Any
 
 from opentraces_schema.models import TraceRecord
 
-from ...enrichment.attribution import _parse_diff_hunks_with_content
+from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
 from .event_log import append_event_batch
-from .models import GitObjectID, TrailEvent, TrailEventDraft
+from .models import GitObjectID, TrailEvent, TrailEventDraft, sha256_text
 
 
 @dataclass(frozen=True)
@@ -135,6 +135,112 @@ def _trail_matches_repo(repo: Path, hook_entry: dict[str, Any]) -> bool:
     repo_top = _git_toplevel(repo_root)
     hook_top = _git_toplevel(hook_root)
     return repo_top is not None and repo_top == hook_top
+
+
+def _snapshot_id(
+    *,
+    trace_id: str,
+    generation_index: int,
+    step_index: int,
+    tree_id: dict[str, str],
+    role: str | None = None,
+) -> str:
+    material: dict[str, Any] = {
+        "trace_id": trace_id,
+        "generation_index": generation_index,
+        "step_index": step_index,
+        "tree_id": tree_id,
+    }
+    if role:
+        material["role"] = role
+    return _id("snapshot", material)
+
+
+def _tree_blob_id(repo: Path, tree_id: dict[str, str], path: str) -> dict[str, str] | None:
+    oid = _git(repo, ["rev-parse", f"{tree_id['hex']}:{path}"], check=False)
+    if not oid:
+        return None
+    try:
+        typed = GitObjectID(hex=oid).model_dump(mode="json")
+    except Exception:
+        return None
+    if _object_type(repo, typed["hex"]) != "blob":
+        return None
+    return typed
+
+
+def _patch_drafts_for_step(
+    repo: Path,
+    *,
+    trace_id: str,
+    generation_index: int,
+    step_index: int,
+    before_snapshot_id: str,
+    after_snapshot_id: str,
+    before_tree_id: dict[str, str],
+    after_tree_id: dict[str, str],
+    capture_method: list[str],
+    limitations: list[str],
+) -> list[TrailEventDraft]:
+    patch = _git(repo, ["diff", "--no-color", before_tree_id["hex"], after_tree_id["hex"]])
+    if not patch:
+        return []
+
+    hunks = _parse_diff_hunks_with_content(patch)
+    drafts: list[TrailEventDraft] = []
+    for file_path, file_hunks in hunks.items():
+        before_blob_id = _tree_blob_id(repo, before_tree_id, file_path)
+        after_blob_id = _tree_blob_id(repo, after_tree_id, file_path)
+        for hunk_index, hunk in enumerate(file_hunks):
+            authored_text = hunk.get("added_text") or ""
+            affected_range = {
+                "start_line": hunk.get("added_start"),
+                "end_line": hunk.get("added_end"),
+            }
+            patch_limitations = list(limitations)
+            if not authored_text:
+                patch_limitations.append("no_added_text")
+            raw_authored_hash = sha256_text(authored_text)
+            git_clean_hash = sha256_text(_norm(authored_text))
+            trace_patch_id = _id(
+                "tracepatch",
+                {
+                    "trace_id": trace_id,
+                    "generation_index": generation_index,
+                    "step_index": step_index,
+                    "snapshot_before_id": before_snapshot_id,
+                    "snapshot_after_id": after_snapshot_id,
+                    "file_path": file_path,
+                    "hunk_index": hunk_index,
+                    "affected_range": affected_range,
+                    "raw_authored_hash": raw_authored_hash,
+                    "before_blob_id": before_blob_id,
+                    "after_blob_id": after_blob_id,
+                },
+            )
+            drafts.append(
+                TrailEventDraft(
+                    event_type="trace_patch_created",
+                    trace_id=trace_id,
+                    generation_index=generation_index,
+                    step_index=step_index,
+                    capture_method=capture_method,
+                    payload={
+                        "trace_patch_id": trace_patch_id,
+                        "snapshot_before_id": before_snapshot_id,
+                        "snapshot_after_id": after_snapshot_id,
+                        "file_path": file_path,
+                        "affected_range": affected_range,
+                        "authored_text": authored_text,
+                        "raw_authored_hash": raw_authored_hash,
+                        "git_clean_hash": git_clean_hash,
+                        "before_blob_id": before_blob_id,
+                        "after_blob_id": after_blob_id,
+                        "limitations": sorted(set(patch_limitations)),
+                    },
+                )
+            )
+    return drafts
 
 
 def write_worktree_tree(repo: Path) -> dict[str, str]:
@@ -394,9 +500,13 @@ def emit_step_window_events_from_record(
         return StepTrailEmissionResult(emitted_events=[])
 
     metadata = record.metadata or {}
-    pre_hooks = metadata.get("hook_pre_tool_use") or {}
-    post_hooks = metadata.get("hook_post_tool_use") or {}
-    if not isinstance(pre_hooks, dict) or not isinstance(post_hooks, dict):
+    pre_hooks_raw = metadata.get("hook_pre_tool_use") or {}
+    post_hooks_raw = metadata.get("hook_post_tool_use") or {}
+    hook_stop_raw = metadata.get("hook_stop") or []
+    pre_hooks = pre_hooks_raw if isinstance(pre_hooks_raw, dict) else {}
+    post_hooks = post_hooks_raw if isinstance(post_hooks_raw, dict) else {}
+    hook_stops = hook_stop_raw if isinstance(hook_stop_raw, list) else []
+    if not pre_hooks and not post_hooks and not hook_stops:
         return StepTrailEmissionResult(emitted_events=[])
 
     from .event_log import read_events
@@ -418,10 +528,30 @@ def emit_step_window_events_from_record(
         for event in existing
         if event.event_type == "trace_snapshot_created"
     }
+    existing_patches = {
+        event.payload.get("trace_patch_id")
+        for event in existing
+        if event.event_type == "trace_patch_created"
+    }
+    existing_trace_events = {
+        (
+            event.event_type,
+            event.trace_id,
+            event.generation_index,
+        )
+        for event in existing
+        if event.event_type in {"trace_session_closed", "trace_step_capture_incomplete"}
+    }
 
     drafts: list[TrailEventDraft] = []
     snapshot_refs: list[tuple[str, str]] = []
     skipped = 0
+    skipped_reasons: dict[str, int] = {}
+
+    def mark_skipped(reason: str) -> None:
+        nonlocal skipped
+        skipped += 1
+        skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
 
     for step in record.steps:
         for tool_call in step.tool_calls:
@@ -429,22 +559,35 @@ def emit_step_window_events_from_record(
             pre = pre_hooks.get(tool_call_id)
             post = post_hooks.get(tool_call_id)
             if not isinstance(pre, dict) or not isinstance(post, dict):
-                skipped += 1
+                mark_skipped("missing_pre_or_post_hook")
                 continue
             if not _trail_matches_repo(repo, pre) or not _trail_matches_repo(repo, post):
-                skipped += 1
+                mark_skipped("worktree_root_mismatch")
                 continue
 
             pre_tree_id = _trail_tree_id(repo, pre)
             post_tree_id = _trail_tree_id(repo, post)
             if not pre_tree_id or not post_tree_id:
-                skipped += 1
+                mark_skipped("missing_valid_tree_id")
                 continue
 
             pre_git_head = _trail_git_head(pre)
             post_git_head = _trail_git_head(post)
             generation_index = record.generation_index
             agent_step_id = f"step_{step.step_index}"
+            before_snapshot_id = _snapshot_id(
+                trace_id=record.trace_id,
+                generation_index=generation_index,
+                step_index=step.step_index,
+                tree_id=pre_tree_id,
+                role="before",
+            )
+            after_snapshot_id = _snapshot_id(
+                trace_id=record.trace_id,
+                generation_index=generation_index,
+                step_index=step.step_index,
+                tree_id=post_tree_id,
+            )
 
             open_key = (
                 "trace_step_window_opened",
@@ -486,21 +629,35 @@ def emit_step_window_events_from_record(
                 capture_status,
                 post.get("limitations") if isinstance(post.get("limitations"), list) else None,
             )
-            snapshot_id = _id(
-                "snapshot",
-                {
-                    "trace_id": record.trace_id,
-                    "generation_index": generation_index,
-                    "step_index": step.step_index,
-                    "tree_id": post_tree_id,
-                },
-            )
+            if before_snapshot_id not in existing_snapshots:
+                existing_snapshots.add(before_snapshot_id)
+                drafts.append(
+                    TrailEventDraft(
+                        event_type="trace_snapshot_created",
+                        trace_id=record.trace_id,
+                        generation_index=generation_index,
+                        step_index=step.step_index,
+                        event_time=pre.get("timestamp"),
+                        capture_method=["hook_pretooluse"],
+                        payload={
+                            "snapshot_id": before_snapshot_id,
+                            "snapshot_role": "before",
+                            "agent_step_id": agent_step_id,
+                            "tool_call_id": tool_call_id,
+                            "tree_id": pre_tree_id,
+                            "git_head": pre_git_head,
+                            "base_commit": pre_git_head,
+                            "capture_status": "captured",
+                            "limitations": [],
+                        },
+                    )
+                )
             ref = (
                 f"refs/opentraces/local/traces/{record.trace_id}/{generation_index}"
                 f"/snapshots/step_{step.step_index}"
             )
-            if snapshot_id not in existing_snapshots:
-                existing_snapshots.add(snapshot_id)
+            if after_snapshot_id not in existing_snapshots:
+                existing_snapshots.add(after_snapshot_id)
                 drafts.append(
                     TrailEventDraft(
                         event_type="trace_snapshot_created",
@@ -510,7 +667,7 @@ def emit_step_window_events_from_record(
                         event_time=post.get("timestamp"),
                         capture_method=["hook_posttooluse"],
                         payload={
-                            "snapshot_id": snapshot_id,
+                            "snapshot_id": after_snapshot_id,
                             "snapshot_role": "after",
                             "agent_step_id": agent_step_id,
                             "tool_call_id": tool_call_id,
@@ -558,6 +715,81 @@ def emit_step_window_events_from_record(
                         ),
                     )
                 )
+
+            patch_drafts = _patch_drafts_for_step(
+                repo,
+                trace_id=record.trace_id,
+                generation_index=generation_index,
+                step_index=step.step_index,
+                before_snapshot_id=before_snapshot_id,
+                after_snapshot_id=after_snapshot_id,
+                before_tree_id=pre_tree_id,
+                after_tree_id=post_tree_id,
+                capture_method=["hook_pretooluse", "hook_posttooluse"],
+                limitations=limitations,
+            )
+            for draft in patch_drafts:
+                trace_patch_id = draft.payload.get("trace_patch_id")
+                if trace_patch_id in existing_patches:
+                    continue
+                existing_patches.add(trace_patch_id)
+                drafts.append(draft)
+
+    generation_index = record.generation_index
+    stop_event_key = ("trace_session_closed", record.trace_id, generation_index)
+    stop_event = next((item for item in hook_stops if isinstance(item, dict)), None)
+    if stop_event and stop_event_key not in existing_trace_events:
+        trail = stop_event.get("trail") if isinstance(stop_event.get("trail"), dict) else {}
+        stop_tree_id = _trail_tree_id(repo, stop_event)
+        stop_git_head = _trail_git_head(stop_event)
+        payload: dict[str, Any] = {
+            "trace_id": record.trace_id,
+            "generation_index": generation_index,
+            "session_id": record.session_id,
+            "event_time": stop_event.get("timestamp"),
+            "worktree_root": trail.get("worktree_root") or str(repo),
+            "tree_id": stop_tree_id,
+            "git_head": stop_git_head,
+            "git": stop_event.get("git") or {},
+            "agent_type": stop_event.get("agent_type"),
+            "permission_mode": stop_event.get("permission_mode"),
+            "stop_hook_active": stop_event.get("stop_hook_active"),
+            "capture_limitations": [],
+        }
+        drafts.append(
+            TrailEventDraft(
+                event_type="trace_session_closed",
+                trace_id=record.trace_id,
+                generation_index=generation_index,
+                step_index=None,
+                event_time=stop_event.get("timestamp"),
+                capture_method=["hook_stop"],
+                payload={key: value for key, value in payload.items() if value is not None},
+            )
+        )
+        existing_trace_events.add(stop_event_key)
+
+    incomplete_key = ("trace_step_capture_incomplete", record.trace_id, generation_index)
+    if skipped and incomplete_key not in existing_trace_events:
+        drafts.append(
+            TrailEventDraft(
+                event_type="trace_step_capture_incomplete",
+                trace_id=record.trace_id,
+                generation_index=generation_index,
+                step_index=None,
+                capture_method=["hook_stop"] if hook_stops else ["hook_pretooluse"],
+                payload={
+                    "trace_id": record.trace_id,
+                    "generation_index": generation_index,
+                    "session_id": record.session_id,
+                    "total_tool_calls": sum(len(step.tool_calls) for step in record.steps),
+                    "skipped_tool_calls": skipped,
+                    "reasons": skipped_reasons,
+                    "capture_limitations": ["incomplete_step_window_capture"],
+                },
+            )
+        )
+        existing_trace_events.add(incomplete_key)
 
     emitted = append_event_batch(repo, drafts, writer=writer)
     for ref, tree_hex in snapshot_refs:

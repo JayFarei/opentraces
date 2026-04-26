@@ -1011,6 +1011,11 @@ class TestSessionEnrichmentLines:
             "data": {
                 "git": {"sha": "abc123", "dirty": False, "files_changed": 0},
                 "permission_mode": "default",
+                "trail": {
+                    "worktree_root": str(tmp_path),
+                    "tree_id": {"algo": "sha1", "hex": "a" * 40},
+                    "git_head": {"algo": "sha1", "hex": "b" * 40},
+                },
             },
         }]
         record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
@@ -1018,6 +1023,10 @@ class TestSessionEnrichmentLines:
         git = record.metadata.get("hook_git_final", {})
         assert git.get("sha") == "abc123"
         assert git.get("dirty") is False
+        stop = record.metadata.get("hook_stop", [])
+        assert len(stop) == 1
+        assert stop[0]["timestamp"] == "2026-03-27T10:01:00Z"
+        assert stop[0]["trail"]["tree_id"]["hex"] == "a" * 40
 
     def test_opentraces_hook_postcompact_sets_is_compacted(self, tmp_path):
         lines = _make_minimal_session() + [{

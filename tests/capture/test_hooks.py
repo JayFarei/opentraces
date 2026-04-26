@@ -7,6 +7,7 @@ opentraces_hook line to the transcript JSONL.
 from __future__ import annotations
 
 import json
+import subprocess
 from io import StringIO
 from pathlib import Path
 
@@ -25,7 +26,17 @@ def _invoke_hook(module_main, payload: dict, monkeypatch, stdin_override=None):
 
 
 def _read_appended_lines(path: Path) -> list[dict]:
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def _init_repo(repo: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+    (repo / "app.py").write_text("print('before')\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +47,7 @@ class TestOnStopHook:
     def test_appends_valid_hook_line(self, tmp_path, monkeypatch):
         from opentraces.capture.claude_code.hooks.on_stop import main
 
+        _init_repo(tmp_path)
         transcript = tmp_path / "session.jsonl"
         transcript.write_text("")
         payload = {
@@ -56,6 +68,9 @@ class TestOnStopHook:
         assert line["data"]["session_id"] == "abc123"
         assert line["data"]["agent_type"] == "main"
         assert "git" in line["data"]
+        assert line["data"]["trail"]["worktree_root"] == str(tmp_path)
+        assert line["data"]["trail"]["tree_id"]["algo"] == "sha1"
+        assert line["data"]["trail"]["git_head"]["algo"] == "sha1"
 
     def test_missing_transcript_path_exits_clean(self, monkeypatch):
         from opentraces.capture.claude_code.hooks.on_stop import main

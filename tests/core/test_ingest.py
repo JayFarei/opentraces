@@ -251,6 +251,22 @@ class TestIngestOneSession:
                 after_tree, file_path=str(x_path), start_line=1, end_line=1,
                 content_hash="murmur3:0", confidence="high",
             ),
+            {
+                "type": "opentraces_hook",
+                "event": "Stop",
+                "timestamp": "2026-04-15T07:00:30Z",
+                "data": {
+                    "session_id": session_id,
+                    "agent_type": "main",
+                    "permission_mode": "default",
+                    "git": {"sha": head, "dirty": True, "changed_paths": ["x.py"]},
+                    "trail": {
+                        "worktree_root": str(project_dir),
+                        "tree_id": after_tree,
+                        "git_head": head_id,
+                    },
+                },
+            },
         ]
         with session_path.open("w") as f:
             for line in lines:
@@ -277,32 +293,51 @@ class TestIngestOneSession:
         assert [event.event_type for event in events] == [
             "trace_step_window_opened",
             "trace_snapshot_created",
+            "trace_snapshot_created",
             "trace_step_window_closed",
             "trace_step_window_opened",
             "trace_snapshot_created",
+            "trace_snapshot_created",
             "trace_step_window_closed",
+            "trace_patch_created",
+            "trace_session_closed",
         ]
         snapshots = [
             event for event in events
             if event.event_type == "trace_snapshot_created"
         ]
-        assert {event.step_index for event in snapshots} == {read_step, write_step}
-        assert snapshots[0].payload["tree_id"] == before_tree
-        assert snapshots[0].payload["capture_status"] == "hook_only"
-        assert "hook_only" in snapshots[0].payload["limitations"]
-        assert snapshots[1].payload["tree_id"] == after_tree
-        assert snapshots[1].payload["capture_status"] == "captured"
+        after_snapshots = [
+            event for event in snapshots
+            if event.payload["snapshot_role"] == "after"
+        ]
+        assert {event.step_index for event in after_snapshots} == {read_step, write_step}
+        assert after_snapshots[0].payload["tree_id"] == before_tree
+        assert after_snapshots[0].payload["capture_status"] == "hook_only"
+        assert "hook_only" in after_snapshots[0].payload["limitations"]
+        assert after_snapshots[1].payload["tree_id"] == after_tree
+        assert after_snapshots[1].payload["capture_status"] == "captured"
         for snapshot in snapshots:
             subprocess.run(
                 ["git", "cat-file", "-e", snapshot.payload["tree_id"]["hex"]],
                 cwd=project_dir,
                 check=True,
             )
+        for snapshot in after_snapshots:
             ref = (
                 f"refs/opentraces/local/traces/{result.trace_id}/1"
                 f"/snapshots/step_{snapshot.step_index}"
             )
             subprocess.run(["git", "rev-parse", "--verify", ref], cwd=project_dir, check=True)
+        patch_events = [
+            event for event in events
+            if event.event_type == "trace_patch_created"
+        ]
+        assert len(patch_events) == 1
+        assert patch_events[0].step_index == write_step
+        assert "new-from-hooked-session" in patch_events[0].payload["authored_text"]
+        session_closed = events[-1]
+        assert session_closed.capture_method == ["hook_stop"]
+        assert session_closed.payload["tree_id"] == after_tree
 
         refreshed = ingest_one_session(session_path, project_dir, reparse=True)
         assert refreshed.action == "refreshed"
@@ -328,6 +363,65 @@ class TestIngestOneSession:
         assert payload["from_tree_id"] == before_tree
         assert payload["to_tree_id"] == after_tree
         assert "new-from-hooked-session" in payload["trace_patch"]["patch"]
+
+        subprocess.run(["git", "add", "x.py"], cwd=project_dir, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "apply session change"], cwd=project_dir, check=True)
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=project_dir, text=True
+        ).strip()
+        from opentraces.core.trails import reconcile_commit_anchors
+
+        anchors = reconcile_commit_anchors(project_dir, commit)
+        assert len(anchors) == 1
+        assert anchors[0]["trace_patch_id"] == patch_events[0].payload["trace_patch_id"]
+
+    def test_incomplete_hook_capture_emits_loss_event(self, project_dir, tmp_path) -> None:
+        from opentraces.core.ingest import ingest_one_session
+        from opentraces.core.trails import read_events, write_worktree_tree
+
+        _init_git_repo(project_dir)
+        session_id = "sess-incomplete-trails"
+        tree = write_worktree_tree(project_dir)
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=project_dir, text=True
+        ).strip()
+        head_id = {"algo": "sha1", "hex": head}
+        session_path = tmp_path / "corpus" / f"{session_id}.jsonl"
+        session_path.parent.mkdir(parents=True)
+        lines = [
+            *_turn(1, session_id, tool_id="read_1"),
+            {
+                "type": "opentraces_hook",
+                "event": "PreToolUse",
+                "timestamp": "2026-04-15T07:00:11Z",
+                "data": {
+                    "tool": "Read",
+                    "tool_use_id": "read_1",
+                    "tool_input": {"file_path": str(project_dir / "x.py")},
+                    "trail": {
+                        "worktree_root": str(project_dir),
+                        "tree_id": tree,
+                        "git_head": head_id,
+                    },
+                },
+            },
+            *_turn(2, session_id, tool_id="read_2"),
+        ]
+        with session_path.open("w") as f:
+            for line in lines:
+                f.write(json.dumps(line) + "\n")
+
+        result = ingest_one_session(session_path, project_dir)
+
+        assert result.action == "new"
+        incomplete = [
+            event for event in read_events(project_dir)
+            if event.trace_id == result.trace_id
+            and event.event_type == "trace_step_capture_incomplete"
+        ]
+        assert len(incomplete) == 1
+        assert incomplete[0].payload["skipped_tool_calls"] == 2
+        assert incomplete[0].payload["reasons"] == {"missing_pre_or_post_hook": 2}
 
     def test_unchanged_file_is_noop(self, project_dir) -> None:
         from opentraces.core.ingest import ingest_one_session

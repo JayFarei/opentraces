@@ -197,7 +197,7 @@ class ClaudeCodeParser:
             "slug", "stop_reason", "is_compacted", "num_turns",
             "permission_denials", "model_usage", "permission_mode",
             "mcp_servers", "hook_git_final", "hook_pre_tool_use",
-            "hook_post_tool_use",
+            "hook_post_tool_use", "hook_stop",
             "compaction_events",
             "post_turn_summaries", "away_summaries", "session_errors",
         ):
@@ -486,6 +486,15 @@ class ClaudeCodeParser:
                     git = data.get("git") or {}
                     if git:
                         metadata["hook_git_final"] = git
+                    metadata.setdefault("hook_stop", []).append({
+                        "timestamp": line.get("timestamp"),
+                        "session_id": data.get("session_id"),
+                        "agent_type": data.get("agent_type"),
+                        "permission_mode": data.get("permission_mode"),
+                        "stop_hook_active": data.get("stop_hook_active"),
+                        "git": git,
+                        "trail": data.get("trail") or {},
+                    })
                     if not metadata.get("permission_mode") and data.get("permission_mode"):
                         metadata["permission_mode"] = data["permission_mode"]
                 elif event == "PostCompact":

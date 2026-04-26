@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 def _git_info(cwd: str) -> dict:
@@ -46,7 +47,7 @@ def _git_info(cwd: str) -> dict:
             stderr=subprocess.DEVNULL,
             timeout=5,
         )
-        status_lines = [l for l in status_out.splitlines() if l.strip()]
+        status_lines = [line for line in status_out.splitlines() if line.strip()]
         # `git diff HEAD --name-only` is the authoritative list for R8:
         # it includes tracked changes vs HEAD (staged + unstaged) and
         # excludes untracked files we didn't mean to claim attribution for.
@@ -65,6 +66,36 @@ def _git_info(cwd: str) -> dict:
             "dirty": bool(status_lines),
             "files_changed": len(status_lines),
             "changed_paths": changed_paths,
+        }
+    except Exception:
+        return {}
+
+
+def _git_head(cwd: Path) -> dict[str, str] | None:
+    try:
+        sha = subprocess.check_output(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=cwd,
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).strip()
+    except Exception:
+        return None
+    return {"algo": "sha1", "hex": sha}
+
+
+def _trail_state(cwd: str | None) -> dict:
+    if not cwd:
+        return {}
+    try:
+        from opentraces.core.trails import write_worktree_tree
+
+        root = Path(cwd).resolve()
+        return {
+            "worktree_root": str(root),
+            "tree_id": write_worktree_tree(root),
+            "git_head": _git_head(root),
         }
     except Exception:
         return {}
@@ -91,6 +122,7 @@ def main() -> None:
             "permission_mode": payload.get("permission_mode"),
             "stop_hook_active": payload.get("stop_hook_active"),
             "git": _git_info(cwd),
+            "trail": _trail_state(cwd),
         },
     })
 
