@@ -103,6 +103,12 @@ def _post_commit_hook_status(cwd: Path) -> dict[str, Any]:
     else:
         state = "missing"
 
+    last_trail_anchors_created = None
+    last_trail_anchor_error = None
+    if last_entry is not None:
+        last_trail_anchors_created = last_entry.get("trail_anchors_created")
+        last_trail_anchor_error = last_entry.get("trail_anchor_error")
+
     return {
         "state": state,
         "installed": installed,
@@ -110,6 +116,8 @@ def _post_commit_hook_status(cwd: Path) -> dict[str, Any]:
         "log_path": str(log_path) if log_path.is_file() else None,
         "recent_runs": recent_runs,
         "last_run": last_entry,
+        "last_trail_anchors_created": last_trail_anchors_created,
+        "last_trail_anchor_error": last_trail_anchor_error,
         "notes_ref_reachable": notes_reachable,
     }
 

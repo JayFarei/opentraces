@@ -11,6 +11,7 @@ from .event_log import (
 from .anchors import reconcile_commit_anchors
 from .exact import append_exact_patch_trail
 from .explain import explain_commit, explain_file_line, explain_trace_step
+from .follow import follow_anchor, follow_patch
 from .models import GitObjectID, TrailEvent, TrailEventDraft
 from .snapshots import (
     SnapshotResult,
@@ -43,6 +44,8 @@ __all__ = [
     "explain_file_line",
     "open_step_window",
     "explain_trace_step",
+    "follow_anchor",
+    "follow_patch",
     "read_events",
     "reconcile_commit_anchors",
     "verify_event_log",

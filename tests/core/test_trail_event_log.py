@@ -17,6 +17,7 @@ from opentraces.core.trails import (
     event_log_status,
     read_events,
 )
+import opentraces.core.trails.event_log as event_log
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -25,6 +26,22 @@ def _git(repo: Path, *args: str) -> str:
 
 def _init_repo(repo: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+    (repo / "README.md").write_text("# seed\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
+
+
+def _init_sha256_repo(repo: Path) -> None:
+    proc = subprocess.run(
+        ["git", "init", "-q", "--object-format=sha256"],
+        cwd=repo,
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        pytest.skip("git does not support sha256 object-format repositories")
     subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
     subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
@@ -108,6 +125,76 @@ def test_event_log_batches_are_linear_fast_forward_commits(tmp_path: Path) -> No
     events = read_events(tmp_path)
     assert [event.event_sequence for event in events] == [1, 2]
     assert events[1].previous_event_id == events[0].event_id
+
+
+def test_append_retries_when_event_log_ref_moves(tmp_path: Path, monkeypatch) -> None:
+    _init_repo(tmp_path)
+    original_update = event_log._update_event_log_ref
+    injected = False
+
+    def race_once(cwd: Path, commit_sha: str, expected_head: str | None) -> bool:
+        nonlocal injected
+        if not injected:
+            injected = True
+            append_event_batch(
+                cwd,
+                [
+                    TrailEventDraft(
+                        event_type="trace_snapshot_created",
+                        trace_id="racer",
+                        step_index=1,
+                        capture_method=["hook_posttooluse"],
+                        payload={"snapshot_id": "racer-snapshot", "limitations": []},
+                    ),
+                ],
+                writer="racer",
+            )
+        return original_update(cwd, commit_sha, expected_head)
+
+    monkeypatch.setattr(event_log, "_update_event_log_ref", race_once)
+
+    emitted = append_event_batch(
+        tmp_path,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="main",
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={"trace_patch_id": "main-patch", "limitations": []},
+            ),
+        ],
+        writer="main",
+    )
+
+    events = read_events(tmp_path)
+    assert [event.trace_id for event in events] == ["racer", "main"]
+    assert [event.event_sequence for event in events] == [1, 2]
+    assert emitted[0].event_sequence == 2
+    assert emitted[0].previous_event_id == events[0].event_id
+    assert event_log_status(tmp_path)["state"] == "ok"
+
+
+def test_append_creates_event_log_ref_in_sha256_repo(tmp_path: Path) -> None:
+    _init_sha256_repo(tmp_path)
+
+    append_event_batch(
+        tmp_path,
+        [
+            TrailEventDraft(
+                event_type="trace_snapshot_created",
+                trace_id="sha256-repo",
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={"snapshot_id": "sha256-snapshot", "limitations": []},
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    head = _git(tmp_path, "rev-parse", EVENT_LOG_REF)
+    assert len(head) == 64
+    assert event_log_status(tmp_path)["state"] == "ok"
 
 
 def test_verify_detects_tampered_event_content_hash(tmp_path: Path) -> None:

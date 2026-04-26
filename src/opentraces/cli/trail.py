@@ -121,6 +121,74 @@ def explain_cmd(
 
 
 @trail_group.command(
+    "follow",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail follow --patch tracepatch-sha256:abc --json",
+        "opentraces trail follow --anchor gitanchor-sha256:def --json",
+    ],
+    see_also=[
+        ("opentraces trail explain", "explain the evidence chain for a Trace Patch."),
+    ],
+    option_groups=[
+        ("Scope", ["trace_patch_id", "git_anchor_id", "project_dir"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.option("--patch", "trace_patch_id", default=None, help="Trace Patch id to follow.")
+@click.option("--anchor", "git_anchor_id", default=None, help="Git Anchor id to follow.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--project",
+    "project_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: CWD).",
+)
+def follow_cmd(
+    trace_patch_id: str | None,
+    git_anchor_id: str | None,
+    as_json: bool,
+    project_dir: Path | None,
+) -> None:
+    """Follow a Trace Patch through later Git history."""
+    from ..core.trails import follow_anchor, follow_patch
+
+    if bool(trace_patch_id) == bool(git_anchor_id):
+        click.echo("Provide exactly one of --patch or --anchor.", err=True)
+        sys.exit(2)
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+    try:
+        payload = (
+            follow_patch(repo, trace_patch_id)
+            if trace_patch_id
+            else follow_anchor(repo, git_anchor_id or "")
+        )
+    except ValueError as exc:
+        click.echo(f"Trace Trail event log is invalid: {exc}", err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to follow trace trail: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    current = payload.get("current_survival") or {}
+    label = payload.get("git_anchor_id") or payload.get("trace_patch_id")
+    click.echo(f"Patch Trail {label}")
+    click.echo(f"  survival: {current.get('survival_state') or 'unknown'}")
+    path = current.get("path")
+    line_range = current.get("range") or {}
+    if path:
+        click.echo(f"  at: {path}:{line_range.get('start_line') or '?'}")
+    for limitation in payload.get("limitations") or current.get("limitations") or []:
+        click.echo(f"  limitation: {limitation}")
+
+
+@trail_group.command(
     "diff",
     cls=OpentracesCommand,
     examples=[

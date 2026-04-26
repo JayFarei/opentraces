@@ -53,6 +53,8 @@ def test_installed_and_chained_with_log(tmp_path):
             "candidates": 2,
             "verdicts": [{"trace_id": "t1", "tier": "tool_emitted"}],
             "notes_written": True,
+            "trail_anchors_created": 3,
+            "trail_anchor_error": None,
             "reason": None,
             "error": None,
         }) + "\n",
@@ -63,6 +65,39 @@ def test_installed_and_chained_with_log(tmp_path):
     assert status["chained_in_post_commit"] is True
     assert status["recent_runs"] == 1
     assert status["last_run"]["candidates"] == 2
+    assert status["last_trail_anchors_created"] == 3
+    assert status["last_trail_anchor_error"] is None
+
+
+def test_installed_and_chained_surfaces_last_trail_anchor_error(tmp_path):
+    _init_repo(tmp_path)
+    hook = tmp_path / ".git" / "hooks" / "opentraces-post-commit"
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    hook.chmod(0o755)
+    chained = tmp_path / ".git" / "hooks" / "post-commit"
+    chained.write_text(
+        '#!/bin/sh\n"$(dirname "$0")"/opentraces-post-commit "$@"\n',
+    )
+    log = tmp_path / ".git" / "opentraces-hook.log"
+    log.write_text(
+        json.dumps({
+            "ts": "2026-04-15T10:00:00+00:00",
+            "sha": "abc123",
+            "candidates": 0,
+            "verdicts": [],
+            "notes_written": False,
+            "trail_anchors_created": 0,
+            "trail_anchor_error": "RuntimeError: synthetic",
+            "reason": "no_traces_in_inbox_window",
+            "error": None,
+        }) + "\n",
+    )
+
+    status = _post_commit_hook_status(tmp_path)
+
+    assert status["state"] == "ok"
+    assert status["last_trail_anchors_created"] == 0
+    assert status["last_trail_anchor_error"] == "RuntimeError: synthetic"
 
 
 def test_installed_never_ran(tmp_path):

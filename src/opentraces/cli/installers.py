@@ -1537,6 +1537,43 @@ def _hooks_section(hooks: list[dict]) -> None:
             _row(kind, name, "installed" if h.get("installed") else "not installed")
 
 
+def _post_commit_hook_section(info: dict) -> None:
+    """Render post-commit hook runtime status, including Trail anchors."""
+    _section("Post-commit hook")
+    state = info.get("state") or "missing"
+    kind = {
+        "ok": "ok",
+        "installed_never_ran": "warn",
+        "installed_not_chained": "warn",
+        "missing": "off",
+    }.get(state, "warn")
+    _row(kind, "status", state, detail=info.get("log_path"))
+    if not info.get("installed"):
+        return
+    _row(
+        "ok" if info.get("chained_in_post_commit") else "warn",
+        "chained",
+        "yes" if info.get("chained_in_post_commit") else "no",
+    )
+    last = info.get("last_run") or {}
+    if not last:
+        return
+    sha = last.get("sha")
+    if sha:
+        _row("ok", "last commit", str(sha)[:12])
+    _row("ok", "candidates", str(last.get("candidates") or 0))
+    if last.get("notes_written"):
+        _row("ok", "notes", "written")
+    else:
+        _row("off", "notes", "not written", detail=last.get("reason"))
+    anchor_error = info.get("last_trail_anchor_error")
+    if anchor_error:
+        _row("err", "trail anchors", "error", detail=str(anchor_error))
+    else:
+        count = info.get("last_trail_anchors_created")
+        _row("ok", "trail anchors", str(count if count is not None else 0))
+
+
 def _skill_row(h: dict) -> None:
     installed = h.get("installed")
     iv = h.get("installed_version")
@@ -1628,6 +1665,7 @@ def _render_doctor_human(report: dict) -> None:
     _attribution_section(report.get("attribution") or {})
     _watcher_section(report.get("watcher") or {})
     _hooks_section(report["hooks"])
+    _post_commit_hook_section(report.get("post_commit_hook") or {})
     _trail_event_log_section(report.get("trail_event_log") or {})
     human_echo("")
 

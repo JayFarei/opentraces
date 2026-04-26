@@ -20,6 +20,7 @@ from .models import (
 )
 
 EVENT_LOG_REF = "refs/opentraces/local/events/v1"
+EVENT_LOG_APPEND_MAX_RETRIES = 5
 
 
 def _utc_now() -> str:
@@ -55,6 +56,41 @@ def _ref_head(cwd: Path) -> str | None:
     if proc.returncode != 0:
         return None
     return proc.stdout.strip()
+
+
+def _zero_object_id(cwd: Path) -> str:
+    proc = _git(cwd, ["rev-parse", "--show-object-format"], check=False)
+    return "0" * 64 if proc.stdout.strip() == "sha256" else "0" * 40
+
+
+def _ref_update_raced(proc: subprocess.CompletedProcess[str]) -> bool:
+    text = f"{proc.stderr}\n{proc.stdout}".lower()
+    return any(
+        marker in text
+        for marker in (
+            "cannot lock ref",
+            "reference already exists",
+            "but expected",
+            "is at",
+        )
+    )
+
+
+def _update_event_log_ref(cwd: Path, commit_sha: str, expected_head: str | None) -> bool:
+    old_value = expected_head or _zero_object_id(cwd)
+    proc = _git(
+        cwd,
+        ["update-ref", EVENT_LOG_REF, commit_sha, old_value],
+        check=False,
+    )
+    if proc.returncode == 0:
+        return True
+    if _ref_update_raced(proc):
+        return False
+    raise RuntimeError(
+        f"git update-ref {EVENT_LOG_REF} failed: "
+        f"{proc.stderr.strip() or proc.stdout.strip()}"
+    )
 
 
 def _hash_blob(cwd: Path, text: str) -> str:
@@ -206,59 +242,65 @@ def append_event_batch(
     cwd = cwd.resolve()
     if not drafts:
         return []
-    head = _ref_head(cwd)
-    existing = read_events(cwd, verify=False)
-    next_sequence = max((event.event_sequence for event in existing), default=0) + 1
-    previous_event_id = existing[-1].event_id if existing else None
-    batch_id = f"batch-{uuid.uuid4().hex}"
+    raw_drafts = [
+        raw if isinstance(raw, TrailEventDraft) else TrailEventDraft.model_validate(raw)
+        for raw in drafts
+    ]
 
-    events: list[TrailEvent] = []
-    for raw in drafts:
-        draft = raw if isinstance(raw, TrailEventDraft) else TrailEventDraft.model_validate(raw)
-        data = {
-            "event_sequence": next_sequence,
-            "event_time": draft.event_time or _utc_now(),
-            "previous_event_id": previous_event_id,
-            "trace_id": draft.trace_id,
-            "generation_index": draft.generation_index,
-            "step_index": draft.step_index,
+    for attempt in range(1, EVENT_LOG_APPEND_MAX_RETRIES + 1):
+        head = _ref_head(cwd)
+        existing = _read_events_from_head(cwd, head) if head else []
+        next_sequence = max((event.event_sequence for event in existing), default=0) + 1
+        previous_event_id = existing[-1].event_id if existing else None
+        batch_id = f"batch-{uuid.uuid4().hex}"
+
+        events: list[TrailEvent] = []
+        for draft in raw_drafts:
+            data = {
+                "event_sequence": next_sequence,
+                "event_time": draft.event_time or _utc_now(),
+                "previous_event_id": previous_event_id,
+                "trace_id": draft.trace_id,
+                "generation_index": draft.generation_index,
+                "step_index": draft.step_index,
+                "batch_id": batch_id,
+                "writer": writer,
+                "capture_method": draft.capture_method,
+                "event_type": draft.event_type,
+                "payload": draft.payload,
+                "SCHEMA_VERSION": None,
+                "SECURITY_VERSION": None,
+                "ATTRIBUTION_VERSION": None,
+            }
+            # Let the model defaults set version fields by omitting explicit None.
+            data = {k: v for k, v in data.items() if v is not None}
+            event = finalize_event(data)
+            events.append(event)
+            next_sequence += 1
+            previous_event_id = event.event_id
+
+        batch = {
             "batch_id": batch_id,
             "writer": writer,
-            "capture_method": draft.capture_method,
-            "event_type": draft.event_type,
-            "payload": draft.payload,
-            "SCHEMA_VERSION": None,
-            "SECURITY_VERSION": None,
-            "ATTRIBUTION_VERSION": None,
+            "previous_event_log_head": head,
+            "event_count": len(events),
         }
-        # Let the model defaults set version fields by omitting explicit None.
-        data = {k: v for k, v in data.items() if v is not None}
-        event = finalize_event(data)
-        events.append(event)
-        next_sequence += 1
-        previous_event_id = event.event_id
+        tree_sha = _write_batch_tree(cwd, events, batch)
+        commit_sha = _commit_batch(cwd, tree_sha, head, batch_id)
 
-    batch = {
-        "batch_id": batch_id,
-        "writer": writer,
-        "previous_event_log_head": head,
-        "event_count": len(events),
-    }
-    tree_sha = _write_batch_tree(cwd, events, batch)
-    commit_sha = _commit_batch(cwd, tree_sha, head, batch_id)
+        if _update_event_log_ref(cwd, commit_sha, head):
+            return events
+        if attempt == EVENT_LOG_APPEND_MAX_RETRIES:
+            break
 
-    if head:
-        _git(cwd, ["update-ref", EVENT_LOG_REF, commit_sha, head])
-    else:
-        _git(cwd, ["update-ref", EVENT_LOG_REF, commit_sha])
-    return events
+    raise RuntimeError(
+        f"{EVENT_LOG_REF} moved during append after "
+        f"{EVENT_LOG_APPEND_MAX_RETRIES} retries"
+    )
 
 
-def read_events(cwd: Path, *, verify: bool = True) -> list[TrailEvent]:
-    head = _ref_head(cwd)
-    if head is None:
-        return []
-    commits = _git(cwd, ["rev-list", "--reverse", EVENT_LOG_REF]).stdout.splitlines()
+def _read_events_from_head(cwd: Path, head: str) -> list[TrailEvent]:
+    commits = _git(cwd, ["rev-list", "--reverse", head]).stdout.splitlines()
     events: list[TrailEvent] = []
     for commit in commits:
         names = _git(cwd, ["ls-tree", "-r", "--name-only", commit, "events"]).stdout.splitlines()
@@ -266,6 +308,14 @@ def read_events(cwd: Path, *, verify: bool = True) -> list[TrailEvent]:
             raw = _git(cwd, ["show", f"{commit}:{name}"]).stdout
             events.append(TrailEvent.model_validate_json(raw))
     events.sort(key=lambda event: event.event_sequence)
+    return events
+
+
+def read_events(cwd: Path, *, verify: bool = True) -> list[TrailEvent]:
+    head = _ref_head(cwd)
+    if head is None:
+        return []
+    events = _read_events_from_head(cwd, head)
     if verify:
         errors = verify_event_log(cwd, events=events)["errors"]
         if errors:
