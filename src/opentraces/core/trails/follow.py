@@ -15,18 +15,24 @@ PHASE4_SURVIVAL_STATES = [
     "lost",
     "unknown",
 ]
-RESERVED_PHASE5_SURVIVAL_STATES = [
+PHASE5_SURVIVAL_STATES = [
     "alive_moved",
     "partially_preserved",
     "repaired",
-    "orphaned",
 ]
+ALL_SURVIVAL_STATES = PHASE4_SURVIVAL_STATES + PHASE5_SURVIVAL_STATES + ["orphaned"]
+# Phase 5 reserves "orphaned" for reference-transaction observation
+# (deferred beyond Phase 5 — see plan §Phase 5 line 248).
+RESERVED_PHASE5_SURVIVAL_STATES = ["orphaned"]
 REVERT_SEARCH_LIMIT = 2000
 PATCH_TRAIL_COMMIT_LIMIT = 500
 OBSERVATION_SCOPE = "anchor_to_head"
 SURVIVAL_PRECEDENCE = {
     "alive_on_path": 50,
+    "alive_moved": 45,
     "alive_transformed": 40,
+    "partially_preserved": 35,
+    "repaired": 32,
     "reverted": 30,
     "lost": 20,
     "unknown": 10,
@@ -142,6 +148,90 @@ def _authored_lines(patch: dict[str, Any]) -> list[str]:
     return authored.splitlines()
 
 
+def _track_rename_path(
+    repo: Path, *, anchor_commit: str, observed_ref: str, original_path: str
+) -> tuple[str, int]:
+    """Walk forward through ``git log --name-status -M`` to track renames.
+
+    Returns ``(current_path, rename_hops)``. When the file was never
+    renamed in the range ``anchor_commit..observed_ref``, returns
+    ``(original_path, 0)``.
+    """
+    out = _git(
+        repo,
+        "log",
+        "-M",
+        "--name-status",
+        "--reverse",
+        "--pretty=format:",
+        f"{anchor_commit}..{observed_ref}",
+        check=False,
+    )
+    current = original_path
+    hops = 0
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[0].startswith("R") and parts[1] == current:
+            current = parts[2]
+            hops += 1
+    return current, hops
+
+
+def _committers_in_range(
+    repo: Path, *, ref: str, path: str, start: int, end: int
+) -> set[str]:
+    """Return the set of committer emails for lines [start..end] at ``ref``."""
+    out = _git(
+        repo,
+        "blame",
+        f"-L{start},{end}",
+        "--line-porcelain",
+        ref,
+        "--",
+        path,
+        check=False,
+    )
+    emails: set[str] = set()
+    for line in out.splitlines():
+        if line.startswith("committer-mail "):
+            email = line.split(" ", 1)[1].strip().strip("<>")
+            if email:
+                emails.add(email)
+    return emails
+
+
+def _commit_author_email(repo: Path, commit: str) -> str | None:
+    out = _git(repo, "log", "-1", "--format=%ae", commit, check=False).strip()
+    return out or None
+
+
+def _count_preserved_lines(
+    authored_lines: list[str], current_text: str
+) -> int:
+    """Count authored lines that survive (whitespace-stripped) anywhere in
+    the current file. Empty lines do not contribute to the count.
+
+    The metric is intentionally line-level rather than character-level so
+    a refactor that splits one authored line across two surviving lines
+    is not double-counted. Phase 5 uses this for partially_preserved /
+    alive_moved gating; future tiers may use AST-aware matching.
+    """
+    if not authored_lines:
+        return 0
+    current_lines_stripped = {
+        line.strip()
+        for line in current_text.splitlines()
+        if line.strip()
+    }
+    return sum(
+        1
+        for line in authored_lines
+        if line.strip() and line.strip() in current_lines_stripped
+    )
+
+
 def _compute_survival(
     repo: Path,
     *,
@@ -211,6 +301,27 @@ def _compute_survival(
 
     current_text = _show_file(repo, observed_ref, path)
     if current_text is None:
+        # File missing at observed_ref. Phase 5 tries rename detection
+        # before declaring the patch lost.
+        new_path, rename_hops = _track_rename_path(
+            repo,
+            anchor_commit=anchor_commit,
+            observed_ref=observed_ref,
+            original_path=path,
+        )
+        if new_path != path and rename_hops > 0:
+            moved_text = _show_file(repo, observed_ref, new_path)
+            if moved_text is not None:
+                preserved = _count_preserved_lines(authored_lines, moved_text)
+                if preserved > 0:
+                    return {
+                        **base,
+                        "survival_state": "alive_moved",
+                        "current_path": new_path,
+                        "rename_hops": rename_hops,
+                        "preserved_line_count": preserved,
+                        "authored_line_count": len(authored_lines),
+                    }
         return {**base, "survival_state": "lost"}
 
     current_lines = current_text.splitlines()
@@ -221,6 +332,43 @@ def _compute_survival(
         if current_range == authored_lines:
             return {**base, "survival_state": "alive_on_path"}
         if len(current_lines) >= start:
+            # Range modified. Phase 5 distinguishes three sub-states.
+            #
+            # 1. ``repaired`` — a different committer than the anchor's
+            #    commit author touched the range. This credits the human
+            #    edit instead of treating it as agent-side transformation.
+            # 2. ``partially_preserved`` — some authored lines survive
+            #    elsewhere in the file but not all. Triggers when
+            #    ``0 < preserved < total``; preserves Phase 4 semantics
+            #    when ``preserved == 0`` (still alive_transformed).
+            # 3. ``alive_transformed`` — Phase 4 fall-through.
+            anchor_email = _commit_author_email(repo, anchor_commit)
+            range_committers = _committers_in_range(
+                repo,
+                ref=observed_ref,
+                path=path,
+                start=start,
+                end=end,
+            )
+            non_anchor_committers = (
+                range_committers - {anchor_email} if anchor_email else range_committers
+            )
+            if non_anchor_committers:
+                return {
+                    **base,
+                    "survival_state": "repaired",
+                    "repair_committer_email": sorted(non_anchor_committers)[0],
+                    "repair_committers": sorted(non_anchor_committers),
+                    "anchor_author_email": anchor_email,
+                }
+            preserved = _count_preserved_lines(authored_lines, current_text)
+            if 0 < preserved < len(authored_lines):
+                return {
+                    **base,
+                    "survival_state": "partially_preserved",
+                    "preserved_line_count": preserved,
+                    "authored_line_count": len(authored_lines),
+                }
             return {**base, "survival_state": "alive_transformed"}
 
     return {**base, "survival_state": "lost"}
@@ -431,6 +579,7 @@ def _follow(
             "trail_limitations": ["no_trace_patch_event"],
             "event_log_ref": EVENT_LOG_REF,
             "phase4_survival_states": PHASE4_SURVIVAL_STATES,
+            "phase5_survival_states": PHASE5_SURVIVAL_STATES,
             "reserved_survival_states": RESERVED_PHASE5_SURVIVAL_STATES,
             "source_events": [],
         }
@@ -449,6 +598,7 @@ def _follow(
             "trail_limitations": ["no_git_anchor_event"],
             "event_log_ref": EVENT_LOG_REF,
             "phase4_survival_states": PHASE4_SURVIVAL_STATES,
+            "phase5_survival_states": PHASE5_SURVIVAL_STATES,
             "reserved_survival_states": RESERVED_PHASE5_SURVIVAL_STATES,
             "source_events": [_source_event(patch_event)],
         }
