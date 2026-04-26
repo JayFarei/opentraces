@@ -18,7 +18,7 @@ After each captured agent session, opentraces parses the trace, runs security
 scanning and redaction, stores it locally, and exposes it through the web UI,
 TUI, and CLI. You review, stage, and push the traces you want to share.
 
-## Current 0.3 Model
+## Current 0.4 Model
 
 - Repo marker: `.opentraces.json`
 - Machine-local state: `~/.opentraces/projects/<slug>/...`
@@ -26,6 +26,7 @@ TUI, and CLI. You review, stage, and push the traces you want to share.
 - Upload vocabulary: `inbox`, `staged`, `pushed`, `rejected`, `blocked`
 - Live capture: Claude Code
 - Dataset import: `opentraces pull --parser hermes`
+- VCS-anchored Trace Trails: `opentraces trail` (`explain`, `diff`, `follow`, `rebuild`, `attach`, `resolve`)
 
 ## Quick Reference
 
@@ -62,6 +63,25 @@ opentraces push --llm-review
 opentraces llm-review --scope staged
 opentraces assess
 opentraces doctor
+```
+
+### Trace Trails
+
+```bash
+opentraces trail explain --trace <id> --step <n>
+opentraces trail explain --trace <id> --step <n> --json
+opentraces trail explain --commit <sha> --json
+opentraces trail explain <path>:<line>
+opentraces trail diff --trace <id> --from-step <a> --to-step <b>
+opentraces trail diff --trace <id> --from-step <a> --to-step <b> --json
+opentraces trail follow --patch <trace_patch_id>
+opentraces trail follow --anchor <git_anchor_id>
+opentraces trail follow --patch <id> --history-limit 1000 --json
+opentraces trail attach --trace <id> --commit <sha>
+opentraces trail rebuild
+opentraces trail resolve ot://trace/<id>/patches/<patch_id>/trail --json
+opentraces trail resolve ot://git-anchor/<git_anchor_id> --json
+opentraces trail resolve ot://file/<path>/line/<n>/origin --json
 ```
 
 ### Remotes, Import, And Export
@@ -351,6 +371,47 @@ opentraces backfill
 by default; pivot to a single trace with `--trace <id>`. Both require a
 populated attribution cache — run `opentraces backfill` when empty.
 
+## Trace Trails
+
+Trace Trails are the VCS-anchored evidence chain from a trace step to a Trace
+Patch, Git Anchor, and Patch Trail. The canonical store is the append-only
+`TrailEvent` log under `refs/opentraces/local/events/v1`. Snapshot refs under
+`refs/opentraces/local/traces/...` are advisory projections, rebuildable from
+the event log via `opentraces trail rebuild`.
+
+`opentraces trail explain` reports Trace Snapshot refs, Trace Patch identity,
+Git Anchor (when present), evidence tier, firmness, source events, and any
+limitations. Steps without a captured patch render as `patch status: no_patch`
+/ `relation: no_patch`.
+
+`opentraces trail follow` reports `current_observations` (one per anchor) and
+`current_survival`. Survival states: `alive_on_path`, `alive_transformed`,
+`reverted`, `lost`, `unknown`, `alive_moved`, `partially_preserved`,
+`repaired`. Bound history with `--history-limit N` (default 500, min 2).
+
+`opentraces trail attach --trace <id> --commit <sha>` retroactively connects
+a trace's evidence to a Git commit when the post-commit hook missed (hook
+failure, daemon crash, out-of-order backfill). New events carry
+`capture_method=["manual_attach"]`. Append-only and idempotent — source events
+are byte-identical after attach.
+
+`opentraces trail rebuild` re-derives the advisory snapshot projections from
+the canonical event log. Idempotent. Use after manual ref cleanup, branch
+surgery, or projection-cache corruption.
+
+`opentraces trail resolve` accepts these stable resource shapes:
+
+- `ot://trace/<trace_id>/patches/<trace_patch_id>/trail`
+- `ot://git-anchor/<git_anchor_id>`
+- `ot://file/<path>/line/<n>/origin`
+
+Anchor identity has two tiers: an exact whitespace-collapsed range hash, and
+a structural-match fallback (line similarity ≥ 0.85). Identity survives
+format-then-commit but firmness drops `firm` → `provisional`.
+
+Exit codes: `2` for missing arguments or generic runtime errors, `3` when
+the Trace Trail event log or `ot://` resource is invalid.
+
 ## Import And Export
 
 ### Import
@@ -381,6 +442,9 @@ opentraces --json show <TRACE_ID>
 opentraces --json config show
 opentraces --json blame abc1234
 opentraces --json backfill
+opentraces --json trail explain --trace <id> --step <n>
+opentraces --json trail follow --patch <patch_id>
+opentraces --json trail resolve ot://git-anchor/<id>
 ```
 
 ## Troubleshooting
@@ -393,6 +457,9 @@ opentraces --json backfill
 | Push failing | Check `auth whoami`, `remote list`, and `doctor` |
 | TruffleHog enabled but missing | Run `opentraces setup trufflehog` or `--disable` |
 | llm-review unreachable | Run `opentraces setup llm-review --test` |
+| `trail explain` shows `no_patch` | Step has no captured snapshot diff; check `opentraces doctor` and event-log integrity |
+| `trail` exits 3 with "event log is invalid" | Run `opentraces trail rebuild` to re-derive advisory projections |
+| Hook failure missed a commit | Run `opentraces trail attach --trace <id> --commit <sha>` |
 
 When removing opentraces from a repo, use:
 

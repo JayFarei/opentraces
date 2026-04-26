@@ -6,7 +6,7 @@ Tip: run `opentraces doctor --security` to see the exact tiers, versions, and co
 
 ## Current User-Facing Tiers
 
-The current 0.3 CLI surfaces these layers:
+The current 0.4 CLI surfaces these layers:
 
 | Tier | Name | Status | What it does |
 |------|------|--------|--------------|

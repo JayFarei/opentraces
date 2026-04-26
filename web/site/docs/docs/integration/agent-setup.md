@@ -40,9 +40,12 @@ opentraces --json status
 opentraces --json list --stage inbox
 opentraces --json show <trace-id>
 opentraces --json config show
+opentraces --json trail explain --trace <id> --step <n>
+opentraces --json trail follow --patch <trace_patch_id>
+opentraces --json trail resolve ot://git-anchor/<git_anchor_id>
 ```
 
-That avoids scraping human-oriented terminal layouts.
+That avoids scraping human-oriented terminal layouts. When a trace has been correlated to a commit, `trail explain` returns the VCS-anchored evidence chain (Trace Patch, Git Anchor, Patch Trail) as structured JSON.
 
 ## Review And Push By Agent
 

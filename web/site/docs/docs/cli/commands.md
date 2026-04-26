@@ -1,6 +1,6 @@
 # Commands
 
-Reference for the current 0.3 `opentraces` CLI.
+Reference for the current 0.4 `opentraces` CLI.
 
 ## Root Command
 
@@ -637,29 +637,132 @@ opentraces trail explain --commit abc1234 --json
 opentraces trail explain src/app.py:42 --json
 opentraces trail diff --trace tr1 --from-step 3 --to-step 4 --json
 opentraces trail follow --patch tracepatch-sha256:abc --json
+opentraces trail attach --trace tr_abc --commit HEAD
+opentraces trail rebuild --json
 opentraces trail resolve ot://git-anchor/gitanchor-sha256:def --json
 ```
 
 Trace Trails are the VCS-anchored evidence chain from an agent step to a Trace
-Patch, Git Anchor, and Patch Trail. `explain` starts from a trace step, commit,
-or file line. `diff` compares captured step snapshots. `follow` observes what
-happened to an anchored Trace Patch after the anchor commit.
+Patch, Git Anchor, and Patch Trail. The canonical store is the append-only
+`TrailEvent` log under `refs/opentraces/local/events/v1`; snapshot refs under
+`refs/opentraces/local/traces/...` are advisory projections that can be rebuilt
+from the event log at any time.
 
-`resolve` accepts stable resource IDs for:
+Subcommands: `explain`, `diff`, `follow`, `attach`, `rebuild`, `resolve`.
 
-- `ot://trace/<trace_id>/patches/<trace_patch_id>/trail`
-- `ot://git-anchor/<git_anchor_id>`
-- `ot://file/<path>/line/<n>/origin`
-
-Trace Slices are bounded context around a Trace Patch, not training data by
-themselves. Current JSON responses include `containing_segment_id` and
-ID-only Trace Slice metadata. Full prompt, tool, observation, test, and file
-content resolution is deferred to the Phase 8 Trace Dataset projection.
+Common flags (every subcommand):
 
 | Flag | Description |
 |------|-------------|
 | `--project DIRECTORY` | Project directory, default CWD. |
 | `--json` | Emit structured JSON instead of text. |
+
+Exit codes: `2` for missing arguments or generic runtime errors, `3` when the
+Trace Trail event log or `ot://` resource is invalid.
+
+#### `trail explain`
+
+Explain the evidence chain for a trace step, commit, or file line.
+
+```bash
+opentraces trail explain --trace tr1 --step 1
+opentraces trail explain --trace tr1 --step 1 --json
+opentraces trail explain --commit abc1234 --json
+opentraces trail explain src/app.py:42 --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `TARGET` (positional) | A `path:line` to explain (alternative to `--trace`/`--commit`). |
+| `--trace TEXT` | Trace id to explain (with `--step`). |
+| `--step INTEGER` | Trace step index. |
+| `--commit TEXT` | Git commit to explain. |
+
+Reports Trace Snapshot refs, Trace Patch identity, Git Anchor (when present),
+evidence tier, firmness, source events, and any limitations. Steps without a
+captured patch render as `patch status: no_patch` / `relation: no_patch`.
+
+#### `trail diff`
+
+Show the Trace Patch between two captured step snapshots.
+
+```bash
+opentraces trail diff --trace tr1 --from-step 1 --to-step 2
+opentraces trail diff --trace tr1 --from-step 1 --to-step 2 --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--trace TEXT` | **Required.** Trace id to diff. |
+| `--from-step INTEGER` | **Required.** Starting step snapshot. |
+| `--to-step INTEGER` | **Required.** Ending step snapshot. |
+
+#### `trail follow`
+
+Follow a Trace Patch through later Git history. Reports `current_observations`
+(one per anchor) and `current_survival` (alive anchors override later lost
+ones). Each observation carries `observation_sequence`, `anchor_trail_index`,
+`observed_commit_time`, and `anchor_descendant_count`.
+
+```bash
+opentraces trail follow --patch tracepatch-sha256:abc --json
+opentraces trail follow --anchor gitanchor-sha256:def --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--patch TEXT` | Trace Patch id to follow (one of `--patch` or `--anchor` is required). |
+| `--anchor TEXT` | Git Anchor id to follow. |
+| `--history-limit INTEGER` | Max commits to observe per Git Anchor (default 500, min 2). |
+
+Survival states reported: `alive_on_path`, `alive_transformed`, `reverted`,
+`lost`, `unknown`, `alive_moved`, `partially_preserved`, `repaired`.
+
+#### `trail attach`
+
+Retroactively connect a trace's evidence to a Git commit when the post-commit
+hook missed (hook failure, daemon crash, out-of-order backfill). New events
+carry `capture_method=["manual_attach"]`. Append-only and idempotent; source
+events are byte-identical after attach.
+
+```bash
+opentraces trail attach --trace tr_abc --commit HEAD
+opentraces trail attach --trace tr_abc --commit abc1234 --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--trace TEXT` | **Required.** Trace id to attach. |
+| `--commit TEXT` | **Required.** Git commit to anchor against. |
+
+#### `trail rebuild`
+
+Re-derive Trace Trails advisory projections (snapshot refs under
+`refs/opentraces/local/traces/...`) from the canonical event log. Use after
+manual ref cleanup, branch surgery, or recovery from a corrupted projection
+cache. The operation is idempotent.
+
+```bash
+opentraces trail rebuild
+opentraces trail rebuild --json
+```
+
+#### `trail resolve`
+
+Resolve a stable `ot://` Trace Trails resource. Returns IDs and metadata
+including `containing_segment_id` without embedding full Trace Slice content.
+
+```bash
+opentraces trail resolve ot://trace/tr1/patches/tracepatch-sha256:abc/trail --json
+opentraces trail resolve ot://git-anchor/gitanchor-sha256:def --json
+opentraces trail resolve ot://file/src/app.py/line/42/origin --json
+```
+
+Trace Slices are bounded context around a Trace Patch, not training data by
+themselves. JSON responses include normalized slice fields
+(`containing_segment_id` plus ID-only Trace Slice metadata) that can be
+resolved through `ot://` references; deeper prompt/tool/observation/file
+content materialization is slated for the Trace Dataset projection.
 
 ### `opentraces blame`
 

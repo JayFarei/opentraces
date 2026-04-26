@@ -1,6 +1,6 @@
 # Supported Agents
 
-0.3 separates live capture from import support.
+0.4 separates live capture from import support.
 
 ## Current Support
 

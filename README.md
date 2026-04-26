@@ -85,6 +85,8 @@ Useful follow-ups:
 - `opentraces trail diff --trace <id> --from-step <a> --to-step <b>` shows the Trace Patch between captured step snapshots.
 - `opentraces trail follow --patch <id>` follows an anchored Trace Patch through Git history and reports current `HEAD` survival.
 - `opentraces trail resolve ot://... --json` resolves stable Trace Trail resource IDs for Trace Patches, Git Anchors, and file-line origins.
+- `opentraces trail attach --trace <id> --commit <sha>` retroactively attaches a trace to a commit when the post-commit hook missed it.
+- `opentraces trail rebuild` re-derives advisory snapshot projections from the canonical event log after manual ref cleanup or branch surgery.
 - `opentraces setup trufflehog` enables Tier 1.5 scanning.
 - `opentraces setup llm-review` configures Tier 2 semantic review.
 - `opentraces push --llm-review` gates uploads on a clean Tier 2 verdict.

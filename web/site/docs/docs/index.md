@@ -11,6 +11,7 @@ opentraces setup            # wire opentraces into your system
 opentraces init             # initialize the project marker
 opentraces web              # or: opentraces tui   — review the inbox
 opentraces blame <sha>      # or: opentraces graph  — inspect attribution
+opentraces trail explain --trace <id> --step <n>   # explain VCS-anchored evidence
 opentraces add <id>         # stage a trace for the next push
 opentraces push             # upload staged traces
 opentraces reject <id>      # say no, keep local only
@@ -45,7 +46,7 @@ The [schema](/docs/schema/overview) is a standalone package and the contract bet
 | **[Installation](/docs/getting-started/installation)** | Install, verify, upgrade, uninstall |
 | **[Authentication](/docs/getting-started/authentication)** | OAuth, PATs, `HF_TOKEN`, auth precedence |
 | **[Quick Start](/docs/getting-started/quickstart)** | Initialize a repo, review traces, upload your first shard |
-| **[Commands](/docs/cli/commands)** | Current 0.3 command reference |
+| **[Commands](/docs/cli/commands)** | Current 0.4 command reference |
 | **[Inbox & Review](/docs/workflow/review)** | Web viewer, TUI, and CLI review loop |
 | **[Push](/docs/workflow/pushing)** | Upload behavior, remotes, visibility, migration, quality badges |
 | **[Security Tiers](/docs/security/tiers)** | Regex, entropy, TruffleHog, Tier 2 review, human approval |

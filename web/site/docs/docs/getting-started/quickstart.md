@@ -105,4 +105,4 @@ ds = load_dataset("your-name/opentraces")
 - [Inbox & Review](/docs/workflow/review) - Web, TUI, and CLI review flows
 - [Push](/docs/workflow/pushing) - Remotes, visibility, migrations, and gates
 - [Security Tiers](/docs/security/tiers) - Review policy and layered scanning
-- [CLI Reference](/docs/cli/commands) - Full 0.3 command surface
+- [CLI Reference](/docs/cli/commands) - Full 0.4 command surface

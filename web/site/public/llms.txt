@@ -26,6 +26,7 @@ opentraces setup            # wire opentraces into your system
 opentraces init             # initialize the project marker
 opentraces web              # or: opentraces tui   — review the inbox
 opentraces blame <sha>      # or: opentraces graph  — inspect attribution
+opentraces trail explain --trace <id> --step <n>   # explain VCS-anchored evidence
 opentraces add <id>         # stage a trace for the next push
 opentraces push             # upload staged traces
 opentraces reject <id>      # say no, keep local only
@@ -60,7 +61,7 @@ The [schema](/docs/schema/overview) is a standalone package and the contract bet
 | **[Installation](/docs/getting-started/installation)** | Install, verify, upgrade, uninstall |
 | **[Authentication](/docs/getting-started/authentication)** | OAuth, PATs, `HF_TOKEN`, auth precedence |
 | **[Quick Start](/docs/getting-started/quickstart)** | Initialize a repo, review traces, upload your first shard |
-| **[Commands](/docs/cli/commands)** | Current 0.3 command reference |
+| **[Commands](/docs/cli/commands)** | Current 0.4 command reference |
 | **[Inbox & Review](/docs/workflow/review)** | Web viewer, TUI, and CLI review loop |
 | **[Push](/docs/workflow/pushing)** | Upload behavior, remotes, visibility, migration, quality badges |
 | **[Security Tiers](/docs/security/tiers)** | Regex, entropy, TruffleHog, Tier 2 review, human approval |
@@ -331,13 +332,13 @@ ds = load_dataset("your-name/opentraces")
 - [Inbox & Review](/docs/workflow/review) - Web, TUI, and CLI review flows
 - [Push](/docs/workflow/pushing) - Remotes, visibility, migrations, and gates
 - [Security Tiers](/docs/security/tiers) - Review policy and layered scanning
-- [CLI Reference](/docs/cli/commands) - Full 0.3 command surface
+- [CLI Reference](/docs/cli/commands) - Full 0.4 command surface
 
 ---
 
 # Commands
 
-Reference for the current 0.3 `opentraces` CLI.
+Reference for the current 0.4 `opentraces` CLI.
 
 ## Root Command
 
@@ -368,6 +369,7 @@ The current public root commands are:
 | `assess` | Score trace quality locally or on a dataset |
 | `web` | Open the browser inbox UI |
 | `tui` | Open the terminal inbox UI |
+| `trail` | Explain VCS-anchored Trace Trails and resolve `ot://` resources |
 | `blame` | Show per-commit attribution for a SHA (optionally one file) |
 | `graph` | Render commit + trace history (commit-primary or trace-primary) |
 | `resume` | Resume the upstream agent session behind a trace |
@@ -963,7 +965,142 @@ Upgrades the opentraces CLI and refreshes project-side files (skill, hooks) wher
 
 ## Advanced Commands
 
-The first commands in this section (`blame`, `graph`, `resume`, `stats`, `log`, `completions`) are part of the default `--help` listing. `backfill`, `git-backfill`, and `watcher` are not: they are real commands but are intentionally hidden from the default listing because they are usually driven by `watcher`, `setup git`, and `setup watcher` respectively.
+The first commands in this section (`trail`, `blame`, `graph`, `resume`, `stats`, `log`, `completions`) are part of the default `--help` listing. `backfill`, `git-backfill`, and `watcher` are not: they are real commands but are intentionally hidden from the default listing because they are usually driven by `watcher`, `setup git`, and `setup watcher` respectively.
+
+### `opentraces trail`
+
+```bash
+opentraces trail explain --trace tr1 --step 4 --json
+opentraces trail explain --commit abc1234 --json
+opentraces trail explain src/app.py:42 --json
+opentraces trail diff --trace tr1 --from-step 3 --to-step 4 --json
+opentraces trail follow --patch tracepatch-sha256:abc --json
+opentraces trail attach --trace tr_abc --commit HEAD
+opentraces trail rebuild --json
+opentraces trail resolve ot://git-anchor/gitanchor-sha256:def --json
+```
+
+Trace Trails are the VCS-anchored evidence chain from an agent step to a Trace
+Patch, Git Anchor, and Patch Trail. The canonical store is the append-only
+`TrailEvent` log under `refs/opentraces/local/events/v1`; snapshot refs under
+`refs/opentraces/local/traces/...` are advisory projections that can be rebuilt
+from the event log at any time.
+
+Subcommands: `explain`, `diff`, `follow`, `attach`, `rebuild`, `resolve`.
+
+Common flags (every subcommand):
+
+| Flag | Description |
+|------|-------------|
+| `--project DIRECTORY` | Project directory, default CWD. |
+| `--json` | Emit structured JSON instead of text. |
+
+Exit codes: `2` for missing arguments or generic runtime errors, `3` when the
+Trace Trail event log or `ot://` resource is invalid.
+
+#### `trail explain`
+
+Explain the evidence chain for a trace step, commit, or file line.
+
+```bash
+opentraces trail explain --trace tr1 --step 1
+opentraces trail explain --trace tr1 --step 1 --json
+opentraces trail explain --commit abc1234 --json
+opentraces trail explain src/app.py:42 --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `TARGET` (positional) | A `path:line` to explain (alternative to `--trace`/`--commit`). |
+| `--trace TEXT` | Trace id to explain (with `--step`). |
+| `--step INTEGER` | Trace step index. |
+| `--commit TEXT` | Git commit to explain. |
+
+Reports Trace Snapshot refs, Trace Patch identity, Git Anchor (when present),
+evidence tier, firmness, source events, and any limitations. Steps without a
+captured patch render as `patch status: no_patch` / `relation: no_patch`.
+
+#### `trail diff`
+
+Show the Trace Patch between two captured step snapshots.
+
+```bash
+opentraces trail diff --trace tr1 --from-step 1 --to-step 2
+opentraces trail diff --trace tr1 --from-step 1 --to-step 2 --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--trace TEXT` | **Required.** Trace id to diff. |
+| `--from-step INTEGER` | **Required.** Starting step snapshot. |
+| `--to-step INTEGER` | **Required.** Ending step snapshot. |
+
+#### `trail follow`
+
+Follow a Trace Patch through later Git history. Reports `current_observations`
+(one per anchor) and `current_survival` (alive anchors override later lost
+ones). Each observation carries `observation_sequence`, `anchor_trail_index`,
+`observed_commit_time`, and `anchor_descendant_count`.
+
+```bash
+opentraces trail follow --patch tracepatch-sha256:abc --json
+opentraces trail follow --anchor gitanchor-sha256:def --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--patch TEXT` | Trace Patch id to follow (one of `--patch` or `--anchor` is required). |
+| `--anchor TEXT` | Git Anchor id to follow. |
+| `--history-limit INTEGER` | Max commits to observe per Git Anchor (default 500, min 2). |
+
+Survival states reported: `alive_on_path`, `alive_transformed`, `reverted`,
+`lost`, `unknown`, `alive_moved`, `partially_preserved`, `repaired`.
+
+#### `trail attach`
+
+Retroactively connect a trace's evidence to a Git commit when the post-commit
+hook missed (hook failure, daemon crash, out-of-order backfill). New events
+carry `capture_method=["manual_attach"]`. Append-only and idempotent; source
+events are byte-identical after attach.
+
+```bash
+opentraces trail attach --trace tr_abc --commit HEAD
+opentraces trail attach --trace tr_abc --commit abc1234 --json
+```
+
+| Flag | Description |
+|------|-------------|
+| `--trace TEXT` | **Required.** Trace id to attach. |
+| `--commit TEXT` | **Required.** Git commit to anchor against. |
+
+#### `trail rebuild`
+
+Re-derive Trace Trails advisory projections (snapshot refs under
+`refs/opentraces/local/traces/...`) from the canonical event log. Use after
+manual ref cleanup, branch surgery, or recovery from a corrupted projection
+cache. The operation is idempotent.
+
+```bash
+opentraces trail rebuild
+opentraces trail rebuild --json
+```
+
+#### `trail resolve`
+
+Resolve a stable `ot://` Trace Trails resource. Returns IDs and metadata
+including `containing_segment_id` without embedding full Trace Slice content.
+
+```bash
+opentraces trail resolve ot://trace/tr1/patches/tracepatch-sha256:abc/trail --json
+opentraces trail resolve ot://git-anchor/gitanchor-sha256:def --json
+opentraces trail resolve ot://file/src/app.py/line/42/origin --json
+```
+
+Trace Slices are bounded context around a Trace Patch, not training data by
+themselves. JSON responses include normalized slice fields
+(`containing_segment_id` plus ID-only Trace Slice metadata) that can be
+resolved through `ot://` references; deeper prompt/tool/observation/file
+content materialization is slated for the Trace Dataset projection.
 
 ### `opentraces blame`
 
@@ -1176,7 +1313,7 @@ Prints or installs shell completion scripts. Both `install` and `uninstall` take
 
 # Supported Agents
 
-0.3 separates live capture from import support.
+0.4 separates live capture from import support.
 
 ## Current Support
 
@@ -1356,8 +1493,9 @@ When `opentraces init` installs the Claude Code hook, capture runs automatically
 2. Parses the raw session into a `TraceRecord`
 3. Filters out trivial traces with fewer than 2 steps or no tool calls
 4. Runs the enrichment and security pipeline
-5. Writes the result into the project's machine-local trace store
-6. Updates local state so the trace surfaces as `inbox`, `staged`, `rejected`, `pushed`, or `blocked`
+5. Records Trace Patch events into the append-only Trace Trails event log under `refs/opentraces/local/events/v1` (consumed by `opentraces trail`)
+6. Writes the result into the project's machine-local trace store
+7. Updates local state so the trace surfaces as `inbox`, `staged`, `rejected`, `pushed`, or `blocked`
 
 ## Enrichment Pipeline
 
@@ -1370,6 +1508,7 @@ Every parsed trace is enriched before staging:
 | Dependencies | Extracts from manifests and install commands | `["flask", "pydantic"]` from `pyproject.toml` |
 | Metrics | Aggregates token counts, cost, cache rates | `cache_hit_rate: 0.91`, `estimated_cost_usd: 3.21` |
 | Security scan | Regex + entropy scan, optional TruffleHog, redaction | sensitive strings rewritten before review |
+| Trace Trails | Records Trace Patches and reconciles Git Anchors after each commit | event log under `refs/opentraces/local/events/v1`, surfaced via `opentraces trail` |
 | Anonymization | Normalizes usernames and local paths | `/Users/alice/project/` becomes a sanitized path |
 
 ## Attribution: the three-layer pipeline
@@ -1381,6 +1520,8 @@ Attribution is built by three resolvers tried in priority order. The strongest a
 3. **`str.find` fallback.** Last-resort textual match of tool output back to the current file content. Low confidence; the resulting `attribution.experimental` is `true`.
 
 The PostToolUse hook is installed alongside the trace-end capture hook by `opentraces init` (and can be reinstalled with `opentraces setup claude-code`). Its events are consumed at parse time, so the post-edit hashes travel with the trace even if the file is later reformatted. This lets the post-commit correlator match ranges across formatter churn and classify the resulting `GitLink` tier.
+
+After the post-commit hook runs, a separate Trace Trail reconciler creates Git Anchor events for the new commit (best-effort, non-fatal). Anchor identity has two tiers: an exact whitespace-collapsed range hash, and a structural-match fallback (line similarity ≥ 0.85) for format-then-commit cases. See [`opentraces trail`](/docs/cli/commands#opentraces-trail) in the CLI reference.
 
 ## Review Policy Interaction
 
@@ -1959,7 +2100,7 @@ opentraces push --no-trufflehog
 | `--migrate-remote / --no-migrate-remote` | prompt | Auto-migrate older schema shards on the remote |
 | `-y, --yes` | off | Skip interactive prompts, including migration confirmation |
 
-`--approved-only` is not part of the 0.3 CLI.
+`--approved-only` is not part of the current CLI.
 
 ## Security Gates
 
@@ -2899,7 +3040,7 @@ Tip: run `opentraces doctor --security` to see the exact tiers, versions, and co
 
 ## Current User-Facing Tiers
 
-The current 0.3 CLI surfaces these layers:
+The current 0.4 CLI surfaces these layers:
 
 | Tier | Name | Status | What it does |
 |------|------|--------|--------------|
@@ -3331,9 +3472,12 @@ opentraces --json status
 opentraces --json list --stage inbox
 opentraces --json show <trace-id>
 opentraces --json config show
+opentraces --json trail explain --trace <id> --step <n>
+opentraces --json trail follow --patch <trace_patch_id>
+opentraces --json trail resolve ot://git-anchor/<git_anchor_id>
 ```
 
-That avoids scraping human-oriented terminal layouts.
+That avoids scraping human-oriented terminal layouts. When a trace has been correlated to a commit, `trail explain` returns the VCS-anchored evidence chain (Trace Patch, Git Anchor, Patch Trail) as structured JSON.
 
 ## Review And Push By Agent
 

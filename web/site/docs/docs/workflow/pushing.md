@@ -35,7 +35,7 @@ opentraces push --no-trufflehog
 | `--migrate-remote / --no-migrate-remote` | prompt | Auto-migrate older schema shards on the remote |
 | `-y, --yes` | off | Skip interactive prompts, including migration confirmation |
 
-`--approved-only` is not part of the 0.3 CLI.
+`--approved-only` is not part of the current CLI.
 
 ## Security Gates
 

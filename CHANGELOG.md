@@ -5,6 +5,100 @@ All notable changes to the opentraces CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-04-26
+
+This release ships **Trace Trails Phase 5**: a VCS-anchored evidence
+substrate that links agent trace steps to the Git history that accepted
+their patches. Trace Trails are exposed via a new `opentraces trail`
+command group, an append-only `TrailEvent` log, and stable `ot://`
+resource identifiers. The substrate is designed to survive
+format-then-commit pipelines, hook failures, and Git history rewrites
+without losing replayability.
+
+### Added
+
+- New `opentraces trail` command group with six subcommands:
+  - `trail explain` — explain the evidence chain for a trace step,
+    commit, or `path:line` target. Reports Trace Snapshot refs, Trace
+    Patch identity, Git Anchor (when present), evidence tier, firmness,
+    source events, and limitations.
+  - `trail diff --trace <id> --from-step <a> --to-step <b>` — emit the
+    Trace Patch between two captured step snapshots.
+  - `trail follow --patch <id>` / `--anchor <id>` — follow an anchored
+    Trace Patch through later Git history. Reports `current_observations`
+    (one per anchor) and `current_survival`. Bound by `--history-limit N`
+    (default 500, min 2).
+  - `trail rebuild` — re-derive advisory snapshot refs under
+    `refs/opentraces/local/traces/...` from the canonical event log.
+    Idempotent.
+  - `trail attach --trace <id> --commit <sha>` — retroactively connect a
+    trace's evidence to a Git commit after a hook failure. New events
+    carry `capture_method=["manual_attach"]`. Append-only and idempotent;
+    source events are byte-identical after attach.
+  - `trail resolve <ot://...>` — resolve stable resource IDs:
+    `ot://trace/<id>/patches/<patch_id>/trail`,
+    `ot://git-anchor/<id>`, `ot://file/<path>/line/<n>/origin`.
+- Append-only `TrailEvent` batch log under
+  `refs/opentraces/local/events/v1`. Batch commits embed snapshot trees
+  as subtrees so the log survives `git gc --prune=now --aggressive`.
+- Post-commit Trace Trail anchors with two-tier identity: exact
+  whitespace-collapsed range hash first, structural-match fallback (line
+  similarity ≥ 0.85). Firmness drops `firm` → `provisional` on fallback
+  so consumers can filter by confidence.
+- Watcher reconciler that consumes `filesystem_mutation_observed` events
+  alongside `trace_step_window_opened` / `trace_step_window_closed`
+  events and emits or upgrades `trace_patch_created` events with
+  `capture_method=["...", "watcher_backstop"]` only when the mutation
+  interval is fully inside exactly one writer's *firm* step window.
+  Idempotent: re-running on the same event set produces identical
+  attributions, keyed by `observation_event_id`.
+- Format-then-commit handling and `git_anchor_superseded` events tagged
+  `capture_method=["post_rewrite_hook"]` for `git commit --amend`,
+  `rebase`, and `reset`-then-recommit. Cherry-pick is not treated as a
+  rewrite — both commits coexist and both receive anchors.
+- Survival states extended beyond the Phase 4 set with `alive_moved`
+  (rename detection via `git log -M --name-status`),
+  `partially_preserved` (subset of authored lines survives elsewhere in
+  the file), and `repaired` (a non-anchor committer touched the anchored
+  range, detected via `git blame --line-porcelain`).
+- Closed `capture_limitations` vocabulary on TrailEvents:
+  `concurrent_writer_overlap`, `unbounded_mutation_window`,
+  `background_process_overlap`, `hook_only`,
+  `hook_payload_state_mismatch`, `session_terminated_unexpectedly`,
+  `watcher_buffer_overflow`, `incomplete_step_window_capture`.
+  Trail-construction limitations such as
+  `patch_trail_history_truncated` are reported separately under
+  `trail_limitations` at the response root.
+- Slice resource resolution: `trail resolve` returns normalized slice
+  fields (`containing_segment_id` plus ID-only Trace Slice metadata)
+  that can be navigated through `ot://` references. Deeper
+  prompt/tool/observation/file content materialization is slated for
+  the Trace Dataset projection.
+
+### Changed
+
+- Capture hook installer now uses `sys.executable` instead of a
+  hard-coded `python3` and prunes stale opentraces hook entries during
+  reinstall, so virtualenv installs and pyenv shims work without PATH
+  gymnastics.
+- `otd` development shim now reports `prog_name="otd"` so help and
+  error output render correctly when used in place of the installed
+  `opentraces` console script.
+
+### Fixed
+
+- `opentraces trail explain` text output for steps without a captured
+  patch now reports `patch status: no_patch` / `relation: no_patch`
+  instead of an empty/ambiguous block.
+- `opentraces trail explain` slice fields are normalized between text
+  and JSON output paths.
+- Phase 5 reconciler hardening: firm-window enforcement, project-local
+  lock to serialize concurrent reconciliations, and stricter validation
+  of TrailEvent batches.
+
+`SCHEMA_VERSION` unchanged (`opentraces-schema` remains `0.3.0`).
+`SECURITY_VERSION` unchanged at `0.3.0`.
+
 ## [0.3.3] - 2026-04-20
 
 ### Fixed
