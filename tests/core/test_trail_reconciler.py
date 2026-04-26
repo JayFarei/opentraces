@@ -456,6 +456,140 @@ def test_watcher_observation_alone_does_not_assign_attribution(
     assert patch_events == []
 
 
+def test_background_process_overlap_records_limitation(tmp_path: Path) -> None:
+    """Plan §Phase 5 edge fixture #4.
+
+    A hook emitted a ``trace_patch_created`` for ``formatted.py``. Two
+    watcher observations land inside the same firm window: one carries
+    ``concurrent_activity=True`` (e.g., a formatter daemon also writing
+    to the file), the other carries ``concurrent_activity=False``.
+
+    The reconciler must produce one attribution row per observation:
+
+    * The concurrent-activity observation is recorded as ``ambiguous``
+      with ``capture_limitations=[background_process_overlap]``. Unlike
+      the concurrent-writer-overlap case, this attribution KEEPS the
+      writer identity (trace_id, step_index) because the window itself
+      is unique — only the contributing process is uncertain.
+    * The clean observation is recorded as ``attributed`` and triggers
+      exactly one patch upgrade.
+
+    The patch is upgraded once, not twice — the in-loop update of
+    ``index["upgraded_patches"]`` is load-bearing for byte-stable
+    replay.
+    """
+    _init_repo(tmp_path)
+    target = tmp_path / "formatted.py"
+    before_text = "x = 1\n"
+    target.write_text(before_text)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed formatted"], cwd=tmp_path, check=True
+    )
+    before_blob = GitObjectID(hex=_hash_object(tmp_path, before_text))
+    after_text = "x = 2\n"
+    target.write_text(after_text)
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, after_text))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+    )
+
+    _emit_hook_patch(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        file_path="formatted.py",
+        trace_patch_id="tracepatch-sha256:fixture-tr1-step1-formatted",
+        before_blob=before_blob,
+        after_blob=after_blob,
+        snapshot_before_id="snapshot-pre-fixture",
+        snapshot_after_id="snapshot-post-fixture",
+        authored_text="x = 2\n",
+    )
+
+    obs_ambiguous = append_filesystem_mutation_observed(
+        tmp_path,
+        path="formatted.py",
+        observed_at_start="2026-04-26T10:00:02Z",
+        observed_at_end="2026-04-26T10:00:04Z",
+        before_blob_id=before_blob,
+        after_blob_id=after_blob,
+        concurrent_activity=True,
+    )
+    obs_clean = append_filesystem_mutation_observed(
+        tmp_path,
+        path="formatted.py",
+        observed_at_start="2026-04-26T10:00:06Z",
+        observed_at_end="2026-04-26T10:00:08Z",
+        before_blob_id=before_blob,
+        after_blob_id=after_blob,
+        concurrent_activity=False,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["background_process_overlap"] == 1
+    assert summary["attributed"] == 1
+    assert summary["patches_upgraded"] == 1, "patch upgraded exactly once"
+    assert summary["concurrent_writer_overlap"] == 0
+    assert summary["unbounded_mutation_window"] == 0
+
+    events = read_events(tmp_path)
+    attributions = [
+        e for e in events if e.event_type == "watcher_observation_attributed"
+    ]
+    assert len(attributions) == 2
+    by_obs = {a.payload["observation_event_id"]: a for a in attributions}
+    ambiguous = by_obs[obs_ambiguous.event_id]
+    clean = by_obs[obs_clean.event_id]
+
+    # Ambiguous: window is unique, but a background process contributed.
+    # Keep the writer identity; the limitation flags the noise.
+    assert ambiguous.payload["result"] == "ambiguous"
+    assert ambiguous.payload["capture_limitations"] == [
+        "background_process_overlap"
+    ]
+    assert ambiguous.trace_id == "tr1"
+    assert ambiguous.step_index == 1
+    assert "candidate_windows" not in ambiguous.payload
+    assert "upgraded_trace_patch_id" not in ambiguous.payload
+
+    # Clean: triggers the patch upgrade.
+    assert clean.payload["result"] == "attributed"
+    assert clean.payload["capture_limitations"] == []
+    assert clean.trace_id == "tr1"
+    assert clean.step_index == 1
+    assert (
+        clean.payload["upgraded_trace_patch_id"]
+        == "tracepatch-sha256:fixture-tr1-step1-formatted"
+    )
+
+    # Exactly one patch event carries watcher_backstop — the in-loop
+    # upgrade dedup prevents a second upgrade for the same trace_patch_id.
+    upgraded_patches = [
+        e
+        for e in events
+        if e.event_type == "trace_patch_created"
+        and "watcher_backstop" in e.capture_method
+    ]
+    assert len(upgraded_patches) == 1
+
+
 def test_mutation_outside_step_windows_records_unbounded_mutation_window(
     tmp_path: Path,
 ) -> None:
