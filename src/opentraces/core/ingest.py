@@ -358,6 +358,20 @@ def _ingest_locked(
     # record we are about to write below (``next_generation``).
     final_record.generation_index = next_generation
 
+    # Trace Trails Phase 2: hook metadata is parsed before the canonical
+    # trace_id exists. Emit the local event-log projection after identity and
+    # generation are known. This substrate must not make normal inbox capture
+    # fragile, so TrailEvent write failures are logged but non-fatal.
+    try:
+        from .trails import emit_step_window_events_from_record
+
+        emit_step_window_events_from_record(project_dir, final_record)
+    except Exception:
+        logger.warning(
+            "trace trail event emission failed for %s", trace_id,
+            exc_info=True,
+        )
+
     # Write the staging JSONL (idempotent overwrite).
     staging_dir = get_project_traces_dir(project_dir)
     staging_dir.mkdir(parents=True, exist_ok=True)

@@ -11,9 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from opentraces_schema.models import TraceRecord
+
 from ...enrichment.attribution import _parse_diff_hunks_with_content
 from .event_log import append_event_batch
-from .models import GitObjectID, TrailEventDraft
+from .models import GitObjectID, TrailEvent, TrailEventDraft
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,12 @@ class StepWindowOpenResult:
     tree_id: dict[str, str]
     git_head: dict[str, str] | None
     event_id: str
+
+
+@dataclass(frozen=True)
+class StepTrailEmissionResult:
+    emitted_events: list[TrailEvent]
+    skipped_tool_calls: int = 0
 
 
 def _utc_now() -> str:
@@ -67,6 +75,66 @@ def _head_id(repo: Path) -> dict[str, str] | None:
     if not out:
         return None
     return GitObjectID(hex=out).model_dump(mode="json")
+
+
+def _is_git_worktree(repo: Path) -> bool:
+    return _git(repo, ["rev-parse", "--is-inside-work-tree"], check=False) == "true"
+
+
+def _object_type(repo: Path, oid_hex: str) -> str | None:
+    out = _git(repo, ["cat-file", "-t", oid_hex], check=False)
+    return out or None
+
+
+def _git_toplevel(path: Path) -> Path | None:
+    out = _git(path, ["rev-parse", "--show-toplevel"], check=False)
+    if not out:
+        return None
+    try:
+        return Path(out).resolve()
+    except Exception:
+        return None
+
+
+def _trail_tree_id(repo: Path, hook_entry: dict[str, Any]) -> dict[str, str] | None:
+    trail = hook_entry.get("trail") or {}
+    tree_id = trail.get("tree_id")
+    if not tree_id:
+        return None
+    try:
+        typed = GitObjectID.model_validate(tree_id).model_dump(mode="json")
+    except Exception:
+        return None
+    if _object_type(repo, typed["hex"]) != "tree":
+        return None
+    return typed
+
+
+def _trail_git_head(hook_entry: dict[str, Any]) -> dict[str, str] | None:
+    trail = hook_entry.get("trail") or {}
+    git_head = trail.get("git_head")
+    if not git_head:
+        return None
+    try:
+        return GitObjectID.model_validate(git_head).model_dump(mode="json")
+    except Exception:
+        return None
+
+
+def _trail_matches_repo(repo: Path, hook_entry: dict[str, Any]) -> bool:
+    worktree_root = ((hook_entry.get("trail") or {}).get("worktree_root") or "").strip()
+    if not worktree_root:
+        return True
+    try:
+        hook_root = Path(worktree_root).resolve()
+        repo_root = repo.resolve()
+    except Exception:
+        return False
+    if hook_root == repo_root:
+        return True
+    repo_top = _git_toplevel(repo_root)
+    hook_top = _git_toplevel(hook_root)
+    return repo_top is not None and repo_top == hook_top
 
 
 def write_worktree_tree(repo: Path) -> dict[str, str]:
@@ -306,6 +374,195 @@ def close_step_window_with_snapshot(
     )
     _create_snapshot_ref(repo, ref, tree_id["hex"])
     return SnapshotResult(snapshot_id=snapshot_id, tree_id=tree_id, ref=ref)
+
+
+def emit_step_window_events_from_record(
+    repo: Path,
+    record: TraceRecord,
+    *,
+    writer: str = "capture-claude-code",
+) -> StepTrailEmissionResult:
+    """Emit Trace Trail step-window events from parsed Claude Code hook metadata.
+
+    The parser preserves PreToolUse/PostToolUse hook boundary facts before the
+    final ``trace_id`` is known. Ingest calls this after assigning the canonical
+    trace identity and generation index, turning those local facts into the
+    append-only TrailEvent log.
+    """
+    repo = repo.resolve()
+    if not _is_git_worktree(repo):
+        return StepTrailEmissionResult(emitted_events=[])
+
+    metadata = record.metadata or {}
+    pre_hooks = metadata.get("hook_pre_tool_use") or {}
+    post_hooks = metadata.get("hook_post_tool_use") or {}
+    if not isinstance(pre_hooks, dict) or not isinstance(post_hooks, dict):
+        return StepTrailEmissionResult(emitted_events=[])
+
+    from .event_log import read_events
+
+    existing = read_events(repo, verify=False)
+    existing_windows = {
+        (
+            event.event_type,
+            event.trace_id,
+            event.generation_index,
+            event.step_index,
+            event.payload.get("tool_call_id"),
+        )
+        for event in existing
+        if event.event_type in {"trace_step_window_opened", "trace_step_window_closed"}
+    }
+    existing_snapshots = {
+        event.payload.get("snapshot_id")
+        for event in existing
+        if event.event_type == "trace_snapshot_created"
+    }
+
+    drafts: list[TrailEventDraft] = []
+    snapshot_refs: list[tuple[str, str]] = []
+    skipped = 0
+
+    for step in record.steps:
+        for tool_call in step.tool_calls:
+            tool_call_id = tool_call.tool_call_id
+            pre = pre_hooks.get(tool_call_id)
+            post = post_hooks.get(tool_call_id)
+            if not isinstance(pre, dict) or not isinstance(post, dict):
+                skipped += 1
+                continue
+            if not _trail_matches_repo(repo, pre) or not _trail_matches_repo(repo, post):
+                skipped += 1
+                continue
+
+            pre_tree_id = _trail_tree_id(repo, pre)
+            post_tree_id = _trail_tree_id(repo, post)
+            if not pre_tree_id or not post_tree_id:
+                skipped += 1
+                continue
+
+            pre_git_head = _trail_git_head(pre)
+            post_git_head = _trail_git_head(post)
+            generation_index = record.generation_index
+            agent_step_id = f"step_{step.step_index}"
+
+            open_key = (
+                "trace_step_window_opened",
+                record.trace_id,
+                generation_index,
+                step.step_index,
+                tool_call_id,
+            )
+            if open_key not in existing_windows:
+                existing_windows.add(open_key)
+                drafts.append(
+                    TrailEventDraft(
+                        event_type="trace_step_window_opened",
+                        trace_id=record.trace_id,
+                        generation_index=generation_index,
+                        step_index=step.step_index,
+                        event_time=pre.get("timestamp"),
+                        capture_method=["hook_pretooluse"],
+                        payload=_window_payload(
+                            repo,
+                            trace_id=record.trace_id,
+                            generation_index=generation_index,
+                            step_index=step.step_index,
+                            agent_step_id=agent_step_id,
+                            tool_call_id=tool_call_id,
+                            tree_id=pre_tree_id,
+                            git_head=pre_git_head,
+                            event_time=pre.get("timestamp") or _utc_now(),
+                            capture_method=["hook_pretooluse"],
+                            boundary_firmness="firm",
+                            limitations=[],
+                            boundary="opened",
+                        ),
+                    )
+                )
+
+            capture_status = post.get("capture_status") or "captured"
+            limitations = _normalized_limitations(
+                capture_status,
+                post.get("limitations") if isinstance(post.get("limitations"), list) else None,
+            )
+            snapshot_id = _id(
+                "snapshot",
+                {
+                    "trace_id": record.trace_id,
+                    "generation_index": generation_index,
+                    "step_index": step.step_index,
+                    "tree_id": post_tree_id,
+                },
+            )
+            ref = (
+                f"refs/opentraces/local/traces/{record.trace_id}/{generation_index}"
+                f"/snapshots/step_{step.step_index}"
+            )
+            if snapshot_id not in existing_snapshots:
+                existing_snapshots.add(snapshot_id)
+                drafts.append(
+                    TrailEventDraft(
+                        event_type="trace_snapshot_created",
+                        trace_id=record.trace_id,
+                        generation_index=generation_index,
+                        step_index=step.step_index,
+                        event_time=post.get("timestamp"),
+                        capture_method=["hook_posttooluse"],
+                        payload={
+                            "snapshot_id": snapshot_id,
+                            "snapshot_role": "after",
+                            "agent_step_id": agent_step_id,
+                            "tool_call_id": tool_call_id,
+                            "tree_id": post_tree_id,
+                            "git_head": post_git_head,
+                            "base_commit": post_git_head,
+                            "capture_status": capture_status,
+                            "limitations": limitations,
+                        },
+                    )
+                )
+                snapshot_refs.append((ref, post_tree_id["hex"]))
+
+            close_key = (
+                "trace_step_window_closed",
+                record.trace_id,
+                generation_index,
+                step.step_index,
+                tool_call_id,
+            )
+            if close_key not in existing_windows:
+                existing_windows.add(close_key)
+                drafts.append(
+                    TrailEventDraft(
+                        event_type="trace_step_window_closed",
+                        trace_id=record.trace_id,
+                        generation_index=generation_index,
+                        step_index=step.step_index,
+                        event_time=post.get("timestamp"),
+                        capture_method=["hook_posttooluse"],
+                        payload=_window_payload(
+                            repo,
+                            trace_id=record.trace_id,
+                            generation_index=generation_index,
+                            step_index=step.step_index,
+                            agent_step_id=agent_step_id,
+                            tool_call_id=tool_call_id,
+                            tree_id=post_tree_id,
+                            git_head=post_git_head,
+                            event_time=post.get("timestamp") or _utc_now(),
+                            capture_method=["hook_posttooluse"],
+                            boundary_firmness="firm",
+                            limitations=limitations,
+                            boundary="closed",
+                        ),
+                    )
+                )
+
+    emitted = append_event_batch(repo, drafts, writer=writer)
+    for ref, tree_hex in snapshot_refs:
+        _create_snapshot_ref(repo, ref, tree_hex)
+    return StepTrailEmissionResult(emitted_events=emitted, skipped_tool_calls=skipped)
 
 
 def append_step_snapshot(

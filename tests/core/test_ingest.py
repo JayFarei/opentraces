@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,16 @@ def _append_turns(path: Path, session_id: str, *, start: int, count: int) -> Non
                 f.write(json.dumps(line) + "\n")
 
 
+def _init_git_repo(repo: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+    (repo / "x.py").write_text("VALUE = 'old'\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
+
+
 @pytest.fixture
 def project_dir(tmp_path):
     """A minimal opted-in project dir.
@@ -172,6 +183,151 @@ class TestIngestOneSession:
         staging = get_project_traces_dir(project_dir) / f"{gen.trace_id}.jsonl"
         assert staging.exists()
         assert staging.stat().st_size > 0
+
+    def test_hook_boundaries_emit_trace_trail_snapshots_for_captured_session(
+        self, project_dir, tmp_path
+    ) -> None:
+        from click.testing import CliRunner
+
+        from opentraces.cli import main
+        from opentraces.core.config import get_project_traces_dir
+        from opentraces.core.ingest import ingest_one_session
+        from opentraces.core.trails import read_events, write_worktree_tree
+
+        _init_git_repo(project_dir)
+        session_id = "sess-trail"
+        x_path = project_dir / "x.py"
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=project_dir, text=True
+        ).strip()
+        head_id = {"algo": "sha1", "hex": head}
+        before_tree = write_worktree_tree(project_dir)
+        x_path.write_text("VALUE = 'new-from-hooked-session'\n")
+        after_tree = write_worktree_tree(project_dir)
+
+        def hook_event(
+            event: str,
+            tool_id: str,
+            tool_name: str,
+            timestamp: str,
+            tree_id: dict,
+            **extra: object,
+        ) -> dict:
+            data = {
+                "tool": tool_name,
+                "tool_use_id": tool_id,
+                "tool_input": {"file_path": str(x_path)},
+                "trail": {
+                    "worktree_root": str(project_dir),
+                    "tree_id": tree_id,
+                    "git_head": head_id,
+                },
+            }
+            data.update(extra)
+            return {
+                "type": "opentraces_hook",
+                "event": event,
+                "timestamp": timestamp,
+                "data": data,
+            }
+
+        session_path = tmp_path / "corpus" / f"{session_id}.jsonl"
+        session_path.parent.mkdir(parents=True)
+        lines = [
+            *_turn(1, session_id, tool_id="read_1"),
+            hook_event(
+                "PreToolUse", "read_1", "Read", "2026-04-15T07:00:11Z", before_tree
+            ),
+            hook_event(
+                "PostToolUse", "read_1", "Read", "2026-04-15T07:00:12Z",
+                before_tree, capture_status="hook_only", limitations=["hook_only"],
+            ),
+            *_turn(2, session_id, tool_id="write_2"),
+            hook_event(
+                "PreToolUse", "write_2", "Write", "2026-04-15T07:00:21Z", before_tree
+            ),
+            hook_event(
+                "PostToolUse", "write_2", "Write", "2026-04-15T07:00:22Z",
+                after_tree, file_path=str(x_path), start_line=1, end_line=1,
+                content_hash="murmur3:0", confidence="high",
+            ),
+        ]
+        with session_path.open("w") as f:
+            for line in lines:
+                f.write(json.dumps(line) + "\n")
+
+        result = ingest_one_session(session_path, project_dir)
+
+        assert result.action == "new"
+        assert result.trace_id is not None
+        staging = get_project_traces_dir(project_dir) / f"{result.trace_id}.jsonl"
+        record = json.loads(staging.read_text())
+        step_by_tool = {
+            tc["tool_call_id"]: step["step_index"]
+            for step in record["steps"]
+            for tc in step.get("tool_calls", [])
+        }
+        read_step = step_by_tool["read_1"]
+        write_step = step_by_tool["write_2"]
+
+        events = [
+            event for event in read_events(project_dir)
+            if event.trace_id == result.trace_id
+        ]
+        assert [event.event_type for event in events] == [
+            "trace_step_window_opened",
+            "trace_snapshot_created",
+            "trace_step_window_closed",
+            "trace_step_window_opened",
+            "trace_snapshot_created",
+            "trace_step_window_closed",
+        ]
+        snapshots = [
+            event for event in events
+            if event.event_type == "trace_snapshot_created"
+        ]
+        assert {event.step_index for event in snapshots} == {read_step, write_step}
+        assert snapshots[0].payload["tree_id"] == before_tree
+        assert snapshots[0].payload["capture_status"] == "hook_only"
+        assert "hook_only" in snapshots[0].payload["limitations"]
+        assert snapshots[1].payload["tree_id"] == after_tree
+        assert snapshots[1].payload["capture_status"] == "captured"
+        for snapshot in snapshots:
+            subprocess.run(
+                ["git", "cat-file", "-e", snapshot.payload["tree_id"]["hex"]],
+                cwd=project_dir,
+                check=True,
+            )
+            ref = (
+                f"refs/opentraces/local/traces/{result.trace_id}/1"
+                f"/snapshots/step_{snapshot.step_index}"
+            )
+            subprocess.run(["git", "rev-parse", "--verify", ref], cwd=project_dir, check=True)
+
+        refreshed = ingest_one_session(session_path, project_dir, reparse=True)
+        assert refreshed.action == "refreshed"
+        assert refreshed.trace_id == result.trace_id
+        assert [
+            event.event_id for event in read_events(project_dir)
+            if event.trace_id == result.trace_id
+        ] == [event.event_id for event in events]
+
+        diff = CliRunner().invoke(
+            main,
+            [
+                "trail", "diff",
+                "--trace", result.trace_id,
+                "--from-step", str(read_step),
+                "--to-step", str(write_step),
+                "--json",
+                "--project", str(project_dir),
+            ],
+        )
+        assert diff.exit_code == 0, diff.output
+        payload = json.loads(diff.output)
+        assert payload["from_tree_id"] == before_tree
+        assert payload["to_tree_id"] == after_tree
+        assert "new-from-hooked-session" in payload["trace_patch"]["patch"]
 
     def test_unchanged_file_is_noop(self, project_dir) -> None:
         from opentraces.core.ingest import ingest_one_session
