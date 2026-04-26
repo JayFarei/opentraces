@@ -191,9 +191,18 @@ follow --patch <trace_patch_id>` and `--anchor <git_anchor_id>` report bounded
 chronological survival observations from each Git Anchor to current `HEAD`;
 `current_observations` contains one latest observation per anchor, and
 `current_survival` aggregates those latest answers so any alive anchor wins over
-later lost anchors. Phase 4 states are `alive_on_path`, `alive_transformed`,
-`reverted`, `lost`, and `unknown`. Rename, partial preservation, repair, and
-orphan reasoning are reserved for the Phase 5 reconciler.
+later lost anchors. Each observation carries `observation_sequence` (global,
+contiguous), `anchor_trail_index` (per-anchor), `observed_commit_time`, and
+`anchor_descendant_count` so consumers can sort, group, or compute truncation
+gaps without re-walking Git. Use `--history-limit N` to bound how many commits
+per anchor are observed (default 500). Trail-construction limitations such as
+`patch_trail_history_truncated` land in `trail_limitations` at the response
+root; per-commit lookup limitations stay on each observation. These are
+intentionally separate from the Phase 5 capture-time `capture_limitations`
+vocabulary on TrailEvents. Phase 4 states are `alive_on_path`,
+`alive_transformed`, `reverted`, `lost`, and `unknown`. Rename, partial
+preservation, repair, and orphan reasoning are reserved for the Phase 5
+reconciler.
 
 ## Docs
 

@@ -82,9 +82,32 @@ def _commit_id(repo: Path, ref: str) -> dict[str, str] | None:
     return _oid(_git(repo, "rev-parse", ref, check=False).strip())
 
 
+def _commit_time(repo: Path, ref: str) -> int | None:
+    out = _git(repo, "log", "-1", "--format=%ct", ref, check=False).strip()
+    if not out:
+        return None
+    try:
+        return int(out)
+    except ValueError:
+        return None
+
+
 def _show_file(repo: Path, ref: str, path: str) -> str | None:
     out = _git(repo, "show", f"{ref}:{path}", check=False)
     return out if out else None
+
+
+def _parse_log_line(line: str) -> tuple[str, int | None]:
+    parts = line.strip().split(maxsplit=1)
+    if not parts or not parts[0]:
+        return ("", None)
+    sha = parts[0]
+    if len(parts) == 2:
+        try:
+            return (sha, int(parts[1]))
+        except ValueError:
+            return (sha, None)
+    return (sha, None)
 
 
 def _find_revert_commit(
@@ -125,9 +148,14 @@ def _compute_survival(
     patch: dict[str, Any],
     anchor: dict[str, Any],
     observed_ref: str = "HEAD",
+    head_id: dict[str, str] | None = None,
+    observed_commit_time: int | None = None,
 ) -> dict[str, Any]:
     observed_commit_id = _commit_id(repo, observed_ref)
-    head_id = _head_id(repo)
+    if head_id is None:
+        head_id = _head_id(repo)
+    if observed_commit_time is None and observed_commit_id is not None:
+        observed_commit_time = _commit_time(repo, observed_ref)
     commit_id = anchor.get("commit_id") or {}
     anchor_commit = commit_id.get("hex")
     path = anchor.get("path") or patch.get("file_path")
@@ -141,6 +169,7 @@ def _compute_survival(
         "anchor_commit_id": commit_id or None,
         "observed_ref": observed_ref,
         "observed_commit_id": observed_commit_id,
+        "observed_commit_time": observed_commit_time,
         "path": path,
         "range": anchor_range or None,
         "evidence_tier": anchor.get("evidence_tier") or "unknown",
@@ -218,10 +247,22 @@ def _aggregate_current_survival(
 def _commits_from_anchor_to_head(
     repo: Path,
     anchor_commit: str,
-) -> tuple[list[str], list[str]]:
-    """Return a bounded chronological ancestry path including anchor and HEAD."""
+    *,
+    history_limit: int,
+) -> tuple[list[tuple[str, int | None]], int | None, list[str]]:
+    """Return ``(commits, descendant_count, limitations)`` for one anchor.
+
+    ``commits`` is a chronological ``[(sha, commit_time_unix)]`` path including
+    the anchor commit and HEAD. When the anchor is not reachable from HEAD,
+    returns a single observation at HEAD and ``descendant_count=None`` so
+    callers can distinguish "unreachable, count unknown" from "reachable, zero
+    descendants".
+    """
     if not _git_ok(repo, "merge-base", "--is-ancestor", anchor_commit, "HEAD"):
-        return ["HEAD"], []
+        head_sha = _git(repo, "rev-parse", "HEAD", check=False).strip()
+        if not head_sha:
+            return [], None, []
+        return [("HEAD", _commit_time(repo, "HEAD"))], None, []
 
     total_out = _git(
         repo,
@@ -236,36 +277,51 @@ def _commits_from_anchor_to_head(
     except ValueError:
         descendant_count = 0
 
+    anchor_time = _commit_time(repo, anchor_commit)
     if descendant_count == 0:
-        return [anchor_commit], []
+        return [(anchor_commit, anchor_time)], 0, []
 
-    head = _git(repo, "rev-parse", "HEAD", check=False).strip()
-    limit = max(PATCH_TRAIL_COMMIT_LIMIT, 2)
+    limit = max(history_limit, 2)
     if descendant_count <= limit - 1:
-        descendants = _git(
+        out = _git(
             repo,
-            "rev-list",
+            "log",
             "--reverse",
             "--ancestry-path",
+            "--format=%H %ct",
             f"{anchor_commit}..HEAD",
             check=False,
-        ).splitlines()
-        return [anchor_commit] + descendants, []
+        )
+        descendants = [
+            _parse_log_line(line) for line in out.splitlines() if line.strip()
+        ]
+        return [(anchor_commit, anchor_time)] + descendants, descendant_count, []
 
     keep_oldest = max(limit - 2, 0)
-    oldest_descendants: list[str] = []
+    oldest_descendants: list[tuple[str, int | None]] = []
     if keep_oldest:
-        newest_order_oldest_subset = _git(
+        out = _git(
             repo,
-            "rev-list",
+            "log",
             "--ancestry-path",
             f"--skip={descendant_count - keep_oldest}",
             f"--max-count={keep_oldest}",
+            "--format=%H %ct",
             f"{anchor_commit}..HEAD",
             check=False,
-        ).splitlines()
-        oldest_descendants = list(reversed(newest_order_oldest_subset))
-    return [anchor_commit] + oldest_descendants + [head], ["patch_trail_history_truncated"]
+        )
+        oldest_descendants = list(
+            reversed(
+                [_parse_log_line(line) for line in out.splitlines() if line.strip()]
+            )
+        )
+    head_sha = _git(repo, "rev-parse", "HEAD", check=False).strip()
+    head_time = _commit_time(repo, head_sha) if head_sha else None
+    return (
+        [(anchor_commit, anchor_time)] + oldest_descendants + [(head_sha, head_time)],
+        descendant_count,
+        ["patch_trail_history_truncated"],
+    )
 
 
 def _anchor_observations(
@@ -273,20 +329,36 @@ def _anchor_observations(
     *,
     patch: dict[str, Any],
     anchor: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[str]]:
+    head_id: dict[str, str] | None,
+    history_limit: int,
+) -> tuple[list[dict[str, Any]], int | None, list[str]]:
     commit_id = anchor.get("commit_id") or {}
     anchor_commit = commit_id.get("hex")
     if not anchor_commit:
-        return [_compute_survival(repo, patch=patch, anchor=anchor)], []
+        observation = _compute_survival(
+            repo, patch=patch, anchor=anchor, head_id=head_id
+        )
+        observation["anchor_trail_index"] = 0
+        observation["anchor_descendant_count"] = None
+        return [observation], None, []
 
-    commits, limitations = _commits_from_anchor_to_head(repo, anchor_commit)
-    observations = [
-        _compute_survival(repo, patch=patch, anchor=anchor, observed_ref=commit)
-        for commit in commits
-    ]
-    for index, observation in enumerate(observations):
-        observation["trail_index"] = index
-    return observations, limitations
+    commits, descendant_count, limitations = _commits_from_anchor_to_head(
+        repo, anchor_commit, history_limit=history_limit
+    )
+    observations: list[dict[str, Any]] = []
+    for index, (commit_sha, commit_time) in enumerate(commits):
+        observation = _compute_survival(
+            repo,
+            patch=patch,
+            anchor=anchor,
+            observed_ref=commit_sha,
+            head_id=head_id,
+            observed_commit_time=commit_time,
+        )
+        observation["anchor_trail_index"] = index
+        observation["anchor_descendant_count"] = descendant_count
+        observations.append(observation)
+    return observations, descendant_count, limitations
 
 
 def _follow(
@@ -294,7 +366,31 @@ def _follow(
     *,
     trace_patch_id: str | None = None,
     git_anchor_id: str | None = None,
+    history_limit: int | None = None,
 ) -> dict[str, Any]:
+    """Walk a Trace Patch through Git history and report survival.
+
+    Limitation field scoping is deliberately three-level:
+
+    * ``response["trail_limitations"]`` carries trail-construction limitations
+      (e.g. ``patch_trail_history_truncated`` when an anchor's descendant count
+      exceeds ``history_limit``).
+    * ``response["observations"][i]["limitations"]`` carries per-observation
+      limitations from a single commit lookup (e.g. ``revert_search_truncated``,
+      ``missing_authored_text``, ``anchor_commit_not_reachable_from_*``).
+    * ``response["current_survival"]["limitations"]`` mirrors the latest
+      observation per anchor.
+
+    These fields are deliberately distinct from the Phase 5 ``capture_limitations``
+    vocabulary on TrailEvents. Capture limitations describe what the capture
+    pipeline observed during a session; trail/observation limitations describe
+    what the follow projection could compute at query time over current repo
+    state.
+    """
+    effective_limit = (
+        history_limit if history_limit is not None else PATCH_TRAIL_COMMIT_LIMIT
+    )
+    head_id = _head_id(repo)
     events = read_events(repo)
     patches: dict[str, tuple[dict[str, Any], Any]] = {}
     anchors: list[tuple[dict[str, Any], Any]] = []
@@ -331,8 +427,8 @@ def _follow(
             "current_observations": [],
             "observations": [],
             "observation_scope": OBSERVATION_SCOPE,
-            "history_limit": PATCH_TRAIL_COMMIT_LIMIT,
-            "limitations": ["no_trace_patch_event"],
+            "history_limit": effective_limit,
+            "trail_limitations": ["no_trace_patch_event"],
             "event_log_ref": EVENT_LOG_REF,
             "phase4_survival_states": PHASE4_SURVIVAL_STATES,
             "reserved_survival_states": RESERVED_PHASE5_SURVIVAL_STATES,
@@ -349,8 +445,8 @@ def _follow(
             "current_observations": [],
             "observations": [],
             "observation_scope": OBSERVATION_SCOPE,
-            "history_limit": PATCH_TRAIL_COMMIT_LIMIT,
-            "limitations": ["no_git_anchor_event"],
+            "history_limit": effective_limit,
+            "trail_limitations": ["no_git_anchor_event"],
             "event_log_ref": EVENT_LOG_REF,
             "phase4_survival_states": PHASE4_SURVIVAL_STATES,
             "reserved_survival_states": RESERVED_PHASE5_SURVIVAL_STATES,
@@ -359,15 +455,19 @@ def _follow(
 
     observations: list[dict[str, Any]] = []
     current_observations: list[tuple[int, dict[str, Any]]] = []
-    limitations: list[str] = []
+    trail_limitations: list[str] = []
     sorted_anchors = sorted(anchors, key=lambda item: item[1].event_sequence)
     for anchor, event in sorted_anchors:
-        anchor_observations, anchor_limitations = _anchor_observations(
-            repo,
-            patch=patch,
-            anchor=anchor,
+        anchor_observations, _descendant_count, anchor_limitations = (
+            _anchor_observations(
+                repo,
+                patch=patch,
+                anchor=anchor,
+                head_id=head_id,
+                history_limit=effective_limit,
+            )
         )
-        limitations.extend(anchor_limitations)
+        trail_limitations.extend(anchor_limitations)
         for observation in anchor_observations:
             observation["anchor_event_sequence"] = event.event_sequence
         start_index = len(observations)
@@ -377,8 +477,13 @@ def _follow(
                 (start_index + len(anchor_observations) - 1, anchor_observations[-1])
             )
 
-    unique_limitations = list(dict.fromkeys(limitations))
-    current_observation_values = [observation for _index, observation in current_observations]
+    for sequence, observation in enumerate(observations):
+        observation["observation_sequence"] = sequence
+
+    unique_trail_limitations = list(dict.fromkeys(trail_limitations))
+    current_observation_values = [
+        observation for _index, observation in current_observations
+    ]
     return {
         "trace_patch_id": patch.get("trace_patch_id"),
         "git_anchor_id": git_anchor_id,
@@ -391,8 +496,8 @@ def _follow(
         "current_observations": current_observation_values,
         "observations": observations,
         "observation_scope": OBSERVATION_SCOPE,
-        "history_limit": PATCH_TRAIL_COMMIT_LIMIT,
-        "limitations": unique_limitations,
+        "history_limit": effective_limit,
+        "trail_limitations": unique_trail_limitations,
         "event_log_ref": EVENT_LOG_REF,
         "phase4_survival_states": PHASE4_SURVIVAL_STATES,
         "reserved_survival_states": RESERVED_PHASE5_SURVIVAL_STATES,
@@ -401,11 +506,25 @@ def _follow(
     }
 
 
-def follow_patch(repo: Path, trace_patch_id: str) -> dict[str, Any]:
+def follow_patch(
+    repo: Path,
+    trace_patch_id: str,
+    *,
+    history_limit: int | None = None,
+) -> dict[str, Any]:
     """Follow survival for all Git Anchors attached to a Trace Patch."""
-    return _follow(repo, trace_patch_id=trace_patch_id)
+    return _follow(
+        repo, trace_patch_id=trace_patch_id, history_limit=history_limit
+    )
 
 
-def follow_anchor(repo: Path, git_anchor_id: str) -> dict[str, Any]:
+def follow_anchor(
+    repo: Path,
+    git_anchor_id: str,
+    *,
+    history_limit: int | None = None,
+) -> dict[str, Any]:
     """Follow survival for one Git Anchor."""
-    return _follow(repo, git_anchor_id=git_anchor_id)
+    return _follow(
+        repo, git_anchor_id=git_anchor_id, history_limit=history_limit
+    )

@@ -132,11 +132,19 @@ def explain_cmd(
     ],
     option_groups=[
         ("Scope", ["trace_patch_id", "git_anchor_id", "project_dir"]),
+        ("History", ["history_limit"]),
         ("Output", ["as_json"]),
     ],
 )
 @click.option("--patch", "trace_patch_id", default=None, help="Trace Patch id to follow.")
 @click.option("--anchor", "git_anchor_id", default=None, help="Git Anchor id to follow.")
+@click.option(
+    "--history-limit",
+    "history_limit",
+    type=click.IntRange(min=2),
+    default=None,
+    help="Max commits to observe per Git Anchor (default 500, min 2).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 @click.option(
     "--project",
@@ -148,6 +156,7 @@ def explain_cmd(
 def follow_cmd(
     trace_patch_id: str | None,
     git_anchor_id: str | None,
+    history_limit: int | None,
     as_json: bool,
     project_dir: Path | None,
 ) -> None:
@@ -161,9 +170,9 @@ def follow_cmd(
     repo = Path(project_dir or Path.cwd()).resolve()
     try:
         payload = (
-            follow_patch(repo, trace_patch_id)
+            follow_patch(repo, trace_patch_id, history_limit=history_limit)
             if trace_patch_id
-            else follow_anchor(repo, git_anchor_id or "")
+            else follow_anchor(repo, git_anchor_id or "", history_limit=history_limit)
         )
     except ValueError as exc:
         click.echo(f"Trace Trail event log is invalid: {exc}", err=True)
@@ -184,7 +193,9 @@ def follow_cmd(
     line_range = current.get("range") or {}
     if path:
         click.echo(f"  at: {path}:{line_range.get('start_line') or '?'}")
-    for limitation in payload.get("limitations") or current.get("limitations") or []:
+    for limitation in (
+        payload.get("trail_limitations") or current.get("limitations") or []
+    ):
         click.echo(f"  limitation: {limitation}")
 
 

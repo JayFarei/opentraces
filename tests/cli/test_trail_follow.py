@@ -271,15 +271,11 @@ def test_trail_follow_bounds_revert_search(tmp_path: Path, monkeypatch) -> None:
     assert "revert_search_truncated" in current["limitations"]
 
 
-def test_trail_follow_history_limit_keeps_current_head(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
+def test_trail_follow_history_limit_keeps_current_head(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     authored = "    return 'bounded-history-phase-four'\n"
     anchor = _anchor_patch(tmp_path, patch_id="history-limit", authored=authored)
     anchor_commit = anchor["commit_id"]["hex"]
-    monkeypatch.setattr(follow_module, "PATCH_TRAIL_COMMIT_LIMIT", 3)
 
     (tmp_path / "noise_a.txt").write_text("a\n")
     first_later_commit = _commit(tmp_path, "noise a")
@@ -288,7 +284,13 @@ def test_trail_follow_history_limit_keeps_current_head(
     (tmp_path / "app.py").write_text("def value():\n    return 'bounded-history-edited'\n")
     head_commit = _commit(tmp_path, "transform after skipped commit")
 
-    payload = _follow(tmp_path, "--patch", "tracepatch-sha256:history-limit")
+    payload = _follow(
+        tmp_path,
+        "--patch",
+        "tracepatch-sha256:history-limit",
+        "--history-limit",
+        "3",
+    )
 
     assert [obs["observed_commit_id"]["hex"] for obs in payload["observations"]] == [
         anchor_commit,
@@ -296,4 +298,64 @@ def test_trail_follow_history_limit_keeps_current_head(
         head_commit,
     ]
     assert payload["current_survival"]["survival_state"] == "alive_transformed"
-    assert "patch_trail_history_truncated" in payload["limitations"]
+    assert "patch_trail_history_truncated" in payload["trail_limitations"]
+    assert payload["history_limit"] == 3
+    assert all(
+        obs["anchor_descendant_count"] == 3 for obs in payload["observations"]
+    )
+
+
+def test_trail_follow_observation_metadata_fields(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    authored = "    return 'metadata-phase-four'\n"
+    _anchor_patch(tmp_path, patch_id="metadata", authored=authored)
+    (tmp_path / "noise.txt").write_text("x\n")
+    _commit(tmp_path, "noise")
+
+    payload = _follow(tmp_path, "--patch", "tracepatch-sha256:metadata")
+
+    assert payload["history_limit"] == follow_module.PATCH_TRAIL_COMMIT_LIMIT
+    observations = payload["observations"]
+    assert [obs["observation_sequence"] for obs in observations] == list(
+        range(len(observations))
+    )
+    assert [obs["anchor_trail_index"] for obs in observations] == list(
+        range(len(observations))
+    )
+    for obs in observations:
+        assert isinstance(obs["observed_commit_time"], int)
+        assert obs["observed_commit_time"] > 0
+        assert obs["anchor_descendant_count"] == 1
+
+
+def test_trail_follow_multi_anchor_indices_and_sequence(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    authored = "    return 'multi-anchor-indices-phase-four'\n"
+    _append_patch(tmp_path, patch_id="indices", authored=authored)
+
+    (tmp_path / "app.py").write_text("def value():\n" + authored)
+    first_commit = _commit(tmp_path, "apply first copy")
+    assert (
+        len(reconcile_commit_anchors(tmp_path, first_commit, writer="post-commit-correlator"))
+        == 1
+    )
+
+    (tmp_path / "app.py").write_text("def value():\n" + authored + authored)
+    second_commit = _commit(tmp_path, "apply second copy")
+    assert (
+        len(reconcile_commit_anchors(tmp_path, second_commit, writer="post-commit-correlator"))
+        == 1
+    )
+
+    payload = _follow(tmp_path, "--patch", "tracepatch-sha256:indices")
+
+    sequences = [obs["observation_sequence"] for obs in payload["observations"]]
+    assert sequences == list(range(len(sequences)))
+
+    trail_indices = [obs["anchor_trail_index"] for obs in payload["observations"]]
+    assert trail_indices.count(0) == 2
+
+    anchor_event_sequences = {
+        obs["anchor_event_sequence"] for obs in payload["observations"]
+    }
+    assert len(anchor_event_sequences) == 2
