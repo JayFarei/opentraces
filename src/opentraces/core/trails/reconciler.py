@@ -15,17 +15,32 @@ and produces attribution under unambiguous conditions only:
 * mutation inside a window but visible to background processes → record
   ``background_process_overlap``.
 
+Only windows whose payload reports ``boundary_firmness == "firm"`` are
+candidates; soft / reconstructed-after-the-fact windows are invisible to
+attribution per plan §Phase 5.
+
 The reconciler is idempotent: re-running on the same event set produces the
 same attributions. Idempotency is guaranteed by emitting one
 ``watcher_observation_attributed`` event per processed observation, keyed by
 ``observation_event_id``. Subsequent runs skip observations whose
 attribution event already exists.
+
+Concurrency: a process-level file lock at ``.git/opentraces-reconciler.lock``
+serializes runs against the same repo so two concurrent reconcilers cannot
+double-emit attribution for the same observation. The append-only event
+log's CAS retry handles inter-batch ordering; the lock handles inter-run
+planning.
 """
 from __future__ import annotations
 
+import contextlib
+import copy
+import errno
+import os
+import posixpath
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .capture_limitations import (
     BACKGROUND_PROCESS_OVERLAP,
@@ -37,6 +52,7 @@ from .models import TrailEvent, TrailEventDraft
 
 RECONCILER_CAPTURE_METHOD = ["watcher_backstop"]
 RECONCILER_WRITER = "watcher-reconciler"
+RECONCILER_LOCK_BASENAME = "opentraces-reconciler.lock"
 
 
 def _parse_iso(value: str) -> datetime:
@@ -51,30 +67,81 @@ def _interval_within(
     return outer[0] <= inner[0] and inner[1] <= outer[1]
 
 
+def _normalize_path(value: str | None) -> str | None:
+    if not isinstance(value, str) or not value:
+        return value
+    return posixpath.normpath(value.replace("\\", "/"))
+
+
+@contextlib.contextmanager
+def _reconciler_lock(repo: Path) -> Iterator[None]:
+    """Serialize reconciler runs per-repo using ``fcntl.flock``.
+
+    On platforms without ``fcntl`` (Windows), this falls back to a no-op
+    and documents the single-writer assumption. The Phase 5 substrate is
+    Unix-first; Windows hardening can come when there is a consumer that
+    needs it.
+    """
+    git_dir = repo / ".git"
+    if not git_dir.is_dir():
+        yield
+        return
+    lock_path = git_dir / RECONCILER_LOCK_BASENAME
+    try:
+        import fcntl  # type: ignore[import-not-found]
+    except ImportError:
+        yield
+        return
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError as exc:
+            if exc.errno not in {errno.ENOLCK, errno.ENOTSUP}:
+                raise
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
+
+
 def _index_events(events: list[TrailEvent]) -> dict[str, Any]:
-    """Bucket events by type for the reconciler's attribution decisions."""
+    """Bucket events by type for the reconciler's attribution decisions.
+
+    Windows missing a ``trace_id`` or ``step_index`` are skipped: a window
+    without writer identity cannot be a unique-and-unambiguous match.
+    """
     observations: list[TrailEvent] = []
-    windows_open: dict[tuple[str | None, int | None, int | None], TrailEvent] = {}
-    windows_close: dict[tuple[str | None, int | None, int | None], TrailEvent] = {}
-    patches_by_step: dict[
-        tuple[str | None, int | None, int | None, str | None], TrailEvent
-    ] = {}
+    windows_open: dict[tuple[str, int, int], TrailEvent] = {}
+    windows_close: dict[tuple[str, int, int], TrailEvent] = {}
+    patches_by_step: dict[tuple[str, int, int, str], TrailEvent] = {}
     attributed: set[str] = set()
     upgraded_patches: set[str] = set()
     for event in events:
         if event.event_type == "filesystem_mutation_observed":
             observations.append(event)
         elif event.event_type == "trace_step_window_opened":
-            key = (event.trace_id, event.generation_index, event.step_index)
+            if event.trace_id is None or event.step_index is None:
+                continue
+            key = (event.trace_id, event.generation_index or 0, event.step_index)
             windows_open[key] = event
         elif event.event_type == "trace_step_window_closed":
-            key = (event.trace_id, event.generation_index, event.step_index)
+            if event.trace_id is None or event.step_index is None:
+                continue
+            key = (event.trace_id, event.generation_index or 0, event.step_index)
             windows_close[key] = event
         elif event.event_type == "trace_patch_created":
-            file_path = event.payload.get("file_path")
+            if event.trace_id is None or event.step_index is None:
+                continue
+            file_path = _normalize_path(event.payload.get("file_path"))
+            if file_path is None:
+                continue
             patch_key = (
                 event.trace_id,
-                event.generation_index,
+                event.generation_index or 0,
                 event.step_index,
                 file_path,
             )
@@ -104,7 +171,14 @@ def _matching_windows(
     windows_open: dict[tuple, TrailEvent],
     windows_close: dict[tuple, TrailEvent],
 ) -> list[tuple[tuple, TrailEvent, TrailEvent]]:
-    """Return all (key, opened, closed) tuples that strictly contain the obs."""
+    """Return all ``(key, opened, closed)`` tuples that contain the obs.
+
+    Only windows with both an opened and a closed event AND
+    ``boundary_firmness == "firm"`` on both boundaries are candidates per
+    plan §Phase 5 ("fully inside exactly one writer's firm step window").
+    Open-but-unclosed windows and soft / reconstructed-after-the-fact
+    windows are invisible to attribution.
+    """
     payload = observation.payload
     obs_interval = (
         _parse_iso(payload["observed_at_start"]),
@@ -114,6 +188,9 @@ def _matching_windows(
     for key, opened in windows_open.items():
         closed = windows_close.get(key)
         if closed is None:
+            continue
+        if (opened.payload.get("boundary_firmness") != "firm"
+                or closed.payload.get("boundary_firmness") != "firm"):
             continue
         win_interval = (_parse_iso(opened.event_time), _parse_iso(closed.event_time))
         if _interval_within(obs_interval, win_interval):
@@ -126,7 +203,7 @@ def _attribution_draft(
     observation: TrailEvent,
     result: str,
     trace_id: str | None,
-    generation_index: int | None,
+    generation_index: int,
     step_index: int | None,
     capture_limitations: list[str],
     candidates: list[dict[str, Any]] | None = None,
@@ -134,7 +211,7 @@ def _attribution_draft(
 ) -> TrailEventDraft:
     payload: dict[str, Any] = {
         "observation_event_id": observation.event_id,
-        "path": observation.payload.get("path"),
+        "path": _normalize_path(observation.payload.get("path")),
         "result": result,
         "capture_limitations": capture_limitations,
     }
@@ -145,7 +222,7 @@ def _attribution_draft(
     return TrailEventDraft(
         event_type="watcher_observation_attributed",
         trace_id=trace_id,
-        generation_index=generation_index if generation_index is not None else 0,
+        generation_index=generation_index,
         step_index=step_index,
         capture_method=list(RECONCILER_CAPTURE_METHOD),
         payload=payload,
@@ -160,6 +237,10 @@ def _upgrade_patch_draft(
     The replayed payload is identical to the original event's payload byte
     by byte. Only the envelope's ``capture_method`` array changes, recording
     that the watcher corroborated the same mutation.
+
+    Uses ``copy.deepcopy`` so nested payload structures (``affected_range``,
+    ``before_blob_id``, ``after_blob_id``) are not aliased with the prior
+    event's payload — defensive against future mutation by validators.
     """
     merged = sorted({*patch_event.capture_method, "watcher_backstop"})
     return TrailEventDraft(
@@ -168,7 +249,7 @@ def _upgrade_patch_draft(
         generation_index=patch_event.generation_index,
         step_index=patch_event.step_index,
         capture_method=merged,
-        payload=dict(patch_event.payload),
+        payload=copy.deepcopy(patch_event.payload),
     )
 
 
@@ -182,112 +263,118 @@ def reconcile_watcher_observations(
     Returns a summary describing what the reconciler did. The caller can use
     this for telemetry; the source of truth is the appended events in the
     canonical event log.
+
+    Concurrency: the per-repo file lock prevents two reconcilers from
+    double-emitting attribution for the same observation. The append-only
+    log's CAS retry continues to handle inter-batch ordering races
+    (see ``append_event_batch``).
     """
     repo = repo.resolve()
-    events = read_events(repo)
-    index = _index_events(events)
+    with _reconciler_lock(repo):
+        events = read_events(repo)
+        index = _index_events(events)
 
-    drafts: list[TrailEventDraft] = []
-    summary = {
-        "observations_total": len(index["observations"]),
-        "observations_processed": 0,
-        "attributed": 0,
-        "concurrent_writer_overlap": 0,
-        "unbounded_mutation_window": 0,
-        "background_process_overlap": 0,
-        "patches_upgraded": 0,
-    }
+        drafts: list[TrailEventDraft] = []
+        summary = {
+            "observations_total": len(index["observations"]),
+            "observations_processed": 0,
+            "attributed": 0,
+            "concurrent_writer_overlap": 0,
+            "unbounded_mutation_window": 0,
+            "background_process_overlap": 0,
+            "patches_upgraded": 0,
+        }
 
-    for observation in index["observations"]:
-        if observation.event_id in index["attributed"]:
-            continue
-        summary["observations_processed"] += 1
-        matches = _matching_windows(
-            observation, index["windows_open"], index["windows_close"]
-        )
-        path = observation.payload.get("path")
-
-        if len(matches) == 0:
-            drafts.append(
-                _attribution_draft(
-                    observation=observation,
-                    result="unattributed",
-                    trace_id=None,
-                    generation_index=None,
-                    step_index=None,
-                    capture_limitations=[UNBOUNDED_MUTATION_WINDOW],
-                )
+        for observation in index["observations"]:
+            if observation.event_id in index["attributed"]:
+                continue
+            summary["observations_processed"] += 1
+            matches = _matching_windows(
+                observation, index["windows_open"], index["windows_close"]
             )
-            summary["unbounded_mutation_window"] += 1
-            continue
+            path = _normalize_path(observation.payload.get("path"))
 
-        if len(matches) > 1:
-            candidates = [
-                {
-                    "trace_id": key[0],
-                    "generation_index": key[1],
-                    "step_index": key[2],
-                }
-                for key, _opened, _closed in matches
-            ]
-            drafts.append(
-                _attribution_draft(
-                    observation=observation,
-                    result="ambiguous",
-                    trace_id=None,
-                    generation_index=None,
-                    step_index=None,
-                    capture_limitations=[CONCURRENT_WRITER_OVERLAP],
-                    candidates=candidates,
+            if len(matches) == 0:
+                drafts.append(
+                    _attribution_draft(
+                        observation=observation,
+                        result="unattributed",
+                        trace_id=None,
+                        generation_index=0,
+                        step_index=None,
+                        capture_limitations=[UNBOUNDED_MUTATION_WINDOW],
+                    )
                 )
-            )
-            summary["concurrent_writer_overlap"] += 1
-            continue
+                summary["unbounded_mutation_window"] += 1
+                continue
 
-        (key, opened, _closed) = matches[0]
-        trace_id, generation_index, step_index = key
+            if len(matches) > 1:
+                candidates = [
+                    {
+                        "trace_id": key[0],
+                        "generation_index": key[1],
+                        "step_index": key[2],
+                    }
+                    for key, _opened, _closed in matches
+                ]
+                drafts.append(
+                    _attribution_draft(
+                        observation=observation,
+                        result="ambiguous",
+                        trace_id=None,
+                        generation_index=0,
+                        step_index=None,
+                        capture_limitations=[CONCURRENT_WRITER_OVERLAP],
+                        candidates=candidates,
+                    )
+                )
+                summary["concurrent_writer_overlap"] += 1
+                continue
 
-        if observation.payload.get("concurrent_activity") is True:
+            (key, _opened, _closed) = matches[0]
+            trace_id, generation_index, step_index = key
+
+            if observation.payload.get("concurrent_activity") is True:
+                drafts.append(
+                    _attribution_draft(
+                        observation=observation,
+                        result="ambiguous",
+                        trace_id=trace_id,
+                        generation_index=generation_index,
+                        step_index=step_index,
+                        capture_limitations=[BACKGROUND_PROCESS_OVERLAP],
+                    )
+                )
+                summary["background_process_overlap"] += 1
+                continue
+
+            upgraded_trace_patch_id: str | None = None
+            patch_key = (trace_id, generation_index, step_index, path)
+            existing_patch = index["patches_by_step"].get(patch_key)
+            if existing_patch is not None:
+                trace_patch_id = existing_patch.payload.get("trace_patch_id")
+                if (
+                    trace_patch_id
+                    and trace_patch_id not in index["upgraded_patches"]
+                ):
+                    drafts.append(_upgrade_patch_draft(existing_patch))
+                    index["upgraded_patches"].add(trace_patch_id)
+                    upgraded_trace_patch_id = trace_patch_id
+                    summary["patches_upgraded"] += 1
+
             drafts.append(
                 _attribution_draft(
                     observation=observation,
-                    result="ambiguous",
+                    result="attributed",
                     trace_id=trace_id,
                     generation_index=generation_index,
                     step_index=step_index,
-                    capture_limitations=[BACKGROUND_PROCESS_OVERLAP],
+                    capture_limitations=[],
+                    upgraded_trace_patch_id=upgraded_trace_patch_id,
                 )
             )
-            summary["background_process_overlap"] += 1
-            continue
+            summary["attributed"] += 1
 
-        upgraded_trace_patch_id: str | None = None
-        patch_key = (trace_id, generation_index, step_index, path)
-        existing_patch = index["patches_by_step"].get(patch_key)
-        if existing_patch is not None:
-            trace_patch_id = existing_patch.payload.get("trace_patch_id")
-            if (
-                trace_patch_id
-                and trace_patch_id not in index["upgraded_patches"]
-            ):
-                drafts.append(_upgrade_patch_draft(existing_patch))
-                index["upgraded_patches"].add(trace_patch_id)
-                upgraded_trace_patch_id = trace_patch_id
-                summary["patches_upgraded"] += 1
-
-        drafts.append(
-            _attribution_draft(
-                observation=observation,
-                result="attributed",
-                trace_id=trace_id,
-                generation_index=generation_index,
-                step_index=step_index,
-                capture_limitations=[],
-                upgraded_trace_patch_id=upgraded_trace_patch_id,
-            )
-        )
-        summary["attributed"] += 1
-
-    if drafts:
-        append_event_batch(repo, drafts, writer=writer)
-    return summary
+        if drafts:
+            append_event_batch(repo, drafts, writer=writer)
+        return summary

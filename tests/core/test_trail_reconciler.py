@@ -4,12 +4,16 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from opentraces.capture.fs_watcher import append_filesystem_mutation_observed
 from opentraces.core.trails import (
     GitObjectID,
     TrailEventDraft,
     append_event_batch,
+    assert_known_capture_limitations,
     close_step_window_with_snapshot,
+    is_known_capture_limitation,
     open_step_window,
     read_events,
     reconcile_watcher_observations,
@@ -166,6 +170,16 @@ def test_watcher_observation_inside_unique_step_window_attributes_patch(
     assert "watcher_backstop" in latest_patch.capture_method
     earliest_patch = min(patch_events, key=lambda e: e.event_sequence)
     assert "watcher_backstop" not in earliest_patch.capture_method
+    # Append-only honesty: the original hook patch event is preserved
+    # untouched. The upgrade is a NEW event with a different content_hash
+    # and event_id; the original capture_method, content_hash, and
+    # event_id all stay byte-equivalent across reconciler runs.
+    assert earliest_patch.capture_method == ["hook_pretooluse", "hook_posttooluse"]
+    assert earliest_patch.event_id != latest_patch.event_id
+    assert earliest_patch.content_hash == latest_patch.content_hash, (
+        "payload content_hash is unchanged because the upgrade re-emits "
+        "the same payload; only capture_method on the envelope changes"
+    )
     assert (
         latest_patch.payload["trace_patch_id"]
         == earliest_patch.payload["trace_patch_id"]
@@ -217,3 +231,162 @@ def test_watcher_observation_event_carries_no_attribution_fields(tmp_path: Path)
         "before_blob_id",
         "after_blob_id",
     }
+
+
+def test_reconciler_replay_is_byte_stable(tmp_path: Path) -> None:
+    """Smoke idempotency: a second reconciler run on the same event set
+    appends nothing new and the canonical event log is byte-equivalent.
+
+    Fixture 5 (``test_reconciler_is_idempotent``) goes deeper, exercising
+    interleaved appends and replay ordering. This is the cheap guard that
+    lives alongside the tracer so we catch a regression the moment any
+    reconciler change drops the dedup keyed by ``observation_event_id``.
+    """
+    _init_repo(tmp_path)
+    target = tmp_path / "auth.py"
+    target.write_text("def authorize():\n    return False\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed auth"], cwd=tmp_path, check=True)
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "x\n"))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+    )
+    append_filesystem_mutation_observed(
+        tmp_path,
+        path="unrelated.txt",
+        observed_at_start="2026-04-26T10:00:03Z",
+        observed_at_end="2026-04-26T10:00:07Z",
+        after_blob_id=after_blob,
+    )
+
+    summary_first = reconcile_watcher_observations(tmp_path)
+    events_first = read_events(tmp_path)
+    summary_second = reconcile_watcher_observations(tmp_path)
+    events_second = read_events(tmp_path)
+
+    assert summary_first["observations_processed"] == 1
+    assert summary_second["observations_processed"] == 0
+    assert summary_second["attributed"] == 0
+    assert summary_second["unbounded_mutation_window"] == 0
+    assert len(events_first) == len(events_second)
+    for left, right in zip(events_first, events_second):
+        assert left.event_id == right.event_id
+        assert left.event_sequence == right.event_sequence
+        assert left.content_hash == right.content_hash
+
+
+def test_non_firm_window_is_invisible_to_attribution(tmp_path: Path) -> None:
+    """A reconstructed-after-the-fact window must NOT receive attribution.
+
+    Plan §Phase 5 (line 226) requires "fully inside exactly one writer's
+    *firm* step window." A window emitted with
+    ``boundary_firmness="provisional"`` should be skipped by
+    ``_matching_windows`` so the observation falls into
+    ``unbounded_mutation_window`` instead.
+    """
+    _init_repo(tmp_path)
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "x\n"))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["manual_attach"],
+        event_time="2026-04-26T10:00:00Z",
+        boundary_firmness="provisional",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["manual_attach"],
+        event_time="2026-04-26T10:00:10Z",
+        boundary_firmness="provisional",
+    )
+    append_filesystem_mutation_observed(
+        tmp_path,
+        path="auth.py",
+        observed_at_start="2026-04-26T10:00:03Z",
+        observed_at_end="2026-04-26T10:00:07Z",
+        after_blob_id=after_blob,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["attributed"] == 0
+    assert summary["unbounded_mutation_window"] == 1
+    events = read_events(tmp_path)
+    attributions = [
+        e for e in events if e.event_type == "watcher_observation_attributed"
+    ]
+    assert len(attributions) == 1
+    assert attributions[0].payload["result"] == "unattributed"
+    assert attributions[0].payload["capture_limitations"] == [
+        "unbounded_mutation_window"
+    ]
+
+
+def test_watcher_emission_validates_payload_at_write_time(tmp_path: Path) -> None:
+    """Malformed observations must be rejected up front.
+
+    Validating at write time means the reconciler can trust the canonical
+    event log and never has to defensively parse timestamps mid-loop.
+    """
+    _init_repo(tmp_path)
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "x\n"))
+
+    with pytest.raises(ValueError, match="non-empty"):
+        append_filesystem_mutation_observed(
+            tmp_path,
+            path="",
+            observed_at_start="2026-04-26T10:00:00Z",
+            observed_at_end="2026-04-26T10:00:01Z",
+            after_blob_id=after_blob,
+        )
+
+    with pytest.raises(ValueError, match="ISO-8601"):
+        append_filesystem_mutation_observed(
+            tmp_path,
+            path="x.txt",
+            observed_at_start="not a timestamp",
+            observed_at_end="2026-04-26T10:00:01Z",
+            after_blob_id=after_blob,
+        )
+
+    with pytest.raises(ValueError, match="must not precede"):
+        append_filesystem_mutation_observed(
+            tmp_path,
+            path="x.txt",
+            observed_at_start="2026-04-26T10:00:05Z",
+            observed_at_end="2026-04-26T10:00:01Z",
+            after_blob_id=after_blob,
+        )
+
+
+def test_capture_limitations_vocabulary_is_closed() -> None:
+    """The Phase 5 closed vocabulary must reject unknown tags up front."""
+    assert is_known_capture_limitation("concurrent_writer_overlap")
+    assert is_known_capture_limitation("unbounded_mutation_window")
+    assert not is_known_capture_limitation("invented_tag")
+    assert_known_capture_limitations(["hook_only", "watcher_buffer_overflow"])
+    with pytest.raises(ValueError, match="unknown capture_limitations"):
+        assert_known_capture_limitations(["something_made_up"])
