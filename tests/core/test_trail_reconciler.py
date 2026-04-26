@@ -1,4 +1,5 @@
 """Phase 5 watcher reconciler — Trace Trails."""
+
 from __future__ import annotations
 
 import subprocess
@@ -18,6 +19,7 @@ from opentraces.core.trails import (
     read_events,
     reconcile_watcher_observations,
 )
+from opentraces.core.trails.explain import explain_trace_step
 
 
 def _init_repo(repo: Path) -> None:
@@ -180,26 +182,301 @@ def test_watcher_observation_inside_unique_step_window_attributes_patch(
         "payload content_hash is unchanged because the upgrade re-emits "
         "the same payload; only capture_method on the envelope changes"
     )
-    assert (
-        latest_patch.payload["trace_patch_id"]
-        == earliest_patch.payload["trace_patch_id"]
-    )
+    assert latest_patch.payload["trace_patch_id"] == earliest_patch.payload["trace_patch_id"]
     assert latest_patch.payload["file_path"] == "auth.py"
-
-    attributed_events = [
-        e for e in events if e.event_type == "watcher_observation_attributed"
+    explanation = explain_trace_step(tmp_path, "tr1", 1)
+    patch_sources = [
+        source
+        for source in explanation["source_events"]
+        if source["event_type"] == "trace_patch_created"
     ]
+    assert patch_sources[-1]["event_id"] == latest_patch.event_id
+    assert "watcher_backstop" in patch_sources[-1]["capture_method"]
+
+    attributed_events = [e for e in events if e.event_type == "watcher_observation_attributed"]
     assert len(attributed_events) == 1
     attribution = attributed_events[0]
     assert attribution.payload["result"] == "attributed"
     assert attribution.payload["capture_limitations"] == []
     assert attribution.trace_id == "tr1"
     assert attribution.step_index == 1
-    assert (
-        attribution.payload["upgraded_trace_patch_id"]
-        == latest_patch.payload["trace_patch_id"]
-    )
+    assert attribution.payload["upgraded_trace_patch_id"] == latest_patch.payload["trace_patch_id"]
     assert attribution.capture_method == ["watcher_backstop"]
+
+
+def test_watcher_corroboration_requires_matching_blob_identity(tmp_path: Path) -> None:
+    """Same path and same firm window is not enough for corroboration.
+
+    The watcher must have observed the same before/after blob transition as
+    the hook patch before the reconciler can upgrade that patch with
+    ``watcher_backstop``. A mismatched watcher observation is still attributed
+    to the unique firm window, but it becomes its own watcher-backed patch.
+    """
+    _init_repo(tmp_path)
+
+    target = tmp_path / "auth.py"
+    before_text = "def authorize():\n    return False\n"
+    after_text = "def authorize():\n    return True\n"
+    target.write_text(before_text)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed auth"], cwd=tmp_path, check=True)
+    hook_before = GitObjectID(hex=_hash_object(tmp_path, before_text))
+    hook_after = GitObjectID(hex=_hash_object(tmp_path, after_text))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+    target.write_text(after_text)
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+    )
+    _emit_hook_patch(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        file_path="auth.py",
+        trace_patch_id="tracepatch-sha256:hook",
+        before_blob=hook_before,
+        after_blob=hook_after,
+        snapshot_before_id="snapshot-pre",
+        snapshot_after_id="snapshot-post",
+        authored_text="    return True\n",
+    )
+
+    watcher_before = GitObjectID(hex=_hash_object(tmp_path, "unrelated before\n"))
+    watcher_after = GitObjectID(hex=_hash_object(tmp_path, "unrelated after\n"))
+    obs = append_filesystem_mutation_observed(
+        tmp_path,
+        path="auth.py",
+        observed_at_start="2026-04-26T10:00:03Z",
+        observed_at_end="2026-04-26T10:00:04Z",
+        before_blob_id=watcher_before,
+        after_blob_id=watcher_after,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["attributed"] == 1
+    assert summary["patches_upgraded"] == 0
+    assert summary["patches_created"] == 1
+
+    events = read_events(tmp_path)
+    upgraded_hook = [
+        e
+        for e in events
+        if e.event_type == "trace_patch_created"
+        and e.payload.get("trace_patch_id") == "tracepatch-sha256:hook"
+        and "watcher_backstop" in e.capture_method
+    ]
+    assert upgraded_hook == []
+    created = [
+        e
+        for e in events
+        if e.event_type == "trace_patch_created"
+        and e.payload.get("source_observation_event_id") == obs.event_id
+    ]
+    assert len(created) == 1
+    assert created[0].payload["before_blob_id"] == watcher_before.model_dump(mode="json")
+    assert created[0].payload["after_blob_id"] == watcher_after.model_dump(mode="json")
+
+
+def test_unique_watcher_observation_without_hook_patch_emits_trace_patch(
+    tmp_path: Path,
+) -> None:
+    """A unique firm window plus blob evidence is enough to create a patch.
+
+    The watcher still does not assign attribution at observation time; the
+    reconciler appends the ``trace_patch_created`` event after it has proved
+    the observation is inside exactly one firm step window.
+    """
+    _init_repo(tmp_path)
+    before_blob = GitObjectID(hex=_hash_object(tmp_path, "x = 1\n"))
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "x = 2\n"))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+    )
+    obs = append_filesystem_mutation_observed(
+        tmp_path,
+        path="generated.py",
+        observed_at_start="2026-04-26T10:00:03Z",
+        observed_at_end="2026-04-26T10:00:07Z",
+        before_blob_id=before_blob,
+        after_blob_id=after_blob,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["attributed"] == 1
+    assert summary["patches_created"] == 1
+    assert summary["patches_upgraded"] == 0
+
+    events = read_events(tmp_path)
+    created = [
+        e
+        for e in events
+        if e.event_type == "trace_patch_created"
+        and e.payload.get("source_observation_event_id") == obs.event_id
+    ]
+    assert len(created) == 1
+    patch = created[0]
+    assert patch.trace_id == "tr1"
+    assert patch.step_index == 1
+    assert patch.capture_method == ["watcher_backstop"]
+    assert patch.payload["file_path"] == "generated.py"
+    assert patch.payload["tool_call_id"] == "tc1"
+    assert patch.payload["authored_text"] == "x = 2\n"
+
+    attribution = [e for e in events if e.event_type == "watcher_observation_attributed"][0]
+    assert attribution.payload["created_trace_patch_id"] == patch.payload["trace_patch_id"]
+    assert attribution.payload["tool_call_id"] == "tc1"
+
+
+def test_duplicate_watcher_observations_share_one_content_derived_patch(
+    tmp_path: Path,
+) -> None:
+    """Patch identity comes from content/window identity, not observation ID."""
+    _init_repo(tmp_path)
+    before_blob = GitObjectID(hex=_hash_object(tmp_path, "x = 1\n"))
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "x = 2\n"))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+    )
+    first = append_filesystem_mutation_observed(
+        tmp_path,
+        path="generated.py",
+        observed_at_start="2026-04-26T10:00:03Z",
+        observed_at_end="2026-04-26T10:00:07Z",
+        before_blob_id=before_blob,
+        after_blob_id=after_blob,
+    )
+    second = append_filesystem_mutation_observed(
+        tmp_path,
+        path="generated.py",
+        observed_at_start="2026-04-26T10:00:04Z",
+        observed_at_end="2026-04-26T10:00:08Z",
+        before_blob_id=before_blob,
+        after_blob_id=after_blob,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["attributed"] == 2
+    assert summary["patches_created"] == 1
+
+    events = read_events(tmp_path)
+    patches = [e for e in events if e.event_type == "trace_patch_created"]
+    attributions = [e for e in events if e.event_type == "watcher_observation_attributed"]
+    assert len(patches) == 1
+    assert {e.payload["observation_event_id"] for e in attributions} == {
+        first.event_id,
+        second.event_id,
+    }
+
+
+def test_multiple_tool_windows_in_one_step_remain_distinct(tmp_path: Path) -> None:
+    """Step identity alone is too coarse; tool windows are the boundary."""
+    _init_repo(tmp_path)
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "x\n"))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:05Z",
+    )
+    open_step_window(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc2",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:06Z",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc2",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+    )
+    obs = append_filesystem_mutation_observed(
+        tmp_path,
+        path="first-tool.txt",
+        observed_at_start="2026-04-26T10:00:02Z",
+        observed_at_end="2026-04-26T10:00:03Z",
+        after_blob_id=after_blob,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["attributed"] == 1
+    assert summary["unbounded_mutation_window"] == 0
+
+    events = read_events(tmp_path)
+    attribution = [
+        e
+        for e in events
+        if e.event_type == "watcher_observation_attributed"
+        and e.payload["observation_event_id"] == obs.event_id
+    ][0]
+    assert attribution.trace_id == "tr1"
+    assert attribution.step_index == 1
+    assert attribution.payload["tool_call_id"] == "tc1"
 
 
 def test_watcher_observation_event_carries_no_attribution_fields(tmp_path: Path) -> None:
@@ -335,14 +612,10 @@ def test_non_firm_window_is_invisible_to_attribution(tmp_path: Path) -> None:
     assert summary["attributed"] == 0
     assert summary["unbounded_mutation_window"] == 1
     events = read_events(tmp_path)
-    attributions = [
-        e for e in events if e.event_type == "watcher_observation_attributed"
-    ]
+    attributions = [e for e in events if e.event_type == "watcher_observation_attributed"]
     assert len(attributions) == 1
     assert attributions[0].payload["result"] == "unattributed"
-    assert attributions[0].payload["capture_limitations"] == [
-        "unbounded_mutation_window"
-    ]
+    assert attributions[0].payload["capture_limitations"] == ["unbounded_mutation_window"]
 
 
 def test_watcher_emission_validates_payload_at_write_time(tmp_path: Path) -> None:
@@ -386,6 +659,7 @@ def test_capture_limitations_vocabulary_is_closed() -> None:
     """The Phase 5 closed vocabulary must reject unknown tags up front."""
     assert is_known_capture_limitation("concurrent_writer_overlap")
     assert is_known_capture_limitation("unbounded_mutation_window")
+    assert is_known_capture_limitation("incomplete_step_window_capture")
     assert not is_known_capture_limitation("invented_tag")
     assert_known_capture_limitations(["hook_only", "watcher_buffer_overflow"])
     with pytest.raises(ValueError, match="unknown capture_limitations"):
@@ -433,15 +707,11 @@ def test_watcher_observation_alone_does_not_assign_attribution(
     assert summary["patches_upgraded"] == 0
 
     events = read_events(tmp_path)
-    attributions = [
-        e for e in events if e.event_type == "watcher_observation_attributed"
-    ]
+    attributions = [e for e in events if e.event_type == "watcher_observation_attributed"]
     assert len(attributions) == 1
     attribution = attributions[0]
     assert attribution.payload["result"] == "unattributed"
-    assert attribution.payload["capture_limitations"] == [
-        "unbounded_mutation_window"
-    ]
+    assert attribution.payload["capture_limitations"] == ["unbounded_mutation_window"]
     assert attribution.trace_id is None
     assert attribution.step_index is None
     assert attribution.generation_index == 0
@@ -483,9 +753,7 @@ def test_background_process_overlap_records_limitation(tmp_path: Path) -> None:
     before_text = "x = 1\n"
     target.write_text(before_text)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "seed formatted"], cwd=tmp_path, check=True
-    )
+    subprocess.run(["git", "commit", "-q", "-m", "seed formatted"], cwd=tmp_path, check=True)
     before_blob = GitObjectID(hex=_hash_object(tmp_path, before_text))
     after_text = "x = 2\n"
     target.write_text(after_text)
@@ -550,9 +818,7 @@ def test_background_process_overlap_records_limitation(tmp_path: Path) -> None:
     assert summary["unbounded_mutation_window"] == 0
 
     events = read_events(tmp_path)
-    attributions = [
-        e for e in events if e.event_type == "watcher_observation_attributed"
-    ]
+    attributions = [e for e in events if e.event_type == "watcher_observation_attributed"]
     assert len(attributions) == 2
     by_obs = {a.payload["observation_event_id"]: a for a in attributions}
     ambiguous = by_obs[obs_ambiguous.event_id]
@@ -561,9 +827,7 @@ def test_background_process_overlap_records_limitation(tmp_path: Path) -> None:
     # Ambiguous: window is unique, but a background process contributed.
     # Keep the writer identity; the limitation flags the noise.
     assert ambiguous.payload["result"] == "ambiguous"
-    assert ambiguous.payload["capture_limitations"] == [
-        "background_process_overlap"
-    ]
+    assert ambiguous.payload["capture_limitations"] == ["background_process_overlap"]
     assert ambiguous.trace_id == "tr1"
     assert ambiguous.step_index == 1
     assert "candidate_windows" not in ambiguous.payload
@@ -575,8 +839,7 @@ def test_background_process_overlap_records_limitation(tmp_path: Path) -> None:
     assert clean.trace_id == "tr1"
     assert clean.step_index == 1
     assert (
-        clean.payload["upgraded_trace_patch_id"]
-        == "tracepatch-sha256:fixture-tr1-step1-formatted"
+        clean.payload["upgraded_trace_patch_id"] == "tracepatch-sha256:fixture-tr1-step1-formatted"
     )
 
     # Exactly one patch event carries watcher_backstop — the in-loop
@@ -584,8 +847,7 @@ def test_background_process_overlap_records_limitation(tmp_path: Path) -> None:
     upgraded_patches = [
         e
         for e in events
-        if e.event_type == "trace_patch_created"
-        and "watcher_backstop" in e.capture_method
+        if e.event_type == "trace_patch_created" and "watcher_backstop" in e.capture_method
     ]
     assert len(upgraded_patches) == 1
 
@@ -649,7 +911,7 @@ def test_reconciler_is_idempotent(tmp_path: Path) -> None:
 
     # Pass 1: in-window observation (matches the hook patch's path) +
     # out-of-window observation.
-    in_window = append_filesystem_mutation_observed(
+    append_filesystem_mutation_observed(
         tmp_path,
         path="auth.py",
         observed_at_start="2026-04-26T10:00:03Z",
@@ -657,7 +919,7 @@ def test_reconciler_is_idempotent(tmp_path: Path) -> None:
         before_blob_id=before_blob,
         after_blob_id=after_blob,
     )
-    out_of_window = append_filesystem_mutation_observed(
+    append_filesystem_mutation_observed(
         tmp_path,
         path="other.txt",
         observed_at_start="2026-04-26T11:00:00Z",
@@ -717,6 +979,7 @@ def test_reconciler_is_idempotent(tmp_path: Path) -> None:
     )
     summary_pass3 = reconcile_watcher_observations(tmp_path)
     events_pass3 = read_events(tmp_path)
+    assert summary_pass3["observations_processed"] == 3
 
     # Original pass-1 events are byte-identical. The newly-appended
     # observation events also live in the log unchanged.
@@ -728,14 +991,10 @@ def test_reconciler_is_idempotent(tmp_path: Path) -> None:
 
     # Exactly three new attribution events (one per new observation).
     pass3_attributions = [
-        e
-        for e in events_pass3
-        if e.event_type == "watcher_observation_attributed"
+        e for e in events_pass3 if e.event_type == "watcher_observation_attributed"
     ]
     pass1_attributions = [
-        e
-        for e in events_pass1
-        if e.event_type == "watcher_observation_attributed"
+        e for e in events_pass1 if e.event_type == "watcher_observation_attributed"
     ]
     assert len(pass3_attributions) - len(pass1_attributions) == 3
 
@@ -761,16 +1020,13 @@ def test_reconciler_is_idempotent(tmp_path: Path) -> None:
     # window even though it was appended last — observation timestamps,
     # not append order, drive containment.
     assert retro_attribution.payload["result"] == "unattributed"
-    assert retro_attribution.payload["capture_limitations"] == [
-        "unbounded_mutation_window"
-    ]
+    assert retro_attribution.payload["capture_limitations"] == ["unbounded_mutation_window"]
 
     # The patch was upgraded exactly once across all three passes.
     upgraded_patches = [
         e
         for e in events_pass3
-        if e.event_type == "trace_patch_created"
-        and "watcher_backstop" in e.capture_method
+        if e.event_type == "trace_patch_created" and "watcher_backstop" in e.capture_method
     ]
     assert len(upgraded_patches) == 1
 
@@ -847,15 +1103,11 @@ def test_mutation_outside_step_windows_records_unbounded_mutation_window(
     assert summary["patches_upgraded"] == 0
 
     events = read_events(tmp_path)
-    attributions = [
-        e for e in events if e.event_type == "watcher_observation_attributed"
-    ]
+    attributions = [e for e in events if e.event_type == "watcher_observation_attributed"]
     assert len(attributions) == 3
     assert {a.payload["result"] for a in attributions} == {"unattributed"}
     for attribution in attributions:
-        assert attribution.payload["capture_limitations"] == [
-            "unbounded_mutation_window"
-        ]
+        assert attribution.payload["capture_limitations"] == ["unbounded_mutation_window"]
         assert attribution.trace_id is None
         assert attribution.step_index is None
 
@@ -951,24 +1203,18 @@ def test_mutation_overlapping_two_writers_records_concurrent_writer_overlap(
     assert summary["patches_upgraded"] == 0
 
     events = read_events(tmp_path)
-    attributions = [
-        e for e in events if e.event_type == "watcher_observation_attributed"
-    ]
+    attributions = [e for e in events if e.event_type == "watcher_observation_attributed"]
     assert len(attributions) == 1
     attribution = attributions[0]
     assert attribution.payload["result"] == "ambiguous"
-    assert attribution.payload["capture_limitations"] == [
-        "concurrent_writer_overlap"
-    ]
+    assert attribution.payload["capture_limitations"] == ["concurrent_writer_overlap"]
     assert attribution.trace_id is None
     assert attribution.step_index is None
 
     # Exactly two candidates — open-but-unclosed C is excluded.
     candidates = attribution.payload["candidate_windows"]
     assert len(candidates) == 2
-    candidate_keys = {
-        (c["trace_id"], c["generation_index"], c["step_index"]) for c in candidates
-    }
+    candidate_keys = {(c["trace_id"], c["generation_index"], c["step_index"]) for c in candidates}
     assert candidate_keys == {("tr1", 0, 1), ("tr2", 0, 1)}
 
     patch_events = [e for e in events if e.event_type == "trace_patch_created"]

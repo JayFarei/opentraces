@@ -5,6 +5,7 @@ These models describe the local event log under
 ``opentraces-schema`` yet because Phase 1 TrailEvents are a local replay
 contract, not a published dataset row.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -92,6 +93,9 @@ class TrailEventDraft(BaseModel):
     step_index: int | None = None
     event_time: str | None = None
     capture_method: list[str]
+    SCHEMA_VERSION: str | None = None
+    SECURITY_VERSION: str | None = None
+    ATTRIBUTION_VERSION: str | None = None
 
     @field_validator("capture_method")
     @classmethod
@@ -103,6 +107,7 @@ class TrailEventDraft(BaseModel):
     @model_validator(mode="after")
     def _payload_object_ids_are_typed(self) -> "TrailEventDraft":
         _reject_bare_git_object_ids(self.payload)
+        _reject_unknown_capture_limitations(self.payload)
         return self
 
 
@@ -136,6 +141,7 @@ class TrailEvent(BaseModel):
     @model_validator(mode="after")
     def _payload_object_ids_are_typed(self) -> "TrailEvent":
         _reject_bare_git_object_ids(self.payload)
+        _reject_unknown_capture_limitations(self.payload)
         return self
 
     def canonical_event_material(self) -> dict[str, Any]:
@@ -178,6 +184,27 @@ def _reject_bare_git_object_ids(value: Any, key: str | None = None) -> None:
         and (key in BARE_GIT_SHA_KEYS or (key or "").endswith("_sha"))
     ):
         raise ValueError(f"{key} must use {{algo, hex}} Git object identity")
+
+
+def _reject_unknown_capture_limitations(value: Any, key: str | None = None) -> None:
+    if isinstance(value, dict):
+        if key == "capture_limitations":
+            from .capture_limitations import assert_known_capture_limitations
+
+            if not isinstance(value, list):
+                raise ValueError("capture_limitations must be an array")
+            assert_known_capture_limitations(value)
+        for child_key, child_value in value.items():
+            _reject_unknown_capture_limitations(child_value, str(child_key))
+        return
+    if isinstance(value, list):
+        if key == "capture_limitations":
+            from .capture_limitations import assert_known_capture_limitations
+
+            assert_known_capture_limitations(value)
+            return
+        for item in value:
+            _reject_unknown_capture_limitations(item, key)
 
 
 def payload_content_hash(payload: dict[str, Any]) -> str:

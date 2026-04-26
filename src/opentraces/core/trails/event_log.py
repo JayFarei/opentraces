@@ -275,9 +275,9 @@ def append_event_batch(
                 "capture_method": draft.capture_method,
                 "event_type": draft.event_type,
                 "payload": draft.payload,
-                "SCHEMA_VERSION": None,
-                "SECURITY_VERSION": None,
-                "ATTRIBUTION_VERSION": None,
+                "SCHEMA_VERSION": draft.SCHEMA_VERSION,
+                "SECURITY_VERSION": draft.SECURITY_VERSION,
+                "ATTRIBUTION_VERSION": draft.ATTRIBUTION_VERSION,
             }
             # Let the model defaults set version fields by omitting explicit None.
             data = {k: v for k, v in data.items() if v is not None}

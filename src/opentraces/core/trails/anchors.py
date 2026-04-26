@@ -1,4 +1,5 @@
 """Delayed Git Anchor reconciliation for Trace Trails."""
+
 from __future__ import annotations
 
 import difflib
@@ -11,7 +12,7 @@ from typing import Any
 from ...enrichment._shared import path_matches
 from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
 from .event_log import append_event_batch, read_events
-from .models import GitObjectID, TrailEventDraft
+from .models import ATTRIBUTION_VERSION, GitObjectID, TrailEventDraft
 
 ANCHOR_ALGORITHMS_PHASE3 = ["exact_range_hash"]
 ANCHOR_ALGORITHMS_PHASE5 = ["exact_range_hash", "structural_match"]
@@ -61,7 +62,9 @@ def _stable_patch_id(repo: Path, commit: str) -> str | None:
     return proc.stdout.split()[0]
 
 
-def _find_exact_anchor(patch: dict[str, Any], hunks: dict[str, list[dict]]) -> dict[str, Any] | None:
+def _find_exact_anchor(
+    patch: dict[str, Any], hunks: dict[str, list[dict]]
+) -> dict[str, Any] | None:
     file_path = patch.get("file_path")
     authored = patch.get("authored_text") or ""
     needle = _norm(authored)
@@ -116,9 +119,7 @@ def _find_structural_anchor(
             added = hunk.get("added_text") or ""
             if not added.strip():
                 continue
-            score = difflib.SequenceMatcher(
-                None, authored, added, autojunk=False
-            ).ratio()
+            score = difflib.SequenceMatcher(None, authored, added, autojunk=False).ratio()
             if score >= STRUCTURAL_MATCH_THRESHOLD and score > best_score:
                 best = {
                     "path": hunk_path,
@@ -139,6 +140,7 @@ def reconcile_commit_anchors(
     writer: str = "post-commit-correlator",
     capture_method: list[str] | None = None,
     trace_id: str | None = None,
+    attribution_version: str | None = None,
 ) -> list[dict[str, Any]]:
     """Search existing Trace Patches against a commit and append anchor events.
 
@@ -153,6 +155,7 @@ def reconcile_commit_anchors(
     effective_capture_method = (
         list(capture_method) if capture_method else ["post_commit_correlator"]
     )
+    effective_attribution_version = attribution_version or ATTRIBUTION_VERSION
     commit = _git(repo, "rev-parse", commit_ref)
     commit_id = {"algo": "sha1", "hex": commit}
     diff = _git(repo, "show", "--format=", "--no-color", "-U3", commit)
@@ -164,7 +167,11 @@ def reconcile_commit_anchors(
         if event.event_type == "git_anchor_created"
     }
     existing_search_keys = {
-        (event.payload.get("trace_patch_id"), (event.payload.get("search_head") or {}).get("hex"))
+        (
+            event.payload.get("trace_patch_id"),
+            (event.payload.get("search_head") or {}).get("hex"),
+            event.ATTRIBUTION_VERSION,
+        )
         for event in events
         if event.event_type == "git_anchor_search_completed"
     }
@@ -184,10 +191,11 @@ def reconcile_commit_anchors(
             continue
         if (trace_patch_id, commit) in existing_anchor_keys:
             continue
-        if (trace_patch_id, commit) in existing_search_keys:
+        if (trace_patch_id, commit, effective_attribution_version) in existing_search_keys:
             # A prior search for this (patch, commit) already recorded a
-            # result; don't re-emit a duplicate search event. This keeps
-            # ``trail attach`` idempotent across repeat invocations.
+            # result under the same attribution version; don't re-emit a
+            # duplicate search event. Newer attribution versions are allowed
+            # to append a new search so periodic re-search remains possible.
             continue
         match = _find_exact_anchor(patch, hunks)
         evidence_tier = "exact_range_hash"
@@ -202,9 +210,7 @@ def reconcile_commit_anchors(
                 }
                 evidence_tier = "structural_match"
                 evidence_firmness = "provisional"
-                anchor_limitations.append(
-                    "structural_match_below_exact_threshold"
-                )
+                anchor_limitations.append("structural_match_below_exact_threshold")
         anchor_payload = None
         created_anchor_ids: list[str] = []
         if match:
@@ -243,6 +249,7 @@ def reconcile_commit_anchors(
                 generation_index=patch_event.generation_index,
                 step_index=patch_event.step_index,
                 capture_method=effective_capture_method,
+                ATTRIBUTION_VERSION=effective_attribution_version,
                 payload={
                     "trace_patch_id": trace_patch_id,
                     "search_head": commit_id,
@@ -260,6 +267,7 @@ def reconcile_commit_anchors(
                     generation_index=patch_event.generation_index,
                     step_index=patch_event.step_index,
                     capture_method=effective_capture_method,
+                    ATTRIBUTION_VERSION=effective_attribution_version,
                     payload=anchor_payload,
                 )
             )

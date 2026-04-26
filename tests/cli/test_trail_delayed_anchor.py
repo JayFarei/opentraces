@@ -1,4 +1,5 @@
 """Trace Trails Phase 3 delayed Git Anchor coverage."""
+
 from __future__ import annotations
 
 import json
@@ -181,13 +182,15 @@ def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:
     payload = json.loads(commit_result.output)
     assert payload["trace_patches"] == []
     search_events = [
-        event for event in payload["source_events"]
+        event
+        for event in payload["source_events"]
         if event["event_type"] == "git_anchor_search_completed"
     ]
     assert search_events
     assert search_events[0]["result"] == "unknown"
     stored_search_events = [
-        event for event in read_events(repo)
+        event
+        for event in read_events(repo)
         if event.event_type == "git_anchor_search_completed"
         and event.payload["trace_patch_id"] == "tracepatch-sha256:orphan"
     ]
@@ -197,6 +200,59 @@ def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:
         "exact_range_hash",
         "structural_match",
     ]
+
+
+def test_unanchored_patch_can_be_researched_under_new_attribution_version(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    authored = "    return 'future-algorithm-might-find-this'\n"
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-research",
+                step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": "tracepatch-sha256:research",
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    (repo / "other.py").write_text("print('still unrelated')\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "unrelated"], cwd=repo, check=True)
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+
+    assert reconcile_commit_anchors(repo, commit_sha) == []
+    assert reconcile_commit_anchors(repo, commit_sha) == []
+    assert (
+        reconcile_commit_anchors(
+            repo,
+            commit_sha,
+            attribution_version="0.2.0",
+        )
+        == []
+    )
+
+    search_versions = [
+        event.ATTRIBUTION_VERSION
+        for event in read_events(repo)
+        if event.event_type == "git_anchor_search_completed"
+        and event.payload["trace_patch_id"] == "tracepatch-sha256:research"
+    ]
+    assert search_versions == ["0.1.0", "0.2.0"]
 
 
 def test_many_trace_patches_in_one_commit(tmp_path: Path) -> None:
@@ -301,20 +357,14 @@ def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
     first_commit = _git(repo, "rev-parse", "HEAD")
     assert [
         anchor["trace_patch_id"]
-        for anchor in reconcile_commit_anchors(
-            repo, first_commit, writer="post-commit-correlator"
-        )
+        for anchor in reconcile_commit_anchors(repo, first_commit, writer="post-commit-correlator")
     ] == ["tracepatch-sha256:repeat"]
 
-    (repo / "app.py").write_text(
-        "def value():\n    return 'intermediate-without-repeat-anchor'\n"
-    )
+    (repo / "app.py").write_text("def value():\n    return 'intermediate-without-repeat-anchor'\n")
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "remove repeated patch"], cwd=repo, check=True)
     middle_commit = _git(repo, "rev-parse", "HEAD")
-    assert reconcile_commit_anchors(
-        repo, middle_commit, writer="post-commit-correlator"
-    ) == []
+    assert reconcile_commit_anchors(repo, middle_commit, writer="post-commit-correlator") == []
 
     (repo / "app.py").write_text("def value():\n" + authored)
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
@@ -322,28 +372,31 @@ def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
     second_commit = _git(repo, "rev-parse", "HEAD")
     assert [
         anchor["trace_patch_id"]
-        for anchor in reconcile_commit_anchors(
-            repo, second_commit, writer="post-commit-correlator"
-        )
+        for anchor in reconcile_commit_anchors(repo, second_commit, writer="post-commit-correlator")
     ] == ["tracepatch-sha256:repeat"]
 
     anchor_events = [
-        event for event in read_events(repo)
+        event
+        for event in read_events(repo)
         if event.event_type == "git_anchor_created"
         and event.payload["trace_patch_id"] == "tracepatch-sha256:repeat"
     ]
-    assert {
-        event.payload["commit_id"]["hex"] for event in anchor_events
-    } == {first_commit, second_commit}
+    assert {event.payload["commit_id"]["hex"] for event in anchor_events} == {
+        first_commit,
+        second_commit,
+    }
 
     search_events = [
-        event for event in read_events(repo)
+        event
+        for event in read_events(repo)
         if event.event_type == "git_anchor_search_completed"
         and event.payload["trace_patch_id"] == "tracepatch-sha256:repeat"
     ]
-    assert [
-        event.payload["result"] for event in search_events
-    ] == ["anchored", "unknown", "anchored"]
+    assert [event.payload["result"] for event in search_events] == [
+        "anchored",
+        "unknown",
+        "anchored",
+    ]
 
     result = CliRunner().invoke(
         main,

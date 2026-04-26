@@ -1,4 +1,5 @@
 """Patch Trail survival observations for Trace Trails."""
+
 from __future__ import annotations
 
 import subprocess
@@ -53,13 +54,16 @@ def _git(repo: Path, *args: str, check: bool = True) -> str:
 
 
 def _git_ok(repo: Path, *args: str) -> bool:
-    return subprocess.run(
-        ["git", *args],
-        cwd=repo,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    ).returncode == 0
+    return (
+        subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
 
 
 def _oid(hex_value: str | None) -> dict[str, str] | None:
@@ -179,9 +183,7 @@ def _track_rename_path(
     return current, hops
 
 
-def _committers_in_range(
-    repo: Path, *, ref: str, path: str, start: int, end: int
-) -> set[str]:
+def _committers_in_range(repo: Path, *, ref: str, path: str, start: int, end: int) -> set[str]:
     """Return the set of committer emails for lines [start..end] at ``ref``."""
     out = _git(
         repo,
@@ -207,9 +209,7 @@ def _commit_author_email(repo: Path, commit: str) -> str | None:
     return out or None
 
 
-def _count_preserved_lines(
-    authored_lines: list[str], current_text: str
-) -> int:
+def _count_preserved_lines(authored_lines: list[str], current_text: str) -> int:
     """Count authored lines that survive (whitespace-stripped) anywhere in
     the current file. Empty lines do not contribute to the count.
 
@@ -220,15 +220,9 @@ def _count_preserved_lines(
     """
     if not authored_lines:
         return 0
-    current_lines_stripped = {
-        line.strip()
-        for line in current_text.splitlines()
-        if line.strip()
-    }
+    current_lines_stripped = {line.strip() for line in current_text.splitlines() if line.strip()}
     return sum(
-        1
-        for line in authored_lines
-        if line.strip() and line.strip() in current_lines_stripped
+        1 for line in authored_lines if line.strip() and line.strip() in current_lines_stripped
     )
 
 
@@ -285,12 +279,6 @@ def _compute_survival(
         anchor_commit=anchor_commit,
         observed_ref=observed_ref,
     )
-    if revert_commit:
-        return {
-            **base,
-            "survival_state": "reverted",
-            "revert_commit_id": _oid(revert_commit),
-        }
     if revert_search_truncated:
         limitations.append("revert_search_truncated")
 
@@ -322,26 +310,25 @@ def _compute_survival(
                         "preserved_line_count": preserved,
                         "authored_line_count": len(authored_lines),
                     }
+        if revert_commit:
+            return {
+                **base,
+                "survival_state": "reverted",
+                "revert_commit_id": _oid(revert_commit),
+            }
         return {**base, "survival_state": "lost"}
 
     current_lines = current_text.splitlines()
     start = anchor_range.get("start_line")
     end = anchor_range.get("end_line")
+    preserved = _count_preserved_lines(authored_lines, current_text)
+    range_exists = False
     if isinstance(start, int) and isinstance(end, int) and start >= 1 and end >= start:
-        current_range = current_lines[start - 1:end]
+        current_range = current_lines[start - 1 : end]
         if current_range == authored_lines:
             return {**base, "survival_state": "alive_on_path"}
         if len(current_lines) >= start:
-            # Range modified. Phase 5 distinguishes three sub-states.
-            #
-            # 1. ``repaired`` — a different committer than the anchor's
-            #    commit author touched the range. This credits the human
-            #    edit instead of treating it as agent-side transformation.
-            # 2. ``partially_preserved`` — some authored lines survive
-            #    elsewhere in the file but not all. Triggers when
-            #    ``0 < preserved < total``; preserves Phase 4 semantics
-            #    when ``preserved == 0`` (still alive_transformed).
-            # 3. ``alive_transformed`` — Phase 4 fall-through.
+            range_exists = True
             anchor_email = _commit_author_email(repo, anchor_commit)
             range_committers = _committers_in_range(
                 repo,
@@ -361,15 +348,22 @@ def _compute_survival(
                     "repair_committers": sorted(non_anchor_committers),
                     "anchor_author_email": anchor_email,
                 }
-            preserved = _count_preserved_lines(authored_lines, current_text)
-            if 0 < preserved < len(authored_lines):
-                return {
-                    **base,
-                    "survival_state": "partially_preserved",
-                    "preserved_line_count": preserved,
-                    "authored_line_count": len(authored_lines),
-                }
-            return {**base, "survival_state": "alive_transformed"}
+
+    if preserved == 0 and revert_commit:
+        return {
+            **base,
+            "survival_state": "reverted",
+            "revert_commit_id": _oid(revert_commit),
+        }
+    if 0 < preserved < len(authored_lines):
+        return {
+            **base,
+            "survival_state": "partially_preserved",
+            "preserved_line_count": preserved,
+            "authored_line_count": len(authored_lines),
+        }
+    if range_exists:
+        return {**base, "survival_state": "alive_transformed"}
 
     return {**base, "survival_state": "lost"}
 
@@ -440,9 +434,7 @@ def _commits_from_anchor_to_head(
             f"{anchor_commit}..HEAD",
             check=False,
         )
-        descendants = [
-            _parse_log_line(line) for line in out.splitlines() if line.strip()
-        ]
+        descendants = [_parse_log_line(line) for line in out.splitlines() if line.strip()]
         return [(anchor_commit, anchor_time)] + descendants, descendant_count, []
 
     keep_oldest = max(limit - 2, 0)
@@ -459,9 +451,7 @@ def _commits_from_anchor_to_head(
             check=False,
         )
         oldest_descendants = list(
-            reversed(
-                [_parse_log_line(line) for line in out.splitlines() if line.strip()]
-            )
+            reversed([_parse_log_line(line) for line in out.splitlines() if line.strip()])
         )
     head_sha = _git(repo, "rev-parse", "HEAD", check=False).strip()
     head_time = _commit_time(repo, head_sha) if head_sha else None
@@ -483,9 +473,7 @@ def _anchor_observations(
     commit_id = anchor.get("commit_id") or {}
     anchor_commit = commit_id.get("hex")
     if not anchor_commit:
-        observation = _compute_survival(
-            repo, patch=patch, anchor=anchor, head_id=head_id
-        )
+        observation = _compute_survival(repo, patch=patch, anchor=anchor, head_id=head_id)
         observation["anchor_trail_index"] = 0
         observation["anchor_descendant_count"] = None
         return [observation], None, []
@@ -535,9 +523,7 @@ def _follow(
     what the follow projection could compute at query time over current repo
     state.
     """
-    effective_limit = (
-        history_limit if history_limit is not None else PATCH_TRAIL_COMMIT_LIMIT
-    )
+    effective_limit = history_limit if history_limit is not None else PATCH_TRAIL_COMMIT_LIMIT
     head_id = _head_id(repo)
     events = read_events(repo)
     patches: dict[str, tuple[dict[str, Any], Any]] = {}
@@ -608,14 +594,12 @@ def _follow(
     trail_limitations: list[str] = []
     sorted_anchors = sorted(anchors, key=lambda item: item[1].event_sequence)
     for anchor, event in sorted_anchors:
-        anchor_observations, _descendant_count, anchor_limitations = (
-            _anchor_observations(
-                repo,
-                patch=patch,
-                anchor=anchor,
-                head_id=head_id,
-                history_limit=effective_limit,
-            )
+        anchor_observations, _descendant_count, anchor_limitations = _anchor_observations(
+            repo,
+            patch=patch,
+            anchor=anchor,
+            head_id=head_id,
+            history_limit=effective_limit,
         )
         trail_limitations.extend(anchor_limitations)
         for observation in anchor_observations:
@@ -631,9 +615,7 @@ def _follow(
         observation["observation_sequence"] = sequence
 
     unique_trail_limitations = list(dict.fromkeys(trail_limitations))
-    current_observation_values = [
-        observation for _index, observation in current_observations
-    ]
+    current_observation_values = [observation for _index, observation in current_observations]
     return {
         "trace_patch_id": patch.get("trace_patch_id"),
         "git_anchor_id": git_anchor_id,
@@ -663,9 +645,7 @@ def follow_patch(
     history_limit: int | None = None,
 ) -> dict[str, Any]:
     """Follow survival for all Git Anchors attached to a Trace Patch."""
-    return _follow(
-        repo, trace_patch_id=trace_patch_id, history_limit=history_limit
-    )
+    return _follow(repo, trace_patch_id=trace_patch_id, history_limit=history_limit)
 
 
 def follow_anchor(
@@ -675,6 +655,4 @@ def follow_anchor(
     history_limit: int | None = None,
 ) -> dict[str, Any]:
     """Follow survival for one Git Anchor."""
-    return _follow(
-        repo, git_anchor_id=git_anchor_id, history_limit=history_limit
-    )
+    return _follow(repo, git_anchor_id=git_anchor_id, history_limit=history_limit)

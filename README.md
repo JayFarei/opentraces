@@ -226,22 +226,23 @@ observation and is deferred until installed-base demand justifies the
 hook surface.
 
 Watcher backstop. Phase 5 ships an agent-agnostic filesystem watcher
-that emits `filesystem_mutation_observed` events with `(path,
+event API for `filesystem_mutation_observed` events with `(path,
 before_blob, after_blob, observed_at_start, observed_at_end)` —
 intentionally no `trace_id` or `step_index`, because attribution is
-the reconciler's job, not the watcher's. The reconciler consumes those
-observations alongside `trace_step_window_opened` /
-`trace_step_window_closed` events shipped since Phase 2 and produces
-attribution under unambiguous conditions only: when the mutation
-interval is fully inside exactly one writer's *firm* step window, the
-existing `trace_patch_created` event is upgraded with
-`capture_method=["...", "watcher_backstop"]`. Ambiguity is recorded as
-a `capture_limitations` tag from the closed Phase 5 vocabulary
-(`concurrent_writer_overlap`, `unbounded_mutation_window`,
+the reconciler's job, not the watcher's. Production daemon wiring is
+deferred. The reconciler consumes observations alongside
+`trace_step_window_opened` / `trace_step_window_closed` events shipped
+since Phase 2 and produces attribution under unambiguous conditions
+only: when the mutation interval is fully inside exactly one writer's
+*firm* step window, a `trace_patch_created` event is emitted or upgraded
+with `capture_method=["...", "watcher_backstop"]`. Ambiguity is
+recorded as a `capture_limitations` tag from the closed Phase 5
+vocabulary (`concurrent_writer_overlap`, `unbounded_mutation_window`,
 `background_process_overlap`, `hook_only`, `hook_payload_state_mismatch`,
-`session_terminated_unexpectedly`, `watcher_buffer_overflow`). The
-reconciler is idempotent — re-running on the same event set produces
-the same attributions, keyed by `observation_event_id`.
+`session_terminated_unexpectedly`, `watcher_buffer_overflow`,
+`incomplete_step_window_capture`). The reconciler is idempotent —
+re-running on the same event set produces the same attributions, keyed
+by `observation_event_id`.
 
 Trail-construction limitations such as `patch_trail_history_truncated`
 land in `trail_limitations` at the response root; per-commit lookup

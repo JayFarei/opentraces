@@ -1,4 +1,5 @@
 """Trace Snapshot capture and diffing for Trace Trails."""
+
 from __future__ import annotations
 
 import hashlib
@@ -175,6 +176,8 @@ def _patch_drafts_for_step(
     trace_id: str,
     generation_index: int,
     step_index: int,
+    agent_step_id: str,
+    tool_call_id: str,
     before_snapshot_id: str,
     after_snapshot_id: str,
     before_tree_id: dict[str, str],
@@ -229,6 +232,8 @@ def _patch_drafts_for_step(
                         "trace_patch_id": trace_patch_id,
                         "snapshot_before_id": before_snapshot_id,
                         "snapshot_after_id": after_snapshot_id,
+                        "agent_step_id": agent_step_id,
+                        "tool_call_id": tool_call_id,
                         "file_path": file_path,
                         "affected_range": affected_range,
                         "authored_text": authored_text,
@@ -427,10 +432,7 @@ def close_step_window_with_snapshot(
             "tree_id": tree_id,
         },
     )
-    ref = (
-        f"refs/opentraces/local/traces/{trace_id}/{generation_index}"
-        f"/snapshots/step_{step_index}"
-    )
+    ref = f"refs/opentraces/local/traces/{trace_id}/{generation_index}/snapshots/step_{step_index}"
 
     append_event_batch(
         repo,
@@ -721,6 +723,8 @@ def emit_step_window_events_from_record(
                 trace_id=record.trace_id,
                 generation_index=generation_index,
                 step_index=step.step_index,
+                agent_step_id=agent_step_id,
+                tool_call_id=tool_call_id,
                 before_snapshot_id=before_snapshot_id,
                 after_snapshot_id=after_snapshot_id,
                 before_tree_id=pre_tree_id,
@@ -932,7 +936,10 @@ def diff_step_snapshots(repo: Path, trace_id: str, from_step: int, to_step: int)
             "files": files,
             "patch": patch,
             "limitations": sorted(
-                set((from_snapshot.get("limitations") or []) + (to_snapshot.get("limitations") or []))
+                set(
+                    (from_snapshot.get("limitations") or [])
+                    + (to_snapshot.get("limitations") or [])
+                )
             ),
         },
         "event_log_ref": EVENT_LOG_REF,

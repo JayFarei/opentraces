@@ -11,6 +11,7 @@ schema:
 * ``orphaned`` — reserved for reference-transaction observation
   (deferred beyond Phase 5).
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -112,15 +113,12 @@ def _commit(repo: Path, message: str, *, env_extra: dict[str, str] | None = None
     env = None
     if env_extra:
         import os
+
         env = os.environ.copy()
         env.update(env_extra)
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, env=env)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", message], cwd=repo, check=True, env=env
-    )
-    return subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
-    ).strip()
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, check=True, env=env)
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
 
 
 def test_rename_plus_edit_reports_alive_moved(tmp_path: Path) -> None:
@@ -148,22 +146,15 @@ def test_rename_plus_edit_reports_alive_moved(tmp_path: Path) -> None:
     )
 
     # Rename + edit in one commit.
-    subprocess.run(
-        ["git", "mv", "auth.py", "authentication.py"], cwd=tmp_path, check=True
-    )
-    (tmp_path / "authentication.py").write_text(
-        "def authorize():\n    return True\n# touched\n"
-    )
+    subprocess.run(["git", "mv", "auth.py", "authentication.py"], cwd=tmp_path, check=True)
+    (tmp_path / "authentication.py").write_text("def authorize():\n    return True\n# touched\n")
     _commit(tmp_path, "rename + edit")
 
     result = follow_patch(tmp_path, "tracepatch-sha256:rename-fixture")
-    survival_states = {
-        obs["survival_state"] for obs in result["observations"]
-    }
+    survival_states = {obs["survival_state"] for obs in result["observations"]}
     assert "alive_moved" in survival_states
     moved_obs = next(
-        obs for obs in result["observations"]
-        if obs["survival_state"] == "alive_moved"
+        obs for obs in result["observations"] if obs["survival_state"] == "alive_moved"
     )
     assert moved_obs["current_path"] == "authentication.py"
     assert moved_obs.get("rename_hops", 0) >= 1
@@ -192,22 +183,45 @@ def test_partial_preservation_reports_partially_preserved(tmp_path: Path) -> Non
     )
 
     # Later commit removes line_two and line_three; line_one survives.
-    (tmp_path / "auth.py").write_text(
-        "def authorize():\n    line_one()\n"
-    )
+    (tmp_path / "auth.py").write_text("def authorize():\n    line_one()\n")
     _commit(tmp_path, "trim authorize")
 
     result = follow_patch(tmp_path, "tracepatch-sha256:partial-fixture")
-    survival_states = {
-        obs["survival_state"] for obs in result["observations"]
-    }
+    survival_states = {obs["survival_state"] for obs in result["observations"]}
     assert "partially_preserved" in survival_states
     partial_obs = next(
-        obs for obs in result["observations"]
-        if obs["survival_state"] == "partially_preserved"
+        obs for obs in result["observations"] if obs["survival_state"] == "partially_preserved"
     )
     assert partial_obs["preserved_line_count"] >= 1
     assert partial_obs["preserved_line_count"] < 3
+
+
+def test_partial_preservation_when_original_range_no_longer_exists(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    authored = "def authorize():\n    line_one()\n    line_two()\n    line_three()\n"
+    (tmp_path / "auth.py").write_text(authored)
+    anchor_commit = _commit(tmp_path, "anchor multiline")
+
+    _emit_anchored_patch(
+        tmp_path,
+        trace_patch_id="tracepatch-sha256:partial-short-file-fixture",
+        file_path="auth.py",
+        authored_text="    line_two()\n    line_three()\n",
+        affected_range={"start_line": 3, "end_line": 4},
+        commit_sha=anchor_commit,
+        git_anchor_id="gitanchor-sha256:partial-short-file-fixture",
+    )
+
+    (tmp_path / "auth.py").write_text("def authorize():\n    line_three()\n")
+    _commit(tmp_path, "shorten authorize")
+
+    result = follow_patch(tmp_path, "tracepatch-sha256:partial-short-file-fixture")
+    current = result["current_survival"]
+    assert current["survival_state"] == "partially_preserved"
+    assert current["preserved_line_count"] == 1
+    assert current["authored_line_count"] == 2
 
 
 def test_human_repair_reports_repaired(tmp_path: Path) -> None:
@@ -234,9 +248,7 @@ def test_human_repair_reports_repaired(tmp_path: Path) -> None:
     )
 
     # Human committer edits the agent's range.
-    (tmp_path / "auth.py").write_text(
-        "def authorize():\n    return user.is_admin\n"
-    )
+    (tmp_path / "auth.py").write_text("def authorize():\n    return user.is_admin\n")
     _commit(
         tmp_path,
         "human override",
@@ -249,12 +261,9 @@ def test_human_repair_reports_repaired(tmp_path: Path) -> None:
     )
 
     result = follow_patch(tmp_path, "tracepatch-sha256:repair-fixture")
-    survival_states = {
-        obs["survival_state"] for obs in result["observations"]
-    }
+    survival_states = {obs["survival_state"] for obs in result["observations"]}
     assert "repaired" in survival_states
     repaired_obs = next(
-        obs for obs in result["observations"]
-        if obs["survival_state"] == "repaired"
+        obs for obs in result["observations"] if obs["survival_state"] == "repaired"
     )
     assert repaired_obs["repair_committer_email"] == "alice@humans.example"

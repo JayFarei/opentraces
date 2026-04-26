@@ -1,4 +1,5 @@
 """Rebuild Trace Trail explanations from TrailEvents."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -53,13 +54,13 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
         elif event.event_type == "git_anchor_created":
             anchors_by_patch.setdefault(payload["trace_patch_id"], []).append((payload, event))
 
-    patch_pair = next(
-        (
-            (payload, event)
-            for payload, event in patches
-            if event.trace_id == trace_id and event.step_index == step_index
-        ),
-        None,
+    patch_candidates = [
+        (payload, event)
+        for payload, event in patches
+        if event.trace_id == trace_id and event.step_index == step_index
+    ]
+    patch_pair = (
+        max(patch_candidates, key=lambda pair: pair[1].event_sequence) if patch_candidates else None
     )
     if patch_pair is None:
         return {

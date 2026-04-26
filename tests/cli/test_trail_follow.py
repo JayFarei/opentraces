@@ -1,4 +1,5 @@
 """Trace Trails Phase 4 Patch Trail follow coverage."""
+
 from __future__ import annotations
 
 import json
@@ -96,9 +97,7 @@ def test_trail_follow_patch_alive_transformed(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     authored = "    return 'alive-transformed-phase-four'\n"
     _anchor_patch(tmp_path, patch_id="transformed", authored=authored)
-    (tmp_path / "app.py").write_text(
-        "def value():\n    return 'human-transformed-phase-four'\n"
-    )
+    (tmp_path / "app.py").write_text("def value():\n    return 'human-transformed-phase-four'\n")
     _commit(tmp_path, "transform anchored line")
 
     payload = _follow(tmp_path, "--patch", "tracepatch-sha256:transformed")
@@ -176,6 +175,27 @@ def test_trail_follow_anchor_reverted(tmp_path: Path) -> None:
     ]
 
 
+def test_trail_follow_reintroduced_patch_is_alive_not_permanently_reverted(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    authored = "    return 'reintroduced-after-revert'\n"
+    anchor = _anchor_patch(tmp_path, patch_id="reintroduced", authored=authored)
+    anchor_commit = anchor["commit_id"]["hex"]
+    subprocess.run(["git", "revert", "--no-edit", anchor_commit], cwd=tmp_path, check=True)
+    (tmp_path / "app.py").write_text("def value():\n" + authored)
+    _commit(tmp_path, "reintroduce reverted line")
+
+    payload = _follow(tmp_path, "--anchor", anchor["git_anchor_id"])
+
+    assert payload["current_survival"]["survival_state"] == "alive_on_path"
+    assert [obs["survival_state"] for obs in payload["observations"]] == [
+        "alive_on_path",
+        "reverted",
+        "alive_on_path",
+    ]
+
+
 def test_trail_follow_patch_lost_when_path_deleted(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     authored = "    return 'lost-phase-four'\n"
@@ -199,11 +219,15 @@ def test_trail_follow_patch_aggregates_multiple_anchor_observations(tmp_path: Pa
 
     (tmp_path / "app.py").write_text("def value():\n" + authored)
     first_commit = _commit(tmp_path, "apply first copy")
-    assert len(reconcile_commit_anchors(tmp_path, first_commit, writer="post-commit-correlator")) == 1
+    assert (
+        len(reconcile_commit_anchors(tmp_path, first_commit, writer="post-commit-correlator")) == 1
+    )
 
     (tmp_path / "app.py").write_text("def value():\n" + authored + authored)
     second_commit = _commit(tmp_path, "apply second copy")
-    assert len(reconcile_commit_anchors(tmp_path, second_commit, writer="post-commit-correlator")) == 1
+    assert (
+        len(reconcile_commit_anchors(tmp_path, second_commit, writer="post-commit-correlator")) == 1
+    )
 
     (tmp_path / "app.py").write_text("def value():\n" + authored)
     _commit(tmp_path, "remove second copy")
@@ -300,9 +324,7 @@ def test_trail_follow_history_limit_keeps_current_head(tmp_path: Path) -> None:
     assert payload["current_survival"]["survival_state"] == "alive_transformed"
     assert "patch_trail_history_truncated" in payload["trail_limitations"]
     assert payload["history_limit"] == 3
-    assert all(
-        obs["anchor_descendant_count"] == 3 for obs in payload["observations"]
-    )
+    assert all(obs["anchor_descendant_count"] == 3 for obs in payload["observations"])
 
 
 def test_trail_follow_observation_metadata_fields(tmp_path: Path) -> None:
@@ -316,12 +338,8 @@ def test_trail_follow_observation_metadata_fields(tmp_path: Path) -> None:
 
     assert payload["history_limit"] == follow_module.PATCH_TRAIL_COMMIT_LIMIT
     observations = payload["observations"]
-    assert [obs["observation_sequence"] for obs in observations] == list(
-        range(len(observations))
-    )
-    assert [obs["anchor_trail_index"] for obs in observations] == list(
-        range(len(observations))
-    )
+    assert [obs["observation_sequence"] for obs in observations] == list(range(len(observations)))
+    assert [obs["anchor_trail_index"] for obs in observations] == list(range(len(observations)))
     for obs in observations:
         assert isinstance(obs["observed_commit_time"], int)
         assert obs["observed_commit_time"] > 0
@@ -336,15 +354,13 @@ def test_trail_follow_multi_anchor_indices_and_sequence(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("def value():\n" + authored)
     first_commit = _commit(tmp_path, "apply first copy")
     assert (
-        len(reconcile_commit_anchors(tmp_path, first_commit, writer="post-commit-correlator"))
-        == 1
+        len(reconcile_commit_anchors(tmp_path, first_commit, writer="post-commit-correlator")) == 1
     )
 
     (tmp_path / "app.py").write_text("def value():\n" + authored + authored)
     second_commit = _commit(tmp_path, "apply second copy")
     assert (
-        len(reconcile_commit_anchors(tmp_path, second_commit, writer="post-commit-correlator"))
-        == 1
+        len(reconcile_commit_anchors(tmp_path, second_commit, writer="post-commit-correlator")) == 1
     )
 
     payload = _follow(tmp_path, "--patch", "tracepatch-sha256:indices")
@@ -355,7 +371,5 @@ def test_trail_follow_multi_anchor_indices_and_sequence(tmp_path: Path) -> None:
     trail_indices = [obs["anchor_trail_index"] for obs in payload["observations"]]
     assert trail_indices.count(0) == 2
 
-    anchor_event_sequences = {
-        obs["anchor_event_sequence"] for obs in payload["observations"]
-    }
+    anchor_event_sequences = {obs["anchor_event_sequence"] for obs in payload["observations"]}
     assert len(anchor_event_sequences) == 2

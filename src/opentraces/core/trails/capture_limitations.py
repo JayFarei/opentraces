@@ -22,6 +22,7 @@ HOOK_ONLY = "hook_only"
 HOOK_PAYLOAD_STATE_MISMATCH = "hook_payload_state_mismatch"
 SESSION_TERMINATED_UNEXPECTEDLY = "session_terminated_unexpectedly"
 WATCHER_BUFFER_OVERFLOW = "watcher_buffer_overflow"
+INCOMPLETE_STEP_WINDOW_CAPTURE = "incomplete_step_window_capture"
 
 CAPTURE_LIMITATIONS: tuple[str, ...] = (
     CONCURRENT_WRITER_OVERLAP,
@@ -31,6 +32,7 @@ CAPTURE_LIMITATIONS: tuple[str, ...] = (
     HOOK_PAYLOAD_STATE_MISMATCH,
     SESSION_TERMINATED_UNEXPECTEDLY,
     WATCHER_BUFFER_OVERFLOW,
+    INCOMPLETE_STEP_WINDOW_CAPTURE,
 )
 
 
