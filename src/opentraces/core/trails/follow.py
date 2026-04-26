@@ -22,6 +22,8 @@ RESERVED_PHASE5_SURVIVAL_STATES = [
     "orphaned",
 ]
 REVERT_SEARCH_LIMIT = 2000
+PATCH_TRAIL_COMMIT_LIMIT = 500
+OBSERVATION_SCOPE = "anchor_to_head"
 SURVIVAL_PRECEDENCE = {
     "alive_on_path": 50,
     "alive_transformed": 40,
@@ -76,18 +78,27 @@ def _head_id(repo: Path) -> dict[str, str] | None:
     return _oid(_git(repo, "rev-parse", "HEAD", check=False).strip())
 
 
+def _commit_id(repo: Path, ref: str) -> dict[str, str] | None:
+    return _oid(_git(repo, "rev-parse", ref, check=False).strip())
+
+
 def _show_file(repo: Path, ref: str, path: str) -> str | None:
     out = _git(repo, "show", f"{ref}:{path}", check=False)
     return out if out else None
 
 
-def _find_revert_commit(repo: Path, anchor_commit: str) -> tuple[str | None, bool]:
+def _find_revert_commit(
+    repo: Path,
+    *,
+    anchor_commit: str,
+    observed_ref: str,
+) -> tuple[str | None, bool]:
     out = _git(
         repo,
         "log",
         f"--max-count={REVERT_SEARCH_LIMIT + 1}",
         "--format=%H%x00%B%x00%x00",
-        f"{anchor_commit}..HEAD",
+        f"{anchor_commit}..{observed_ref}",
         check=False,
     )
     if not out:
@@ -113,7 +124,9 @@ def _compute_survival(
     *,
     patch: dict[str, Any],
     anchor: dict[str, Any],
+    observed_ref: str = "HEAD",
 ) -> dict[str, Any]:
+    observed_commit_id = _commit_id(repo, observed_ref)
     head_id = _head_id(repo)
     commit_id = anchor.get("commit_id") or {}
     anchor_commit = commit_id.get("hex")
@@ -126,21 +139,33 @@ def _compute_survival(
         "git_anchor_id": anchor.get("git_anchor_id"),
         "trace_patch_id": anchor.get("trace_patch_id") or patch.get("trace_patch_id"),
         "anchor_commit_id": commit_id or None,
-        "observed_head_id": head_id,
+        "observed_ref": observed_ref,
+        "observed_commit_id": observed_commit_id,
         "path": path,
         "range": anchor_range or None,
         "evidence_tier": anchor.get("evidence_tier") or "unknown",
         "evidence_firmness": anchor.get("evidence_firmness") or "unknown",
         "limitations": limitations,
     }
-    if not anchor_commit or not path or head_id is None:
+    if head_id is not None and observed_commit_id == head_id:
+        base["observed_head_id"] = head_id
+
+    if not anchor_commit or not path or observed_commit_id is None:
         limitations.append("missing_git_survival_inputs")
         return {**base, "survival_state": "unknown"}
-    if not _git_ok(repo, "merge-base", "--is-ancestor", anchor_commit, "HEAD"):
-        limitations.append("anchor_commit_not_reachable_from_head")
+    if not _git_ok(repo, "merge-base", "--is-ancestor", anchor_commit, observed_ref):
+        limitations.append(
+            "anchor_commit_not_reachable_from_head"
+            if observed_ref == "HEAD"
+            else "anchor_commit_not_reachable_from_observed_ref"
+        )
         return {**base, "survival_state": "unknown"}
 
-    revert_commit, revert_search_truncated = _find_revert_commit(repo, anchor_commit)
+    revert_commit, revert_search_truncated = _find_revert_commit(
+        repo,
+        anchor_commit=anchor_commit,
+        observed_ref=observed_ref,
+    )
     if revert_commit:
         return {
             **base,
@@ -155,7 +180,7 @@ def _compute_survival(
         limitations.append("missing_authored_text")
         return {**base, "survival_state": "unknown"}
 
-    current_text = _show_file(repo, "HEAD", path)
+    current_text = _show_file(repo, observed_ref, path)
     if current_text is None:
         return {**base, "survival_state": "lost"}
 
@@ -172,11 +197,13 @@ def _compute_survival(
     return {**base, "survival_state": "lost"}
 
 
-def _aggregate_current_survival(observations: list[dict[str, Any]]) -> dict[str, Any]:
-    if not observations:
+def _aggregate_current_survival(
+    indexed_observations: list[tuple[int, dict[str, Any]]],
+) -> dict[str, Any]:
+    if not indexed_observations:
         return {"survival_state": "unknown"}
     best_index, best = max(
-        enumerate(observations),
+        indexed_observations,
         key=lambda item: (
             SURVIVAL_PRECEDENCE.get(item[1].get("survival_state"), 0),
             item[0],
@@ -186,6 +213,80 @@ def _aggregate_current_survival(observations: list[dict[str, Any]]) -> dict[str,
     current["aggregation"] = "any_alive_anchor_wins"
     current["selected_observation_index"] = best_index
     return current
+
+
+def _commits_from_anchor_to_head(
+    repo: Path,
+    anchor_commit: str,
+) -> tuple[list[str], list[str]]:
+    """Return a bounded chronological ancestry path including anchor and HEAD."""
+    if not _git_ok(repo, "merge-base", "--is-ancestor", anchor_commit, "HEAD"):
+        return ["HEAD"], []
+
+    total_out = _git(
+        repo,
+        "rev-list",
+        "--count",
+        "--ancestry-path",
+        f"{anchor_commit}..HEAD",
+        check=False,
+    ).strip()
+    try:
+        descendant_count = int(total_out or "0")
+    except ValueError:
+        descendant_count = 0
+
+    if descendant_count == 0:
+        return [anchor_commit], []
+
+    head = _git(repo, "rev-parse", "HEAD", check=False).strip()
+    limit = max(PATCH_TRAIL_COMMIT_LIMIT, 2)
+    if descendant_count <= limit - 1:
+        descendants = _git(
+            repo,
+            "rev-list",
+            "--reverse",
+            "--ancestry-path",
+            f"{anchor_commit}..HEAD",
+            check=False,
+        ).splitlines()
+        return [anchor_commit] + descendants, []
+
+    keep_oldest = max(limit - 2, 0)
+    oldest_descendants: list[str] = []
+    if keep_oldest:
+        newest_order_oldest_subset = _git(
+            repo,
+            "rev-list",
+            "--ancestry-path",
+            f"--skip={descendant_count - keep_oldest}",
+            f"--max-count={keep_oldest}",
+            f"{anchor_commit}..HEAD",
+            check=False,
+        ).splitlines()
+        oldest_descendants = list(reversed(newest_order_oldest_subset))
+    return [anchor_commit] + oldest_descendants + [head], ["patch_trail_history_truncated"]
+
+
+def _anchor_observations(
+    repo: Path,
+    *,
+    patch: dict[str, Any],
+    anchor: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    commit_id = anchor.get("commit_id") or {}
+    anchor_commit = commit_id.get("hex")
+    if not anchor_commit:
+        return [_compute_survival(repo, patch=patch, anchor=anchor)], []
+
+    commits, limitations = _commits_from_anchor_to_head(repo, anchor_commit)
+    observations = [
+        _compute_survival(repo, patch=patch, anchor=anchor, observed_ref=commit)
+        for commit in commits
+    ]
+    for index, observation in enumerate(observations):
+        observation["trail_index"] = index
+    return observations, limitations
 
 
 def _follow(
@@ -227,8 +328,10 @@ def _follow(
             "git_anchor_id": git_anchor_id,
             "relation": "unknown",
             "current_survival": {"survival_state": "unknown"},
+            "current_observations": [],
             "observations": [],
-            "observation_scope": "head_only",
+            "observation_scope": OBSERVATION_SCOPE,
+            "history_limit": PATCH_TRAIL_COMMIT_LIMIT,
             "limitations": ["no_trace_patch_event"],
             "event_log_ref": EVENT_LOG_REF,
             "phase4_survival_states": PHASE4_SURVIVAL_STATES,
@@ -243,8 +346,10 @@ def _follow(
             "git_anchor_id": git_anchor_id,
             "relation": "unknown",
             "current_survival": {"survival_state": "unknown"},
+            "current_observations": [],
             "observations": [],
-            "observation_scope": "head_only",
+            "observation_scope": OBSERVATION_SCOPE,
+            "history_limit": PATCH_TRAIL_COMMIT_LIMIT,
             "limitations": ["no_git_anchor_event"],
             "event_log_ref": EVENT_LOG_REF,
             "phase4_survival_states": PHASE4_SURVIVAL_STATES,
@@ -252,25 +357,47 @@ def _follow(
             "source_events": [_source_event(patch_event)],
         }
 
-    observations = [
-        _compute_survival(repo, patch=patch, anchor=anchor)
-        for anchor, _event in sorted(anchors, key=lambda item: item[1].event_sequence)
-    ]
+    observations: list[dict[str, Any]] = []
+    current_observations: list[tuple[int, dict[str, Any]]] = []
+    limitations: list[str] = []
+    sorted_anchors = sorted(anchors, key=lambda item: item[1].event_sequence)
+    for anchor, event in sorted_anchors:
+        anchor_observations, anchor_limitations = _anchor_observations(
+            repo,
+            patch=patch,
+            anchor=anchor,
+        )
+        limitations.extend(anchor_limitations)
+        for observation in anchor_observations:
+            observation["anchor_event_sequence"] = event.event_sequence
+        start_index = len(observations)
+        observations.extend(anchor_observations)
+        if anchor_observations:
+            current_observations.append(
+                (start_index + len(anchor_observations) - 1, anchor_observations[-1])
+            )
+
+    unique_limitations = list(dict.fromkeys(limitations))
+    current_observation_values = [observation for _index, observation in current_observations]
     return {
         "trace_patch_id": patch.get("trace_patch_id"),
         "git_anchor_id": git_anchor_id,
         "relation": "patch_trail_observed",
         "current_survival": (
-            observations[-1] if git_anchor_id else _aggregate_current_survival(observations)
+            current_observation_values[-1]
+            if git_anchor_id and current_observation_values
+            else _aggregate_current_survival(current_observations)
         ),
+        "current_observations": current_observation_values,
         "observations": observations,
-        "observation_scope": "head_only",
-        "limitations": [],
+        "observation_scope": OBSERVATION_SCOPE,
+        "history_limit": PATCH_TRAIL_COMMIT_LIMIT,
+        "limitations": unique_limitations,
         "event_log_ref": EVENT_LOG_REF,
         "phase4_survival_states": PHASE4_SURVIVAL_STATES,
         "reserved_survival_states": RESERVED_PHASE5_SURVIVAL_STATES,
         "source_events": [_source_event(patch_event)]
-        + [_source_event(event) for _anchor, event in anchors],
+        + [_source_event(event) for _anchor, event in sorted_anchors],
     }
 
 

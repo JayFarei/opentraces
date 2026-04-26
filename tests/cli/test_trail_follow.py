@@ -87,6 +87,7 @@ def test_trail_follow_patch_alive_on_path(tmp_path: Path) -> None:
     payload = _follow(tmp_path, "--patch", "tracepatch-sha256:alive")
 
     assert payload["relation"] == "patch_trail_observed"
+    assert payload["observation_scope"] == "anchor_to_head"
     assert payload["current_survival"]["survival_state"] == "alive_on_path"
     assert payload["observations"][0]["path"] == "app.py"
 
@@ -103,6 +104,41 @@ def test_trail_follow_patch_alive_transformed(tmp_path: Path) -> None:
     payload = _follow(tmp_path, "--patch", "tracepatch-sha256:transformed")
 
     assert payload["current_survival"]["survival_state"] == "alive_transformed"
+    assert [obs["survival_state"] for obs in payload["observations"]] == [
+        "alive_on_path",
+        "alive_transformed",
+    ]
+
+
+def test_trail_follow_patch_emits_chronological_commit_observations(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    authored = "    return 'chronological-phase-four'\n"
+    anchor = _anchor_patch(tmp_path, patch_id="chronological", authored=authored)
+    anchor_commit = anchor["commit_id"]["hex"]
+    (tmp_path / "notes.txt").write_text("noise\n")
+    noise_commit = _commit(tmp_path, "unrelated later commit")
+    (tmp_path / "app.py").write_text("def value():\n    return 'chronological-edited'\n")
+    transformed_commit = _commit(tmp_path, "transform anchored line")
+    subprocess.run(["git", "rm", "-q", "app.py"], cwd=tmp_path, check=True)
+    deleted_commit = _commit(tmp_path, "delete anchored line")
+
+    payload = _follow(tmp_path, "--patch", "tracepatch-sha256:chronological")
+
+    assert [obs["observed_commit_id"]["hex"] for obs in payload["observations"]] == [
+        anchor_commit,
+        noise_commit,
+        transformed_commit,
+        deleted_commit,
+    ]
+    assert [obs["survival_state"] for obs in payload["observations"]] == [
+        "alive_on_path",
+        "alive_on_path",
+        "alive_transformed",
+        "lost",
+    ]
+    assert payload["current_survival"]["survival_state"] == "lost"
 
 
 def test_survival_recomputed_from_current_git_state_not_stale_capture_boolean(
@@ -134,6 +170,10 @@ def test_trail_follow_anchor_reverted(tmp_path: Path) -> None:
     current = payload["current_survival"]
     assert current["survival_state"] == "reverted"
     assert current["revert_commit_id"]["hex"] == _git(tmp_path, "rev-parse", "HEAD")
+    assert [obs["survival_state"] for obs in payload["observations"]] == [
+        "alive_on_path",
+        "reverted",
+    ]
 
 
 def test_trail_follow_patch_lost_when_path_deleted(tmp_path: Path) -> None:
@@ -146,6 +186,10 @@ def test_trail_follow_patch_lost_when_path_deleted(tmp_path: Path) -> None:
     payload = _follow(tmp_path, "--patch", "tracepatch-sha256:lost")
 
     assert payload["current_survival"]["survival_state"] == "lost"
+    assert [obs["survival_state"] for obs in payload["observations"]] == [
+        "alive_on_path",
+        "lost",
+    ]
 
 
 def test_trail_follow_patch_aggregates_multiple_anchor_observations(tmp_path: Path) -> None:
@@ -166,13 +210,12 @@ def test_trail_follow_patch_aggregates_multiple_anchor_observations(tmp_path: Pa
 
     payload = _follow(tmp_path, "--patch", "tracepatch-sha256:multi")
 
-    assert [obs["survival_state"] for obs in payload["observations"]] == [
+    assert [obs["survival_state"] for obs in payload["current_observations"]] == [
         "alive_on_path",
         "lost",
     ]
     assert payload["current_survival"]["survival_state"] == "alive_on_path"
     assert payload["current_survival"]["aggregation"] == "any_alive_anchor_wins"
-    assert payload["current_survival"]["selected_observation_index"] == 0
 
 
 def test_trail_follow_unknown_for_unreachable_anchor_commit(tmp_path: Path) -> None:
@@ -226,3 +269,31 @@ def test_trail_follow_bounds_revert_search(tmp_path: Path, monkeypatch) -> None:
     current = payload["current_survival"]
     assert current["survival_state"] == "alive_on_path"
     assert "revert_search_truncated" in current["limitations"]
+
+
+def test_trail_follow_history_limit_keeps_current_head(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _init_repo(tmp_path)
+    authored = "    return 'bounded-history-phase-four'\n"
+    anchor = _anchor_patch(tmp_path, patch_id="history-limit", authored=authored)
+    anchor_commit = anchor["commit_id"]["hex"]
+    monkeypatch.setattr(follow_module, "PATCH_TRAIL_COMMIT_LIMIT", 3)
+
+    (tmp_path / "noise_a.txt").write_text("a\n")
+    first_later_commit = _commit(tmp_path, "noise a")
+    (tmp_path / "noise_b.txt").write_text("b\n")
+    _commit(tmp_path, "noise b")
+    (tmp_path / "app.py").write_text("def value():\n    return 'bounded-history-edited'\n")
+    head_commit = _commit(tmp_path, "transform after skipped commit")
+
+    payload = _follow(tmp_path, "--patch", "tracepatch-sha256:history-limit")
+
+    assert [obs["observed_commit_id"]["hex"] for obs in payload["observations"]] == [
+        anchor_commit,
+        first_later_commit,
+        head_commit,
+    ]
+    assert payload["current_survival"]["survival_state"] == "alive_transformed"
+    assert "patch_trail_history_truncated" in payload["limitations"]
