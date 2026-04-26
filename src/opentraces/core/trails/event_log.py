@@ -63,9 +63,13 @@ def _zero_object_id(cwd: Path) -> str:
     return "0" * 64 if proc.stdout.strip() == "sha256" else "0" * 40
 
 
-def _ref_update_raced(proc: subprocess.CompletedProcess[str]) -> bool:
+def _ref_update_raced(
+    cwd: Path,
+    proc: subprocess.CompletedProcess[str],
+    expected_head: str | None,
+) -> bool:
     text = f"{proc.stderr}\n{proc.stdout}".lower()
-    return any(
+    if not any(
         marker in text
         for marker in (
             "cannot lock ref",
@@ -73,7 +77,10 @@ def _ref_update_raced(proc: subprocess.CompletedProcess[str]) -> bool:
             "but expected",
             "is at",
         )
-    )
+    ):
+        return False
+    current_head = _ref_head(cwd)
+    return current_head != expected_head
 
 
 def _update_event_log_ref(cwd: Path, commit_sha: str, expected_head: str | None) -> bool:
@@ -85,7 +92,7 @@ def _update_event_log_ref(cwd: Path, commit_sha: str, expected_head: str | None)
     )
     if proc.returncode == 0:
         return True
-    if _ref_update_raced(proc):
+    if _ref_update_raced(cwd, proc, expected_head):
         return False
     raise RuntimeError(
         f"git update-ref {EVENT_LOG_REF} failed: "

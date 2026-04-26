@@ -21,6 +21,14 @@ RESERVED_PHASE5_SURVIVAL_STATES = [
     "repaired",
     "orphaned",
 ]
+REVERT_SEARCH_LIMIT = 2000
+SURVIVAL_PRECEDENCE = {
+    "alive_on_path": 50,
+    "alive_transformed": 40,
+    "reverted": 30,
+    "lost": 20,
+    "unknown": 10,
+}
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> str:
@@ -73,16 +81,24 @@ def _show_file(repo: Path, ref: str, path: str) -> str | None:
     return out if out else None
 
 
-def _find_revert_commit(repo: Path, anchor_commit: str) -> str | None:
-    out = _git(repo, "log", "--format=%H%x00%B%x00%x00", f"{anchor_commit}..HEAD", check=False)
+def _find_revert_commit(repo: Path, anchor_commit: str) -> tuple[str | None, bool]:
+    out = _git(
+        repo,
+        "log",
+        f"--max-count={REVERT_SEARCH_LIMIT + 1}",
+        "--format=%H%x00%B%x00%x00",
+        f"{anchor_commit}..HEAD",
+        check=False,
+    )
     if not out:
-        return None
+        return None, False
     records = [record for record in out.split("\x00\x00") if record.strip()]
-    for record in records:
+    truncated = len(records) > REVERT_SEARCH_LIMIT
+    for record in records[:REVERT_SEARCH_LIMIT]:
         commit, _, body = record.partition("\x00")
         if f"This reverts commit {anchor_commit}" in body:
-            return commit.strip()
-    return None
+            return commit.strip(), truncated
+    return None, truncated
 
 
 def _authored_lines(patch: dict[str, Any]) -> list[str]:
@@ -124,13 +140,15 @@ def _compute_survival(
         limitations.append("anchor_commit_not_reachable_from_head")
         return {**base, "survival_state": "unknown"}
 
-    revert_commit = _find_revert_commit(repo, anchor_commit)
+    revert_commit, revert_search_truncated = _find_revert_commit(repo, anchor_commit)
     if revert_commit:
         return {
             **base,
             "survival_state": "reverted",
             "revert_commit_id": _oid(revert_commit),
         }
+    if revert_search_truncated:
+        limitations.append("revert_search_truncated")
 
     authored_lines = _authored_lines(patch)
     if not authored_lines:
@@ -151,9 +169,23 @@ def _compute_survival(
         if len(current_lines) >= start:
             return {**base, "survival_state": "alive_transformed"}
 
-    if "\n".join(authored_lines) in current_text:
-        return {**base, "survival_state": "alive_transformed"}
     return {**base, "survival_state": "lost"}
+
+
+def _aggregate_current_survival(observations: list[dict[str, Any]]) -> dict[str, Any]:
+    if not observations:
+        return {"survival_state": "unknown"}
+    best_index, best = max(
+        enumerate(observations),
+        key=lambda item: (
+            SURVIVAL_PRECEDENCE.get(item[1].get("survival_state"), 0),
+            item[0],
+        ),
+    )
+    current = dict(best)
+    current["aggregation"] = "any_alive_anchor_wins"
+    current["selected_observation_index"] = best_index
+    return current
 
 
 def _follow(
@@ -196,6 +228,7 @@ def _follow(
             "relation": "unknown",
             "current_survival": {"survival_state": "unknown"},
             "observations": [],
+            "observation_scope": "head_only",
             "limitations": ["no_trace_patch_event"],
             "event_log_ref": EVENT_LOG_REF,
             "phase4_survival_states": PHASE4_SURVIVAL_STATES,
@@ -211,6 +244,7 @@ def _follow(
             "relation": "unknown",
             "current_survival": {"survival_state": "unknown"},
             "observations": [],
+            "observation_scope": "head_only",
             "limitations": ["no_git_anchor_event"],
             "event_log_ref": EVENT_LOG_REF,
             "phase4_survival_states": PHASE4_SURVIVAL_STATES,
@@ -226,8 +260,11 @@ def _follow(
         "trace_patch_id": patch.get("trace_patch_id"),
         "git_anchor_id": git_anchor_id,
         "relation": "patch_trail_observed",
-        "current_survival": observations[-1],
+        "current_survival": (
+            observations[-1] if git_anchor_id else _aggregate_current_survival(observations)
+        ),
         "observations": observations,
+        "observation_scope": "head_only",
         "limitations": [],
         "event_log_ref": EVENT_LOG_REF,
         "phase4_survival_states": PHASE4_SURVIVAL_STATES,

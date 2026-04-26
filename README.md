@@ -83,6 +83,7 @@ Useful follow-ups:
 - `opentraces trail explain --trace <id> --step <n>` explains Trace Trails evidence rebuilt from the local Git event log.
 - `opentraces trail explain <path>:<line>` resolves a Git-side file line back to Trace Patch evidence when an exact anchor exists.
 - `opentraces trail diff --trace <id> --from-step <a> --to-step <b>` shows the Trace Patch between captured step snapshots.
+- `opentraces trail follow --patch <id>` reports whether an anchored Trace Patch is still alive at the current Git `HEAD`.
 - `opentraces setup trufflehog` enables Tier 1.5 scanning.
 - `opentraces setup llm-review` configures Tier 2 semantic review.
 - `opentraces push --llm-review` gates uploads on a clean Tier 2 verdict.
@@ -172,7 +173,8 @@ lineage: append-only local `TrailEvent` batches under
 `refs/opentraces/local/events/v1`, plus rebuildable projections such as CLI
 explanations, doctor checks, and later search/dataset views.
 
-The initial surface supports exact patch explanations and snapshot diffs.
+The initial surface supports exact patch explanations, snapshot diffs, and
+current-head Patch Trail follow-up.
 `opentraces trail explain --trace <id> --step <n>` rebuilds from the local
 event log and reports the Trace Snapshot references, Trace Patch identity, Git
 Anchor, evidence tier, firmness, source events, and any limitations.
@@ -180,7 +182,18 @@ Anchor, evidence tier, firmness, source events, and any limitations.
 captured snapshot trees and emits the resulting Trace Patch. The delayed Git
 Anchor reconciler can search a later commit for existing Trace Patches and
 record exact anchors, which can be queried from `--commit <sha>` or
-`<path>:<line>`; Patch Trail survival states are intentionally later phases.
+`<path>:<line>`.
+
+Trace-side history is the append-only sequence of snapshots, patches, searches,
+and anchors observed by OpenTraces. Git-side Patch Trails are computed from Git
+history and repository state after a patch has a Git Anchor. `opentraces trail
+follow --patch <trace_patch_id>` and `--anchor <git_anchor_id>` currently report
+one current-`HEAD` survival observation per anchor, ordered by anchor event
+sequence; `current_survival` aggregates patch-level answers so any alive anchor
+wins over later lost anchors. Phase 4 states are `alive_on_path`,
+`alive_transformed`, `reverted`, `lost`, and `unknown`. Rename, partial
+preservation, repair, and orphan reasoning are reserved for the Phase 5
+reconciler.
 
 ## Docs
 

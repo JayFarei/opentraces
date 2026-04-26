@@ -8,6 +8,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from opentraces.cli import main
+import opentraces.core.trails.follow as follow_module
 from opentraces.core.trails import (
     TrailEventDraft,
     append_event_batch,
@@ -104,6 +105,23 @@ def test_trail_follow_patch_alive_transformed(tmp_path: Path) -> None:
     assert payload["current_survival"]["survival_state"] == "alive_transformed"
 
 
+def test_survival_recomputed_from_current_git_state_not_stale_capture_boolean(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    authored = "    return 'live-recomputed-phase-four'\n"
+    _anchor_patch(tmp_path, patch_id="live", authored=authored)
+
+    before = _follow(tmp_path, "--patch", "tracepatch-sha256:live")
+    assert before["current_survival"]["survival_state"] == "alive_on_path"
+
+    (tmp_path / "app.py").write_text("def value():\n    return 'changed-after-follow'\n")
+    _commit(tmp_path, "change after first follow")
+
+    after = _follow(tmp_path, "--patch", "tracepatch-sha256:live")
+    assert after["current_survival"]["survival_state"] == "alive_transformed"
+
+
 def test_trail_follow_anchor_reverted(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     authored = "    return 'reverted-phase-four'\n"
@@ -128,6 +146,33 @@ def test_trail_follow_patch_lost_when_path_deleted(tmp_path: Path) -> None:
     payload = _follow(tmp_path, "--patch", "tracepatch-sha256:lost")
 
     assert payload["current_survival"]["survival_state"] == "lost"
+
+
+def test_trail_follow_patch_aggregates_multiple_anchor_observations(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    authored = "    return 'multi-anchor-aggregation-phase-four'\n"
+    _append_patch(tmp_path, patch_id="multi", authored=authored)
+
+    (tmp_path / "app.py").write_text("def value():\n" + authored)
+    first_commit = _commit(tmp_path, "apply first copy")
+    assert len(reconcile_commit_anchors(tmp_path, first_commit, writer="post-commit-correlator")) == 1
+
+    (tmp_path / "app.py").write_text("def value():\n" + authored + authored)
+    second_commit = _commit(tmp_path, "apply second copy")
+    assert len(reconcile_commit_anchors(tmp_path, second_commit, writer="post-commit-correlator")) == 1
+
+    (tmp_path / "app.py").write_text("def value():\n" + authored)
+    _commit(tmp_path, "remove second copy")
+
+    payload = _follow(tmp_path, "--patch", "tracepatch-sha256:multi")
+
+    assert [obs["survival_state"] for obs in payload["observations"]] == [
+        "alive_on_path",
+        "lost",
+    ]
+    assert payload["current_survival"]["survival_state"] == "alive_on_path"
+    assert payload["current_survival"]["aggregation"] == "any_alive_anchor_wins"
+    assert payload["current_survival"]["selected_observation_index"] == 0
 
 
 def test_trail_follow_unknown_for_unreachable_anchor_commit(tmp_path: Path) -> None:
@@ -163,3 +208,21 @@ def test_trail_follow_unknown_for_unreachable_anchor_commit(tmp_path: Path) -> N
     current = payload["current_survival"]
     assert current["survival_state"] == "unknown"
     assert "anchor_commit_not_reachable_from_head" in current["limitations"]
+
+
+def test_trail_follow_bounds_revert_search(tmp_path: Path, monkeypatch) -> None:
+    _init_repo(tmp_path)
+    authored = "    return 'bounded-revert-search-phase-four'\n"
+    _anchor_patch(tmp_path, patch_id="bounded", authored=authored)
+    monkeypatch.setattr(follow_module, "REVERT_SEARCH_LIMIT", 1)
+
+    (tmp_path / "noise_a.txt").write_text("a\n")
+    _commit(tmp_path, "noise a")
+    (tmp_path / "noise_b.txt").write_text("b\n")
+    _commit(tmp_path, "noise b")
+
+    payload = _follow(tmp_path, "--patch", "tracepatch-sha256:bounded")
+
+    current = payload["current_survival"]
+    assert current["survival_state"] == "alive_on_path"
+    assert "revert_search_truncated" in current["limitations"]
