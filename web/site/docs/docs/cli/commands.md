@@ -31,6 +31,7 @@ The current public root commands are:
 | `assess` | Score trace quality locally or on a dataset |
 | `web` | Open the browser inbox UI |
 | `tui` | Open the terminal inbox UI |
+| `trail` | Explain VCS-anchored Trace Trails and resolve `ot://` resources |
 | `blame` | Show per-commit attribution for a SHA (optionally one file) |
 | `graph` | Render commit + trace history (commit-primary or trace-primary) |
 | `resume` | Resume the upstream agent session behind a trace |
@@ -626,7 +627,39 @@ Upgrades the opentraces CLI and refreshes project-side files (skill, hooks) wher
 
 ## Advanced Commands
 
-The first commands in this section (`blame`, `graph`, `resume`, `stats`, `log`, `completions`) are part of the default `--help` listing. `backfill`, `git-backfill`, and `watcher` are not: they are real commands but are intentionally hidden from the default listing because they are usually driven by `watcher`, `setup git`, and `setup watcher` respectively.
+The first commands in this section (`trail`, `blame`, `graph`, `resume`, `stats`, `log`, `completions`) are part of the default `--help` listing. `backfill`, `git-backfill`, and `watcher` are not: they are real commands but are intentionally hidden from the default listing because they are usually driven by `watcher`, `setup git`, and `setup watcher` respectively.
+
+### `opentraces trail`
+
+```bash
+opentraces trail explain --trace tr1 --step 4 --json
+opentraces trail explain --commit abc1234 --json
+opentraces trail explain src/app.py:42 --json
+opentraces trail diff --trace tr1 --from-step 3 --to-step 4 --json
+opentraces trail follow --patch tracepatch-sha256:abc --json
+opentraces trail resolve ot://git-anchor/gitanchor-sha256:def --json
+```
+
+Trace Trails are the VCS-anchored evidence chain from an agent step to a Trace
+Patch, Git Anchor, and Patch Trail. `explain` starts from a trace step, commit,
+or file line. `diff` compares captured step snapshots. `follow` observes what
+happened to an anchored Trace Patch after the anchor commit.
+
+`resolve` accepts stable resource IDs for:
+
+- `ot://trace/<trace_id>/patches/<trace_patch_id>/trail`
+- `ot://git-anchor/<git_anchor_id>`
+- `ot://file/<path>/line/<n>/origin`
+
+Trace Slices are bounded context around a Trace Patch, not training data by
+themselves. Current JSON responses include `containing_segment_id` and
+ID-only Trace Slice metadata. Full prompt, tool, observation, test, and file
+content resolution is deferred to the Phase 8 Trace Dataset projection.
+
+| Flag | Description |
+|------|-------------|
+| `--project DIRECTORY` | Project directory, default CWD. |
+| `--json` | Emit structured JSON instead of text. |
 
 ### `opentraces blame`
 

@@ -1,4 +1,4 @@
-"""Trace Trails substrate (Phases 1–5)."""
+"""Trace Trails substrate and client projections."""
 from __future__ import annotations
 
 from .anchors import reconcile_commit_anchors
@@ -21,6 +21,15 @@ from .follow import follow_anchor, follow_patch
 from .models import GitObjectID, TrailEvent, TrailEventDraft
 from .reconciler import reconcile_watcher_observations
 from .rebuild import rebuild_projections
+from .resources import resolve_resource
+from .slices import (
+    DEFAULT_TRACE_SLICE_STEP_RADIUS,
+    resource_ref_for_file_line,
+    resource_ref_for_git_anchor,
+    resource_ref_for_trace_patch_trail,
+    trace_slice_for_event,
+    trace_slice_id_for,
+)
 from .supersede import supersede_anchors_for_rewrite
 from .snapshots import (
     SnapshotResult,
@@ -43,6 +52,7 @@ __all__ = [
     "SnapshotResult",
     "StepTrailEmissionResult",
     "StepWindowOpenResult",
+    "DEFAULT_TRACE_SLICE_STEP_RADIUS",
     "append_event_batch",
     "append_exact_patch_trail",
     "append_step_snapshot",
@@ -63,7 +73,13 @@ __all__ = [
     "rebuild_projections",
     "reconcile_commit_anchors",
     "reconcile_watcher_observations",
+    "resolve_resource",
+    "resource_ref_for_file_line",
+    "resource_ref_for_git_anchor",
+    "resource_ref_for_trace_patch_trail",
     "supersede_anchors_for_rewrite",
+    "trace_slice_for_event",
+    "trace_slice_id_for",
     "verify_event_log",
     "write_worktree_tree",
 ]

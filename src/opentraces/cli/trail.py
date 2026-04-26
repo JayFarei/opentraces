@@ -121,6 +121,58 @@ def explain_cmd(
 
 
 @trail_group.command(
+    "resolve",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail resolve ot://trace/tr1/patches/tracepatch-sha256:abc/trail --json",
+        "opentraces trail resolve ot://git-anchor/gitanchor-sha256:def --json",
+        "opentraces trail resolve ot://file/src/app.py/line/42/origin --json",
+    ],
+    see_also=[
+        ("opentraces trail explain", "explain the evidence chain for a Trace Patch."),
+        ("opentraces trail follow", "follow a Trace Patch through Git history."),
+    ],
+    option_groups=[
+        ("Scope", ["resource", "project_dir"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.argument("resource")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--project",
+    "project_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: CWD).",
+)
+def resolve_cmd(resource: str, as_json: bool, project_dir: Path | None) -> None:
+    """Resolve a stable ot:// Trace Trails resource."""
+    from ..core.trails import resolve_resource
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+    try:
+        payload = resolve_resource(repo, resource)
+    except ValueError as exc:
+        click.echo(f"Trace Trail resource is invalid: {exc}", err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to resolve trace trail resource: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    click.echo(f"{payload.get('resource_type')}: {payload.get('relation')}")
+    segment_id = payload.get("containing_segment_id")
+    if segment_id:
+        click.echo(f"  containing segment: {segment_id}")
+    for limitation in payload.get("limitations") or []:
+        click.echo(f"  limitation: {limitation}")
+
+
+@trail_group.command(
     "follow",
     cls=OpentracesCommand,
     examples=[

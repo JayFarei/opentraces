@@ -133,6 +133,168 @@ def test_post_commit_reconciler_adds_delayed_git_anchor(tmp_path: Path) -> None:
     assert line_payload["trace_patch"]["trace_patch_id"] == "tracepatch-sha256:delayed"
 
 
+def test_ot_trace_patch_trail_resource_resolves(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    seed_sha = _git(repo, "rev-parse", "HEAD")
+    authored = "    return 'resource-trace-patch-trail-line-54-phase-six'\n"
+    trace_patch_id = "tracepatch-sha256:resource-trail"
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-resource",
+                step_index=3,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": trace_patch_id,
+                    "snapshot_before_id": "snapshot-before-resource",
+                    "snapshot_after_id": "snapshot-after-resource",
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "before_blob_id": _oid(repo, f"{seed_sha}:app.py"),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    (repo / "app.py").write_text("def value():\n" + authored)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "resource patch"], cwd=repo, check=True)
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+    reconcile_commit_anchors(repo, commit_sha, writer="post-commit-correlator")
+
+    resource = f"ot://trace/tr-resource/patches/{trace_patch_id}/trail"
+    result = CliRunner().invoke(
+        main,
+        ["trail", "resolve", resource, "--json", "--project", str(repo)],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["resource"] == resource
+    assert payload["resource_type"] == "trace_patch_trail"
+    assert payload["relation"] == "trace_patch_trail_resolved"
+    assert payload["trace_id"] == "tr-resource"
+    assert payload["trace_patch_id"] == trace_patch_id
+    assert payload["containing_segment_id"].startswith("traceslice-sha256:")
+    assert payload["trace_slice"]["start_step_index"] == 0
+    assert payload["trace_slice"]["end_step_index"] == 6
+    assert payload["trail"]["relation"] == "patch_trail_observed"
+
+
+def test_ot_git_anchor_resource_resolves(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    seed_sha = _git(repo, "rev-parse", "HEAD")
+    authored = "    return 'resource-git-anchor-line-54-phase-six'\n"
+    trace_patch_id = "tracepatch-sha256:resource-anchor"
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-anchor-resource",
+                step_index=5,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": trace_patch_id,
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "before_blob_id": _oid(repo, f"{seed_sha}:app.py"),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    (repo / "app.py").write_text("def value():\n" + authored)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "resource anchor"], cwd=repo, check=True)
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+    anchors = reconcile_commit_anchors(repo, commit_sha, writer="post-commit-correlator")
+    git_anchor_id = anchors[0]["git_anchor_id"]
+
+    resource = f"ot://git-anchor/{git_anchor_id}"
+    result = CliRunner().invoke(
+        main,
+        ["trail", "resolve", resource, "--json", "--project", str(repo)],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["resource"] == resource
+    assert payload["resource_type"] == "git_anchor"
+    assert payload["relation"] == "git_anchor_resolved"
+    assert payload["git_anchor"]["git_anchor_id"] == git_anchor_id
+    assert payload["trace_patch"]["trace_patch_id"] == trace_patch_id
+    assert payload["containing_segment_id"].startswith("traceslice-sha256:")
+    assert payload["trace_slice"]["start_step_index"] == 2
+    assert payload["trace_slice"]["end_step_index"] == 8
+    assert payload["trail"]["relation"] == "patch_trail_observed"
+
+
+def test_ot_file_line_origin_resource_resolves(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    seed_sha = _git(repo, "rev-parse", "HEAD")
+    authored = "    return 'resource-file-line-origin-54-phase-six'\n"
+    trace_patch_id = "tracepatch-sha256:resource-file-line"
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-file-resource",
+                step_index=2,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": trace_patch_id,
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "before_blob_id": _oid(repo, f"{seed_sha}:app.py"),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    (repo / "app.py").write_text("def value():\n" + authored)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "resource file line"], cwd=repo, check=True)
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+    anchors = reconcile_commit_anchors(repo, commit_sha, writer="post-commit-correlator")
+
+    resource = "ot://file/app.py/line/2/origin"
+    result = CliRunner().invoke(
+        main,
+        ["trail", "resolve", resource, "--json", "--project", str(repo)],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["resource"] == resource
+    assert payload["resource_type"] == "file_line_origin"
+    assert payload["relation"] == "anchored_in_git"
+    assert payload["trace_patch"]["trace_patch_id"] == trace_patch_id
+    assert payload["git_anchor"]["git_anchor_id"] == anchors[0]["git_anchor_id"]
+    assert payload["containing_segment_id"].startswith("traceslice-sha256:")
+
+
 def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:
     repo = tmp_path
     _init_repo(repo)

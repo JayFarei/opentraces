@@ -84,6 +84,7 @@ Useful follow-ups:
 - `opentraces trail explain <path>:<line>` resolves a Git-side file line back to Trace Patch evidence when an exact anchor exists.
 - `opentraces trail diff --trace <id> --from-step <a> --to-step <b>` shows the Trace Patch between captured step snapshots.
 - `opentraces trail follow --patch <id>` follows an anchored Trace Patch through Git history and reports current `HEAD` survival.
+- `opentraces trail resolve ot://... --json` resolves stable Trace Trail resource IDs for Trace Patches, Git Anchors, and file-line origins.
 - `opentraces setup trufflehog` enables Tier 1.5 scanning.
 - `opentraces setup llm-review` configures Tier 2 semantic review.
 - `opentraces push --llm-review` gates uploads on a clean Tier 2 verdict.
@@ -179,6 +180,13 @@ recovery, projection rebuild from canonical events, watcher-based
 backstop attribution, and adversarial reconciliation across Git
 rewrites.
 
+Trace Slices are the bounded local context around a Trace Patch: nearby
+steps, prompts, tools, observations, tests, and segment boundaries when
+known. A Trace Slice is context for audit and later dataset projections,
+not a training datum by itself. Phase 6 resolves stable
+`containing_segment_id` values and `ot://` resource paths only; resolving
+full slice content is deferred to the Phase 8 Trace Dataset projection.
+
 `opentraces trail explain --trace <id> --step <n>` rebuilds from the local
 event log and reports the Trace Snapshot references, Trace Patch identity, Git
 Anchor, evidence tier, firmness, source events, and any limitations.
@@ -187,6 +195,13 @@ captured snapshot trees and emits the resulting Trace Patch. The delayed Git
 Anchor reconciler can search a later commit for existing Trace Patches and
 record exact anchors, which can be queried from `--commit <sha>` or
 `<path>:<line>`.
+
+`opentraces trail resolve ot://... --json` resolves stable resource paths:
+`ot://trace/<trace_id>/patches/<trace_patch_id>/trail`,
+`ot://git-anchor/<git_anchor_id>`, and
+`ot://file/<path>/line/<n>/origin`. Resolution returns IDs and metadata,
+including `containing_segment_id`, without embedding full Trace Slice
+content.
 
 `opentraces trail attach --trace <id> --commit <sha>` retroactively
 connects a trace's evidence to a Git commit when the post-commit

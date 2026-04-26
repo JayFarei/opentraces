@@ -95,6 +95,66 @@ def test_trail_explain_exact_patch_anchor_from_events(tmp_path: Path) -> None:
     ]
 
 
+def test_trail_explain_includes_containing_segment_id(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    (repo / "app.py").write_text("def value():\n    return 'old'\n")
+    _commit(repo, "seed")
+
+    authored = "    return 'agent-produced-slice-context-line-54-phase-six'\n"
+    (repo / "app.py").write_text("def value():\n" + authored)
+    commit_sha = _commit(repo, "agent change")
+
+    append_exact_patch_trail(
+        repo,
+        trace_id="tr-slice",
+        step_index=4,
+        file_path="app.py",
+        authored_text=authored,
+        commit_ref=commit_sha,
+        writer="test-fixture",
+        capture_method=["hook_posttooluse"],
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "explain",
+            "--trace",
+            "tr-slice",
+            "--step",
+            "4",
+            "--json",
+            "--project",
+            str(repo),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["patch_status"] == "patched"
+    assert payload["containing_segment_id"].startswith("traceslice-sha256:")
+    assert payload["trace_slice"] == {
+        "containing_segment_id": payload["containing_segment_id"],
+        "content_status": "phase8_deferred",
+        "end_step_index": 7,
+        "generation_index": 0,
+        "git_anchor_id": payload["git_anchor_id"],
+        "relation": "contains_trace_patch",
+        "source": "default_step_neighborhood",
+        "start_step_index": 1,
+        "trace_id": "tr-slice",
+        "trace_patch_id": payload["trace_patch_id"],
+    }
+    assert payload["git_anchor"]["containing_segment_id"] == payload["containing_segment_id"]
+    assert payload["resource_refs"]["trace_patch_trail"] == (
+        f"ot://trace/tr-slice/patches/{payload['trace_patch_id']}/trail"
+    )
+    assert payload["resource_refs"]["git_anchor"] == f"ot://git-anchor/{payload['git_anchor_id']}"
+    assert payload["resource_refs"]["file_line_origin"] == "ot://file/app.py/line/2/origin"
+
+
 def test_missing_anchor_returns_unknown_not_failure(tmp_path: Path) -> None:
     repo = tmp_path
     _init_repo(repo)
@@ -181,6 +241,59 @@ def test_missing_anchor_returns_unknown_not_failure(tmp_path: Path) -> None:
     assert payload["evidence_firmness"] == "unknown"
     assert payload["git_anchor_id"] is None
     assert "git_anchor_unknown" in payload["limitations"]
+
+
+def test_research_only_trace_has_no_patch_status_without_failure(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    (repo / "notes.md").write_text("research notes\n")
+    seed_sha = _commit(repo, "seed")
+
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_snapshot_created",
+                trace_id="tr-research-only",
+                step_index=2,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "snapshot_id": "snapshot-research-only-step2",
+                    "snapshot_role": "after",
+                    "tree_id": _oid(repo, f"{seed_sha}^{{tree}}"),
+                    "git_head_id": _oid(repo, seed_sha),
+                    "capture_status": "read_only_step",
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "explain",
+            "--trace",
+            "tr-research-only",
+            "--step",
+            "2",
+            "--json",
+            "--project",
+            str(repo),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["relation"] == "no_patch"
+    assert payload["patch_status"] == "no_patch"
+    assert payload["trace_patch_id"] is None
+    assert payload["git_anchor_id"] is None
+    assert payload["containing_segment_id"].startswith("traceslice-sha256:")
+    assert payload["trace_slice"]["relation"] == "contains_no_patch_step"
+    assert payload["source_events"][0]["event_type"] == "trace_snapshot_created"
 
 
 def test_rebuild_round_trip_after_projection_delete(tmp_path: Path) -> None:
