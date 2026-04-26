@@ -191,7 +191,12 @@ def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:
         if event.event_type == "git_anchor_search_completed"
         and event.payload["trace_patch_id"] == "tracepatch-sha256:orphan"
     ]
-    assert stored_search_events[0].payload["algorithms_attempted"] == ["exact_range_hash"]
+    # Phase 5 expanded the algorithm list to include the structural
+    # fallback; the search event records every tier attempted.
+    assert stored_search_events[0].payload["algorithms_attempted"] == [
+        "exact_range_hash",
+        "structural_match",
+    ]
 
 
 def test_many_trace_patches_in_one_commit(tmp_path: Path) -> None:

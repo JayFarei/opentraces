@@ -1,6 +1,7 @@
 """Delayed Git Anchor reconciliation for Trace Trails."""
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import subprocess
@@ -13,6 +14,8 @@ from .event_log import append_event_batch, read_events
 from .models import GitObjectID, TrailEventDraft
 
 ANCHOR_ALGORITHMS_PHASE3 = ["exact_range_hash"]
+ANCHOR_ALGORITHMS_PHASE5 = ["exact_range_hash", "structural_match"]
+STRUCTURAL_MATCH_THRESHOLD = 0.85
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> str:
@@ -80,6 +83,55 @@ def _find_exact_anchor(patch: dict[str, Any], hunks: dict[str, list[dict]]) -> d
     return None
 
 
+def _find_structural_anchor(
+    patch: dict[str, Any], hunks: dict[str, list[dict]]
+) -> dict[str, Any] | None:
+    """Phase 5 structural fallback: line-level similarity over the same path.
+
+    When the exact-range matcher fails (because a formatter rewrote
+    non-whitespace characters such as quote style, parentheses, or
+    operator spacing), this fallback compares the patch's authored text
+    against each hunk's added text using ``difflib.SequenceMatcher``.
+
+    Threshold ``STRUCTURAL_MATCH_THRESHOLD`` is tuned to accept
+    quote-style and minor refactor changes while rejecting unrelated
+    lines. Real AST-aware structural matching is future work; this is
+    the substrate path so the evidence tier is wired correctly when
+    better algorithms land.
+
+    Returns a match dict with ``path``, ``range``, and ``similarity``
+    fields, or ``None`` when no hunk in the same file scores above
+    threshold.
+    """
+    file_path = patch.get("file_path")
+    authored = patch.get("authored_text") or ""
+    if not file_path or not authored.strip():
+        return None
+    best: dict[str, Any] | None = None
+    best_score = 0.0
+    for hunk_path, file_hunks in hunks.items():
+        if not path_matches(file_path, hunk_path):
+            continue
+        for hunk in file_hunks:
+            added = hunk.get("added_text") or ""
+            if not added.strip():
+                continue
+            score = difflib.SequenceMatcher(
+                None, authored, added, autojunk=False
+            ).ratio()
+            if score >= STRUCTURAL_MATCH_THRESHOLD and score > best_score:
+                best = {
+                    "path": hunk_path,
+                    "range": {
+                        "start_line": hunk.get("added_start"),
+                        "end_line": hunk.get("added_end"),
+                    },
+                    "similarity": round(score, 4),
+                }
+                best_score = score
+    return best
+
+
 def reconcile_commit_anchors(
     repo: Path,
     commit_ref: str = "HEAD",
@@ -138,6 +190,21 @@ def reconcile_commit_anchors(
             # ``trail attach`` idempotent across repeat invocations.
             continue
         match = _find_exact_anchor(patch, hunks)
+        evidence_tier = "exact_range_hash"
+        evidence_firmness = "firm"
+        anchor_limitations: list[str] = []
+        if match is None:
+            structural = _find_structural_anchor(patch, hunks)
+            if structural is not None:
+                match = {
+                    "path": structural["path"],
+                    "range": structural["range"],
+                }
+                evidence_tier = "structural_match"
+                evidence_firmness = "provisional"
+                anchor_limitations.append(
+                    "structural_match_below_exact_threshold"
+                )
         anchor_payload = None
         created_anchor_ids: list[str] = []
         if match:
@@ -149,7 +216,7 @@ def reconcile_commit_anchors(
                     "commit_id": commit_id,
                     "path": match["path"],
                     "range": match["range"],
-                    "evidence_tier": "exact_range_hash",
+                    "evidence_tier": evidence_tier,
                 },
             )
             created_anchor_ids = [git_anchor_id]
@@ -163,10 +230,10 @@ def reconcile_commit_anchors(
                 "patch_id": _stable_patch_id(repo, commit),
                 "observed_ref": commit_ref,
                 "relation": "anchored_in_git",
-                "evidence_tier": "exact_range_hash",
-                "evidence_firmness": "firm",
+                "evidence_tier": evidence_tier,
+                "evidence_firmness": evidence_firmness,
                 "source": writer,
-                "limitations": [],
+                "limitations": anchor_limitations,
             }
 
         drafts.append(
@@ -179,7 +246,7 @@ def reconcile_commit_anchors(
                 payload={
                     "trace_patch_id": trace_patch_id,
                     "search_head": commit_id,
-                    "algorithms_attempted": ANCHOR_ALGORITHMS_PHASE3,
+                    "algorithms_attempted": ANCHOR_ALGORITHMS_PHASE5,
                     "result": "anchored" if anchor_payload else "unknown",
                     "created_anchor_ids": created_anchor_ids,
                 },
