@@ -590,6 +590,191 @@ def test_background_process_overlap_records_limitation(tmp_path: Path) -> None:
     assert len(upgraded_patches) == 1
 
 
+def test_reconciler_is_idempotent(tmp_path: Path) -> None:
+    """Plan §Phase 5 edge fixture #5 — three-pass idempotency.
+
+    The reconciler is exercised across three passes:
+
+    1. Initial: open window, hook patch, append two observations (one
+       inside the window, one outside). Run reconciler. Snapshot.
+    2. Replay: run reconciler again with no new events. Event log is
+       byte-identical with the snapshot.
+    3. Interleaved append: add a new in-window observation, a
+       buffer-overflow-tagged observation, and a retroactively-
+       timestamped observation. Run reconciler. Original attributions
+       are byte-identical; only the three new observations get new
+       attribution events.
+
+    Pins: ``observation_event_id`` is the only idempotency key, and
+    observation timestamps (not append order) drive containment.
+    """
+    _init_repo(tmp_path)
+    target = tmp_path / "auth.py"
+    target.write_text("def authorize():\n    return False\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=tmp_path, check=True)
+    before_blob = GitObjectID(hex=_hash_object(tmp_path, "before\n"))
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "after\n"))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc1",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+    )
+    _emit_hook_patch(
+        tmp_path,
+        trace_id="tr1",
+        step_index=1,
+        file_path="auth.py",
+        trace_patch_id="tracepatch-sha256:idempotent",
+        before_blob=before_blob,
+        after_blob=after_blob,
+        snapshot_before_id="snapshot-pre",
+        snapshot_after_id="snapshot-post",
+        authored_text="    return True\n",
+    )
+
+    # Pass 1: in-window observation (matches the hook patch's path) +
+    # out-of-window observation.
+    in_window = append_filesystem_mutation_observed(
+        tmp_path,
+        path="auth.py",
+        observed_at_start="2026-04-26T10:00:03Z",
+        observed_at_end="2026-04-26T10:00:07Z",
+        before_blob_id=before_blob,
+        after_blob_id=after_blob,
+    )
+    out_of_window = append_filesystem_mutation_observed(
+        tmp_path,
+        path="other.txt",
+        observed_at_start="2026-04-26T11:00:00Z",
+        observed_at_end="2026-04-26T11:00:01Z",
+        after_blob_id=after_blob,
+    )
+    summary_pass1 = reconcile_watcher_observations(tmp_path)
+    events_pass1 = read_events(tmp_path)
+    assert summary_pass1["observations_processed"] == 2
+    assert summary_pass1["attributed"] == 1
+    assert summary_pass1["unbounded_mutation_window"] == 1
+    assert summary_pass1["patches_upgraded"] == 1
+
+    pass1_event_ids = [e.event_id for e in events_pass1]
+    pass1_event_sequences = [e.event_sequence for e in events_pass1]
+    pass1_content_hashes = [e.content_hash for e in events_pass1]
+
+    # Pass 2: replay with no new events.
+    summary_pass2 = reconcile_watcher_observations(tmp_path)
+    events_pass2 = read_events(tmp_path)
+    assert summary_pass2["observations_processed"] == 0
+    for bucket in (
+        "attributed",
+        "concurrent_writer_overlap",
+        "unbounded_mutation_window",
+        "background_process_overlap",
+        "patches_upgraded",
+    ):
+        assert summary_pass2[bucket] == 0
+    assert len(events_pass2) == len(events_pass1)
+    assert [e.event_id for e in events_pass2] == pass1_event_ids
+    assert [e.event_sequence for e in events_pass2] == pass1_event_sequences
+    assert [e.content_hash for e in events_pass2] == pass1_content_hashes
+
+    # Pass 3: interleaved appends.
+    new_in_window = append_filesystem_mutation_observed(
+        tmp_path,
+        path="auth.py",
+        observed_at_start="2026-04-26T10:00:04Z",
+        observed_at_end="2026-04-26T10:00:06Z",
+        after_blob_id=after_blob,
+    )
+    buffer_overflow_obs = append_filesystem_mutation_observed(
+        tmp_path,
+        path="auth.py",
+        observed_at_start="2026-04-26T10:00:05Z",
+        observed_at_end="2026-04-26T10:00:08Z",
+        after_blob_id=after_blob,
+        capture_limitations=["watcher_buffer_overflow"],
+    )
+    retroactive_obs = append_filesystem_mutation_observed(
+        tmp_path,
+        path="auth.py",
+        observed_at_start="2026-04-25T12:00:00Z",
+        observed_at_end="2026-04-25T12:00:01Z",
+        after_blob_id=after_blob,
+    )
+    summary_pass3 = reconcile_watcher_observations(tmp_path)
+    events_pass3 = read_events(tmp_path)
+
+    # Original pass-1 events are byte-identical. The newly-appended
+    # observation events also live in the log unchanged.
+    pass1_count = len(events_pass1)
+    for prior, replayed in zip(events_pass1, events_pass3[:pass1_count]):
+        assert prior.event_id == replayed.event_id
+        assert prior.content_hash == replayed.content_hash
+        assert prior.capture_method == replayed.capture_method
+
+    # Exactly three new attribution events (one per new observation).
+    pass3_attributions = [
+        e
+        for e in events_pass3
+        if e.event_type == "watcher_observation_attributed"
+    ]
+    pass1_attributions = [
+        e
+        for e in events_pass1
+        if e.event_type == "watcher_observation_attributed"
+    ]
+    assert len(pass3_attributions) - len(pass1_attributions) == 3
+
+    by_obs = {a.payload["observation_event_id"]: a for a in pass3_attributions}
+    new_in_window_attribution = by_obs[new_in_window.event_id]
+    overflow_attribution = by_obs[buffer_overflow_obs.event_id]
+    retro_attribution = by_obs[retroactive_obs.event_id]
+
+    # New in-window observation attributes to tr1 step 1 (the hook patch
+    # is already upgraded; second-attribution path emits no new patch).
+    assert new_in_window_attribution.payload["result"] == "attributed"
+    assert new_in_window_attribution.trace_id == "tr1"
+    assert "upgraded_trace_patch_id" not in new_in_window_attribution.payload, (
+        "patch upgrade should fire only once across the trace+step+path"
+    )
+
+    # Buffer-overflow-tagged observation: capture_limitations on the
+    # observation payload is orthogonal to attribution result.
+    assert overflow_attribution.payload["result"] == "attributed"
+    assert overflow_attribution.trace_id == "tr1"
+
+    # Retroactively-timestamped observation falls outside the wall-clock
+    # window even though it was appended last — observation timestamps,
+    # not append order, drive containment.
+    assert retro_attribution.payload["result"] == "unattributed"
+    assert retro_attribution.payload["capture_limitations"] == [
+        "unbounded_mutation_window"
+    ]
+
+    # The patch was upgraded exactly once across all three passes.
+    upgraded_patches = [
+        e
+        for e in events_pass3
+        if e.event_type == "trace_patch_created"
+        and "watcher_backstop" in e.capture_method
+    ]
+    assert len(upgraded_patches) == 1
+
+
 def test_mutation_outside_step_windows_records_unbounded_mutation_window(
     tmp_path: Path,
 ) -> None:
