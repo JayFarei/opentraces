@@ -24,12 +24,18 @@ from ...core.state import StateManager
 from .event_log import EVENT_LOG_REF, read_events
 from .ids import normalize_id
 from .models import TrailEvent
+from .contract import (
+    SNAPSHOT_RESUME_SCHEMA_VERSION,
+    has_snapshot_resume_contract,
+    required_snapshot_resume_capability,
+    satisfied_snapshot_resume_contract,
+    snapshot_resume_trace_metadata,
+)
 from .slices import trace_slice_for_event
 
 TRACE_WORKSPACE_SCHEMA_VERSION = "opentraces.trace_workspace.v1"
 TRACE_PLAY_SCHEMA_VERSION = "opentraces.trail_play.v1"
 SNAPSHOT_REWIND_SCHEMA_VERSION = "opentraces.snapshot_rewind.v1"
-SNAPSHOT_RESUME_SCHEMA_VERSION = "opentraces.snapshot_resume.v1"
 WORKSPACE_META_FILENAME = ".opentraces-trace-workspace.json"
 
 NON_PORTABLE_DEPENDENCIES = [
@@ -366,6 +372,7 @@ def export_trace_workspace(repo: Path, trace_id: str, output: Path) -> dict[str,
         "environment_manifest": {
             "target_agent": "claude-code",
             "adapter_slots": _adapter_slots(),
+            "trace_trails": snapshot_resume_trace_metadata(),
             "non_portable_dependencies": NON_PORTABLE_DEPENDENCIES,
         },
         "limitations": limitations,
@@ -553,6 +560,7 @@ def _write_claude_resume_session(
     materialized_path: Path,
     record: TraceRecord,
     selected_step_id: str,
+    snapshot_id: str,
     new_session_id: str,
     preamble: str,
     context: list[dict[str, Any]],
@@ -565,17 +573,20 @@ def _write_claude_resume_session(
     session_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         {
-            "type": "opentraces_resume_parent",
+            "type": "opentraces_resume_packet",
+            "schema_version": SNAPSHOT_RESUME_SCHEMA_VERSION,
             "uuid": str(uuid.uuid4()),
             "cwd": str(materialized_path),
-            "parentSessionId": record.session_id,
-            "parentStepId": selected_step_id,
-            "opentraces_version": "trace-trails-phase-8",
             "message": {"role": "user", "content": preamble},
             "opentraces": {
-                "trace_id": record.trace_id,
-                "parent_session_id": record.session_id,
-                "parent_step_id": selected_step_id,
+                "resume_mode": "snapshot_backed",
+                "relation": "snapshot_resume",
+                "source_trace_id": record.trace_id,
+                "source_session_id": record.session_id,
+                "source_step_id": selected_step_id,
+                "source_snapshot_id": snapshot_id,
+                "materialized_worktree": str(materialized_path),
+                "non_portable_dependencies": NON_PORTABLE_DEPENDENCIES,
             },
         }
     ]
@@ -625,8 +636,25 @@ def snapshot_resume_packet(
     """Build a snapshot-backed Claude Code resume packet."""
     repo = repo.resolve()
     step_index = _parse_step_index(step_id)
-    snapshot_event = _snapshot_event_for_step(repo, record.trace_id, step_index)
     normalized_step_id = f"s{step_index}"
+    if not has_snapshot_resume_contract(record.metadata):
+        return {
+            "schema_version": SNAPSHOT_RESUME_SCHEMA_VERSION,
+            "resume_mode": "unsupported",
+            "relation": "unknown",
+            "trace_id": record.trace_id,
+            "step_id": normalized_step_id,
+            "target_agent": "claude-code",
+            "limitations": [
+                f"missing_snapshot_resume_contract:{SNAPSHOT_RESUME_SCHEMA_VERSION}"
+            ],
+            "required_capability": required_snapshot_resume_capability(),
+            "legacy_fallback": _legacy_fallback_info(),
+            "adapter_slots": _adapter_slots(),
+            "workspace_source": _workspace_source(repo),
+        }
+
+    snapshot_event = _snapshot_event_for_step(repo, record.trace_id, step_index)
     if snapshot_event is None:
         return {
             "schema_version": SNAPSHOT_RESUME_SCHEMA_VERSION,
@@ -671,6 +699,7 @@ def snapshot_resume_packet(
 
     context = _step_context(record, step_index)
     snapshot = _snapshot_row(snapshot_event)
+    snapshot_id = normalize_id(snapshot.get("snapshot_id"))
     limitations = sorted(
         set((snapshot.get("limitations") or []) + NON_PORTABLE_DEPENDENCIES)
     )
@@ -683,7 +712,7 @@ def snapshot_resume_packet(
         f"Resume trace {record.trace_id} at {normalized_step_id}. "
         f"The worktree {'would be' if dry_run else 'has been'} materialized "
         "from Trace Snapshot "
-        f"{normalize_id(snapshot.get('snapshot_id'))[:12]}. "
+        f"{snapshot_id[:12]}. "
         "This is trajectory forking from observed state, not deterministic "
         "agent re-execution. Non-portable dependencies are declared in the "
         "resume packet."
@@ -692,7 +721,7 @@ def snapshot_resume_packet(
     if dry_run:
         materialized_path = _default_materialization_path(
             repo,
-            normalize_id(snapshot.get("snapshot_id")),
+            snapshot_id,
         )
         session_path = _claude_resume_session_path(materialized_path, new_session_id)
     else:
@@ -701,6 +730,7 @@ def snapshot_resume_packet(
             materialized_path=materialized_path,
             record=record,
             selected_step_id=normalized_step_id,
+            snapshot_id=snapshot_id,
             new_session_id=new_session_id,
             preamble=preamble,
             context=context,
@@ -724,6 +754,7 @@ def snapshot_resume_packet(
         "step_id": normalized_step_id,
         "containing_segment_id": (slice_info or {}).get("containing_segment_id"),
         "target_agent": "claude-code",
+        "resume_contract": satisfied_snapshot_resume_contract(),
         "launch": {
             "argv": ["claude", "--resume", new_session_id],
             "cwd": str(materialized_path),

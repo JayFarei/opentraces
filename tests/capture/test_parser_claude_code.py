@@ -130,6 +130,20 @@ class TestClaudeCodeParser:
         assert record.agent.version == "1.0.83"
         assert len(record.steps) >= 2
 
+    def test_parse_marks_trace_trails_snapshot_resume_contract(self, tmp_path):
+        lines = _make_minimal_session()
+        session_file = _write_session(tmp_path, lines)
+
+        parser = ClaudeCodeParser()
+        record = parser.parse_session(session_file)
+
+        assert record is not None
+        assert record.schema_version == "0.3.0"
+        assert record.metadata["trace_trails"] == {
+            "schema_version": "opentraces.trace_trails.v1",
+            "snapshot_resume_contract": "opentraces.snapshot_resume.v1",
+        }
+
     def test_tool_result_correlation(self, tmp_path):
         lines = _make_minimal_session()
         session_file = _write_session(tmp_path, lines)

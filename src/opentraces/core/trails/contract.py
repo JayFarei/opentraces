@@ -20,6 +20,10 @@ from .ids import (
 
 SEARCH_SCHEMA_VERSION = "opentraces.trail.search.v1"
 RESOLVE_SCHEMA_VERSION = "opentraces.trail.resolve.v1"
+TRACE_TRAILS_METADATA_SCHEMA_VERSION = "opentraces.trace_trails.v1"
+SNAPSHOT_RESUME_SCHEMA_VERSION = "opentraces.snapshot_resume.v1"
+SNAPSHOT_RESUME_METADATA_KEY = "trace_trails.snapshot_resume_contract"
+SNAPSHOT_RESUME_MIN_OPENTRACES_VERSION = "0.4.0"
 PROJECTION_NAME = "trace_trail"
 PROJECTION_VERSION = "v1"
 
@@ -81,6 +85,37 @@ LIMITATION_ACTIONS = {
     "no_git_anchor_for_line": "Run otd trail search --path for nearby committed Trace Patches.",
     "maturation_stale": "Run otd trail rebuild.",
 }
+
+
+def snapshot_resume_trace_metadata() -> dict[str, str]:
+    return {
+        "schema_version": TRACE_TRAILS_METADATA_SCHEMA_VERSION,
+        "snapshot_resume_contract": SNAPSHOT_RESUME_SCHEMA_VERSION,
+    }
+
+
+def required_snapshot_resume_capability() -> dict[str, str]:
+    return {
+        "metadata_key": SNAPSHOT_RESUME_METADATA_KEY,
+        "schema_version": SNAPSHOT_RESUME_SCHEMA_VERSION,
+        "min_opentraces_version": SNAPSHOT_RESUME_MIN_OPENTRACES_VERSION,
+    }
+
+
+def satisfied_snapshot_resume_contract() -> dict[str, str]:
+    return {
+        "metadata_key": SNAPSHOT_RESUME_METADATA_KEY,
+        "schema_version": SNAPSHOT_RESUME_SCHEMA_VERSION,
+        "status": "satisfied",
+    }
+
+
+def has_snapshot_resume_contract(metadata: dict[str, Any] | None) -> bool:
+    metadata = metadata if isinstance(metadata, dict) else {}
+    trace_trails = metadata.get("trace_trails")
+    if not isinstance(trace_trails, dict):
+        return False
+    return trace_trails.get("snapshot_resume_contract") == SNAPSHOT_RESUME_SCHEMA_VERSION
 
 
 def evidence_label(tier: str | None) -> str:

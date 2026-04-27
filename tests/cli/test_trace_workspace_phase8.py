@@ -33,7 +33,12 @@ def _init_repo(repo: Path) -> None:
     subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
 
 
-def _write_trace_record(repo: Path, trace_id: str) -> None:
+def _write_trace_record(
+    repo: Path,
+    trace_id: str,
+    *,
+    snapshot_resume_contract: bool = True,
+) -> None:
     from opentraces.core.config import get_project_traces_dir
     from opentraces.core.state import StateManager
     from opentraces.core.config import get_project_state_path
@@ -73,6 +78,14 @@ def _write_trace_record(repo: Path, trace_id: str) -> None:
         ],
         "metrics": {},
     }
+    if snapshot_resume_contract:
+        record["metadata"] = {
+            "opentraces_version": "0.4.0",
+            "trace_trails": {
+                "schema_version": "opentraces.trace_trails.v1",
+                "snapshot_resume_contract": "opentraces.snapshot_resume.v1",
+            },
+        }
     (traces_dir / f"{trace_id}.jsonl").write_text(json.dumps(record) + "\n")
     state = StateManager(get_project_state_path(repo))
     state._state.setdefault("traces", {})[trace_id] = {
@@ -440,6 +453,11 @@ def test_resume_from_snapshot_packet_is_filtered_and_records_fork_lineage(
     assert payload["materialization"]["materialized"] is False
     assert not Path(payload["materialization"]["path"]).exists()
     assert payload["snapshot"]["tree_id"]["hex"] == recorded_tree
+    assert payload["resume_contract"] == {
+        "metadata_key": "trace_trails.snapshot_resume_contract",
+        "schema_version": "opentraces.snapshot_resume.v1",
+        "status": "satisfied",
+    }
     assert [step["step_id"] for step in payload["session_context"]["steps"]] == [
         "s1",
         "s2",
@@ -504,6 +522,23 @@ def test_resume_from_snapshot_execution_hands_off_to_claude_in_materialized_work
     assert forked.parent_session_id == "ff00aa11-2222-3333-4444-555555555555"
     assert forked.parent_step_id == "s2"
     assert forked.source_path and Path(forked.source_path).exists()
+    session_lines = [
+        json.loads(line)
+        for line in Path(forked.source_path).read_text().splitlines()
+    ]
+    preamble = session_lines[0]
+    assert preamble["type"] == "opentraces_resume_packet"
+    assert preamble["schema_version"] == "opentraces.snapshot_resume.v1"
+    assert "parentSessionId" not in preamble
+    assert "parentStepId" not in preamble
+    assert preamble["opentraces"]["resume_mode"] == "snapshot_backed"
+    assert preamble["opentraces"]["source_trace_id"] == trace_id
+    assert preamble["opentraces"]["source_session_id"] == (
+        "ff00aa11-2222-3333-4444-555555555555"
+    )
+    assert preamble["opentraces"]["source_step_id"] == "s2"
+    assert preamble["opentraces"]["source_snapshot_id"]
+    assert preamble["opentraces"]["materialized_worktree"] == str(materialized)
 
 
 def test_resume_from_snapshot_reports_missing_snapshot_as_unknown(
@@ -530,6 +565,41 @@ def test_resume_from_snapshot_reports_missing_snapshot_as_unknown(
     assert payload["limitations"] == ["missing_snapshot:step_2"]
     assert payload["legacy_fallback"]["mode"] == "claude_code_at_step"
     assert payload["legacy_fallback"]["available_when"] == "non_json_resume"
+
+
+def test_resume_from_pre_04_trace_requires_snapshot_resume_contract(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    trace_id = "tr-pre-04-contract"
+    source = tmp_path / "source-pre-04"
+    _init_repo(source)
+    _write_trace_record(source, trace_id, snapshot_resume_contract=False)
+    _capture_two_step_trace(source, trace_id)
+    monkeypatch.chdir(source)
+
+    result = runner.invoke(
+        main,
+        ["resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["resume_mode"] == "unsupported"
+    assert payload["relation"] == "unknown"
+    assert payload["limitations"] == [
+        "missing_snapshot_resume_contract:opentraces.snapshot_resume.v1"
+    ]
+    assert payload["required_capability"] == {
+        "metadata_key": "trace_trails.snapshot_resume_contract",
+        "schema_version": "opentraces.snapshot_resume.v1",
+        "min_opentraces_version": "0.4.0",
+    }
+    assert payload["legacy_fallback"]["mode"] == "claude_code_at_step"
+    assert "session" not in payload
+    assert "materialization" not in payload
 
 
 def test_resume_from_snapshot_rejects_malformed_step_without_traceback(

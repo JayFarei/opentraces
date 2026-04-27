@@ -35,6 +35,7 @@ from opentraces_schema import (
     TraceRecord,
     VCS,
 )
+from ...core.trails.contract import snapshot_resume_trace_metadata
 from ...quality.parse_gate import meets_quality_threshold
 
 logger = logging.getLogger(__name__)
@@ -192,7 +193,10 @@ class ClaudeCodeParser:
         outcome = self._build_outcome(metadata)
 
         # Carry session-level signals forward in the metadata catch-all dict
-        trace_metadata: dict[str, Any] = {"project": project_name}
+        trace_metadata: dict[str, Any] = {
+            "project": project_name,
+            "trace_trails": snapshot_resume_trace_metadata(),
+        }
         for key in (
             "slug", "stop_reason", "is_compacted", "num_turns",
             "permission_denials", "model_usage", "permission_mode",
