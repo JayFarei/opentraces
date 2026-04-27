@@ -338,21 +338,20 @@ def test_trail_play_default_renders_human_graph(
     )
 
     assert result.exit_code == 0, result.output
-    assert result.output.startswith(f"Trace {trace_id}\n")
+    assert result.output.startswith(f"Trace play for t:{trace_id[:8]}\n")
     assert "Workspace: trace-workspace-" in result.output
     assert "Source repo: unavailable" in result.output
-    assert "Status: replayable, resumable from 2 snapshots" in result.output
-    assert "s1  inspect the seed project" in result.output
-    assert "s2  change app.py to return a portable value" in result.output
-    assert "snapshot " in result.output
-    assert recorded_tree[:8] in result.output
+    assert "2 snapshots · 1 Trace Patch anchored in Git" in result.output
+    assert f"╭◆ t:{trace_id[:8]}" in result.output
+    assert "├◆ step:s1  inspect the seed project" in result.output
+    assert "╰◆ step:s2  change app.py to return a portable value" in result.output
+    assert "◇ snap:" in result.output
+    assert f"tree:{recorded_tree[:8]}" in result.output
     assert "checkout: opentraces trail snapshot checkout " in result.output
     assert f"resume: opentraces resume {trace_id} --at-step s2" in result.output
-    assert f"trace patch {ids['trace_patch_id'][:8]}  app.py" in result.output
-    assert (
-        f"git anchor {ids['git_anchor_id'][:8]}  commit {commit_sha[:8]}  "
-        "exact_range_hash firm"
-    ) in result.output
+    assert f"◇ tp:{ids['trace_patch_id'][:8]}  app.py  landed_exact" in result.output
+    assert f"● c:{commit_sha[:8]}  ga:{ids['git_anchor_id'][:8]}" in result.output
+    assert "evidence: exact range match · firm" in result.output
     assert "Limitations: external_services_not_captured" in result.output
     assert "{" not in result.output
     assert str(source_unavailable) not in result.output
@@ -384,17 +383,20 @@ def test_trail_play_table_renders_scan_friendly_rows(
 
     assert result.exit_code == 0, result.output
     assert result.output.splitlines()[0] == (
-        "seq\tstep\tkind\tobject\tfile/commit\tevidence\tlimitations"
+        "SEQ  STEP  KIND          OBJECT        FILE/COMMIT  EVIDENCE             LIMITATIONS"
     )
-    assert "\ts1\tsnapshot\t" in result.output
-    assert "\ts2\tsnapshot\t" in result.output
+    assert "s1    snapshot" in result.output
+    assert "s2    snapshot" in result.output
     assert (
-        f"\ts2\ttrace_patch\t{ids['trace_patch_id'][:8]}\tapp.py\t-\t"
+        f"s2    trace_patch   tp:{ids['trace_patch_id'][:8]}  app.py"
+    ) in result.output
+    assert (
+        f"tp:{ids['trace_patch_id'][:8]}  app.py       -                    "
         "external_services_not_captured"
     ) in result.output
     assert (
-        f"\ts2\tgit_anchor\t{ids['git_anchor_id'][:8]}\t{commit_sha[:8]}\t"
-        "exact_range_hash firm\t-"
+        f"s2    git_anchor    ga:{ids['git_anchor_id'][:8]}  c:{commit_sha[:8]}   "
+        "exact range match · firm"
     ) in result.output
     assert "{" not in result.output
     assert str(source_unavailable) not in result.output

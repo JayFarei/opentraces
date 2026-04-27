@@ -547,13 +547,162 @@ def _meaningful_trail_play_items(items: list[dict[str, Any]]) -> list[dict[str, 
     return [item for item in items if item.get("event_type") in meaningful]
 
 
+def _snapshot_handle(row: dict[str, Any], *, color: bool = False) -> str:
+    token = f"snap:{_short_digest(row.get('snapshot_id'))}"
+    if not color:
+        return token
+    prefix = paint(Role.ID_PREFIX, "snap:", use_color=True)
+    body = paint(Role.TRACE_ID, token[5:], use_color=True)
+    return f"{prefix}{body}"
+
+
+def _step_label(step_id: str) -> str:
+    return f"step:{step_id}"
+
+
+def _tree_label(item: dict[str, Any]) -> str:
+    tree_hex = ((item.get("tree_id") or {}).get("hex") or "")[:8]
+    return f"tree:{tree_hex or 'unknown'}"
+
+
+def _trail_play_anchors_by_patch(
+    items: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    anchors: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if item.get("event_type") != "git_anchor_created":
+            continue
+        trace_patch_id = item.get("trace_patch_id")
+        if trace_patch_id:
+            anchors[str(trace_patch_id)] = item
+    return anchors
+
+
+def _trail_play_patch_ids(items: list[dict[str, Any]]) -> set[str]:
+    return {
+        str(item.get("trace_patch_id"))
+        for item in items
+        if item.get("event_type") == "trace_patch_created"
+        and item.get("trace_patch_id")
+    }
+
+
+def _trail_play_children(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    patch_ids = _trail_play_patch_ids(items)
+    children: list[dict[str, Any]] = []
+    for item in items:
+        if (
+            item.get("event_type") == "git_anchor_created"
+            and item.get("trace_patch_id") in patch_ids
+        ):
+            continue
+        children.append(item)
+    return children
+
+
+def _trail_play_landing_state(anchor: dict[str, Any] | None) -> str:
+    if not anchor:
+        return "unanchored"
+    return _landing_state(
+        {
+            "git_anchor_id": anchor.get("git_anchor_id"),
+            "commit_sha": _commit_hex(anchor),
+            "evidence_tier": anchor.get("evidence_tier"),
+        }
+    )
+
+
+def _trail_play_evidence(anchor: dict[str, Any] | None) -> str:
+    if not anchor:
+        return "unknown evidence · unknown"
+    firmness = anchor.get("evidence_firmness") or "unknown"
+    return f"{_human_evidence(anchor.get('evidence_tier'))} \u00B7 {firmness}"
+
+
+def _trail_play_status(timeline: list[dict[str, Any]]) -> str:
+    if not timeline:
+        return "missing timeline"
+    snapshots = [
+        item for item in timeline if item.get("event_type") == "trace_snapshot_created"
+    ]
+    noun = "snapshot" if len(snapshots) == 1 else "snapshots"
+    return f"replayable \u00B7 resumable from {len(snapshots)} {noun}"
+
+
+def _trail_play_count_summary(timeline: list[dict[str, Any]]) -> str:
+    snapshots = [
+        item for item in timeline if item.get("event_type") == "trace_snapshot_created"
+    ]
+    patch_ids = _trail_play_patch_ids(timeline)
+    anchors_by_patch = _trail_play_anchors_by_patch(timeline)
+    anchored_count = len(patch_ids & set(anchors_by_patch))
+    snapshot_noun = "snapshot" if len(snapshots) == 1 else "snapshots"
+    parts = [f"{len(snapshots)} {snapshot_noun}"]
+    if patch_ids:
+        parts.append(
+            _trace_patch_count_label(
+                len(patch_ids),
+                anchored=anchored_count == len(patch_ids),
+            )
+        )
+    else:
+        parts.append("0 Trace Patches")
+    return " \u00B7 ".join(parts)
+
+
+def _append_trail_play_snapshot_lines(
+    lines: list[str],
+    item: dict[str, Any],
+    *,
+    prefix: str,
+    branch: str,
+    stem: str,
+    trace_id: str,
+    step_id: str,
+) -> None:
+    role = item.get("snapshot_role") or "after"
+    detail_prefix = f"{prefix}{stem}  "
+    lines.append(
+        f"{prefix}{branch}\u25C7 {_snapshot_handle(item)}  {_tree_label(item)}  {role}"
+    )
+    lines.append(
+        f"{detail_prefix}checkout: opentraces trail snapshot checkout "
+        f"{_snapshot_ref_for_command(item)}"
+    )
+    if role == "after":
+        lines.append(
+            f"{detail_prefix}resume: opentraces resume {trace_id} --at-step {step_id}"
+        )
+
+
+def _append_trail_play_patch_lines(
+    lines: list[str],
+    item: dict[str, Any],
+    *,
+    anchor: dict[str, Any] | None,
+    prefix: str,
+    branch: str,
+    stem: str,
+) -> None:
+    detail_prefix = f"{prefix}{stem}  "
+    path = item.get("file_path") or "unknown"
+    lines.append(
+        f"{prefix}{branch}\u25C7 {_patch_handle(item, color=False)}  "
+        f"{path}  {_trail_play_landing_state(anchor)}"
+    )
+    lines.append(f"{detail_prefix}\u2502 evidence: {_trail_play_evidence(anchor)}")
+    if anchor:
+        commit = _commit_handle(_commit_hex(anchor), color=False)
+        anchor_handle = _anchor_handle(anchor, color=False)
+        lines.append(f"{detail_prefix}\u2570\u25CF {commit}  {anchor_handle}")
+    else:
+        lines.append(f"{detail_prefix}\u2570? no reliable landing")
+
+
 def _render_trail_play_graph(repo: Path, payload: dict[str, Any]) -> str:
     trace_id = payload.get("trace_id") or "unknown"
     timeline = payload.get("timeline") or []
     workspace_source = payload.get("workspace_source") or {}
-    snapshots = [
-        item for item in timeline if item.get("event_type") == "trace_snapshot_created"
-    ]
     step_summaries = _load_trace_step_summaries(repo, str(trace_id))
     workspace_id = workspace_source.get("workspace_id")
     workspace_label = workspace_id or workspace_source.get("type") or "local_project"
@@ -562,68 +711,79 @@ def _render_trail_play_graph(repo: Path, payload: dict[str, Any]) -> str:
         if workspace_source.get("type") == "trace_workspace"
         else str(repo)
     )
-    status = "missing timeline"
-    if timeline:
-        noun = "snapshot" if len(snapshots) == 1 else "snapshots"
-        status = f"replayable, resumable from {len(snapshots)} {noun}"
+    status = _trail_play_status(timeline)
+    trace = _trace_handle(str(trace_id), color=False)
 
     lines = [
-        f"Trace {trace_id}",
+        f"Trace play for {trace}",
         f"Workspace: {workspace_label}",
         f"Source repo: {source_repo}",
-        f"Status: {status}",
+        _trail_play_count_summary(timeline),
         "",
+        f"\u256D\u25C6 {trace}",
+        f"\u2502 status: {status}",
+        f"\u2502 workspace: {workspace_label} \u00B7 source repo {source_repo}",
+        "\u2502",
     ]
 
     grouped = _group_trail_play_steps(timeline)
-    for step_position, step_id in enumerate(sorted(grouped, key=_step_sort_key)):
+    step_ids = sorted(grouped, key=_step_sort_key)
+    for step_position, step_id in enumerate(step_ids):
         summary = step_summaries.get(step_id)
-        lines.append(f"{step_id}  {summary}" if summary else step_id)
         meaningful = _meaningful_trail_play_items(grouped[step_id])
-        for item_position, item in enumerate(meaningful):
-            is_last = item_position == len(meaningful) - 1
-            branch = "`-" if is_last else "+-"
-            stem = "  " if is_last else "| "
+        anchors_by_patch = _trail_play_anchors_by_patch(meaningful)
+        children = _trail_play_children(meaningful)
+        step_is_last = step_position == len(step_ids) - 1
+        step_branch = "\u2570" if step_is_last else "\u251C"
+        step_prefix = "   " if step_is_last else "\u2502  "
+        step_title = _step_label(step_id)
+        if summary:
+            lines.append(f"{step_branch}\u25C6 {step_title}  {summary}")
+        else:
+            lines.append(f"{step_branch}\u25C6 {step_title}")
+
+        for item_position, item in enumerate(children):
+            child_is_last = item_position == len(children) - 1
+            branch = "\u2570" if child_is_last else "\u251C"
+            stem = " " if child_is_last else "\u2502"
             event_type = item.get("event_type")
             if event_type == "trace_snapshot_created":
-                snapshot_id = _short_digest(item.get("snapshot_id"))
-                tree_hex = ((item.get("tree_id") or {}).get("hex") or "")[:8]
-                role = item.get("snapshot_role") or "after"
-                lines.append(" |")
-                lines.append(f" {branch} snapshot {snapshot_id}  tree {tree_hex}  {role}")
-                lines.append(
-                    f" {stem} checkout: opentraces trail snapshot checkout "
-                    f"{_snapshot_ref_for_command(item)}"
+                _append_trail_play_snapshot_lines(
+                    lines,
+                    item,
+                    prefix=step_prefix,
+                    branch=branch,
+                    stem=stem,
+                    trace_id=str(trace_id),
+                    step_id=step_id,
                 )
-                if role == "after":
-                    lines.append(
-                        f" {stem} resume: opentraces resume {trace_id} --at-step {step_id}"
-                    )
             elif event_type == "trace_patch_created":
-                patch_id = _short_digest(item.get("trace_patch_id"))
-                path = item.get("file_path") or "unknown"
-                lines.append(" |")
-                lines.append(f" {branch} trace patch {patch_id}  {path}")
+                _append_trail_play_patch_lines(
+                    lines,
+                    item,
+                    anchor=anchors_by_patch.get(str(item.get("trace_patch_id"))),
+                    prefix=step_prefix,
+                    branch=branch,
+                    stem=stem,
+                )
             elif event_type == "git_anchor_created":
-                anchor_id = _short_digest(item.get("git_anchor_id"))
-                commit = (_commit_hex(item) or "")[:8] or "unknown"
-                evidence = item.get("evidence_tier") or "unknown"
-                firmness = item.get("evidence_firmness") or "unknown"
-                lines.append(" |")
                 lines.append(
-                    f" {branch} git anchor {anchor_id}  commit {commit}  "
-                    f"{evidence} {firmness}"
+                    f"{step_prefix}{branch}\u25CF "
+                    f"{_commit_handle(_commit_hex(item), color=False)}  "
+                    f"{_anchor_handle(item, color=False)}  "
+                    f"{_trail_play_evidence(item)}"
                 )
             elif event_type == "trace_step_capture_incomplete":
-                lines.append(" |")
-                lines.append(f" {branch} limitation trace_step_capture_incomplete")
+                lines.append(
+                    f"{step_prefix}{branch}? limitation trace_step_capture_incomplete"
+                )
             elif event_type == "patch_trail_observation_created":
                 state = item.get("survival_state") or "observed"
-                lines.append(" |")
-                lines.append(f" {branch} patch trail {state}")
-        if step_position != len(grouped) - 1:
-            lines.append(" |")
-            lines.append(" v")
+                lines.append(f"{step_prefix}{branch}\u25C7 patch trail {state}")
+        if not children:
+            lines.append(f"{step_prefix}\u2570? no replayable events")
+        if not step_is_last:
+            lines.append("\u2502")
 
     limitations = _trail_play_limitations(payload)
     if limitations:
@@ -637,8 +797,26 @@ def _trail_play_limitations_cell(item: dict[str, Any]) -> str:
     return ",".join(str(limitation) for limitation in limitations) or "-"
 
 
+def _trail_play_table_row(
+    seq: str,
+    step: str,
+    kind: str,
+    obj: str,
+    file_commit: str,
+    evidence: str,
+    limitations: str,
+) -> str:
+    return (
+        f"{seq:<4} {step:<5} {kind:<13} {obj:<12} "
+        f"{file_commit:<12} {evidence:<20} {limitations}"
+    )
+
+
 def _render_trail_play_table(payload: dict[str, Any]) -> str:
-    rows = ["seq\tstep\tkind\tobject\tfile/commit\tevidence\tlimitations"]
+    rows = [
+        "SEQ  STEP  KIND          OBJECT        FILE/COMMIT  "
+        "EVIDENCE             LIMITATIONS"
+    ]
     for item in _meaningful_trail_play_items(payload.get("timeline") or []):
         seq = str(item.get("event_sequence") or "")
         step = item.get("step_id") or "-"
@@ -649,75 +827,63 @@ def _render_trail_play_table(payload: dict[str, Any]) -> str:
             role = item.get("snapshot_role") or "after"
             capture_status = item.get("capture_status") or "unknown"
             rows.append(
-                "\t".join(
-                    [
-                        seq,
-                        step,
-                        "snapshot",
-                        _short_digest(item.get("snapshot_id")),
-                        f"tree:{tree_hex}",
-                        f"{role} {capture_status}",
-                        limitations,
-                    ]
+                _trail_play_table_row(
+                    seq,
+                    step,
+                    "snapshot",
+                    _snapshot_handle(item),
+                    f"tree:{tree_hex}",
+                    f"{role} {capture_status}",
+                    limitations,
                 )
             )
         elif event_type == "trace_patch_created":
             rows.append(
-                "\t".join(
-                    [
-                        seq,
-                        step,
-                        "trace_patch",
-                        _short_digest(item.get("trace_patch_id")),
-                        item.get("file_path") or "-",
-                        "-",
-                        limitations,
-                    ]
+                _trail_play_table_row(
+                    seq,
+                    step,
+                    "trace_patch",
+                    _patch_handle(item, color=False),
+                    item.get("file_path") or "-",
+                    "-",
+                    limitations,
                 )
             )
         elif event_type == "git_anchor_created":
             commit = (_commit_hex(item) or "")[:8] or "-"
-            evidence = item.get("evidence_tier") or "unknown"
-            firmness = item.get("evidence_firmness") or "unknown"
             rows.append(
-                "\t".join(
-                    [
-                        seq,
-                        step,
-                        "git_anchor",
-                        _short_digest(item.get("git_anchor_id")),
-                        commit,
-                        f"{evidence} {firmness}",
-                        limitations,
-                    ]
+                _trail_play_table_row(
+                    seq,
+                    step,
+                    "git_anchor",
+                    _anchor_handle(item, color=False),
+                    f"c:{commit}",
+                    _trail_play_evidence(item),
+                    limitations,
                 )
             )
         elif event_type == "patch_trail_observation_created":
             rows.append(
-                "\t".join(
-                    [
-                        seq,
-                        step,
-                        "patch_trail",
-                        _short_digest(item.get("trace_patch_id")),
-                        item.get("path") or "-",
-                        item.get("survival_state") or "observed",
-                        limitations,
-                    ]
+                _trail_play_table_row(
+                    seq,
+                    step,
+                    "patch_trail",
+                    _patch_handle(item, color=False),
+                    item.get("path") or "-",
+                    item.get("survival_state") or "observed",
+                    limitations,
                 )
             )
         elif event_type == "trace_step_capture_incomplete":
             rows.append(
-                "\t".join(
-                    [
-                        seq,
-                        step,
-                        "limitation",
-                        "-",
-                        "-",
-                        "trace_step_capture_incomplete",
-                        limitations,
-                    ]
+                _trail_play_table_row(
+                    seq,
+                    step,
+                    "limitation",
+                    "-",
+                    "-",
+                    "trace_step_capture_incomplete",
+                    limitations,
                 )
             )
     return "\n".join(rows)
