@@ -41,6 +41,10 @@ def _tp(name: str) -> str:
     return hashlib.sha256(f"trace-patch:{name}".encode("utf-8")).hexdigest()
 
 
+def _ga(name: str) -> str:
+    return hashlib.sha256(f"git-anchor:{name}".encode("utf-8")).hexdigest()
+
+
 def test_post_commit_reconciler_adds_delayed_git_anchor(tmp_path: Path) -> None:
     repo = tmp_path
     _init_repo(repo)
@@ -301,6 +305,103 @@ def test_ot_file_line_origin_resource_resolves(tmp_path: Path) -> None:
     assert payload["git_anchor"]["git_anchor_id"] == anchors[0]["git_anchor_id"]
     assert len(payload["containing_segment_id"]) == 64
     assert payload["trace_slice"]["containing_segment_ref"]["kind"] == "trace_slice"
+
+
+def test_ot_resources_normalize_legacy_prefixed_anchor_patch_ids(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    seed_sha = _git(repo, "rev-parse", "HEAD")
+    authored = "    return 'legacy resource anchor bridge'\n"
+    trace_patch_id = _tp("legacy-resource-anchor")
+    git_anchor_id = _ga("legacy-resource-anchor")
+
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-legacy-resource",
+                step_index=4,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": f"tracepatch-sha256:{trace_patch_id}",
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "before_blob_id": _oid(repo, f"{seed_sha}:app.py"),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    (repo / "app.py").write_text("def value():\n" + authored)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "legacy resource anchor"],
+        cwd=repo,
+        check=True,
+    )
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="git_anchor_created",
+                trace_id="tr-legacy-resource",
+                step_index=4,
+                capture_method=["post_commit_correlator"],
+                payload={
+                    "git_anchor_id": f"gitanchor-sha256:{git_anchor_id}",
+                    "trace_patch_id": f"tracepatch-sha256:{trace_patch_id}",
+                    "commit_id": {"algo": "sha1", "hex": commit_sha},
+                    "path": "app.py",
+                    "range": {"start_line": 2, "end_line": 2},
+                    "blob_id": _oid(repo, f"{commit_sha}:app.py"),
+                    "observed_ref": commit_sha,
+                    "relation": "anchored_in_git",
+                    "evidence_tier": "exact_range_hash",
+                    "evidence_firmness": "firm",
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    anchor_resource = f"ot://git-anchor/sha256/{git_anchor_id}"
+    anchor_result = CliRunner().invoke(
+        main,
+        ["trail", "resolve", anchor_resource, "--json", "--project", str(repo)],
+    )
+    assert anchor_result.exit_code == 0, anchor_result.output
+    anchor_payload = json.loads(anchor_result.output)
+    assert anchor_payload["git_anchor_id"] == git_anchor_id
+    assert anchor_payload["trace_patch_id"] == trace_patch_id
+    assert anchor_payload["trace_patch"]["trace_patch_id"] == trace_patch_id
+    assert anchor_payload["lineage_key"]["trace_patch"]["id"] == trace_patch_id
+    assert anchor_payload["lineage_key"]["git_anchor"]["id"] == git_anchor_id
+
+    line_result = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "resolve",
+            "ot://file/app.py/line/2/origin",
+            "--json",
+            "--project",
+            str(repo),
+        ],
+    )
+    assert line_result.exit_code == 0, line_result.output
+    line_payload = json.loads(line_result.output)
+    assert line_payload["trace_patch"]["trace_patch_id"] == trace_patch_id
+    assert line_payload["git_anchor"]["git_anchor_id"] == git_anchor_id
 
 
 def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:

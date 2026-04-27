@@ -98,6 +98,37 @@ def test_trail_explain_exact_patch_anchor_from_events(tmp_path: Path) -> None:
         "git_anchor_created",
     ]
 
+    human_commit = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "explain",
+            "--commit",
+            commit_sha,
+            "--project",
+            str(repo),
+        ],
+    )
+    assert human_commit.exit_code == 0, human_commit.output
+    assert f"tp:{payload['trace_patch_id'][:8]}" in human_commit.output
+    assert payload["trace_patch_id"] not in human_commit.output
+    assert "exact range match" in human_commit.output
+
+    follow = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "follow",
+            "--patch",
+            payload["trace_patch_id"],
+            "--project",
+            str(repo),
+        ],
+    )
+    assert follow.exit_code == 0, follow.output
+    assert f"Patch Trail tp:{payload['trace_patch_id'][:8]}" in follow.output
+    assert payload["trace_patch_id"] not in follow.output
+
 
 def test_trail_explain_includes_containing_segment_id(tmp_path: Path) -> None:
     repo = tmp_path

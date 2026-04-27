@@ -85,8 +85,9 @@ def explain_cmd(
         patch = payload.get("trace_patch")
         if patch:
             click.echo(
-                f"  {patch.get('trace_id')} {patch.get('trace_patch_id')} "
-                f"{patch.get('evidence_tier')}"
+                f"  {_trace_handle(patch, color=False)} "
+                f"{_patch_handle(patch, color=False)} "
+                f"{_human_evidence(patch.get('evidence_tier'))}"
             )
         else:
             click.echo("  relation: unknown")
@@ -96,8 +97,9 @@ def explain_cmd(
         click.echo(f"Commit {payload['commit_sha'][:12]}")
         for patch in payload.get("trace_patches") or []:
             click.echo(
-                f"  {patch.get('trace_id')} {patch.get('trace_patch_id')} "
-                f"{patch.get('evidence_tier')}"
+                f"  {_trace_handle(patch, color=False)} "
+                f"{_patch_handle(patch, color=False)} "
+                f"{_human_evidence(patch.get('evidence_tier'))}"
             )
         if not payload.get("trace_patches"):
             click.echo("  no Trace Patches anchored in this commit")
@@ -244,7 +246,11 @@ def follow_cmd(
         return
 
     current = payload.get("current_survival") or {}
-    label = payload.get("git_anchor_id") or payload.get("trace_patch_id")
+    label = (
+        _anchor_handle(payload, color=False)
+        if payload.get("git_anchor_id")
+        else _patch_handle(payload, color=False)
+    )
     click.echo(f"Patch Trail {label}")
     click.echo(f"  survival: {current.get('survival_state') or 'unknown'}")
     path = current.get("path")
@@ -294,6 +300,15 @@ def _patch_handle(row: dict[str, Any], *, color: bool) -> str:
     if not color:
         return token
     prefix = paint(Role.ID_PREFIX, "tp:", use_color=True)
+    body = paint(Role.TRACE_ID, token[3:], use_color=True)
+    return f"{prefix}{body}"
+
+
+def _anchor_handle(row: dict[str, Any], *, color: bool) -> str:
+    token = f"ga:{_short_digest(row.get('git_anchor_id'))}"
+    if not color:
+        return token
+    prefix = paint(Role.ID_PREFIX, "ga:", use_color=True)
     body = paint(Role.TRACE_ID, token[3:], use_color=True)
     return f"{prefix}{body}"
 

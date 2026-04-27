@@ -16,6 +16,7 @@ from opentraces.core.trails import (
     append_event_batch,
     append_exact_patch_trail,
     build_trail_query_projection,
+    reconcile_commit_anchors,
 )
 from opentraces.core.trails.models import sha256_text
 
@@ -39,6 +40,10 @@ def _commit(repo: Path, message: str) -> str:
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, check=True)
     return _git(repo, "rev-parse", "HEAD")
+
+
+def _oid(repo: Path, rev_path: str) -> dict[str, str]:
+    return {"algo": "sha1", "hex": _git(repo, "rev-parse", rev_path)}
 
 
 def _run(repo: Path, args: list[str]):
@@ -436,6 +441,57 @@ def test_partial_commit_unknown_patch_not_promoted_to_blame_graph_or_search(
     unknown = _run_json(tmp_path, ["trail", "search", "--trace", "unknowntracephase7"])
     assert unknown["results"][0]["relation"] == "unknown"
     assert "git_anchor_unknown" in unknown["results"][0]["limitations"]
+
+
+def test_trail_query_normalizes_legacy_prefixed_patch_id_with_new_anchor(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    seed_sha = _git(tmp_path, "rev-parse", "HEAD")
+    patch_id = sha256_text("legacy-query-patch").split(":", 1)[1]
+    authored = "    return 'legacy query anchor bridge'\n"
+    append_event_batch(
+        tmp_path,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="legacyqueryphase7",
+                step_index=7,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": f"tracepatch-sha256:{patch_id}",
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "before_blob_id": _oid(tmp_path, f"{seed_sha}:app.py"),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+    (tmp_path / "app.py").write_text("def value():\n" + authored)
+    commit_sha = _commit(tmp_path, "legacy query patch")
+    created = reconcile_commit_anchors(
+        tmp_path,
+        commit_sha,
+        writer="post-commit-correlator",
+    )
+    assert [anchor["trace_patch_id"] for anchor in created] == [patch_id]
+
+    search = _run_json(tmp_path, ["trail", "search", "--trace", "legacyqueryphase7"])
+
+    assert search["results"][0]["trace_patch_id"] == patch_id
+    assert search["results"][0]["git_anchor_id"] == created[0]["git_anchor_id"]
+    assert search["results"][0]["relation"] == "anchored_in_git"
+    assert "git_anchor_unknown" not in search["results"][0]["limitations"]
+    assert search["results"][0]["lineage_key"]["trace_patch"]["id"] == patch_id
+
+    blame = _run_json(tmp_path, ["blame", commit_sha])
+    assert blame["trailEvidence"][0]["trace_patch_id"] == patch_id
+    assert blame["trailEvidence"][0]["git_anchor_id"] == created[0]["git_anchor_id"]
 
 
 def test_legacy_notes_only_project_still_renders_blame_without_trail_events(

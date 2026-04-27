@@ -107,7 +107,7 @@ def _trace_patch_view(
 def _latest_anchor_id(anchors: list[tuple[dict[str, Any], TrailEvent]]) -> str | None:
     if not anchors:
         return None
-    return anchors[-1][0].get("git_anchor_id")
+    return id_from_payload(anchors[-1][0], "git_anchor")
 
 
 def _index_events(
@@ -420,7 +420,7 @@ def _resolve_git_anchor(repo: Path, resource: str, segments: list[str]) -> dict[
         return payload
 
     anchor, anchor_event = anchor_pair
-    trace_patch_id = anchor.get("trace_patch_id")
+    trace_patch_id = id_from_payload(anchor, "trace_patch")
     patch_pair = patches.get(trace_patch_id or "")
     trace_slice = trace_slice_for_event(
         anchor_event,
@@ -486,12 +486,13 @@ def _resolve_file_line_origin(repo: Path, resource: str, segments: list[str]) ->
             continue
         if start is None or end is None or not (int(start) <= line_no <= int(end)):
             continue
-        trace_patch_id = anchor.get("trace_patch_id")
+        trace_patch_id = id_from_payload(anchor, "trace_patch")
+        git_anchor_id = id_from_payload(anchor, "git_anchor")
         patch_pair = patches.get(trace_patch_id or "")
         trace_slice = trace_slice_for_event(
             event,
             trace_patch_id=trace_patch_id,
-            git_anchor_id=anchor.get("git_anchor_id"),
+            git_anchor_id=git_anchor_id,
             relation="contains_file_line_origin",
         )
         containing_segment_id = (
@@ -517,7 +518,7 @@ def _resolve_file_line_origin(repo: Path, resource: str, segments: list[str]) ->
                 patch,
                 patch_event,
                 containing_segment_id=containing_segment_id,
-                git_anchor_id=anchor.get("git_anchor_id"),
+                git_anchor_id=git_anchor_id,
             )
             response["source_events"].insert(0, _source_event(patch_event))
         else:

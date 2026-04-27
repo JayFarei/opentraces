@@ -18,6 +18,7 @@ from typing import Any
 from .contract import enrich_trail_row, projection_digest
 from .event_log import EVENT_LOG_REF, read_events
 from .follow import follow_patch
+from .ids import id_from_payload, normalize_id
 from .models import TrailEvent
 from .slices import resource_refs_for_patch, trace_slice_for_event
 
@@ -31,7 +32,7 @@ def _source_event(event: TrailEvent) -> dict[str, Any]:
     }
     if event.event_type == "git_anchor_search_completed":
         out["result"] = event.payload.get("result")
-        out["trace_patch_id"] = event.payload.get("trace_patch_id")
+        out["trace_patch_id"] = id_from_payload(event.payload, "trace_patch")
     return out
 
 
@@ -241,19 +242,19 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
     for event in events:
         payload = event.payload
         if event.event_type == "trace_patch_created":
-            patch_id = payload.get("trace_patch_id")
+            patch_id = id_from_payload(payload, "trace_patch")
             if patch_id:
                 patch_pairs[patch_id] = (payload, event)
         elif event.event_type == "git_anchor_created":
             anchor_pairs.append((payload, event))
         elif event.event_type == "git_anchor_search_completed":
-            patch_id = payload.get("trace_patch_id")
+            patch_id = id_from_payload(payload, "trace_patch")
             if patch_id:
                 search_pairs_by_patch.setdefault(patch_id, []).append((payload, event))
 
     anchors_by_patch: dict[str, list[tuple[dict[str, Any], TrailEvent]]] = {}
     for anchor, event in anchor_pairs:
-        patch_id = anchor.get("trace_patch_id")
+        patch_id = id_from_payload(anchor, "trace_patch")
         if patch_id:
             anchors_by_patch.setdefault(patch_id, []).append((anchor, event))
     for pairs in anchors_by_patch.values():
@@ -269,7 +270,11 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
                 "search_head_sha": (search.get("search_head") or {}).get("hex"),
                 "algorithms_attempted": search.get("algorithms_attempted") or [],
                 "result": search.get("result"),
-                "created_anchor_ids": search.get("created_anchor_ids") or [],
+                "created_anchor_ids": [
+                    normalize_id(anchor_id)
+                    for anchor_id in search.get("created_anchor_ids") or []
+                    if anchor_id
+                ],
                 "source_event": _source_event(event),
             }
             for search, event in pairs
@@ -278,7 +283,7 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
     for patch_id, (patch, patch_event) in patch_pairs.items():
         anchor_pairs_for_patch = anchors_by_patch.get(patch_id, [])
         latest_anchor_id = (
-            anchor_pairs_for_patch[-1][0].get("git_anchor_id")
+            id_from_payload(anchor_pairs_for_patch[-1][0], "git_anchor")
             if anchor_pairs_for_patch
             else None
         )
@@ -335,8 +340,8 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
         }
 
     for anchor, anchor_event in sorted(anchor_pairs, key=lambda pair: pair[1].event_sequence):
-        anchor_id = anchor.get("git_anchor_id")
-        patch_id = anchor.get("trace_patch_id")
+        anchor_id = id_from_payload(anchor, "git_anchor")
+        patch_id = id_from_payload(anchor, "trace_patch")
         if not anchor_id or not patch_id:
             continue
         patch_pair = patch_pairs.get(patch_id)
