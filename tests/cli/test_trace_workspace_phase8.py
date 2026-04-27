@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +19,40 @@ from opentraces.core.trails import (
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
+
+
+def _run_cli_subprocess(
+    args: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    repo_root = Path(__file__).resolve().parents[2]
+    subprocess_env = os.environ.copy()
+    pythonpath = os.pathsep.join([
+        str(repo_root / "src"),
+        str(repo_root / "packages" / "opentraces-schema" / "src"),
+        subprocess_env.get("PYTHONPATH", ""),
+    ])
+    subprocess_env["PYTHONPATH"] = pythonpath
+    if env:
+        subprocess_env.update(env)
+    proc = subprocess.run(
+        [sys.executable, "-c", "from opentraces.cli import main; main()", *args],
+        cwd=cwd,
+        env=subprocess_env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if check and proc.returncode != 0:
+        raise AssertionError(
+            "CLI subprocess failed "
+            f"exit={proc.returncode} args={args}\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    return proc
 
 
 def _init_repo(repo: Path) -> None:
@@ -538,6 +574,106 @@ def test_resume_from_snapshot_execution_hands_off_to_claude_in_materialized_work
     )
     assert preamble["opentraces"]["source_step_id"] == "s2"
     assert preamble["opentraces"]["source_snapshot_id"]
+    assert preamble["opentraces"]["materialized_worktree"] == str(materialized)
+
+
+def test_trace_workspace_resume_executes_claude_subprocess_end_to_end(
+    tmp_path: Path,
+) -> None:
+    trace_id = "tr-resume-subprocess-e2e"
+    source = tmp_path / "source-subprocess"
+    _init_repo(source)
+    _write_trace_record(source, trace_id)
+    recorded_tree = _capture_two_step_trace(source, trace_id)
+    workspace = tmp_path / "trace-workspace"
+
+    export_result = _run_cli_subprocess(
+        ["trace", "workspace", "export", trace_id, "--output", str(workspace), "--json"],
+        cwd=source,
+    )
+    export_payload = json.loads(export_result.stdout)
+    assert export_payload["event_count"] == 6
+    assert export_payload["snapshot_count"] == 2
+
+    source_unavailable = tmp_path / "source-unavailable"
+    source.rename(source_unavailable)
+    imported = tmp_path / "blank-import-subprocess"
+    _run_cli_subprocess(
+        [
+            "trace",
+            "workspace",
+            "open",
+            str(workspace),
+            "--project",
+            str(imported),
+            "--json",
+        ],
+        cwd=tmp_path,
+    )
+
+    play_result = _run_cli_subprocess(
+        ["trail", "play", trace_id, "--json", "--project", str(imported)],
+        cwd=tmp_path,
+    )
+    play_payload = json.loads(play_result.stdout)
+    assert play_payload["event_count"] == 6
+    assert str(source_unavailable) not in play_result.stdout
+
+    dry_run = _run_cli_subprocess(
+        ["resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
+        cwd=imported,
+    )
+    dry_payload = json.loads(dry_run.stdout)
+    assert dry_payload["resume_mode"] == "snapshot_backed"
+    assert dry_payload["snapshot"]["tree_id"]["hex"] == recorded_tree
+    assert dry_payload["materialization"]["materialized"] is False
+    assert not Path(dry_payload["materialization"]["path"]).exists()
+
+    shim_log = tmp_path / "claude-shim.json"
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    shim = shim_dir / "claude"
+    shim.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, pathlib, sys\n"
+        "pathlib.Path(os.environ['CLAUDE_SHIM_LOG']).write_text("
+        "json.dumps({'argv': sys.argv, 'cwd': os.getcwd()}) + '\\n')\n"
+        "sys.exit(42)\n"
+    )
+    shim.chmod(0o755)
+
+    exec_result = _run_cli_subprocess(
+        ["resume", trace_id, "--at-step", "s2"],
+        cwd=imported,
+        env={
+            "PATH": f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+            "CLAUDE_SHIM_LOG": str(shim_log),
+        },
+        check=False,
+    )
+    assert exec_result.returncode == 42
+    shim_payload = json.loads(shim_log.read_text())
+    assert shim_payload["argv"][1] == "--resume"
+    resumed_session_id = shim_payload["argv"][2]
+    assert resumed_session_id
+
+    materialized = Path(shim_payload["cwd"])
+    assert materialized != imported
+    assert _git(materialized, "write-tree") == recorded_tree
+
+    from opentraces.core.config import get_project_state_path
+    from opentraces.core.state import StateManager
+
+    state = StateManager(get_project_state_path(imported))
+    forked = state.get_session(resumed_session_id)
+    assert forked is not None
+    assert forked.parent_session_id == "ff00aa11-2222-3333-4444-555555555555"
+    assert forked.parent_step_id == "s2"
+    assert forked.source_path and Path(forked.source_path).exists()
+    preamble = json.loads(Path(forked.source_path).read_text().splitlines()[0])
+    assert preamble["type"] == "opentraces_resume_packet"
+    assert preamble["opentraces"]["source_trace_id"] == trace_id
+    assert preamble["opentraces"]["source_step_id"] == "s2"
     assert preamble["opentraces"]["materialized_worktree"] == str(materialized)
 
 
