@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
@@ -376,6 +377,52 @@ def test_resume_from_snapshot_packet_is_filtered_and_records_fork_lineage(
     assert "external_services_not_captured" in payload["non_portable_dependencies"]
     assert payload["adapter_slots"]["codex"]["implemented"] is False
     assert payload["adapter_slots"]["codex"]["status"] == "schema_ready_unimplemented"
+
+
+def test_resume_from_snapshot_execution_hands_off_to_claude_in_materialized_worktree(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_id = "tr-resume-execution"
+    runner, _, workspace, recorded_tree = _export_workspace(
+        tmp_path,
+        monkeypatch,
+        trace_id=trace_id,
+    )
+    imported = tmp_path / "execution-import"
+    _open_workspace(runner, workspace, imported)
+
+    monkeypatch.chdir(imported)
+    with patch("shutil.which", return_value="/usr/local/bin/claude"), \
+         patch("os.execvp") as exec_mock, \
+         patch("os.chdir") as chdir_mock:
+        result = runner.invoke(
+            main,
+            ["resume", trace_id, "--at-step", "s2"],
+            catch_exceptions=False,
+        )
+
+    assert result.exit_code == 1
+    materialized = Path(chdir_mock.call_args.args[0])
+    assert materialized != imported
+    assert _git(materialized, "write-tree") == recorded_tree
+
+    executable, argv = exec_mock.call_args.args
+    assert executable == "/usr/local/bin/claude"
+    assert argv[0] == "/usr/local/bin/claude"
+    assert argv[1] == "--resume"
+    resumed_session_id = argv[2]
+    assert resumed_session_id
+
+    from opentraces.core.config import get_project_state_path
+    from opentraces.core.state import StateManager
+
+    state = StateManager(get_project_state_path(imported))
+    forked = state.get_session(resumed_session_id)
+    assert forked is not None
+    assert forked.parent_session_id == "ff00aa11-2222-3333-4444-555555555555"
+    assert forked.parent_step_id == "s2"
+    assert forked.source_path and Path(forked.source_path).exists()
 
 
 def test_resume_from_snapshot_reports_missing_snapshot_as_unknown(
