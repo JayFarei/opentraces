@@ -126,6 +126,8 @@ class TraceContribution:
     # The renderer uses this to distinguish ``t:<uuid>`` (canonical, clickable
     # via ``ot show``) from ``s:<session>`` (attribution-only, not in inbox).
     canonical: bool = False
+    source: str = "attribution"
+    trail_evidence: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -387,8 +389,6 @@ def _render_trace_header(trace: TraceContribution, first: bool,
         plain_state = state_col
         sep = "  " + _color("\u2502", "\x1b[90m", opts.color) + "  "
         if len(plain_state) > STATE_W:
-            pad = ""
-            body_plain = f"{plain_state}"
             painted_state = _paint_state(plain_state, opts.color)
             line = f"{handle}  {painted_state}"
         else:
@@ -537,7 +537,8 @@ def _render_entity_sublines(
     for file_path, ents in bd[:MAX_FILES]:
         file_line = f"{sub_prefix}  {file_path}"
         if use_color:
-            file_line = f"{sub_prefix}  {_color(file_path, '\x1b[90m', True)}"
+            dim_code = "\x1b[90m"
+            file_line = f"{sub_prefix}  {_color(file_path, dim_code, True)}"
         out.append(file_line)
         for (ct, et, name) in ents[:MAX_PER_FILE]:
             glyph, code = {
@@ -726,9 +727,10 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
     """
     try:
         from opentraces.core.cache import AttributionCache
+
+        cache = AttributionCache(project_cwd)
     except Exception:
-        return commits
-    cache = AttributionCache(project_cwd)
+        cache = None
 
     # Membership set for canonical tagging. A trace_id is canonical iff it
     # has a state.json entry — the single source of truth for "the user has
@@ -742,7 +744,7 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
     except Exception:
         canonical_ids = set()
     for c in commits:
-        data = cache.read_attribution(c.sha)
+        data = cache.read_attribution(c.sha) if cache is not None else None
         if not data:
             continue
         cov = data.get("coverage") or {}
@@ -857,7 +859,49 @@ def _attach_attribution(commits: list[Commit], project_cwd: Path,
                 if breakdowns:
                     c.entity_breakdowns = breakdowns
         except Exception:
-            pass
+                pass
+    try:
+        from opentraces.core.trails import build_trail_query_projection
+
+        trail_projection = build_trail_query_projection(project_cwd)
+    except Exception:
+        trail_projection = None
+    if trail_projection is None:
+        return commits
+
+    for c in commits:
+        rows = trail_projection.anchors_for_commit_with_survival(c.sha)
+        if not rows:
+            continue
+        by_trace = {trace.trace_id: trace for trace in c.traces}
+        for row in rows:
+            trace_id = row.get("trace_id")
+            if not trace_id:
+                continue
+            existing = by_trace.get(trace_id)
+            if existing is not None:
+                existing.trail_evidence.append(row)
+                continue
+            line_count = int(row.get("line_count") or 0)
+            contrib = TraceContribution(
+                trace_id=trace_id,
+                line_count=line_count,
+                files=[row.get("file_path") or row.get("path") or ""],
+                lifecycle=row.get("evidence_firmness") or "provisional",
+                attributed_ratio=None,
+                missing_ratio=None,
+                canonical=True,
+                source="trail_events",
+                trail_evidence=[row],
+            )
+            c.traces.append(contrib)
+            by_trace[trace_id] = contrib
+        c.traces.sort(
+            key=lambda trace: (
+                0 if trace.source == "attribution" else 1,
+                trace.trace_id,
+            )
+        )
     return commits
 
 

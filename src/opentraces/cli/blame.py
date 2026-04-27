@@ -35,7 +35,6 @@ import click
 
 from ._help import OpentracesCommand
 from ..clients.text.colors import (
-    RESET,
     Role,
     coverage_role,
     detect_color,
@@ -45,7 +44,6 @@ from ..clients.text.colors import (
 from ..clients.text.graph_renderer import (
     ANSI_DIM,
     ANSI_GREEN,
-    ANSI_RESET,
     ANSI_YELLOW,
     _color,
     strip_ansi,
@@ -143,6 +141,15 @@ def _resolve_sha(cwd: Path, ref: str) -> str | None:
         if len(matches) == 1:
             return matches[0]
     return None
+
+
+def _looks_like_file_line_target(arg: str) -> bool:
+    if not arg or arg[:2].lower() in ("c:", "t:", "s:"):
+        return False
+    if ":" not in arg:
+        return False
+    _path, raw_line = arg.rsplit(":", 1)
+    return bool(_path) and raw_line.isdigit()
 
 
 # --------------------------------------------------------------------------- #
@@ -534,6 +541,117 @@ def _hook_linked_only_trace_ids(
     return [tid for tid in tids if tid not in attr_expanded]
 
 
+def _trail_projection_for(project_cwd: Path):
+    try:
+        from ..core.trails import build_trail_query_projection
+
+        return build_trail_query_projection(project_cwd)
+    except Exception:
+        return None
+
+
+def _trail_trace_id_for_prefix(project_cwd: Path, prefix: str) -> str | None:
+    projection = _trail_projection_for(project_cwd)
+    if projection is None:
+        return None
+    return projection.resolve_trace_prefix(prefix)
+
+
+def _trail_evidence_for_commit(
+    project_cwd: Path,
+    sha: str,
+    scope_file: str | None = None,
+) -> list[dict]:
+    projection = _trail_projection_for(project_cwd)
+    if projection is None:
+        return []
+    rows = projection.anchors_for_commit_with_survival(sha)
+    if scope_file:
+        rows = [
+            row
+            for row in rows
+            if row.get("file_path") == scope_file or row.get("path") == scope_file
+        ]
+    return rows
+
+
+def _projection_disagreements(
+    data: dict,
+    hook_linked_ids: list[str],
+    trail_rows: list[dict],
+) -> tuple[list[dict], list[str]]:
+    legacy_ids = {
+        t.get("trace_id")
+        for t in (data.get("traces") or [])
+        if t.get("trace_id")
+    }
+    legacy_ids.update(hook_linked_ids)
+    trail_ids = {
+        row.get("trace_id")
+        for row in trail_rows
+        if row.get("trace_id")
+    }
+    disagreements: list[dict] = []
+    limitations: list[str] = []
+    if trail_rows and not legacy_ids:
+        limitations.append("attribution_cache_missing_trail_events_used")
+    if legacy_ids and trail_ids:
+        missing_from_legacy = sorted(trail_ids - legacy_ids)
+        missing_from_trails = sorted(legacy_ids - trail_ids)
+        if missing_from_legacy:
+            disagreements.append(
+                {
+                    "type": "trail_events_not_in_legacy_projection",
+                    "trace_ids": missing_from_legacy,
+                    "trace_patch_ids": sorted(
+                        row.get("trace_patch_id")
+                        for row in trail_rows
+                        if row.get("trace_id") in missing_from_legacy
+                        and row.get("trace_patch_id")
+                    ),
+                }
+            )
+        if missing_from_trails:
+            disagreements.append(
+                {
+                    "type": "legacy_projection_not_in_trail_events",
+                    "trace_ids": missing_from_trails,
+                }
+            )
+    return disagreements, limitations
+
+
+def _render_trail_evidence_section(
+    trail_rows: list[dict],
+    sha: str,
+    color: bool,
+) -> list[str]:
+    if not trail_rows:
+        return []
+    rule = paint(Role.DIM, SPINE_H * 72, use_color=color)
+    out = ["", rule, ""]
+    out.append(
+        "Trace Trails "
+        + paint(Role.DIM, "(canonical event log evidence)", use_color=color)
+    )
+    out.append("")
+    for row in trail_rows:
+        trace = render_handle("t", row.get("trace_id") or "?", use_color=color)
+        patch_id = row.get("trace_patch_id") or "?"
+        anchor_id = row.get("git_anchor_id") or "?"
+        path = row.get("file_path") or row.get("path") or "?"
+        line_range = row.get("range") or row.get("affected_range") or {}
+        start = line_range.get("start_line") or "?"
+        evidence = row.get("evidence_tier") or "unknown"
+        firmness = row.get("evidence_firmness") or row.get("firmness") or "unknown"
+        out.append(f"  {trace}  {path}:{start}  {evidence} ({firmness})")
+        out.append(f"    Trace Patch: {patch_id}")
+        out.append(f"    Git Anchor:  {anchor_id}")
+    out.append("")
+    out.append(f"  explain: otd trail explain --commit {sha}")
+    return out
+
+
 def _render_hook_linked_section(
     project_cwd: Path, trace_ids: list[str], color: bool,
 ) -> list[str]:
@@ -572,7 +690,8 @@ def _render_hook_linked_section(
 
 def _render_default(meta: tuple[str, str, str], data: dict,
                     project_cwd: Path, scope_file: str | None,
-                    color: bool, *, show_entities: bool = False) -> str:
+                    color: bool, *, show_entities: bool = False,
+                    trail_rows: list[dict] | None = None) -> str:
     files = data.get("files") or {}
     traces = data.get("traces") or []
     lines: list[str] = []
@@ -591,6 +710,10 @@ def _render_default(meta: tuple[str, str, str], data: dict,
         lines.extend(_render_hook_linked_section(
             project_cwd, hook_linked, color,
         ))
+    if trail_rows is None:
+        trail_rows = _trail_evidence_for_commit(project_cwd, meta[0], scope_file)
+    if trail_rows:
+        lines.extend(_render_trail_evidence_section(trail_rows, meta[0], color))
 
     # Files block — simple, aligned, separated from the trace tree by a
     # dim horizontal rule so the two sections read as distinct groups.
@@ -703,6 +826,15 @@ def _build_json_payload(meta: tuple[str, str, str], data: dict,
             {"trace_id": tid, "id": tid[:8]} for tid in hook_linked_ids
         ],
     }
+    trail_rows = _trail_evidence_for_commit(project_cwd, full_sha, scope_file)
+    disagreements, projection_limitations = _projection_disagreements(
+        data,
+        hook_linked_ids,
+        trail_rows,
+    )
+    payload["trailEvidence"] = trail_rows
+    payload["projection_disagreements"] = disagreements
+    payload["projection_limitations"] = projection_limitations
     # Legacy "entities" key — keep for back-compat.
     if include_entities:
         if entity_data_raw is None:
@@ -843,7 +975,8 @@ def _render_trace_blame(
 
     n_att = len(result.attribution_commits)
     n_links = len(result.git_link_commits)
-    total = n_att + n_links
+    n_trails = len(result.trail_event_commits)
+    total = len(result.commits)
     summary_parts = [f"{total} commit{'' if total == 1 else 's'}"]
     if n_att:
         pct_covered = int(round(100 * sum(c.pct for c in result.attribution_commits) /
@@ -856,6 +989,8 @@ def _render_trace_blame(
         _ = pct_covered
     if n_links:
         summary_parts.append(f"{n_links} hook-linked")
+    if n_trails:
+        summary_parts.append(f"{n_trails} trail-anchored")
 
     spine_v = _spine(SPINE_V, color)
     lines.append(f"{spine_v} {' · '.join(summary_parts)}")
@@ -892,6 +1027,17 @@ def _render_trace_blame(
                     + paint(Role.DIM, "0 diff lines", use_color=color)
                 )
             row += f"  {lines_text}"
+        elif commit.source == "trail_events":
+            tier_text = commit.tier or "trail-events"
+            tier_paint = paint(Role.ADDED, tier_text, use_color=color)
+            row += f"  {tier_paint}"
+            if commit.lines_in_commit:
+                row += "  " + paint(
+                    Role.DIM,
+                    f"{commit.lines_in_commit} anchored line"
+                    f"{'' if commit.lines_in_commit == 1 else 's'}",
+                    use_color=color,
+                )
         else:
             # git_links tier badge — no reliable per-line count.
             tier_text = {
@@ -964,6 +1110,41 @@ def _build_trace_json_payload(
             for c in result.commits
         ],
         "files": [{"path": p, "lines": n} for p, n in result.files],
+    }
+
+
+def _build_file_line_json_payload(project_cwd: Path, target: str) -> dict:
+    path, raw_line = target.rsplit(":", 1)
+    line_no = int(raw_line)
+    projection = _trail_projection_for(project_cwd)
+    limitations: list[str] = []
+    rows: list[dict] = []
+    if projection is None:
+        limitations.append("trail_query_unavailable")
+    else:
+        limitations.extend(projection.limitations)
+        for row in projection.patches_touching_file(path):
+            line_range = row.get("range") or row.get("affected_range") or {}
+            start = line_range.get("start_line")
+            end = line_range.get("end_line")
+            if start is None or end is None:
+                continue
+            if int(start) <= line_no <= int(end):
+                rows.append(projection.with_current_survival(row))
+    rows.sort(
+        key=lambda row: row.get("source_refs", {}).get("git_anchor_event_sequence", 0),
+        reverse=True,
+    )
+    relation = "anchored_in_git" if rows else "unknown"
+    if not rows and "no_git_anchor_for_line" not in limitations:
+        limitations.append("no_git_anchor_for_line")
+    return {
+        "target": target,
+        "relation": relation,
+        "trailEvidence": rows,
+        "trace_patch": rows[0] if rows else None,
+        "git_anchor": rows[0] if rows else None,
+        "limitations": limitations,
     }
 
 
@@ -1084,6 +1265,8 @@ def _resolve_blame_target(cwd: Path, arg: str) -> tuple[str, str] | tuple[None, 
             tid = resolve_trace_id_prefix(cwd, low)
         except AmbiguousPrefixError as e:
             return (None, str(e))
+        if not tid:
+            tid = _trail_trace_id_for_prefix(cwd, low)
         if tid:
             return ("trace", tid)
         return (None, f"Unknown trace: {arg}")
@@ -1104,12 +1287,18 @@ def _resolve_blame_target(cwd: Path, arg: str) -> tuple[str, str] | tuple[None, 
             return (None, str(e))
         return (None, f"Unknown session: {arg}")
 
+    if _looks_like_file_line_target(low):
+        return ("file_line", low)
+
     def _try_trace_like() -> tuple[str, str] | None:
         """Try trace_id → session_id → attribution cache, in that order."""
         try:
             tid = resolve_trace_id_prefix(cwd, low)
             if tid:
                 return ("trace", tid)
+            trail_tid = _trail_trace_id_for_prefix(cwd, low)
+            if trail_tid:
+                return ("trace", trail_tid)
             sid_tid = _resolve_session_id_in_staging(cwd, low)
             if sid_tid:
                 return ("trace", sid_tid)
@@ -1155,6 +1344,7 @@ def _resolve_blame_target(cwd: Path, arg: str) -> tuple[str, str] | tuple[None, 
         "opentraces blame abc1234",
         "opentraces blame c:abc1234 src/main.py",
         "opentraces blame t:4dccb032",
+        "opentraces blame src/app.py:42 --json",
         "opentraces blame abc1234 --lines",
         "opentraces blame abc1234 --json",
     ],
@@ -1230,6 +1420,28 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
         )
         return
 
+    if mode == "file_line":
+        if path or show_lines or show_entities:
+            click.echo(
+                "--lines, --entities, and PATH are commit-mode only.",
+                err=True,
+            )
+            sys.exit(2)
+        payload = _build_file_line_json_payload(cwd, resolved)
+        if as_json:
+            click.echo(_json.dumps(payload, indent=2))
+            return
+        click.echo(f"Line {payload['target']}")
+        if payload.get("trailEvidence"):
+            row = payload["trailEvidence"][0]
+            click.echo(
+                f"  {row.get('trace_id')} {row.get('trace_patch_id')} "
+                f"{row.get('evidence_tier')}"
+            )
+        else:
+            click.echo("  relation: unknown")
+        return
+
     full_sha = resolved  # commit-mode
     meta = _git_show_meta(cwd, full_sha)
     if not meta:
@@ -1245,8 +1457,9 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
     # backfill produces attribution-cache rows from file blame, which
     # can't exist for hook-linked-only commits by construction.
     notes_tids = notes_store.trace_ids_for_commit(full_sha, cwd)
+    trail_rows = _trail_evidence_for_commit(cwd, full_sha, path)
 
-    if not cache.has_attribution(full_sha) and not notes_tids:
+    if not cache.has_attribution(full_sha) and not notes_tids and not trail_rows:
         ran = _maybe_prompt_first_run(cwd, full_sha)
         if not ran or not cache.has_attribution(full_sha):
             sys.exit(1)
@@ -1268,7 +1481,8 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
     if show_entities and entity_data_raw is None:
         click.echo(
             _render_default(meta, data, cwd, path, color,
-                            show_entities=False),
+                            show_entities=False,
+                            trail_rows=trail_rows),
             nl=False,
         )
         click.echo("")
@@ -1277,6 +1491,7 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
 
     click.echo(
         _render_default(meta, data, cwd, path, color,
-                        show_entities=show_entities),
+                        show_entities=show_entities,
+                        trail_rows=trail_rows),
         nl=False,
     )

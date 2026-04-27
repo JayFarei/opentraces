@@ -922,6 +922,7 @@ TRAIL_ASSERTION_KINDS = {
     "trail_file_line_explain",
     "trail_resolve_all_resource_refs",
     "trail_no_patch_step",
+    "trail_consumers_agree",
 }
 
 def _resolve_trace(state: RunState, label: str) -> set[str] | None:
@@ -970,6 +971,45 @@ def _trail_trace_step_payload(state: RunState, selection_name: str = "selected")
     )
     state.trail_json[cache_key] = payload
     return payload
+
+
+def _line_origin_for(row: dict) -> tuple[str | None, int | None]:
+    origin = row.get("line_origin") or {}
+    if origin:
+        return origin.get("path"), origin.get("line")
+    line_range = row.get("range") or row.get("affected_range") or {}
+    return row.get("file_path") or row.get("path"), line_range.get("start_line")
+
+
+def _assert_same_trail_identity(expected: dict, actual: dict, context: str) -> None:
+    for key in (
+        "trace_id",
+        "step_id",
+        "trace_patch_id",
+        "git_anchor_id",
+        "containing_segment_id",
+        "commit_sha",
+        "file_path",
+    ):
+        if expected.get(key) != actual.get(key):
+            raise AssertionError(
+                f"{context}: {key} mismatch: "
+                f"expected {expected.get(key)!r}, got {actual.get(key)!r}"
+            )
+    expected_origin = _line_origin_for(expected)
+    actual_origin = _line_origin_for(actual)
+    if expected_origin != actual_origin:
+        raise AssertionError(
+            f"{context}: file-line origin mismatch: "
+            f"expected {expected_origin!r}, got {actual_origin!r}"
+        )
+
+
+def _first_row_by_patch(rows: list[dict], trace_patch_id: str) -> dict | None:
+    return next(
+        (row for row in rows if row.get("trace_patch_id") == trace_patch_id),
+        None,
+    )
 
 
 def _assert_trail_scenario(state: RunState, a: dict) -> str:
@@ -1146,6 +1186,115 @@ def _assert_trail_scenario(state: RunState, a: dict) -> str:
             _require_containing_segment(payload, "trail no-patch explain")
         state.trail_json[f"no_patch:{label}"] = payload
         return f"trail explain no-patch step {selected['trace_id']}:{selected['step_index']} ✓"
+
+    if kind == "trail_consumers_agree":
+        sel = _trail_selection(state, selection_name)
+        ref = a.get("ref", "HEAD")
+        expected_sha = _rev_parse(state.project_dir, ref)
+        trace_payload = _trail_trace_step_payload(state, selection_name)
+        expected = {
+            "trace_id": trace_payload.get("trace_id"),
+            "step_id": trace_payload.get("step_id"),
+            "trace_patch_id": trace_payload.get("trace_patch_id"),
+            "git_anchor_id": trace_payload.get("git_anchor_id"),
+            "containing_segment_id": trace_payload.get("containing_segment_id"),
+            "commit_sha": ((trace_payload.get("git_anchor") or {}).get("commit_sha")),
+            "file_path": trace_payload.get("file_path"),
+            "affected_range": trace_payload.get("affected_range"),
+        }
+        if expected["commit_sha"] != expected_sha:
+            raise AssertionError(
+                f"trail trace-step commit mismatch: expected {expected_sha}, "
+                f"got {expected['commit_sha']}"
+            )
+
+        commit_payload = _run_otd_json(
+            state,
+            ["trail", "explain", "--commit", ref, "--json"],
+        )
+        commit_row = _first_row_by_patch(
+            commit_payload.get("trace_patches", []),
+            sel["trace_patch_id"],
+        )
+        if commit_row is None:
+            raise AssertionError("trail explain --commit missing selected patch")
+        commit_row = {**commit_row, "commit_sha": expected_sha}
+        _assert_same_trail_identity(expected, commit_row, "trail explain --commit")
+        state.trail_json[f"phase7:commit:{selection_name}"] = commit_payload
+
+        resolve_payload = _run_otd_json(
+            state,
+            ["trail", "resolve", trace_payload["resource_refs"]["trace_patch_trail"], "--json"],
+        )
+        resolve_anchor = (resolve_payload.get("git_anchors") or [{}])[-1]
+        resolve_row = {
+            **(resolve_payload.get("trace_patch") or {}),
+            "git_anchor_id": resolve_anchor.get("git_anchor_id"),
+            "commit_sha": resolve_anchor.get("commit_sha"),
+            "file_path": (resolve_payload.get("trace_patch") or {}).get("file_path"),
+            "range": resolve_anchor.get("range"),
+            "line_origin": {
+                "path": resolve_anchor.get("path"),
+                "line": (resolve_anchor.get("range") or {}).get("start_line"),
+            },
+        }
+        _assert_same_trail_identity(expected, resolve_row, "trail resolve")
+        state.trail_json[f"phase7:resolve:{selection_name}"] = resolve_payload
+
+        blame_payload = _run_otd_json(state, ["blame", ref, "--json"])
+        blame_row = _first_row_by_patch(
+            blame_payload.get("trailEvidence", []),
+            sel["trace_patch_id"],
+        )
+        if blame_row is None:
+            raise AssertionError("blame JSON missing selected Trail evidence")
+        _assert_same_trail_identity(expected, blame_row, "blame")
+        state.trail_json[f"phase7:blame:{selection_name}"] = blame_payload
+
+        line_target = f"{expected['file_path']}:{(expected.get('affected_range') or {}).get('start_line')}"
+        line_blame_payload = _run_otd_json(state, ["blame", line_target, "--json"])
+        line_blame_row = _first_row_by_patch(
+            line_blame_payload.get("trailEvidence", []),
+            sel["trace_patch_id"],
+        )
+        if line_blame_row is None:
+            raise AssertionError("blame path:line JSON missing selected Trail evidence")
+        _assert_same_trail_identity(expected, line_blame_row, "blame path:line")
+        state.trail_json[f"phase7:blame-line:{selection_name}"] = line_blame_payload
+
+        graph_payload = _run_otd_json(
+            state,
+            ["graph", "--limit", "1", "--no-color", "--json"],
+        )
+        graph_rows = [
+            evidence
+            for commit in graph_payload.get("commits", [])
+            for trace in commit.get("traces", [])
+            for evidence in trace.get("trail_evidence", [])
+        ]
+        graph_row = _first_row_by_patch(graph_rows, sel["trace_patch_id"])
+        if graph_row is None:
+            raise AssertionError("graph JSON missing selected Trail evidence")
+        _assert_same_trail_identity(expected, graph_row, "graph")
+        state.trail_json[f"phase7:graph:{selection_name}"] = graph_payload
+
+        search_payload = _run_otd_json(
+            state,
+            ["trail", "search", "--commit", ref, "--json"],
+        )
+        search_row = _first_row_by_patch(
+            search_payload.get("results", []),
+            sel["trace_patch_id"],
+        )
+        if search_row is None:
+            raise AssertionError("trail search JSON missing selected Trail evidence")
+        _assert_same_trail_identity(expected, search_row, "trail search")
+        state.trail_json[f"phase7:search:{selection_name}"] = search_payload
+
+        return (
+            "trail explain/resolve, blame, graph, and search agree on "
+            f"{sel['trace_patch_id']} ✓"
+        )
 
     raise ValueError(f"unknown trail assertion kind: {kind!r}")
 
@@ -1373,7 +1522,7 @@ def _assert_backfill_scenario(state: RunState, a: dict) -> str:
                     f"report.{name}: expected ≤{a['max']}, got {actual}"
                 )
             return f"report.{name}={actual} (≤{a['max']}) ✓"
-        raise ValueError(f"report_field needs 'equals', 'min', or 'max'")
+        raise ValueError("report_field needs 'equals', 'min', or 'max'")
     return ""  # fall-through sentinel, caller handles legacy assertion
 
 
@@ -1506,11 +1655,15 @@ def run_scenario(s: Scenario, verbose: bool = False) -> tuple[bool, str]:
         return False, f"{type(e).__name__}: {e}"
     finally:
         if state.watcher_proc:
-            try: _step_stop_watcher(state, {})
-            except Exception: pass
+            try:
+                _step_stop_watcher(state, {})
+            except Exception:
+                pass
         for ctx in state.contexts:
-            try: _run([TMUX, "kill-session", "-t", ctx.name], check=False)
-            except Exception: pass
+            try:
+                _run([TMUX, "kill-session", "-t", ctx.name], check=False)
+            except Exception:
+                pass
 
 
 def teardown_scenario(s: Scenario) -> None:

@@ -45,7 +45,7 @@ class InverseBlameCommit:
     lines_in_commit: int
     total_commit_lines: int
     pct: int  # 0-100; 0 when unknown
-    source: Literal["attribution", "git_links"]
+    source: Literal["attribution", "git_links", "trail_events"]
     tier: str | None  # tool_emitted / tool_emitted_with_divergence / overlapping / None
 
 
@@ -66,6 +66,10 @@ class InverseBlameResult:
     @property
     def git_link_commits(self) -> list[InverseBlameCommit]:
         return [c for c in self.commits if c.source == "git_links"]
+
+    @property
+    def trail_event_commits(self) -> list[InverseBlameCommit]:
+        return [c for c in self.commits if c.source == "trail_events"]
 
 
 def compute(
@@ -143,6 +147,17 @@ def compute(
     total_lines = 0
     canonical_trace_id = primary.trace_id if primary is not None else trace_id
 
+    try:
+        from .trails import build_trail_query_projection
+
+        trail_projection = build_trail_query_projection(project_cwd)
+        trail_resolved = trail_projection.resolve_trace_prefix(trace_id)
+        if trail_resolved:
+            canonical_trace_id = trail_resolved
+            id_candidates.add(trail_resolved)
+    except Exception:
+        trail_projection = None
+
     for sha in cache.list_attributed_shas():
         data = cache.read_attribution(sha)
         if not data:
@@ -213,12 +228,47 @@ def compute(
                 tier=tier,
             )
 
-    # Sort: attribution first (by lines desc), then git_links (by tier
-    # rank then sha so order is deterministic across runs).
+    # --- Trace Trails (canonical local event log) -----------------------
+    if trail_projection is not None:
+        trail_rows: list[dict] = []
+        seen_anchor_ids: set[str] = set()
+        for candidate in sorted(id_candidates):
+            for row in trail_projection.anchors_for_trace(candidate):
+                anchor_id = row.get("git_anchor_id")
+                if anchor_id and anchor_id in seen_anchor_ids:
+                    continue
+                if anchor_id:
+                    seen_anchor_ids.add(anchor_id)
+                trail_rows.append(row)
+        for row in trail_rows:
+            sha = (row.get("commit_sha") or "").strip()
+            if not sha:
+                continue
+            lines = int(row.get("line_count") or 0)
+            if row.get("file_path"):
+                files_agg[row["file_path"]] = files_agg.get(row["file_path"], 0) + lines
+            if sha in by_sha and by_sha[sha].source == "attribution":
+                if by_sha[sha].tier is None:
+                    by_sha[sha].tier = row.get("evidence_tier") or "trail_events"
+                continue
+            diff_total = diff_line_count(project_cwd, sha) or 0
+            by_sha[sha] = InverseBlameCommit(
+                sha=sha,
+                short_sha=sha[:8],
+                subject=_commit_subject(project_cwd, sha),
+                lines_in_commit=lines,
+                total_commit_lines=diff_total,
+                pct=_pct_int(lines / diff_total) if diff_total > 0 else 0,
+                source="trail_events",
+                tier=row.get("evidence_tier") or "trail_events",
+            )
+
+    # Sort by evidence strength, then line count / tier / sha so order is
+    # deterministic across runs.
     commits = sorted(
         by_sha.values(),
         key=lambda c: (
-            0 if c.source == "attribution" else 1,
+            {"attribution": 0, "trail_events": 1, "git_links": 2}.get(c.source, 9),
             -c.lines_in_commit,
             _TIER_RANK.get(c.tier or "", 99),
             c.sha,

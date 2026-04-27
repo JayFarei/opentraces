@@ -13,6 +13,7 @@ implements the 7-rule GitButler manifesto (plan 043 Appendix A).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import click
@@ -37,7 +38,7 @@ from ..clients.text import graph_renderer as _gr
     option_groups=[
         ("Pagination", ["limit", "page", "show_all"]),
         ("Scope", ["trace_id", "since_ref", "until_ref", "project_dir"]),
-        ("Output", ["show_entities", "no_color"]),
+        ("Output", ["show_entities", "as_json", "no_color"]),
     ],
 )
 @click.option("--limit", type=int, default=20, show_default=True,
@@ -54,6 +55,8 @@ from ..clients.text import graph_renderer as _gr
               help="Disable pagination (alias for a large --limit).")
 @click.option("--entities", "show_entities", is_flag=True,
               help="Include entity-change suffixes (requires entity cache).")
+@click.option("--json", "as_json", is_flag=True,
+              help="Emit structured JSON instead of text.")
 @click.option("--no-color", "no_color", is_flag=True,
               help="Disable ANSI colors.")
 @click.option("--project", "project_dir", type=click.Path(
@@ -61,7 +64,7 @@ from ..clients.text import graph_renderer as _gr
               default=None, help="Project directory (default: CWD).")
 def graph_cmd(limit: int, page: int, trace_id: str | None,
               since_ref: str | None, until_ref: str | None,
-              show_all: bool, show_entities: bool, no_color: bool,
+              show_all: bool, show_entities: bool, as_json: bool, no_color: bool,
               project_dir: Path | None) -> None:
     """Render commit + trace history.
 
@@ -105,7 +108,14 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
         has_any = bool(cache.list_attributed_shas())
     except Exception:
         has_any = False
-    if not has_any:
+    has_trail_events = False
+    try:
+        from ..core.trails import build_trail_query_projection
+
+        has_trail_events = bool(build_trail_query_projection(cwd).anchors_by_id)
+    except Exception:
+        has_trail_events = False
+    if not has_any and not has_trail_events:
         click.echo(
             "Attribution cache is empty. "
             "Run `ot backfill` (or wait for the watcher).",
@@ -126,6 +136,47 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
     )
     commits = _gr.load_commits_from_repo(cwd, opts)
     if not commits:
+        if as_json:
+            click.echo(
+                json.dumps(
+                    {
+                        "mode": opts.mode,
+                        "pivot_trace_id": opts.pivot_trace_id,
+                        "commits": [],
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
         click.echo("(no commits in range)")
+        return
+    if as_json:
+        payload = {
+            "mode": opts.mode,
+            "pivot_trace_id": opts.pivot_trace_id,
+            "commits": [
+                {
+                    "sha": commit.sha,
+                    "short_sha": commit.short_sha,
+                    "subject": commit.subject,
+                    "timestamp": commit.timestamp,
+                    "parents": commit.parents,
+                    "traces": [
+                        {
+                            "trace_id": trace.trace_id,
+                            "line_count": trace.line_count,
+                            "files": trace.files,
+                            "lifecycle": trace.lifecycle,
+                            "source": trace.source,
+                            "trail_evidence": trace.trail_evidence,
+                        }
+                        for trace in commit.traces
+                    ],
+                }
+                for commit in commits
+            ],
+        }
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
     click.echo(_gr.render(commits, opts), nl=False)

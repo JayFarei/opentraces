@@ -255,6 +255,123 @@ def follow_cmd(
 
 
 @trail_group.command(
+    "search",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail search --trace tr1 --json",
+        "opentraces trail search --commit HEAD --json",
+        "opentraces trail search --path src/app.py --json",
+        "opentraces trail search --survival reverted --json",
+    ],
+    see_also=[
+        ("opentraces trail explain", "explain the canonical evidence chain."),
+        ("opentraces blame", "show reviewer-facing attribution."),
+        ("opentraces graph", "render commit + trace navigation."),
+    ],
+    option_groups=[
+        ("Scope", ["trace_id", "commit", "path", "survival", "project_dir"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.option("--trace", "trace_id", default=None, help="Find patches for a trace.")
+@click.option("--commit", "commit", default=None, help="Find anchors for a commit.")
+@click.option("--path", "path", default=None, help="Find committed patches touching a file.")
+@click.option(
+    "--survival",
+    "survival",
+    default=None,
+    help="Find Patch Trails by current survival state, e.g. reverted.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--project",
+    "project_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: CWD).",
+)
+def search_cmd(
+    trace_id: str | None,
+    commit: str | None,
+    path: str | None,
+    survival: str | None,
+    as_json: bool,
+    project_dir: Path | None,
+) -> None:
+    """Search the Trail Query projection."""
+    from ..core.trails.query import resolve_commit_ref, build_trail_query_projection
+
+    selectors = [value for value in (trace_id, commit, path, survival) if value]
+    if len(selectors) != 1:
+        click.echo("Provide exactly one of --trace, --commit, --path, or --survival.", err=True)
+        sys.exit(2)
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+    try:
+        projection = build_trail_query_projection(repo)
+    except ValueError as exc:
+        click.echo(f"Trace Trail event log is invalid: {exc}", err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to search trace trails: {exc}", err=True)
+        sys.exit(2)
+
+    query: dict[str, str | None] = {}
+    results: list[dict]
+    limitations = list(projection.limitations)
+    if trace_id:
+        resolved_trace = projection.resolve_trace_prefix(trace_id) or trace_id
+        query = {"type": "patches_per_trace", "trace_id": resolved_trace}
+        results = projection.patches_for_trace(resolved_trace)
+    elif commit:
+        commit_sha = resolve_commit_ref(repo, commit)
+        if commit_sha is None:
+            click.echo(f"Unknown commit: {commit}", err=True)
+            sys.exit(2)
+        query = {"type": "anchors_per_commit", "commit": commit, "commit_sha": commit_sha}
+        results = projection.anchors_for_commit(commit_sha)
+    elif path:
+        query = {"type": "patches_touching_file", "path": path}
+        results = projection.patches_touching_file(path)
+    else:
+        query = {"type": "patch_trails_by_survival", "survival": survival}
+        if survival != "reverted":
+            limitations.append("unsupported_survival_filter")
+            results = []
+        else:
+            results = projection.reverted_patch_trails()
+
+    payload = {
+        "query": query,
+        "results": results,
+        "result_count": len(results),
+        "projection": projection.to_summary(),
+        "event_log_ref": projection.event_log_ref,
+        "limitations": limitations,
+    }
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if not results:
+        click.echo("No Trace Trail results")
+        for limitation in limitations:
+            click.echo(f"  limitation: {limitation}")
+        return
+    click.echo(f"Trace Trail search: {query.get('type')} ({len(results)} result(s))")
+    for row in results:
+        label = row.get("trace_patch_id") or row.get("git_anchor_id") or "?"
+        evidence = row.get("evidence_tier") or row.get("relation") or "unknown"
+        commit_sha = row.get("commit_sha")
+        location = row.get("file_path") or row.get("path") or "?"
+        if commit_sha:
+            click.echo(f"  {label} {commit_sha[:12]} {location} {evidence}")
+        else:
+            click.echo(f"  {label} {location} {evidence}")
+
+
+@trail_group.command(
     "diff",
     cls=OpentracesCommand,
     examples=[

@@ -94,6 +94,11 @@ selection = "selected"
 requires_containing_segment_id = true
 
 [[assertions]]
+kind = "trail_consumers_agree"
+selection = "selected"
+ref = "HEAD"
+
+[[assertions]]
 kind = "trail_no_patch_step"
 trace = "research"
 patch_status = "no_patch"

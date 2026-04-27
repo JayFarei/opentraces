@@ -19,6 +19,11 @@ from .exact import append_exact_patch_trail
 from .explain import explain_commit, explain_file_line, explain_trace_step
 from .follow import follow_anchor, follow_patch
 from .models import GitObjectID, TrailEvent, TrailEventDraft
+from .query import (
+    TrailQueryProjection,
+    build_trail_query_projection,
+    trail_query_summary,
+)
 from .reconciler import reconcile_watcher_observations
 from .rebuild import rebuild_projections
 from .resources import resolve_resource
@@ -49,6 +54,7 @@ __all__ = [
     "GitObjectID",
     "TrailEvent",
     "TrailEventDraft",
+    "TrailQueryProjection",
     "SnapshotResult",
     "StepTrailEmissionResult",
     "StepWindowOpenResult",
@@ -58,6 +64,7 @@ __all__ = [
     "append_step_snapshot",
     "assert_known_capture_limitations",
     "attach_trace_to_commit",
+    "build_trail_query_projection",
     "is_known_capture_limitation",
     "close_step_window_with_snapshot",
     "diff_step_snapshots",
@@ -78,6 +85,7 @@ __all__ = [
     "resource_ref_for_git_anchor",
     "resource_ref_for_trace_patch_trail",
     "supersede_anchors_for_rewrite",
+    "trail_query_summary",
     "trace_slice_for_event",
     "trace_slice_id_for",
     "verify_event_log",
