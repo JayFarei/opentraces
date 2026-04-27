@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 
 from ._help import OpentracesCommand, OpentracesGroup
+from ..clients.text.colors import Role, detect_color, paint, render_handle
 
 
 @click.group("trail", cls=OpentracesGroup)
@@ -254,6 +257,480 @@ def follow_cmd(
         click.echo(f"  limitation: {limitation}")
 
 
+EVIDENCE_LABELS = {
+    "exact_blob_hash": "exact blob match",
+    "exact_range_hash": "exact range match",
+    "git_clean_range_hash": "normalized range match",
+    "patch_id": "patch-id match",
+    "structural_symbol": "structural symbol match",
+    "formatter_divergent": "formatter-divergent match",
+    "overlapping_hunk": "overlapping hunk",
+    "time_file_overlap": "weak time/file overlap",
+    "orphan": "no reliable landing",
+    "unknown": "unknown evidence",
+}
+
+SURVIVAL_GLYPHS = {
+    "alive_on_path": "\u2713",
+    "alive_moved": "\u21B7",
+    "alive_transformed": "~",
+    "partially_preserved": "\u25D0",
+    "repaired": "!",
+    "reverted": "\u00D7",
+    "lost": "\u00D7",
+    "unknown": "?",
+}
+
+
+def _short_digest(value: str | None, length: int = 8) -> str:
+    if not value:
+        return "unknown"
+    tail = value.rsplit(":", 1)[-1]
+    return tail[:length] or value[:length]
+
+
+def _patch_handle(row: dict[str, Any], *, color: bool) -> str:
+    token = f"tp:{_short_digest(row.get('trace_patch_id'))}"
+    if not color:
+        return token
+    prefix = paint(Role.ID_PREFIX, "tp:", use_color=True)
+    body = paint(Role.TRACE_ID, token[3:], use_color=True)
+    return f"{prefix}{body}"
+
+
+def _trace_handle(row_or_trace_id: dict[str, Any] | str | None, *, color: bool) -> str:
+    trace_id = (
+        row_or_trace_id.get("trace_id")
+        if isinstance(row_or_trace_id, dict)
+        else row_or_trace_id
+    )
+    return render_handle("t", trace_id or "unknown", use_color=color)
+
+
+def _commit_handle(row_or_sha: dict[str, Any] | str | None, *, color: bool) -> str:
+    sha = (
+        row_or_sha.get("commit_sha")
+        if isinstance(row_or_sha, dict)
+        else row_or_sha
+    )
+    return render_handle("c", sha or "unknown", use_color=color)
+
+
+def _human_evidence(tier: str | None) -> str:
+    return EVIDENCE_LABELS.get(tier or "unknown", (tier or "unknown").replace("_", " "))
+
+
+def _landing_state(row: dict[str, Any]) -> str:
+    if not row.get("git_anchor_id") or not row.get("commit_sha"):
+        return "orphan"
+    tier = row.get("evidence_tier")
+    if tier in {"exact_blob_hash", "exact_range_hash", "patch_id"}:
+        return "landed_exact"
+    if tier == "git_clean_range_hash":
+        return "landed_normalized"
+    return "landed_divergent"
+
+
+def _survival_state(row: dict[str, Any]) -> str:
+    current = row.get("current_survival") or {}
+    state = row.get("survival_state") or current.get("survival_state")
+    if state:
+        return state
+    if row.get("commit_sha"):
+        return "alive_on_path"
+    return "unknown"
+
+
+def _git_subject(repo: Path, sha: str | None) -> str:
+    if not sha:
+        return ""
+    proc = subprocess.run(
+        ["git", "show", "-s", "--format=%s", sha],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.strip()
+
+
+def _render_search_table(results: list[dict[str, Any]], *, color: bool) -> str:
+    lines = [
+        "TRACE PATCH  STEP   FILE                            LANDING     EVIDENCE             STATE"
+    ]
+    for row in results:
+        trace_patch = _patch_handle(row, color=color)
+        step = str(row.get("step_index") if row.get("step_index") is not None else "?")
+        path = row.get("file_path") or row.get("path") or "?"
+        commit = _commit_handle(row, color=color) if row.get("commit_sha") else "-"
+        evidence = _human_evidence(row.get("evidence_tier"))
+        state = _survival_state(row)
+        lines.append(
+            f"{trace_patch:<12} {step:<6} {path[:31]:<31} {commit:<11} "
+            f"{evidence[:19]:<19} {state}"
+        )
+    return "\n".join(lines)
+
+
+def _trace_patch_count_label(count: int, *, anchored: bool | None = None) -> str:
+    noun = f"{count} Trace Patch{'' if count == 1 else 'es'}"
+    if anchored is True:
+        return f"{noun} anchored in Git"
+    if anchored is False:
+        return f"{noun} not anchored in Git"
+    return noun
+
+
+def _trace_patch_branch_for_trace(
+    row: dict[str, Any],
+    *,
+    color: bool,
+    last: bool,
+) -> list[str]:
+    trace_patch = _patch_handle(row, color=color)
+    commit = _commit_handle(row, color=color)
+    survival = _survival_state(row)
+    glyph = SURVIVAL_GLYPHS.get(survival, "?")
+    evidence = _human_evidence(row.get("evidence_tier"))
+    firmness = row.get("firmness") or row.get("evidence_firmness") or "unknown"
+    path = row.get("file_path") or row.get("path") or "?"
+    step = row.get("step_index") if row.get("step_index") is not None else "?"
+    line_count = row.get("line_count") or 0
+    count_text = f"+{line_count}" if line_count else "change"
+    branch = "\u2570" if last else "\u251C"
+    stem = " " if last else "\u2502"
+    lines = [
+        f"{branch}\u25C7 {trace_patch}  {path}  {_landing_state(row)}",
+        f"{stem}  \u2502 step: {step} \u00B7 {count_text}",
+        f"{stem}  \u2502 evidence: {evidence} \u00B7 {firmness}",
+    ]
+    if row.get("commit_sha"):
+        lines.append(f"{stem}  \u2570\u25CF {commit}  {glyph} {survival}")
+    else:
+        lines.append(f"{stem}  \u2570? no reliable landing")
+    return lines
+
+
+def _trace_patch_branch_for_commit(
+    row: dict[str, Any],
+    *,
+    color: bool,
+    last: bool,
+) -> list[str]:
+    trace_patch = _patch_handle(row, color=color)
+    trace = _trace_handle(row, color=color)
+    evidence = _human_evidence(row.get("evidence_tier"))
+    firmness = row.get("firmness") or row.get("evidence_firmness") or "unknown"
+    path = row.get("file_path") or row.get("path") or "?"
+    step = row.get("step_index") if row.get("step_index") is not None else "?"
+    survival = _survival_state(row)
+    branch = "\u2570" if last else "\u251C"
+    stem = " " if last else "\u2502"
+    return [
+        f"{branch}\u25C7 {trace_patch}  {path}  {_landing_state(row)}  {survival}",
+        f"{stem}  \u2502 evidence: {evidence} \u00B7 {firmness}",
+        f"{stem}  \u2570\u25C6 {trace}  step {step}",
+    ]
+
+
+def _trace_patch_branch_for_path(
+    row: dict[str, Any],
+    *,
+    color: bool,
+    last: bool,
+) -> list[str]:
+    trace_patch = _patch_handle(row, color=color)
+    trace = _trace_handle(row, color=color)
+    commit = _commit_handle(row, color=color)
+    evidence = _human_evidence(row.get("evidence_tier"))
+    firmness = row.get("firmness") or row.get("evidence_firmness") or "unknown"
+    path = row.get("file_path") or row.get("path") or "?"
+    step = row.get("step_index") if row.get("step_index") is not None else "?"
+    survival = _survival_state(row)
+    branch = "\u2570" if last else "\u251C"
+    stem = " " if last else "\u2502"
+    return [
+        f"{branch}\u25C7 {trace_patch}  {path}  {_landing_state(row)}  {survival}",
+        f"{stem}  \u2502 step: {step}",
+        f"{stem}  \u2502 evidence: {evidence} \u00B7 {firmness}",
+        f"{stem}  \u251C\u25C6 {trace}",
+        f"{stem}  \u2570\u25CF {commit}",
+    ]
+
+
+def _render_trace_search(
+    query: dict[str, str | None],
+    results: list[dict[str, Any]],
+    *,
+    color: bool,
+    table: bool,
+) -> str:
+    trace_id = query.get("trace_id") or ""
+    if table:
+        lines = [
+            f"Trace trail for {_trace_handle(trace_id, color=color)}",
+            "",
+            _trace_patch_count_label(len(results)),
+            "",
+            _render_search_table(results, color=color),
+        ]
+        return "\n".join(lines)
+
+    trace = _trace_handle(trace_id or results[0].get("trace_id"), color=color)
+    anchored_count = sum(1 for row in results if row.get("commit_sha"))
+    anchored_label = (
+        _trace_patch_count_label(len(results), anchored=True)
+        if anchored_count == len(results)
+        else _trace_patch_count_label(len(results))
+    )
+    lines = [
+        f"Trace trail for {trace}",
+        "",
+        anchored_label,
+        "",
+        f"\u256D\u25C6 {trace}",
+        "\u2502",
+    ]
+    for index, row in enumerate(results):
+        lines.extend(
+            _trace_patch_branch_for_trace(
+                row,
+                color=color,
+                last=index == len(results) - 1,
+            )
+        )
+        if index != len(results) - 1:
+            lines.append("\u2502")
+    first = results[0]
+    first_step = (
+        first.get("step_index") if first.get("step_index") is not None else "?"
+    )
+    lines.extend(
+        [
+            "",
+            "Next:",
+            f"  otd trail explain --trace {first.get('trace_id')} --step {first_step}",
+            f"  otd trail follow --patch {first.get('trace_patch_id')}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_commit_search(
+    repo: Path,
+    query: dict[str, str | None],
+    results: list[dict[str, Any]],
+    *,
+    color: bool,
+    table: bool,
+) -> str:
+    commit_sha = query.get("commit_sha") or ""
+    commit = _commit_handle(commit_sha, color=color)
+    subject = _git_subject(repo, commit_sha)
+    trace_count = len({row.get("trace_id") for row in results if row.get("trace_id")})
+    file_count = len({row.get("file_path") for row in results if row.get("file_path")})
+    if table:
+        lines = [
+            f"Trace trail evidence in {query.get('commit')}",
+            f"Resolved {query.get('commit')} -> {commit}",
+            "",
+            (
+                f"{len(results)} anchored Trace Patch"
+                f"{'' if len(results) == 1 else 'es'} \u00B7 "
+                f"{trace_count} trace{'' if trace_count == 1 else 's'} \u00B7 "
+                f"{file_count} file{'' if file_count == 1 else 's'}"
+            ),
+            "",
+            _render_search_table(results, color=color),
+        ]
+        return "\n".join(lines)
+
+    row = results[0]
+    lines = [
+        f"Trace trail evidence in {query.get('commit')}",
+        f"Resolved {query.get('commit')} -> {commit}",
+        "",
+        (
+            f"{len(results)} anchored Trace Patch"
+            f"{'' if len(results) == 1 else 'es'} \u00B7 "
+            f"{trace_count} trace{'' if trace_count == 1 else 's'} \u00B7 "
+            f"{file_count} file{'' if file_count == 1 else 's'}"
+        ),
+        "",
+        f"\u25CF {commit}  {subject}",
+        "\u2502",
+    ]
+    for index, row in enumerate(results):
+        lines.extend(
+            _trace_patch_branch_for_commit(
+                row,
+                color=color,
+                last=index == len(results) - 1,
+            )
+        )
+        if index != len(results) - 1:
+            lines.append("\u2502")
+    return "\n".join(lines)
+
+
+def _render_path_search(
+    query: dict[str, str | None],
+    results: list[dict[str, Any]],
+    *,
+    color: bool,
+    table: bool,
+) -> str:
+    path = query.get("path") or "?"
+    if table:
+        lines = [
+            f"Trace trail for path {path}",
+            "",
+            (
+                f"{len(results)} committed Trace Patch"
+                f"{'' if len(results) == 1 else 'es'} touching this file"
+            ),
+            "",
+            _render_search_table(results, color=color),
+        ]
+        return "\n".join(lines)
+
+    row = results[0]
+    lines = [
+        f"Trace trail for path {path}",
+        "",
+        (
+            f"{len(results)} committed Trace Patch"
+            f"{'' if len(results) == 1 else 'es'} touching this file"
+        ),
+        "",
+    ]
+    for index, row in enumerate(results):
+        lines.extend(
+            _trace_patch_branch_for_path(
+                row,
+                color=color,
+                last=index == len(results) - 1,
+            )
+        )
+        if index != len(results) - 1:
+            lines.append("\u2502")
+    first = results[0]
+    first_step = (
+        first.get("step_index") if first.get("step_index") is not None else "?"
+    )
+    lines.extend(
+        [
+            "",
+            "Next:",
+            f"  otd trail explain --trace {first.get('trace_id')} --step {first_step}",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _render_survival_search(
+    query: dict[str, str | None],
+    results: list[dict[str, Any]],
+    *,
+    color: bool,
+    table: bool,
+) -> str:
+    survival = query.get("survival") or "unknown"
+    if table:
+        lines = [
+            f"Trace trails with survival {survival}",
+            "",
+            f"{len(results)} Trace Patch{'' if len(results) == 1 else 'es'}",
+            "",
+            _render_search_table(results, color=color),
+        ]
+        return "\n".join(lines)
+    lines = [
+        f"Trace trails with survival {survival}",
+        "",
+        f"{len(results)} Trace Patch{'' if len(results) == 1 else 'es'}",
+        "",
+    ]
+    for index, row in enumerate(results):
+        lines.extend(
+            _trace_patch_branch_for_path(
+                row,
+                color=color,
+                last=index == len(results) - 1,
+            )
+        )
+        if index != len(results) - 1:
+            lines.append("\u2502")
+    return "\n".join(lines)
+
+
+def _render_empty_search(
+    query: dict[str, str | None],
+    limitations: list[str],
+    *,
+    color: bool,
+) -> str:
+    qtype = query.get("type")
+    if qtype == "patches_per_trace":
+        lines = [
+            f"Trace trail for {_trace_handle(query.get('trace_id'), color=color)}",
+            "",
+            "No committed Trace Patches found.",
+            "",
+            "Possible reasons:",
+            "  - this was a research-only or review session",
+            "  - the work has not landed in local Git history",
+            "  - the patch was transformed beyond current matching thresholds",
+            "  - TrailEvents are unavailable for this project",
+        ]
+    elif qtype == "anchors_per_commit":
+        lines = [
+            f"Trace trail evidence in {query.get('commit')}",
+            "",
+            "No anchored Trace Patches found for this commit.",
+        ]
+    elif qtype == "patches_touching_file":
+        lines = [
+            f"Trace trail for path {query.get('path')}",
+            "",
+            "No committed Trace Patches touching this file were found.",
+        ]
+    else:
+        lines = [
+            f"Trace trails with survival {query.get('survival')}",
+            "",
+            "No Trace Patches found in this survival state.",
+        ]
+    for limitation in limitations:
+        lines.append(f"  limitation: {limitation}")
+    return "\n".join(lines)
+
+
+def _render_search_results(
+    repo: Path,
+    query: dict[str, str | None],
+    results: list[dict[str, Any]],
+    limitations: list[str],
+    *,
+    color: bool,
+    graph_mode: bool,
+    table_mode: bool,
+) -> str:
+    if not results:
+        return _render_empty_search(query, limitations, color=color)
+    table = table_mode
+    qtype = query.get("type")
+    if qtype == "patches_per_trace":
+        return _render_trace_search(query, results, color=color, table=table)
+    if qtype == "anchors_per_commit":
+        return _render_commit_search(repo, query, results, color=color, table=table)
+    if qtype == "patches_touching_file":
+        return _render_path_search(query, results, color=color, table=table)
+    return _render_survival_search(query, results, color=color, table=table)
+
+
 @trail_group.command(
     "search",
     cls=OpentracesCommand,
@@ -270,7 +747,7 @@ def follow_cmd(
     ],
     option_groups=[
         ("Scope", ["trace_id", "commit", "path", "survival", "project_dir"]),
-        ("Output", ["as_json"]),
+        ("Output", ["as_json", "graph_mode", "table_mode", "no_color"]),
     ],
 )
 @click.option("--trace", "trace_id", default=None, help="Find patches for a trace.")
@@ -282,6 +759,9 @@ def follow_cmd(
     default=None,
     help="Find Patch Trails by current survival state, e.g. reverted.",
 )
+@click.option("--graph", "graph_mode", is_flag=True, help="Show rail/lineage view (default).")
+@click.option("--table", "table_mode", is_flag=True, help="Force compact table view.")
+@click.option("--no-color", "no_color", is_flag=True, help="Disable ANSI color.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 @click.option(
     "--project",
@@ -295,11 +775,18 @@ def search_cmd(
     commit: str | None,
     path: str | None,
     survival: str | None,
+    graph_mode: bool,
+    table_mode: bool,
+    no_color: bool,
     as_json: bool,
     project_dir: Path | None,
 ) -> None:
     """Search the Trail Query projection."""
     from ..core.trails.query import resolve_commit_ref, build_trail_query_projection
+
+    if graph_mode and table_mode:
+        click.echo("Use only one of --graph or --table.", err=True)
+        sys.exit(2)
 
     selectors = [value for value in (trace_id, commit, path, survival) if value]
     if len(selectors) != 1:
@@ -322,17 +809,23 @@ def search_cmd(
     if trace_id:
         resolved_trace = projection.resolve_trace_prefix(trace_id) or trace_id
         query = {"type": "patches_per_trace", "trace_id": resolved_trace}
-        results = projection.patches_for_trace(resolved_trace)
+        results = [
+            projection.with_current_survival(row)
+            for row in projection.patches_for_trace(resolved_trace)
+        ]
     elif commit:
         commit_sha = resolve_commit_ref(repo, commit)
         if commit_sha is None:
             click.echo(f"Unknown commit: {commit}", err=True)
             sys.exit(2)
         query = {"type": "anchors_per_commit", "commit": commit, "commit_sha": commit_sha}
-        results = projection.anchors_for_commit(commit_sha)
+        results = projection.anchors_for_commit_with_survival(commit_sha)
     elif path:
         query = {"type": "patches_touching_file", "path": path}
-        results = projection.patches_touching_file(path)
+        results = [
+            projection.with_current_survival(row)
+            for row in projection.patches_touching_file(path)
+        ]
     else:
         query = {"type": "patch_trails_by_survival", "survival": survival}
         if survival != "reverted":
@@ -354,21 +847,17 @@ def search_cmd(
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
 
-    if not results:
-        click.echo("No Trace Trail results")
-        for limitation in limitations:
-            click.echo(f"  limitation: {limitation}")
-        return
-    click.echo(f"Trace Trail search: {query.get('type')} ({len(results)} result(s))")
-    for row in results:
-        label = row.get("trace_patch_id") or row.get("git_anchor_id") or "?"
-        evidence = row.get("evidence_tier") or row.get("relation") or "unknown"
-        commit_sha = row.get("commit_sha")
-        location = row.get("file_path") or row.get("path") or "?"
-        if commit_sha:
-            click.echo(f"  {label} {commit_sha[:12]} {location} {evidence}")
-        else:
-            click.echo(f"  {label} {location} {evidence}")
+    click.echo(
+        _render_search_results(
+            repo,
+            query,
+            results,
+            limitations,
+            color=detect_color(no_color, sys.stdout),
+            graph_mode=graph_mode,
+            table_mode=table_mode,
+        )
+    )
 
 
 @trail_group.command(

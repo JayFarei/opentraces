@@ -166,6 +166,104 @@ def test_trail_search_finds_patches_for_trace(tmp_path: Path) -> None:
     assert payload["query"]["type"] == "patches_per_trace"
     assert payload["results"][0]["trace_patch_id"] == expected["trace_patch_id"]
     assert payload["results"][0]["git_anchor_id"] == expected["git_anchor_id"]
+    assert payload["results"][0]["commit_sha"] == expected["commit_sha"]
+
+
+def test_trail_search_trace_human_output_uses_lineage_graph_language(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    _commit_sha, expected = _append_anchored_patch(
+        tmp_path,
+        trace_id="tr-phase7-human",
+    )
+
+    result = _run(tmp_path, ["trail", "search", "--trace", expected["trace_id"]])
+
+    assert result.exit_code == 0, result.output
+    assert "Trace trail for t:tr-phase" in result.output
+    assert "1 Trace Patch anchored in Git" in result.output
+    assert "╭◆ t:tr-phase" in result.output
+    assert "╰◇ tp:" in result.output
+    assert "│ evidence: exact range match · firm" in result.output
+    assert "╰● c:" in result.output
+    assert "landed_exact" in result.output
+    assert "alive_on_path" in result.output
+    assert "exact range match" in result.output
+    assert "Next:" in result.output
+
+
+def test_trail_search_commit_human_output_resolves_ref_and_shows_trace_patch_node(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    commit_sha, _expected = _append_anchored_patch(tmp_path)
+
+    result = _run(tmp_path, ["trail", "search", "--commit", "HEAD"])
+
+    assert result.exit_code == 0, result.output
+    assert "Trace trail evidence in HEAD" in result.output
+    assert f"Resolved HEAD -> c:{commit_sha[:8]}" in result.output
+    assert "1 anchored Trace Patch · 1 trace · 1 file" in result.output
+    assert "● c:" in result.output
+    assert "╰◇ tp:" in result.output
+    assert "╰◆ t:" in result.output
+    assert "exact range match · firm" in result.output
+
+
+def test_trail_search_table_mode_is_compact_for_many_results(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    _append_anchored_patch(tmp_path, trace_id="tr-phase7-human", file_path="a.py")
+    _append_anchored_patch(
+        tmp_path,
+        trace_id="tr-phase7-human",
+        file_path="b.py",
+        authored="    return 'second phase seven patch'\n",
+        message="second phase seven patch",
+    )
+
+    result = _run(tmp_path, ["trail", "search", "--trace", "tr-phase7-human", "--table"])
+
+    assert result.exit_code == 0, result.output
+    assert "2 Trace Patches" in result.output
+    assert "TRACE PATCH  STEP   FILE" in result.output
+    assert result.output.count("tp:") == 2
+
+
+def test_trail_search_defaults_to_graph_for_multiple_trace_patches(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    _append_anchored_patch(tmp_path, trace_id="tr-phase7-human", file_path="a.py")
+    _append_anchored_patch(
+        tmp_path,
+        trace_id="tr-phase7-human",
+        file_path="b.py",
+        authored="    return 'second phase seven patch'\n",
+        message="second phase seven patch",
+    )
+
+    result = _run(tmp_path, ["trail", "search", "--trace", "tr-phase7-human"])
+
+    assert result.exit_code == 0, result.output
+    assert "2 Trace Patches anchored in Git" in result.output
+    assert "├◇ tp:" in result.output
+    assert "╰◇ tp:" in result.output
+    assert result.output.count("evidence: exact range match · firm") == 2
+    assert result.output.count("╰● c:") == 2
+
+
+def test_trail_search_empty_state_teaches_instead_of_plain_zero(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+
+    result = _run(tmp_path, ["trail", "search", "--trace", "missing-trace"])
+
+    assert result.exit_code == 0, result.output
+    assert "No committed Trace Patches found." in result.output
+    assert "Possible reasons:" in result.output
+    assert "TrailEvents are unavailable for this project" in result.output
 
 
 def test_trail_search_finds_anchors_for_commit(tmp_path: Path) -> None:

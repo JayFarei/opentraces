@@ -408,9 +408,13 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
             latest = anchors[-1]
             patch_row["relation"] = latest.get("relation") or "anchored_in_git"
             patch_row["git_anchor_id"] = latest.get("git_anchor_id")
+            patch_row["commit_id"] = latest.get("commit_id")
+            patch_row["commit_sha"] = latest.get("commit_sha")
             patch_row["evidence_tier"] = latest.get("evidence_tier") or "unknown"
             patch_row["evidence_firmness"] = latest.get("evidence_firmness") or "unknown"
             patch_row["firmness"] = patch_row["evidence_firmness"]
+            patch_row["range"] = latest.get("range")
+            patch_row["line_origin"] = latest.get("line_origin")
             patch_row["limitations"] = _dedupe(
                 list(patch_row.get("limitations") or [])
                 + list(latest.get("limitations") or [])
