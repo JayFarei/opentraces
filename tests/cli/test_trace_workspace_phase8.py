@@ -218,7 +218,8 @@ def test_trace_workspace_import_replays_and_resumes_without_source_repo(
     assert str(source_unavailable) not in resume_result.output
 
     materialized = Path(resume_payload["materialization"]["path"])
-    assert _git(materialized, "write-tree") == recorded_tree
+    assert resume_payload["materialization"]["materialized"] is False
+    assert not materialized.exists()
 
 
 def test_trail_snapshots_lists_rewind_candidates(
@@ -287,6 +288,47 @@ def test_snapshot_checkout_dry_run_emits_rewind_packet(
     assert not Path(payload["materialization"]["path"]).exists()
 
 
+def test_snapshot_checkout_materializes_isolated_worktree_and_renders_text(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_id = "tr-snapshot-checkout-materialize"
+    runner, source, _, recorded_tree = _export_workspace(
+        tmp_path,
+        monkeypatch,
+        trace_id=trace_id,
+    )
+    snapshots = runner.invoke(
+        main,
+        ["trail", "snapshots", "--trace", trace_id, "--json", "--project", str(source)],
+        catch_exceptions=False,
+    )
+    snapshot = json.loads(snapshots.output)["snapshots"][1]
+    target = tmp_path / "snapshot-worktree"
+
+    result = runner.invoke(
+        main,
+        [
+            "trail",
+            "snapshot",
+            "checkout",
+            snapshot["snapshot_ref"]["ref"],
+            "--target",
+            str(target),
+            "--project",
+            str(source),
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Snapshot:" in result.output
+    assert "Tree:" in result.output
+    assert str(target) in result.output
+    assert target != source
+    assert _git(target, "write-tree") == recorded_tree
+
+
 def test_trace_workspace_export_contains_required_git_objects_and_trail_events(
     tmp_path: Path,
     monkeypatch,
@@ -308,6 +350,33 @@ def test_trace_workspace_export_contains_required_git_objects_and_trail_events(
     _git(source, "bundle", "verify", str(workspace / "git.bundle"))
 
 
+def test_trace_workspace_export_unknown_trace_returns_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    source = tmp_path / "source-unknown"
+    _init_repo(source)
+    monkeypatch.chdir(source)
+
+    result = runner.invoke(
+        main,
+        [
+            "trace",
+            "workspace",
+            "export",
+            "tr-unknown",
+            "--output",
+            str(tmp_path / "unknown-workspace"),
+            "--json",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 3
+    assert "no TrailEvents found for trace tr-unknown" in result.output
+
+
 def test_trace_workspace_open_rejects_missing_snapshot_tree(
     tmp_path: Path,
     monkeypatch,
@@ -323,6 +392,7 @@ def test_trace_workspace_open_rejects_missing_snapshot_tree(
     manifest["snapshots"][0]["tree_id"]["hex"] = "f" * 40
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
+    target = tmp_path / "blank-bad"
     result = runner.invoke(
         main,
         [
@@ -331,7 +401,7 @@ def test_trace_workspace_open_rejects_missing_snapshot_tree(
             "open",
             str(workspace),
             "--project",
-            str(tmp_path / "blank-bad"),
+            str(target),
             "--json",
         ],
         catch_exceptions=False,
@@ -339,6 +409,7 @@ def test_trace_workspace_open_rejects_missing_snapshot_tree(
 
     assert result.exit_code == 3
     assert "missing_snapshot_tree" in result.output
+    assert not target.exists() or not any(target.iterdir())
 
 
 def test_resume_from_snapshot_packet_is_filtered_and_records_fork_lineage(
@@ -366,6 +437,8 @@ def test_resume_from_snapshot_packet_is_filtered_and_records_fork_lineage(
     after_status = _git(imported, "status", "--short")
     assert after_status == before_status
     payload = json.loads(result.output)
+    assert payload["materialization"]["materialized"] is False
+    assert not Path(payload["materialization"]["path"]).exists()
     assert payload["snapshot"]["tree_id"]["hex"] == recorded_tree
     assert [step["step_id"] for step in payload["session_context"]["steps"]] == [
         "s1",
@@ -377,6 +450,14 @@ def test_resume_from_snapshot_packet_is_filtered_and_records_fork_lineage(
     assert "external_services_not_captured" in payload["non_portable_dependencies"]
     assert payload["adapter_slots"]["codex"]["implemented"] is False
     assert payload["adapter_slots"]["codex"]["status"] == "schema_ready_unimplemented"
+    session_path = Path(payload["session"]["new_session_path"])
+    assert not session_path.exists()
+
+    from opentraces.core.config import get_project_state_path
+    from opentraces.core.state import StateManager
+
+    state = StateManager(get_project_state_path(imported))
+    assert state.get_session(payload["session"]["new_session_id"]) is None
 
 
 def test_resume_from_snapshot_execution_hands_off_to_claude_in_materialized_worktree(
@@ -447,3 +528,66 @@ def test_resume_from_snapshot_reports_missing_snapshot_as_unknown(
     assert payload["resume_mode"] == "unknown"
     assert payload["relation"] == "unknown"
     assert payload["limitations"] == ["missing_snapshot:step_2"]
+    assert payload["legacy_fallback"]["mode"] == "claude_code_at_step"
+    assert payload["legacy_fallback"]["available_when"] == "non_json_resume"
+
+
+def test_resume_from_snapshot_rejects_malformed_step_without_traceback(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_id = "tr-bad-step"
+    runner, _, workspace, _ = _export_workspace(
+        tmp_path,
+        monkeypatch,
+        trace_id=trace_id,
+    )
+    imported = tmp_path / "bad-step-import"
+    _open_workspace(runner, workspace, imported)
+    monkeypatch.chdir(imported)
+
+    result = runner.invoke(
+        main,
+        ["resume", trace_id, "--at-step", "not-a-step", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.output)
+    assert payload["error"]["code"] == "INVALID_STEP"
+    assert "invalid step id" in payload["error"]["message"]
+    assert "Traceback" not in result.output
+
+
+def test_resume_at_step_rejects_non_claude_agent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_id = "tr-non-claude-step"
+    runner, _, workspace, _ = _export_workspace(
+        tmp_path,
+        monkeypatch,
+        trace_id=trace_id,
+    )
+    imported = tmp_path / "non-claude-import"
+    _open_workspace(runner, workspace, imported)
+
+    from opentraces.core.config import get_project_traces_dir
+
+    traces_dir = get_project_traces_dir(imported)
+    trace_file = traces_dir / f"{trace_id}.jsonl"
+    record = json.loads(trace_file.read_text().splitlines()[0])
+    record["agent"]["name"] = "hermes"
+    trace_file.write_text(json.dumps(record) + "\n")
+    monkeypatch.chdir(imported)
+
+    result = runner.invoke(
+        main,
+        ["resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.output)
+    assert payload["error"]["code"] == "UNSUPPORTED_AT_STEP_AGENT"
+    assert "claude-code" in payload["error"]["message"]

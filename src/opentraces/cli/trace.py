@@ -291,8 +291,8 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
             "timestamp": str(record.timestamp_end) if record.timestamp_end else None,
             "relative_time": rel_time,
             "git_links": [
-                {"revision": l.revision, "tier": l.tier}
-                for l in record.git_links
+                {"revision": link.revision, "tier": link.tier}
+                for link in record.git_links
             ],
             "lifecycle": record.lifecycle,
         })
@@ -487,8 +487,6 @@ def trace_show(trace_id: str, verbose: bool, markdown: bool) -> None:
 
 def _trace_commit_impl(trace_id: str) -> None:
     """Commit a single trace for push."""
-    from ..core.state import TraceStatus
-
     state, staging_dir = _load_project_state()
     entry = state.get_trace(trace_id)
     if entry is None:
@@ -540,8 +538,6 @@ def trace_reject(trace_id: str) -> None:
     Use reject when a trace has content you don't want to share but want
     to keep on disk for reference. To push it later, reset first.
     """
-    from ..core.state import TraceStatus
-
     full_id = _resolve_trace_id(trace_id) or trace_id
     trace_id = full_id
     state, staging_dir = _load_project_state()
@@ -732,7 +728,7 @@ def trace_resume(
         click.echo(f"No trace matches {trace_id!r}", err=True)
         sys.exit(6)
 
-    record, staging_file = _load_trace_record(staging_dir, full_id)
+    record, _staging_file = _load_trace_record(staging_dir, full_id)
     if record is None:
         # Filename is historically the session_id for Claude Code captures,
         # not the trace_id. Fall back to scanning all JSONL files for a
@@ -746,7 +742,6 @@ def trace_resume(
                 continue
             if rec.trace_id == full_id or rec.session_id == full_id:
                 record = rec
-                staging_file = p
                 break
     if record is None:
         click.echo(f"Trace file unreadable: {full_id}", err=True)
@@ -762,12 +757,26 @@ def trace_resume(
 
     if agent_name in ("claude-code", "claude_code", "claude"):
         if at_step:
-            snapshot_packet = snapshot_resume_packet(
-                project_dir,
-                record,
-                at_step,
-                state=state,
-            )
+            try:
+                snapshot_packet = snapshot_resume_packet(
+                    project_dir,
+                    record,
+                    at_step,
+                    state=state,
+                    dry_run=dry_run,
+                )
+            except ValueError as exc:
+                if as_json:
+                    click.echo(
+                        json.dumps(
+                            error_response("INVALID_STEP", "resume", str(exc)),
+                            indent=2,
+                            sort_keys=True,
+                        )
+                    )
+                else:
+                    click.echo(str(exc), err=True)
+                sys.exit(2)
             if as_json:
                 click.echo(json.dumps(snapshot_packet, indent=2, sort_keys=True))
                 sys.exit(0)
@@ -778,7 +787,7 @@ def trace_resume(
                 if dry_run:
                     click.echo(" ".join(argv))
                     click.echo(
-                        "materialized snapshot "
+                        "would materialize snapshot "
                         f"{snapshot_packet.get('snapshot', {}).get('snapshot_id')} "
                         f"at {materialization.get('path')}"
                     )
@@ -820,6 +829,24 @@ def trace_resume(
         rc = resume_claude_code(session_id, project_cwd=project_dir,
                                 dry_run=dry_run)
         sys.exit(rc)
+
+    if at_step:
+        message = "--at-step resume is currently supported only for claude-code traces."
+        if as_json:
+            click.echo(
+                json.dumps(
+                    error_response(
+                        "UNSUPPORTED_AT_STEP_AGENT",
+                        "resume",
+                        message,
+                    ),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        else:
+            click.echo(message, err=True)
+        sys.exit(2)
 
     # Non-claude-code: print the native resume hint and exit 0.
     print_generic_hint(agent_name, session_id)

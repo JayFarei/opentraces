@@ -399,44 +399,57 @@ def open_trace_workspace(workspace: Path, project: Path) -> dict[str, Any]:
 
     if project.exists() and any(project.iterdir()):
         raise ValueError(f"project directory is not blank: {project}")
-    project.mkdir(parents=True, exist_ok=True)
-    _git(project, ["init", "-q"])
-    _git(project, ["config", "user.email", "opentraces@local"])
-    _git(project, ["config", "user.name", "opentraces"])
-    _git(
-        project,
-        ["fetch", str(bundle), f"{EVENT_LOG_REF}:{EVENT_LOG_REF}"],
-    )
 
-    missing: list[str] = []
-    for snapshot in manifest.get("snapshots") or []:
-        tree_id = snapshot.get("tree_id") or {}
-        tree_hex = tree_id.get("hex")
-        if not tree_hex or _object_type(project, tree_hex) != "tree":
-            missing.append(str(snapshot.get("snapshot_id") or tree_hex or "unknown"))
-    if missing:
-        raise ValueError("missing_snapshot_tree:" + ",".join(missing))
+    temp_project = project.parent / f".{project.name}.opentraces-open-{uuid.uuid4().hex}"
+    try:
+        temp_project.mkdir(parents=True)
+        _git(temp_project, ["init", "-q"])
+        _git(temp_project, ["config", "user.email", "opentraces@local"])
+        _git(temp_project, ["config", "user.name", "opentraces"])
+        _git(
+            temp_project,
+            ["fetch", str(bundle), f"{EVENT_LOG_REF}:{EVENT_LOG_REF}"],
+        )
 
-    project_id = f"trace-workspace-{normalize_id(manifest.get('trace_id'))[:12]}"
-    (project / ".opentraces.json").write_text(
-        json.dumps({"marker_version": "2", "project_id": project_id}, indent=2) + "\n"
-    )
+        missing: list[str] = []
+        for snapshot in manifest.get("snapshots") or []:
+            tree_id = snapshot.get("tree_id") or {}
+            tree_hex = tree_id.get("hex")
+            if not tree_hex or _object_type(temp_project, tree_hex) != "tree":
+                missing.append(str(snapshot.get("snapshot_id") or tree_hex or "unknown"))
+        if missing:
+            raise ValueError("missing_snapshot_tree:" + ",".join(missing))
 
-    traces_dir = get_project_traces_dir(project)
-    traces_dir.mkdir(parents=True, exist_ok=True)
-    trace_record_rel = manifest.get("trace_record")
-    if trace_record_rel:
-        src = workspace / trace_record_rel
-        if src.exists():
-            shutil.copyfile(src, traces_dir / Path(trace_record_rel).name)
+        project_id = f"trace-workspace-{normalize_id(manifest.get('trace_id'))[:12]}"
+        (temp_project / ".opentraces.json").write_text(
+            json.dumps({"marker_version": "2", "project_id": project_id}, indent=2) + "\n"
+        )
 
-    meta = {
-        "schema_version": TRACE_WORKSPACE_SCHEMA_VERSION,
-        "workspace_id": manifest.get("workspace_id"),
-        "trace_id": manifest.get("trace_id"),
-        "opened_at": _utc_now(),
-    }
-    (project / WORKSPACE_META_FILENAME).write_text(json.dumps(meta, indent=2) + "\n")
+        meta = {
+            "schema_version": TRACE_WORKSPACE_SCHEMA_VERSION,
+            "workspace_id": manifest.get("workspace_id"),
+            "trace_id": manifest.get("trace_id"),
+            "opened_at": _utc_now(),
+        }
+        (temp_project / WORKSPACE_META_FILENAME).write_text(
+            json.dumps(meta, indent=2) + "\n"
+        )
+
+        if project.exists():
+            project.rmdir()
+        temp_project.rename(project)
+
+        traces_dir = get_project_traces_dir(project)
+        traces_dir.mkdir(parents=True, exist_ok=True)
+        trace_record_rel = manifest.get("trace_record")
+        if trace_record_rel:
+            src = workspace / trace_record_rel
+            if src.exists():
+                shutil.copyfile(src, traces_dir / Path(trace_record_rel).name)
+    except Exception:
+        shutil.rmtree(temp_project, ignore_errors=True)
+        raise
+
     return {
         "schema_version": TRACE_WORKSPACE_SCHEMA_VERSION,
         "status": "ok",
@@ -552,9 +565,12 @@ def _write_claude_resume_session(
     session_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         {
-            "type": "opentraces_resume_preamble",
+            "type": "opentraces_resume_parent",
             "uuid": str(uuid.uuid4()),
             "cwd": str(materialized_path),
+            "parentSessionId": record.session_id,
+            "parentStepId": selected_step_id,
+            "opentraces_version": "trace-trails-phase-8",
             "message": {"role": "user", "content": preamble},
             "opentraces": {
                 "trace_id": record.trace_id,
@@ -583,12 +599,28 @@ def _write_claude_resume_session(
     return session_path
 
 
+def _claude_resume_session_path(materialized_path: Path, new_session_id: str) -> Path:
+    return (
+        get_projects_path(load_config())
+        / encode_claude_path(materialized_path)
+        / f"{new_session_id}.jsonl"
+    )
+
+
+def _legacy_fallback_info() -> dict[str, str]:
+    return {
+        "mode": "claude_code_at_step",
+        "available_when": "non_json_resume",
+    }
+
+
 def snapshot_resume_packet(
     repo: Path,
     record: TraceRecord,
     step_id: str,
     *,
     state: StateManager | None = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Build a snapshot-backed Claude Code resume packet."""
     repo = repo.resolve()
@@ -604,6 +636,7 @@ def snapshot_resume_packet(
             "step_id": normalized_step_id,
             "target_agent": "claude-code",
             "limitations": [f"missing_snapshot:step_{step_index}"],
+            "legacy_fallback": _legacy_fallback_info(),
             "adapter_slots": _adapter_slots(),
             "workspace_source": _workspace_source(repo),
         }
@@ -618,6 +651,7 @@ def snapshot_resume_packet(
             "step_id": normalized_step_id,
             "target_agent": "claude-code",
             "limitations": [f"missing_trace_step:{normalized_step_id}"],
+            "legacy_fallback": _legacy_fallback_info(),
             "adapter_slots": _adapter_slots(),
             "workspace_source": _workspace_source(repo),
         }
@@ -630,11 +664,11 @@ def snapshot_resume_packet(
             "step_id": normalized_step_id,
             "target_agent": "claude-code",
             "limitations": ["subagent_step_not_resumable"],
+            "legacy_fallback": _legacy_fallback_info(),
             "adapter_slots": _adapter_slots(),
             "workspace_source": _workspace_source(repo),
         }
 
-    materialized_path = materialize_snapshot_tree(repo, snapshot_event)
     context = _step_context(record, step_index)
     snapshot = _snapshot_row(snapshot_event)
     limitations = sorted(
@@ -647,22 +681,32 @@ def snapshot_resume_packet(
     preamble = (
         "OpenTraces snapshot-backed resume. "
         f"Resume trace {record.trace_id} at {normalized_step_id}. "
-        f"The worktree has been materialized from Trace Snapshot "
+        f"The worktree {'would be' if dry_run else 'has been'} materialized "
+        "from Trace Snapshot "
         f"{normalize_id(snapshot.get('snapshot_id'))[:12]}. "
         "This is trajectory forking from observed state, not deterministic "
         "agent re-execution. Non-portable dependencies are declared in the "
         "resume packet."
     )
     new_session_id = str(uuid.uuid4())
-    session_path = _write_claude_resume_session(
-        materialized_path=materialized_path,
-        record=record,
-        selected_step_id=normalized_step_id,
-        new_session_id=new_session_id,
-        preamble=preamble,
-        context=context,
-    )
-    if state is not None:
+    if dry_run:
+        materialized_path = _default_materialization_path(
+            repo,
+            normalize_id(snapshot.get("snapshot_id")),
+        )
+        session_path = _claude_resume_session_path(materialized_path, new_session_id)
+    else:
+        materialized_path = materialize_snapshot_tree(repo, snapshot_event)
+        session_path = _write_claude_resume_session(
+            materialized_path=materialized_path,
+            record=record,
+            selected_step_id=normalized_step_id,
+            new_session_id=new_session_id,
+            preamble=preamble,
+            context=context,
+        )
+
+    if state is not None and not dry_run:
         state.upsert_session(
             session_id=new_session_id,
             source_path=str(session_path),
@@ -695,7 +739,7 @@ def snapshot_resume_packet(
         "materialization": {
             "path": str(materialized_path),
             "isolated": True,
-            "materialized": True,
+            "materialized": not dry_run,
             "mode": "git_worktree",
         },
         "session_context": {
