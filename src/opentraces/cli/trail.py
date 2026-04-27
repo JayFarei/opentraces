@@ -401,6 +401,7 @@ def snapshot_checkout_cmd(
     cls=OpentracesCommand,
     examples=[
         "opentraces trail play tr1 --json",
+        "opentraces trail play tr1 --table",
     ],
     see_also=[
         ("opentraces trail explain", "explain canonical evidence."),
@@ -408,10 +409,11 @@ def snapshot_checkout_cmd(
     ],
     option_groups=[
         ("Scope", ["trace_id", "project_dir"]),
-        ("Output", ["as_json"]),
+        ("Output", ["as_table", "as_json"]),
     ],
 )
 @click.argument("trace_id")
+@click.option("--table", "as_table", is_flag=True, help="Emit compact human table.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 @click.option(
     "--project",
@@ -420,9 +422,18 @@ def snapshot_checkout_cmd(
     default=None,
     help="Project directory (default: CWD).",
 )
-def play_cmd(trace_id: str, as_json: bool, project_dir: Path | None) -> None:
+def play_cmd(
+    trace_id: str,
+    as_table: bool,
+    as_json: bool,
+    project_dir: Path | None,
+) -> None:
     """Play back the observed Trace Trails timeline for a trace."""
     from ..core.trails import play_trace_timeline
+
+    if as_table and as_json:
+        click.echo("Provide only one of --table or --json.", err=True)
+        sys.exit(2)
 
     repo = Path(project_dir or Path.cwd()).resolve()
     try:
@@ -438,10 +449,278 @@ def play_cmd(trace_id: str, as_json: bool, project_dir: Path | None) -> None:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
 
-    click.echo(f"Trace timeline for {trace_id}")
+    if as_table:
+        click.echo(_render_trail_play_table(payload))
+        return
+
+    click.echo(_render_trail_play_graph(repo, payload))
+
+
+def _load_trace_step_summaries(repo: Path, trace_id: str) -> dict[str, str]:
+    from ..core.config import get_project_traces_dir
+
+    try:
+        traces_dir = get_project_traces_dir(repo)
+    except Exception:
+        return {}
+    paths = [traces_dir / f"{trace_id}.jsonl"]
+    paths.extend(sorted(path for path in traces_dir.glob("*.jsonl") if path not in paths))
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            first_line = path.read_text().splitlines()[0]
+            record = json.loads(first_line)
+        except Exception:
+            continue
+        if record.get("trace_id") != trace_id and record.get("session_id") != trace_id:
+            continue
+        summaries: dict[str, str] = {}
+        for step in record.get("steps") or []:
+            step_index = step.get("step_index")
+            if step_index is None:
+                continue
+            content = _compact_text(step.get("content") or "")
+            if content:
+                summaries[f"s{step_index}"] = content
+        return summaries
+    return {}
+
+
+def _compact_text(value: str, *, limit: int = 72) -> str:
+    text = " ".join(value.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _step_sort_key(step_id: str) -> tuple[int, str]:
+    raw = step_id[1:] if step_id.startswith("s") else step_id
+    return (int(raw), step_id) if raw.isdigit() else (sys.maxsize, step_id)
+
+
+def _snapshot_ref_for_command(item: dict[str, Any]) -> str:
+    snapshot_ref = item.get("snapshot_ref") or {}
+    return snapshot_ref.get("ref") or item.get("snapshot_id") or "unknown"
+
+
+def _commit_hex(item: dict[str, Any]) -> str | None:
+    commit_id = item.get("commit_id") or {}
+    if isinstance(commit_id, dict):
+        return commit_id.get("hex")
+    if isinstance(commit_id, str):
+        return commit_id
+    return None
+
+
+def _trail_play_limitations(payload: dict[str, Any]) -> list[str]:
+    seen: set[str] = set()
+    limitations: list[str] = []
+    for limitation in payload.get("limitations") or []:
+        if limitation not in seen:
+            limitations.append(str(limitation))
+            seen.add(str(limitation))
     for item in payload.get("timeline") or []:
+        for limitation in item.get("limitations") or []:
+            if limitation not in seen:
+                limitations.append(str(limitation))
+                seen.add(str(limitation))
+    return limitations
+
+
+def _group_trail_play_steps(timeline: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in timeline:
+        step_id = item.get("step_id") or "unscoped"
+        grouped.setdefault(step_id, []).append(item)
+    return grouped
+
+
+def _meaningful_trail_play_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    meaningful = {
+        "trace_snapshot_created",
+        "trace_patch_created",
+        "git_anchor_created",
+        "patch_trail_observation_created",
+        "trace_step_capture_incomplete",
+    }
+    return [item for item in items if item.get("event_type") in meaningful]
+
+
+def _render_trail_play_graph(repo: Path, payload: dict[str, Any]) -> str:
+    trace_id = payload.get("trace_id") or "unknown"
+    timeline = payload.get("timeline") or []
+    workspace_source = payload.get("workspace_source") or {}
+    snapshots = [
+        item for item in timeline if item.get("event_type") == "trace_snapshot_created"
+    ]
+    step_summaries = _load_trace_step_summaries(repo, str(trace_id))
+    workspace_id = workspace_source.get("workspace_id")
+    workspace_label = workspace_id or workspace_source.get("type") or "local_project"
+    source_repo = (
+        "unavailable"
+        if workspace_source.get("type") == "trace_workspace"
+        else str(repo)
+    )
+    status = "missing timeline"
+    if timeline:
+        noun = "snapshot" if len(snapshots) == 1 else "snapshots"
+        status = f"replayable, resumable from {len(snapshots)} {noun}"
+
+    lines = [
+        f"Trace {trace_id}",
+        f"Workspace: {workspace_label}",
+        f"Source repo: {source_repo}",
+        f"Status: {status}",
+        "",
+    ]
+
+    grouped = _group_trail_play_steps(timeline)
+    for step_position, step_id in enumerate(sorted(grouped, key=_step_sort_key)):
+        summary = step_summaries.get(step_id)
+        lines.append(f"{step_id}  {summary}" if summary else step_id)
+        meaningful = _meaningful_trail_play_items(grouped[step_id])
+        for item_position, item in enumerate(meaningful):
+            is_last = item_position == len(meaningful) - 1
+            branch = "`-" if is_last else "+-"
+            stem = "  " if is_last else "| "
+            event_type = item.get("event_type")
+            if event_type == "trace_snapshot_created":
+                snapshot_id = _short_digest(item.get("snapshot_id"))
+                tree_hex = ((item.get("tree_id") or {}).get("hex") or "")[:8]
+                role = item.get("snapshot_role") or "after"
+                lines.append(" |")
+                lines.append(f" {branch} snapshot {snapshot_id}  tree {tree_hex}  {role}")
+                lines.append(
+                    f" {stem} checkout: opentraces trail snapshot checkout "
+                    f"{_snapshot_ref_for_command(item)}"
+                )
+                if role == "after":
+                    lines.append(
+                        f" {stem} resume: opentraces resume {trace_id} --at-step {step_id}"
+                    )
+            elif event_type == "trace_patch_created":
+                patch_id = _short_digest(item.get("trace_patch_id"))
+                path = item.get("file_path") or "unknown"
+                lines.append(" |")
+                lines.append(f" {branch} trace patch {patch_id}  {path}")
+            elif event_type == "git_anchor_created":
+                anchor_id = _short_digest(item.get("git_anchor_id"))
+                commit = (_commit_hex(item) or "")[:8] or "unknown"
+                evidence = item.get("evidence_tier") or "unknown"
+                firmness = item.get("evidence_firmness") or "unknown"
+                lines.append(" |")
+                lines.append(
+                    f" {branch} git anchor {anchor_id}  commit {commit}  "
+                    f"{evidence} {firmness}"
+                )
+            elif event_type == "trace_step_capture_incomplete":
+                lines.append(" |")
+                lines.append(f" {branch} limitation trace_step_capture_incomplete")
+            elif event_type == "patch_trail_observation_created":
+                state = item.get("survival_state") or "observed"
+                lines.append(" |")
+                lines.append(f" {branch} patch trail {state}")
+        if step_position != len(grouped) - 1:
+            lines.append(" |")
+            lines.append(" v")
+
+    limitations = _trail_play_limitations(payload)
+    if limitations:
+        lines.append("")
+        lines.append(f"Limitations: {', '.join(limitations)}")
+    return "\n".join(lines)
+
+
+def _trail_play_limitations_cell(item: dict[str, Any]) -> str:
+    limitations = item.get("limitations") or []
+    return ",".join(str(limitation) for limitation in limitations) or "-"
+
+
+def _render_trail_play_table(payload: dict[str, Any]) -> str:
+    rows = ["seq\tstep\tkind\tobject\tfile/commit\tevidence\tlimitations"]
+    for item in _meaningful_trail_play_items(payload.get("timeline") or []):
+        seq = str(item.get("event_sequence") or "")
         step = item.get("step_id") or "-"
-        click.echo(f"  {item['event_sequence']:>4} {step:<5} {item['event_type']}")
+        event_type = item.get("event_type")
+        limitations = _trail_play_limitations_cell(item)
+        if event_type == "trace_snapshot_created":
+            tree_hex = ((item.get("tree_id") or {}).get("hex") or "")[:8] or "-"
+            role = item.get("snapshot_role") or "after"
+            capture_status = item.get("capture_status") or "unknown"
+            rows.append(
+                "\t".join(
+                    [
+                        seq,
+                        step,
+                        "snapshot",
+                        _short_digest(item.get("snapshot_id")),
+                        f"tree:{tree_hex}",
+                        f"{role} {capture_status}",
+                        limitations,
+                    ]
+                )
+            )
+        elif event_type == "trace_patch_created":
+            rows.append(
+                "\t".join(
+                    [
+                        seq,
+                        step,
+                        "trace_patch",
+                        _short_digest(item.get("trace_patch_id")),
+                        item.get("file_path") or "-",
+                        "-",
+                        limitations,
+                    ]
+                )
+            )
+        elif event_type == "git_anchor_created":
+            commit = (_commit_hex(item) or "")[:8] or "-"
+            evidence = item.get("evidence_tier") or "unknown"
+            firmness = item.get("evidence_firmness") or "unknown"
+            rows.append(
+                "\t".join(
+                    [
+                        seq,
+                        step,
+                        "git_anchor",
+                        _short_digest(item.get("git_anchor_id")),
+                        commit,
+                        f"{evidence} {firmness}",
+                        limitations,
+                    ]
+                )
+            )
+        elif event_type == "patch_trail_observation_created":
+            rows.append(
+                "\t".join(
+                    [
+                        seq,
+                        step,
+                        "patch_trail",
+                        _short_digest(item.get("trace_patch_id")),
+                        item.get("path") or "-",
+                        item.get("survival_state") or "observed",
+                        limitations,
+                    ]
+                )
+            )
+        elif event_type == "trace_step_capture_incomplete":
+            rows.append(
+                "\t".join(
+                    [
+                        seq,
+                        step,
+                        "limitation",
+                        "-",
+                        "-",
+                        "trace_step_capture_incomplete",
+                        limitations,
+                    ]
+                )
+            )
+    return "\n".join(rows)
 
 
 EVIDENCE_LABELS = {

@@ -12,13 +12,23 @@ from click.testing import CliRunner
 
 from opentraces.cli import main
 from opentraces.core.trails import (
+    TrailEventDraft,
+    append_event_batch,
     close_step_window_with_snapshot,
     open_step_window,
 )
+from opentraces.core.trails.ids import git_anchor_ref, trace_patch_ref
+from opentraces.core.trails.models import sha256_text
 
 
 def _git(repo: Path, *args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=repo, text=True).strip()
+
+
+def _commit(repo: Path, message: str) -> str:
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=repo, check=True)
+    return _git(repo, "rev-parse", "HEAD")
 
 
 def _run_cli_subprocess(
@@ -174,6 +184,63 @@ def _capture_two_step_trace(repo: Path, trace_id: str) -> str:
     return snapshot.tree_id["hex"]
 
 
+def _append_step2_patch_and_anchor(
+    repo: Path,
+    trace_id: str,
+    commit_sha: str,
+) -> dict[str, str]:
+    authored = "    return 'portable-phase-8'\n"
+    trace_patch_id = sha256_text(f"{trace_id}:step2:patch").split(":", 1)[1]
+    git_anchor_id = sha256_text(f"{trace_id}:step2:anchor").split(":", 1)[1]
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id=trace_id,
+                step_index=2,
+                event_time="2026-04-27T09:01:03Z",
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": trace_patch_id,
+                    "trace_patch_ref": trace_patch_ref(trace_patch_id),
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "limitations": ["external_services_not_captured"],
+                },
+            ),
+            TrailEventDraft(
+                event_type="git_anchor_created",
+                trace_id=trace_id,
+                step_index=2,
+                event_time="2026-04-27T09:01:04Z",
+                capture_method=["post_commit_correlator"],
+                payload={
+                    "git_anchor_id": git_anchor_id,
+                    "git_anchor_ref": git_anchor_ref(git_anchor_id),
+                    "trace_patch_id": trace_patch_id,
+                    "trace_patch_ref": trace_patch_ref(trace_patch_id),
+                    "commit_id": {"algo": "sha1", "hex": commit_sha},
+                    "path": "app.py",
+                    "range": {"start_line": 2, "end_line": 2},
+                    "relation": "anchored_in_git",
+                    "evidence_tier": "exact_range_hash",
+                    "evidence_firmness": "firm",
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+    return {
+        "trace_patch_id": trace_patch_id,
+        "git_anchor_id": git_anchor_id,
+    }
+
+
 def _export_workspace(
     tmp_path: Path,
     monkeypatch,
@@ -198,6 +265,32 @@ def _export_workspace(
     return runner, source, workspace, recorded_tree
 
 
+def _export_workspace_with_patch_anchor(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    trace_id: str,
+) -> tuple[CliRunner, Path, Path, str, str, dict[str, str]]:
+    runner = CliRunner()
+    source = tmp_path / "source"
+    _init_repo(source)
+    _write_trace_record(source, trace_id)
+    recorded_tree = _capture_two_step_trace(source, trace_id)
+    commit_sha = _commit(source, "agent change")
+    ids = _append_step2_patch_and_anchor(source, trace_id, commit_sha)
+
+    workspace = tmp_path / "trace-workspace"
+    monkeypatch.chdir(source)
+    export_result = runner.invoke(
+        main,
+        ["trace", "workspace", "export", trace_id, "--output", str(workspace)],
+        catch_exceptions=False,
+    )
+    assert export_result.exit_code == 0, export_result.output
+    monkeypatch.chdir(tmp_path)
+    return runner, source, workspace, recorded_tree, commit_sha, ids
+
+
 def _open_workspace(
     runner: CliRunner,
     workspace: Path,
@@ -218,6 +311,132 @@ def _open_workspace(
     )
     assert result.exit_code == 0, result.output
     return json.loads(result.output)
+
+
+def test_trail_play_default_renders_human_graph(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_id = "tr-play-human"
+    runner, source, workspace, recorded_tree, commit_sha, ids = (
+        _export_workspace_with_patch_anchor(
+            tmp_path,
+            monkeypatch,
+            trace_id=trace_id,
+        )
+    )
+    source_unavailable = tmp_path / "source-unavailable"
+    source.rename(source_unavailable)
+
+    imported = tmp_path / "play-human-import"
+    _open_workspace(runner, workspace, imported)
+
+    result = runner.invoke(
+        main,
+        ["trail", "play", trace_id, "--project", str(imported)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.startswith(f"Trace {trace_id}\n")
+    assert "Workspace: trace-workspace-" in result.output
+    assert "Source repo: unavailable" in result.output
+    assert "Status: replayable, resumable from 2 snapshots" in result.output
+    assert "s1  inspect the seed project" in result.output
+    assert "s2  change app.py to return a portable value" in result.output
+    assert "snapshot " in result.output
+    assert recorded_tree[:8] in result.output
+    assert "checkout: opentraces trail snapshot checkout " in result.output
+    assert f"resume: opentraces resume {trace_id} --at-step s2" in result.output
+    assert f"trace patch {ids['trace_patch_id'][:8]}  app.py" in result.output
+    assert (
+        f"git anchor {ids['git_anchor_id'][:8]}  commit {commit_sha[:8]}  "
+        "exact_range_hash firm"
+    ) in result.output
+    assert "Limitations: external_services_not_captured" in result.output
+    assert "{" not in result.output
+    assert str(source_unavailable) not in result.output
+
+
+def test_trail_play_table_renders_scan_friendly_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_id = "tr-play-table"
+    runner, source, workspace, _, commit_sha, ids = (
+        _export_workspace_with_patch_anchor(
+            tmp_path,
+            monkeypatch,
+            trace_id=trace_id,
+        )
+    )
+    source_unavailable = tmp_path / "source-unavailable"
+    source.rename(source_unavailable)
+
+    imported = tmp_path / "play-table-import"
+    _open_workspace(runner, workspace, imported)
+
+    result = runner.invoke(
+        main,
+        ["trail", "play", trace_id, "--table", "--project", str(imported)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[0] == (
+        "seq\tstep\tkind\tobject\tfile/commit\tevidence\tlimitations"
+    )
+    assert "\ts1\tsnapshot\t" in result.output
+    assert "\ts2\tsnapshot\t" in result.output
+    assert (
+        f"\ts2\ttrace_patch\t{ids['trace_patch_id'][:8]}\tapp.py\t-\t"
+        "external_services_not_captured"
+    ) in result.output
+    assert (
+        f"\ts2\tgit_anchor\t{ids['git_anchor_id'][:8]}\t{commit_sha[:8]}\t"
+        "exact_range_hash firm\t-"
+    ) in result.output
+    assert "{" not in result.output
+    assert str(source_unavailable) not in result.output
+
+
+def test_trail_play_json_uses_imported_events_not_original_repository(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    trace_id = "tr-play-json-imported"
+    runner, source, workspace, _, _, _ = _export_workspace_with_patch_anchor(
+        tmp_path,
+        monkeypatch,
+        trace_id=trace_id,
+    )
+    source_unavailable = tmp_path / "source-unavailable"
+    source.rename(source_unavailable)
+
+    imported = tmp_path / "play-json-import"
+    _open_workspace(runner, workspace, imported)
+
+    result = runner.invoke(
+        main,
+        ["trail", "play", trace_id, "--json", "--project", str(imported)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["event_count"] == 8
+    assert [item["event_type"] for item in payload["timeline"]] == [
+        "trace_step_window_opened",
+        "trace_snapshot_created",
+        "trace_step_window_closed",
+        "trace_step_window_opened",
+        "trace_snapshot_created",
+        "trace_step_window_closed",
+        "trace_patch_created",
+        "git_anchor_created",
+    ]
+    assert payload["workspace_source"]["type"] == "trace_workspace"
+    assert str(source_unavailable) not in result.output
 
 
 def test_trace_workspace_import_replays_and_resumes_without_source_repo(
