@@ -14,7 +14,7 @@ from pathlib import Path
 import click
 
 from opentraces import cli as _cli
-from ._help import OpentracesCommand
+from ._help import OpentracesCommand, OpentracesGroup
 from ..core.trace_meta import short_trace_id
 from ..core.workflow import resolve_visible_stage, stage_label  # noqa: F401
 
@@ -66,6 +66,101 @@ def error_response(*a, **k):
 # ---------------------------------------------------------------------------
 # Standalone trace commands (registered at root in cli/__init__).
 # ---------------------------------------------------------------------------
+
+
+@click.group("trace", cls=OpentracesGroup)
+def trace_group() -> None:
+    """Trace subcommands."""
+
+
+@trace_group.group("workspace", cls=OpentracesGroup)
+def trace_workspace_group() -> None:
+    """Portable Trace Workspace commands."""
+
+
+@trace_workspace_group.command(
+    "export",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trace workspace export tr1 --output ./tr1.trace-workspace",
+    ],
+    option_groups=[
+        ("Scope", ["trace_id"]),
+        ("Output", ["output", "as_json"]),
+    ],
+)
+@click.argument("trace_id")
+@click.option(
+    "--output",
+    "output",
+    required=True,
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    help="Directory to write the Trace Workspace package.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_workspace_export(trace_id: str, output: Path, as_json: bool) -> None:
+    """Export a trace and retained Git evidence as a portable workspace."""
+    from ..core.trails import export_trace_workspace
+
+    try:
+        payload = export_trace_workspace(Path.cwd(), trace_id, output)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to export Trace Workspace: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Trace Workspace exported: {payload['output']}")
+    click.echo(f"  events:    {payload['event_count']}")
+    click.echo(f"  snapshots: {payload['snapshot_count']}")
+
+
+@trace_workspace_group.command(
+    "open",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trace workspace open ./tr1.trace-workspace --project ./blank --json",
+    ],
+    option_groups=[
+        ("Scope", ["workspace", "project"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.argument(
+    "workspace",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+)
+@click.option(
+    "--project",
+    "project",
+    required=True,
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    help="Blank directory where the Trace Workspace should be opened.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_workspace_open(workspace: Path, project: Path, as_json: bool) -> None:
+    """Open a portable Trace Workspace into a blank project directory."""
+    from ..core.trails import open_trace_workspace
+
+    try:
+        payload = open_trace_workspace(workspace, project)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to open Trace Workspace: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Trace Workspace opened: {payload['project']}")
+    click.echo(f"  events:    {payload['event_count']}")
+    click.echo(f"  snapshots: {payload['snapshot_count']}")
 
 
 def _load_project_state():
@@ -597,7 +692,13 @@ def trace_discard(trace_id: str, confirmed: bool) -> None:
 )
 @click.option("--dry-run", "dry_run", is_flag=True,
               help="Print the resume command instead of exec'ing it.")
-def trace_resume(trace_id: str, at_step: str | None, dry_run: bool) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Emit a structured resume packet.")
+def trace_resume(
+    trace_id: str,
+    at_step: str | None,
+    dry_run: bool,
+    as_json: bool,
+) -> None:
     """Resume the upstream agent session that produced a trace.
 
     Accepts the full trace_id or a ``t:XX`` / ``XX`` prefix (>=2 chars).
@@ -609,6 +710,7 @@ def trace_resume(trace_id: str, at_step: str | None, dry_run: bool) -> None:
         AmbiguousPrefixError,
     )
     from ..core.agent_resume import resume_claude_code, print_generic_hint
+    from ..core.trails import snapshot_resume_packet
     from ..capture.claude_code.resume import ResumeError, resolve_at_step
 
     state, staging_dir = _load_project_state()
@@ -660,6 +762,34 @@ def trace_resume(trace_id: str, at_step: str | None, dry_run: bool) -> None:
 
     if agent_name in ("claude-code", "claude_code", "claude"):
         if at_step:
+            snapshot_packet = snapshot_resume_packet(
+                project_dir,
+                record,
+                at_step,
+                state=state,
+            )
+            if as_json:
+                click.echo(json.dumps(snapshot_packet, indent=2, sort_keys=True))
+                sys.exit(0)
+            if snapshot_packet.get("resume_mode") == "snapshot_backed":
+                argv = snapshot_packet.get("launch", {}).get("argv") or []
+                new_session_id = snapshot_packet.get("session", {}).get("new_session_id")
+                materialization = snapshot_packet.get("materialization") or {}
+                if dry_run:
+                    click.echo(" ".join(argv))
+                    click.echo(
+                        "materialized snapshot "
+                        f"{snapshot_packet.get('snapshot', {}).get('snapshot_id')} "
+                        f"at {materialization.get('path')}"
+                    )
+                    sys.exit(0)
+                rc = resume_claude_code(
+                    new_session_id,
+                    project_cwd=Path(materialization.get("path")),
+                    dry_run=False,
+                )
+                sys.exit(rc)
+
             try:
                 target = resolve_at_step(
                     full_id,

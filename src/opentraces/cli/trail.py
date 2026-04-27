@@ -263,6 +263,187 @@ def follow_cmd(
         click.echo(f"  limitation: {limitation}")
 
 
+@trail_group.command(
+    "snapshots",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail snapshots --trace tr1",
+        "opentraces trail snapshots --trace tr1 --json",
+    ],
+    see_also=[
+        ("opentraces trail snapshot checkout", "materialize a rewind point."),
+        ("opentraces resume", "fork from a snapshot-backed step."),
+    ],
+    option_groups=[
+        ("Scope", ["trace_id", "project_dir"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.option("--trace", "trace_id", required=True, help="Trace id to inspect.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--project",
+    "project_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: CWD).",
+)
+def snapshots_cmd(trace_id: str, as_json: bool, project_dir: Path | None) -> None:
+    """List Trace Snapshot rewind candidates for a trace."""
+    from ..core.trails import list_trace_snapshots
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+    try:
+        payload = list_trace_snapshots(repo, trace_id)
+    except ValueError as exc:
+        click.echo(f"Trace Trail event log is invalid: {exc}", err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to list trace snapshots: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    click.echo(f"Trace Snapshots for {trace_id}")
+    if not payload["snapshots"]:
+        click.echo("  no snapshots found")
+        return
+    for snapshot in payload["snapshots"]:
+        tree_hex = ((snapshot.get("tree_id") or {}).get("hex") or "")[:12]
+        click.echo(
+            f"  {snapshot.get('step_id') or '?'} "
+            f"{snapshot.get('role') or 'after'} "
+            f"{snapshot.get('snapshot_id')} tree {tree_hex}"
+        )
+        for limitation in snapshot.get("limitations") or []:
+            click.echo(f"    limitation: {limitation}")
+
+
+@trail_group.group("snapshot", cls=OpentracesGroup)
+def snapshot_group() -> None:
+    """Trace Snapshot rewind commands."""
+
+
+@snapshot_group.command(
+    "checkout",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail snapshot checkout ot://trace-snapshot/sha256/abc --dry-run --json",
+    ],
+    see_also=[
+        ("opentraces trail snapshots", "list rewind candidates."),
+    ],
+    option_groups=[
+        ("Scope", ["snapshot_ref", "project_dir", "target_dir"]),
+        ("Output", ["dry_run", "as_json"]),
+    ],
+)
+@click.argument("snapshot_ref")
+@click.option("--dry-run", "dry_run", is_flag=True, help="Build the rewind packet only.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--target",
+    "target_dir",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Materialization directory. Defaults to an isolated opentraces worktree path.",
+)
+@click.option(
+    "--project",
+    "project_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: CWD).",
+)
+def snapshot_checkout_cmd(
+    snapshot_ref: str,
+    dry_run: bool,
+    as_json: bool,
+    target_dir: Path | None,
+    project_dir: Path | None,
+) -> None:
+    """Materialize or preview a Trace Snapshot rewind."""
+    from ..core.trails import snapshot_checkout_packet
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+    try:
+        payload = snapshot_checkout_packet(
+            repo,
+            snapshot_ref,
+            dry_run=dry_run,
+            target=target_dir,
+        )
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to checkout trace snapshot: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if payload.get("relation") == "unknown":
+        click.echo("Trace snapshot checkout is unknown")
+        for limitation in payload.get("limitations") or []:
+            click.echo(f"  limitation: {limitation}")
+        return
+    click.echo(f"Snapshot: {payload.get('snapshot_id')}")
+    click.echo(f"Tree:     {((payload.get('tree_id') or {}).get('hex') or '')}")
+    click.echo(f"Path:     {(payload.get('materialization') or {}).get('path')}")
+
+
+@trail_group.command(
+    "play",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail play tr1 --json",
+    ],
+    see_also=[
+        ("opentraces trail explain", "explain canonical evidence."),
+        ("opentraces resume", "fork from a snapshot-backed step."),
+    ],
+    option_groups=[
+        ("Scope", ["trace_id", "project_dir"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.argument("trace_id")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--project",
+    "project_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: CWD).",
+)
+def play_cmd(trace_id: str, as_json: bool, project_dir: Path | None) -> None:
+    """Play back the observed Trace Trails timeline for a trace."""
+    from ..core.trails import play_trace_timeline
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+    try:
+        payload = play_trace_timeline(repo, trace_id)
+    except ValueError as exc:
+        click.echo(f"Trace Trail event log is invalid: {exc}", err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to play trace timeline: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    click.echo(f"Trace timeline for {trace_id}")
+    for item in payload.get("timeline") or []:
+        step = item.get("step_id") or "-"
+        click.echo(f"  {item['event_sequence']:>4} {step:<5} {item['event_type']}")
+
+
 EVIDENCE_LABELS = {
     "exact_blob_hash": "exact blob match",
     "exact_range_hash": "exact range match",

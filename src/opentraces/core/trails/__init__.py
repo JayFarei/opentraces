@@ -36,6 +36,14 @@ from .slices import (
     trace_slice_id_for,
 )
 from .supersede import supersede_anchors_for_rewrite
+from .workspace import (
+    export_trace_workspace,
+    list_trace_snapshots,
+    open_trace_workspace,
+    play_trace_timeline,
+    snapshot_checkout_packet,
+    snapshot_resume_packet,
+)
 from .snapshots import (
     SnapshotResult,
     StepTrailEmissionResult,
@@ -76,6 +84,10 @@ __all__ = [
     "explain_trace_step",
     "follow_anchor",
     "follow_patch",
+    "export_trace_workspace",
+    "list_trace_snapshots",
+    "open_trace_workspace",
+    "play_trace_timeline",
     "read_events",
     "rebuild_projections",
     "reconcile_commit_anchors",
@@ -84,6 +96,8 @@ __all__ = [
     "resource_ref_for_file_line",
     "resource_ref_for_git_anchor",
     "resource_ref_for_trace_patch_trail",
+    "snapshot_checkout_packet",
+    "snapshot_resume_packet",
     "supersede_anchors_for_rewrite",
     "trail_query_summary",
     "trace_slice_for_event",

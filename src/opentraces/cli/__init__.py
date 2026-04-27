@@ -2690,6 +2690,7 @@ def _auth_whoami() -> None:
 # Click commands are first-class objects — add_command attaches the same
 # Command to two groups without copying logic.
 from .trace import (  # noqa: E402
+    trace_group as _trace_group,
     trace_show as _trace_show_cmd,
     trace_list as _trace_list_cmd,
     trace_reject as _trace_reject_cmd,
@@ -2697,6 +2698,7 @@ from .trace import (  # noqa: E402
     trace_discard as _trace_discard_cmd,
     trace_resume as _trace_resume_cmd,
 )
+main.add_command(_trace_group, name="trace")
 main.add_command(_trace_show_cmd, name="show")
 main.add_command(_trace_reject_cmd, name="reject")
 main.add_command(_trace_reset_cmd, name="reset")
