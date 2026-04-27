@@ -1,0 +1,89 @@
+name = "phase7_lineage_consumers"
+description = """
+Real Claude/tmux Trace Trails UAT for Phase 7. A live Claude Code session
+writes one distinctive line, Git anchors it through the installed post-commit
+hook, and the lineage consumer surfaces prove they are only projections over
+the same canonical TrailEvents evidence.
+"""
+
+[[steps]]
+type = "reset"
+
+[[steps]]
+type = "init_opentraces"
+
+[[steps]]
+type = "trail_preflight"
+expected_version = "0.4.0"
+setup_claude_code = true
+setup_git = true
+doctor = true
+
+[[steps]]
+type = "claude"
+label = "author"
+timeout = 300
+quiesce = 6
+prompts = [
+    """Use the Write tool to create src/phase7_lineage_consumer.py with exactly this content and do not edit any other files:
+def phase7_lineage_value():
+    return "trail-phase7-lineage-consumer-001"
+""",
+]
+
+[[steps]]
+type = "trail_select_patch"
+name = "selected"
+trace = "author"
+file = "src/phase7_lineage_consumer.py"
+contains = "trail-phase7-lineage-consumer-001"
+timeout = 45
+
+[[steps]]
+type = "commit"
+message = "real trace trail phase 7 lineage consumers"
+files = ["src/phase7_lineage_consumer.py"]
+
+[[steps]]
+type = "trail_select_patch"
+name = "selected"
+trace = "author"
+file = "src/phase7_lineage_consumer.py"
+contains = "trail-phase7-lineage-consumer-001"
+require_anchor = true
+timeout = 30
+
+[[assertions]]
+kind = "trail_commit_patch_count"
+ref = "HEAD"
+equals = 1
+
+[[assertions]]
+kind = "trail_trace_step_explain"
+selection = "selected"
+relation = "anchored_in_git"
+patch_status = "patched"
+evidence_tier = "exact_range_hash"
+requires_containing_segment_id = true
+requires_git_anchor = true
+
+[[assertions]]
+kind = "trail_commit_explain"
+selection = "selected"
+ref = "HEAD"
+requires_containing_segment_id = true
+
+[[assertions]]
+kind = "trail_file_line_explain"
+selection = "selected"
+requires_containing_segment_id = true
+
+[[assertions]]
+kind = "trail_resolve_all_resource_refs"
+selection = "selected"
+requires_containing_segment_id = true
+
+[[assertions]]
+kind = "trail_consumers_agree"
+selection = "selected"
+ref = "HEAD"

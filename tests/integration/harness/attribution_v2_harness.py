@@ -630,6 +630,23 @@ def _trace_ids_for_label(state: RunState, label: str) -> set[str]:
     return trace_ids
 
 
+def _canonical_trace_ids_for_label(state: RunState, label: str) -> set[str]:
+    observed_ids = state.label_to_trace.get(label) or set()
+    trace_ids = set()
+    try:
+        from opentraces.core.config import get_project_traces_dir
+
+        for path in get_project_traces_dir(state.project_dir).glob("*.jsonl"):
+            data = json.loads(path.read_text())
+            if data.get("session_id") in observed_ids and data.get("trace_id"):
+                trace_ids.add(data["trace_id"])
+            elif data.get("trace_id") in observed_ids:
+                trace_ids.add(data["trace_id"])
+    except Exception:
+        pass
+    return trace_ids or set(observed_ids)
+
+
 def _read_trail_events(state: RunState):
     from opentraces.core.trails import read_events
 
@@ -1636,7 +1653,100 @@ def run_assertions(state: RunState, assertions: list[dict]) -> list[str]:
 # Scenario runner
 # --------------------------------------------------------------------------- #
 
-def run_scenario(s: Scenario, verbose: bool = False) -> tuple[bool, str]:
+def _write_trail_evidence_bundle(
+    s: Scenario,
+    state: RunState,
+    assertion_messages: list[str],
+    evidence_dir: Path | None,
+) -> Path | None:
+    if evidence_dir is None:
+        env_dir = os.environ.get("OT_TRAIL_UAT_BUNDLE_DIR")
+        evidence_dir = Path(env_dir) if env_dir else None
+    if evidence_dir is None:
+        return None
+
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    hook_path = state.project_dir / ".git" / "hooks" / "opentraces-post-commit"
+    hook_interpreter = None
+    if hook_path.is_file():
+        hook_interpreter = hook_path.read_text(errors="replace").splitlines()[0:1]
+        hook_interpreter = hook_interpreter[0] if hook_interpreter else None
+
+    otd_version = _run([str(_otd_path()), "--version"], cwd=state.project_dir)
+    head = _run(["git", "rev-parse", "HEAD"], cwd=state.project_dir)
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "-" for c in s.name)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    bundle_path = evidence_dir / f"{safe_name}-{stamp}.json"
+    labels = {}
+    traces = {}
+    for label, observed_ids in sorted(state.label_to_trace.items()):
+        trace_ids = sorted(_canonical_trace_ids_for_label(state, label))
+        labels[label] = {
+            "observed_ids": sorted(observed_ids),
+            "trace_ids": trace_ids,
+        }
+        traces[label] = trace_ids
+    identities = {}
+    for name, selection in sorted(state.trail_selection.items()):
+        trace_payload = state.trail_json.get(f"trace_step:{name}") or {}
+        anchor = trace_payload.get("git_anchor") or {}
+        origin_path, origin_line = _line_origin_for(trace_payload)
+        identities[name] = {
+            "trace_id": trace_payload.get("trace_id") or selection.get("trace_id"),
+            "step_id": trace_payload.get("step_id"),
+            "step_index": trace_payload.get("step_index") or selection.get("step_index"),
+            "trace_patch_id": (
+                trace_payload.get("trace_patch_id")
+                or selection.get("trace_patch_id")
+            ),
+            "git_anchor_id": (
+                trace_payload.get("git_anchor_id")
+                or selection.get("git_anchor_id")
+            ),
+            "containing_segment_id": trace_payload.get("containing_segment_id"),
+            "commit_sha": anchor.get("commit_sha"),
+            "file_path": (
+                trace_payload.get("file_path")
+                or selection.get("file_path")
+            ),
+            "file_line_origin": {
+                "path": origin_path,
+                "line": origin_line,
+            },
+        }
+    bundle = {
+        "schema_version": 1,
+        "scenario": {
+            "name": s.name,
+            "description": s.description.strip(),
+            "source_file": str(s.source_file) if s.source_file else None,
+            "project_dir": str(state.project_dir),
+        },
+        "runtime": {
+            "otd_version": otd_version.stdout.strip(),
+            "hook_path": str(hook_path),
+            "hook_interpreter": hook_interpreter,
+        },
+        "git": {
+            "head": head.stdout.strip(),
+        },
+        "labels": labels,
+        "traces": traces,
+        "identities": identities,
+        "selections": state.trail_selection,
+        "no_patch_selections": state.trail_no_patch_selection,
+        "assertions": assertion_messages,
+        "raw_json": state.trail_json,
+    }
+    bundle_path.write_text(json.dumps(bundle, indent=2, sort_keys=True))
+    return bundle_path
+
+
+def run_scenario(
+    s: Scenario,
+    verbose: bool = False,
+    evidence_dir: Path | None = None,
+) -> tuple[bool, str]:
     state = RunState(project_dir=s.project_dir, verbose=verbose)
     try:
         for i, step in enumerate(s.steps):
@@ -1648,7 +1758,11 @@ def run_scenario(s: Scenario, verbose: bool = False) -> tuple[bool, str]:
             except Exception as e:
                 return False, f"step {i+1} ({t}) failed: {e}"
         msgs = run_assertions(state, s.assertions)
-        return True, "; ".join(msgs)
+        detail = "; ".join(msgs)
+        bundle_path = _write_trail_evidence_bundle(s, state, msgs, evidence_dir)
+        if bundle_path is not None:
+            detail = f"{detail}; evidence bundle {bundle_path}"
+        return True, detail
     except AssertionError as e:
         return False, str(e)
     except Exception as e:
@@ -1687,6 +1801,8 @@ def main() -> int:
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("--keep", action="store_true",
                     help="don't clean up project dir / tmux sessions")
+    ap.add_argument("--evidence-dir", type=Path,
+                    help="write raw trail/blame/graph/search JSON bundles here")
     ap.add_argument("--list", action="store_true",
                     help="list available scenarios and exit")
     args = ap.parse_args()
@@ -1717,7 +1833,11 @@ def main() -> int:
         t0 = time.time()
         print(f"→ {s.name}{DIM}  ({s.source_file})  → {s.project_dir}{RESET}",
               flush=True)
-        ok, detail = run_scenario(s, verbose=args.verbose)
+        ok, detail = run_scenario(
+            s,
+            verbose=args.verbose,
+            evidence_dir=args.evidence_dir,
+        )
         elapsed = time.time() - t0
         marker = f"{GREEN}✓{RESET}" if ok else f"{RED}✗{RESET}"
         print(f"  {marker} {detail}  {DIM}[{elapsed:.1f}s]{RESET}")

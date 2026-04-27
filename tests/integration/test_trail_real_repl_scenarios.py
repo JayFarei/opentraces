@@ -19,6 +19,7 @@ import pytest
 
 SCENARIOS_DIR = Path(__file__).parent / "trail_scenarios"
 HARNESS_PATH = Path(__file__).parent / "harness" / "attribution_v2_harness.py"
+EVIDENCE_DIR = Path(__file__).resolve().parents[2] / ".pytest_cache" / "trail_uat"
 
 
 def _scenario_files() -> list[Path]:
@@ -62,7 +63,13 @@ def test_trail_real_repl_scenario(scenario_path: Path) -> None:
         pytest.skip("tmux not on PATH")
 
     result = subprocess.run(
-        [sys.executable, str(HARNESS_PATH), str(scenario_path)],
+        [
+            sys.executable,
+            str(HARNESS_PATH),
+            "--evidence-dir",
+            str(EVIDENCE_DIR),
+            str(scenario_path),
+        ],
         capture_output=True,
         text=True,
         timeout=600,
