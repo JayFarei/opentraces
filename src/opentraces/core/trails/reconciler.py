@@ -37,8 +37,6 @@ from __future__ import annotations
 import contextlib
 import copy
 import errno
-import hashlib
-import json
 import os
 import posixpath
 import subprocess
@@ -53,6 +51,13 @@ from .capture_limitations import (
     UNBOUNDED_MUTATION_WINDOW,
 )
 from .event_log import append_event_batch, read_events
+from .ids import (
+    SNAPSHOT_CANONICALIZATION,
+    TRACE_PATCH_CANONICALIZATION,
+    content_ref,
+    trace_patch_ref,
+    trace_snapshot_ref,
+)
 from .models import TrailEvent, TrailEventDraft, sha256_text
 
 RECONCILER_CAPTURE_METHOD = ["watcher_backstop"]
@@ -77,8 +82,20 @@ def _normalize_path(value: str | None) -> str | None:
 
 
 def _id(prefix: str, material: dict[str, Any]) -> str:
-    raw = json.dumps(material, sort_keys=True, separators=(",", ":"))
-    return f"{prefix}-sha256:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
+    kind = {
+        "snapshot": "trace_snapshot",
+        "tracepatch": "trace_patch",
+    }.get(prefix, prefix)
+    canonicalization = (
+        SNAPSHOT_CANONICALIZATION
+        if kind == "trace_snapshot"
+        else TRACE_PATCH_CANONICALIZATION
+    )
+    return content_ref(
+        kind=kind,
+        canonicalization=canonicalization,
+        material=material,
+    )["id"]
 
 
 def _git(repo: Path, *args: str, check: bool = True) -> str:
@@ -457,8 +474,11 @@ def _watcher_patch_draft(
     trace_patch_id = _id("tracepatch", identity_material)
     payload: dict[str, Any] = {
         "trace_patch_id": trace_patch_id,
+        "trace_patch_ref": trace_patch_ref(trace_patch_id),
         "snapshot_before_id": snapshot_before_id,
+        "snapshot_before_ref": trace_snapshot_ref(snapshot_before_id),
         "snapshot_after_id": snapshot_after_id,
+        "snapshot_after_ref": trace_snapshot_ref(snapshot_after_id),
         "file_path": path,
         "affected_range": affected_range,
         "authored_text": authored_text,

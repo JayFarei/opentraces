@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .event_log import EVENT_LOG_REF, read_events
+from .ids import git_anchor_ref, id_from_payload, trace_patch_ref
 from .models import TrailEvent
 from .slices import resource_refs_for_patch, trace_slice_for_event
 
@@ -19,7 +20,7 @@ def _source_event(event: TrailEvent) -> dict[str, Any]:
     }
     if event.event_type == "git_anchor_search_completed":
         out["result"] = event.payload.get("result")
-        out["trace_patch_id"] = event.payload.get("trace_patch_id")
+        out["trace_patch_id"] = id_from_payload(event.payload, "trace_patch")
     return out
 
 
@@ -31,7 +32,13 @@ def _git_anchor_view(
     evidence_tier = anchor.get("evidence_tier") or "unknown"
     evidence_firmness = anchor.get("evidence_firmness") or "unknown"
     out = {
-        "git_anchor_id": anchor.get("git_anchor_id"),
+        "git_anchor_id": id_from_payload(anchor, "git_anchor"),
+        "git_anchor_ref": anchor.get("git_anchor_ref")
+        or (
+            git_anchor_ref(id_from_payload(anchor, "git_anchor"))
+            if id_from_payload(anchor, "git_anchor")
+            else None
+        ),
         "commit_id": anchor.get("commit_id"),
         "commit_sha": (anchor.get("commit_id") or {}).get("hex"),
         "path": anchor.get("path"),
@@ -63,7 +70,9 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
         elif event.event_type == "trace_patch_created":
             patches.append((payload, event))
         elif event.event_type == "git_anchor_created":
-            anchors_by_patch.setdefault(payload["trace_patch_id"], []).append((payload, event))
+            patch_id = id_from_payload(payload, "trace_patch")
+            if patch_id:
+                anchors_by_patch.setdefault(patch_id, []).append((payload, event))
 
     patch_candidates = [
         (payload, event)
@@ -124,10 +133,11 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
         }
 
     patch, patch_event = patch_pair
+    trace_patch_id = id_from_payload(patch, "trace_patch")
     before_pair = snapshots.get(patch["snapshot_before_id"])
     after_pair = snapshots.get(patch["snapshot_after_id"])
     anchor_pairs = sorted(
-        anchors_by_patch.get(patch["trace_patch_id"], []),
+        anchors_by_patch.get(trace_patch_id or "", []),
         key=lambda pair: pair[1].event_sequence,
     )
     anchor_pair = anchor_pairs[-1] if anchor_pairs else None
@@ -150,7 +160,7 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
         relation = anchor.get("relation") or "anchored_in_git"
         evidence_tier = anchor.get("evidence_tier") or "unknown"
         evidence_firmness = anchor.get("evidence_firmness") or "unknown"
-        git_anchor_id = anchor.get("git_anchor_id")
+        git_anchor_id = id_from_payload(anchor, "git_anchor")
         if len(anchor_pairs) > 1:
             limitations.append("multiple_candidate_commits")
     else:
@@ -158,7 +168,7 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
 
     trace_slice = trace_slice_for_event(
         patch_event,
-        trace_patch_id=patch["trace_patch_id"],
+        trace_patch_id=trace_patch_id,
         git_anchor_id=git_anchor_id,
         relation="contains_trace_patch",
     )
@@ -186,7 +196,9 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
         "evidence_firmness": evidence_firmness,
         "trace_snapshot_before": before_pair[0] if before_pair else None,
         "trace_snapshot_after": after_pair[0] if after_pair else None,
-        "trace_patch_id": patch["trace_patch_id"],
+        "trace_patch_id": trace_patch_id,
+        "trace_patch_ref": patch.get("trace_patch_ref")
+        or (trace_patch_ref(trace_patch_id) if trace_patch_id else None),
         "file_path": patch["file_path"],
         "affected_range": affected_range,
         "raw_authored_hash": patch["raw_authored_hash"],
@@ -198,7 +210,7 @@ def explain_trace_step(repo: Path, trace_id: str, step_index: int) -> dict[str, 
         "trace_slice": trace_slice,
         "resource_refs": resource_refs_for_patch(
             trace_id=trace_id,
-            trace_patch_id=patch["trace_patch_id"],
+            trace_patch_id=trace_patch_id,
             file_path=patch.get("file_path"),
             start_line=affected_range.get("start_line"),
             git_anchor_id=git_anchor_id,
@@ -231,7 +243,9 @@ def explain_commit(repo: Path, commit_ref: str) -> dict[str, Any]:
     patches_by_id: dict[str, tuple[dict[str, Any], TrailEvent]] = {}
     for event in events:
         if event.event_type == "trace_patch_created":
-            patches_by_id[event.payload.get("trace_patch_id")] = (event.payload, event)
+            patch_id = id_from_payload(event.payload, "trace_patch")
+            if patch_id:
+                patches_by_id[patch_id] = (event.payload, event)
 
     trace_patches: list[dict[str, Any]] = []
     source_events: list[dict[str, Any]] = []
@@ -245,7 +259,7 @@ def explain_commit(repo: Path, commit_ref: str) -> dict[str, Any]:
         commit_id = event.payload.get("commit_id") or {}
         if commit_id.get("hex") != commit:
             continue
-        patch_id = event.payload.get("trace_patch_id")
+        patch_id = id_from_payload(event.payload, "trace_patch")
         patch_pair = patches_by_id.get(patch_id)
         patch_payload, patch_event = patch_pair if patch_pair else ({}, event)
         trace_slice = trace_slice_for_event(
@@ -269,7 +283,15 @@ def explain_commit(repo: Path, commit_ref: str) -> dict[str, Any]:
                 "patch_status": "patched",
                 "file_path": file_path,
                 "affected_range": affected_range,
-                "git_anchor_id": event.payload.get("git_anchor_id"),
+                "git_anchor_id": id_from_payload(event.payload, "git_anchor"),
+                "trace_patch_ref": patch_payload.get("trace_patch_ref")
+                or (trace_patch_ref(patch_id) if patch_id else None),
+                "git_anchor_ref": event.payload.get("git_anchor_ref")
+                or (
+                    git_anchor_ref(id_from_payload(event.payload, "git_anchor"))
+                    if id_from_payload(event.payload, "git_anchor")
+                    else None
+                ),
                 "containing_segment_id": containing_segment_id,
                 "trace_slice": trace_slice,
                 "resource_refs": resource_refs_for_patch(
@@ -277,7 +299,7 @@ def explain_commit(repo: Path, commit_ref: str) -> dict[str, Any]:
                     trace_patch_id=patch_id,
                     file_path=file_path,
                     start_line=(affected_range or {}).get("start_line"),
-                    git_anchor_id=event.payload.get("git_anchor_id"),
+                    git_anchor_id=id_from_payload(event.payload, "git_anchor"),
                 ),
                 "evidence_tier": event.payload.get("evidence_tier") or "unknown",
                 "evidence_firmness": event.payload.get("evidence_firmness") or "unknown",
@@ -304,9 +326,10 @@ def explain_file_line(repo: Path, target: str) -> dict[str, Any]:
 
     events = read_events(repo)
     patches_by_id: dict[str, tuple[dict[str, Any], TrailEvent]] = {
-        event.payload.get("trace_patch_id"): (event.payload, event)
+        id_from_payload(event.payload, "trace_patch"): (event.payload, event)
         for event in events
         if event.event_type == "trace_patch_created"
+        and id_from_payload(event.payload, "trace_patch")
     }
     for event in reversed(events):
         if event.event_type != "git_anchor_created":
@@ -319,13 +342,13 @@ def explain_file_line(repo: Path, target: str) -> dict[str, Any]:
         end = anchor_range.get("end_line")
         if start is None or end is None or not (int(start) <= line_no <= int(end)):
             continue
-        patch_id = event.payload.get("trace_patch_id")
+        patch_id = id_from_payload(event.payload, "trace_patch")
         patch_pair = patches_by_id.get(patch_id)
         patch_payload, patch_event = patch_pair if patch_pair else ({}, event)
         trace_slice = trace_slice_for_event(
             patch_event,
             trace_patch_id=patch_id,
-            git_anchor_id=event.payload.get("git_anchor_id"),
+            git_anchor_id=id_from_payload(event.payload, "git_anchor"),
             relation="contains_trace_patch",
         )
         containing_segment_id = (
@@ -343,7 +366,7 @@ def explain_file_line(repo: Path, target: str) -> dict[str, Any]:
                 trace_patch_id=patch_id,
                 file_path=path,
                 start_line=line_no,
-                git_anchor_id=event.payload.get("git_anchor_id"),
+                git_anchor_id=id_from_payload(event.payload, "git_anchor"),
             ),
             "git_anchor": {
                 **event.payload,
@@ -354,6 +377,8 @@ def explain_file_line(repo: Path, target: str) -> dict[str, Any]:
                 "step_id": f"step_{event.step_index}" if event.step_index is not None else None,
                 "step_index": event.step_index,
                 "trace_patch_id": patch_id,
+                "trace_patch_ref": patch_payload.get("trace_patch_ref")
+                or (trace_patch_ref(patch_id) if patch_id else None),
                 "patch_status": "patched",
                 "file_path": file_path,
                 "affected_range": affected_range,
@@ -363,7 +388,7 @@ def explain_file_line(repo: Path, target: str) -> dict[str, Any]:
                     trace_patch_id=patch_id,
                     file_path=file_path,
                     start_line=(affected_range or {}).get("start_line"),
-                    git_anchor_id=event.payload.get("git_anchor_id"),
+                    git_anchor_id=id_from_payload(event.payload, "git_anchor"),
                 ),
                 "evidence_tier": event.payload.get("evidence_tier") or "unknown",
                 "evidence_firmness": event.payload.get("evidence_firmness") or "unknown",

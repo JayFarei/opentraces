@@ -182,9 +182,7 @@ def test_hook_failure_plus_manual_attach_does_not_rewrite_source_events(
     )
     assert search_event.payload["result"] == "anchored"
     assert search_event.payload["search_head"]["hex"] == commit_sha
-    assert search_event.payload["trace_patch_id"] == (
-        "tracepatch-sha256:fixture-tr1-step1-attach"
-    )
+    assert search_event.payload["trace_patch_id"] == "fixture-tr1-step1-attach"
 
     # trail explain resolves through the manually-attached anchor.
     explanation = explain_trace_step(tmp_path, "tr1", 1)

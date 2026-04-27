@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 from pathlib import Path
 
@@ -36,6 +37,10 @@ def _oid(repo: Path, rev_path: str) -> dict[str, str]:
     return {"algo": "sha1", "hex": _git(repo, "rev-parse", rev_path)}
 
 
+def _tp(name: str) -> str:
+    return hashlib.sha256(f"trace-patch:{name}".encode("utf-8")).hexdigest()
+
+
 def test_post_commit_reconciler_adds_delayed_git_anchor(tmp_path: Path) -> None:
     repo = tmp_path
     _init_repo(repo)
@@ -50,7 +55,7 @@ def test_post_commit_reconciler_adds_delayed_git_anchor(tmp_path: Path) -> None:
                 step_index=1,
                 capture_method=["hook_posttooluse"],
                 payload={
-                    "trace_patch_id": "tracepatch-sha256:delayed",
+                    "trace_patch_id": _tp("delayed"),
                     "snapshot_before_id": "snapshot-before-delayed",
                     "snapshot_after_id": "snapshot-after-delayed",
                     "file_path": "app.py",
@@ -72,7 +77,7 @@ def test_post_commit_reconciler_adds_delayed_git_anchor(tmp_path: Path) -> None:
     commit_sha = _git(repo, "rev-parse", "HEAD")
 
     created = reconcile_commit_anchors(repo, commit_sha, writer="post-commit-correlator")
-    assert [anchor["trace_patch_id"] for anchor in created] == ["tracepatch-sha256:delayed"]
+    assert [anchor["trace_patch_id"] for anchor in created] == [_tp("delayed")]
 
     trace_result = CliRunner().invoke(
         main,
@@ -109,7 +114,7 @@ def test_post_commit_reconciler_adds_delayed_git_anchor(tmp_path: Path) -> None:
     commit_payload = json.loads(commit_result.output)
     assert commit_payload["commit_sha"] == commit_sha
     assert commit_payload["trace_patches"][0]["trace_id"] == "tr-delayed"
-    assert commit_payload["trace_patches"][0]["trace_patch_id"] == "tracepatch-sha256:delayed"
+    assert commit_payload["trace_patches"][0]["trace_patch_id"] == _tp("delayed")
     assert commit_payload["trace_patches"][0]["evidence_tier"] == "exact_range_hash"
     assert "git_anchor_search_completed" in [
         event["event_type"] for event in commit_payload["source_events"]
@@ -130,7 +135,7 @@ def test_post_commit_reconciler_adds_delayed_git_anchor(tmp_path: Path) -> None:
     line_payload = json.loads(line_result.output)
     assert line_payload["target"] == "app.py:2"
     assert line_payload["trace_patch"]["trace_id"] == "tr-delayed"
-    assert line_payload["trace_patch"]["trace_patch_id"] == "tracepatch-sha256:delayed"
+    assert line_payload["trace_patch"]["trace_patch_id"] == _tp("delayed")
 
 
 def test_ot_trace_patch_trail_resource_resolves(tmp_path: Path) -> None:
@@ -138,7 +143,7 @@ def test_ot_trace_patch_trail_resource_resolves(tmp_path: Path) -> None:
     _init_repo(repo)
     seed_sha = _git(repo, "rev-parse", "HEAD")
     authored = "    return 'resource-trace-patch-trail-line-54-phase-six'\n"
-    trace_patch_id = "tracepatch-sha256:resource-trail"
+    trace_patch_id = _tp("resource-trail")
     append_event_batch(
         repo,
         [
@@ -170,7 +175,7 @@ def test_ot_trace_patch_trail_resource_resolves(tmp_path: Path) -> None:
     commit_sha = _git(repo, "rev-parse", "HEAD")
     reconcile_commit_anchors(repo, commit_sha, writer="post-commit-correlator")
 
-    resource = f"ot://trace/tr-resource/patches/{trace_patch_id}/trail"
+    resource = f"ot://trace-patch/sha256/{trace_patch_id}/trail"
     result = CliRunner().invoke(
         main,
         ["trail", "resolve", resource, "--json", "--project", str(repo)],
@@ -183,7 +188,8 @@ def test_ot_trace_patch_trail_resource_resolves(tmp_path: Path) -> None:
     assert payload["relation"] == "trace_patch_trail_resolved"
     assert payload["trace_id"] == "tr-resource"
     assert payload["trace_patch_id"] == trace_patch_id
-    assert payload["containing_segment_id"].startswith("traceslice-sha256:")
+    assert len(payload["containing_segment_id"]) == 64
+    assert payload["trace_slice"]["containing_segment_ref"]["kind"] == "trace_slice"
     assert payload["trace_slice"]["start_step_index"] == 0
     assert payload["trace_slice"]["end_step_index"] == 6
     assert payload["trail"]["relation"] == "patch_trail_observed"
@@ -194,7 +200,7 @@ def test_ot_git_anchor_resource_resolves(tmp_path: Path) -> None:
     _init_repo(repo)
     seed_sha = _git(repo, "rev-parse", "HEAD")
     authored = "    return 'resource-git-anchor-line-54-phase-six'\n"
-    trace_patch_id = "tracepatch-sha256:resource-anchor"
+    trace_patch_id = _tp("resource-anchor")
     append_event_batch(
         repo,
         [
@@ -225,7 +231,7 @@ def test_ot_git_anchor_resource_resolves(tmp_path: Path) -> None:
     anchors = reconcile_commit_anchors(repo, commit_sha, writer="post-commit-correlator")
     git_anchor_id = anchors[0]["git_anchor_id"]
 
-    resource = f"ot://git-anchor/{git_anchor_id}"
+    resource = f"ot://git-anchor/sha256/{git_anchor_id}"
     result = CliRunner().invoke(
         main,
         ["trail", "resolve", resource, "--json", "--project", str(repo)],
@@ -238,7 +244,8 @@ def test_ot_git_anchor_resource_resolves(tmp_path: Path) -> None:
     assert payload["relation"] == "git_anchor_resolved"
     assert payload["git_anchor"]["git_anchor_id"] == git_anchor_id
     assert payload["trace_patch"]["trace_patch_id"] == trace_patch_id
-    assert payload["containing_segment_id"].startswith("traceslice-sha256:")
+    assert len(payload["containing_segment_id"]) == 64
+    assert payload["trace_slice"]["containing_segment_ref"]["kind"] == "trace_slice"
     assert payload["trace_slice"]["start_step_index"] == 2
     assert payload["trace_slice"]["end_step_index"] == 8
     assert payload["trail"]["relation"] == "patch_trail_observed"
@@ -249,7 +256,7 @@ def test_ot_file_line_origin_resource_resolves(tmp_path: Path) -> None:
     _init_repo(repo)
     seed_sha = _git(repo, "rev-parse", "HEAD")
     authored = "    return 'resource-file-line-origin-54-phase-six'\n"
-    trace_patch_id = "tracepatch-sha256:resource-file-line"
+    trace_patch_id = _tp("resource-file-line")
     append_event_batch(
         repo,
         [
@@ -292,7 +299,8 @@ def test_ot_file_line_origin_resource_resolves(tmp_path: Path) -> None:
     assert payload["relation"] == "anchored_in_git"
     assert payload["trace_patch"]["trace_patch_id"] == trace_patch_id
     assert payload["git_anchor"]["git_anchor_id"] == anchors[0]["git_anchor_id"]
-    assert payload["containing_segment_id"].startswith("traceslice-sha256:")
+    assert len(payload["containing_segment_id"]) == 64
+    assert payload["trace_slice"]["containing_segment_ref"]["kind"] == "trace_slice"
 
 
 def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:
@@ -308,7 +316,7 @@ def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:
                 step_index=1,
                 capture_method=["hook_posttooluse"],
                 payload={
-                    "trace_patch_id": "tracepatch-sha256:orphan",
+                    "trace_patch_id": _tp("orphan"),
                     "file_path": "app.py",
                     "affected_range": {"start_line": 2, "end_line": 2},
                     "authored_text": authored,
@@ -354,7 +362,7 @@ def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:
         event
         for event in read_events(repo)
         if event.event_type == "git_anchor_search_completed"
-        and event.payload["trace_patch_id"] == "tracepatch-sha256:orphan"
+            and event.payload["trace_patch_id"] == _tp("orphan")
     ]
     # Phase 5 expanded the algorithm list to include the structural
     # fallback; the search event records every tier attempted.
@@ -379,7 +387,7 @@ def test_unanchored_patch_can_be_researched_under_new_attribution_version(
                 step_index=1,
                 capture_method=["hook_posttooluse"],
                 payload={
-                    "trace_patch_id": "tracepatch-sha256:research",
+                    "trace_patch_id": _tp("research"),
                     "file_path": "app.py",
                     "affected_range": {"start_line": 2, "end_line": 2},
                     "authored_text": authored,
@@ -412,7 +420,7 @@ def test_unanchored_patch_can_be_researched_under_new_attribution_version(
         event.ATTRIBUTION_VERSION
         for event in read_events(repo)
         if event.event_type == "git_anchor_search_completed"
-        and event.payload["trace_patch_id"] == "tracepatch-sha256:research"
+            and event.payload["trace_patch_id"] == _tp("research")
     ]
     assert search_versions == ["0.1.0", "0.2.0"]
 
@@ -434,7 +442,7 @@ def test_many_trace_patches_in_one_commit(tmp_path: Path) -> None:
                 step_index=1,
                 capture_method=["hook_posttooluse"],
                 payload={
-                    "trace_patch_id": "tracepatch-sha256:alpha",
+                    "trace_patch_id": _tp("alpha"),
                     "file_path": "app.py",
                     "affected_range": {"start_line": 2, "end_line": 2},
                     "authored_text": alpha,
@@ -449,7 +457,7 @@ def test_many_trace_patches_in_one_commit(tmp_path: Path) -> None:
                 step_index=2,
                 capture_method=["hook_posttooluse"],
                 payload={
-                    "trace_patch_id": "tracepatch-sha256:beta",
+                    "trace_patch_id": _tp("beta"),
                     "file_path": "other.py",
                     "affected_range": {"start_line": 2, "end_line": 2},
                     "authored_text": beta,
@@ -469,8 +477,8 @@ def test_many_trace_patches_in_one_commit(tmp_path: Path) -> None:
 
     created = reconcile_commit_anchors(repo, commit_sha, writer="post-commit-correlator")
     assert {anchor["trace_patch_id"] for anchor in created} == {
-        "tracepatch-sha256:alpha",
-        "tracepatch-sha256:beta",
+        _tp("alpha"),
+        _tp("beta"),
     }
 
     result = CliRunner().invoke(
@@ -498,7 +506,7 @@ def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
                 step_index=1,
                 capture_method=["hook_posttooluse"],
                 payload={
-                    "trace_patch_id": "tracepatch-sha256:repeat",
+                    "trace_patch_id": _tp("repeat"),
                     "snapshot_before_id": "snapshot-before-repeat",
                     "snapshot_after_id": "snapshot-after-repeat",
                     "file_path": "app.py",
@@ -520,7 +528,7 @@ def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
     assert [
         anchor["trace_patch_id"]
         for anchor in reconcile_commit_anchors(repo, first_commit, writer="post-commit-correlator")
-    ] == ["tracepatch-sha256:repeat"]
+    ] == [_tp("repeat")]
 
     (repo / "app.py").write_text("def value():\n    return 'intermediate-without-repeat-anchor'\n")
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
@@ -535,13 +543,13 @@ def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
     assert [
         anchor["trace_patch_id"]
         for anchor in reconcile_commit_anchors(repo, second_commit, writer="post-commit-correlator")
-    ] == ["tracepatch-sha256:repeat"]
+    ] == [_tp("repeat")]
 
     anchor_events = [
         event
         for event in read_events(repo)
         if event.event_type == "git_anchor_created"
-        and event.payload["trace_patch_id"] == "tracepatch-sha256:repeat"
+        and event.payload["trace_patch_id"] == _tp("repeat")
     ]
     assert {event.payload["commit_id"]["hex"] for event in anchor_events} == {
         first_commit,
@@ -552,7 +560,7 @@ def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
         event
         for event in read_events(repo)
         if event.event_type == "git_anchor_search_completed"
-        and event.payload["trace_patch_id"] == "tracepatch-sha256:repeat"
+        and event.payload["trace_patch_id"] == _tp("repeat")
     ]
     assert [event.payload["result"] for event in search_events] == [
         "anchored",
@@ -567,7 +575,7 @@ def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["commit_sha"] == second_commit
-    assert payload["trace_patches"][0]["trace_patch_id"] == "tracepatch-sha256:repeat"
+    assert payload["trace_patches"][0]["trace_patch_id"] == _tp("repeat")
 
     trace_result = CliRunner().invoke(
         main,

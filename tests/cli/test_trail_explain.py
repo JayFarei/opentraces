@@ -79,8 +79,12 @@ def test_trail_explain_exact_patch_anchor_from_events(tmp_path: Path) -> None:
     assert payload["affected_range"] == {"start_line": 2, "end_line": 2}
     assert payload["git_anchor"]["commit_sha"] == commit_sha
     assert payload["git_anchor"]["path"] == "app.py"
-    assert payload["trace_patch_id"].startswith("tracepatch-sha256:")
-    assert payload["git_anchor_id"].startswith("gitanchor-sha256:")
+    assert len(payload["trace_patch_id"]) == 64
+    assert payload["trace_patch_ref"]["kind"] == "trace_patch"
+    assert payload["trace_patch_ref"]["ref"].startswith("ot://trace-patch/sha256/")
+    assert len(payload["git_anchor_id"]) == 64
+    assert payload["git_anchor"]["git_anchor_ref"]["kind"] == "git_anchor"
+    assert payload["git_anchor"]["git_anchor_ref"]["ref"].startswith("ot://git-anchor/sha256/")
     assert payload["raw_authored_hash"].startswith("sha256:")
     assert payload["git_clean_hash"].startswith("sha256:")
     assert payload["before_blob_id"]["algo"] == "sha1"
@@ -134,24 +138,28 @@ def test_trail_explain_includes_containing_segment_id(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["patch_status"] == "patched"
-    assert payload["containing_segment_id"].startswith("traceslice-sha256:")
-    assert payload["trace_slice"] == {
-        "containing_segment_id": payload["containing_segment_id"],
-        "content_status": "phase8_deferred",
-        "end_step_index": 7,
-        "generation_index": 0,
-        "git_anchor_id": payload["git_anchor_id"],
-        "relation": "contains_trace_patch",
-        "source": "default_step_neighborhood",
-        "start_step_index": 1,
-        "trace_id": "tr-slice",
-        "trace_patch_id": payload["trace_patch_id"],
-    }
+    assert len(payload["containing_segment_id"]) == 64
+    trace_slice = payload["trace_slice"]
+    assert trace_slice["containing_segment_id"] == payload["containing_segment_id"]
+    assert trace_slice["containing_segment_ref"]["kind"] == "trace_slice"
+    assert trace_slice["content_status"] == "phase8_deferred"
+    assert trace_slice["end_step_index"] == 7
+    assert trace_slice["generation_index"] == 0
+    assert trace_slice["git_anchor_id"] == payload["git_anchor_id"]
+    assert trace_slice["git_anchor_ref"]["id"] == payload["git_anchor_id"]
+    assert trace_slice["relation"] == "contains_trace_patch"
+    assert trace_slice["source"] == "default_step_neighborhood"
+    assert trace_slice["start_step_index"] == 1
+    assert trace_slice["trace_id"] == "tr-slice"
+    assert trace_slice["trace_patch_id"] == payload["trace_patch_id"]
+    assert trace_slice["trace_patch_ref"]["id"] == payload["trace_patch_id"]
     assert payload["git_anchor"]["containing_segment_id"] == payload["containing_segment_id"]
     assert payload["resource_refs"]["trace_patch_trail"] == (
-        f"ot://trace/tr-slice/patches/{payload['trace_patch_id']}/trail"
+        f"ot://trace-patch/sha256/{payload['trace_patch_id']}/trail"
     )
-    assert payload["resource_refs"]["git_anchor"] == f"ot://git-anchor/{payload['git_anchor_id']}"
+    assert payload["resource_refs"]["git_anchor"] == (
+        f"ot://git-anchor/sha256/{payload['git_anchor_id']}"
+    )
     assert payload["resource_refs"]["file_line_origin"] == "ot://file/app.py/line/2/origin"
 
 
@@ -291,7 +299,8 @@ def test_research_only_trace_has_no_patch_status_without_failure(tmp_path: Path)
     assert payload["patch_status"] == "no_patch"
     assert payload["trace_patch_id"] is None
     assert payload["git_anchor_id"] is None
-    assert payload["containing_segment_id"].startswith("traceslice-sha256:")
+    assert len(payload["containing_segment_id"]) == 64
+    assert payload["trace_slice"]["containing_segment_ref"]["kind"] == "trace_slice"
     assert payload["trace_slice"]["relation"] == "contains_no_patch_step"
     assert payload["source_events"][0]["event_type"] == "trace_snapshot_created"
 

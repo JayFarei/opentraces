@@ -130,8 +130,8 @@ def explain_cmd(
     "resolve",
     cls=OpentracesCommand,
     examples=[
-        "opentraces trail resolve ot://trace/tr1/patches/tracepatch-sha256:abc/trail --json",
-        "opentraces trail resolve ot://git-anchor/gitanchor-sha256:def --json",
+        "opentraces trail resolve ot://trace-patch/sha256/4f2ff6541cdee78eaea8bd2910157a7176e3c21f5d936a7f4f4561d08f024982/trail --json",
+        "opentraces trail resolve ot://git-anchor/sha256/8354f2b00a5b4e80975bf0e763651c782249098f5cdb74b6e32720613a1bfc8a --json",
         "opentraces trail resolve ot://file/src/app.py/line/42/origin --json",
     ],
     see_also=[
@@ -182,8 +182,8 @@ def resolve_cmd(resource: str, as_json: bool, project_dir: Path | None) -> None:
     "follow",
     cls=OpentracesCommand,
     examples=[
-        "opentraces trail follow --patch tracepatch-sha256:abc --json",
-        "opentraces trail follow --anchor gitanchor-sha256:def --json",
+        "opentraces trail follow --patch 4f2ff6541cdee78eaea8bd2910157a7176e3c21f5d936a7f4f4561d08f024982 --json",
+        "opentraces trail follow --anchor 8354f2b00a5b4e80975bf0e763651c782249098f5cdb74b6e32720613a1bfc8a --json",
     ],
     see_also=[
         ("opentraces trail explain", "explain the evidence chain for a Trace Patch."),
@@ -783,6 +783,15 @@ def search_cmd(
 ) -> None:
     """Search the Trail Query projection."""
     from ..core.trails.query import resolve_commit_ref, build_trail_query_projection
+    from ..core.trails.contract import (
+        PROJECTION_NAME,
+        PROJECTION_VERSION,
+        SEARCH_SCHEMA_VERSION,
+        project_identity,
+        projection_watermark,
+        typed_limitations,
+    )
+    from ..core.trails.ids import ID_ALGORITHM
 
     if graph_mode and table_mode:
         click.echo("Use only one of --graph or --table.", err=True)
@@ -808,7 +817,11 @@ def search_cmd(
     limitations = list(projection.limitations)
     if trace_id:
         resolved_trace = projection.resolve_trace_prefix(trace_id) or trace_id
-        query = {"type": "patches_per_trace", "trace_id": resolved_trace}
+        query = {
+            "type": "patches_per_trace",
+            "semantic_type": "trace_to_patches",
+            "trace_id": resolved_trace,
+        }
         results = [
             projection.with_current_survival(row)
             for row in projection.patches_for_trace(resolved_trace)
@@ -818,29 +831,66 @@ def search_cmd(
         if commit_sha is None:
             click.echo(f"Unknown commit: {commit}", err=True)
             sys.exit(2)
-        query = {"type": "anchors_per_commit", "commit": commit, "commit_sha": commit_sha}
+        query = {
+            "type": "anchors_per_commit",
+            "semantic_type": "commit_to_anchors",
+            "commit": commit,
+            "commit_sha": commit_sha,
+        }
         results = projection.anchors_for_commit_with_survival(commit_sha)
     elif path:
-        query = {"type": "patches_touching_file", "path": path}
+        query = {
+            "type": "patches_touching_file",
+            "semantic_type": "path_to_patches",
+            "path": path,
+        }
         results = [
             projection.with_current_survival(row)
             for row in projection.patches_touching_file(path)
         ]
     else:
-        query = {"type": "patch_trails_by_survival", "survival": survival}
+        query = {
+            "type": "patch_trails_by_survival",
+            "semantic_type": "survival_to_patch_trails",
+            "survival": survival,
+        }
         if survival != "reverted":
             limitations.append("unsupported_survival_filter")
             results = []
         else:
             results = projection.reverted_patch_trails()
 
+    head_sha = resolve_commit_ref(repo, "HEAD")
+    projection_summary = projection.to_summary()
     payload = {
+        "schema_version": SEARCH_SCHEMA_VERSION,
+        "projection_version": PROJECTION_VERSION,
         "query": query,
         "results": results,
         "result_count": len(results),
-        "projection": projection.to_summary(),
+        "projection": {
+            **projection_summary,
+            "name": PROJECTION_NAME,
+            "version": PROJECTION_VERSION,
+            "object_ref_contract": "opentraces.object_ref.v1",
+            "object_id_algorithm": ID_ALGORITHM,
+            "high_watermark": projection_watermark(
+                events_seen=projection.events_seen,
+                last_event_id=projection.last_event_id,
+                digest=projection.projection_digest,
+            ),
+            "git": {
+                "repo_ref": "ot://repo/local",
+                "head_sha": head_sha,
+                "as_of_ref": "HEAD",
+            },
+            "stale": False,
+            "limitation_details": typed_limitations(projection.limitations),
+        },
+        "project": project_identity(repo),
         "event_log_ref": projection.event_log_ref,
         "limitations": limitations,
+        "limitation_details": typed_limitations(limitations),
     }
 
     if as_json:

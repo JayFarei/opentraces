@@ -96,6 +96,42 @@ def _assert_same_anchor(expected: dict, actual: dict) -> None:
         assert actual.get(field) == expected.get(field), field
     assert actual["line_origin"]["path"] == expected["file_path"]
     assert actual["line_origin"]["line"] == expected["affected_range"]["start_line"]
+    lineage_key = actual["lineage_key"]
+    assert lineage_key["trace"]["id"] == expected["trace_id"]
+    assert lineage_key["trace"]["kind"] == "trace"
+    assert lineage_key["step"]["id"] == expected["step_id"]
+    assert lineage_key["step"]["kind"] == "trace_step"
+    assert lineage_key["trace_patch"]["id"] == expected["trace_patch_id"]
+    assert lineage_key["trace_patch"]["kind"] == "trace_patch"
+    assert lineage_key["trace_patch"]["ref"].startswith("ot://trace-patch/sha256/")
+    assert lineage_key["git_anchor"]["id"] == expected["git_anchor_id"]
+    assert lineage_key["git_anchor"]["kind"] == "git_anchor"
+    assert lineage_key["git_anchor"]["ref"].startswith("ot://git-anchor/sha256/")
+    assert lineage_key["commit"]["id"] == expected["commit_sha"]
+    assert lineage_key["commit"]["kind"] == "git_commit"
+    assert actual["origin"]["kind"] == "trace_step"
+    assert actual["origin"]["step_id"] == expected["step_id"]
+    assert actual["trace_patch"]["kind"] == "trace_patch"
+    assert actual["trace_patch"]["trace_patch_id"] == expected["trace_patch_id"]
+    assert actual["trace_patch"]["ref"]["id"] == expected["trace_patch_id"]
+    assert actual["trace_patch"]["ranges"][0]["side"] == "trace_patch"
+    assert actual["landing"]["kind"] == "git_anchor"
+    assert actual["landing"]["relation"] == "landed_in_commit"
+    assert actual["landing"]["git_anchor_id"] == expected["git_anchor_id"]
+    assert actual["landing"]["ref"]["id"] == expected["git_anchor_id"]
+    assert actual["landing"]["ranges"][0]["side"] == "landing"
+    assert actual["evidence"]["tier"] == "exact_range_hash"
+    assert actual["evidence"]["label"] == "exact range match"
+    assert actual["evidence"]["firmness"] == "firm_observed"
+    assert "committed_range_hash_matches_trace_patch_range_hash" in actual["evidence"][
+        "reason_codes"
+    ]
+    assert actual["current_state"]["survival_state"] in {
+        "alive_on_path",
+        "reverted",
+    }
+    assert actual["current_state"]["observed_at_commit"]
+    assert actual["line_origin_refs"][0]["resource_ref"].startswith("ot://file/")
 
 
 def test_lineage_consumers_and_search_read_same_trail_projection(tmp_path: Path) -> None:
@@ -118,7 +154,20 @@ def test_lineage_consumers_and_search_read_same_trail_projection(tmp_path: Path)
         tmp_path,
         ["trail", "resolve", trace_explain["resource_refs"]["trace_patch_trail"]],
     )
+    assert resolve["schema_version"] == "opentraces.trail.resolve.v1"
     assert resolve["trace_patch_id"] == expected["trace_patch_id"]
+    assert resolve["lineage_key"]["trace_patch"]["id"] == expected["trace_patch_id"]
+    assert resolve["current_state"]["survival_state"] == "alive_on_path"
+    assert {node["kind"] for node in resolve["nodes"]} >= {
+        "trace",
+        "trace_step",
+        "trace_patch",
+        "git_anchor",
+        "git_commit",
+    }
+    assert {
+        edge["relation"] for edge in resolve["edges"]
+    } >= {"contains_step", "created_trace_patch", "anchored_in_git", "landed_in_commit"}
 
     blame = _run_json(tmp_path, ["blame", commit_sha])
     assert blame["projection_limitations"] == ["attribution_cache_missing_trail_events_used"]
@@ -163,7 +212,14 @@ def test_trail_search_finds_patches_for_trace(tmp_path: Path) -> None:
 
     payload = _run_json(tmp_path, ["trail", "search", "--trace", expected["trace_id"]])
 
+    assert payload["schema_version"] == "opentraces.trail.search.v1"
+    assert payload["projection_version"] == "v1"
+    assert payload["projection"]["name"] == "trace_trail"
+    assert payload["projection"]["high_watermark"]["events_seen"] >= 1
+    assert payload["project"]["project_id"]
+    assert "result" not in payload
     assert payload["query"]["type"] == "patches_per_trace"
+    assert payload["query"]["semantic_type"] == "trace_to_patches"
     assert payload["results"][0]["trace_patch_id"] == expected["trace_patch_id"]
     assert payload["results"][0]["git_anchor_id"] == expected["git_anchor_id"]
     assert payload["results"][0]["commit_sha"] == expected["commit_sha"]
@@ -282,10 +338,9 @@ def test_trail_search_finds_patches_touching_file(tmp_path: Path) -> None:
 
     payload = _run_json(tmp_path, ["trail", "search", "--path", "src/search_demo.py"])
 
-    assert payload["query"] == {
-        "type": "patches_touching_file",
-        "path": "src/search_demo.py",
-    }
+    assert payload["query"]["type"] == "patches_touching_file"
+    assert payload["query"]["semantic_type"] == "path_to_patches"
+    assert payload["query"]["path"] == "src/search_demo.py"
     assert payload["results"][0]["trace_patch_id"] == expected["trace_patch_id"]
 
 
@@ -300,10 +355,9 @@ def test_trail_search_finds_reverted_patch_trails(tmp_path: Path) -> None:
 
     payload = _run_json(tmp_path, ["trail", "search", "--survival", "reverted"])
 
-    assert payload["query"] == {
-        "type": "patch_trails_by_survival",
-        "survival": "reverted",
-    }
+    assert payload["query"]["type"] == "patch_trails_by_survival"
+    assert payload["query"]["semantic_type"] == "survival_to_patch_trails"
+    assert payload["query"]["survival"] == "reverted"
     assert payload["results"][0]["trace_patch_id"] == expected["trace_patch_id"]
     assert payload["results"][0]["current_survival"]["survival_state"] == "reverted"
 
@@ -351,7 +405,7 @@ def test_partial_commit_unknown_patch_not_promoted_to_blame_graph_or_search(
                 step_index=4,
                 capture_method=["hook_posttooluse"],
                 payload={
-                    "trace_patch_id": "tracepatch-sha256:phase7-unknown",
+                    "trace_patch_id": sha256_text("phase7-unknown").split(":", 1)[1],
                     "file_path": "uncommitted.py",
                     "affected_range": {"start_line": 1, "end_line": 1},
                     "authored_text": unknown_authored,

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import subprocess
 import tempfile
@@ -16,6 +14,13 @@ from opentraces_schema.models import TraceRecord
 
 from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
 from .event_log import append_event_batch
+from .ids import (
+    SNAPSHOT_CANONICALIZATION,
+    TRACE_PATCH_CANONICALIZATION,
+    content_ref,
+    trace_patch_ref,
+    trace_snapshot_ref,
+)
 from .models import GitObjectID, TrailEvent, TrailEventDraft, sha256_text
 
 
@@ -67,8 +72,20 @@ def _git(
 
 
 def _id(prefix: str, material: dict[str, Any]) -> str:
-    raw = json.dumps(material, sort_keys=True, separators=(",", ":"))
-    return f"{prefix}-sha256:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
+    kind = {
+        "snapshot": "trace_snapshot",
+        "tracepatch": "trace_patch",
+    }.get(prefix, prefix)
+    canonicalization = (
+        SNAPSHOT_CANONICALIZATION
+        if kind == "trace_snapshot"
+        else TRACE_PATCH_CANONICALIZATION
+    )
+    return content_ref(
+        kind=kind,
+        canonicalization=canonicalization,
+        material=material,
+    )["id"]
 
 
 def _head_id(repo: Path) -> dict[str, str] | None:
@@ -205,9 +222,10 @@ def _patch_drafts_for_step(
                 patch_limitations.append("no_added_text")
             raw_authored_hash = sha256_text(authored_text)
             git_clean_hash = sha256_text(_norm(authored_text))
-            trace_patch_id = _id(
-                "tracepatch",
-                {
+            trace_patch_object_ref = content_ref(
+                kind="trace_patch",
+                canonicalization=TRACE_PATCH_CANONICALIZATION,
+                material={
                     "trace_id": trace_id,
                     "generation_index": generation_index,
                     "step_index": step_index,
@@ -221,6 +239,7 @@ def _patch_drafts_for_step(
                     "after_blob_id": after_blob_id,
                 },
             )
+            trace_patch_id = trace_patch_object_ref["id"]
             drafts.append(
                 TrailEventDraft(
                     event_type="trace_patch_created",
@@ -230,8 +249,11 @@ def _patch_drafts_for_step(
                     capture_method=capture_method,
                     payload={
                         "trace_patch_id": trace_patch_id,
+                        "trace_patch_ref": trace_patch_object_ref,
                         "snapshot_before_id": before_snapshot_id,
+                        "snapshot_before_ref": trace_snapshot_ref(before_snapshot_id),
                         "snapshot_after_id": after_snapshot_id,
+                        "snapshot_after_ref": trace_snapshot_ref(after_snapshot_id),
                         "agent_step_id": agent_step_id,
                         "tool_call_id": tool_call_id,
                         "file_path": file_path,
@@ -446,6 +468,7 @@ def close_step_window_with_snapshot(
                 capture_method=capture_method,
                 payload={
                     "snapshot_id": snapshot_id,
+                    "snapshot_ref": trace_snapshot_ref(snapshot_id),
                     "snapshot_role": "after",
                     "tree_id": tree_id,
                     "git_head": git_head,
@@ -643,6 +666,7 @@ def emit_step_window_events_from_record(
                         capture_method=["hook_pretooluse"],
                         payload={
                             "snapshot_id": before_snapshot_id,
+                            "snapshot_ref": trace_snapshot_ref(before_snapshot_id),
                             "snapshot_role": "before",
                             "agent_step_id": agent_step_id,
                             "tool_call_id": tool_call_id,
@@ -670,6 +694,7 @@ def emit_step_window_events_from_record(
                         capture_method=["hook_posttooluse"],
                         payload={
                             "snapshot_id": after_snapshot_id,
+                            "snapshot_ref": trace_snapshot_ref(after_snapshot_id),
                             "snapshot_role": "after",
                             "agent_step_id": agent_step_id,
                             "tool_call_id": tool_call_id,
@@ -913,15 +938,17 @@ def diff_step_snapshots(repo: Path, trace_id: str, from_step: int, to_step: int)
                     "added_text": hunk.get("added_text") or "",
                 }
             )
-    trace_patch_id = _id(
-        "tracepatch",
-        {
+    trace_patch_object_ref = content_ref(
+        kind="trace_patch",
+        canonicalization=TRACE_PATCH_CANONICALIZATION,
+        material={
             "trace_id": trace_id,
             "from_snapshot_id": from_snapshot["snapshot_id"],
             "to_snapshot_id": to_snapshot["snapshot_id"],
             "patch": patch,
         },
     )
+    trace_patch_id = trace_patch_object_ref["id"]
     return {
         "trace_id": trace_id,
         "from_step": from_step,
@@ -933,6 +960,7 @@ def diff_step_snapshots(repo: Path, trace_id: str, from_step: int, to_step: int)
         "relation": "snapshot_diff",
         "trace_patch": {
             "trace_patch_id": trace_patch_id,
+            "trace_patch_ref": trace_patch_ref(trace_patch_id),
             "files": files,
             "patch": patch,
             "limitations": sorted(

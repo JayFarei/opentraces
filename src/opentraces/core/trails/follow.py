@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .event_log import EVENT_LOG_REF, read_events
+from .ids import id_from_payload, normalize_id
 from .models import GitObjectID
 
 PHASE4_SURVIVAL_STATES = [
@@ -248,8 +249,9 @@ def _compute_survival(
 
     base = {
         "observation_type": "patch_survival_observed",
-        "git_anchor_id": anchor.get("git_anchor_id"),
-        "trace_patch_id": anchor.get("trace_patch_id") or patch.get("trace_patch_id"),
+        "git_anchor_id": id_from_payload(anchor, "git_anchor"),
+        "trace_patch_id": id_from_payload(anchor, "trace_patch")
+        or id_from_payload(patch, "trace_patch"),
         "anchor_commit_id": commit_id or None,
         "observed_ref": observed_ref,
         "observed_commit_id": observed_commit_id,
@@ -528,9 +530,13 @@ def _follow(
     events = read_events(repo)
     patches: dict[str, tuple[dict[str, Any], Any]] = {}
     anchors: list[tuple[dict[str, Any], Any]] = []
+    if trace_patch_id:
+        trace_patch_id = normalize_id(trace_patch_id)
+    if git_anchor_id:
+        git_anchor_id = normalize_id(git_anchor_id)
     for event in events:
         if event.event_type == "trace_patch_created":
-            patch_id = event.payload.get("trace_patch_id")
+            patch_id = id_from_payload(event.payload, "trace_patch")
             if patch_id:
                 patches[patch_id] = (event.payload, event)
         elif event.event_type == "git_anchor_created":
@@ -540,15 +546,15 @@ def _follow(
         anchors = [
             (anchor, event)
             for anchor, event in anchors
-            if anchor.get("git_anchor_id") == git_anchor_id
+            if id_from_payload(anchor, "git_anchor") == git_anchor_id
         ]
         if anchors and trace_patch_id is None:
-            trace_patch_id = anchors[0][0].get("trace_patch_id")
+            trace_patch_id = id_from_payload(anchors[0][0], "trace_patch")
     elif trace_patch_id:
         anchors = [
             (anchor, event)
             for anchor, event in anchors
-            if anchor.get("trace_patch_id") == trace_patch_id
+            if id_from_payload(anchor, "trace_patch") == trace_patch_id
         ]
 
     patch_pair = patches.get(trace_patch_id or "")
@@ -573,7 +579,7 @@ def _follow(
     patch, patch_event = patch_pair
     if not anchors:
         return {
-            "trace_patch_id": patch.get("trace_patch_id"),
+            "trace_patch_id": id_from_payload(patch, "trace_patch"),
             "git_anchor_id": git_anchor_id,
             "relation": "unknown",
             "current_survival": {"survival_state": "unknown"},
@@ -617,7 +623,7 @@ def _follow(
     unique_trail_limitations = list(dict.fromkeys(trail_limitations))
     current_observation_values = [observation for _index, observation in current_observations]
     return {
-        "trace_patch_id": patch.get("trace_patch_id"),
+        "trace_patch_id": id_from_payload(patch, "trace_patch"),
         "git_anchor_id": git_anchor_id,
         "relation": "patch_trail_observed",
         "current_survival": (

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .contract import enrich_trail_row, projection_digest
 from .event_log import EVENT_LOG_REF, read_events
 from .follow import follow_patch
 from .models import TrailEvent
@@ -86,7 +87,7 @@ def _event_source_refs(
 
 
 def _copy_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [copy.deepcopy(row) for row in rows]
+    return [enrich_trail_row(copy.deepcopy(row)) for row in rows]
 
 
 @dataclass
@@ -96,6 +97,8 @@ class TrailQueryProjection:
     repo: Path
     event_log_ref: str = EVENT_LOG_REF
     events_seen: int = 0
+    last_event_id: str | None = None
+    projection_digest: str | None = None
     patches_by_id: dict[str, dict[str, Any]] = field(default_factory=dict)
     anchors_by_id: dict[str, dict[str, Any]] = field(default_factory=dict)
     anchors_by_commit: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -112,6 +115,8 @@ class TrailQueryProjection:
         return {
             "event_log_ref": self.event_log_ref,
             "events_seen": self.events_seen,
+            "last_event_id": self.last_event_id,
+            "projection_digest": self.projection_digest,
             "patch_count": len(self.patches_by_id),
             "anchor_count": len(self.anchors_by_id),
             "limitations": self.limitations,
@@ -172,13 +177,13 @@ class TrailQueryProjection:
         out = copy.deepcopy(row)
         trace_patch_id = out.get("trace_patch_id")
         if not trace_patch_id:
-            return out
+            return enrich_trail_row(out)
         trail = follow_patch(self.repo, trace_patch_id)
         current = trail.get("current_survival") or {}
         out["current_survival"] = current
         out["survival_state"] = current.get("survival_state") or "unknown"
         out["trail_limitations"] = trail.get("trail_limitations") or []
-        return out
+        return enrich_trail_row(out)
 
     def patches_touching_file(self, file_path: str) -> list[dict[str, Any]]:
         """Return committed patch evidence touching ``file_path``.
@@ -215,14 +220,19 @@ class TrailQueryProjection:
             row["current_survival"] = current
             row["trail_limitations"] = trail.get("trail_limitations") or []
             row["observations"] = trail.get("observations") or []
-            rows.append(row)
+            rows.append(enrich_trail_row(row))
         return rows
 
 
 def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
     repo = repo.resolve()
     events = read_events(repo)
-    projection = TrailQueryProjection(repo=repo, events_seen=len(events))
+    projection = TrailQueryProjection(
+        repo=repo,
+        events_seen=len(events),
+        last_event_id=events[-1].event_id if events else None,
+        projection_digest=projection_digest(events),
+    )
 
     patch_pairs: dict[str, tuple[dict[str, Any], TrailEvent]] = {}
     anchor_pairs: list[tuple[dict[str, Any], TrailEvent]] = []
@@ -295,6 +305,7 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
             "step_index": patch_event.step_index,
             "generation_index": patch_event.generation_index,
             "trace_patch_id": patch_id,
+            "trace_patch_ref": patch.get("trace_patch_ref"),
             "patch_status": "patched",
             "relation": "anchored_in_git" if anchor_pairs_for_patch else "unknown",
             "file_path": patch.get("file_path"),
@@ -304,6 +315,7 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
             "containing_segment_id": containing_segment_id,
             "trace_slice": trace_slice,
             "git_anchor_id": latest_anchor_id,
+            "git_anchor_ref": None,
             "git_anchors": [],
             "anchor_searches": search_rows,
             "evidence_tier": "unknown",
@@ -372,6 +384,7 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
             "patch_status": "patched",
             "relation": anchor.get("relation") or "anchored_in_git",
             "git_anchor_id": anchor_id,
+            "git_anchor_ref": anchor.get("git_anchor_ref"),
             "commit_id": commit_id,
             "commit_sha": commit_sha,
             "file_path": file_path,
@@ -408,6 +421,7 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
             latest = anchors[-1]
             patch_row["relation"] = latest.get("relation") or "anchored_in_git"
             patch_row["git_anchor_id"] = latest.get("git_anchor_id")
+            patch_row["git_anchor_ref"] = latest.get("git_anchor_ref")
             patch_row["commit_id"] = latest.get("commit_id")
             patch_row["commit_sha"] = latest.get("commit_sha")
             patch_row["evidence_tier"] = latest.get("evidence_tier") or "unknown"

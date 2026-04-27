@@ -130,9 +130,7 @@ def test_formatter_divergence_downgrades_firmness_not_identity(
     # Identity preserved — exactly one anchor.
     assert len(created) == 1
     anchor = created[0]
-    assert anchor["trace_patch_id"] == (
-        "tracepatch-sha256:fixture-tr1-formatter"
-    )
+    assert anchor["trace_patch_id"] == "fixture-tr1-formatter"
     # Firmness downgraded.
     assert anchor["evidence_tier"] == "structural_match"
     assert anchor["evidence_firmness"] == "provisional"

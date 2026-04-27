@@ -1,15 +1,21 @@
 """Phase 1 exact Trace Patch to Git Anchor event creation."""
 from __future__ import annotations
 
-import hashlib
-import json
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from ...enrichment._shared import line_count, path_matches
 from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
 from .event_log import append_event_batch
+from .ids import (
+    GIT_ANCHOR_CANONICALIZATION,
+    SNAPSHOT_CANONICALIZATION,
+    TRACE_PATCH_CANONICALIZATION,
+    content_ref,
+    git_anchor_ref,
+    trace_patch_ref,
+    trace_snapshot_ref,
+)
 from .models import GitObjectID, TrailEvent, TrailEventDraft, sha256_text
 
 
@@ -34,11 +40,6 @@ def _oid(repo: Path, rev_path: str) -> dict[str, str] | None:
         return GitObjectID(hex=out).model_dump(mode="json")
     except Exception:
         return None
-
-
-def _id(prefix: str, material: dict[str, Any]) -> str:
-    raw = json.dumps(material, sort_keys=True, separators=(",", ":"))
-    return f"{prefix}-sha256:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
 
 
 def _commit_tree_id(repo: Path, commit: str) -> dict[str, str]:
@@ -94,9 +95,10 @@ def append_exact_patch_trail(
     after_blob_id = _oid(repo, f"{commit}:{file_path}")
     affected_range = _find_exact_range(repo, commit, file_path, authored_text)
 
-    before_snapshot_id = _id(
-        "snapshot",
-        {
+    before_snapshot_ref = content_ref(
+        kind="trace_snapshot",
+        canonicalization=SNAPSHOT_CANONICALIZATION,
+        material={
             "trace_id": trace_id,
             "generation_index": generation_index,
             "step_index": step_index,
@@ -104,9 +106,11 @@ def append_exact_patch_trail(
             "tree_id": before_tree_id,
         },
     )
-    after_snapshot_id = _id(
-        "snapshot",
-        {
+    before_snapshot_id = before_snapshot_ref["id"]
+    after_snapshot_ref = content_ref(
+        kind="trace_snapshot",
+        canonicalization=SNAPSHOT_CANONICALIZATION,
+        material={
             "trace_id": trace_id,
             "generation_index": generation_index,
             "step_index": step_index,
@@ -114,11 +118,13 @@ def append_exact_patch_trail(
             "tree_id": after_tree_id,
         },
     )
+    after_snapshot_id = after_snapshot_ref["id"]
     raw_authored_hash = sha256_text(authored_text)
     git_clean_hash = sha256_text(_norm(authored_text))
-    trace_patch_id = _id(
-        "tracepatch",
-        {
+    trace_patch_object_ref = content_ref(
+        kind="trace_patch",
+        canonicalization=TRACE_PATCH_CANONICALIZATION,
+        material={
             "trace_id": trace_id,
             "generation_index": generation_index,
             "step_index": step_index,
@@ -129,16 +135,20 @@ def append_exact_patch_trail(
             "after_blob_id": after_blob_id,
         },
     )
-    git_anchor_id = _id(
-        "gitanchor",
-        {
-            "trace_patch_id": trace_patch_id,
+    trace_patch_id = trace_patch_object_ref["id"]
+    git_anchor_object_ref = content_ref(
+        kind="git_anchor",
+        canonicalization=GIT_ANCHOR_CANONICALIZATION,
+        relation="anchored_in_git",
+        material={
+            "trace_patch_ref": trace_patch_ref(trace_patch_id),
             "commit_id": {"algo": "sha1", "hex": commit},
             "path": file_path,
             "range": affected_range,
             "evidence_tier": "exact_range_hash",
         },
     )
+    git_anchor_id = git_anchor_object_ref["id"]
 
     drafts = [
         TrailEventDraft(
@@ -149,6 +159,7 @@ def append_exact_patch_trail(
             capture_method=capture_method,
             payload={
                 "snapshot_id": before_snapshot_id,
+                "snapshot_ref": trace_snapshot_ref(before_snapshot_id),
                 "snapshot_role": "before",
                 "tree_id": before_tree_id,
                 "git_head_id": {"algo": "sha1", "hex": parent or commit},
@@ -164,6 +175,7 @@ def append_exact_patch_trail(
             capture_method=capture_method,
             payload={
                 "snapshot_id": after_snapshot_id,
+                "snapshot_ref": trace_snapshot_ref(after_snapshot_id),
                 "snapshot_role": "after",
                 "tree_id": after_tree_id,
                 "git_head_id": {"algo": "sha1", "hex": commit},
@@ -179,8 +191,11 @@ def append_exact_patch_trail(
             capture_method=capture_method,
             payload={
                 "trace_patch_id": trace_patch_id,
+                "trace_patch_ref": trace_patch_object_ref,
                 "snapshot_before_id": before_snapshot_id,
+                "snapshot_before_ref": trace_snapshot_ref(before_snapshot_id),
                 "snapshot_after_id": after_snapshot_id,
+                "snapshot_after_ref": trace_snapshot_ref(after_snapshot_id),
                 "file_path": file_path,
                 "affected_range": affected_range,
                 "authored_text": authored_text,
@@ -199,7 +214,9 @@ def append_exact_patch_trail(
             capture_method=["manual_attach"] if capture_method == ["manual_attach"] else capture_method,
             payload={
                 "git_anchor_id": git_anchor_id,
+                "git_anchor_ref": git_anchor_ref(git_anchor_id),
                 "trace_patch_id": trace_patch_id,
+                "trace_patch_ref": trace_patch_ref(trace_patch_id),
                 "commit_id": {"algo": "sha1", "hex": commit},
                 "path": file_path,
                 "range": affected_range,

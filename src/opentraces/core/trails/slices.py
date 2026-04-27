@@ -10,7 +10,15 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import quote
 
-from .models import TrailEvent, sha256_hex
+from .ids import (
+    TRACE_SLICE_CANONICALIZATION,
+    content_ref,
+    git_anchor_ref,
+    normalize_id,
+    trace_patch_ref,
+    trace_slice_ref,
+)
+from .models import TrailEvent
 
 DEFAULT_TRACE_SLICE_STEP_RADIUS = 3
 DEFAULT_TRACE_SLICE_SOURCE = "default_step_neighborhood"
@@ -37,7 +45,11 @@ def trace_slice_id_for(
         "end_step_index": end_step_index,
         "source": source,
     }
-    return f"traceslice-sha256:{sha256_hex(material)}"
+    return content_ref(
+        kind="trace_slice",
+        canonicalization=TRACE_SLICE_CANONICALIZATION,
+        material=material,
+    )["id"]
 
 
 def trace_slice_for_event(
@@ -65,29 +77,32 @@ def trace_slice_for_event(
     )
     return {
         "containing_segment_id": containing_segment_id,
+        "containing_segment_ref": trace_slice_ref(containing_segment_id),
         "content_status": TRACE_SLICE_CONTENT_STATUS,
         "end_step_index": end_step_index,
         "generation_index": generation_index,
         "git_anchor_id": git_anchor_id,
+        "git_anchor_ref": git_anchor_ref(git_anchor_id) if git_anchor_id else None,
         "relation": relation,
         "source": source,
         "start_step_index": start_step_index,
         "trace_id": event.trace_id,
         "trace_patch_id": trace_patch_id,
+        "trace_patch_ref": trace_patch_ref(trace_patch_id) if trace_patch_id else None,
     }
 
 
 def resource_ref_for_trace_patch_trail(trace_id: str, trace_patch_id: str) -> str:
     """Return the stable resource URI for a Trace Patch Trail."""
-    return (
-        f"ot://trace/{quote(trace_id, safe=':-._~')}/patches/"
-        f"{quote(trace_patch_id, safe=':-._~')}/trail"
-    )
+    del trace_id
+    trace_patch_id = normalize_id(trace_patch_id)
+    return f"ot://trace-patch/sha256/{quote(trace_patch_id, safe='-._~')}/trail"
 
 
 def resource_ref_for_git_anchor(git_anchor_id: str) -> str:
     """Return the stable resource URI for a Git Anchor."""
-    return f"ot://git-anchor/{quote(git_anchor_id, safe=':-._~')}"
+    git_anchor_id = normalize_id(git_anchor_id)
+    return f"ot://git-anchor/sha256/{quote(git_anchor_id, safe='-._~')}"
 
 
 def resource_ref_for_file_line(path: str, line: int) -> str:

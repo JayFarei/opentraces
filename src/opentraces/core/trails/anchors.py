@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import difflib
-import hashlib
-import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -12,6 +10,13 @@ from typing import Any
 from ...enrichment._shared import path_matches
 from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
 from .event_log import append_event_batch, read_events
+from .ids import (
+    GIT_ANCHOR_CANONICALIZATION,
+    content_ref,
+    git_anchor_ref,
+    id_from_payload,
+    trace_patch_ref,
+)
 from .models import ATTRIBUTION_VERSION, GitObjectID, TrailEventDraft
 
 ANCHOR_ALGORITHMS_PHASE3 = ["exact_range_hash"]
@@ -30,11 +35,6 @@ def _git(repo: Path, *args: str, check: bool = True) -> str:
     if check and proc.returncode != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
     return proc.stdout.strip()
-
-
-def _id(prefix: str, material: dict[str, Any]) -> str:
-    raw = json.dumps(material, sort_keys=True, separators=(",", ":"))
-    return f"{prefix}-sha256:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
 
 
 def _oid(repo: Path, rev_path: str) -> dict[str, str] | None:
@@ -162,13 +162,13 @@ def reconcile_commit_anchors(
     hunks = _parse_diff_hunks_with_content(diff)
     events = read_events(repo)
     existing_anchor_keys = {
-        (event.payload.get("trace_patch_id"), (event.payload.get("commit_id") or {}).get("hex"))
+        (id_from_payload(event.payload, "trace_patch"), (event.payload.get("commit_id") or {}).get("hex"))
         for event in events
         if event.event_type == "git_anchor_created"
     }
     existing_search_keys = {
         (
-            event.payload.get("trace_patch_id"),
+            id_from_payload(event.payload, "trace_patch"),
             (event.payload.get("search_head") or {}).get("hex"),
             event.ATTRIBUTION_VERSION,
         )
@@ -186,7 +186,7 @@ def reconcile_commit_anchors(
     created: list[dict[str, Any]] = []
     for patch_event in patch_events:
         patch = patch_event.payload
-        trace_patch_id = patch.get("trace_patch_id")
+        trace_patch_id = id_from_payload(patch, "trace_patch")
         if not trace_patch_id:
             continue
         if (trace_patch_id, commit) in existing_anchor_keys:
@@ -215,20 +215,25 @@ def reconcile_commit_anchors(
         created_anchor_ids: list[str] = []
         if match:
             blob_id = _oid(repo, f"{commit}:{match['path']}")
-            git_anchor_id = _id(
-                "gitanchor",
-                {
-                    "trace_patch_id": trace_patch_id,
+            git_anchor_object_ref = content_ref(
+                kind="git_anchor",
+                canonicalization=GIT_ANCHOR_CANONICALIZATION,
+                relation="anchored_in_git",
+                material={
+                    "trace_patch_ref": trace_patch_ref(trace_patch_id),
                     "commit_id": commit_id,
                     "path": match["path"],
                     "range": match["range"],
                     "evidence_tier": evidence_tier,
                 },
             )
+            git_anchor_id = git_anchor_object_ref["id"]
             created_anchor_ids = [git_anchor_id]
             anchor_payload = {
                 "git_anchor_id": git_anchor_id,
+                "git_anchor_ref": git_anchor_ref(git_anchor_id),
                 "trace_patch_id": trace_patch_id,
+                "trace_patch_ref": trace_patch_ref(trace_patch_id),
                 "commit_id": commit_id,
                 "path": match["path"],
                 "range": match["range"],
@@ -252,6 +257,7 @@ def reconcile_commit_anchors(
                 ATTRIBUTION_VERSION=effective_attribution_version,
                 payload={
                     "trace_patch_id": trace_patch_id,
+                    "trace_patch_ref": trace_patch_ref(trace_patch_id),
                     "search_head": commit_id,
                     "algorithms_attempted": ANCHOR_ALGORITHMS_PHASE5,
                     "result": "anchored" if anchor_payload else "unknown",
