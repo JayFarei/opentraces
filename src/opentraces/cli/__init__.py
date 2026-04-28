@@ -2691,7 +2691,7 @@ def _auth_whoami() -> None:
 # Command to two groups without copying logic.
 from .trace import (  # noqa: E402
     trace_group as _trace_group,
-    trace_show as _trace_show_cmd,
+    trace_show_root as _trace_show_cmd,
     trace_list as _trace_list_cmd,
     trace_reject as _trace_reject_cmd,
     trace_reset as _trace_reset_cmd,

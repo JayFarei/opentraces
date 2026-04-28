@@ -554,6 +554,12 @@ def test_rebuild_index_adds_trail_patch_and_git_anchor_units_without_authored_te
     assert patch_unit.metadata["commit_sha"] == commit_sha
     assert patch_unit.signals[0].name == "trail_patch_created"
     assert patch_unit.trail_refs
+    assert all(ref.startswith("ot://") for ref in patch_unit.trail_refs)
+    assert all(
+        ref.startswith("ot://")
+        for signal in patch_unit.signals
+        for ref in signal.evidence_refs
+    )
 
     assert anchor_unit is not None
     assert anchor_unit.unit_type == "git_anchor"
@@ -575,6 +581,7 @@ def test_rebuild_index_adds_trail_patch_and_git_anchor_units_without_authored_te
     packets = query_index(facet_filters=("unit.type=patch",))
     assert [packet.unit_id for packet in packets] == [patch_unit.unit_id]
     assert packets[0].unit_type == "patch"
+    assert all(ref.startswith("ot://") for ref in packets[0].trail_refs)
     assert packets[0].map_node_refs
 
     trail_map = get_trace_map("trace-plan056-trail")

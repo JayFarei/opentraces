@@ -164,6 +164,7 @@ def trace_workspace_open(workspace: Path, project: Path, as_json: bool) -> None:
 
 
 @trace_group.command("query", cls=OpentracesCommand)
+@click.argument("lex_terms", nargs=-1)
 @click.option("--lex", default=None, help="Lexical query text.")
 @click.option("--skill", default=None, help="Exact skill.name facet.")
 @click.option("--tool", default=None, help="Exact tool.name facet.")
@@ -203,6 +204,7 @@ def trace_workspace_open(workspace: Path, project: Path, as_json: bool) -> None:
 @click.option("--hyde", default=None, help="Reserved HyDE query mode.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_query(
+    lex_terms: tuple[str, ...],
     lex: str | None,
     skill: str | None,
     tool: str | None,
@@ -240,6 +242,11 @@ def trace_query(
     """Search local retained traces and return bounded candidate packets."""
     from ..core.trace_index import query_index_page, rebuild_index
 
+    if lex_terms:
+        if lex:
+            click.echo("Use either positional search terms or --lex, not both.", err=True)
+            sys.exit(2)
+        lex = " ".join(lex_terms)
     if vec or hyde:
         click.echo(
             "Vector and HyDE trace query modes are reserved in M1. "
@@ -439,7 +446,12 @@ def trace_get(ref: str, as_json: bool) -> None:
     if ref.startswith("ot://"):
         from ..core.trails import resolve_resource
 
-        payload = {"status": "ok", "resource": resolve_resource(Path.cwd(), ref)}
+        try:
+            resource = resolve_resource(Path.cwd(), ref)
+        except ValueError as exc:
+            click.echo(f"Trace resource not found: {ref}: {exc}", err=True)
+            sys.exit(6)
+        payload = {"status": "ok", "resource": resource}
     elif ref.startswith("tu:"):
         unit = get_unit(ref)
         if unit is None:
@@ -478,6 +490,40 @@ trace_group.add_command(trace_query, name="search")
 trace_group.add_command(trace_get, name="show")
 
 
+@click.command(
+    "show",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces show abc12",
+        "opentraces show tu:<trace-id>:trace --json",
+        "opentraces show ot://trace/<id>/map --json",
+    ],
+)
+@click.argument("ref")
+@click.option("--verbose", is_flag=True, default=False, help="Show full step content for legacy staged traces.")
+@click.option("--markdown", is_flag=True, default=False, help="Emit a markdown wrapper for legacy staged traces.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON for trace get refs.")
+@click.pass_context
+def trace_show_root(
+    ctx: click.Context,
+    ref: str,
+    verbose: bool,
+    markdown: bool,
+    as_json: bool,
+) -> None:
+    """Root compatibility wrapper for legacy show and Plan 56 trace get."""
+    if ref.startswith(("ot://", "tu:", "tmn:")):
+        if verbose or markdown:
+            click.echo("--verbose and --markdown only apply to staged trace IDs.", err=True)
+            sys.exit(2)
+        ctx.invoke(trace_get, ref=ref, as_json=as_json)
+        return
+    if verbose or markdown or _local_trace_exists(ref):
+        ctx.invoke(trace_show, trace_id=ref, verbose=verbose, markdown=markdown)
+        return
+    ctx.invoke(trace_get, ref=ref, as_json=as_json)
+
+
 def _trace_id_from_ref(ref: str) -> str:
     if ref.startswith("ot://trace/"):
         path = ref.removeprefix("ot://trace/")
@@ -497,6 +543,21 @@ def _trace_id_from_ref(ref: str) -> str:
         if len(parts) >= 3:
             return parts[1]
     return ref
+
+
+def _local_trace_exists(trace_id: str) -> bool:
+    try:
+        from ..core.config import get_project_traces_dir, project_is_opted_in
+
+        project_dir = Path.cwd()
+        if not project_is_opted_in(project_dir):
+            return False
+        record, _staging_file = _load_trace_record(get_project_traces_dir(project_dir), trace_id)
+        return record is not None
+    except SystemExit:
+        return False
+    except Exception:
+        return False
 
 
 def _candidate_node_id(trace_map, candidate: str) -> str | None:

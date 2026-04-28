@@ -378,6 +378,25 @@ def test_trace_search_and_show_aliases_resolve(tmp_path):
     assert show.exit_code == 0, show.output
     assert json.loads(show.output)["unit"]["unit_id"] == packet["unit_id"]
 
+    root_show = runner.invoke(main, ["show", packet["unit_id"], "--json"])
+    assert root_show.exit_code == 0, root_show.output
+    assert json.loads(root_show.output)["unit"]["unit_id"] == packet["unit_id"]
+
+    positional_search = runner.invoke(
+        main,
+        ["trace", "search", "bug", "fix", "failing", "test", "--json"],
+    )
+    assert positional_search.exit_code == 0, positional_search.output
+    assert json.loads(positional_search.output)["candidates"][0]["trace_id"] == packet["trace_id"]
+
+
+def test_trace_get_ot_resource_errors_without_traceback():
+    result = CliRunner().invoke(main, ["trace", "get", "ot://trace/nonexistent", "--json"])
+
+    assert result.exit_code == 6
+    assert "Trace resource not found" in result.output
+    assert "Traceback" not in result.output
+
 
 def test_trace_query_cli_metadata_filters_and_page_tokens(tmp_path):
     project = tmp_path / "demo"

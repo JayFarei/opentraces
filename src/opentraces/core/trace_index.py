@@ -28,7 +28,7 @@ from .trace_map import build_trace_map
 from .trace_map import slice_trace_map_for_candidate
 
 
-INDEX_VERSION = "plan056-m1-v1"
+INDEX_VERSION = "plan056-m1-v2"
 _M1_UNIT_TYPES = {
     "trace",
     "trace_map_node",
@@ -1272,7 +1272,16 @@ def _trail_refs(row: dict[str, Any]) -> tuple[str, ...]:
         values.append(trace_slice["trace_patch_ref"])
     if trace_slice.get("git_anchor_ref"):
         values.append(trace_slice["git_anchor_ref"])
-    return tuple(dict.fromkeys(str(value) for value in values))
+    return tuple(dict.fromkeys(ref for value in values if (ref := _trail_ref_value(value))))
+
+
+def _trail_ref_value(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value if value.startswith("ot://") else None
+    if isinstance(value, dict):
+        ref = value.get("ref")
+        return str(ref) if isinstance(ref, str) and ref.startswith("ot://") else None
+    return None
 
 
 def _trail_metadata(row: dict[str, Any]) -> dict[str, Any]:
