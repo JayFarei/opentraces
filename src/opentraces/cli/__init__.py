@@ -17,19 +17,15 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import click
-
-logger = logging.getLogger(__name__)
-
-from pathlib import Path
 
 from .. import __version__
 from ..core.config import auth_identity, load_config, load_project_config, save_config, save_project_config
 from ..core.trace_meta import short_trace_id
 from ..core.workflow import (
     DEFAULT_AGENT,
-    DEFAULT_PUSH_POLICY,
     DEFAULT_REMOTE_NAME,
     DEFAULT_REVIEW_POLICY,
     OPENTRACES_ASCII,
@@ -39,8 +35,10 @@ from ..core.workflow import (
     normalize_push_policy,
     normalize_review_policy,
     resolve_visible_stage,
-    stage_label,
 )
+from ._help import OpentracesGroup
+
+logger = logging.getLogger(__name__)
 
 SENTINEL = "---OPENTRACES_JSON---"
 
@@ -179,7 +177,7 @@ def _git_chip(record) -> tuple[str, str, str] | None:
     links = getattr(record, "git_links", None) or []
     if not links:
         return None
-    best = min(links, key=lambda l: _TIER_PRIORITY.get(getattr(l, "tier", "orphan"), 99))
+    best = min(links, key=lambda link: _TIER_PRIORITY.get(getattr(link, "tier", "orphan"), 99))
     sha = (getattr(best, "revision", "") or "")[:7]
     glyph, color = _TIER_GLYPH.get(best.tier, ("·", "bright_black"))
     return (glyph, sha, color)
@@ -224,9 +222,6 @@ def print_banner(*, tagline: str | None = OPENTRACES_TAGLINE, file=None) -> None
     click.echo(click.style(OPENTRACES_ASCII, fg="cyan", bold=True), file=file)
     if tagline:
         click.echo(f"\n  {_dim(tagline)}\n", file=file)
-
-
-from ._help import OpentracesGroup
 
 
 class GroupedGroup(OpentracesGroup):
@@ -750,7 +745,7 @@ def _login_with_device_code(save_credentials, credentials_path) -> None:
     expires_in = data.get("expires_in", 900)
 
     # Step 2: Show code and try to open browser
-    click.echo(f"  Open this URL in your browser:")
+    click.echo("  Open this URL in your browser:")
     click.echo(f"    {verification_uri}")
     click.echo()
     click.echo(f"  And enter code: {user_code}")
@@ -841,7 +836,7 @@ def _validate_and_save(token_value: str, save_credentials, credentials_path) -> 
     save_credentials(token_value)
     click.echo(f"  Authenticated as {username}.")
     click.echo(f"  Token saved to {credentials_path}")
-    click.echo(f"\n  You can now push traces with 'opentraces push'.")
+    click.echo("\n  You can now push traces with 'opentraces push'.")
 
     emit_json({
         "status": "ok",
@@ -1766,9 +1761,9 @@ def init(
     click.echo(f"  Marker:  {marker_file}")
     click.echo(f"  Traces:  {traces_dir}")
     if hook_installed:
-        click.echo(f"  Hook:    .claude/settings.json (SessionEnd)")
+        click.echo("  Hook:    .claude/settings.json (SessionEnd)")
     if skill_installed:
-        click.echo(f"  Skill:   .agents/skills/opentraces/SKILL.md")
+        click.echo("  Skill:   .agents/skills/opentraces/SKILL.md")
     click.echo(f"  Agents:  {', '.join(selected_agents)}")
     click.echo(f"  Policy:  {review_policy}")
     click.echo(f"  Push:    {push_policy}")
@@ -2274,7 +2269,7 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
             symlink.symlink_to(os.path.relpath(str(target), str(symlink.parent)))
             human_echo(f"  Linked skill: {agent_skills_path}/opentraces/SKILL.md")
 
-        human_echo(f"  Installed skill: .agents/skills/opentraces/SKILL.md")
+        human_echo("  Installed skill: .agents/skills/opentraces/SKILL.md")
         return True
     except Exception as e:
         human_echo(f"  Could not install skill: {e}")
@@ -2350,7 +2345,7 @@ def status(limit: int) -> None:
     if remote:
         _hdr.print(f"  [dim]remote:[/] {remote} [dim]({visibility})[/]", highlight=False)
     else:
-        _hdr.print(f"  [dim]remote:[/] [yellow]not set[/]", highlight=False)
+        _hdr.print("  [dim]remote:[/] [yellow]not set[/]", highlight=False)
     _hdr.print(_HdrRule(style="dim"))
     _hdr.print()
 
@@ -3598,88 +3593,7 @@ def _emit_dry_run(project_dir: Path, *, paths: list[Path] | None) -> None:
         f"new={counts['new']} refreshed={counts['refreshed']} "
         f"new_gen={counts['new_generation']} noop={counts['noop']}"
     )
-    # The remainder is dead code retained so import-time references don't
-    # break; structurally rewritten under the per-project layout.
-    from ..core.config import get_projects_path, is_project_excluded, get_project_traces_dir
-    from ..capture.claude_code import ClaudeCodeParser
-    from ..core.pipeline import process_trace
-    from ..core.state import StateManager, TraceStatus, ProcessedFile
 
-    cfg = load_config()
-    projects_path = get_projects_path(cfg)
-    parser = ClaudeCodeParser()
-    state = StateManager(state_path=Path("/tmp/opentraces-parse-state.json"))
-
-    parsed_count = 0
-    skipped_count = 0
-    error_count = 0
-
-    click.echo(f"Scanning traces in {projects_path}...")
-
-    for session_path in parser.discover_sessions(projects_path):
-        if limit > 0 and parsed_count >= limit:
-            break
-
-        # Check incremental processing
-        should_process, offset = state.should_reprocess(str(session_path))
-        if not should_process:
-            skipped_count += 1
-            continue
-
-        try:
-            record = parser.parse_session(session_path, byte_offset=offset)
-            if record is None:
-                skipped_count += 1
-                continue
-
-            # Check project exclusion
-            project_dir = session_path.parent
-            if is_project_excluded(cfg, str(project_dir)):
-                skipped_count += 1
-                continue
-
-            result = process_trace(record, project_dir, cfg)
-
-            # Stage the trace
-            jsonl_line = result.record.to_jsonl_line()
-            staging_file = get_project_traces_dir(project_dir) / f"{result.record.trace_id}.jsonl"
-            staging_file.parent.mkdir(parents=True, exist_ok=True)
-            staging_file.write_text(jsonl_line + "\n")
-
-            state.set_trace_status(
-                result.record.trace_id,
-                TraceStatus.APPROVED if auto else TraceStatus.STAGED,
-                session_id=result.record.session_id,
-                file_path=str(staging_file),
-            )
-
-            # Track processed file
-            stat = session_path.stat()
-            state.mark_file_processed(ProcessedFile(
-                file_path=str(session_path),
-                inode=stat.st_ino,
-                mtime=stat.st_mtime,
-                last_byte_offset=stat.st_size,
-            ))
-
-            parsed_count += 1
-            click.echo(f"  Parsed: {session_path.name} ({len(result.record.steps)} steps, {sum(len(s.tool_calls) for s in result.record.steps)} tool calls)")
-
-        except Exception as e:
-            error_count += 1
-            click.echo(f"  Error: {session_path.name}: {e}", err=True)
-
-    click.echo(f"\nDone: {parsed_count} parsed, {skipped_count} skipped, {error_count} errors")
-    emit_json({
-        "status": "ok",
-        "parsed": parsed_count,
-        "skipped": skipped_count,
-        "errors": error_count,
-        "next_steps": [
-            "Run 'opentraces tui' to review staged traces" if not auto else "Run 'opentraces push' to upload",
-        ],
-        "next_command": "opentraces tui" if not auto else "opentraces push",
-    })
 @main.command(
     examples=[
         "opentraces web",
@@ -3981,7 +3895,7 @@ def assess(judge: bool, judge_model: str, limit: int,
     from ..quality.summary import build_summary
     from ..quality.display import format_assessment, format_glossary
     from ..core.config import (
-        get_project_traces_dir, load_project_config, project_is_opted_in,
+        load_project_config, project_is_opted_in,
     )
 
     if explain:

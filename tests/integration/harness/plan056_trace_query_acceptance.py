@@ -100,7 +100,7 @@ def _write_project_trace(project_dir: Path) -> None:
                 step_index=2,
                 role="agent",
                 content="Plan:\n- reproduce failure\n- patch parser\n- rerun pytest",
-                reasoning_content=("PRIVATE ACCEPTANCE TRANSCRIPT BLOCK " * 120).strip(),
+                reasoning_content=("PRIVATE ACCEPTANCE TRANSCRIPT BLOCK " * 3000).strip(),
                 tool_calls=[
                     ToolCall(
                         tool_call_id="tc-skill",
@@ -162,6 +162,29 @@ def _write_project_trace(project_dir: Path) -> None:
     traces_dir = get_project_traces_dir(project_dir)
     traces_dir.mkdir(parents=True, exist_ok=True)
     (traces_dir / f"{record.trace_id}.jsonl").write_text(record.model_dump_json() + "\n")
+
+    distractor = TraceRecord(
+        trace_id="trace-plan056-acceptance-distractor",
+        session_id="session-plan056-acceptance-distractor",
+        agent=Agent(name="claude-code", model="claude-opus-4-6"),
+        task={"description": "Bug fix failing parser test discussion only"},
+        steps=[
+            Step(
+                step_index=1,
+                role="user",
+                content="Read a note that says bug fix failing test, but do not edit or test.",
+            ),
+            Step(
+                step_index=2,
+                role="agent",
+                content="This was only a lexical discussion with no patch or verification.",
+            ),
+        ],
+        outcome={"success": False, "committed": False},
+    )
+    (traces_dir / f"{distractor.trace_id}.jsonl").write_text(
+        distractor.model_dump_json() + "\n"
+    )
 
 
 def _invoke(runner: CliRunner, argv: list[str]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -232,6 +255,18 @@ def run_local() -> dict[str, Any]:
             )
             command_transcripts.append(skill_transcript)
 
+            broad_transcript, broad_payload = _invoke(
+                runner,
+                [
+                    "trace",
+                    "query",
+                    "--lex",
+                    "bug fix failing test",
+                    "--json",
+                ],
+            )
+            command_transcripts.append(broad_transcript)
+
             signal_transcript, signal_payload = _invoke(
                 runner,
                 [
@@ -278,6 +313,7 @@ def run_local() -> dict[str, Any]:
             summary_text = json.dumps(
                 {
                     "skill": skill_payload,
+                    "broad": broad_payload,
                     "signal": signal_payload,
                     "map": map_payload,
                     "commands": command_transcripts,
@@ -292,8 +328,12 @@ def run_local() -> dict[str, Any]:
                 "command_transcripts": command_transcripts,
                 "candidate_counts": {
                     "skill": len(skill_payload["candidates"]),
+                    "broad_lexical": len(broad_payload["candidates"]),
                     "signal_gated": len(signal_payload["candidates"]),
                 },
+                "signal_gating_reduced_candidates": (
+                    len(broad_payload["candidates"]) > len(signal_payload["candidates"])
+                ),
                 "selected_ids": {
                     "trace_id": packet["trace_id"],
                     "unit_id": packet["unit_id"],

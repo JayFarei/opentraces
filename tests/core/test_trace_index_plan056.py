@@ -7,6 +7,8 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from opentraces_schema import Agent, GitLink, Observation, Step, ToolCall, TraceRecord
 
 
@@ -410,6 +412,125 @@ def test_redacted_or_malformed_service_urls_do_not_break_indexing(tmp_path):
     assert [packet.trace_id for packet in packets] == ["trace-plan056-redacted-url"]
 
 
+def test_rebuild_index_skips_malformed_jsonl_lines_without_dropping_valid_records(tmp_path):
+    from opentraces.core.config import get_project_traces_dir
+    from opentraces.core.trace_index import query_index, rebuild_index
+
+    project = tmp_path / "demo"
+    _enroll_project(project, "1234567890abcdef1234567890abcdef")
+    traces_dir = get_project_traces_dir(project)
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    valid = _bug_fix_trace("trace-plan056-valid-jsonl")
+    (traces_dir / "mixed.jsonl").write_text(
+        "\n".join(
+            [
+                "{not valid json",
+                json.dumps({"trace_id": "missing-required-fields"}),
+                valid.model_dump_json(),
+            ]
+        )
+        + "\n"
+    )
+
+    summary = rebuild_index()
+    packets = query_index(skill="grill-me")
+
+    assert summary.trace_count == 1
+    assert [packet.trace_id for packet in packets] == ["trace-plan056-valid-jsonl"]
+
+
+def test_trace_index_redacts_secret_shapes_from_packets_units_and_map_previews(tmp_path):
+    from opentraces.core.trace_index import get_trace_map, get_unit, query_index, rebuild_index
+
+    openai_key = "sk-abcdefghijklmnopqrstuvwxyz123456"
+    aws_key = "AKIAIOSFODNN7EXAMPLE"
+    password = "PASSWORD=hunter2"
+    project = tmp_path / "demo"
+    _enroll_project(project, "1234567890abcdef1234567890abcdef")
+    record = TraceRecord(
+        trace_id="trace-plan056-secret-proof",
+        session_id="session-plan056-secret-proof",
+        agent=Agent(name="claude-code"),
+        task={"description": f"Rotate leaked credential OPENAI_API_KEY={openai_key}"},
+        steps=[
+            Step(
+                step_index=1,
+                role="user",
+                content=f"Use grill-me to inspect the auth failure with {password}.",
+            ),
+            Step(
+                step_index=2,
+                role="agent",
+                content="Plan:\n- inspect failing auth\n- avoid leaking secrets",
+                tool_calls=[
+                    ToolCall(
+                        tool_call_id="tc-skill",
+                        tool_name="Skill",
+                        input={"name": "grill-me"},
+                    ),
+                    ToolCall(
+                        tool_call_id="tc-auth",
+                        tool_name="Bash",
+                        input={"command": f"curl https://api.example.test?token={openai_key}"},
+                    ),
+                ],
+                observations=[
+                    Observation(
+                        source_call_id="tc-auth",
+                        content=f"403 denied for access key {aws_key}",
+                        output_summary=f"auth denied for {aws_key}",
+                    )
+                ],
+            ),
+            Step(step_index=3, role="agent", content="Done without exposing credentials."),
+        ],
+    )
+    _write_project_trace(project, record)
+
+    rebuild_index()
+    packets = query_index(skill="grill-me")
+    unit = get_unit("tu:trace-plan056-secret-proof:trace")
+    trace_map = get_trace_map("trace-plan056-secret-proof")
+
+    assert len(packets) == 1
+    assert unit is not None
+    assert trace_map is not None
+    indexed_payload = json.dumps(
+        {
+            "packet": packets[0].model_dump(mode="json"),
+            "unit": unit.model_dump(mode="json"),
+            "map": trace_map.model_dump(mode="json"),
+        },
+        sort_keys=True,
+    )
+    for raw_secret in (openai_key, aws_key, password, "hunter2"):
+        assert raw_secret not in indexed_payload
+    assert "[REDACTED]" in indexed_payload
+
+
+def test_get_accessors_do_not_silently_rebuild_missing_index(tmp_path):
+    from opentraces.core.trace_index import (
+        default_index_path,
+        get_map_node,
+        get_trace_map,
+        get_trace_path,
+        get_unit,
+    )
+
+    project = tmp_path / "demo"
+    _enroll_project(project, "1234567890abcdef1234567890abcdef")
+    _write_project_trace(project, _bug_fix_trace("trace-plan056-missing-index"))
+
+    index_path = default_index_path()
+    assert not index_path.exists()
+
+    assert get_unit("tu:trace-plan056-missing-index:trace") is None
+    assert get_trace_map("trace-plan056-missing-index") is None
+    assert get_map_node("tmn:trace-plan056-missing-index:1") is None
+    assert get_trace_path("trace-plan056-missing-index") is None
+    assert not index_path.exists()
+
+
 def test_rebuild_index_adds_remaining_m1_trace_unit_types(tmp_path):
     from opentraces.core.trace_index import get_unit, query_index, rebuild_index
 
@@ -482,6 +603,40 @@ def test_query_refreshes_incrementally_when_trace_store_changes(tmp_path):
     assert os.stat(index_path).st_ino == inode_before
 
 
+def test_query_refresh_updates_modified_and_deleted_trace_sources(tmp_path):
+    import os
+
+    from opentraces.core.config import get_project_traces_dir
+    from opentraces.core.trace_index import default_index_path, query_index, rebuild_index
+
+    project = tmp_path / "demo"
+    _enroll_project(project, "1234567890abcdef1234567890abcdef")
+    _write_project_trace(project, _bug_fix_trace("trace-plan056-stale"))
+    rebuild_index()
+    index_path = default_index_path()
+    inode_before = os.stat(index_path).st_ino
+
+    packets = query_index(skill="grill-me")
+    assert packets[0].files == ["src/parser.py"]
+
+    _write_project_trace(
+        project,
+        _bug_fix_trace("trace-plan056-stale", file_path="src/changed.py"),
+    )
+    trace_path = get_project_traces_dir(project) / "trace-plan056-stale.jsonl"
+    stat = trace_path.stat()
+    os.utime(trace_path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+
+    packets = query_index(skill="grill-me")
+    assert [packet.trace_id for packet in packets] == ["trace-plan056-stale"]
+    assert packets[0].files == ["src/changed.py"]
+
+    trace_path.unlink()
+
+    assert query_index(skill="grill-me") == []
+    assert os.stat(index_path).st_ino == inode_before
+
+
 def test_rebuild_index_replaces_duplicate_trace_ids_across_shards(tmp_path):
     from opentraces.core.trace_index import query_index, rebuild_index
 
@@ -504,8 +659,44 @@ def test_rebuild_index_replaces_duplicate_trace_ids_across_shards(tmp_path):
     assert packets[0].files == ["new.py"]
 
 
+def test_rebuild_index_preserves_existing_cache_when_rebuild_fails(tmp_path, monkeypatch):
+    from opentraces.core import trace_index
+
+    project = tmp_path / "demo"
+    _enroll_project(project, "1234567890abcdef1234567890abcdef")
+    _write_project_trace(
+        project,
+        _bug_fix_trace("trace-plan056-first", session_id="session-plan056-first"),
+    )
+    summary = trace_index.rebuild_index()
+
+    assert trace_index.get_unit("tu:trace-plan056-first:trace") is not None
+    assert summary.index_path.exists()
+
+    _write_project_trace(
+        project,
+        _bug_fix_trace("trace-plan056-second", session_id="session-plan056-second"),
+    )
+    original_insert_unit = trace_index._insert_unit
+
+    def fail_on_second_trace(conn, unit):
+        if unit.trace_id == "trace-plan056-second":
+            raise RuntimeError("simulated rebuild failure")
+        original_insert_unit(conn, unit)
+
+    monkeypatch.setattr(trace_index, "_insert_unit", fail_on_second_trace)
+
+    with pytest.raises(RuntimeError, match="simulated rebuild failure"):
+        trace_index.rebuild_index()
+
+    assert summary.index_path.exists()
+    assert trace_index.get_unit("tu:trace-plan056-first:trace") is not None
+    assert trace_index.get_unit("tu:trace-plan056-second:trace") is None
+
+
 def test_rebuild_index_adds_trail_patch_and_git_anchor_units_without_authored_text(tmp_path):
     from opentraces.core.trace_index import get_trace_map, get_unit, query_index, rebuild_index
+    from opentraces.core.trace_map import walk_trace_map
     from opentraces.core.trails import append_exact_patch_trail, build_trail_query_projection
 
     project = tmp_path / "demo"
@@ -589,3 +780,58 @@ def test_rebuild_index_adds_trail_patch_and_git_anchor_units_without_authored_te
     assert [node.action_type for node in trail_map.nodes] == ["patch_created", "git_anchor"]
     assert trail_map.nodes[0].unit_id == patch_unit.unit_id
     assert trail_map.nodes[1].unit_id == anchor_unit.unit_id
+    forward = walk_trace_map(
+        trail_map,
+        trail_map.nodes[0].node_id,
+        direction="forward",
+        until_action_types={"git_anchor"},
+    )
+    assert [node.action_type for node in forward.nodes] == ["patch_created", "git_anchor"]
+
+
+def test_query_reuses_unchanged_trail_projection_cache(tmp_path, monkeypatch):
+    from opentraces.core import trails
+    from opentraces.core.trace_index import query_index, rebuild_index
+    from opentraces.core.trails import append_exact_patch_trail
+
+    project = tmp_path / "demo"
+    project.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=project, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=project, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=project, check=True)
+    _register_project(project, "1234567890abcdef1234567890abcdef")
+
+    (project / "app.py").write_text("def value():\n    return 'old'\n")
+    subprocess.run(["git", "add", "app.py"], cwd=project, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=project, check=True)
+    authored_text = "    return 'cached trail projection'\n"
+    (project / "app.py").write_text("def value():\n" + authored_text)
+    subprocess.run(["git", "add", "app.py"], cwd=project, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "patch"], cwd=project, check=True)
+    commit_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=project,
+        text=True,
+    ).strip()
+    append_exact_patch_trail(
+        project,
+        trace_id="trace-plan056-trail-cache",
+        step_index=3,
+        file_path="app.py",
+        authored_text=authored_text,
+        commit_ref=commit_sha,
+        writer="test",
+        capture_method=["hook_posttooluse"],
+    )
+
+    rebuild_index()
+
+    def fail_if_rebuilt(_repo):
+        raise AssertionError("unchanged TrailEvents should use the cached projection")
+
+    monkeypatch.setattr(trails, "build_trail_query_projection", fail_if_rebuilt)
+
+    packets = query_index(facet_filters=("unit.type=patch",))
+
+    assert [packet.trace_id for packet in packets] == ["trace-plan056-trail-cache"]

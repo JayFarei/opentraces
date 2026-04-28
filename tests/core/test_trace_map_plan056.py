@@ -125,3 +125,21 @@ def test_candidate_slice_walks_from_instruction_to_nearby_verification_nodes():
     ]
     assert len(sliced.nodes) <= 6
     assert all(node.action_type != "tool_result" for node in sliced.nodes)
+
+
+def test_build_trace_map_marks_sorted_last_agent_text_as_final_response():
+    from opentraces.core.trace_map import build_trace_map
+
+    record = _bug_fix_trace()
+    record.steps = [
+        record.steps[0],
+        record.steps[-1],
+        *record.steps[1:-1],
+    ]
+
+    trace_map = build_trace_map(record)
+
+    final_nodes = [node for node in trace_map.nodes if node.action_type == "final_response"]
+    assert len(final_nodes) == 1
+    assert final_nodes[0].step_index == 5
+    assert final_nodes[0].text_preview == "Implemented the parser fix and verified pytest passes."

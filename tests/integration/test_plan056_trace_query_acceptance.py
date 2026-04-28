@@ -29,10 +29,12 @@ def test_plan056_trace_query_acceptance_harness_local_json():
     assert payload["status"] == "ok"
     assert payload["mode"] == "local"
     assert payload["candidate_counts"]["skill"] == 1
+    assert payload["candidate_counts"]["broad_lexical"] > payload["candidate_counts"]["signal_gated"]
     assert payload["candidate_counts"]["signal_gated"] == 1
+    assert payload["signal_gating_reduced_candidates"] is True
     assert payload["selected_ids"]["trace_id"] == "trace-plan056-acceptance"
-    assert payload["byte_ratios"]["full_to_packet"] > 1
-    assert payload["byte_ratios"]["full_to_slice"] > 1
+    assert payload["byte_ratios"]["full_to_packet"] > 10
+    assert payload["byte_ratios"]["full_to_slice"] > 10
     assert payload["index_rebuild_digests"]["equivalent"] is True
     assert payload["no_transcript_text"] is True
     assert all(command["exit_code"] == 0 for command in payload["command_transcripts"])

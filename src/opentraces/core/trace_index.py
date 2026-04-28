@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+from pydantic import ValidationError
 
 from opentraces_schema import (
     CandidatePacket,
@@ -24,11 +27,12 @@ from opentraces_schema import (
 )
 
 from . import paths
+from .text_redaction import redact_index_text
 from .trace_map import build_trace_map
 from .trace_map import slice_trace_map_for_candidate
 
 
-INDEX_VERSION = "plan056-m1-v2"
+INDEX_VERSION = "plan056-m1-v3"
 _M1_UNIT_TYPES = {
     "trace",
     "trace_map_node",
@@ -79,42 +83,45 @@ def rebuild_index(index_path: Path | None = None) -> RebuildSummary:
 
     db_path = index_path or default_index_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    if db_path.exists():
-        db_path.unlink()
+    tmp_path = db_path.with_name(f"{db_path.name}.tmp")
+    if tmp_path.exists():
+        tmp_path.unlink()
 
-    with sqlite3.connect(db_path) as conn:
-        _create_schema(conn)
-        project_sources = _project_sources_by_slug()
-        for project_home in _iter_project_homes():
-            project_slug = project_home.name
-            for trace_path in _iter_trace_paths(project_home):
-                records = _iter_trace_file_records(trace_path)
-                for record in records:
-                    _delete_trace_ids(conn, [record.trace_id])
-                    trace_map = build_trace_map(record)
-                    units = _build_units(record, trace_map, project_slug)
-                    _insert_trace(conn, record, project_slug, trace_path, trace_map)
-                    for unit in units:
-                        _insert_unit(conn, unit)
-                    for node in trace_map.nodes:
-                        _insert_map_node(conn, node)
-                    for edge in trace_map.edges:
-                        _insert_map_edge(conn, edge)
-                _record_source(conn, trace_path, len(records))
-            source_repo = project_sources.get(project_slug)
-            if source_repo and source_repo.exists():
-                trail_units = _build_trail_units(source_repo, project_slug)
-                for trail_map in _trail_maps_from_units(trail_units):
-                    _insert_trail_map(conn, trail_map)
-                for unit in trail_units:
-                    _insert_unit(conn, unit)
-        conn.execute(
-            "insert into meta(key, value) values (?, ?)",
-            ("index_version", INDEX_VERSION),
-        )
-        summary = _index_totals(conn, db_path)
-        conn.commit()
-    return summary
+    try:
+        with sqlite3.connect(tmp_path) as conn:
+            _create_schema(conn)
+            project_sources = _project_sources_by_slug()
+            for project_home in _iter_project_homes():
+                project_slug = project_home.name
+                for trace_path in _iter_trace_paths(project_home):
+                    records = _iter_trace_file_records(trace_path)
+                    for record in records:
+                        _delete_trace_ids(conn, [record.trace_id])
+                        trace_map = build_trace_map(record)
+                        units = _build_units(record, trace_map, project_slug)
+                        _insert_trace(conn, record, project_slug, trace_path, trace_map)
+                        for unit in units:
+                            _insert_unit(conn, unit)
+                        for node in trace_map.nodes:
+                            _insert_map_node(conn, node)
+                        for edge in trace_map.edges:
+                            _insert_map_edge(conn, edge)
+                    _record_source(conn, trace_path, len(records))
+                source_repo = project_sources.get(project_slug)
+                if source_repo and source_repo.exists():
+                    _rebuild_trail_projection(conn, project_slug, source_repo)
+            conn.execute(
+                "insert into meta(key, value) values (?, ?)",
+                ("index_version", INDEX_VERSION),
+            )
+            summary = _index_totals(conn, db_path)
+            conn.commit()
+        tmp_path.replace(db_path)
+        return summary
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
 
 
 def refresh_index(index_path: Path | None = None) -> RebuildSummary:
@@ -182,17 +189,31 @@ def refresh_index(index_path: Path | None = None) -> RebuildSummary:
             _delete_trace_ids(conn, old_trace_ids)
             conn.execute("delete from sources where path = ?", (source_key,))
 
-        _delete_units_by_types(conn, {"patch", "git_anchor"})
-        _delete_trail_maps(conn)
+        seen_trail_projects: set[str] = set()
         for project_home in _iter_project_homes():
             project_slug = project_home.name
+            seen_trail_projects.add(project_slug)
             source_repo = project_sources.get(project_slug)
             if source_repo and source_repo.exists():
-                trail_units = _build_trail_units(source_repo, project_slug)
-                for trail_map in _trail_maps_from_units(trail_units):
-                    _insert_trail_map(conn, trail_map)
-                for unit in trail_units:
-                    _insert_unit(conn, unit)
+                _refresh_trail_projection(conn, project_slug, source_repo)
+            else:
+                _delete_trail_projection_for_project(conn, project_slug)
+                conn.execute(
+                    "delete from trail_sources where project_slug = ?",
+                    (project_slug,),
+                )
+
+        stale_trail_projects = [
+            str(row["project_slug"])
+            for row in conn.execute("select project_slug from trail_sources")
+            if str(row["project_slug"]) not in seen_trail_projects
+        ]
+        for project_slug in stale_trail_projects:
+            _delete_trail_projection_for_project(conn, project_slug)
+            conn.execute(
+                "delete from trail_sources where project_slug = ?",
+                (project_slug,),
+            )
 
         conn.execute(
             "insert or replace into meta(key, value) values (?, ?)",
@@ -478,7 +499,7 @@ def query_index_page(
 def get_trace_map(trace_id: str, *, index_path: Path | None = None) -> TraceMap | None:
     db_path = index_path or default_index_path()
     if not db_path.exists():
-        rebuild_index(db_path)
+        return None
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         nodes = [
@@ -510,7 +531,7 @@ def get_trace_map(trace_id: str, *, index_path: Path | None = None) -> TraceMap 
 def get_unit(unit_id: str, *, index_path: Path | None = None) -> TraceUnit | None:
     db_path = index_path or default_index_path()
     if not db_path.exists():
-        rebuild_index(db_path)
+        return None
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
@@ -523,7 +544,7 @@ def get_unit(unit_id: str, *, index_path: Path | None = None) -> TraceUnit | Non
 def get_map_node(node_id: str, *, index_path: Path | None = None) -> TraceMapNode | None:
     db_path = index_path or default_index_path()
     if not db_path.exists():
-        rebuild_index(db_path)
+        return None
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
             "select payload from trace_map_nodes where node_id = ?",
@@ -535,7 +556,7 @@ def get_map_node(node_id: str, *, index_path: Path | None = None) -> TraceMapNod
 def get_trace_path(trace_id: str, *, index_path: Path | None = None) -> Path | None:
     db_path = index_path or default_index_path()
     if not db_path.exists():
-        rebuild_index(db_path)
+        return None
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
             "select trace_path from traces where trace_id = ?",
@@ -556,6 +577,11 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             mtime_ns integer not null,
             size integer not null,
             record_count integer not null
+        );
+        create table trail_sources (
+            project_slug text primary key,
+            repo_path text not null,
+            ref_sha text not null
         );
         create table traces (
             trace_id text primary key,
@@ -631,9 +657,12 @@ def _schema_supports_refresh(conn: sqlite3.Connection) -> bool:
         sources = conn.execute(
             "select name from sqlite_master where type = 'table' and name = 'sources'"
         ).fetchone()
+        trail_sources = conn.execute(
+            "select name from sqlite_master where type = 'table' and name = 'trail_sources'"
+        ).fetchone()
     except sqlite3.Error:
         return False
-    return bool(version and version[0] == INDEX_VERSION and sources)
+    return bool(version and version[0] == INDEX_VERSION and sources and trail_sources)
 
 
 def _index_totals(conn: sqlite3.Connection, db_path: Path) -> RebuildSummary:
@@ -659,6 +688,78 @@ def _record_source(conn: sqlite3.Connection, trace_path: Path, record_count: int
     )
 
 
+def _rebuild_trail_projection(
+    conn: sqlite3.Connection,
+    project_slug: str,
+    source_repo: Path,
+) -> None:
+    ref_sha = _trail_event_ref_sha(source_repo)
+    if not ref_sha:
+        conn.execute("delete from trail_sources where project_slug = ?", (project_slug,))
+        return
+    trail_units = _build_trail_units(source_repo, project_slug)
+    for trail_map in _trail_maps_from_units(trail_units):
+        _insert_trail_map(conn, trail_map)
+    for unit in trail_units:
+        _insert_unit(conn, unit)
+    _record_trail_source(conn, project_slug, source_repo, ref_sha)
+
+
+def _refresh_trail_projection(
+    conn: sqlite3.Connection,
+    project_slug: str,
+    source_repo: Path,
+) -> None:
+    ref_sha = _trail_event_ref_sha(source_repo)
+    repo_path = str(source_repo.resolve())
+    existing = conn.execute(
+        "select repo_path, ref_sha from trail_sources where project_slug = ?",
+        (project_slug,),
+    ).fetchone()
+    if existing and existing["repo_path"] == repo_path and existing["ref_sha"] == (ref_sha or ""):
+        return
+
+    _delete_trail_projection_for_project(conn, project_slug)
+    if ref_sha:
+        _rebuild_trail_projection(conn, project_slug, source_repo)
+    else:
+        conn.execute("delete from trail_sources where project_slug = ?", (project_slug,))
+
+
+def _record_trail_source(
+    conn: sqlite3.Connection,
+    project_slug: str,
+    source_repo: Path,
+    ref_sha: str,
+) -> None:
+    conn.execute(
+        """
+        insert or replace into trail_sources(project_slug, repo_path, ref_sha)
+        values (?, ?, ?)
+        """,
+        (project_slug, str(source_repo.resolve()), ref_sha),
+    )
+
+
+def _trail_event_ref_sha(source_repo: Path) -> str | None:
+    try:
+        from .trails import EVENT_LOG_REF
+
+        proc = subprocess.run(
+            ["git", "show-ref", "--hash", EVENT_LOG_REF],
+            cwd=source_repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, ValueError):
+        return None
+    if proc.returncode != 0:
+        return None
+    ref_sha = proc.stdout.strip()
+    return ref_sha or None
+
+
 def _delete_trace_ids(conn: sqlite3.Connection, trace_ids: list[str]) -> None:
     ids = sorted({trace_id for trace_id in trace_ids if trace_id})
     if not ids:
@@ -678,6 +779,25 @@ def _delete_units_by_types(conn: sqlite3.Connection, unit_types: set[str]) -> No
     _delete_units_where(conn, f"unit_type in ({placeholders})", values)
 
 
+def _delete_trail_projection_for_project(conn: sqlite3.Connection, project_slug: str) -> None:
+    trace_ids = [
+        str(row[0])
+        for row in conn.execute(
+            """
+            select distinct trace_id from units
+            where project_slug = ? and unit_type in ('patch', 'git_anchor')
+            """,
+            (project_slug,),
+        )
+    ]
+    _delete_units_where(
+        conn,
+        "project_slug = ? and unit_type in ('patch', 'git_anchor')",
+        [project_slug],
+    )
+    _delete_trail_maps_for_trace_ids(conn, trace_ids)
+
+
 def _delete_units_where(conn: sqlite3.Connection, clause: str, params: list[str]) -> None:
     rows = list(conn.execute(f"select rowid, unit_id from units where {clause}", params))
     for rowid, unit_id in rows:
@@ -687,9 +807,19 @@ def _delete_units_where(conn: sqlite3.Connection, clause: str, params: list[str]
         conn.execute("delete from units where unit_id = ?", (unit_id,))
 
 
-def _delete_trail_maps(conn: sqlite3.Connection) -> None:
-    conn.execute("delete from trace_map_edges where edge_id like 'tme:%:trail:%'")
-    conn.execute("delete from trace_map_nodes where node_id like 'tmn:%:trail:%'")
+def _delete_trail_maps_for_trace_ids(conn: sqlite3.Connection, trace_ids: list[str]) -> None:
+    ids = sorted({trace_id for trace_id in trace_ids if trace_id})
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute(
+        f"delete from trace_map_edges where trace_id in ({placeholders}) and edge_id like 'tme:%:trail:%'",
+        ids,
+    )
+    conn.execute(
+        f"delete from trace_map_nodes where trace_id in ({placeholders}) and node_id like 'tmn:%:trail:%'",
+        ids,
+    )
 
 
 def _project_sources_by_slug() -> dict[str, Path]:
@@ -697,7 +827,7 @@ def _project_sources_by_slug() -> dict[str, Path]:
         from .config import load_config
 
         cfg = load_config()
-    except Exception:
+    except (OSError, ValueError, json.JSONDecodeError, ValidationError):
         return {}
     out: dict[str, Path] = {}
     for project_path, registration in getattr(cfg, "projects", {}).items():
@@ -728,7 +858,7 @@ def _iter_trace_file_records(trace_path: Path) -> list[TraceRecord]:
             continue
         try:
             records.append(TraceRecord.model_validate_json(line))
-        except Exception:
+        except (ValueError, json.JSONDecodeError, ValidationError):
             continue
     return records
 
@@ -740,7 +870,7 @@ def _insert_trace(
     trace_path: Path,
     trace_map: TraceMap,
 ) -> None:
-    title = record.task.description or _first_user_text(record) or record.trace_id
+    title = _index_text(record.task.description or _first_user_text(record) or record.trace_id)
     conn.execute(
         """
         insert into traces(trace_id, project_slug, session_id, generation_index, trace_path, title)
@@ -884,7 +1014,7 @@ def _build_units(record: TraceRecord, trace_map: TraceMap, project_slug: str) ->
     test_commands = _test_commands(record)
     signals = _trace_signals(record, trace_map)
     facets = _trace_facets(record, project_slug, skills, tools, files)
-    title = record.task.description or _first_user_text(record) or record.trace_id
+    title = _index_text(record.task.description or _first_user_text(record) or record.trace_id)
     unit = TraceUnit(
         unit_id=f"tu:{record.trace_id}:trace",
         unit_type="trace",
@@ -893,7 +1023,7 @@ def _build_units(record: TraceRecord, trace_map: TraceMap, project_slug: str) ->
         files=files,
         skills=skills,
         title_text=title,
-        intent_text=" ".join(filter(None, [record.task.description, _first_user_text(record)])),
+        intent_text=_index_text(" ".join(filter(None, [record.task.description, _first_user_text(record)]))),
         action_text=" ".join(_tool_texts(record)),
         evidence_text=" ".join(_observation_summaries(record)),
         artifact_text=" ".join([*files, *record.dependencies]),
@@ -988,7 +1118,7 @@ def _trace_intent_unit(
         files=[],
         skills=_trace_skills(record),
         title_text=title,
-        intent_text=" ".join(filter(None, [record.task.description, _first_user_text(record)])),
+        intent_text=_index_text(" ".join(filter(None, [record.task.description, _first_user_text(record)]))),
         action_text="",
         evidence_text="intent candidate derived from task and first user instruction",
         artifact_text="",
@@ -1032,7 +1162,7 @@ def _trace_slice_unit(
         files=files,
         skills=_trace_skills(record),
         title_text=title,
-        intent_text=_first_user_text(record) or record.task.description or "",
+        intent_text=_index_text(_first_user_text(record) or record.task.description or ""),
         action_text=" ".join(node.action_type for node in selected_nodes),
         evidence_text="bounded intent-to-evidence Trace Map slice",
         artifact_text=" ".join(files),
@@ -1078,7 +1208,7 @@ def _skill_invocation_units(
                     project_slug=project_slug,
                     skills=[skill_name],
                     title_text=f"Skill invocation {skill_name}",
-                    intent_text=record.task.description or _first_user_text(record) or "",
+                    intent_text=_index_text(record.task.description or _first_user_text(record) or ""),
                     action_text=f"{call.tool_name} {skill_name}",
                     evidence_text=f"skill.name={skill_name}",
                     facets=facets,
@@ -1118,7 +1248,7 @@ def _tool_sequence_unit(
         files=[],
         skills=_trace_skills(record),
         title_text=f"Tool sequence for {title}",
-        intent_text=record.task.description or _first_user_text(record) or "",
+        intent_text=_index_text(record.task.description or _first_user_text(record) or ""),
         action_text=" ".join(tools),
         evidence_text=f"{len(tools)} tool calls",
         artifact_text="",
@@ -1138,7 +1268,7 @@ def _build_trail_units(repo: Path, project_slug: str) -> list[TraceUnit]:
         from .trails import build_trail_query_projection
 
         projection = build_trail_query_projection(repo)
-    except Exception:
+    except (OSError, RuntimeError, ValueError, ValidationError, subprocess.SubprocessError):
         return []
 
     units: list[TraceUnit] = []
@@ -1998,9 +2128,9 @@ def _tool_texts(record: TraceRecord) -> list[str]:
             command = call.input.get("command")
             file_path = call.input.get("file_path") or call.input.get("file")
             if command:
-                texts.append(str(command))
+                texts.append(_index_text(command))
             elif file_path:
-                texts.append(f"{call.tool_name} {file_path}")
+                texts.append(_index_text(f"{call.tool_name} {file_path}"))
             else:
                 texts.append(call.tool_name)
     return texts
@@ -2069,5 +2199,9 @@ def _candidate_node_for_unit(trace_map: TraceMap, unit: TraceUnit) -> TraceMapNo
 
 
 def _preview(text: str, *, limit: int = 240) -> str:
-    compact = " ".join(str(text).split())
+    compact = " ".join(_index_text(text).split())
     return compact[: limit - 3] + "..." if len(compact) > limit else compact
+
+
+def _index_text(text: object) -> str:
+    return redact_index_text(text)

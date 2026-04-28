@@ -361,6 +361,53 @@ def test_trace_query_reserved_vector_mode_exits_10():
     assert "reserved in M1" in result.output
 
 
+def test_trace_query_reserved_hyde_mode_exits_10():
+    result = CliRunner().invoke(main, ["trace", "query", "--hyde", "parser bug"])
+
+    assert result.exit_code == 10
+    assert "reserved in M1" in result.output
+
+
+def test_trace_query_include_superseded_returns_older_generations(tmp_path):
+    project = tmp_path / "demo"
+    _enroll_project(project, "abcdef1234567890abcdef1234567890")
+    old = _trace()
+    old.trace_id = "trace-plan056-cli-old"
+    old.generation_index = 1
+    new = _trace()
+    new.trace_id = "trace-plan056-cli-new"
+    new.generation_index = 2
+    _write_project_trace(project, old)
+    _write_project_trace(project, new)
+
+    runner = CliRunner()
+    latest_only = runner.invoke(
+        main,
+        ["trace", "query", "--skill", "grill-me", "--force-rebuild", "--json"],
+    )
+    assert latest_only.exit_code == 0, latest_only.output
+    assert [packet["trace_id"] for packet in json.loads(latest_only.output)["candidates"]] == [
+        "trace-plan056-cli-new"
+    ]
+
+    with_superseded = runner.invoke(
+        main,
+        [
+            "trace",
+            "query",
+            "--skill",
+            "grill-me",
+            "--include-superseded",
+            "--json",
+        ],
+    )
+    assert with_superseded.exit_code == 0, with_superseded.output
+    assert {
+        packet["trace_id"]
+        for packet in json.loads(with_superseded.output)["candidates"]
+    } == {"trace-plan056-cli-old", "trace-plan056-cli-new"}
+
+
 def test_trace_search_and_show_aliases_resolve(tmp_path):
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")

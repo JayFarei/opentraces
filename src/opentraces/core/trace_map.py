@@ -8,6 +8,8 @@ from typing import Any
 
 from opentraces_schema import TraceMap, TraceMapEdge, TraceMapNode, TraceRecord
 
+from .text_redaction import redact_index_text
+
 
 _TEST_COMMAND_RE = re.compile(
     r"\b(pytest|npm\s+test|pnpm\s+test|yarn\s+test|cargo\s+test|go\s+test|"
@@ -21,7 +23,13 @@ def build_trace_map(record: TraceRecord) -> TraceMap:
 
     builder = _TraceMapBuilder(record.trace_id)
 
-    for step in sorted(record.steps, key=lambda s: s.step_index):
+    steps = sorted(record.steps, key=lambda s: s.step_index)
+    last_agent_text_step = next(
+        (step for step in reversed(steps) if step.role == "agent" and step.content),
+        None,
+    )
+
+    for step in steps:
         if step.role == "user" and step.content:
             builder.add_node(
                 unit_id=f"tu:{record.trace_id}:step:{step.step_index}",
@@ -32,7 +40,7 @@ def build_trace_map(record: TraceRecord) -> TraceMap:
         elif step.role == "agent" and step.content:
             builder.add_node(
                 unit_id=f"tu:{record.trace_id}:step:{step.step_index}",
-                action_type=_agent_text_action_type(step.content, is_last=step is record.steps[-1]),
+                action_type=_agent_text_action_type(step.content, is_last=step is last_agent_text_step),
                 step_index=step.step_index,
                 text_preview=_preview(step.content),
             )
@@ -317,7 +325,7 @@ def _tool_preview(tool_name: str, tool_input: dict[str, Any]) -> str:
 
 
 def _preview(text: str, *, limit: int = 160) -> str:
-    compact = " ".join(str(text).split())
+    compact = " ".join(redact_index_text(text).split())
     return compact[: limit - 3] + "..." if len(compact) > limit else compact
 
 
