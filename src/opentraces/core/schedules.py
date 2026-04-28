@@ -1,0 +1,187 @@
+"""Local dataset schedule registry for Plan 57."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from opentraces_schema import DatasetSchedule
+
+from .datasets import list_datasets, load_dataset, save_manifest
+
+
+@dataclass(frozen=True)
+class ScheduleState:
+    dataset: str
+    path: Path
+    enabled: bool
+    every: str
+    executor: str
+    trigger: dict[str, Any]
+    last_run_status: str | None = None
+
+
+def add_schedule(name: str, *, every: str, executor: str) -> ScheduleState:
+    dataset = load_dataset(name)
+    state = _state(
+        dataset.name,
+        dataset.path,
+        enabled=True,
+        every=every,
+        executor=executor,
+        last_run_status=None,
+    )
+    _write_state(dataset.path, state)
+    _write_trigger(dataset.path, name, executor)
+    _append_log(dataset.path, f"schedule added every={every} executor={executor}")
+    dataset.manifest.schedule = DatasetSchedule(enabled=True, every=every, executor=executor)
+    save_manifest(dataset.path, dataset.manifest)
+    return state
+
+
+def list_schedules() -> list[ScheduleState]:
+    schedules: list[ScheduleState] = []
+    for dataset in list_datasets():
+        state_path = dataset.path / ".opentraces" / "schedule.yaml"
+        if state_path.exists():
+            schedules.append(read_schedule(dataset.name))
+    return schedules
+
+
+def read_schedule(name: str) -> ScheduleState:
+    dataset = load_dataset(name)
+    state_path = dataset.path / ".opentraces" / "schedule.yaml"
+    if not state_path.exists():
+        raise FileNotFoundError(f"schedule not found: {name}")
+    raw = yaml.safe_load(state_path.read_text(encoding="utf-8")) or {}
+    return ScheduleState(
+        dataset=name,
+        path=dataset.path,
+        enabled=bool(raw.get("enabled")),
+        every=str(raw.get("every") or ""),
+        executor=str(raw.get("executor") or "claude-code-headless"),
+        trigger=dict(raw.get("trigger") or {}),
+        last_run_status=raw.get("last_run_status"),
+    )
+
+
+def pause_schedule(name: str) -> ScheduleState:
+    dataset = load_dataset(name)
+    state = read_schedule(name)
+    updated = _state(
+        name,
+        dataset.path,
+        enabled=False,
+        every=state.every,
+        executor=state.executor,
+        last_run_status=state.last_run_status,
+    )
+    _write_state(dataset.path, updated)
+    _append_log(dataset.path, "schedule paused")
+    dataset.manifest.schedule = DatasetSchedule(
+        enabled=False,
+        every=state.every,
+        executor=state.executor,
+    )
+    save_manifest(dataset.path, dataset.manifest)
+    return updated
+
+
+def resume_schedule(name: str) -> ScheduleState:
+    dataset = load_dataset(name)
+    state = read_schedule(name)
+    updated = _state(
+        name,
+        dataset.path,
+        enabled=True,
+        every=state.every,
+        executor=state.executor,
+        last_run_status=state.last_run_status,
+    )
+    _write_state(dataset.path, updated)
+    _write_trigger(dataset.path, name, state.executor)
+    _append_log(dataset.path, "schedule resumed")
+    dataset.manifest.schedule = DatasetSchedule(
+        enabled=True,
+        every=state.every,
+        executor=state.executor,
+    )
+    save_manifest(dataset.path, dataset.manifest)
+    return updated
+
+
+def remove_schedule(name: str) -> ScheduleState:
+    dataset = load_dataset(name)
+    state = read_schedule(name)
+    for relative in ("schedule.yaml", "schedule.trigger"):
+        path = dataset.path / ".opentraces" / relative
+        if path.exists():
+            path.unlink()
+    _append_log(dataset.path, "schedule removed")
+    dataset.manifest.schedule = None
+    save_manifest(dataset.path, dataset.manifest)
+    return state
+
+
+def read_schedule_logs(name: str, *, tail: bool = False) -> list[str]:
+    dataset = load_dataset(name)
+    log_path = dataset.path / ".opentraces" / "schedule.log"
+    if not log_path.exists():
+        return []
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    return lines[-50:] if tail else lines
+
+
+def _state(
+    name: str,
+    root: Path,
+    *,
+    enabled: bool,
+    every: str,
+    executor: str,
+    last_run_status: str | None,
+) -> ScheduleState:
+    return ScheduleState(
+        dataset=name,
+        path=root,
+        enabled=enabled,
+        every=every,
+        executor=executor,
+        trigger={
+            "backend": "local-file",
+            "path": str(root / ".opentraces" / "schedule.trigger"),
+        },
+        last_run_status=last_run_status,
+    )
+
+
+def _write_state(root: Path, state: ScheduleState) -> None:
+    payload = {
+        "dataset": state.dataset,
+        "enabled": state.enabled,
+        "every": state.every,
+        "executor": state.executor,
+        "trigger": state.trigger,
+        "last_run_status": state.last_run_status,
+    }
+    (root / ".opentraces" / "schedule.yaml").write_text(
+        yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _write_trigger(root: Path, name: str, executor: str) -> None:
+    trigger_path = root / ".opentraces" / "schedule.trigger"
+    trigger_path.write_text(
+        f"opentraces dataset run {name} --scheduled --executor {executor}\n",
+        encoding="utf-8",
+    )
+
+
+def _append_log(root: Path, message: str) -> None:
+    log_path = root / ".opentraces" / "schedule.log"
+    with log_path.open("a", encoding="utf-8") as stream:
+        stream.write(message + "\n")

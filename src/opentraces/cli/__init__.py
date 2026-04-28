@@ -49,7 +49,22 @@ _json_mode = False
 # -- Grouped help formatting --------------------------------------------------
 
 COMMAND_SECTIONS = [
-    ("Core", ["add", "push", "pull", "list", "show", "status", "trail", "blame", "resume"]),
+    (
+        "Core",
+        [
+            "add",
+            "push",
+            "pull",
+            "list",
+            "show",
+            "status",
+            "trail",
+            "dataset",
+            "workflow",
+            "blame",
+            "resume",
+        ],
+    ),
     (
         "Inbox",
         [
@@ -2699,6 +2714,12 @@ main.add_command(_trace_reject_cmd, name="reject")
 main.add_command(_trace_reset_cmd, name="reset")
 main.add_command(_trace_discard_cmd, name="discard")
 main.add_command(_trace_resume_cmd, name="resume")
+
+from .dataset import dataset_group as _dataset_group  # noqa: E402
+from .workflow import workflow_group as _workflow_group  # noqa: E402
+
+main.add_command(_dataset_group, name="dataset")
+main.add_command(_workflow_group, name="workflow")
 
 
 @main.command("list")

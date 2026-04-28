@@ -20,6 +20,18 @@ from .models import (
     TraceRecord,
     VCS,
 )
+from .dataset import (
+    DatasetCandidateQuery,
+    DatasetDiscoverability,
+    DatasetIdentity,
+    DatasetManifest,
+    DatasetRowIndexEntry,
+    DatasetRunRecord,
+    DatasetSchedule,
+    DatasetSchemaRef,
+    ExecutorConfig,
+    WorkflowRef,
+)
 from .trace_index import (
     CandidatePacket,
     TraceFacet,
@@ -38,7 +50,16 @@ __all__ = [
     "AttributionFile",
     "AttributionRange",
     "CandidatePacket",
+    "DatasetCandidateQuery",
+    "DatasetDiscoverability",
+    "DatasetIdentity",
+    "DatasetManifest",
+    "DatasetRowIndexEntry",
+    "DatasetRunRecord",
+    "DatasetSchedule",
+    "DatasetSchemaRef",
     "Environment",
+    "ExecutorConfig",
     "GitLink",
     "Metrics",
     "Observation",
@@ -58,4 +79,5 @@ __all__ = [
     "TraceSignal",
     "TraceUnit",
     "VCS",
+    "WorkflowRef",
 ]
