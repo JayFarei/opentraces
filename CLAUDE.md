@@ -60,7 +60,47 @@ pytest tests/ -v
 
 ## Testing
 
+Use the repo virtualenv for test commands; system Python may not have the
+editable packages and CLI dependencies installed.
+
 ```bash
 source .venv/bin/activate
 pytest tests/ -v
 ```
+
+Focused Trace Trails validation:
+
+```bash
+.venv/bin/python -m pytest \
+  tests/integration/test_trace_trails_full_stack_demo.py \
+  tests/integration/test_trace_trails_installed_runtime_uat.py \
+  tests/integration/test_trace_trails_portrayal.py \
+  tests/integration/test_trace_trails_corpus.py -q
+```
+
+Trace Trails test capabilities:
+
+- `tests/integration/test_trace_trails_full_stack_demo.py` runs the deterministic full-stack mock project: hook-boundary mutation observation, ingest, delayed Git Anchor maturation, Trace Workspace export/open, and user-facing `trail`/`blame`/`graph` projections.
+- `tests/integration/test_trace_trails_installed_runtime_uat.py` exercises installed runtime surfaces: `opentraces --json setup git`, a real Git post-commit hook invocation, and `opentraces watcher tick --project ... --json` driving session ingest, watcher reconciliation, and anchor maturation.
+- `tests/integration/test_trace_trails_portrayal.py` builds the reviewer-facing portrayal packet and checks UAT judgement points for usefulness/usability across watcher, attribution, maturation, and projection surfaces. Human-readable criteria live in `tests/integration/trail_scenarios/reports/trace_trails_portrayal_uat.md`.
+- `tests/integration/test_trace_trails_corpus.py` verifies the versioned synthetic corpus at `tests/fixtures/trace_trails_corpus/v1`, including normalized command/API outputs, TrailEvents, Trace Workspace rows, and HF-style dataset artifacts.
+- `tests/integration/harness/trace_trails_corpus.py --check` confirms the committed corpus is current; `--update` intentionally regenerates it after accepted scenario changes.
+
+Corpus commands:
+
+```bash
+.venv/bin/python tests/integration/harness/trace_trails_corpus.py --check
+.venv/bin/python tests/integration/harness/trace_trails_corpus.py --update
+```
+
+Opt-in live Claude/tmux UAT is available but must not run in default CI:
+
+```bash
+OT_REAL_REPL=1 OT_TRAIL_REAL_REPL=1 \
+  .venv/bin/python -m pytest tests/integration/test_trail_real_repl_scenarios.py -q
+```
+
+Use the focused Trace Trails suites when validating lineage behavior. Full
+`pytest tests/ -v` is still the broad regression command, but unrelated perf
+budgets or UI snapshot drift should be triaged separately from Trace Trails
+functional evidence.
