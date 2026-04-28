@@ -32,12 +32,15 @@ so the hook never blocks Claude Code.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 import mmh3
+
+from opentraces.capture.claude_code.hooks._trails import (
+    observe_tool_boundary_for_hook,
+    trail_state,
+)
 
 
 def _hash(text: str) -> str:
@@ -131,58 +134,6 @@ def _handle_write(tool_input: dict) -> dict | None:
     }
 
 
-def _git_head(cwd: Path) -> dict[str, str] | None:
-    try:
-        sha = subprocess.check_output(
-            ["git", "rev-parse", "--verify", "HEAD"],
-            cwd=cwd,
-            text=True,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        ).strip()
-    except Exception:
-        return None
-    return {"algo": "sha1", "hex": sha}
-
-
-def _trail_state(cwd: str | None) -> dict:
-    if not cwd:
-        return {}
-    try:
-        from opentraces.core.trails import write_worktree_tree
-
-        root = Path(cwd).resolve()
-        return {
-            "worktree_root": str(root),
-            "tree_id": write_worktree_tree(root),
-            "git_head": _git_head(root),
-        }
-    except Exception:
-        return {}
-
-
-def _observe_tool_boundary(
-    cwd: str | None,
-    tool_name: str | None,
-    transcript_path: str | None,
-) -> dict | None:
-    try:
-        from opentraces.capture.fs_watcher.runtime import observe_tool_boundary
-
-        exclude_paths = [transcript_path] if transcript_path else None
-        result = observe_tool_boundary(cwd, tool_name, exclude_paths=exclude_paths)
-    except Exception:
-        return None
-    if result is None:
-        return None
-    return {
-        "baseline_initialized": result.baseline_initialized,
-        "paths_seen": result.paths_seen,
-        "observations": len(result.observations),
-        "skipped_paths": result.skipped_paths,
-    }
-
-
 def _dual_emit_agent_trace(cwd: str | None, data: dict, session_id: str | None) -> None:
     """Plan 041 R37: append an Agent Trace-compatible attribution line
     to `.agent-trace/traces.jsonl` in the repo root so any opentraces-
@@ -231,7 +182,7 @@ def main() -> None:
     tool_use_id = payload.get("tool_use_id")
     session_id = payload.get("session_id")
     cwd = payload.get("cwd")
-    observer = _observe_tool_boundary(cwd, tool_name, transcript_path)
+    observer = observe_tool_boundary_for_hook(cwd, tool_name, transcript_path)
 
     if tool_name == "Edit":
         data = _handle_edit(tool_input)
@@ -256,9 +207,9 @@ def main() -> None:
     data["session_id"] = session_id
     data["tool_input"] = tool_input
     data["tool_response"] = payload.get("tool_response") or {}
-    trail_state = _trail_state(cwd)
-    if trail_state:
-        data["trail"] = trail_state
+    trail = trail_state(cwd)
+    if trail:
+        data["trail"] = trail
     if observer is not None:
         data["trail_observer"] = observer
 

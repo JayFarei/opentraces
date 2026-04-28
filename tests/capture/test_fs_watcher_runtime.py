@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from opentraces.capture.fs_watcher.runtime import observe_tool_boundary, poll_project_once
+from opentraces.capture.fs_watcher.runtime import poll_project_once
 from opentraces.core.trails import (
     close_step_window_with_snapshot,
     open_step_window,
@@ -217,19 +217,3 @@ def test_polling_observer_excludes_explicit_paths(tmp_path: Path) -> None:
     result = poll_project_once(tmp_path, state_path=state, exclude_paths=[transcript])
 
     assert [event.payload["path"] for event in result.observations] == ["generated.py"]
-
-
-def test_observe_tool_boundary_skips_non_mutating_tools(tmp_path: Path) -> None:
-    _init_repo(tmp_path)
-
-    result = observe_tool_boundary(tmp_path, "Read")
-
-    assert result is None
-    assert not (tmp_path / ".git" / "opentraces-fs-watcher-state.json").exists()
-
-
-def test_observe_tool_boundary_skips_non_git_dirs(tmp_path: Path) -> None:
-    result = observe_tool_boundary(tmp_path, "Bash")
-
-    assert result is None
-    assert not (tmp_path / ".git").exists()

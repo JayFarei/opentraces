@@ -19,7 +19,7 @@ from .observations import (
     append_filesystem_mutation_observed,
     filesystem_mutation_observed_draft,
 )
-from .runtime import ObservedMutation, PollResult, observe_tool_boundary, poll_project_once
+from .runtime import ObservedMutation, PollResult, poll_project_once
 
 __all__ = [
     "FilesystemMutationObservation",
@@ -27,6 +27,5 @@ __all__ = [
     "PollResult",
     "append_filesystem_mutation_observed",
     "filesystem_mutation_observed_draft",
-    "observe_tool_boundary",
     "poll_project_once",
 ]

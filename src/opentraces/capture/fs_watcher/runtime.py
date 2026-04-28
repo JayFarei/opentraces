@@ -26,16 +26,6 @@ from .observations import filesystem_mutation_observed_draft
 DEFAULT_STATE_BASENAME = "opentraces-fs-watcher-state.json"
 DEFAULT_LOCK_BASENAME = "opentraces-fs-watcher.lock"
 DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024
-HOOK_BOUNDARY_WRITER = "hook-fs-watcher"
-MUTATING_TOOL_NAMES = frozenset(
-    {
-        "bash",
-        "edit",
-        "write",
-        "multiedit",
-        "notebookedit",
-    }
-)
 INTERNAL_PREFIXES = (
     ".git/",
     ".opentraces/",
@@ -89,35 +79,6 @@ def poll_project_once(
             exclude_paths=exclude_paths,
             writer=writer,
         )
-
-
-def observe_tool_boundary(
-    cwd: str | Path | None,
-    tool_name: str | None,
-    *,
-    exclude_paths: Iterable[str | Path] | None = None,
-    writer: str = HOOK_BOUNDARY_WRITER,
-) -> PollResult | None:
-    """Poll at an agent tool boundary when the tool can mutate files.
-
-    Claude Code hook integration calls this at PreToolUse and PostToolUse.
-    A PreToolUse call usually initializes or refreshes the baseline. The
-    matching PostToolUse call then observes the path/blob transitions with
-    an interval narrow enough to fit inside the step window once ingest emits
-    ``trace_step_window_opened`` / ``trace_step_window_closed``.
-
-    Non-mutating tools and non-Git directories are skipped. All errors are
-    swallowed so hook execution never blocks the agent runtime.
-    """
-    if not cwd or not _is_mutating_tool(tool_name):
-        return None
-    try:
-        root = _worktree_root(Path(cwd).resolve())
-        if root is None:
-            return None
-        return poll_project_once(root, exclude_paths=exclude_paths, writer=writer)
-    except Exception:
-        return None
 
 
 def _poll_project_once_unlocked(
@@ -211,10 +172,6 @@ def _poll_project_once_unlocked(
         mutations=mutations,
         skipped_paths=skipped,
     )
-
-
-def _is_mutating_tool(tool_name: str | None) -> bool:
-    return isinstance(tool_name, str) and tool_name.strip().lower() in MUTATING_TOOL_NAMES
 
 
 def _normalize_excluded_paths(

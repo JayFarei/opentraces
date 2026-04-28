@@ -7,6 +7,7 @@ This module collapses the former top-level `agents/`, `parsers/`, and `installer
 ## What lives here
 
 - `_base.py` — cross-agent protocols: `SessionParser`, `FormatImporter`, `ParseOutcome`.
+- `tool_boundary.py` — adapter-facing Trace Trails worktree observation at tool lifecycle boundaries. Agent hooks call this interface; `fs_watcher/` owns only path/blob observation.
 - `claude_code/` — Claude Code adapter.
   - `parse.py` — `ClaudeCodeParser` (live session parser).
   - `hooks/` — `on_stop`, `on_compact`, `on_tool_use`. Copied to `~/.claude/hooks/` by `opentraces setup claude-code`.
@@ -35,7 +36,7 @@ The full contributor-facing contract, with worked examples for Tiers 1 to 4 (fil
    - `SessionParser` for live agent sessions.
    - `FormatImporter` for file-based imports.
    - `HookInstaller` if you wire scripts into the agent's settings.
-3. Add hooks under `capture/<name>/hooks/` if the external tool supports them. For Trace Trails participation, hooks must call `core.trails.write_worktree_tree(cwd)` synchronously at tool boundaries and emit `opentraces_hook` lines into the transcript with `metadata["hook_pre_tool_use"]` / `["hook_post_tool_use"]` keys.
+3. Add hooks under `capture/<name>/hooks/` if the external tool supports them. For Trace Trails participation, hooks must call `core.trails.write_worktree_tree(cwd)` synchronously at tool boundaries, call `capture.tool_boundary.observe_tool_boundary(...)` for mutating tools, and emit `opentraces_hook` lines into the transcript with `metadata["hook_pre_tool_use"]` / `["hook_post_tool_use"]` keys. If the agent uses non-Claude tool names, pass `may_mutate=True` after applying the adapter's own tool policy instead of modifying `fs_watcher/`.
 4. Register in `_register_defaults()` in `capture/__init__.py`. Generalize the hardcoded Claude-Code-only call sites listed in the integration spec under "Known coupling" before shipping a second live agent.
 5. Add tests under `tests/capture/test_parser_<name>.py` and any hook/install tests, following the recipes in the integration spec's "Test pattern catalog."
 
