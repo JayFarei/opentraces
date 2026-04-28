@@ -7,6 +7,7 @@ shape is testable without going through Click, and any future surfaces
 """
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,88 @@ from ..security.version import SECURITY_VERSION
 
 
 # --- Trace Trails event-log panel (plan 054 phase 1) ----------------------
+
+
+def _trace_index_status() -> dict[str, Any]:
+    """Report local Trace Index cache status for Plan 56."""
+    from . import paths
+    from .trace_index import INDEX_VERSION, default_index_path
+
+    index_path = default_index_path()
+    rebuild_advice = "opentraces trace query --force-rebuild"
+    legacy_artifacts = _legacy_trace_index_artifacts()
+    source_files = sorted(paths.PROJECTS_DIR.glob("*/traces/*.jsonl")) if paths.PROJECTS_DIR.exists() else []
+    source_latest_mtime = max((p.stat().st_mtime for p in source_files), default=None)
+    base = {
+        "index_path": str(index_path),
+        "expected_version": INDEX_VERSION,
+        "source_trace_files": len(source_files),
+        "source_latest_mtime": source_latest_mtime,
+        "rebuild_advice": rebuild_advice,
+        "legacy_artifacts": legacy_artifacts,
+        "legacy_warning": bool(legacy_artifacts),
+    }
+    if not index_path.exists():
+        return {
+            **base,
+            "state": "missing",
+            "trace_count": 0,
+            "unit_count": 0,
+            "map_node_count": 0,
+        }
+
+    try:
+        with sqlite3.connect(index_path) as conn:
+            version_row = conn.execute(
+                "select value from meta where key = 'index_version'"
+            ).fetchone()
+            trace_count = conn.execute("select count(*) from traces").fetchone()[0]
+            unit_count = conn.execute("select count(*) from units").fetchone()[0]
+            map_node_count = conn.execute("select count(*) from trace_map_nodes").fetchone()[0]
+    except Exception as exc:
+        return {
+            **base,
+            "state": "error",
+            "error": str(exc),
+            "trace_count": 0,
+            "unit_count": 0,
+            "map_node_count": 0,
+        }
+
+    index_mtime = index_path.stat().st_mtime
+    version = version_row[0] if version_row else None
+    stale = bool(source_latest_mtime is not None and source_latest_mtime > index_mtime)
+    state = "stale" if stale or version != INDEX_VERSION else "ok"
+    return {
+        **base,
+        "state": state,
+        "index_version": version,
+        "index_mtime": index_mtime,
+        "trace_count": trace_count,
+        "unit_count": unit_count,
+        "map_node_count": map_node_count,
+    }
+
+
+def _legacy_trace_index_artifacts() -> list[dict[str, Any]]:
+    from . import paths
+
+    candidates = [
+        paths.OPENTRACES_DIR / "trace_index.json",
+        paths.OPENTRACES_DIR / "db" / "ot.sqlite",
+    ]
+    out: list[dict[str, Any]] = []
+    for artifact in candidates:
+        if artifact.exists():
+            out.append(
+                {
+                    "path": str(artifact),
+                    "status": "ignored",
+                    "replacement": str(paths.OPENTRACES_DIR / "index" / "index.db"),
+                }
+            )
+    return out
+
 
 def _trail_event_log_status(cwd: Path) -> dict[str, Any]:
     """Report integrity for the canonical local Trace Trails event log."""
@@ -640,6 +723,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "attribution": _attribution_status(cwd),
         "watcher": _watcher_status(),
         "hooks": _hook_installers(),
+        "trace_index": _trace_index_status(),
         "trail_event_log": _trail_event_log_status(cwd),
         "post_commit_hook": _post_commit_hook_status(cwd),
     }

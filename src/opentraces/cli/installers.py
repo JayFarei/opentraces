@@ -1574,6 +1574,20 @@ def _post_commit_hook_section(info: dict) -> None:
         _row("ok", "trail anchors", str(count if count is not None else 0))
 
 
+def _trace_index_section(info: dict) -> None:
+    _section("Trace Index")
+    state = info.get("state") or "missing"
+    kind = {"ok": "ok", "stale": "warn", "missing": "off", "error": "err"}.get(state, "warn")
+    _row(kind, "status", state, detail=info.get("index_path"))
+    _row("ok", "traces", str(info.get("trace_count") or 0))
+    _row("ok", "units", str(info.get("unit_count") or 0))
+    _row("ok", "map nodes", str(info.get("map_node_count") or 0))
+    if info.get("legacy_warning"):
+        _row("warn", "legacy cache", "ignored", detail="canonical cache is ~/.opentraces/index/index.db")
+    if state != "ok":
+        _row("warn", "rebuild", info.get("rebuild_advice") or "opentraces trace query --force-rebuild")
+
+
 def _skill_row(h: dict) -> None:
     installed = h.get("installed")
     iv = h.get("installed_version")
@@ -1664,6 +1678,7 @@ def _render_doctor_human(report: dict) -> None:
     _entity_parser_section(report.get("entity_parser") or {})
     _attribution_section(report.get("attribution") or {})
     _watcher_section(report.get("watcher") or {})
+    _trace_index_section(report.get("trace_index") or {})
     _hooks_section(report["hooks"])
     _post_commit_hook_section(report.get("post_commit_hook") or {})
     _trail_event_log_section(report.get("trail_event_log") or {})

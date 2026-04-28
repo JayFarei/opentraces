@@ -20,6 +20,15 @@ from .models import (
     TraceRecord,
     VCS,
 )
+from .trace_index import (
+    CandidatePacket,
+    TraceFacet,
+    TraceMap,
+    TraceMapEdge,
+    TraceMapNode,
+    TraceSignal,
+    TraceUnit,
+)
 from .version import SCHEMA_VERSION
 
 __all__ = [
@@ -28,6 +37,7 @@ __all__ = [
     "AttributionConversation",
     "AttributionFile",
     "AttributionRange",
+    "CandidatePacket",
     "Environment",
     "GitLink",
     "Metrics",
@@ -40,6 +50,12 @@ __all__ = [
     "Task",
     "TokenUsage",
     "ToolCall",
+    "TraceFacet",
+    "TraceMap",
+    "TraceMapEdge",
+    "TraceMapNode",
     "TraceRecord",
+    "TraceSignal",
+    "TraceUnit",
     "VCS",
 ]

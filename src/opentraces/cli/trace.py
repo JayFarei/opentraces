@@ -163,6 +163,356 @@ def trace_workspace_open(workspace: Path, project: Path, as_json: bool) -> None:
     click.echo(f"  snapshots: {payload['snapshot_count']}")
 
 
+@trace_group.command("query", cls=OpentracesCommand)
+@click.option("--lex", default=None, help="Lexical query text.")
+@click.option("--skill", default=None, help="Exact skill.name facet.")
+@click.option("--tool", default=None, help="Exact tool.name facet.")
+@click.option("--files", default=None, help="File glob filter over indexed paths.")
+@click.option("--file-kind", default=None, help="File extension/kind filter.")
+@click.option("--file-op", default=None, help="Derived file.operation filter.")
+@click.option("--signal", default=None, help="Deterministic signal filter.")
+@click.option("--facet", "facet_filters", multiple=True, help="Generic facet filter as name=value.")
+@click.option("--metadata", "metadata_filters", multiple=True, help="Indexed unit metadata filter as key=value.")
+@click.option("--provider", default=None, help="Exact provider.kind facet.")
+@click.option("--cmd-family", default=None, help="Derived bash.command_family facet.")
+@click.option("--bash-action", default=None, help="Derived bash.action facet.")
+@click.option("--test", "test_framework", default=None, help="Derived test.framework facet.")
+@click.option("--service", default=None, help="Derived service.name facet.")
+@click.option("--service-channel", default=None, help="Derived service.channel facet.")
+@click.option("--dependency", default=None, help="Exact dependency.name facet.")
+@click.option("--git-tier", default=None, help="Exact git_link_tier facet.")
+@click.option("--survival", default=None, help="Derived Trace Trail survival state.")
+@click.option("--since", default=None, help="ISO date/time or duration such as 7d.")
+@click.option("--candidate-kind", default=None, help="Soft candidate label filter.")
+@click.option("--success/--no-success", default=None, help="Filter outcome.success.")
+@click.option("--committed/--uncommitted", default=None, help="Filter outcome.committed.")
+@click.option("--project", default=None, help="Project slug to search.")
+@click.option("--cwd", "current_cwd", is_flag=True, help="Search only the current opted-in project.")
+@click.option("--limit", type=int, default=20, show_default=True, help="Maximum candidates.")
+@click.option("--page-token", default=None, help="Cursor token returned by the previous page.")
+@click.option("--latest-generation/--include-superseded", default=True, help="Suppress older generations by default.")
+@click.option(
+    "--include-slice",
+    type=click.Choice(["intent", "evidence"]),
+    default=None,
+    help="Embed a bounded Trace Map slice in each candidate.",
+)
+@click.option("--max-slice-nodes", type=int, default=40, show_default=True, help="Maximum nodes for --include-slice.")
+@click.option("--force-rebuild", is_flag=True, help="Rebuild the local Trace Index before querying.")
+@click.option("--vec", default=None, help="Reserved vector query mode.")
+@click.option("--hyde", default=None, help="Reserved HyDE query mode.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_query(
+    lex: str | None,
+    skill: str | None,
+    tool: str | None,
+    files: str | None,
+    file_kind: str | None,
+    file_op: str | None,
+    signal: str | None,
+    facet_filters: tuple[str, ...],
+    metadata_filters: tuple[str, ...],
+    provider: str | None,
+    cmd_family: str | None,
+    bash_action: str | None,
+    test_framework: str | None,
+    service: str | None,
+    service_channel: str | None,
+    dependency: str | None,
+    git_tier: str | None,
+    survival: str | None,
+    since: str | None,
+    candidate_kind: str | None,
+    success: bool | None,
+    committed: bool | None,
+    project: str | None,
+    current_cwd: bool,
+    limit: int,
+    page_token: str | None,
+    latest_generation: bool,
+    include_slice: str | None,
+    max_slice_nodes: int,
+    force_rebuild: bool,
+    vec: str | None,
+    hyde: str | None,
+    as_json: bool,
+) -> None:
+    """Search local retained traces and return bounded candidate packets."""
+    from ..core.trace_index import query_index_page, rebuild_index
+
+    if vec or hyde:
+        click.echo(
+            "Vector and HyDE trace query modes are reserved in M1. "
+            "Use --lex or exact filters, or provision a future vector index.",
+            err=True,
+        )
+        raise click.exceptions.Exit(10)
+    if current_cwd and project:
+        click.echo("Use either --cwd or --project, not both.", err=True)
+        sys.exit(2)
+    if current_cwd:
+        from ..core.config import get_project_dir, project_is_opted_in
+
+        cwd = Path.cwd()
+        if not project_is_opted_in(cwd):
+            click.echo("Not an opentraces project. Run 'opentraces init' first.", err=True)
+            sys.exit(3)
+        project = get_project_dir(cwd).name
+    if not any([
+        lex,
+        skill,
+        tool,
+        files,
+        file_kind,
+        file_op,
+        signal,
+        facet_filters,
+        metadata_filters,
+        provider,
+        cmd_family,
+        bash_action,
+        test_framework,
+        service,
+        service_channel,
+        dependency,
+        git_tier,
+        survival,
+        since,
+        candidate_kind,
+        success is not None,
+        committed is not None,
+        project,
+    ]):
+        click.echo(
+            "Provide --lex, --skill, --tool, --files, --signal, --facet, "
+            "--metadata, named filters, --candidate-kind, --success, "
+            "--committed, --cwd, or --project.",
+            err=True,
+        )
+        sys.exit(3)
+    if force_rebuild:
+        rebuild_index()
+
+    try:
+        page = query_index_page(
+            lex=lex,
+            skill=skill,
+            tool=tool,
+            files=files,
+            file_kind=file_kind,
+            file_op=file_op,
+            signal=signal,
+            facet_filters=facet_filters,
+            metadata_filters=metadata_filters,
+            provider=provider,
+            cmd_family=cmd_family,
+            bash_action=bash_action,
+            test_framework=test_framework,
+            service=service,
+            service_channel=service_channel,
+            dependency=dependency,
+            git_tier=git_tier,
+            survival=survival,
+            since=since,
+            success=success,
+            committed=committed,
+            candidate_kind=candidate_kind,
+            latest_generation=latest_generation,
+            project=project,
+            limit=limit,
+            page_token=page_token,
+            include_slice=include_slice,
+            max_slice_nodes=max_slice_nodes,
+        )
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+    payload = {
+        "status": "ok",
+        "total": page.total,
+        "total_returned": len(page.candidates),
+        "limit": limit,
+        "next_page_token": page.next_page_token,
+        "has_more": page.next_page_token is not None,
+        "candidates": [packet.model_dump(mode="json") for packet in page.candidates],
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for packet in page.candidates:
+        click.echo(f"{packet.trace_id}  {packet.title}")
+
+
+@trace_group.command("map", cls=OpentracesCommand)
+@click.argument("target")
+@click.option("--candidate", default=None, help="Candidate unit or map node to expand around.")
+@click.option("--around", default=None, help="Map node or unit to show a local neighborhood around.")
+@click.option("--depth", type=int, default=2, show_default=True, help="Neighborhood depth for --around.")
+@click.option("--from-node", default=None, help="Map node or unit where a directional walk starts.")
+@click.option("--walk", type=click.Choice(["back", "forward"]), default=None, help="Walk direction for --from-node.")
+@click.option("--until", "until_actions", multiple=True, help="Action type that stops --walk.")
+@click.option("--max-steps", type=int, default=40, show_default=True, help="Maximum nodes in candidate slice.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_map_cmd(
+    target: str,
+    candidate: str | None,
+    around: str | None,
+    depth: int,
+    from_node: str | None,
+    walk: str | None,
+    until_actions: tuple[str, ...],
+    max_steps: int,
+    as_json: bool,
+) -> None:
+    """Show a deterministic Trace Map or bounded candidate slice."""
+    from ..core.trace_index import get_trace_map
+    from ..core.trace_map import slice_trace_map_for_candidate, trace_map_around, walk_trace_map
+
+    trace_id = _trace_id_from_ref(target)
+    trace_map = get_trace_map(trace_id)
+    if trace_map is None:
+        click.echo(f"Trace Map not found: {target}", err=True)
+        sys.exit(6)
+
+    selected = trace_map
+    candidate_node_id = None
+    if sum(bool(value) for value in (candidate, around, from_node)) > 1:
+        click.echo("Use only one of --candidate, --around, or --from-node.", err=True)
+        sys.exit(2)
+    if candidate:
+        candidate_node_id = _candidate_node_id(trace_map, candidate)
+        if candidate_node_id is None:
+            click.echo(f"Candidate not found in Trace Map: {candidate}", err=True)
+            sys.exit(6)
+        selected = slice_trace_map_for_candidate(
+            trace_map,
+            candidate_node_id,
+            max_steps=max_steps,
+        )
+    elif around:
+        candidate_node_id = _candidate_node_id(trace_map, around)
+        if candidate_node_id is None:
+            click.echo(f"Node not found in Trace Map: {around}", err=True)
+            sys.exit(6)
+        selected = trace_map_around(trace_map, candidate_node_id, depth=depth)
+    elif from_node:
+        if walk is None:
+            click.echo("--from-node requires --walk back|forward.", err=True)
+            sys.exit(2)
+        candidate_node_id = _candidate_node_id(trace_map, from_node)
+        if candidate_node_id is None:
+            click.echo(f"Node not found in Trace Map: {from_node}", err=True)
+            sys.exit(6)
+        selected = walk_trace_map(
+            trace_map,
+            candidate_node_id,
+            direction=walk,
+            until_action_types=set(until_actions),
+            max_steps=max_steps,
+        )
+    elif walk:
+        click.echo("--walk requires --from-node.", err=True)
+        sys.exit(2)
+
+    payload = {
+        "status": "ok",
+        "trace_id": trace_id,
+        "candidate_node_id": candidate_node_id,
+        "map": selected.model_dump(mode="json"),
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for node in selected.nodes:
+        click.echo(f"{node.node_id}  {node.action_type}  {node.text_preview or ''}")
+
+
+@trace_group.command("get", cls=OpentracesCommand)
+@click.argument("ref")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_get(ref: str, as_json: bool) -> None:
+    """Resolve a trace, trace unit, map node, or ot:// Trail resource."""
+    from opentraces_schema import TraceRecord
+
+    from ..core.trace_index import get_map_node, get_trace_path, get_unit
+
+    if ref.startswith("ot://"):
+        from ..core.trails import resolve_resource
+
+        payload = {"status": "ok", "resource": resolve_resource(Path.cwd(), ref)}
+    elif ref.startswith("tu:"):
+        unit = get_unit(ref)
+        if unit is None:
+            click.echo(f"Trace unit not found: {ref}", err=True)
+            sys.exit(6)
+        payload = {"status": "ok", "unit": unit.model_dump(mode="json")}
+    elif ref.startswith("tmn:"):
+        node = get_map_node(ref)
+        if node is None:
+            click.echo(f"Trace Map node not found: {ref}", err=True)
+            sys.exit(6)
+        payload = {"status": "ok", "map_node": node.model_dump(mode="json")}
+    else:
+        trace_path = get_trace_path(_trace_id_from_ref(ref))
+        if trace_path is None or not trace_path.exists():
+            click.echo(f"Trace not found: {ref}", err=True)
+            sys.exit(6)
+        first_line = next((line for line in trace_path.read_text().splitlines() if line.strip()), "")
+        record = TraceRecord.model_validate_json(first_line)
+        payload = {"status": "ok", "trace": record.model_dump(mode="json")}
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    if "trace" in payload:
+        click.echo(payload["trace"]["trace_id"])
+    elif "unit" in payload:
+        click.echo(payload["unit"]["unit_id"])
+    elif "map_node" in payload:
+        click.echo(payload["map_node"]["node_id"])
+    else:
+        click.echo(payload["resource"].get("resource_type", ref))
+
+
+trace_group.add_command(trace_query, name="search")
+trace_group.add_command(trace_get, name="show")
+
+
+def _trace_id_from_ref(ref: str) -> str:
+    if ref.startswith("ot://trace/"):
+        path = ref.removeprefix("ot://trace/")
+        if path.endswith("/map"):
+            return path.removesuffix("/map")
+        return path.split("/", 1)[0]
+    if ref.startswith("tmn:"):
+        from ..core.trace_index import get_map_node
+
+        node = get_map_node(ref)
+        if node is not None:
+            return node.trace_id
+    if ref.startswith("t:"):
+        return ref[2:]
+    if ref.startswith("tu:"):
+        parts = ref.split(":")
+        if len(parts) >= 3:
+            return parts[1]
+    return ref
+
+
+def _candidate_node_id(trace_map, candidate: str) -> str | None:
+    for node in trace_map.nodes:
+        if candidate in {node.node_id, node.unit_id}:
+            return node.node_id
+    trace_unit_id = f"tu:{trace_map.trace_id}:trace"
+    signal_prefix = f"tu:{trace_map.trace_id}:signal:"
+    if candidate == trace_unit_id or candidate.startswith(signal_prefix):
+        for action_type in ("file_edit", "test_run", "agent_plan", "user_instruction"):
+            node = next((n for n in trace_map.nodes if n.action_type == action_type), None)
+            if node:
+                return node.node_id
+    return None
+
+
 def _load_project_state():
     """Shared helper: load project-local StateManager and staging dir."""
     from ..core.config import get_project_traces_dir, get_project_state_path, project_is_opted_in
