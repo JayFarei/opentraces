@@ -142,6 +142,149 @@ def test_post_commit_reconciler_adds_delayed_git_anchor(tmp_path: Path) -> None:
     assert line_payload["trace_patch"]["trace_patch_id"] == _tp("delayed")
 
 
+def test_trail_mature_anchors_patch_created_after_commit(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    seed_sha = _git(repo, "rev-parse", "HEAD")
+    authored = "    return 'patch-created-after-commit-plan-54'\n"
+
+    (repo / "app.py").write_text("def value():\n" + authored)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "commit before ingest"], cwd=repo, check=True)
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-after-commit",
+                step_index=1,
+                capture_method=["watcher_backstop"],
+                payload={
+                    "trace_patch_id": _tp("after-commit"),
+                    "snapshot_before_id": "snapshot-before-after-commit",
+                    "snapshot_after_id": "snapshot-after-after-commit",
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "before_blob_id": _oid(repo, f"{seed_sha}:app.py"),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["trail", "mature", "--commit", commit_sha, "--json", "--project", str(repo)],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["commits_considered"] == 1
+    assert payload["searches_completed"] == 1
+    assert payload["anchors_created"] == 1
+
+    events = read_events(repo)
+    assert any(e.event_type == "git_anchor_created" for e in events)
+    search = [e for e in events if e.event_type == "git_anchor_search_completed"][0]
+    assert search.payload["result"] == "anchored"
+
+
+def test_trail_mature_records_unknowns_and_is_idempotent(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    seed_sha = _git(repo, "rev-parse", "HEAD")
+    authored = "    return 'not in this commit'\n"
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-unknown",
+                step_index=1,
+                capture_method=["watcher_backstop"],
+                payload={
+                    "trace_patch_id": _tp("unknown"),
+                    "snapshot_before_id": "snapshot-before-unknown",
+                    "snapshot_after_id": "snapshot-after-unknown",
+                    "file_path": "app.py",
+                    "affected_range": {"start_line": 2, "end_line": 2},
+                    "authored_text": authored,
+                    "raw_authored_hash": sha256_text(authored),
+                    "git_clean_hash": sha256_text(" ".join(authored.split())),
+                    "before_blob_id": _oid(repo, f"{seed_sha}:app.py"),
+                    "limitations": [],
+                },
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    first = CliRunner().invoke(
+        main,
+        ["trail", "mature", "--commit", "HEAD", "--json", "--project", str(repo)],
+    )
+    assert first.exit_code == 0, first.output
+    first_payload = json.loads(first.output)
+    assert first_payload["searches_completed"] == 1
+    assert first_payload["anchors_created"] == 0
+
+    second = CliRunner().invoke(
+        main,
+        ["trail", "mature", "--commit", "HEAD", "--json", "--project", str(repo)],
+    )
+    assert second.exit_code == 0, second.output
+    second_payload = json.loads(second.output)
+    assert second_payload["searches_completed"] == 0
+    assert second_payload["anchors_created"] == 0
+
+    searches = [
+        e for e in read_events(repo)
+        if e.event_type == "git_anchor_search_completed"
+    ]
+    assert len(searches) == 1
+    assert searches[0].payload["result"] == "unknown"
+
+
+def test_trail_mature_fails_for_invalid_explicit_commit(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "trail",
+            "mature",
+            "--commit",
+            "definitely-not-a-ref",
+            "--json",
+            "--project",
+            str(repo),
+        ],
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.output)
+    assert payload["commits_considered"] == 0
+    assert payload["errors"] == ["unresolved commit ref: definitely-not-a-ref"]
+
+
+def test_trail_mature_fails_for_non_git_project(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        main,
+        ["trail", "mature", "--json", "--project", str(tmp_path)],
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.output)
+    assert payload["commits_considered"] == 0
+    assert payload["errors"] == ["not a Git repository or HEAD is unavailable"]
+
+
 def test_ot_trace_patch_trail_resource_resolves(tmp_path: Path) -> None:
     repo = tmp_path
     _init_repo(repo)

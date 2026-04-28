@@ -302,6 +302,44 @@ def _normalized_limitations(
     return sorted(set(out))
 
 
+def _repo_relative_path(repo: Path, raw_path: Any) -> str | None:
+    if not isinstance(raw_path, str) or not raw_path:
+        return None
+    try:
+        path = Path(raw_path)
+        if path.is_absolute():
+            rel = path.resolve().relative_to(repo.resolve())
+        else:
+            rel = path
+    except Exception:
+        return None
+    return str(rel).replace("\\", "/")
+
+
+def _declared_write_paths(repo: Path, tool_name: str | None, tool_input: Any) -> list[str]:
+    if not isinstance(tool_input, dict):
+        return []
+    name = (tool_name or "").lower()
+    if name not in {"edit", "write", "multiedit", "notebookedit"}:
+        return []
+    keys = ["file_path", "path"]
+    if name == "notebookedit":
+        keys.append("notebook_path")
+    out: list[str] = []
+    for key in keys:
+        rel = _repo_relative_path(repo, tool_input.get(key))
+        if rel:
+            out.append(rel)
+    return sorted(set(out))
+
+
+def _declared_command(tool_name: str | None, tool_input: Any) -> str | None:
+    if (tool_name or "").lower() != "bash" or not isinstance(tool_input, dict):
+        return None
+    command = tool_input.get("command") or tool_input.get("cmd")
+    return command if isinstance(command, str) and command else None
+
+
 def _boundary_state(
     repo: Path,
     *,
@@ -334,8 +372,12 @@ def _window_payload(
     boundary_firmness: str,
     limitations: list[str],
     boundary: str,
+    session_id: str | None = None,
+    tool_name: str | None = None,
+    declared_write_paths: list[str] | None = None,
+    declared_command: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "trace_id": trace_id,
         "generation_index": generation_index,
         "step_index": step_index,
@@ -350,6 +392,15 @@ def _window_payload(
         "capture_limitations": limitations,
         "boundary": boundary,
     }
+    if tool_name:
+        payload["tool_name"] = tool_name
+    if session_id:
+        payload["session_id"] = session_id
+    if declared_write_paths:
+        payload["declared_write_paths"] = list(declared_write_paths)
+    if declared_command:
+        payload["declared_command"] = declared_command
+    return payload
 
 
 def open_step_window(
@@ -368,6 +419,10 @@ def open_step_window(
     limitations: list[str] | None = None,
     boundary_firmness: str = "firm",
     claimed_tree_id: dict[str, str] | None = None,
+    tool_name: str | None = None,
+    declared_write_paths: list[str] | None = None,
+    declared_command: str | None = None,
+    session_id: str | None = None,
 ) -> StepWindowOpenResult:
     """Append a pre-tool step-window event with verified boundary state."""
     repo = repo.resolve()
@@ -403,6 +458,10 @@ def open_step_window(
                     boundary_firmness=boundary_firmness,
                     limitations=limitations,
                     boundary="opened",
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    declared_write_paths=declared_write_paths,
+                    declared_command=declared_command,
                 ),
             )
         ],
@@ -433,6 +492,10 @@ def close_step_window_with_snapshot(
     limitations: list[str] | None = None,
     boundary_firmness: str = "firm",
     claimed_tree_id: dict[str, str] | None = None,
+    tool_name: str | None = None,
+    declared_write_paths: list[str] | None = None,
+    declared_command: str | None = None,
+    session_id: str | None = None,
 ) -> SnapshotResult:
     """Append a post-tool snapshot plus the matching close-window event."""
     repo = repo.resolve()
@@ -498,6 +561,10 @@ def close_step_window_with_snapshot(
                     boundary_firmness=boundary_firmness,
                     limitations=limitations,
                     boundary="closed",
+                    session_id=session_id,
+                    tool_name=tool_name,
+                    declared_write_paths=declared_write_paths,
+                    declared_command=declared_command,
                 ),
             ),
         ],
@@ -598,6 +665,14 @@ def emit_step_window_events_from_record(
 
             pre_git_head = _trail_git_head(pre)
             post_git_head = _trail_git_head(post)
+            tool_name = tool_call.tool_name or pre.get("tool") or post.get("tool")
+            tool_input = (
+                pre.get("tool_input")
+                if isinstance(pre.get("tool_input"), dict)
+                else tool_call.input
+            )
+            declared_paths = _declared_write_paths(repo, tool_name, tool_input)
+            declared_command = _declared_command(tool_name, tool_input)
             generation_index = record.generation_index
             agent_step_id = f"step_{step.step_index}"
             before_snapshot_id = _snapshot_id(
@@ -645,6 +720,10 @@ def emit_step_window_events_from_record(
                             boundary_firmness="firm",
                             limitations=[],
                             boundary="opened",
+                            session_id=record.session_id,
+                            tool_name=tool_name,
+                            declared_write_paths=declared_paths,
+                            declared_command=declared_command,
                         ),
                     )
                 )
@@ -739,6 +818,10 @@ def emit_step_window_events_from_record(
                             boundary_firmness="firm",
                             limitations=limitations,
                             boundary="closed",
+                            session_id=record.session_id,
+                            tool_name=tool_name,
+                            declared_write_paths=declared_paths,
+                            declared_command=declared_command,
                         ),
                     )
                 )

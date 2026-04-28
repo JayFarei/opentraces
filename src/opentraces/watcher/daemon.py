@@ -33,7 +33,7 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..core.config import PROJECTS_DIR, get_project_state_path
@@ -75,6 +75,12 @@ class TickReport:
     sessions_new_generations: int = 0
     sessions_noops: int = 0
     sessions_errored: int = 0
+    fs_observations: int = 0
+    fs_reconciled: int = 0
+    fs_patches_created: int = 0
+    fs_patches_upgraded: int = 0
+    trail_maturation_searches: int = 0
+    trail_maturation_anchors: int = 0
 
 
 # --- helpers ---------------------------------------------------------------
@@ -194,6 +200,49 @@ def _configure_logging() -> None:
     _LOG_CONFIGURED = True
 
 
+def _run_trace_trails_runtime(
+    project_cwd: Path,
+    report: TickReport,
+    *,
+    force_maturation: bool = False,
+) -> None:
+    """Best-effort Plan 54 runtime loop for one watcher tick."""
+    try:
+        from ..capture.fs_watcher.runtime import poll_project_once
+        from ..core.trails import reconcile_watcher_observations
+        from ..core.trails.maturation import has_unsearched_recent_patches, mature_trails
+
+        poll = poll_project_once(project_cwd)
+        report.fs_observations = len(poll.observations)
+        reconcile_summary = reconcile_watcher_observations(project_cwd)
+        report.fs_reconciled = int(
+            reconcile_summary.get("observations_processed", 0) or 0
+        )
+        report.fs_patches_created = int(
+            reconcile_summary.get("patches_created", 0) or 0
+        )
+        report.fs_patches_upgraded = int(
+            reconcile_summary.get("patches_upgraded", 0) or 0
+        )
+        should_mature = force_maturation or bool(poll.observations) or bool(
+            report.fs_patches_created or report.fs_patches_upgraded
+        )
+        if not should_mature:
+            should_mature = has_unsearched_recent_patches(project_cwd)
+        if should_mature:
+            summary = mature_trails(project_cwd)
+            report.trail_maturation_searches = int(summary.searches_completed)
+            report.trail_maturation_anchors = int(summary.anchors_created)
+            if summary.errors:
+                logger.warning(
+                    "trail maturation completed with errors for %s: %s",
+                    project_cwd,
+                    "; ".join(summary.errors[:3]),
+                )
+    except Exception:  # noqa: BLE001
+        logger.exception("Trace Trails runtime failed for %s", project_cwd)
+
+
 # --- public API ------------------------------------------------------------
 
 def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
@@ -226,6 +275,7 @@ def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
             raise RuntimeError("simulated crash: after_probe")
 
         if new_commits == 0 and not jsonl_active:
+            _run_trace_trails_runtime(project_cwd, report, force_maturation=False)
             # Quiet tick — still record that we probed.
             state.set_last_watcher_run_at()
             report.duration_ms = (time.monotonic() - t0) * 1000.0
@@ -263,8 +313,10 @@ def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
             )
             report.sessions_noops = int(getattr(sr, "noops", 0) or 0)
             report.sessions_errored = int(getattr(sr, "errored", 0) or 0)
-        except Exception as sweep_err:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception("session sweep failed for %s", project_cwd)
+
+        _run_trace_trails_runtime(project_cwd, report, force_maturation=True)
 
         report.duration_ms = (time.monotonic() - t0) * 1000.0
         logger.info(
@@ -373,6 +425,12 @@ def _cli_entry(argv: list[str]) -> int:
             "backfill_invoked": r.backfill_invoked,
             "coverage_ratio": r.coverage_ratio,
             "commits_processed": r.commits_processed,
+            "fs_observations": r.fs_observations,
+            "fs_reconciled": r.fs_reconciled,
+            "fs_patches_created": r.fs_patches_created,
+            "fs_patches_upgraded": r.fs_patches_upgraded,
+            "trail_maturation_searches": r.trail_maturation_searches,
+            "trail_maturation_anchors": r.trail_maturation_anchors,
             "error": r.error,
         }, indent=2))
         return 1 if r.error else 0

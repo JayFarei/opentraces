@@ -51,6 +51,27 @@ def _git(
     return proc
 
 
+def _git_bytes(
+    cwd: Path,
+    args: list[str],
+    *,
+    input: bytes | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        input=input,
+        capture_output=True,
+        check=False,
+    )
+    if check and proc.returncode != 0:
+        stderr = proc.stderr.decode(errors="replace").strip()
+        stdout = proc.stdout.decode(errors="replace").strip()
+        raise RuntimeError(f"git {' '.join(args)} failed: {stderr or stdout}")
+    return proc
+
+
 def _ref_head(cwd: Path) -> str | None:
     proc = _git(cwd, ["rev-parse", "--verify", EVENT_LOG_REF], check=False)
     if proc.returncode != 0:
@@ -306,14 +327,63 @@ def append_event_batch(
     )
 
 
+def _event_blob_entries(cwd: Path, commits: list[str]) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
+    for commit in commits:
+        proc = _git_bytes(cwd, ["ls-tree", "-r", "-z", commit, "events"])
+        commit_entries: list[tuple[str, str]] = []
+        for raw_entry in proc.stdout.split(b"\0"):
+            if not raw_entry:
+                continue
+            try:
+                meta, raw_path = raw_entry.split(b"\t", 1)
+            except ValueError:
+                continue
+            parts = meta.split()
+            if len(parts) < 3 or parts[1] != b"blob":
+                continue
+            path = raw_path.decode(errors="surrogateescape")
+            if path.startswith("events/") and path.endswith(".json"):
+                commit_entries.append((path, parts[2].decode()))
+        entries.extend((path, oid) for path, oid in sorted(commit_entries))
+    return entries
+
+
+def _read_blobs_batch(cwd: Path, entries: list[tuple[str, str]]) -> list[bytes]:
+    if not entries:
+        return []
+    input_data = ("".join(f"{oid}\n" for _, oid in entries)).encode()
+    proc = _git_bytes(cwd, ["cat-file", "--batch"], input=input_data)
+    data = proc.stdout
+    offset = 0
+    blobs: list[bytes] = []
+    for _path, expected_oid in entries:
+        newline = data.find(b"\n", offset)
+        if newline < 0:
+            raise RuntimeError("git cat-file --batch returned truncated header")
+        header = data[offset:newline].split()
+        if len(header) != 3:
+            raise RuntimeError("git cat-file --batch returned malformed header")
+        oid, object_type, raw_size = header
+        if oid.decode() != expected_oid or object_type != b"blob":
+            raise RuntimeError("git cat-file --batch returned unexpected object")
+        size = int(raw_size)
+        start = newline + 1
+        end = start + size
+        if end > len(data):
+            raise RuntimeError("git cat-file --batch returned truncated blob")
+        blobs.append(data[start:end])
+        offset = end + 1
+    return blobs
+
+
 def _read_events_from_head(cwd: Path, head: str) -> list[TrailEvent]:
     commits = _git(cwd, ["rev-list", "--reverse", head]).stdout.splitlines()
-    events: list[TrailEvent] = []
-    for commit in commits:
-        names = _git(cwd, ["ls-tree", "-r", "--name-only", commit, "events"]).stdout.splitlines()
-        for name in sorted(n for n in names if n.startswith("events/") and n.endswith(".json")):
-            raw = _git(cwd, ["show", f"{commit}:{name}"]).stdout
-            events.append(TrailEvent.model_validate_json(raw))
+    entries = _event_blob_entries(cwd, commits)
+    events = [
+        TrailEvent.model_validate_json(raw)
+        for raw in _read_blobs_batch(cwd, entries)
+    ]
     events.sort(key=lambda event: event.event_sequence)
     return events
 

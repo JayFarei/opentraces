@@ -726,6 +726,235 @@ def test_watcher_observation_alone_does_not_assign_attribution(
     assert patch_events == []
 
 
+def test_overlapping_direct_file_tools_narrow_by_declared_write_path(
+    tmp_path: Path,
+) -> None:
+    """Two sessions in one worktree can be separated for direct file tools."""
+    _init_repo(tmp_path)
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "button\n"))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr-frontend",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-front",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+        tool_name="Edit",
+        declared_write_paths=["frontend/Button.tsx"],
+        session_id="sess-front",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr-frontend",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-front",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+        tool_name="Edit",
+        declared_write_paths=["frontend/Button.tsx"],
+        session_id="sess-front",
+    )
+    open_step_window(
+        tmp_path,
+        trace_id="tr-backend",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-back",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+        tool_name="Write",
+        declared_write_paths=["backend/api.py"],
+        session_id="sess-back",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr-backend",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-back",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+        tool_name="Write",
+        declared_write_paths=["backend/api.py"],
+        session_id="sess-back",
+    )
+    obs = append_filesystem_mutation_observed(
+        tmp_path,
+        path="frontend/Button.tsx",
+        observed_at_start="2026-04-26T10:00:03Z",
+        observed_at_end="2026-04-26T10:00:04Z",
+        after_blob_id=after_blob,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["attributed"] == 1
+    assert summary["concurrent_writer_overlap"] == 0
+
+    events = read_events(tmp_path)
+    attribution = [
+        e for e in events
+        if e.event_type == "watcher_observation_attributed"
+        and e.payload["observation_event_id"] == obs.event_id
+    ][0]
+    assert attribution.trace_id == "tr-frontend"
+    assert attribution.payload["session_id"] == "sess-front"
+    assert attribution.payload["tool_call_id"] == "tc-front"
+    assert attribution.payload["attribution_rule"] == "writer_scope_match"
+
+
+def test_overlapping_bash_and_direct_file_tool_remains_ambiguous(
+    tmp_path: Path,
+) -> None:
+    """Path intent does not override an overlapping unbounded Bash writer."""
+    _init_repo(tmp_path)
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "button\n"))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr-frontend",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-front",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+        tool_name="Edit",
+        declared_write_paths=["frontend/Button.tsx"],
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr-frontend",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-front",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+        tool_name="Edit",
+        declared_write_paths=["frontend/Button.tsx"],
+    )
+    open_step_window(
+        tmp_path,
+        trace_id="tr-bash",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-bash",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+        tool_name="Bash",
+        declared_command="npm run codegen",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr-bash",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-bash",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+        tool_name="Bash",
+        declared_command="npm run codegen",
+    )
+    obs = append_filesystem_mutation_observed(
+        tmp_path,
+        path="frontend/Button.tsx",
+        observed_at_start="2026-04-26T10:00:03Z",
+        observed_at_end="2026-04-26T10:00:04Z",
+        after_blob_id=after_blob,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["attributed"] == 0
+    assert summary["concurrent_writer_overlap"] == 1
+
+    events = read_events(tmp_path)
+    attribution = [
+        e for e in events
+        if e.event_type == "watcher_observation_attributed"
+        and e.payload["observation_event_id"] == obs.event_id
+    ][0]
+    assert attribution.payload["result"] == "ambiguous"
+    assert attribution.trace_id is None
+
+
+def test_overlapping_direct_file_tool_missing_scope_remains_ambiguous(
+    tmp_path: Path,
+) -> None:
+    """A direct file tool without declared path scope is still unbounded."""
+    _init_repo(tmp_path)
+    after_blob = GitObjectID(hex=_hash_object(tmp_path, "button\n"))
+
+    open_step_window(
+        tmp_path,
+        trace_id="tr-known",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-known",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+        tool_name="Edit",
+        declared_write_paths=["frontend/Button.tsx"],
+        session_id="sess-known",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr-known",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-known",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+        tool_name="Edit",
+        declared_write_paths=["frontend/Button.tsx"],
+        session_id="sess-known",
+    )
+    open_step_window(
+        tmp_path,
+        trace_id="tr-unknown-scope",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-unknown",
+        capture_method=["hook_pretooluse"],
+        event_time="2026-04-26T10:00:00Z",
+        tool_name="Edit",
+        session_id="sess-unknown",
+    )
+    close_step_window_with_snapshot(
+        tmp_path,
+        trace_id="tr-unknown-scope",
+        step_index=1,
+        agent_step_id="step_1",
+        tool_call_id="tc-unknown",
+        capture_method=["hook_posttooluse"],
+        event_time="2026-04-26T10:00:10Z",
+        tool_name="Edit",
+        session_id="sess-unknown",
+    )
+    obs = append_filesystem_mutation_observed(
+        tmp_path,
+        path="frontend/Button.tsx",
+        observed_at_start="2026-04-26T10:00:03Z",
+        observed_at_end="2026-04-26T10:00:04Z",
+        after_blob_id=after_blob,
+    )
+
+    summary = reconcile_watcher_observations(tmp_path)
+    assert summary["attributed"] == 0
+    assert summary["concurrent_writer_overlap"] == 1
+
+    events = read_events(tmp_path)
+    attribution = [
+        e for e in events
+        if e.event_type == "watcher_observation_attributed"
+        and e.payload["observation_event_id"] == obs.event_id
+    ][0]
+    assert attribution.payload["result"] == "ambiguous"
+    assert attribution.trace_id is None
+    candidates = attribution.payload["candidate_windows"]
+    assert {c["session_id"] for c in candidates} == {"sess-known", "sess-unknown"}
+
+
 def test_background_process_overlap_records_limitation(tmp_path: Path) -> None:
     """Plan §Phase 5 edge fixture #4.
 

@@ -318,6 +318,56 @@ def _matching_windows(
     return matches
 
 
+def _declares_path(window: TrailEvent, path: str | None) -> bool:
+    if not path:
+        return False
+    declared = window.payload.get("declared_write_paths")
+    if not isinstance(declared, list):
+        return False
+    normalized = {_normalize_path(item) for item in declared if isinstance(item, str)}
+    return path in normalized
+
+
+def _is_direct_path_writer(window: TrailEvent) -> bool:
+    tool_name = window.payload.get("tool_name")
+    if not isinstance(tool_name, str):
+        return False
+    return tool_name.lower() in {"edit", "write", "multiedit", "notebookedit"}
+
+
+def _has_declared_path_scope(window: TrailEvent) -> bool:
+    declared = window.payload.get("declared_write_paths")
+    return isinstance(declared, list) and any(
+        isinstance(item, str) and item for item in declared
+    )
+
+
+def _narrow_matches_by_declared_path(
+    matches: list[tuple[tuple, TrailEvent, TrailEvent]],
+    path: str | None,
+) -> tuple[list[tuple[tuple, TrailEvent, TrailEvent]], str | None]:
+    """Narrow overlapping direct file-tool windows by declared write path.
+
+    This is deliberately not applied when any candidate is Bash/unknown. Timing
+    overlap plus one direct path claim is not strong enough if another writer's
+    scope is unbounded.
+    """
+    if not path or not matches:
+        return matches, None
+    if not all(_is_direct_path_writer(opened) for _key, opened, _closed in matches):
+        return matches, None
+    if not all(_has_declared_path_scope(opened) for _key, opened, _closed in matches):
+        return matches, None
+    scoped = [
+        item
+        for item in matches
+        if _declares_path(item[1], path)
+    ]
+    if len(scoped) == 1:
+        return scoped, "writer_scope_match"
+    return matches, None
+
+
 def _attribution_draft(
     *,
     observation: TrailEvent,
@@ -330,6 +380,7 @@ def _attribution_draft(
     upgraded_trace_patch_id: str | None = None,
     created_trace_patch_id: str | None = None,
     window: TrailEvent | None = None,
+    attribution_rule: str | None = None,
 ) -> TrailEventDraft:
     payload: dict[str, Any] = {
         "observation_event_id": observation.event_id,
@@ -343,6 +394,8 @@ def _attribution_draft(
         payload["upgraded_trace_patch_id"] = upgraded_trace_patch_id
     if created_trace_patch_id is not None:
         payload["created_trace_patch_id"] = created_trace_patch_id
+    if attribution_rule is not None:
+        payload["attribution_rule"] = attribution_rule
     if window is not None:
         tool_call_id = window.payload.get("tool_call_id")
         agent_step_id = window.payload.get("agent_step_id")
@@ -350,6 +403,9 @@ def _attribution_draft(
             payload["tool_call_id"] = tool_call_id
         if agent_step_id is not None:
             payload["agent_step_id"] = agent_step_id
+        session_id = window.payload.get("session_id")
+        if session_id is not None:
+            payload["session_id"] = session_id
     return TrailEventDraft(
         event_type="watcher_observation_attributed",
         trace_id=trace_id,
@@ -489,7 +545,13 @@ def _watcher_patch_draft(
         "limitations": [],
         "source_observation_event_id": observation.event_id,
     }
-    for key in ("agent_step_id", "tool_call_id"):
+    for key in (
+        "agent_step_id",
+        "tool_call_id",
+        "session_id",
+        "tool_name",
+        "declared_write_paths",
+    ):
         value = opened.payload.get(key)
         if value is not None:
             payload[key] = value
@@ -557,6 +619,13 @@ def reconcile_watcher_observations(
                 summary["unbounded_mutation_window"] += 1
                 continue
 
+            attribution_rule: str | None = None
+            if len(matches) > 1:
+                narrowed, attribution_rule = _narrow_matches_by_declared_path(matches, path)
+                if len(narrowed) == 1:
+                    matches = narrowed
+                else:
+                    attribution_rule = None
             if len(matches) > 1:
                 candidates = [
                     {
@@ -565,6 +634,9 @@ def reconcile_watcher_observations(
                         "step_index": key[2],
                         "tool_call_id": key[3],
                         "agent_step_id": opened.payload.get("agent_step_id"),
+                        "session_id": opened.payload.get("session_id"),
+                        "tool_name": opened.payload.get("tool_name"),
+                        "declared_write_paths": opened.payload.get("declared_write_paths"),
                     }
                     for key, opened, _closed in matches
                 ]
@@ -646,6 +718,7 @@ def reconcile_watcher_observations(
                     upgraded_trace_patch_id=upgraded_trace_patch_id,
                     created_trace_patch_id=created_trace_patch_id,
                     window=opened,
+                    attribution_rule=attribution_rule,
                 )
             )
             summary["attributed"] += 1

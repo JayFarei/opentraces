@@ -15,9 +15,10 @@ import json
 import subprocess
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
-import pytest
-
+from opentraces.core.trails import TrailEventDraft, append_event_batch, read_events
+from opentraces.core.trails.models import sha256_text
 from opentraces.watcher import daemon as _wd
 
 
@@ -101,6 +102,78 @@ class TestWatcherSweep:
         assert report.error is None
         assert report.backfill_invoked is False, "should be quiet"
         assert calls == [], "quiet ticks must not sweep sessions"
+
+    def test_quiet_tick_runs_trace_trails_runtime(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        p = _init_project(tmp_path / "proj")
+        _wd.run_once(p)
+
+        poll_calls: list[Path] = []
+
+        def _poll(project_dir):
+            poll_calls.append(Path(project_dir))
+            return SimpleNamespace(observations=[])
+
+        monkeypatch.setattr(
+            "opentraces.capture.fs_watcher.runtime.poll_project_once",
+            _poll,
+        )
+        monkeypatch.setattr(
+            "opentraces.core.trails.reconcile_watcher_observations",
+            lambda project_dir: {
+                "observations_processed": 0,
+                "patches_created": 0,
+                "patches_upgraded": 0,
+            },
+        )
+
+        report = _wd.run_once(p)
+        assert report.error is None
+        assert report.backfill_invoked is False
+        assert poll_calls == [p.resolve()]
+
+    def test_quiet_tick_matures_existing_unsearched_patch(
+        self, tmp_path
+    ) -> None:
+        p = _init_project(tmp_path / "proj")
+        _wd.run_once(p)
+
+        authored = "not in current history\n"
+        append_event_batch(
+            p,
+            [
+                TrailEventDraft(
+                    event_type="trace_patch_created",
+                    trace_id="tr-quiet",
+                    step_index=1,
+                    capture_method=["watcher_backstop"],
+                    payload={
+                        "trace_patch_id": "quiet-patch",
+                        "file_path": "ghost.py",
+                        "affected_range": {"start_line": 1, "end_line": 1},
+                        "authored_text": authored,
+                        "raw_authored_hash": sha256_text(authored),
+                        "git_clean_hash": sha256_text(" ".join(authored.split())),
+                        "limitations": [],
+                    },
+                )
+            ],
+            writer="test-fixture",
+        )
+
+        report = _wd.run_once(p)
+        assert report.error is None
+        assert report.backfill_invoked is False
+        assert report.trail_maturation_searches == 1
+        assert report.trail_maturation_anchors == 0
+
+        searches = [
+            event for event in read_events(p)
+            if event.event_type == "git_anchor_search_completed"
+        ]
+        assert len(searches) == 1
+        assert searches[0].payload["result"] == "unknown"
 
     def test_sweep_failure_does_not_break_the_tick(
         self, tmp_path, monkeypatch

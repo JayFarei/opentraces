@@ -18,8 +18,12 @@ from .observations import (
     FilesystemMutationObservation,
     append_filesystem_mutation_observed,
 )
+from .runtime import ObservedMutation, PollResult, poll_project_once
 
 __all__ = [
     "FilesystemMutationObservation",
+    "ObservedMutation",
+    "PollResult",
     "append_filesystem_mutation_observed",
+    "poll_project_once",
 ]

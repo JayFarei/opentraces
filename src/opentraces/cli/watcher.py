@@ -115,6 +115,12 @@ def _tick(project_dir: Path | None, json_out: bool) -> None:
                 "backfill_invoked": r.backfill_invoked,
                 "commits_processed": r.commits_processed,
                 "coverage_ratio": r.coverage_ratio,
+                "fs_observations": r.fs_observations,
+                "fs_reconciled": r.fs_reconciled,
+                "fs_patches_created": r.fs_patches_created,
+                "fs_patches_upgraded": r.fs_patches_upgraded,
+                "trail_maturation_searches": r.trail_maturation_searches,
+                "trail_maturation_anchors": r.trail_maturation_anchors,
                 "error": r.error,
             } for r in reports
         ], indent=2))
@@ -125,5 +131,7 @@ def _tick(project_dir: Path | None, json_out: bool) -> None:
             f"{r.project_cwd}: {status_bit} "
             f"new_commits={r.new_commits} jsonl={r.jsonl_activity} "
             f"backfilled={r.commits_processed} "
+            f"fs_obs={r.fs_observations} "
+            f"anchors={r.trail_maturation_anchors} "
             f"duration={r.duration_ms:.1f}ms"
         )

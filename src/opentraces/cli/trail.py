@@ -1694,6 +1694,90 @@ def attach_cmd(
 
 
 @trail_group.command(
+    "mature",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail mature",
+        "opentraces trail mature --commits 100 --json",
+        "opentraces trail mature --commit HEAD --json",
+    ],
+    see_also=[
+        ("opentraces trail attach", "manually attach one trace to one commit."),
+        ("opentraces trail explain", "show evidence chain for a trace step."),
+    ],
+    option_groups=[
+        ("Scope", ["project_dir", "commits", "commit_refs"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--project",
+    "project_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: CWD).",
+)
+@click.option(
+    "--commits",
+    type=int,
+    default=50,
+    show_default=True,
+    help="Recent HEAD commits to search when --commit is not provided.",
+)
+@click.option(
+    "--commit",
+    "commit_refs",
+    multiple=True,
+    help="Specific commit/ref to search. May be passed multiple times.",
+)
+def mature_cmd(
+    as_json: bool,
+    project_dir: Path | None,
+    commits: int,
+    commit_refs: tuple[str, ...],
+) -> None:
+    """Continuously mature Trace Patches into Git Anchors.
+
+    This command searches existing commits for Trace Patches that were created
+    after those commits landed. It appends search-completed events, including
+    unknowns, and is idempotent under the current attribution version.
+    """
+    from ..core.trails import mature_trails
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+    try:
+        summary = mature_trails(
+            repo,
+            commit_refs=commit_refs or None,
+            max_commits=commits,
+        ).to_dict()
+    except ValueError as exc:
+        click.echo(f"Trace Trail event log is invalid: {exc}", err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to mature trace trails: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(summary, indent=2, sort_keys=True))
+        if summary["errors"]:
+            sys.exit(2)
+        return
+
+    click.echo(
+        f"Matured Trace Trails across {summary['commits_considered']} commit(s):"
+    )
+    click.echo(f"  searches: {summary['searches_completed']}")
+    click.echo(f"  anchors:  {summary['anchors_created']}")
+    if summary["errors"]:
+        click.echo(f"  errors:   {len(summary['errors'])}")
+        for error in summary["errors"]:
+            click.echo(f"    {error}")
+        sys.exit(2)
+
+
+@trail_group.command(
     "rebuild",
     cls=OpentracesCommand,
     examples=[
