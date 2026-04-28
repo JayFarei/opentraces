@@ -44,7 +44,12 @@ Classify each changed file into impact categories:
 | `src/opentraces/cli.py` (commands, flags, help text) | Site, Docs, Core refs, Inline |
 | `packages/opentraces-schema/src/opentraces_schema/models.py` | Site (schema-versions.ts, SchemaExplorer), Docs (schema/*.md), Core refs (schema README) |
 | `src/opentraces/security/` | Site (PrivacyTrust.tsx), Docs (security/*.md) |
-| `src/opentraces/parsers/` (new parser) | Site (InfraDiagram, Features), Docs (supported-agents.md), Core refs (CLAUDE.md) |
+| `src/opentraces/capture/` (new adapter, protocol change, or registry edit) | Docs (integration/capture-integration.md, cli/supported-agents.md, contributing/development.md), Core refs (CLAUDE.md, capture/README.md), Site (InfraDiagram agent list, Features) |
+| `src/opentraces/capture/_base.py` (protocol signatures) | Docs (integration/capture-integration.md, cli/supported-agents.md), Core refs (capture/README.md). The integration spec quotes the protocol bodies — must stay byte-for-byte aligned. |
+| `src/opentraces/capture/claude_code/hooks/` or `install.py` | Docs (integration/capture-integration.md "Tier 3" / "Tier 4" sections, cli/commands.md `setup claude-code` flags), Core refs (skill/SKILL.md hook reference) |
+| `src/opentraces/watcher/` (daemon or installer) | Docs (integration/capture-integration.md "Watcher integration" section, cli/commands.md `watcher` group), Core refs (CLAUDE.md if behavior changes) |
+| `src/opentraces/core/trails/` (Trace Trails substrate) | Docs (integration/capture-integration.md "Tier 4" section if capture API changed, cli/commands.md `trail` group), Core refs (CLAUDE.md trace-trails decision block) |
+| `src/opentraces/parsers/` (legacy path — collapsed into `capture/` since 0.4) | If anything still references this path, it is itself stale: update to point at `capture/` instead. |
 | `src/opentraces/__init__.py` (version bump) | Site (version.json), Docs (versioning.md), Core refs (CHANGELOG) |
 | `pyproject.toml` (dependencies, extras) | Docs (installation.md, development.md), Core refs (README, CLAUDE.md) |
 | `src/opentraces/clients/tui.py` | Site (Hero.tsx TUI mockup), Docs (review.md keybindings) |
@@ -104,6 +109,12 @@ Instructions: For each doc page, verify every CLI command, flag, code example, a
 - `docs/cli/commands.md` — the most detailed command reference, every flag must match `cli.py`
 - `docs/schema/*.md` — field tables must match Pydantic models
 - `docs/integration/ci-cd.md` — GitHub Actions YAML must use current install method
+- `docs/integration/capture-integration.md` — contributor spec for adding a new agent. Must match four code surfaces exactly:
+  1. Protocol signatures (`SessionParser`, `FormatImporter`, `HookInstaller`, `ParseOutcome`) match `src/opentraces/capture/_base.py`
+  2. Registry entries (`PARSERS`, `IMPORTERS`, `HOOK_INSTALLERS`, `HARNESS_DIRS`) match `src/opentraces/capture/__init__.py` `_register_defaults()` and `src/opentraces/capture/skill/install.py`
+  3. The "Known coupling" file:line refs to hardcoded `ClaudeCodeParser` imports still exist (`core/ingest.py`, `quality/engine.py`, `cli/__init__.py`, `clients/web/server.py`, `cli/trace.py`) — update line numbers, or delete rows if the coupling is generalized
+  4. Trace Trails Tier 4 contract: `metadata["hook_pre_tool_use"]` / `["hook_post_tool_use"]` / `["hook_stop"]` keys are still what `emit_step_window_events_from_record()` reads in `src/opentraces/core/trails/snapshots.py`, and `write_worktree_tree(cwd)` is still the synchronous boundary call
+  Also verify `docs/cli/supported-agents.md` agrees on the protocol names (this used to be inconsistent with `contributing/schema-changes.md` per the known-issues list)
 - `docs/contributing/development.md` — dev setup commands must work
 
 ### Agent 3: Core refs agent
@@ -182,6 +193,68 @@ grep -rn "JayFarei/opentraces" --include="*.md" --include="*.tsx" --include="*.t
 # Version consistency
 grep -rn '"0\.' --include="*.json" --include="*.py" --include="*.ts" --include="*.md" | grep -v node_modules | grep -v .venv | grep -v package
 ```
+
+### Rubric D: Capture integration spec drift
+
+Only run this rubric when `src/opentraces/capture/`, `src/opentraces/watcher/`, or `src/opentraces/core/trails/` changed in the diff. The integration spec at `web/site/docs/docs/integration/capture-integration.md` is held to a tighter standard than other docs because contributors copy code from it.
+
+1. **Protocol signatures match `_base.py`**. The spec quotes the bodies of `SessionParser`, `FormatImporter`, `HookInstaller`, and `ParseOutcome`. Diff the doc's quoted blocks against the source:
+   ```bash
+   grep -A 10 "class SessionParser" src/opentraces/capture/_base.py
+   grep -A 10 "class FormatImporter" src/opentraces/capture/_base.py
+   grep -A 10 "class HookInstaller" src/opentraces/capture/_base.py
+   ```
+   Any field rename, parameter add, or return-type change in `_base.py` must be reflected verbatim in the spec.
+
+2. **Registry block matches `_register_defaults`**. The "Registration" section shows the actual `PARSERS` / `IMPORTERS` / `HOOK_INSTALLERS` registrations:
+   ```bash
+   grep -A 15 "_register_defaults" src/opentraces/capture/__init__.py
+   grep -A 5 "HARNESS_DIRS" src/opentraces/capture/skill/install.py
+   ```
+
+3. **"Known coupling" file:line refs are still accurate**. The spec lists hardcoded `ClaudeCodeParser` imports in `core/ingest.py`, `quality/engine.py`, `cli/__init__.py`, `clients/web/server.py`, and `cli/trace.py`. Verify each cited line still contains the cited code:
+   ```bash
+   grep -n "ClaudeCodeParser" src/opentraces/core/ingest.py src/opentraces/quality/engine.py src/opentraces/cli/__init__.py src/opentraces/clients/web/server.py src/opentraces/cli/trace.py
+   grep -n '"claude-code" not in agents' src/opentraces/cli/__init__.py
+   grep -n '"agents":' src/opentraces/cli/__init__.py
+   ```
+   Update line numbers, or remove rows from the spec if a coupling has been generalized through the registry.
+
+4. **Trace Trails Tier 4 contract**. The spec asserts that `metadata["hook_pre_tool_use"]` / `["hook_post_tool_use"]` / `["hook_stop"]` are the exact keys `emit_step_window_events_from_record` reads. Verify:
+   ```bash
+   grep -n "hook_pre_tool_use\|hook_post_tool_use\|hook_stop" src/opentraces/core/trails/snapshots.py
+   grep -n "def write_worktree_tree" src/opentraces/core/trails/snapshots.py
+   ```
+
+5. **Hook event names match the installer**. The spec's "Recommended hook events" table uses generic names (Session start, Tool call begin, etc.) but the worked Codex example assumes Stop / PreToolUse / PostToolUse parity. The Claude Code reference must still register these events:
+   ```bash
+   grep -A 6 "EVENT_SCRIPTS" src/opentraces/capture/claude_code/install.py
+   ```
+
+6. **Watcher integration claim**. The spec says the watcher daemon is agent-agnostic except for `_claude_jsonl_dir`. Verify:
+   ```bash
+   grep -n "_claude_jsonl_dir\|_jsonl_activity_since" src/opentraces/watcher/daemon.py
+   ```
+   If `daemon.py` has grown a dispatch over multiple agents, update the spec's "Watcher integration" section.
+
+7. **`src/opentraces/capture/README.md` and `docs/cli/supported-agents.md` agree** with the integration spec on protocol names and registration steps. The "Adapter Contracts" section in supported-agents.md is the user-facing summary, capture-integration.md is the long-form spec, capture/README.md is the source-tree authority. They must not contradict each other.
+
+8. **Test coverage requirements section is current**. The "Coverage matrix", "What you inherit, what you must add", and "Hardcoded coupling: refactor risk" tables in the spec are load-bearing for any new agent contributor. Drift here means contributors ship without required tests. Run when `tests/`, `src/opentraces/capture/`, or `src/opentraces/core/trails/` changed:
+   ```bash
+   # Substrate test files referenced as "free" — they must still exist and pass
+   ls tests/core/test_trail_event_log.py tests/core/test_trail_anchor_tiers.py tests/core/test_trail_rebuild.py tests/core/test_trail_reconciler.py tests/core/test_doctor_trail_event_log.py tests/cli/test_trail_search_phase7.py
+   # Phase-7 UAT helper used as the spec's recommended pattern
+   grep -n "_append_anchored_patch\|append_exact_patch_trail" tests/cli/test_trail_search_phase7.py
+   # Registry-presence test pattern referenced (5-liner template)
+   grep -n "test_importers_registry\|test_parsers_registry" tests/capture/test_parser_hermes.py tests/publish/test_exporters.py
+   # Hook subprocess test pattern referenced for non-Python hooks
+   grep -n "subprocess.run\|HOOK_PATH" tests/capture/test_hook_ingest_spawn.py
+   # Schema stability fixture (spec asks contributors to extend it)
+   ls tests/fixtures/trace_record_stability/v02_sample.jsonl
+   # Conftest isolation fixture line refs (spec quotes line 25-33 + 36)
+   grep -n "_isolate_opentraces_global_state\|monkeypatch.setenv.*HOME" tests/conftest.py
+   ```
+   If the "Hardcoded coupling: refactor risk" table cites tests by path that no longer exist, or new coupling sites have been added without spec mention, update the table. If `tests/capture/test_registry.py` now exists (i.e. someone backfilled the registry-uniqueness tests), update the "What you inherit" table to move registry consistency from "MUST ADD" to "FREE".
 
 Report any rubric failures before applying changes.
 

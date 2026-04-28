@@ -28,15 +28,19 @@ Defaults register on first call to keep import cost low.
 
 ## Adding a new adapter
 
+The full contributor-facing contract, with worked examples for Tiers 1 to 4 (file importer through Trace Trails capture), lives at [`docs/integration/capture-integration.md`](../../../web/site/docs/docs/integration/capture-integration.md). Quick checklist:
+
 1. Create `capture/<name>/` (or `capture/<name>.py` for a single-file adapter).
 2. Implement the relevant protocol from `_base.py`:
    - `SessionParser` for live agent sessions.
    - `FormatImporter` for file-based imports.
-3. Add hooks under `capture/<name>/hooks/` if the external tool supports them, and an installer (`install.py`) if we need to wire them in automatically.
-4. Register in `_register_defaults()` in `capture/__init__.py`.
-5. Add tests under `tests/test_parser_<name>.py` and any hook/install tests.
+   - `HookInstaller` if you wire scripts into the agent's settings.
+3. Add hooks under `capture/<name>/hooks/` if the external tool supports them. For Trace Trails participation, hooks must call `core.trails.write_worktree_tree(cwd)` synchronously at tool boundaries and emit `opentraces_hook` lines into the transcript with `metadata["hook_pre_tool_use"]` / `["hook_post_tool_use"]` keys.
+4. Register in `_register_defaults()` in `capture/__init__.py`. Generalize the hardcoded Claude-Code-only call sites listed in the integration spec under "Known coupling" before shipping a second live agent.
+5. Add tests under `tests/capture/test_parser_<name>.py` and any hook/install tests, following the recipes in the integration spec's "Test pattern catalog."
 
 ## See also
 
-- Root `CLAUDE.md` — full project structure.
+- [`docs/integration/capture-integration.md`](../../../web/site/docs/docs/integration/capture-integration.md) — full contributor spec with worked Codex example.
+- Root `CLAUDE.md` — full project structure and Trace Trails decisions.
 - `src/opentraces/publish/README.md` — the outbound boundary (symmetric to this one).

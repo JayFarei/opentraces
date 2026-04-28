@@ -60,6 +60,7 @@ All paths relative to `web/site/docs/docs/`.
 | `workflow/pushing.md` | Push flags, shard naming `traces-NNNN.jsonl` |
 | `workflow/export.md` | States export is not public yet — update when it ships |
 | `integration/agent-setup.md` | `opentraces _capture` hidden command signature |
+| `integration/capture-integration.md` | Contributor spec for adding a new agent. Quotes protocol bodies from `src/opentraces/capture/_base.py` (must match verbatim), the `_register_defaults()` block from `capture/__init__.py`, the `EVENT_SCRIPTS` table from `capture/claude_code/install.py`, and file:line refs to hardcoded `ClaudeCodeParser` imports in `core/ingest.py`, `quality/engine.py`, `cli/__init__.py`, `clients/web/server.py`, `cli/trace.py`. Also asserts the Trace Trails Tier 4 contract: `metadata["hook_pre_tool_use"]` / `["hook_post_tool_use"]` / `["hook_stop"]` keys read by `emit_step_window_events_from_record` in `core/trails/snapshots.py`, and `write_worktree_tree(cwd)` as the synchronous boundary call. Includes a "Watcher integration" section that tracks `_claude_jsonl_dir` in `watcher/daemon.py:97`. Run Rubric D from SKILL.md when this page might have drifted. |
 | `integration/ci-cd.md` | GitHub Actions YAML (uses `pip install`, should use `pipx`?) |
 | `contributing/development.md` | Dev install, make targets, key file paths, parser protocol |
 | `contributing/schema-changes.md` | `BaseParser` interface (inconsistent with supported-agents.md `SessionParser`) |
