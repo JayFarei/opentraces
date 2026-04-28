@@ -1,0 +1,93 @@
+{
+  "payloads": [
+    {
+      "name": "blame_commit",
+      "path": "blame_commit.json",
+      "top_level_keys": [
+        "commit",
+        "coverage",
+        "entity_contributions",
+        "files",
+        "hookLinked",
+        "projection_disagreements",
+        "projection_limitations",
+        "traces",
+        "trailEvidence"
+      ]
+    },
+    {
+      "name": "graph",
+      "path": "graph.json",
+      "top_level_keys": [
+        "commits",
+        "mode",
+        "pivot_trace_id"
+      ]
+    },
+    {
+      "name": "trail_explain_step",
+      "path": "trail_explain_step.json",
+      "top_level_keys": [
+        "affected_range",
+        "after_blob_id",
+        "before_blob_id",
+        "containing_segment_id",
+        "event_log_ref",
+        "evidence_firmness",
+        "evidence_tier",
+        "file_path",
+        "generation_index",
+        "git_anchor",
+        "git_anchor_id",
+        "git_anchors",
+        "git_clean_hash",
+        "limitations",
+        "patch_status",
+        "raw_authored_hash",
+        "relation",
+        "resource_refs",
+        "source_events",
+        "step_id",
+        "step_index",
+        "trace_id",
+        "trace_patch_id",
+        "trace_patch_ref",
+        "trace_slice",
+        "trace_snapshot_after",
+        "trace_snapshot_before",
+        "unavailable_stronger_claims"
+      ]
+    },
+    {
+      "name": "trail_play",
+      "path": "trail_play.json",
+      "top_level_keys": [
+        "event_count",
+        "event_log_ref",
+        "limitations",
+        "schema_version",
+        "timeline",
+        "trace_id",
+        "workspace_source"
+      ]
+    },
+    {
+      "name": "trail_search_commit",
+      "path": "trail_search_commit.json",
+      "top_level_keys": [
+        "event_log_ref",
+        "limitation_details",
+        "limitations",
+        "project",
+        "projection",
+        "projection_version",
+        "query",
+        "result_count",
+        "results",
+        "schema_version"
+      ]
+    }
+  ],
+  "scenario": "full_stack_demo",
+  "schema_version": "opentraces.trace_trails_corpus.api.v1"
+}

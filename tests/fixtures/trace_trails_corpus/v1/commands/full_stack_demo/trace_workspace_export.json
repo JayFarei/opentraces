@@ -1,0 +1,12 @@
+{
+  "event_count": 10,
+  "git_bundle": "<run-root>/exported.trace-workspace/git.bundle",
+  "limitations": [],
+  "manifest": "<run-root>/exported.trace-workspace/manifest.json",
+  "output": "<run-root>/exported.trace-workspace",
+  "schema_version": "opentraces.trace_workspace.v1",
+  "snapshot_count": 2,
+  "status": "ok",
+  "trace_id": "<trace:01>",
+  "trace_record": "traces/<trace:01>.jsonl"
+}

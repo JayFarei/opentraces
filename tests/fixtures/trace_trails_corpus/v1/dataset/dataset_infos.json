@@ -1,0 +1,483 @@
+{
+  "default": {
+    "builder_name": "json",
+    "citation": "",
+    "config_name": "default",
+    "dataset_name": "trace_trails_corpus_v1",
+    "description": "",
+    "features": {
+      "agent": {
+        "model": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "name": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "version": {
+          "_type": "Value",
+          "dtype": "string"
+        }
+      },
+      "attribution": {
+        "experimental": {
+          "_type": "Value",
+          "dtype": "bool"
+        },
+        "files": [
+          {
+            "conversations": [
+              {
+                "contributor": {
+                  "_type": "Json"
+                },
+                "ids": {
+                  "_type": "Json"
+                },
+                "ranges": [
+                  {
+                    "change_type": {
+                      "_type": "Value",
+                      "dtype": "string"
+                    },
+                    "confidence": {
+                      "_type": "Value",
+                      "dtype": "string"
+                    },
+                    "content_hash": {
+                      "_type": "Value",
+                      "dtype": "string"
+                    },
+                    "contributor": {
+                      "_type": "Json"
+                    },
+                    "end_line": {
+                      "_type": "Value",
+                      "dtype": "int64"
+                    },
+                    "original": {
+                      "_type": "Json"
+                    },
+                    "start_line": {
+                      "_type": "Value",
+                      "dtype": "int64"
+                    }
+                  }
+                ],
+                "related": [
+                  {
+                    "_type": "Json"
+                  }
+                ],
+                "url": {
+                  "_type": "Value",
+                  "dtype": "string"
+                }
+              }
+            ],
+            "path": {
+              "_type": "Value",
+              "dtype": "string"
+            }
+          }
+        ],
+        "revision": {
+          "_type": "Json"
+        },
+        "unaccounted_files": [
+          {
+            "_type": "Value",
+            "dtype": "string"
+          }
+        ]
+      },
+      "content_hash": {
+        "_type": "Value",
+        "dtype": "string"
+      },
+      "dependencies": [
+        {
+          "_type": "Value",
+          "dtype": "string"
+        }
+      ],
+      "environment": {
+        "language_ecosystem": [
+          {
+            "_type": "Value",
+            "dtype": "string"
+          }
+        ],
+        "os": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "shell": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "vcs": {
+          "base_commit": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "branch": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "diff": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "type": {
+            "_type": "Value",
+            "dtype": "string"
+          }
+        }
+      },
+      "execution_context": {
+        "_type": "Value",
+        "dtype": "string"
+      },
+      "generation_index": {
+        "_type": "Value",
+        "dtype": "int64"
+      },
+      "git_links": [
+        {
+          "branch": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "commit_reachable": {
+            "_type": "Value",
+            "dtype": "bool"
+          },
+          "content_alive": {
+            "_type": "Value",
+            "dtype": "bool"
+          },
+          "repo_url": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "revision": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "tier": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "vcs_type": {
+            "_type": "Value",
+            "dtype": "string"
+          }
+        }
+      ],
+      "lifecycle": {
+        "_type": "Value",
+        "dtype": "string"
+      },
+      "metadata": {
+        "_type": "Json"
+      },
+      "metrics": {
+        "cache_hit_rate": {
+          "_type": "Value",
+          "dtype": "float64"
+        },
+        "estimated_cost_usd": {
+          "_type": "Value",
+          "dtype": "float64"
+        },
+        "total_cache_creation_tokens": {
+          "_type": "Value",
+          "dtype": "int64"
+        },
+        "total_cache_read_tokens": {
+          "_type": "Value",
+          "dtype": "int64"
+        },
+        "total_duration_s": {
+          "_type": "Value",
+          "dtype": "float64"
+        },
+        "total_input_tokens": {
+          "_type": "Value",
+          "dtype": "int64"
+        },
+        "total_output_tokens": {
+          "_type": "Value",
+          "dtype": "int64"
+        },
+        "total_steps": {
+          "_type": "Value",
+          "dtype": "int64"
+        }
+      },
+      "outcome": {
+        "commit_sha": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "committed": {
+          "_type": "Value",
+          "dtype": "bool"
+        },
+        "description": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "patch": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "reward": {
+          "_type": "Value",
+          "dtype": "float64"
+        },
+        "reward_source": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "signal_confidence": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "signal_source": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "success": {
+          "_type": "Value",
+          "dtype": "bool"
+        },
+        "terminal_state": {
+          "_type": "Value",
+          "dtype": "string"
+        }
+      },
+      "schema_version": {
+        "_type": "Value",
+        "dtype": "string"
+      },
+      "security": {
+        "classifier_version": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "flags_reviewed": {
+          "_type": "Value",
+          "dtype": "int64"
+        },
+        "redactions_applied": {
+          "_type": "Value",
+          "dtype": "int64"
+        },
+        "scanned": {
+          "_type": "Value",
+          "dtype": "bool"
+        }
+      },
+      "session_id": {
+        "_type": "Value",
+        "dtype": "string"
+      },
+      "steps": [
+        {
+          "agent_role": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "call_type": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "content": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "model": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "observations": [
+            {
+              "content": {
+                "_type": "Value",
+                "dtype": "string"
+              },
+              "error": {
+                "_type": "Value",
+                "dtype": "string"
+              },
+              "output_summary": {
+                "_type": "Value",
+                "dtype": "string"
+              },
+              "source_call_id": {
+                "_type": "Value",
+                "dtype": "string"
+              }
+            }
+          ],
+          "parent_step": {
+            "_type": "Value",
+            "dtype": "int64"
+          },
+          "reasoning_content": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "role": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "snippets": [
+            {
+              "end_line": {
+                "_type": "Value",
+                "dtype": "int64"
+              },
+              "file_path": {
+                "_type": "Value",
+                "dtype": "string"
+              },
+              "language": {
+                "_type": "Value",
+                "dtype": "string"
+              },
+              "source_step": {
+                "_type": "Value",
+                "dtype": "int64"
+              },
+              "start_line": {
+                "_type": "Value",
+                "dtype": "int64"
+              },
+              "text": {
+                "_type": "Value",
+                "dtype": "string"
+              }
+            }
+          ],
+          "step_index": {
+            "_type": "Value",
+            "dtype": "int64"
+          },
+          "subagent_trajectory_ref": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "system_prompt_hash": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "timestamp": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "token_usage": {
+            "cache_read_tokens": {
+              "_type": "Value",
+              "dtype": "int64"
+            },
+            "cache_write_tokens": {
+              "_type": "Value",
+              "dtype": "int64"
+            },
+            "input_tokens": {
+              "_type": "Value",
+              "dtype": "int64"
+            },
+            "output_tokens": {
+              "_type": "Value",
+              "dtype": "int64"
+            },
+            "prefix_reuse_tokens": {
+              "_type": "Value",
+              "dtype": "int64"
+            }
+          },
+          "tool_calls": [
+            {
+              "duration_ms": {
+                "_type": "Value",
+                "dtype": "int64"
+              },
+              "input": {
+                "_type": "Json"
+              },
+              "tool_call_id": {
+                "_type": "Value",
+                "dtype": "string"
+              },
+              "tool_name": {
+                "_type": "Value",
+                "dtype": "string"
+              }
+            }
+          ],
+          "tools_available": [
+            {
+              "_type": "Value",
+              "dtype": "string"
+            }
+          ]
+        }
+      ],
+      "system_prompts": {
+        "_type": "Json"
+      },
+      "task": {
+        "base_commit": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "description": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "repository": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "repository_url": {
+          "_type": "Value",
+          "dtype": "string"
+        },
+        "source": {
+          "_type": "Value",
+          "dtype": "string"
+        }
+      },
+      "timestamp_end": {
+        "_type": "Value",
+        "dtype": "string"
+      },
+      "timestamp_start": {
+        "_type": "Value",
+        "dtype": "string"
+      },
+      "tool_definitions": [
+        {
+          "_type": "Json"
+        }
+      ],
+      "trace_id": {
+        "_type": "Value",
+        "dtype": "string"
+      }
+    },
+    "homepage": "",
+    "license": "cc-by-4.0",
+    "version": {
+      "major": 0,
+      "minor": 3,
+      "patch": 0,
+      "version_str": "0.3.0"
+    }
+  }
+}

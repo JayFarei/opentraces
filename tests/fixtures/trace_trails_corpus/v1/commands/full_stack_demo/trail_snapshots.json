@@ -1,0 +1,85 @@
+{
+  "event_log_ref": "refs/opentraces/local/events/v1",
+  "schema_version": "opentraces.trail_snapshots.v1",
+  "snapshot_count": 2,
+  "snapshots": [
+    {
+      "base_commit": {
+        "algo": "sha1",
+        "hex": "<git-object:02>"
+      },
+      "capture_status": "captured",
+      "generation_index": 1,
+      "git_head": {
+        "algo": "sha1",
+        "hex": "<git-object:02>"
+      },
+      "limitations": [],
+      "role": "before",
+      "snapshot_id": "<snapshot:01>",
+      "snapshot_ref": {
+        "algorithm": "sha256",
+        "canonicalization": "opentraces.trace_snapshot.v1",
+        "display_id": "<display-ref:01>",
+        "id": "<snapshot:01>",
+        "id_format": "digest",
+        "kind": "trace_snapshot",
+        "ref": "ot://trace-snapshot/sha256/<snapshot:01>"
+      },
+      "source_event": {
+        "event_id": "<trail-event:03>",
+        "event_sequence": 3,
+        "event_type": "trace_snapshot_created"
+      },
+      "step_id": "s2",
+      "step_index": 2,
+      "trace_id": "<trace:01>",
+      "tree_id": {
+        "algo": "sha1",
+        "hex": "<git-object:03>"
+      }
+    },
+    {
+      "base_commit": {
+        "algo": "sha1",
+        "hex": "<git-object:02>"
+      },
+      "capture_status": "hook_only",
+      "generation_index": 1,
+      "git_head": {
+        "algo": "sha1",
+        "hex": "<git-object:02>"
+      },
+      "limitations": [
+        "hook_only"
+      ],
+      "role": "after",
+      "snapshot_id": "<snapshot:02>",
+      "snapshot_ref": {
+        "algorithm": "sha256",
+        "canonicalization": "opentraces.trace_snapshot.v1",
+        "display_id": "<display-ref:02>",
+        "id": "<snapshot:02>",
+        "id_format": "digest",
+        "kind": "trace_snapshot",
+        "ref": "ot://trace-snapshot/sha256/<snapshot:02>"
+      },
+      "source_event": {
+        "event_id": "<trail-event:04>",
+        "event_sequence": 4,
+        "event_type": "trace_snapshot_created"
+      },
+      "step_id": "s2",
+      "step_index": 2,
+      "trace_id": "<trace:01>",
+      "tree_id": {
+        "algo": "sha1",
+        "hex": "<git-object:04>"
+      }
+    }
+  ],
+  "trace_id": "<trace:01>",
+  "workspace_source": {
+    "type": "local_project"
+  }
+}

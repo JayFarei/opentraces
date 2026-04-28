@@ -1,0 +1,64 @@
+{
+  "base_commit": {
+    "algo": "sha1",
+    "hex": "<git-object:02>"
+  },
+  "event_log_ref": "refs/opentraces/local/events/v1",
+  "limitations": [
+    "hook_only"
+  ],
+  "materialization": {
+    "isolated": true,
+    "materialized": false,
+    "mode": "git_worktree",
+    "path": "<run-root>/home/.opentraces/projects/mock-project-trace-tr/trace-worktrees/<materialized-worktree:01>"
+  },
+  "relation": "snapshot_rewind",
+  "schema_version": "opentraces.snapshot_rewind.v1",
+  "snapshot": {
+    "base_commit": {
+      "algo": "sha1",
+      "hex": "<git-object:02>"
+    },
+    "capture_status": "hook_only",
+    "generation_index": 1,
+    "git_head": {
+      "algo": "sha1",
+      "hex": "<git-object:02>"
+    },
+    "limitations": [
+      "hook_only"
+    ],
+    "role": "after",
+    "snapshot_id": "<snapshot:02>",
+    "snapshot_ref": {
+      "algorithm": "sha256",
+      "canonicalization": "opentraces.trace_snapshot.v1",
+      "display_id": "<display-ref:02>",
+      "id": "<snapshot:02>",
+      "id_format": "digest",
+      "kind": "trace_snapshot",
+      "ref": "ot://trace-snapshot/sha256/<snapshot:02>"
+    },
+    "source_event": {
+      "event_id": "<trail-event:04>",
+      "event_sequence": 4,
+      "event_type": "trace_snapshot_created"
+    },
+    "step_id": "s2",
+    "step_index": 2,
+    "trace_id": "<trace:01>",
+    "tree_id": {
+      "algo": "sha1",
+      "hex": "<git-object:04>"
+    }
+  },
+  "snapshot_id": "<snapshot:02>",
+  "tree_id": {
+    "algo": "sha1",
+    "hex": "<git-object:04>"
+  },
+  "workspace_source": {
+    "type": "local_project"
+  }
+}

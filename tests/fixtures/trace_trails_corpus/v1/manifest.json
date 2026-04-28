@@ -1,0 +1,32 @@
+{
+  "corpus_version": "v1",
+  "scenarios": [
+    {
+      "api": "api/full_stack_demo/",
+      "commands": "commands/full_stack_demo/",
+      "dataset": "dataset/",
+      "event_count": 11,
+      "event_type_counts": {
+        "filesystem_mutation_observed": 1,
+        "git_anchor_created": 1,
+        "git_anchor_search_completed": 1,
+        "trace_patch_created": 2,
+        "trace_session_closed": 1,
+        "trace_snapshot_created": 2,
+        "trace_step_window_closed": 1,
+        "trace_step_window_opened": 1,
+        "watcher_observation_attributed": 1
+      },
+      "name": "full_stack_demo",
+      "status": "ok",
+      "step_index": 2,
+      "summary": "summaries/full_stack_demo.json",
+      "trace_id": "<trace:01>",
+      "trail_events": "trail/events.jsonl",
+      "workspace_manifest": "workspace/manifest.json",
+      "workspace_trace_records": "workspace/traces/full_stack_demo.jsonl"
+    }
+  ],
+  "schema_version": "opentraces.trace_trails_corpus.v1",
+  "source_harness": "tests.integration.harness.trace_trails_full_stack_demo.run_demo"
+}

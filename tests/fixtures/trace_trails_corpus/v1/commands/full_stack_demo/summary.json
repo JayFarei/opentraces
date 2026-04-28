@@ -1,0 +1,260 @@
+{
+  "command_count": 16,
+  "commands": [
+    {
+      "name": "blame_commit",
+      "path": "blame_commit.json",
+      "top_level_keys": [
+        "commit",
+        "coverage",
+        "entity_contributions",
+        "files",
+        "hookLinked",
+        "projection_disagreements",
+        "projection_limitations",
+        "traces",
+        "trailEvidence"
+      ]
+    },
+    {
+      "name": "graph",
+      "path": "graph.json",
+      "top_level_keys": [
+        "commits",
+        "mode",
+        "pivot_trace_id"
+      ]
+    },
+    {
+      "name": "opened_trail_play",
+      "path": "opened_trail_play.json",
+      "top_level_keys": [
+        "event_count",
+        "event_log_ref",
+        "limitations",
+        "schema_version",
+        "timeline",
+        "trace_id",
+        "workspace_source"
+      ]
+    },
+    {
+      "name": "trace_workspace_export",
+      "path": "trace_workspace_export.json",
+      "top_level_keys": [
+        "event_count",
+        "git_bundle",
+        "limitations",
+        "manifest",
+        "output",
+        "schema_version",
+        "snapshot_count",
+        "status",
+        "trace_id",
+        "trace_record"
+      ]
+    },
+    {
+      "name": "trace_workspace_open",
+      "path": "trace_workspace_open.json",
+      "top_level_keys": [
+        "event_count",
+        "event_log_ref",
+        "project",
+        "schema_version",
+        "snapshot_count",
+        "status",
+        "trace_id",
+        "workspace_source"
+      ]
+    },
+    {
+      "name": "trail_explain_commit",
+      "path": "trail_explain_commit.json",
+      "top_level_keys": [
+        "commit_sha",
+        "event_log_ref",
+        "source_events",
+        "trace_patches"
+      ]
+    },
+    {
+      "name": "trail_explain_line",
+      "path": "trail_explain_line.json",
+      "top_level_keys": [
+        "containing_segment_id",
+        "event_log_ref",
+        "git_anchor",
+        "relation",
+        "resource_refs",
+        "source_events",
+        "target",
+        "trace_patch",
+        "trace_slice"
+      ]
+    },
+    {
+      "name": "trail_explain_step",
+      "path": "trail_explain_step.json",
+      "top_level_keys": [
+        "affected_range",
+        "after_blob_id",
+        "before_blob_id",
+        "containing_segment_id",
+        "event_log_ref",
+        "evidence_firmness",
+        "evidence_tier",
+        "file_path",
+        "generation_index",
+        "git_anchor",
+        "git_anchor_id",
+        "git_anchors",
+        "git_clean_hash",
+        "limitations",
+        "patch_status",
+        "raw_authored_hash",
+        "relation",
+        "resource_refs",
+        "source_events",
+        "step_id",
+        "step_index",
+        "trace_id",
+        "trace_patch_id",
+        "trace_patch_ref",
+        "trace_slice",
+        "trace_snapshot_after",
+        "trace_snapshot_before",
+        "unavailable_stronger_claims"
+      ]
+    },
+    {
+      "name": "trail_mature",
+      "path": "trail_mature.json",
+      "top_level_keys": [
+        "anchors_created",
+        "commits_considered",
+        "errors",
+        "searches_completed"
+      ]
+    },
+    {
+      "name": "trail_play",
+      "path": "trail_play.json",
+      "top_level_keys": [
+        "event_count",
+        "event_log_ref",
+        "limitations",
+        "schema_version",
+        "timeline",
+        "trace_id",
+        "workspace_source"
+      ]
+    },
+    {
+      "name": "trail_resolve_patch",
+      "path": "trail_resolve_patch.json",
+      "top_level_keys": [
+        "containing_segment_id",
+        "current_state",
+        "edges",
+        "event_log_ref",
+        "evidence",
+        "git_anchors",
+        "landing",
+        "limitation_details",
+        "lineage_key",
+        "nodes",
+        "patch_status",
+        "refs",
+        "relation",
+        "resource",
+        "resource_type",
+        "schema_version",
+        "source_events",
+        "trace_id",
+        "trace_patch",
+        "trace_patch_id",
+        "trace_slice",
+        "trail"
+      ]
+    },
+    {
+      "name": "trail_search_commit",
+      "path": "trail_search_commit.json",
+      "top_level_keys": [
+        "event_log_ref",
+        "limitation_details",
+        "limitations",
+        "project",
+        "projection",
+        "projection_version",
+        "query",
+        "result_count",
+        "results",
+        "schema_version"
+      ]
+    },
+    {
+      "name": "trail_search_path",
+      "path": "trail_search_path.json",
+      "top_level_keys": [
+        "event_log_ref",
+        "limitation_details",
+        "limitations",
+        "project",
+        "projection",
+        "projection_version",
+        "query",
+        "result_count",
+        "results",
+        "schema_version"
+      ]
+    },
+    {
+      "name": "trail_search_trace",
+      "path": "trail_search_trace.json",
+      "top_level_keys": [
+        "event_log_ref",
+        "limitation_details",
+        "limitations",
+        "project",
+        "projection",
+        "projection_version",
+        "query",
+        "result_count",
+        "results",
+        "schema_version"
+      ]
+    },
+    {
+      "name": "trail_snapshot_checkout",
+      "path": "trail_snapshot_checkout.json",
+      "top_level_keys": [
+        "base_commit",
+        "event_log_ref",
+        "limitations",
+        "materialization",
+        "relation",
+        "schema_version",
+        "snapshot",
+        "snapshot_id",
+        "tree_id",
+        "workspace_source"
+      ]
+    },
+    {
+      "name": "trail_snapshots",
+      "path": "trail_snapshots.json",
+      "top_level_keys": [
+        "event_log_ref",
+        "schema_version",
+        "snapshot_count",
+        "snapshots",
+        "trace_id",
+        "workspace_source"
+      ]
+    }
+  ],
+  "scenario": "full_stack_demo",
+  "schema_version": "opentraces.trace_trails_corpus.commands.v1"
+}

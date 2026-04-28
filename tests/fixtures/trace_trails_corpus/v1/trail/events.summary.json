@@ -1,0 +1,16 @@
+{
+  "event_count": 11,
+  "event_type_counts": {
+    "filesystem_mutation_observed": 1,
+    "git_anchor_created": 1,
+    "git_anchor_search_completed": 1,
+    "trace_patch_created": 2,
+    "trace_session_closed": 1,
+    "trace_snapshot_created": 2,
+    "trace_step_window_closed": 1,
+    "trace_step_window_opened": 1,
+    "watcher_observation_attributed": 1
+  },
+  "scenario": "full_stack_demo",
+  "schema_version": "opentraces.trace_trails_corpus.events.v1"
+}

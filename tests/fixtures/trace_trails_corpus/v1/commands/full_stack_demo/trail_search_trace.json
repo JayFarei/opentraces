@@ -1,0 +1,552 @@
+{
+  "event_log_ref": "refs/opentraces/local/events/v1",
+  "limitation_details": [],
+  "limitations": [],
+  "project": {
+    "project_id": "trace-trails-full-stack-demo-0000",
+    "ref": "ot://repo/local",
+    "repo_root": "<run-root>/mock-project",
+    "vcs": "git"
+  },
+  "projection": {
+    "anchor_count": 1,
+    "event_log_ref": "refs/opentraces/local/events/v1",
+    "events_seen": 11,
+    "git": {
+      "as_of_ref": "HEAD",
+      "head_sha": "<git-commit:02>",
+      "repo_ref": "ot://repo/local"
+    },
+    "high_watermark": {
+      "events_seen": 11,
+      "last_event_id": "<trail-event:11>",
+      "projection_digest": "<content-hash:13>"
+    },
+    "last_event_id": "<trail-event:11>",
+    "limitation_details": [],
+    "limitations": [],
+    "name": "trace_trail",
+    "object_id_algorithm": "sha256",
+    "object_ref_contract": "opentraces.object_ref.v1",
+    "patch_count": 1,
+    "projection_digest": "<content-hash:13>",
+    "stale": false,
+    "version": "v1"
+  },
+  "projection_version": "v1",
+  "query": {
+    "semantic_type": "trace_to_patches",
+    "trace_id": "<trace:01>",
+    "type": "patches_per_trace"
+  },
+  "result_count": 1,
+  "results": [
+    {
+      "affected_range": {
+        "end_line": 2,
+        "start_line": 1
+      },
+      "anchor_searches": [
+        {
+          "algorithms_attempted": [
+            "exact_range_hash",
+            "structural_match"
+          ],
+          "created_anchor_ids": [
+            "<git-anchor:01>"
+          ],
+          "result": "anchored",
+          "search_head": {
+            "algo": "sha1",
+            "hex": "<git-object:05>"
+          },
+          "search_head_sha": "<git-commit:02>",
+          "source_event": {
+            "capture_method": [
+              "trail_maturation"
+            ],
+            "event_id": "<trail-event:10>",
+            "event_sequence": 10,
+            "event_type": "git_anchor_search_completed",
+            "result": "anchored",
+            "trace_patch_id": "<trace-patch:01>"
+          },
+          "trace_patch_id": "<trace-patch:01>"
+        }
+      ],
+      "commit_id": {
+        "algo": "sha1",
+        "hex": "<git-object:05>"
+      },
+      "commit_sha": "<git-commit:02>",
+      "containing_segment_id": "<hex64:02>",
+      "current_state": {
+        "firmness": "firm_observed",
+        "label": "alive on path",
+        "limitations": [],
+        "observed_at_commit": "<git-commit:02>",
+        "observed_at_ref": "<git-commit:02>",
+        "path": "src/generated.py",
+        "ranges": [
+          {
+            "end_line": 2,
+            "path": "src/generated.py",
+            "side": "current",
+            "start_line": 1
+          }
+        ],
+        "survival_state": "alive_on_path"
+      },
+      "current_survival": {
+        "aggregation": "any_alive_anchor_wins",
+        "anchor_commit_id": {
+          "algo": "sha1",
+          "hex": "<git-object:05>"
+        },
+        "anchor_descendant_count": 0,
+        "anchor_event_sequence": 11,
+        "anchor_trail_index": 0,
+        "evidence_firmness": "firm",
+        "evidence_tier": "exact_range_hash",
+        "git_anchor_id": "<git-anchor:01>",
+        "limitations": [],
+        "observation_sequence": 0,
+        "observation_type": "patch_survival_observed",
+        "observed_commit_id": {
+          "algo": "sha1",
+          "hex": "<git-object:05>"
+        },
+        "observed_commit_time": 1777334400,
+        "observed_head_id": {
+          "algo": "sha1",
+          "hex": "<git-object:05>"
+        },
+        "observed_ref": "<git-commit:02>",
+        "path": "src/generated.py",
+        "range": {
+          "end_line": 2,
+          "start_line": 1
+        },
+        "selected_observation_index": 0,
+        "survival_state": "alive_on_path",
+        "trace_patch_id": "<trace-patch:01>"
+      },
+      "event_log_ref": "refs/opentraces/local/events/v1",
+      "evidence": {
+        "evidence_refs": [
+          "ot://trace-patch/sha256/<trace-patch:01>/trail",
+          "ot://git-anchor/sha256/<git-anchor:01>"
+        ],
+        "firmness": "firm_observed",
+        "label": "exact range match",
+        "rank": 1,
+        "reason_codes": [
+          "committed_range_hash_matches_trace_patch_range_hash"
+        ],
+        "tier": "exact_range_hash"
+      },
+      "evidence_firmness": "firm",
+      "evidence_tier": "exact_range_hash",
+      "file_path": "src/generated.py",
+      "firmness": "firm",
+      "generation_index": 1,
+      "git_anchor_id": "<git-anchor:01>",
+      "git_anchor_ref": {
+        "algorithm": "sha256",
+        "canonicalization": "opentraces.git_anchor.v1",
+        "display_id": "<display-ref:04>",
+        "id": "<git-anchor:01>",
+        "id_format": "digest",
+        "kind": "git_anchor",
+        "ref": "ot://git-anchor/sha256/<git-anchor:01>",
+        "relation": "anchored_in_git"
+      },
+      "git_anchors": [
+        {
+          "affected_range": {
+            "end_line": 2,
+            "start_line": 1
+          },
+          "commit_id": {
+            "algo": "sha1",
+            "hex": "<git-object:05>"
+          },
+          "commit_sha": "<git-commit:02>",
+          "containing_segment_id": "<hex64:02>",
+          "event_log_ref": "refs/opentraces/local/events/v1",
+          "evidence_firmness": "firm",
+          "evidence_tier": "exact_range_hash",
+          "file_path": "src/generated.py",
+          "firmness": "firm",
+          "generation_index": 1,
+          "git_anchor_id": "<git-anchor:01>",
+          "git_anchor_ref": {
+            "algorithm": "sha256",
+            "canonicalization": "opentraces.git_anchor.v1",
+            "display_id": "<display-ref:04>",
+            "id": "<git-anchor:01>",
+            "id_format": "digest",
+            "kind": "git_anchor",
+            "ref": "ot://git-anchor/sha256/<git-anchor:01>",
+            "relation": "anchored_in_git"
+          },
+          "limitations": [
+            "hook_only"
+          ],
+          "line_count": 2,
+          "line_origin": {
+            "line": 1,
+            "path": "src/generated.py",
+            "resource_ref": "ot://file/src/generated.py/line/1/origin"
+          },
+          "patch_status": "patched",
+          "path": "src/generated.py",
+          "range": {
+            "end_line": 2,
+            "start_line": 1
+          },
+          "relation": "anchored_in_git",
+          "resource_refs": {
+            "file_line_origin": "ot://file/src/generated.py/line/1/origin",
+            "git_anchor": "ot://git-anchor/sha256/<git-anchor:01>",
+            "trace_patch_trail": "ot://trace-patch/sha256/<trace-patch:01>/trail"
+          },
+          "source_events": [
+            {
+              "capture_method": [
+                "hook_posttooluse",
+                "hook_pretooluse",
+                "watcher_backstop"
+              ],
+              "event_id": "<trail-event:08>",
+              "event_sequence": 8,
+              "event_type": "trace_patch_created"
+            },
+            {
+              "capture_method": [
+                "trail_maturation"
+              ],
+              "event_id": "<trail-event:11>",
+              "event_sequence": 11,
+              "event_type": "git_anchor_created"
+            }
+          ],
+          "source_refs": {
+            "event_log_ref": "refs/opentraces/local/events/v1",
+            "git_anchor_event_id": "<trail-event:11>",
+            "git_anchor_event_sequence": 11,
+            "trace_patch_event_id": "<trail-event:08>",
+            "trace_patch_event_sequence": 8
+          },
+          "step_id": "step_2",
+          "step_index": 2,
+          "trace_id": "<trace:01>",
+          "trace_patch_id": "<trace-patch:01>",
+          "trace_slice": {
+            "containing_segment_id": "<hex64:02>",
+            "containing_segment_ref": {
+              "algorithm": "sha256",
+              "canonicalization": "opentraces.trace_slice.v1",
+              "display_id": "<display-ref:06>",
+              "id": "<hex64:02>",
+              "id_format": "digest",
+              "kind": "trace_slice",
+              "ref": "ot://trace-slice/sha256/<hex64:02>"
+            },
+            "content_status": "phase8_deferred",
+            "end_step_index": 5,
+            "generation_index": 1,
+            "git_anchor_id": "<git-anchor:01>",
+            "git_anchor_ref": {
+              "algorithm": "sha256",
+              "canonicalization": "opentraces.git_anchor.v1",
+              "display_id": "<display-ref:04>",
+              "id": "<git-anchor:01>",
+              "id_format": "digest",
+              "kind": "git_anchor",
+              "ref": "ot://git-anchor/sha256/<git-anchor:01>",
+              "relation": "anchored_in_git"
+            },
+            "relation": "contains_trace_patch",
+            "source": "default_step_neighborhood",
+            "start_step_index": 0,
+            "trace_id": "<trace:01>",
+            "trace_patch_id": "<trace-patch:01>",
+            "trace_patch_ref": {
+              "algorithm": "sha256",
+              "canonicalization": "opentraces.trace_patch.v1",
+              "display_id": "<display-ref:03>",
+              "id": "<trace-patch:01>",
+              "id_format": "digest",
+              "kind": "trace_patch",
+              "ref": "ot://trace-patch/sha256/<trace-patch:01>"
+            }
+          }
+        }
+      ],
+      "landing": {
+        "anchor_relation": "anchored_in_git",
+        "commit_ref": {
+          "algorithm": "sha1",
+          "display_id": "c:3e5fd888",
+          "id": "<git-commit:02>",
+          "id_format": "git_oid",
+          "kind": "git_commit",
+          "ref": "ot://repo/local/git/commit/sha1/<git-commit:02>",
+          "repo_ref": "ot://repo/local"
+        },
+        "commit_sha": "<git-commit:02>",
+        "file_path": "src/generated.py",
+        "git_anchor_id": "<git-anchor:01>",
+        "kind": "git_anchor",
+        "ranges": [
+          {
+            "end_line": 2,
+            "path": "src/generated.py",
+            "side": "landing",
+            "start_line": 1
+          }
+        ],
+        "ref": {
+          "algorithm": "sha256",
+          "canonicalization": "opentraces.git_anchor.v1",
+          "display_id": "<display-ref:04>",
+          "id": "<git-anchor:01>",
+          "id_format": "digest",
+          "kind": "git_anchor",
+          "ref": "ot://git-anchor/sha256/<git-anchor:01>",
+          "relation": "anchored_in_git"
+        },
+        "relation": "landed_in_commit",
+        "resource_ref": "ot://git-anchor/sha256/<git-anchor:01>"
+      },
+      "limitation_details": [
+        {
+          "affects": [
+            "lineage"
+          ],
+          "code": "hook_only",
+          "message": "hook only",
+          "severity": "warning"
+        }
+      ],
+      "limitations": [
+        "hook_only"
+      ],
+      "line_count": 2,
+      "line_origin": {
+        "line": 1,
+        "path": "src/generated.py",
+        "resource_ref": "ot://file/src/generated.py/line/1/origin"
+      },
+      "line_origin_refs": [
+        {
+          "line": 1,
+          "path": "src/generated.py",
+          "resource_ref": "ot://file/src/generated.py/line/1/origin"
+        }
+      ],
+      "lineage_key": {
+        "commit": {
+          "algorithm": "sha1",
+          "display_id": "c:3e5fd888",
+          "id": "<git-commit:02>",
+          "id_format": "git_oid",
+          "kind": "git_commit",
+          "ref": "ot://repo/local/git/commit/sha1/<git-commit:02>",
+          "repo_ref": "ot://repo/local"
+        },
+        "git_anchor": {
+          "algorithm": "sha256",
+          "canonicalization": "opentraces.git_anchor.v1",
+          "display_id": "<display-ref:04>",
+          "id": "<git-anchor:01>",
+          "id_format": "digest",
+          "kind": "git_anchor",
+          "ref": "ot://git-anchor/sha256/<git-anchor:01>",
+          "relation": "anchored_in_git"
+        },
+        "step": {
+          "display_id": "step:step_2",
+          "id": "step_2",
+          "id_format": "trace_scoped",
+          "index": 2,
+          "kind": "trace_step",
+          "parent_ref": "ot://trace/<trace:01>",
+          "ref": "ot://trace/<trace:01>/steps/step_2"
+        },
+        "trace": {
+          "display_id": "<display-ref:05>",
+          "id": "<trace:01>",
+          "id_format": "uuid",
+          "kind": "trace",
+          "ref": "ot://trace/<trace:01>"
+        },
+        "trace_patch": {
+          "algorithm": "sha256",
+          "canonicalization": "opentraces.trace_patch.v1",
+          "display_id": "<display-ref:03>",
+          "id": "<trace-patch:01>",
+          "id_format": "digest",
+          "kind": "trace_patch",
+          "ref": "ot://trace-patch/sha256/<trace-patch:01>"
+        }
+      },
+      "origin": {
+        "generation_index": 1,
+        "kind": "trace_step",
+        "ref": {
+          "display_id": "step:step_2",
+          "id": "step_2",
+          "id_format": "trace_scoped",
+          "index": 2,
+          "kind": "trace_step",
+          "parent_ref": "ot://trace/<trace:01>",
+          "ref": "ot://trace/<trace:01>/steps/step_2"
+        },
+        "step_id": "step_2",
+        "step_index": 2,
+        "trace": {
+          "display_id": "<display-ref:05>",
+          "id": "<trace:01>",
+          "id_format": "uuid",
+          "kind": "trace",
+          "ref": "ot://trace/<trace:01>"
+        }
+      },
+      "patch_status": "patched",
+      "path": "src/generated.py",
+      "range": {
+        "end_line": 2,
+        "start_line": 1
+      },
+      "ranges": [
+        {
+          "end_line": 2,
+          "path": "src/generated.py",
+          "side": "trace_patch",
+          "start_line": 1
+        },
+        {
+          "end_line": 2,
+          "path": "src/generated.py",
+          "side": "landing",
+          "start_line": 1
+        }
+      ],
+      "relation": "anchored_in_git",
+      "resource_refs": {
+        "file_line_origin": "ot://file/src/generated.py/line/1/origin",
+        "git_anchor": "ot://git-anchor/sha256/<git-anchor:01>",
+        "trace_patch_trail": "ot://trace-patch/sha256/<trace-patch:01>/trail"
+      },
+      "source_events": [
+        {
+          "capture_method": [
+            "hook_posttooluse",
+            "hook_pretooluse",
+            "watcher_backstop"
+          ],
+          "event_id": "<trail-event:08>",
+          "event_sequence": 8,
+          "event_type": "trace_patch_created"
+        },
+        {
+          "capture_method": [
+            "trail_maturation"
+          ],
+          "event_id": "<trail-event:11>",
+          "event_sequence": 11,
+          "event_type": "git_anchor_created"
+        }
+      ],
+      "source_refs": {
+        "event_log_ref": "refs/opentraces/local/events/v1",
+        "git_anchor_event_id": "<trail-event:11>",
+        "git_anchor_event_sequence": 11,
+        "trace_patch_event_id": "<trail-event:08>",
+        "trace_patch_event_sequence": 8
+      },
+      "step_id": "step_2",
+      "step_index": 2,
+      "survival_state": "alive_on_path",
+      "trace_id": "<trace:01>",
+      "trace_patch": {
+        "file_path": "src/generated.py",
+        "kind": "trace_patch",
+        "patch_status": "patched",
+        "ranges": [
+          {
+            "end_line": 2,
+            "path": "src/generated.py",
+            "side": "trace_patch",
+            "start_line": 1
+          }
+        ],
+        "ref": {
+          "algorithm": "sha256",
+          "canonicalization": "opentraces.trace_patch.v1",
+          "display_id": "<display-ref:03>",
+          "id": "<trace-patch:01>",
+          "id_format": "digest",
+          "kind": "trace_patch",
+          "ref": "ot://trace-patch/sha256/<trace-patch:01>"
+        },
+        "resource_ref": "ot://trace-patch/sha256/<trace-patch:01>/trail",
+        "trace_patch_id": "<trace-patch:01>"
+      },
+      "trace_patch_id": "<trace-patch:01>",
+      "trace_patch_ref": {
+        "algorithm": "sha256",
+        "canonicalization": "opentraces.trace_patch.v1",
+        "display_id": "<display-ref:03>",
+        "id": "<trace-patch:01>",
+        "id_format": "digest",
+        "kind": "trace_patch",
+        "ref": "ot://trace-patch/sha256/<trace-patch:01>"
+      },
+      "trace_slice": {
+        "containing_segment_id": "<hex64:02>",
+        "containing_segment_ref": {
+          "algorithm": "sha256",
+          "canonicalization": "opentraces.trace_slice.v1",
+          "display_id": "<display-ref:06>",
+          "id": "<hex64:02>",
+          "id_format": "digest",
+          "kind": "trace_slice",
+          "ref": "ot://trace-slice/sha256/<hex64:02>"
+        },
+        "content_status": "phase8_deferred",
+        "end_step_index": 5,
+        "generation_index": 1,
+        "git_anchor_id": "<git-anchor:01>",
+        "git_anchor_ref": {
+          "algorithm": "sha256",
+          "canonicalization": "opentraces.git_anchor.v1",
+          "display_id": "<display-ref:04>",
+          "id": "<git-anchor:01>",
+          "id_format": "digest",
+          "kind": "git_anchor",
+          "ref": "ot://git-anchor/sha256/<git-anchor:01>",
+          "relation": "anchored_in_git"
+        },
+        "relation": "contains_trace_patch",
+        "source": "default_step_neighborhood",
+        "start_step_index": 0,
+        "trace_id": "<trace:01>",
+        "trace_patch_id": "<trace-patch:01>",
+        "trace_patch_ref": {
+          "algorithm": "sha256",
+          "canonicalization": "opentraces.trace_patch.v1",
+          "display_id": "<display-ref:03>",
+          "id": "<trace-patch:01>",
+          "id_format": "digest",
+          "kind": "trace_patch",
+          "ref": "ot://trace-patch/sha256/<trace-patch:01>"
+        }
+      },
+      "trail_limitations": []
+    }
+  ],
+  "schema_version": "opentraces.trail.search.v1"
+}
