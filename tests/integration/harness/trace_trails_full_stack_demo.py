@@ -27,7 +27,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
@@ -388,8 +388,13 @@ def _run_cli(args: list[str], *, cwd: Path | None = None) -> dict[str, Any]:
             + " ".join(cli_args)
             + f" failed with exit {result.exit_code}:\n{result.output}"
         )
+    output = result.output.strip()
+    sentinel = "---OPENTRACES_JSON---"
+    if sentinel in output:
+        output = output.split(sentinel, 1)[1].strip()
     try:
-        return json.loads(result.output)
+        value, _ = json.JSONDecoder().raw_decode(output)
+        return value
     except json.JSONDecodeError as exc:
         raise AssertionError(
             "opentraces " + " ".join(cli_args) + f" did not emit JSON:\n{result.output}"
@@ -797,6 +802,237 @@ def _run_demo_with_isolated_home(paths: DemoPaths, *, verbose: bool) -> dict[str
     return summary
 
 
+def _runtime_transcript_path(paths: DemoPaths) -> Path:
+    from opentraces.core.repo_identity import encode_claude_path
+
+    return (
+        paths.home
+        / ".claude"
+        / "projects"
+        / encode_claude_path(paths.repo)
+        / f"{SESSION_ID}.jsonl"
+    )
+
+
+def _read_last_hook_log(repo: Path) -> dict[str, Any]:
+    hook_log = repo / ".git" / "opentraces-hook.log"
+    if not hook_log.exists():
+        raise AssertionError(f"missing post-commit hook log: {hook_log}")
+    lines = [line for line in hook_log.read_text().splitlines() if line.strip()]
+    if not lines:
+        raise AssertionError(f"empty post-commit hook log: {hook_log}")
+    return json.loads(lines[-1])
+
+
+def run_installed_runtime_demo(root: Path, *, verbose: bool = False) -> dict[str, Any]:
+    """Run the production-path Trace Trails UAT.
+
+    This scenario uses command/install surfaces rather than direct core calls:
+
+    * ``opentraces --json setup git`` installs the Git post-commit hook.
+    * ``git commit`` executes that hook before any Trace Patch exists.
+    * The installed Claude hook boundary observer records the concrete
+      filesystem transition without direct attribution.
+    * ``opentraces watcher tick --project ... --json`` performs session ingest,
+      watcher reconciliation, and Trail maturation.
+
+    The only white-box part is the synthetic Claude transcript itself. That is
+    deliberate: this UAT is about the OpenTraces runtime surfaces, not launching
+    a real Claude Code REPL.
+    """
+    paths = _create_paths(root.resolve())
+    if paths.root.exists():
+        shutil.rmtree(paths.root)
+    paths.root.mkdir(parents=True)
+    with _temporary_opentraces_home(paths.home):
+        runtime_paths = replace(paths, transcript=_runtime_transcript_path(paths))
+        return _run_installed_runtime_demo_with_isolated_home(
+            runtime_paths,
+            verbose=verbose,
+        )
+
+
+def _run_installed_runtime_demo_with_isolated_home(
+    paths: DemoPaths,
+    *,
+    verbose: bool,
+) -> dict[str, Any]:
+    _init_demo_repo(paths.repo)
+
+    watcher_status = _run_cli(["watcher", "status", "--json"])
+    setup_git = _run_cli(["--json", "setup", "git"], cwd=paths.repo)
+    _assert(setup_git["status"] == "ok", "setup git did not report ok")
+    _assert(
+        setup_git["state"]["installed"] is True,
+        "setup git did not install the post-commit hook",
+    )
+
+    _simulate_agent_step(paths)
+
+    _git(paths.repo, "add", "src/generated.py")
+    _git(paths.repo, "commit", "-q", "-m", "installed runtime commit before ingest")
+    commit_sha = _git(paths.repo, "rev-parse", "HEAD")
+    hook_log = _read_last_hook_log(paths.repo)
+    _assert(hook_log["sha"] == commit_sha, "post-commit hook log did not record HEAD")
+    _assert(
+        hook_log.get("trail_anchors_created") == 0,
+        "post-commit hook created anchors before watcher/session ingest",
+    )
+    events_before_tick = _events_by_type(paths.repo)
+    _assert(
+        events_before_tick.get("filesystem_mutation_observed"),
+        "hook boundary watcher emitted no pre-ingest filesystem observation",
+    )
+    _assert(
+        not events_before_tick.get("watcher_observation_attributed"),
+        "watcher observation was reconciled before watcher tick/session ingest",
+    )
+    _assert(
+        not events_before_tick.get("git_anchor_created"),
+        "Git Anchor existed before watcher tick/session ingest",
+    )
+
+    tick = _run_cli(
+        ["watcher", "tick", "--project", str(paths.repo), "--json"],
+    )
+    _assert(isinstance(tick, list) and len(tick) == 1, "watcher tick did not return one report")
+    tick_report = tick[0]
+    _assert(tick_report["error"] is None, f"watcher tick failed: {tick_report['error']}")
+    _assert(
+        tick_report["fs_observations"] == 0,
+        "watcher tick re-observed a mutation already captured at the tool boundary",
+    )
+    _assert(tick_report["sessions_created"] >= 1, "watcher tick did not ingest a session")
+    _assert(
+        tick_report["trail_maturation_searches"] >= 1,
+        "watcher tick did not mature any Trace Patch searches",
+    )
+    _assert(
+        tick_report["trail_maturation_anchors"] >= 1,
+        "watcher tick did not create any Git Anchors",
+    )
+
+    from opentraces.core.trails import read_events
+
+    events = read_events(paths.repo)
+    observations = [
+        event
+        for event in events
+        if event.event_type == "filesystem_mutation_observed"
+        and event.payload.get("path") == "src/generated.py"
+    ]
+    _assert(observations, "no filesystem observation event for src/generated.py")
+    _assert(
+        any(event.writer == "hook-fs-watcher" for event in observations),
+        "filesystem observation was not emitted by the hook boundary watcher",
+    )
+    attributed = [
+        event
+        for event in events
+        if event.event_type == "watcher_observation_attributed"
+        and event.payload.get("path") == "src/generated.py"
+        and event.payload.get("result") == "attributed"
+    ]
+    _assert(attributed, "watcher observation was not attributed")
+    watcher_patches = [
+        event
+        for event in events
+        if event.event_type == "trace_patch_created"
+        and event.payload.get("file_path") == "src/generated.py"
+        and "watcher_backstop" in event.capture_method
+    ]
+    _assert(watcher_patches, "Trace Patch was not corroborated by watcher_backstop")
+    anchors = [
+        event
+        for event in events
+        if event.event_type == "git_anchor_created"
+        and (event.payload.get("commit_id") or {}).get("hex") == commit_sha
+    ]
+    _assert(len(anchors) == 1, "watcher maturation did not create exactly one Git Anchor")
+    anchor = anchors[0]
+    trace_id = anchor.trace_id
+    step_index = anchor.step_index
+    trace_patch_id = anchor.payload["trace_patch_id"]
+    git_anchor_id = anchor.payload["git_anchor_id"]
+    _assert(trace_id is not None, "Git Anchor has no trace id")
+    _assert(step_index is not None, "Git Anchor has no step index")
+
+    explain_step = _run_cli(
+        [
+            "trail",
+            "explain",
+            "--trace",
+            trace_id,
+            "--step",
+            str(step_index),
+            "--json",
+            "--project",
+            str(paths.repo),
+        ]
+    )
+    blame_commit = _run_cli(
+        ["blame", commit_sha, "--json", "--project", str(paths.repo)]
+    )
+    graph_commit = _run_cli(["graph", "--json", "--project", str(paths.repo)])
+    search_commit = _run_cli(
+        [
+            "trail",
+            "search",
+            "--commit",
+            commit_sha,
+            "--json",
+            "--project",
+            str(paths.repo),
+        ]
+    )
+    _assert(explain_step["relation"] == "anchored_in_git", "step explanation is not anchored")
+    _assert(blame_commit.get("trailEvidence"), "blame did not expose Trail evidence")
+    _assert(search_commit["result_count"] >= 1, "trail search did not expose the anchor")
+    _assert(
+        any(
+            trace.get("trace_id") == trace_id
+            for commit in graph_commit.get("commits", [])
+            for trace in commit.get("traces", [])
+        ),
+        "graph did not expose the Trace Trail-backed trace",
+    )
+
+    summary: dict[str, Any] = {
+        "status": "ok",
+        "scenario": "installed-runtime",
+        "repo": str(paths.repo),
+        "opentraces_home": str(paths.home / ".opentraces"),
+        "transcript": str(paths.transcript),
+        "commit_sha": commit_sha,
+        "trace_id": trace_id,
+        "step_index": step_index,
+        "trace_patch_id": trace_patch_id,
+        "git_anchor_id": git_anchor_id,
+        "watcher_status": watcher_status,
+        "setup_git_installed": setup_git["state"]["installed"],
+        "post_commit_hook_log": hook_log,
+        "watcher_tick": tick_report,
+        "pre_tick_event_counts": {
+            event_type: len(values)
+            for event_type, values in sorted(events_before_tick.items())
+        },
+        "filesystem_observation_event_id": observations[-1].event_id,
+        "watcher_attribution_event_id": attributed[-1].event_id,
+        "event_counts": {
+            event_type: len([event for event in events if event.event_type == event_type])
+            for event_type in sorted({event.event_type for event in events})
+        },
+    }
+    if verbose:
+        summary["commands"] = {
+            "trail_explain_step": explain_step,
+            "blame_commit": blame_commit,
+            "graph": graph_commit,
+            "trail_search_commit": search_commit,
+        }
+    return summary
+
+
 def _run_in_temp(*, keep: bool, verbose: bool, workdir: Path | None) -> dict[str, Any]:
     if workdir is not None:
         return run_demo(workdir, verbose=verbose)
@@ -812,13 +1048,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep", action="store_true", help="Keep the disposable demo directory.")
     parser.add_argument("--verbose", action="store_true", help="Include raw command JSON outputs.")
     parser.add_argument(
+        "--scenario",
+        choices=["hook-boundary", "installed-runtime"],
+        default="hook-boundary",
+        help="Full-stack scenario to run.",
+    )
+    parser.add_argument(
         "--workdir",
         type=Path,
         default=None,
         help="Directory to use for the disposable demo. Removed and recreated.",
     )
     args = parser.parse_args(argv)
-    summary = _run_in_temp(keep=args.keep, verbose=args.verbose, workdir=args.workdir)
+    if args.scenario == "installed-runtime":
+        if args.workdir is not None:
+            summary = run_installed_runtime_demo(args.workdir, verbose=args.verbose)
+        elif args.keep:
+            root = (
+                Path(tempfile.gettempdir())
+                / f"opentraces-trace-trails-installed-runtime-{int(time.time())}"
+            )
+            summary = run_installed_runtime_demo(root, verbose=args.verbose)
+        else:
+            with tempfile.TemporaryDirectory(
+                prefix="opentraces-trace-trails-installed-runtime-"
+            ) as tmp:
+                summary = run_installed_runtime_demo(Path(tmp), verbose=args.verbose)
+    else:
+        summary = _run_in_temp(keep=args.keep, verbose=args.verbose, workdir=args.workdir)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
