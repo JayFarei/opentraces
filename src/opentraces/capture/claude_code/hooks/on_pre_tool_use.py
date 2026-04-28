@@ -44,6 +44,28 @@ def _trail_state(cwd: str | None) -> dict:
         return {}
 
 
+def _observe_tool_boundary(
+    cwd: str | None,
+    tool_name: str | None,
+    transcript_path: str | None,
+) -> dict | None:
+    try:
+        from opentraces.capture.fs_watcher.runtime import observe_tool_boundary
+
+        exclude_paths = [transcript_path] if transcript_path else None
+        result = observe_tool_boundary(cwd, tool_name, exclude_paths=exclude_paths)
+    except Exception:
+        return None
+    if result is None:
+        return None
+    return {
+        "baseline_initialized": result.baseline_initialized,
+        "paths_seen": result.paths_seen,
+        "observations": len(result.observations),
+        "skipped_paths": result.skipped_paths,
+    }
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -55,13 +77,17 @@ def main() -> None:
         sys.exit(0)
 
     timestamp = datetime.now(timezone.utc).isoformat()
+    tool_name = payload.get("tool_name")
+    observer = _observe_tool_boundary(payload.get("cwd"), tool_name, transcript_path)
     data = {
         "session_id": payload.get("session_id"),
-        "tool": payload.get("tool_name"),
+        "tool": tool_name,
         "tool_use_id": payload.get("tool_use_id"),
         "tool_input": payload.get("tool_input") or {},
         "trail": _trail_state(payload.get("cwd")),
     }
+    if observer is not None:
+        data["trail_observer"] = observer
     line = json.dumps(
         {
             "type": "opentraces_hook",

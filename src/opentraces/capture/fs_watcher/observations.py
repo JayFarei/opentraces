@@ -104,6 +104,35 @@ def append_filesystem_mutation_observed(
     ``capture_limitations`` may contain ``watcher_buffer_overflow`` when the
     daemon detected lost events; the closed vocabulary is enforced here.
     """
+    draft = filesystem_mutation_observed_draft(
+        path=path,
+        observed_at_start=observed_at_start,
+        observed_at_end=observed_at_end,
+        before_blob_id=before_blob_id,
+        after_blob_id=after_blob_id,
+        concurrent_activity=concurrent_activity,
+        capture_limitations=capture_limitations,
+    )
+    events = append_event_batch(repo, [draft], writer=writer)
+    return events[0]
+
+
+def filesystem_mutation_observed_draft(
+    *,
+    path: str,
+    observed_at_start: str,
+    observed_at_end: str,
+    before_blob_id: GitObjectID | dict[str, str] | None = None,
+    after_blob_id: GitObjectID | dict[str, str] | None = None,
+    concurrent_activity: bool = False,
+    capture_limitations: list[str] | None = None,
+) -> TrailEventDraft:
+    """Build a validated observation draft without appending it.
+
+    Runtime observers use this to batch many path mutations into one
+    append-only TrailEvent batch. The public single-event API above remains
+    available for tests and small direct integrations.
+    """
     if capture_limitations:
         assert_known_capture_limitations(capture_limitations)
 
@@ -133,7 +162,7 @@ def append_filesystem_mutation_observed(
     if capture_limitations:
         payload["capture_limitations"] = list(capture_limitations)
 
-    draft = TrailEventDraft(
+    return TrailEventDraft(
         event_type="filesystem_mutation_observed",
         trace_id=None,
         generation_index=0,
@@ -141,5 +170,3 @@ def append_filesystem_mutation_observed(
         capture_method=list(WATCHER_CAPTURE_METHOD),
         payload=payload,
     )
-    events = append_event_batch(repo, [draft], writer=writer)
-    return events[0]

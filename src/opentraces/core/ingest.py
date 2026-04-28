@@ -363,12 +363,16 @@ def _ingest_locked(
     # generation are known. This substrate must not make normal inbox capture
     # fragile, so TrailEvent write failures are logged but non-fatal.
     try:
-        from .trails import emit_step_window_events_from_record
+        from .trails import (
+            emit_step_window_events_from_record,
+            reconcile_watcher_observations,
+        )
 
         emit_step_window_events_from_record(project_dir, final_record)
+        reconcile_watcher_observations(project_dir)
     except Exception:
         logger.warning(
-            "trace trail event emission failed for %s", trace_id,
+            "trace trail event emission/reconciliation failed for %s", trace_id,
             exc_info=True,
         )
 

@@ -7,6 +7,8 @@ for paths whose blob identity changed or disappeared.
 """
 from __future__ import annotations
 
+import contextlib
+import errno
 import json
 import os
 import stat
@@ -15,13 +17,25 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Iterator
 
+from ...core.trails.event_log import append_event_batch
 from ...core.trails.models import GitObjectID, TrailEvent
-from .observations import append_filesystem_mutation_observed
+from .observations import filesystem_mutation_observed_draft
 
 DEFAULT_STATE_BASENAME = "opentraces-fs-watcher-state.json"
+DEFAULT_LOCK_BASENAME = "opentraces-fs-watcher.lock"
 DEFAULT_MAX_FILE_BYTES = 10 * 1024 * 1024
+HOOK_BOUNDARY_WRITER = "hook-fs-watcher"
+MUTATING_TOOL_NAMES = frozenset(
+    {
+        "bash",
+        "edit",
+        "write",
+        "multiedit",
+        "notebookedit",
+    }
+)
 INTERNAL_PREFIXES = (
     ".git/",
     ".opentraces/",
@@ -53,6 +67,7 @@ def poll_project_once(
     *,
     state_path: Path | None = None,
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    exclude_paths: Iterable[str | Path] | None = None,
     writer: str = "fs-watcher",
 ) -> PollResult:
     """Scan one project and append observation events for changed files.
@@ -61,7 +76,60 @@ def poll_project_once(
     This avoids turning pre-existing dirty worktrees into false mutations.
     """
     repo = Path(repo).resolve()
+    root = _worktree_root(repo)
+    if root is None:
+        return PollResult()
+    repo = root
+
+    with _observer_lock(repo):
+        return _poll_project_once_unlocked(
+            repo,
+            state_path=state_path,
+            max_file_bytes=max_file_bytes,
+            exclude_paths=exclude_paths,
+            writer=writer,
+        )
+
+
+def observe_tool_boundary(
+    cwd: str | Path | None,
+    tool_name: str | None,
+    *,
+    exclude_paths: Iterable[str | Path] | None = None,
+    writer: str = HOOK_BOUNDARY_WRITER,
+) -> PollResult | None:
+    """Poll at an agent tool boundary when the tool can mutate files.
+
+    Claude Code hook integration calls this at PreToolUse and PostToolUse.
+    A PreToolUse call usually initializes or refreshes the baseline. The
+    matching PostToolUse call then observes the path/blob transitions with
+    an interval narrow enough to fit inside the step window once ingest emits
+    ``trace_step_window_opened`` / ``trace_step_window_closed``.
+
+    Non-mutating tools and non-Git directories are skipped. All errors are
+    swallowed so hook execution never blocks the agent runtime.
+    """
+    if not cwd or not _is_mutating_tool(tool_name):
+        return None
+    try:
+        root = _worktree_root(Path(cwd).resolve())
+        if root is None:
+            return None
+        return poll_project_once(root, exclude_paths=exclude_paths, writer=writer)
+    except Exception:
+        return None
+
+
+def _poll_project_once_unlocked(
+    repo: Path,
+    *,
+    state_path: Path | None,
+    max_file_bytes: int,
+    exclude_paths: Iterable[str | Path] | None,
+    writer: str,
+) -> PollResult:
     state_path = state_path or _default_state_path(repo)
+    excluded = _normalize_excluded_paths(repo, exclude_paths)
     now = _utc_now()
     prior = _read_state(state_path)
     prior_paths = _state_paths(prior)
@@ -73,7 +141,7 @@ def poll_project_once(
     skipped_current: set[str] = set()
     skipped = 0
     for rel_path in current_paths:
-        if _is_internal_path(rel_path):
+        if _is_internal_path(rel_path) or rel_path in excluded:
             continue
         blob, status = _hash_worktree_file(
             repo,
@@ -91,6 +159,7 @@ def poll_project_once(
     mutations: list[ObservedMutation] = []
     observations: list[TrailEvent] = []
     if not baseline:
+        drafts = []
         all_paths = sorted(set(prior_paths) | set(current))
         for rel_path in all_paths:
             if rel_path in skipped_current:
@@ -109,17 +178,17 @@ def poll_project_once(
                 observed_at_end=now,
             )
             mutations.append(mutation)
-            observations.append(
-                append_filesystem_mutation_observed(
-                    repo,
+            drafts.append(
+                filesystem_mutation_observed_draft(
                     path=rel_path,
                     observed_at_start=mutation.observed_at_start,
                     observed_at_end=mutation.observed_at_end,
                     before_blob_id=before,
                     after_blob_id=after,
-                    writer=writer,
                 )
             )
+        if drafts:
+            observations = append_event_batch(repo, drafts, writer=writer)
 
     state_paths = dict(current)
     for rel_path in skipped_current:
@@ -144,6 +213,34 @@ def poll_project_once(
     )
 
 
+def _is_mutating_tool(tool_name: str | None) -> bool:
+    return isinstance(tool_name, str) and tool_name.strip().lower() in MUTATING_TOOL_NAMES
+
+
+def _normalize_excluded_paths(
+    repo: Path,
+    paths: Iterable[str | Path] | None,
+) -> set[str]:
+    if paths is None:
+        return set()
+    excluded: set[str] = set()
+    for raw in paths:
+        try:
+            path = Path(raw)
+            if path.is_absolute():
+                rel_path = path.resolve().relative_to(repo)
+            else:
+                rel_path = path
+        except Exception:
+            continue
+        normalized = str(rel_path).replace("\\", "/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        if normalized and normalized != ".":
+            excluded.add(normalized)
+    return excluded
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -153,13 +250,55 @@ def _timestamp_or_now(value: Any, fallback: str) -> str:
 
 
 def _default_state_path(repo: Path) -> Path:
-    git_dir = _git(repo, "rev-parse", "--git-dir", check=False).strip()
-    if git_dir:
-        path = Path(git_dir)
-        if not path.is_absolute():
-            path = repo / path
-        return path / DEFAULT_STATE_BASENAME
+    git_dir = _git_dir(repo)
+    if git_dir is not None:
+        return git_dir / DEFAULT_STATE_BASENAME
     return repo / ".git" / DEFAULT_STATE_BASENAME
+
+
+def _worktree_root(repo: Path) -> Path | None:
+    out = _git(repo, "rev-parse", "--show-toplevel", check=False).strip()
+    if not out:
+        return None
+    return Path(out).resolve()
+
+
+def _git_dir(repo: Path) -> Path | None:
+    git_dir = _git(repo, "rev-parse", "--git-dir", check=False).strip()
+    if not git_dir:
+        return None
+    path = Path(git_dir)
+    if not path.is_absolute():
+        path = repo / path
+    return path.resolve()
+
+
+@contextlib.contextmanager
+def _observer_lock(repo: Path) -> Iterator[None]:
+    git_dir = _git_dir(repo)
+    if git_dir is None:
+        yield
+        return
+    lock_path = git_dir / DEFAULT_LOCK_BASENAME
+    try:
+        import fcntl  # type: ignore[import-not-found]
+    except ImportError:
+        yield
+        return
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError as exc:
+            if exc.errno not in {errno.ENOLCK, errno.ENOTSUP}:
+                raise
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
 
 
 def _read_state(path: Path) -> dict[str, Any]:

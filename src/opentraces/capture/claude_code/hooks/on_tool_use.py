@@ -161,6 +161,28 @@ def _trail_state(cwd: str | None) -> dict:
         return {}
 
 
+def _observe_tool_boundary(
+    cwd: str | None,
+    tool_name: str | None,
+    transcript_path: str | None,
+) -> dict | None:
+    try:
+        from opentraces.capture.fs_watcher.runtime import observe_tool_boundary
+
+        exclude_paths = [transcript_path] if transcript_path else None
+        result = observe_tool_boundary(cwd, tool_name, exclude_paths=exclude_paths)
+    except Exception:
+        return None
+    if result is None:
+        return None
+    return {
+        "baseline_initialized": result.baseline_initialized,
+        "paths_seen": result.paths_seen,
+        "observations": len(result.observations),
+        "skipped_paths": result.skipped_paths,
+    }
+
+
 def _dual_emit_agent_trace(cwd: str | None, data: dict, session_id: str | None) -> None:
     """Plan 041 R37: append an Agent Trace-compatible attribution line
     to `.agent-trace/traces.jsonl` in the repo root so any opentraces-
@@ -209,6 +231,7 @@ def main() -> None:
     tool_use_id = payload.get("tool_use_id")
     session_id = payload.get("session_id")
     cwd = payload.get("cwd")
+    observer = _observe_tool_boundary(cwd, tool_name, transcript_path)
 
     if tool_name == "Edit":
         data = _handle_edit(tool_input)
@@ -236,6 +259,8 @@ def main() -> None:
     trail_state = _trail_state(cwd)
     if trail_state:
         data["trail"] = trail_state
+    if observer is not None:
+        data["trail_observer"] = observer
 
     line = json.dumps({
         "type": "opentraces_hook",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from opentraces.capture.fs_watcher.runtime import poll_project_once
+from opentraces.capture.fs_watcher.runtime import observe_tool_boundary, poll_project_once
 from opentraces.core.trails import (
     close_step_window_with_snapshot,
     open_step_window,
@@ -186,3 +186,50 @@ def test_polling_observer_writes_blob_objects_for_reconciler_diff(tmp_path: Path
 
     assert _git(tmp_path, "cat-file", "-t", before_hex) == "blob"
     assert _git(tmp_path, "cat-file", "-t", after_hex) == "blob"
+
+
+def test_polling_observer_batches_multiple_mutations(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    state = tmp_path / ".git" / "fs-state.json"
+    poll_project_once(tmp_path, state_path=state)
+
+    (tmp_path / "app.py").write_text("x = 4\n")
+    (tmp_path / "new.py").write_text("created = True\n")
+    result = poll_project_once(tmp_path, state_path=state)
+
+    assert len(result.observations) == 2
+    assert {event.payload["path"] for event in result.observations} == {
+        "app.py",
+        "new.py",
+    }
+    assert len({event.batch_id for event in result.observations}) == 1
+
+
+def test_polling_observer_excludes_explicit_paths(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    state = tmp_path / ".git" / "fs-state.json"
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text("")
+    poll_project_once(tmp_path, state_path=state, exclude_paths=[transcript])
+
+    transcript.write_text('{"event":"PostToolUse"}\n')
+    (tmp_path / "generated.py").write_text("answer = 42\n")
+    result = poll_project_once(tmp_path, state_path=state, exclude_paths=[transcript])
+
+    assert [event.payload["path"] for event in result.observations] == ["generated.py"]
+
+
+def test_observe_tool_boundary_skips_non_mutating_tools(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+
+    result = observe_tool_boundary(tmp_path, "Read")
+
+    assert result is None
+    assert not (tmp_path / ".git" / "opentraces-fs-watcher-state.json").exists()
+
+
+def test_observe_tool_boundary_skips_non_git_dirs(tmp_path: Path) -> None:
+    result = observe_tool_boundary(tmp_path, "Bash")
+
+    assert result is None
+    assert not (tmp_path / ".git").exists()

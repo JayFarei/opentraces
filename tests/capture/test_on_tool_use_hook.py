@@ -7,8 +7,10 @@ latency <50ms.
 
 from __future__ import annotations
 
+import subprocess
 import json
 import time
+from datetime import datetime
 from io import StringIO
 from pathlib import Path
 
@@ -20,6 +22,22 @@ def _invoke(module_main, payload: dict, monkeypatch) -> None:
 
 def _read_events(transcript: Path) -> list[dict]:
     return [json.loads(line) for line in transcript.read_text().splitlines() if line.strip()]
+
+
+def _init_repo(repo: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+    (repo / "app.py").write_text("print('before')\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=repo, check=True)
+
+
+def _parse_iso(value: str) -> datetime:
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value)
 
 
 class TestPostToolUseEdit:
@@ -212,6 +230,51 @@ class TestHookRobustness:
         assert ev["data"]["tool_input"]["command"] == "printf generated > generated.txt"
         assert ev["data"]["capture_status"] == "hook_only"
         assert "hook_only" in ev["data"]["limitations"]
+
+    def test_bash_mutation_observed_at_tool_boundary(self, tmp_path, monkeypatch):
+        from opentraces.capture.claude_code.hooks.on_pre_tool_use import (
+            main as pre_main,
+        )
+        from opentraces.capture.claude_code.hooks.on_tool_use import main as post_main
+        from opentraces.core.trails import read_events
+
+        _init_repo(tmp_path)
+        transcript = tmp_path / "s.jsonl"
+        transcript.write_text("")
+        common = {
+            "transcript_path": str(transcript),
+            "cwd": str(tmp_path),
+            "session_id": "sess",
+            "tool_name": "Bash",
+            "tool_use_id": "toolu_bash_observed",
+            "tool_input": {"command": "python generate.py"},
+        }
+
+        _invoke(pre_main, common, monkeypatch)
+        (tmp_path / "generated.txt").write_text("generated\n")
+        _invoke(
+            post_main,
+            {**common, "tool_response": {"stdout": "", "stderr": ""}},
+            monkeypatch,
+        )
+
+        hook_events = _read_events(transcript)
+        assert hook_events[0]["data"]["trail_observer"]["baseline_initialized"] is True
+        assert hook_events[1]["data"]["trail_observer"]["observations"] == 1
+
+        observations = [
+            event for event in read_events(tmp_path)
+            if event.event_type == "filesystem_mutation_observed"
+        ]
+        assert len(observations) == 1
+        observation = observations[0]
+        assert observation.payload["path"] == "generated.txt"
+        assert (
+            _parse_iso(hook_events[0]["timestamp"])
+            <= _parse_iso(observation.payload["observed_at_start"])
+            <= _parse_iso(observation.payload["observed_at_end"])
+            <= _parse_iso(hook_events[1]["timestamp"])
+        )
 
     def test_hook_runs_under_50ms_budget(self, tmp_path, monkeypatch):
         from opentraces.capture.claude_code.hooks.on_tool_use import main

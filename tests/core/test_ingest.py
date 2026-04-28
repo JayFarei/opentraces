@@ -457,6 +457,117 @@ class TestIngestOneSession:
         assert incomplete[0].payload["skipped_tool_calls"] == 2
         assert incomplete[0].payload["reasons"] == {"missing_pre_or_post_hook": 2}
 
+    def test_ingest_reconciles_existing_filesystem_observation(
+        self, project_dir, tmp_path
+    ) -> None:
+        from opentraces.capture.fs_watcher import append_filesystem_mutation_observed
+        from opentraces.core.ingest import ingest_one_session
+        from opentraces.core.trails import GitObjectID, read_events, write_worktree_tree
+
+        _init_git_repo(project_dir)
+        session_id = "sess-watch-reconcile"
+        x_path = project_dir / "x.py"
+        before_text = x_path.read_text()
+        before_blob = subprocess.check_output(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=project_dir,
+            input=before_text,
+            text=True,
+        ).strip()
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=project_dir, text=True
+        ).strip()
+        head_id = {"algo": "sha1", "hex": head}
+        before_tree = write_worktree_tree(project_dir)
+        after_text = "VALUE = 'watcher-backed'\n"
+        x_path.write_text(after_text)
+        after_blob = subprocess.check_output(
+            ["git", "hash-object", "-w", "--stdin"],
+            cwd=project_dir,
+            input=after_text,
+            text=True,
+        ).strip()
+        after_tree = write_worktree_tree(project_dir)
+        append_filesystem_mutation_observed(
+            project_dir,
+            path="x.py",
+            observed_at_start="2026-04-15T07:00:21.100000Z",
+            observed_at_end="2026-04-15T07:00:21.900000Z",
+            before_blob_id=GitObjectID(algo="sha1", hex=before_blob),
+            after_blob_id=GitObjectID(algo="sha1", hex=after_blob),
+            writer="test-hook-boundary-observer",
+        )
+
+        def hook_event(
+            event: str,
+            timestamp: str,
+            tree_id: dict,
+            **extra: object,
+        ) -> dict:
+            data = {
+                "tool": "Write",
+                "tool_use_id": "write_1",
+                "tool_input": {"file_path": str(x_path), "content": after_text},
+                "trail": {
+                    "worktree_root": str(project_dir),
+                    "tree_id": tree_id,
+                    "git_head": head_id,
+                },
+            }
+            data.update(extra)
+            return {
+                "type": "opentraces_hook",
+                "event": event,
+                "timestamp": timestamp,
+                "data": data,
+            }
+
+        session_path = tmp_path / "corpus" / f"{session_id}.jsonl"
+        session_path.parent.mkdir(parents=True)
+        turn = _turn(1, session_id, tool_id="write_1")
+        turn[1]["message"]["content"][0]["name"] = "Write"
+        turn[1]["message"]["content"][0]["input"] = {
+            "file_path": str(x_path),
+            "content": after_text,
+        }
+        lines = [
+            *turn,
+            hook_event("PreToolUse", "2026-04-15T07:00:21Z", before_tree),
+            hook_event(
+                "PostToolUse",
+                "2026-04-15T07:00:22Z",
+                after_tree,
+                file_path=str(x_path),
+                start_line=1,
+                end_line=1,
+                content_hash="murmur3:0",
+                confidence="high",
+            ),
+        ]
+        with session_path.open("w") as f:
+            for line in lines:
+                f.write(json.dumps(line) + "\n")
+
+        result = ingest_one_session(session_path, project_dir)
+
+        assert result.action == "new"
+        events = read_events(project_dir)
+        attributed = [
+            event for event in events
+            if event.event_type == "watcher_observation_attributed"
+        ]
+        assert len(attributed) == 1
+        assert attributed[0].trace_id == result.trace_id
+        assert attributed[0].payload["result"] == "attributed"
+        upgraded = [
+            event for event in events
+            if event.event_type == "trace_patch_created"
+            and event.trace_id == result.trace_id
+            and "watcher_backstop" in event.capture_method
+        ]
+        assert len(upgraded) == 1
+        assert upgraded[0].payload["file_path"] == "x.py"
+
     def test_unchanged_file_is_noop(self, project_dir) -> None:
         from opentraces.core.ingest import ingest_one_session
 
