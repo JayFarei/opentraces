@@ -265,6 +265,9 @@ def reconcile_commit_anchors(
                 },
             )
         )
+        existing_search_keys.add(
+            (trace_patch_id, commit, effective_attribution_version)
+        )
         if anchor_payload:
             drafts.append(
                 TrailEventDraft(
@@ -277,6 +280,7 @@ def reconcile_commit_anchors(
                     payload=anchor_payload,
                 )
             )
+            existing_anchor_keys.add((trace_patch_id, commit))
             created.append(anchor_payload)
 
     if drafts:

@@ -17,6 +17,7 @@ web/site/.vercel/
 .vercel/
 .gstack/
 .opentraces/
+.agent-trace/
 
 .desloppify/
 

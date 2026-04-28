@@ -194,6 +194,71 @@ def test_trail_mature_anchors_patch_created_after_commit(tmp_path: Path) -> None
     assert search.payload["result"] == "anchored"
 
 
+def test_trail_mature_deduplicates_replayed_trace_patch_events(tmp_path: Path) -> None:
+    repo = tmp_path
+    _init_repo(repo)
+    seed_sha = _git(repo, "rev-parse", "HEAD")
+    authored = "    return 'watcher-corroborated-replay-dedup'\n"
+
+    (repo / "app.py").write_text("def value():\n" + authored)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "commit before replay"], cwd=repo, check=True)
+    commit_sha = _git(repo, "rev-parse", "HEAD")
+
+    payload = {
+        "trace_patch_id": _tp("replayed"),
+        "snapshot_before_id": "snapshot-before-replayed",
+        "snapshot_after_id": "snapshot-after-replayed",
+        "file_path": "app.py",
+        "affected_range": {"start_line": 2, "end_line": 2},
+        "authored_text": authored,
+        "raw_authored_hash": sha256_text(authored),
+        "git_clean_hash": sha256_text(" ".join(authored.split())),
+        "before_blob_id": _oid(repo, f"{seed_sha}:app.py"),
+        "limitations": [],
+    }
+    append_event_batch(
+        repo,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-replayed",
+                step_index=1,
+                capture_method=["hook_pretooluse", "hook_posttooluse"],
+                payload=payload,
+            ),
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id="tr-replayed",
+                step_index=1,
+                capture_method=[
+                    "hook_pretooluse",
+                    "hook_posttooluse",
+                    "watcher_backstop",
+                ],
+                payload=payload,
+            ),
+        ],
+        writer="test-fixture",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["trail", "mature", "--commit", commit_sha, "--json", "--project", str(repo)],
+    )
+    assert result.exit_code == 0, result.output
+    summary = json.loads(result.output)
+    assert summary["searches_completed"] == 1
+    assert summary["anchors_created"] == 1
+
+    events = read_events(repo)
+    anchors = [e for e in events if e.event_type == "git_anchor_created"]
+    searches = [e for e in events if e.event_type == "git_anchor_search_completed"]
+    assert len(anchors) == 1
+    assert len(searches) == 1
+    assert anchors[0].payload["trace_patch_id"] == _tp("replayed")
+
+
 def test_trail_mature_records_unknowns_and_is_idempotent(tmp_path: Path) -> None:
     repo = tmp_path
     _init_repo(repo)
