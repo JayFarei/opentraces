@@ -81,6 +81,7 @@
                 "trace_patch_id": "<trace-patch:01>"
               },
               "event_log_ref": "refs/opentraces/local/events/v1",
+              "event_time": "<timestamp>",
               "evidence": {
                 "evidence_refs": [
                   "ot://trace-patch/sha256/<trace-patch:01>/trail",
@@ -275,6 +276,7 @@
                   ],
                   "event_id": "<trail-event:08>",
                   "event_sequence": 8,
+                  "event_time": "<timestamp>",
                   "event_type": "trace_patch_created"
                 },
                 {
@@ -283,6 +285,7 @@
                   ],
                   "event_id": "<trail-event:11>",
                   "event_sequence": 11,
+                  "event_time": "<timestamp>",
                   "event_type": "git_anchor_created"
                 }
               ],
@@ -321,6 +324,7 @@
                 "resource_ref": "ot://trace-patch/sha256/<trace-patch:01>/trail",
                 "trace_patch_id": "<trace-patch:01>"
               },
+              "trace_patch_event_time": "<timestamp>",
               "trace_patch_id": "<trace-patch:01>",
               "trace_slice": {
                 "containing_segment_id": "<hex64:02>",

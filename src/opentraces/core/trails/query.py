@@ -29,6 +29,10 @@ def _source_event(event: TrailEvent) -> dict[str, Any]:
         "event_sequence": event.event_sequence,
         "event_type": event.event_type,
         "capture_method": event.capture_method,
+        # Cluster A — A4 enrichment: surface ``event_time`` so downstream
+        # surfaces (notably the Trace Index ``--since`` filter) can age
+        # patch / git_anchor candidates without re-reading the event log.
+        "event_time": event.event_time,
     }
     if event.event_type == "git_anchor_search_completed":
         out["result"] = event.payload.get("result")
@@ -311,6 +315,9 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
             "generation_index": patch_event.generation_index,
             "trace_patch_id": patch_id,
             "trace_patch_ref": patch.get("trace_patch_ref"),
+            # Cluster A — A4: keep the originating event time on the row so
+            # the Trace Index can populate timestamp metadata for ``--since``.
+            "event_time": patch_event.event_time,
             "patch_status": "patched",
             "relation": "anchored_in_git" if anchor_pairs_for_patch else "unknown",
             "file_path": patch.get("file_path"),
@@ -390,6 +397,11 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
             "relation": anchor.get("relation") or "anchored_in_git",
             "git_anchor_id": anchor_id,
             "git_anchor_ref": anchor.get("git_anchor_ref"),
+            # Cluster A — A4: keep both the patch and anchor event_times.
+            # The anchor time is the freshest known event for the row;
+            # the patch time backs --since when no anchor exists yet.
+            "event_time": anchor_event.event_time,
+            "trace_patch_event_time": patch_event.event_time,
             "commit_id": commit_id,
             "commit_sha": commit_sha,
             "file_path": file_path,
