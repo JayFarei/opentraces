@@ -13,7 +13,7 @@ import click
 from ._help import OpentracesCommand, OpentracesGroup
 from ..core.datasets import (
     add_dataset_remote,
-    apply_remote_dataset,
+    clone_remote_dataset,
     create_dataset,
     DatasetRemotePermissionError,
     DatasetRemoteSchemaAheadError,
@@ -676,23 +676,75 @@ def dataset_publish(
     )
 
 
-@dataset_group.command("apply", cls=OpentracesCommand)
-@click.argument("remote")
-@click.option("--as", "as_name", default=None, help="Local dataset name.")
-@click.option("--read-only", is_flag=True, help="Apply without workflow contribution setup.")
-@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def dataset_apply(remote: str, as_name: str | None, read_only: bool, as_json: bool) -> None:
-    """Create a local dataset from a remote HF dataset contract."""
+def _clone_remote(
+    remote: str,
+    as_name: str | None,
+    read_only: bool,
+    with_data: bool,
+    as_json: bool,
+) -> None:
     try:
-        dataset = apply_remote_dataset(remote, as_name=as_name, read_only=read_only)
+        dataset = clone_remote_dataset(remote, as_name=as_name, read_only=read_only)
     except (FileExistsError, FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
-    payload = {"status": "ok", "dataset": _dataset_payload(dataset)}
+    pull_summary = None
+    if with_data:
+        try:
+            pull_summary = pull_dataset(dataset.name, data=True)
+        except (FileNotFoundError, ValueError) as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(3)
+    payload: dict[str, object] = {"status": "ok", "dataset": _dataset_payload(dataset)}
+    if pull_summary is not None:
+        payload["pull"] = {
+            "imported_count": pull_summary.imported_count,
+            "duplicate_count": pull_summary.duplicate_count,
+        }
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
-    click.echo(f"Dataset applied: {dataset.name}")
+    click.echo(f"Dataset cloned: {dataset.name}")
+    if pull_summary is not None:
+        click.echo(f"Pulled {pull_summary.imported_count} row(s)")
+
+
+@dataset_group.command("clone", cls=OpentracesCommand)
+@click.argument("remote")
+@click.option("--as", "as_name", default=None, help="Local dataset name.")
+@click.option("--read-only", is_flag=True, help="Clone without workflow contribution setup.")
+@click.option("--data", "with_data", is_flag=True, help="Also import row shards.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_clone(
+    remote: str,
+    as_name: str | None,
+    read_only: bool,
+    with_data: bool,
+    as_json: bool,
+) -> None:
+    """Clone a remote HF dataset contract into a new local dataset."""
+    _clone_remote(remote, as_name, read_only, with_data, as_json)
+
+
+@dataset_group.command("apply", cls=OpentracesCommand, hidden=True)
+@click.argument("remote")
+@click.option("--as", "as_name", default=None, help="Local dataset name.")
+@click.option("--read-only", is_flag=True, help="Clone without workflow contribution setup.")
+@click.option("--data", "with_data", is_flag=True, help="Also import row shards.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_apply(
+    remote: str,
+    as_name: str | None,
+    read_only: bool,
+    with_data: bool,
+    as_json: bool,
+) -> None:
+    """Deprecated alias for `clone`."""
+    click.echo(
+        "warning: `ot dataset apply` is deprecated; use `ot dataset clone` instead",
+        err=True,
+    )
+    _clone_remote(remote, as_name, read_only, with_data, as_json)
 
 
 @dataset_group.command("pull", cls=OpentracesCommand)

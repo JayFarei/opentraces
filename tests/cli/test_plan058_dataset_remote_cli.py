@@ -164,7 +164,7 @@ def test_dataset_publish_check_only_and_status_json(tmp_path, monkeypatch):
     assert json.loads(doctor.output)["byte_identity"]["status"] == "ok"
 
 
-def test_dataset_apply_and_pull_cli_use_hf_shaped_remote(tmp_path, monkeypatch):
+def test_dataset_clone_and_pull_cli_use_hf_shaped_remote(tmp_path, monkeypatch):
     runner = CliRunner()
     monkeypatch.setenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", str(tmp_path / "remotes"))
     create_dataset(
@@ -187,18 +187,92 @@ def test_dataset_apply_and_pull_cli_use_hf_shaped_remote(tmp_path, monkeypatch):
     )
     publish_dataset("origin-dataset", contributor="tester")
 
-    applied = runner.invoke(
+    cloned = runner.invoke(
         dataset_group,
-        ["apply", "hf://me/origin-dataset", "--as", "local-copy", "--read-only", "--json"],
+        ["clone", "hf://me/origin-dataset", "--as", "local-copy", "--read-only", "--json"],
     )
-    assert applied.exit_code == 0, applied.output
-    assert json.loads(applied.output)["dataset"]["name"] == "local-copy"
+    assert cloned.exit_code == 0, cloned.output
+    assert json.loads(cloned.output)["dataset"]["name"] == "local-copy"
     assert read_row_index("local-copy") == []
 
     pulled = runner.invoke(dataset_group, ["pull", "local-copy", "--data", "--json"])
     assert pulled.exit_code == 0, pulled.output
     assert json.loads(pulled.output)["pull"]["imported_count"] == 1
     assert len(read_row_index("local-copy")) == 1
+
+
+def test_dataset_clone_with_data_imports_rows_in_one_step(tmp_path, monkeypatch):
+    runner = CliRunner()
+    monkeypatch.setenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", str(tmp_path / "remotes"))
+    create_dataset(
+        "origin-with-data",
+        workflow_skill="curator",
+        workflow_digest="sha256:w",
+        publication_policy={"review": "auto"},
+    )
+    add_dataset_remote("origin-with-data", "me/origin-with-data", visibility="private")
+    append_rows(
+        "origin-with-data",
+        [
+            {
+                "source_trace_id": "trace-2",
+                "source_unit_id": "tu:trace-2:trace",
+                "summary": "Cloned in one step.",
+            }
+        ],
+        run_id="run-1",
+    )
+    publish_dataset("origin-with-data", contributor="tester")
+
+    cloned = runner.invoke(
+        dataset_group,
+        [
+            "clone",
+            "hf://me/origin-with-data",
+            "--as",
+            "one-step-copy",
+            "--data",
+            "--read-only",
+            "--json",
+        ],
+    )
+    assert cloned.exit_code == 0, cloned.output
+    payload = json.loads(cloned.output)
+    assert payload["dataset"]["name"] == "one-step-copy"
+    assert payload["pull"]["imported_count"] == 1
+    assert len(read_row_index("one-step-copy")) == 1
+
+
+def test_dataset_apply_alias_still_works_and_warns(tmp_path, monkeypatch):
+    runner = CliRunner()
+    monkeypatch.setenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", str(tmp_path / "remotes"))
+    create_dataset(
+        "origin-alias",
+        workflow_skill="curator",
+        workflow_digest="sha256:w",
+        publication_policy={"review": "auto"},
+    )
+    add_dataset_remote("origin-alias", "me/origin-alias", visibility="private")
+    append_rows(
+        "origin-alias",
+        [
+            {
+                "source_trace_id": "trace-alias",
+                "source_unit_id": "tu:trace-alias:trace",
+                "summary": "Alias path.",
+            }
+        ],
+        run_id="run-1",
+    )
+    publish_dataset("origin-alias", contributor="tester")
+
+    applied = runner.invoke(
+        dataset_group,
+        ["apply", "hf://me/origin-alias", "--as", "alias-copy", "--read-only", "--json"],
+    )
+    assert applied.exit_code == 0, applied.output
+    assert json.loads(applied.stdout)["dataset"]["name"] == "alias-copy"
+    assert "deprecated" in applied.stderr
 
 
 def test_dataset_withdraw_cli_emits_tombstone_and_hard_delete_requires_confirmation():

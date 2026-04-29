@@ -2,7 +2,7 @@
 
 This test publishes a local dataset to a fake HF remote (via
 ``OPENTRACES_PLAN058_FAKE_REMOTE_ROOT``), clones it back through
-``ot dataset apply`` + ``ot dataset pull --data``, and proves that the cloned
+``ot dataset clone`` + ``ot dataset pull --data``, and proves that the cloned
 local dataset path is loadable by the standard HuggingFace ``datasets`` library
 and yields rows equivalent to the originals (V24).
 
@@ -24,7 +24,7 @@ from opentraces.core import paths as paths_mod
 from opentraces.core.datasets import (
     add_dataset_remote,
     append_rows,
-    apply_remote_dataset,
+    clone_remote_dataset,
     create_dataset,
     dataset_path,
     publish_dataset,
@@ -127,9 +127,9 @@ def test_plan058_load_dataset_roundtrip_yields_equivalent_rows(isolated_workspac
     assert len(src_rows) == 3
     assert _row_id_set(src_rows) == _row_id_set(originals)
 
-    # Apply the fake remote into a fresh local clone and pull row data.
-    applied = apply_remote_dataset("hf://me/roundtrip", as_name="clone", read_only=True)
-    assert applied.manifest.active_remote == "me/roundtrip"
+    # Clone the fake remote into a fresh local copy and pull row data.
+    cloned = clone_remote_dataset("hf://me/roundtrip", as_name="clone", read_only=True)
+    assert cloned.manifest.active_remote == "me/roundtrip"
     assert read_row_index("clone") == []
 
     pulled = pull_dataset("clone", data=True)

@@ -34,7 +34,7 @@ from opentraces.core import paths as paths_mod
 from opentraces.core.datasets import (
     add_dataset_remote,
     append_rows,
-    apply_remote_dataset,
+    clone_remote_dataset,
     create_dataset,
     dataset_path,
     publish_dataset,
@@ -197,10 +197,10 @@ def test_plan058_hf_live_publish_pull_byte_identity_and_no_control_plane_leak(
         else:
             assert downloaded.read_bytes(), f"remote file {rel} is empty"
 
-    # Apply + pull --data into a fresh local clone and confirm the rows
+    # Clone + pull --data into a fresh local clone and confirm the rows
     # round-trip back. This exercises the same code paths fake mode covers.
-    applied = apply_remote_dataset(f"hf://{repo_id}", as_name="live-clone", read_only=True, token=token)
-    assert applied.manifest.active_remote == repo_id
+    cloned = clone_remote_dataset(f"hf://{repo_id}", as_name="live-clone", read_only=True, token=token)
+    assert cloned.manifest.active_remote == repo_id
     assert read_row_index("live-clone") == []
 
     metadata_only = pull_dataset("live-clone", data=False, token=token)

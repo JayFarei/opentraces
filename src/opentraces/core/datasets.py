@@ -724,7 +724,7 @@ def publish_dataset(
         )
 
 
-def apply_remote_dataset(
+def clone_remote_dataset(
     remote: str,
     *,
     as_name: str | None = None,

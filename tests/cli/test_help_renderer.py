@@ -153,7 +153,7 @@ def test_legacy_verbs_are_not_advertised():
 @pytest.mark.parametrize(
     ("args", "expected"),
     [
-        (["dataset", "--help"], ["apply", "Create a local dataset", "publish", "review"]),
+        (["dataset", "--help"], ["clone", "Clone a remote HF dataset", "publish", "review"]),
         (["dataset", "remote", "--help"], ["add", "Connect a local dataset", "create"]),
         (["dataset", "schedule", "--help"], ["add", "Add a local schedule", "pause"]),
         (["workflow", "--help"], ["create", "edit", "remove"]),

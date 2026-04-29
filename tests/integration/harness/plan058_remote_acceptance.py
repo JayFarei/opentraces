@@ -144,7 +144,7 @@ def run_fake() -> dict[str, Any]:
 
         applied = _invoke(
             runner,
-            ["apply", "hf://me/acceptance", "--as", "copy", "--read-only", "--json"],
+            ["clone", "hf://me/acceptance", "--as", "copy", "--read-only", "--json"],
         )
         pulled = _invoke(runner, ["pull", "copy", "--data", "--json"])
 
@@ -254,7 +254,7 @@ def run_hf_live() -> dict[str, Any]:
 
     from opentraces.core.datasets import (
         add_dataset_remote,
-        apply_remote_dataset,
+        clone_remote_dataset,
         create_dataset,
         dataset_path,
         publish_dataset,
@@ -317,7 +317,7 @@ def run_hf_live() -> dict[str, Any]:
                 ".opentraces" in Path(rel).parts for rel in remote_files
             )
 
-            apply_remote_dataset(
+            clone_remote_dataset(
                 f"hf://{repo_id}",
                 as_name="live-clone",
                 read_only=True,

@@ -132,14 +132,14 @@ def test_plan058_publish_stages_only_publishable_rows_and_never_uploads_control_
     assert state.rows[blocked.row_ids[0]].status == "blocked"
 
 
-def test_plan058_apply_and_pull_are_metadata_first_and_data_pull_is_additive(
+def test_plan058_clone_and_pull_are_metadata_first_and_data_pull_is_additive(
     tmp_path,
     monkeypatch,
 ):
     from opentraces.core.datasets import (
         add_dataset_remote,
         append_rows,
-        apply_remote_dataset,
+        clone_remote_dataset,
         create_dataset,
         pull_dataset,
         publish_dataset,
@@ -157,10 +157,10 @@ def test_plan058_apply_and_pull_are_metadata_first_and_data_pull_is_additive(
     append_rows("source", [_row("Remote row.", trace_id="trace-remote")], run_id="run-1")
     publish_dataset("source", contributor="tester")
 
-    applied = apply_remote_dataset("hf://me/source", as_name="copy", read_only=True)
-    assert applied.manifest.active_remote == "me/source"
+    cloned = clone_remote_dataset("hf://me/source", as_name="copy", read_only=True)
+    assert cloned.manifest.active_remote == "me/source"
     assert read_row_index("copy") == []
-    assert (applied.path / "data" / "train.jsonl").read_text() == ""
+    assert (cloned.path / "data" / "train.jsonl").read_text() == ""
 
     metadata_only = pull_dataset("copy", data=False)
     assert metadata_only.imported_count == 0

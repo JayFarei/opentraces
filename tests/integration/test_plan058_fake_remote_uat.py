@@ -96,15 +96,15 @@ def _seed_published_dataset(
 
 
 # ---------------------------------------------------------------------------
-# V1 / V2 — `dataset apply` creates remote-bound local dataset, no row data
+# V1 / V2 — `dataset clone` creates remote-bound local dataset, no row data
 # ---------------------------------------------------------------------------
 
 
-def test_v1_apply_hf_scheme_creates_remote_bound_dataset_without_row_data(
+def test_v1_clone_hf_scheme_creates_remote_bound_dataset_without_row_data(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """V1: `apply hf://owner/name` clones the contract without downloading rows."""
+    """V1: `clone hf://owner/name` clones the contract without downloading rows."""
     _setup_fake_remote(monkeypatch, tmp_path)
     runner = CliRunner()
     _seed_published_dataset(
@@ -115,7 +115,7 @@ def test_v1_apply_hf_scheme_creates_remote_bound_dataset_without_row_data(
 
     result = runner.invoke(
         dataset_group,
-        ["apply", "hf://me/v1-source", "--as", "v1-copy", "--read-only", "--json"],
+        ["clone", "hf://me/v1-source", "--as", "v1-copy", "--read-only", "--json"],
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
@@ -123,22 +123,22 @@ def test_v1_apply_hf_scheme_creates_remote_bound_dataset_without_row_data(
 
     copy_root = dataset_path("v1-copy")
     manifest = payload["dataset"]["manifest"]
-    # The applied local dataset must be remote-bound to the source repo.
+    # The cloned local dataset must be remote-bound to the source repo.
     assert manifest["active_remote"] == "me/v1-source"
     assert "me/v1-source" in manifest["remotes"]
 
-    # No row data should have been imported by `apply` alone.
+    # No row data should have been imported by `clone` alone.
     assert read_row_index("v1-copy") == []
     train = copy_root / "data" / "train.jsonl"
     assert train.exists()
     assert train.read_text(encoding="utf-8") == ""
-    # No published shards either — apply patterns are metadata-only.
+    # No published shards either — clone patterns are metadata-only.
     other_shards = [
         path
         for path in (copy_root / "data").glob("*.jsonl")
         if path.name != "train.jsonl"
     ]
-    assert other_shards == [], f"apply must not import row shards: {other_shards}"
+    assert other_shards == [], f"clone must not import row shards: {other_shards}"
 
     # Public contract files should have been copied.
     assert (copy_root / "README.md").exists()
@@ -146,11 +146,11 @@ def test_v1_apply_hf_scheme_creates_remote_bound_dataset_without_row_data(
     assert (copy_root / "schemas" / "row.schema.json").exists()
 
 
-def test_v2_apply_short_owner_name_resolves_as_hf_remote(
+def test_v2_clone_short_owner_name_resolves_as_hf_remote(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """V2: `apply owner/name` (no scheme) resolves as HF and produces same contract."""
+    """V2: `clone owner/name` (no scheme) resolves as HF and produces same contract."""
     _setup_fake_remote(monkeypatch, tmp_path)
     runner = CliRunner()
     _seed_published_dataset(
@@ -161,7 +161,7 @@ def test_v2_apply_short_owner_name_resolves_as_hf_remote(
 
     result = runner.invoke(
         dataset_group,
-        ["apply", "me/v2-source", "--as", "v2-copy", "--read-only", "--json"],
+        ["clone", "me/v2-source", "--as", "v2-copy", "--read-only", "--json"],
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
@@ -198,7 +198,7 @@ def test_v4_pull_without_data_refreshes_metadata_only_and_imports_zero_rows(
     )
     runner.invoke(
         dataset_group,
-        ["apply", "hf://me/v4-source", "--as", "v4-copy", "--read-only", "--json"],
+        ["clone", "hf://me/v4-source", "--as", "v4-copy", "--read-only", "--json"],
     )
 
     # Sanity: nothing imported yet.
@@ -239,12 +239,12 @@ def test_v5_pull_data_refuses_with_publishable_unpublished_rows_and_force_overri
         rows=[_row("Remote-only row.", trace_id="trace-remote")],
     )
 
-    # Apply remote, then create an unpublished local publishable row.
+    # Clone remote, then create an unpublished local publishable row.
     runner.invoke(
         dataset_group,
-        ["apply", "hf://me/v5-source", "--as", "v5-copy", "--read-only", "--json"],
+        ["clone", "hf://me/v5-source", "--as", "v5-copy", "--read-only", "--json"],
     )
-    # apply stamps the manifest with the public contract's policy. The remote
+    # clone stamps the manifest with the public contract's policy. The remote
     # was published with `review: auto`, so the copy inherits that. We append
     # a local row to make it eagerly publishable.
     append_rows(
