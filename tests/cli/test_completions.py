@@ -215,3 +215,63 @@ def test_complete_trace_ambiguous_returns_multiple(runner, complete_project):
     # No filter -> both traces show up (both actionable status).
     assert "b73af9c8" in names
     assert "cafebab" in " ".join(names)
+
+
+# ---------------------------------------------------------------------------
+# Dataset name completion
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def datasets_project(tmp_path, monkeypatch):
+    """Seed two local datasets so the dataset-name completer has data."""
+    from opentraces.core.datasets import (
+        add_dataset_remote,
+        create_dataset,
+    )
+
+    create_dataset("alpha-traces", workflow_skill="curator", workflow_digest="sha256:w")
+    create_dataset("beta-traces", workflow_skill="curator", workflow_digest="sha256:w")
+    add_dataset_remote("alpha-traces", "me/alpha-traces", visibility="private")
+    yield tmp_path
+
+
+def test_complete_dataset_name_full_list(runner, datasets_project):
+    lines = _complete(runner, "dataset", "show", "")
+    names = [ln.split("\t")[0] for ln in lines]
+    assert "alpha-traces" in names
+    assert "beta-traces" in names
+
+
+def test_complete_dataset_name_prefix_filter(runner, datasets_project):
+    lines = _complete(runner, "dataset", "publish", "alpha")
+    names = [ln.split("\t")[0] for ln in lines]
+    assert "alpha-traces" in names
+    assert "beta-traces" not in names
+
+
+def test_complete_dataset_name_skipped_for_new(runner, datasets_project):
+    lines = _complete(runner, "dataset", "new", "")
+    names = [ln.split("\t")[0] for ln in lines]
+    # `new` takes a name that doesn't exist yet, so existing names must
+    # not be proposed.
+    assert "alpha-traces" not in names
+    assert "beta-traces" not in names
+
+
+def test_complete_dataset_name_skipped_outside_dataset_tree(runner, datasets_project):
+    # The trace tree also has commands with a `name` argument elsewhere;
+    # the dataset-name completer must not leak outside `ot dataset ...`.
+    lines = _complete(runner, "trace", "")
+    names = [ln.split("\t")[0] for ln in lines]
+    assert "alpha-traces" not in names
+    assert "beta-traces" not in names
+
+
+def test_complete_dataset_name_works_for_remote_subcommand(runner, datasets_project):
+    # `ot dataset remote add <NAME> <REPO>` — first positional is `name`,
+    # which should complete from existing datasets.
+    lines = _complete(runner, "dataset", "remote", "add", "")
+    names = [ln.split("\t")[0] for ln in lines]
+    assert "alpha-traces" in names
+    assert "beta-traces" in names

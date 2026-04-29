@@ -50,7 +50,8 @@ def _section_of(name: str) -> str:
     """Return the section name for a root-level command, or '' if unlisted."""
     from . import COMMAND_SECTIONS
 
-    for section, names in COMMAND_SECTIONS:
+    for entry in COMMAND_SECTIONS:
+        section, names = entry[0], entry[1]
         if name in names:
             return section.lower()
     return ""
@@ -236,6 +237,48 @@ def _commit_sha_candidates(
     return out
 
 
+def _dataset_name_candidates(
+    cmd: click.Command, partial: str, tokens: list[str]
+) -> list[tuple[str, str, str]]:
+    """Emit local dataset names for ``ot dataset <verb> <NAME>``.
+
+    Fires only inside the ``dataset`` tree and only when the resolved
+    leaf command takes a positional ``name`` argument that refers to an
+    existing local dataset. ``dataset new`` is excluded since the user
+    is typing a name that doesn't exist yet; ``clone``/``apply`` take
+    ``remote`` (an HF repo id) as their first arg, so the arg-name
+    check naturally skips them.
+    """
+    if partial.startswith("-"):
+        return []
+    if not tokens or tokens[0] != "dataset":
+        return []
+    if getattr(cmd, "name", "") == "new":
+        return []
+    wants = any(
+        isinstance(p, click.Argument) and p.name == "name"
+        for p in cmd.params
+    )
+    if not wants:
+        return []
+    try:
+        from ..core.datasets import list_datasets
+    except Exception:
+        return []
+    try:
+        datasets = list_datasets()
+    except Exception:
+        return []
+    probe = partial.lower()
+    out: list[tuple[str, str, str]] = []
+    for dataset in datasets:
+        if probe and not dataset.name.lower().startswith(probe):
+            continue
+        active = dataset.manifest.active_remote or "no remote"
+        out.append(("value", dataset.name, active))
+    return out
+
+
 def _shell_choice_candidates(
     cmd: click.Command, partial: str, tokens: list[str]
 ) -> list[tuple[str, str, str]]:
@@ -285,6 +328,7 @@ def complete_cmd(ctx: click.Context, tokens: tuple[str, ...]) -> None:
         sub = _subcommand_candidates(cmd, partial, root)
         values = _trace_id_candidates(cmd, partial)
         values += _commit_sha_candidates(cmd, partial)
+        values += _dataset_name_candidates(cmd, partial, token_list)
         values += _shell_choice_candidates(cmd, partial, token_list)
         candidates.extend(sub)
         candidates.extend(values)
