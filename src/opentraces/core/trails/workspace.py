@@ -34,7 +34,7 @@ from .contract import (
 from .slices import trace_slice_for_event
 
 TRACE_WORKSPACE_SCHEMA_VERSION = "opentraces.trace_workspace.v1"
-TRACE_PLAY_SCHEMA_VERSION = "opentraces.trail_play.v1"
+TRACE_PLAY_SCHEMA_VERSION = "opentraces.trail_timeline.v1"
 SNAPSHOT_REWIND_SCHEMA_VERSION = "opentraces.snapshot_rewind.v1"
 WORKSPACE_META_FILENAME = ".opentraces-trace-workspace.json"
 

@@ -380,10 +380,10 @@ def dataset_schedule_logs(name: str, tail: bool, as_json: bool) -> None:
         click.echo(line)
 
 
-@dataset_schedule_group.command("rm", cls=OpentracesCommand)
+@dataset_schedule_group.command("remove", cls=OpentracesCommand)
 @click.argument("name")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def dataset_schedule_rm(name: str, as_json: bool) -> None:
+def dataset_schedule_remove(name: str, as_json: bool) -> None:
     """Remove a dataset workflow schedule."""
     try:
         schedule = remove_schedule(name)
@@ -578,12 +578,26 @@ def dataset_run(
 
 
 @dataset_group.command("review", cls=OpentracesCommand)
-@click.argument("name")
+@click.argument("args", nargs=-1)
 @click.option("--tui", "mode", flag_value="tui", default=None, help="Open TUI review.")
 @click.option("--web", "mode", flag_value="web", help="Open web review.")
+@click.option("--all", "all_rows", is_flag=True, help="With `reset`, reset every row to policy defaults.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def dataset_review(name: str, mode: str | None, as_json: bool) -> None:
-    """Review publication state for rows in a local dataset."""
+def dataset_review(args: tuple[str, ...], mode: str | None, all_rows: bool, as_json: bool) -> None:
+    """Review dataset rows, or reset selected rows to policy defaults."""
+    if not args:
+        click.echo("Usage: ot dataset review <name> OR ot dataset review reset <name> [ROW_ID...]", err=True)
+        sys.exit(2)
+    if args[0] == "reset":
+        if len(args) < 2:
+            click.echo("Usage: ot dataset review reset <name> [ROW_ID...]", err=True)
+            sys.exit(2)
+        _dataset_review_transition(args[1], list(args[2:]), all_rows, "reset", as_json)
+        return
+    if len(args) > 1:
+        click.echo("Usage: ot dataset review <name>", err=True)
+        sys.exit(2)
+    name = args[0]
     try:
         state = evaluate_publication_state(name)
     except (FileNotFoundError, ValueError) as exc:
@@ -865,21 +879,6 @@ def dataset_reject(name: str, row_ids: tuple[str, ...], all_rows: bool, as_json:
     _dataset_review_transition(name, list(row_ids), all_rows, "rejected", as_json)
 
 
-@dataset_group.command("reset-review", cls=OpentracesCommand)
-@click.argument("name")
-@click.argument("row_ids", nargs=-1)
-@click.option("--all", "all_rows", is_flag=True, help="Reset every row to policy defaults.")
-@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def dataset_reset_review(
-    name: str,
-    row_ids: tuple[str, ...],
-    all_rows: bool,
-    as_json: bool,
-) -> None:
-    """Reset selected rows to the dataset publication policy default."""
-    _dataset_review_transition(name, list(row_ids), all_rows, "reset", as_json)
-
-
 @dataset_group.command("doctor", cls=OpentracesCommand)
 @click.argument("name")
 @click.option("--byte-identity", is_flag=True, help="Check remembered published files against the remote.")
@@ -920,11 +919,11 @@ def dataset_export(name: str, fmt: str, output: Path, as_json: bool) -> None:
     click.echo(f"Exported {export['row_count']} rows to {output}")
 
 
-@dataset_group.command("rm", cls=OpentracesCommand)
+@dataset_group.command("remove", cls=OpentracesCommand)
 @click.argument("name")
 @click.option("--yes", is_flag=True, help="Confirm removal.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def dataset_rm(name: str, yes: bool, as_json: bool) -> None:
+def dataset_remove(name: str, yes: bool, as_json: bool) -> None:
     """Remove a local dataset after explicit confirmation."""
     if not yes:
         click.echo("Pass --yes to remove a dataset.", err=True)

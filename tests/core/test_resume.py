@@ -126,7 +126,7 @@ def resume_project(tmp_path, monkeypatch):
 def test_resume_dry_run_prints_claude_cmd(runner, resume_project):
     from opentraces.cli import main
     with patch("shutil.which", return_value="/usr/local/bin/claude"):
-        result = runner.invoke(main, ["resume", "t:b7", "--dry-run"])
+        result = runner.invoke(main, ["trail", "resume", "t:b7", "--dry-run"])
     assert result.exit_code == 0, result.output
     assert "claude" in result.output
     assert "--resume" in result.output
@@ -136,7 +136,7 @@ def test_resume_dry_run_prints_claude_cmd(runner, resume_project):
 def test_resume_bare_prefix(runner, resume_project):
     from opentraces.cli import main
     with patch("shutil.which", return_value="/usr/local/bin/claude"):
-        result = runner.invoke(main, ["resume", "b73af9c8", "--dry-run"])
+        result = runner.invoke(main, ["trail", "resume", "b73af9c8", "--dry-run"])
     assert result.exit_code == 0, result.output
     assert "--resume ff00aa11-sess-id-5678" in result.output
 
@@ -144,7 +144,7 @@ def test_resume_bare_prefix(runner, resume_project):
 def test_resume_missing_claude_returns_127(runner, resume_project):
     from opentraces.cli import main
     with patch("shutil.which", return_value=None):
-        result = runner.invoke(main, ["resume", "t:b7"])
+        result = runner.invoke(main, ["trail", "resume", "t:b7"])
     assert result.exit_code == 127, result.output
     assert "not on PATH" in result.output
     assert "claude --resume ff00aa11" in result.output
@@ -152,13 +152,13 @@ def test_resume_missing_claude_returns_127(runner, resume_project):
 
 def test_resume_unknown_prefix_returns_6(runner, resume_project):
     from opentraces.cli import main
-    result = runner.invoke(main, ["resume", "t:9999", "--dry-run"])
+    result = runner.invoke(main, ["trail", "resume", "t:9999", "--dry-run"])
     assert result.exit_code == 6, result.output
 
 
 def test_resume_too_short_prefix_errors(runner, resume_project):
     from opentraces.cli import main
-    result = runner.invoke(main, ["resume", "b", "--dry-run"])
+    result = runner.invoke(main, ["trail", "resume", "b", "--dry-run"])
     assert result.exit_code == 2, result.output
 
 
@@ -172,7 +172,7 @@ def test_resume_non_claude_agent_prints_hint(runner, resume_project):
     tfile.write_text(json.dumps(rec) + "\n")
 
     from opentraces.cli import main
-    result = runner.invoke(main, ["resume", "t:b7"])
+    result = runner.invoke(main, ["trail", "resume", "t:b7"])
     assert result.exit_code == 0, result.output
     assert "hermes" in result.output or "No native resume" in result.output
 
@@ -185,7 +185,7 @@ def test_resume_execvp_invoked_without_dry_run(runner, resume_project):
     with patch("shutil.which", return_value="/usr/local/bin/claude"), \
          patch("os.execvp") as exec_mock, \
          patch("os.chdir"):
-        result = runner.invoke(main, ["resume", "t:b7"])
+        result = runner.invoke(main, ["trail", "resume", "t:b7"])
     # Since execvp is mocked, agent_resume falls through to `return 1`.
     assert exec_mock.called
     args, _ = exec_mock.call_args
@@ -202,7 +202,7 @@ def test_resume_at_step_dry_run_prints_new_session_and_truncation(runner, resume
 
     with patch("shutil.which", return_value="/usr/local/bin/claude"), \
          patch("uuid.uuid4", return_value=_FAKE_NEW_SESSION):
-        result = runner.invoke(main, ["resume", "t:b7", "--at-step", "s2", "--dry-run"])
+        result = runner.invoke(main, ["trail", "resume", "t:b7", "--at-step", "s2", "--dry-run"])
 
     assert result.exit_code == 0, result.output
     assert f"claude --resume {_FAKE_NEW_SESSION_STR}" in result.output
@@ -221,7 +221,7 @@ def test_resume_at_step_materializes_new_session_and_execs(runner, resume_projec
          patch("uuid.uuid4", return_value=_FAKE_NEW_SESSION), \
          patch("os.execvp") as exec_mock, \
          patch("os.chdir"):
-        result = runner.invoke(main, ["resume", "t:b7", "--at-step", "s2"])
+        result = runner.invoke(main, ["trail", "resume", "t:b7", "--at-step", "s2"])
 
     new_session_path = (
         fake_home / ".claude" / "projects" / encode_claude_path(resume_project) / f"{_FAKE_NEW_SESSION_STR}.jsonl"
@@ -293,7 +293,7 @@ def test_resume_at_step_falls_back_to_anchor_session_path(
     fallback_uuid = uuid.UUID("22222222-3333-4444-5555-666666666666")
     with patch("shutil.which", return_value="/usr/local/bin/claude"), \
          patch("uuid.uuid4", return_value=fallback_uuid):
-        result = runner.invoke(main, ["resume", "t:b7", "--at-step", "s2", "--dry-run"])
+        result = runner.invoke(main, ["trail", "resume", "t:b7", "--at-step", "s2", "--dry-run"])
 
     assert result.exit_code == 0, result.output
     assert f"claude --resume {fallback_uuid}" in result.output
@@ -321,7 +321,7 @@ def test_resume_at_step_fork_lineage_survives_ingest_tick(
          patch("uuid.uuid4", return_value=fork_uuid), \
          patch("os.execvp"), \
          patch("os.chdir"):
-        result = runner.invoke(main, ["resume", "t:b7", "--at-step", "s2"])
+        result = runner.invoke(main, ["trail", "resume", "t:b7", "--at-step", "s2"])
     assert result.exit_code == 1  # execvp mocked, agent_resume returns 1
 
     state = StateManager(get_project_state_path(resume_project))

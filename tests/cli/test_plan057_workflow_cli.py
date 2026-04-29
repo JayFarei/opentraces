@@ -8,13 +8,13 @@ from click.testing import CliRunner
 from opentraces.cli.workflow import workflow_group
 
 
-def test_workflow_cli_new_list_show_rm_json_round_trip():
+def test_workflow_cli_create_list_show_edit_remove_json_round_trip():
     runner = CliRunner()
 
     created = runner.invoke(
         workflow_group,
         [
-            "new",
+            "create",
             "grill-me-intent-curator",
             "--description",
             "Build rows for the grill-me-intents dataset",
@@ -41,27 +41,18 @@ def test_workflow_cli_new_list_show_rm_json_round_trip():
         "Build rows for the grill-me-intents dataset"
     )
 
-    removed = runner.invoke(workflow_group, ["rm", "grill-me-intent-curator", "--yes", "--json"])
+    edited = runner.invoke(workflow_group, ["edit", "grill-me-intent-curator", "--json"])
+    assert edited.exit_code == 0, edited.output
+    assert Path(json.loads(edited.output)["edit_path"]).name == "SKILL.md"
+
+    removed = runner.invoke(workflow_group, ["remove", "grill-me-intent-curator", "--yes", "--json"])
     assert removed.exit_code == 0, removed.output
     assert json.loads(removed.output)["removed"]["name"] == "grill-me-intent-curator"
 
 
-def test_workflow_cli_install_copies_skill_package(tmp_path):
-    source = tmp_path / "curator"
-    source.mkdir()
-    (source / "SKILL.md").write_text(
-        "---\n"
-        "name: installed-curator\n"
-        "description: Installed curator\n"
-        "mode: agent-skill\n"
-        "---\n"
-        "# Installed curator\n"
-    )
-
+def test_workflow_cli_rejects_removed_install_surface(tmp_path):
     runner = CliRunner()
-    installed = runner.invoke(workflow_group, ["install", str(source), "--json"])
+    installed = runner.invoke(workflow_group, ["install", str(tmp_path), "--json"])
 
-    assert installed.exit_code == 0, installed.output
-    payload = json.loads(installed.output)
-    assert payload["workflow"]["name"] == "installed-curator"
-    assert payload["workflow"]["digest"].startswith("sha256:")
+    assert installed.exit_code != 0
+    assert "No such command" in installed.output

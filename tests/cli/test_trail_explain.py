@@ -114,20 +114,20 @@ def test_trail_explain_exact_patch_anchor_from_events(tmp_path: Path) -> None:
     assert payload["trace_patch_id"] not in human_commit.output
     assert "exact range match" in human_commit.output
 
-    follow = CliRunner().invoke(
+    sync = CliRunner().invoke(
         main,
         [
             "trail",
-            "follow",
+            "sync",
             "--patch",
             payload["trace_patch_id"],
             "--project",
             str(repo),
         ],
     )
-    assert follow.exit_code == 0, follow.output
-    assert f"Patch Trail tp:{payload['trace_patch_id'][:8]}" in follow.output
-    assert payload["trace_patch_id"] not in follow.output
+    assert sync.exit_code == 0, sync.output
+    assert f"Trail sync tp:{payload['trace_patch_id'][:8]}" in sync.output
+    assert payload["trace_patch_id"] not in sync.output
 
 
 def test_trail_explain_includes_containing_segment_id(tmp_path: Path) -> None:

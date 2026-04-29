@@ -32,10 +32,7 @@ def initialized_project(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: False)
     runner = CliRunner()
-    result = runner.invoke(main, [
-        "init", "--review-policy", "review",
-        "--remote", "test/opentraces", "--no-hook", "--start-fresh",
-    ])
+    result = runner.invoke(main, ["init", "--start-fresh"])
     assert result.exit_code == 0, f"init failed: {result.output}"
     return tmp_path, runner
 
@@ -118,58 +115,22 @@ class TestPreInitCommands:
 
 
 # ---------------------------------------------------------------------------
-# Not-initialized path
+# Current public command tree
 # ---------------------------------------------------------------------------
 
-class TestNotInitialized:
-    """Commands that should exit 3 when no .opentraces/ exists."""
+class TestPublicCommandTree:
+    """Smoke-test the unreleased simplified command surface."""
 
     def test_status_not_initialized(self, runner, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(main, ["status"])
         assert result.exit_code == 3
 
-    def test_stats_not_initialized(self, runner, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        result = runner.invoke(main, ["stats"])
-        assert result.exit_code == 3
-
-    def test_context_not_initialized(self, runner, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("opentraces.cli._auth_identity", lambda *a: None)
-        result = runner.invoke(main, ["context"])
-        assert result.exit_code == 3
-
-
-# ---------------------------------------------------------------------------
-# Post-init commands
-# ---------------------------------------------------------------------------
-
-class TestPostInitCommands:
-    """Commands that require an initialized project."""
-
-    def test_status(self, initialized_project):
+    def test_status_json_after_init(self, initialized_project):
         project_dir, runner = initialized_project
-        result = runner.invoke(main, ["status"])
+        result = runner.invoke(main, ["--json", "status"])
         assert result.exit_code == 0
-        assert "mode" in result.output.lower() or "review" in result.output.lower()
-
-    def test_stats(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["stats"])
-        assert result.exit_code == 0
-
-    def test_context(self, initialized_project, monkeypatch):
-        project_dir, runner = initialized_project
-        monkeypatch.setattr("opentraces.cli._auth_identity", lambda *a: None)
-        result = runner.invoke(main, ["context"])
-        assert result.exit_code == 0
-
-    def test_log(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["log"])
-        assert result.exit_code == 0, result.output
-        assert "No traces have been pushed yet." in result.output
+        assert "---OPENTRACES_JSON---" in result.output
 
     def test_config_show(self, initialized_project):
         project_dir, runner = initialized_project
@@ -181,143 +142,41 @@ class TestPostInitCommands:
         result = runner.invoke(main, ["config", "set", "classifier_sensitivity", "high"])
         assert result.exit_code == 0
 
-    def test_remote_show(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["remote"])
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "list",
+            "show",
+            "add",
+            "reject",
+            "push",
+            "pull",
+            "web",
+            "tui",
+            "remote",
+            "reset",
+            "redact",
+            "discard",
+            "llm-review",
+            "export",
+            "stats",
+            "log",
+            "assess",
+            "blame",
+            "graph",
+            "resume",
+        ],
+    )
+    def test_legacy_flat_roots_are_not_registered(self, runner, command):
+        result = runner.invoke(main, [command, "--help"])
+        assert result.exit_code == 2
+        assert "No such command" in result.output
+
+    @pytest.mark.parametrize("command", ["trace", "trail", "workflow", "dataset"])
+    def test_canonical_groups_have_help(self, runner, command):
+        result = runner.invoke(main, [command, "--help"])
         assert result.exit_code == 0
-
-    def test_remote_add(self, initialized_project, monkeypatch):
-        """Connecting a second remote via the simplified ``add`` verb."""
-        project_dir, runner = initialized_project
-        monkeypatch.setattr("opentraces.cli._auth_identity", lambda *a: {"name": "testuser"})
-        monkeypatch.setattr("opentraces.cli._remote_probe",
-                            lambda repo_id, token: {"private": True})
-        result = runner.invoke(main, ["remote", "add", "testuser/new-dataset"])
-        assert result.exit_code == 0, result.output
-
-    def test_remote_remove(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["remote", "remove", "origin"])
-        assert result.exit_code == 0
-
-    def test_commit_all_empty(self, initialized_project):
-        """commit --all with no inbox traces should still exit 0."""
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["add", "--all"])
-        assert result.exit_code == 0
-
-    def test_remove(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["remove"])
-        assert result.exit_code == 0
-        assert not (project_dir / ".opentraces.json").exists()
-
-
-# ---------------------------------------------------------------------------
-# Session commands (need staged traces)
-# ---------------------------------------------------------------------------
-
-class TestSessionCommands:
-    """Session subcommands that require staged traces."""
-
-    def test_session_list(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["list"])
-        assert result.exit_code == 0
-
-    def test_session_list_stage_filter(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["list", "--stage", "inbox"])
-        assert result.exit_code == 0
-
-    def test_session_show(self, project_with_traces):
-        project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["show", trace_id])
-        assert result.exit_code == 0
-
-    def test_session_show_not_found(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["show", "nonexistent-trace-id"])
-        assert result.exit_code == 6
-
-    def test_session_commit(self, project_with_traces):
-        project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["add", trace_id])
-        assert result.exit_code == 0
-
-    def test_session_reject(self, project_with_traces):
-        project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["reject", trace_id])
-        assert result.exit_code == 0
-
-    def test_session_reset_after_commit(self, project_with_traces):
-        project_dir, runner, trace_id = project_with_traces
-        runner.invoke(main, ["add", trace_id])
-        result = runner.invoke(main, ["reset", trace_id])
-        assert result.exit_code == 0
-
-    def test_session_redact(self, project_with_traces):
-        project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["redact", trace_id, "nonexistent-pattern", "--step", "0"])
-        # May be 0 (success, no match is still OK) or 2 (step out of range)
-        assert result.exit_code in (0, 2)
-
-    def test_session_discard(self, project_with_traces):
-        project_dir, runner, trace_id = project_with_traces
-        result = runner.invoke(main, ["discard", trace_id, "--yes"])
-        assert result.exit_code == 0
-
-    def test_session_discard_not_found(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["discard", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "--yes"])
-        assert result.exit_code == 6
-
-
-# ---------------------------------------------------------------------------
-# Optional-dependency commands (mock launchers)
-# ---------------------------------------------------------------------------
-
-class TestOptionalDepCommands:
-    """Commands that launch blocking servers, mocked to avoid hangs."""
-
-    def test_web(self, initialized_project, monkeypatch):
-        project_dir, runner = initialized_project
-        monkeypatch.setattr("opentraces.cli._launch_web_ui", lambda *a, **kw: None)
-        result = runner.invoke(main, ["web", "--no-open"])
-        assert result.exit_code == 0
-
-    def test_tui(self, initialized_project, monkeypatch):
-        project_dir, runner = initialized_project
-        monkeypatch.setattr("opentraces.cli._launch_tui_ui", lambda *a, **kw: None)
-        result = runner.invoke(main, ["tui"])
-        assert result.exit_code == 0
-
-
-# ---------------------------------------------------------------------------
-# JSON mode
-# ---------------------------------------------------------------------------
-
-class TestJsonMode:
-    """Test that --json flag produces the sentinel and valid JSON."""
-
-    def test_json_context(self, initialized_project, monkeypatch):
-        project_dir, runner = initialized_project
-        monkeypatch.setattr("opentraces.cli._auth_identity", lambda *a: None)
-        result = runner.invoke(main, ["--json", "context"])
-        assert result.exit_code == 0
-        assert "---OPENTRACES_JSON---" in result.output
-
-    def test_json_status(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["--json", "status"])
-        assert result.exit_code == 0
-        assert "---OPENTRACES_JSON---" in result.output
-
-    def test_json_session_list(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["--json", "list"])
-        assert result.exit_code == 0
-        assert "---OPENTRACES_JSON---" in result.output
+        assert "Commands:" in result.output
 
 
 # ---------------------------------------------------------------------------
@@ -366,71 +225,6 @@ class TestMachineMode:
 # session show truncation
 # ---------------------------------------------------------------------------
 
-class TestSessionShowTruncation:
-    """session show truncates human output by default; --verbose disables it."""
-
-    def test_session_show_truncates_long_content(self, project_with_traces, monkeypatch):
-        """Human output should truncate step content > 500 chars."""
-        project_dir, runner, trace_id = project_with_traces
-        # Inject a long step content into the staging file
-        from opentraces.core.config import get_project_traces_dir
-        staging_dir = get_project_traces_dir(project_dir)
-        staging_file = next(staging_dir.glob("*.jsonl"))
-        import json as _json
-        data = _json.loads(staging_file.read_text().strip().splitlines()[0])
-        long_content = "x" * 2000
-        if data.get("steps"):
-            data["steps"][0]["content"] = long_content
-        staging_file.write_text(_json.dumps(data) + "\n")
-
-        result = runner.invoke(main, ["show", trace_id])
-        assert result.exit_code == 0
-        # Only check the human output portion (before the JSON sentinel)
-        human_output = result.output.split("---OPENTRACES_JSON---")[0]
-        assert "truncated" in human_output
-        assert long_content not in human_output
-
-    def test_session_show_verbose_shows_full_content(self, project_with_traces):
-        """--verbose should show full step content without truncation."""
-        project_dir, runner, trace_id = project_with_traces
-        from opentraces.core.config import get_project_traces_dir
-        staging_dir = get_project_traces_dir(project_dir)
-        staging_file = next(staging_dir.glob("*.jsonl"))
-        import json as _json
-        data = _json.loads(staging_file.read_text().strip().splitlines()[0])
-        long_content = "y" * 2000
-        if data.get("steps"):
-            data["steps"][0]["content"] = long_content
-        staging_file.write_text(_json.dumps(data) + "\n")
-
-        result = runner.invoke(main, ["show", trace_id, "--verbose"])
-        assert result.exit_code == 0
-        assert "truncated" not in result.output
-        assert long_content in result.output
-
-    def test_session_show_json_never_truncated(self, project_with_traces):
-        """--json mode must return the full record regardless of content length."""
-        project_dir, runner, trace_id = project_with_traces
-        from opentraces.core.config import get_project_traces_dir
-        staging_dir = get_project_traces_dir(project_dir)
-        staging_file = next(staging_dir.glob("*.jsonl"))
-        import json as _json
-        data = _json.loads(staging_file.read_text().strip().splitlines()[0])
-        long_content = "z" * 2000
-        if data.get("steps"):
-            data["steps"][0]["content"] = long_content
-        staging_file.write_text(_json.dumps(data) + "\n")
-
-        result = runner.invoke(main, ["--json", "show", trace_id])
-        assert result.exit_code == 0
-        sentinel = "---OPENTRACES_JSON---"
-        assert sentinel in result.output
-        payload = _json.loads(result.output.split(sentinel)[1].strip())
-        steps = payload["trace"].get("steps", [])
-        if steps:
-            assert steps[0]["content"] == long_content
-
-
 # ---------------------------------------------------------------------------
 # Hint lines in human output
 # ---------------------------------------------------------------------------
@@ -450,63 +244,22 @@ class TestHintLines:
 # Exit code contract tests
 # ---------------------------------------------------------------------------
 
-class TestExitCodes:
-    """Regression guards for the exit code scheme introduced in the agent-aware CLI work."""
-
-    def test_conflicting_push_flags_exits_2(self, initialized_project):
-        """--private and --public together is a usage error (exit 2), not a config error (exit 3)."""
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["push", "--private", "--public"])
-        assert result.exit_code == 2
-
-    def test_session_commit_not_found_exits_6(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["add", "nonexistent-trace-id"])
-        assert result.exit_code == 6
-
-    def test_session_reject_not_found_exits_6(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["reject", "nonexistent-trace-id"])
-        assert result.exit_code == 6
-
-    def test_session_reset_not_found_exits_6(self, initialized_project):
-        project_dir, runner = initialized_project
-        result = runner.invoke(main, ["reset", "nonexistent-trace-id"])
-        assert result.exit_code == 6
-
-
-# ---------------------------------------------------------------------------
-# Init flag tests
-# ---------------------------------------------------------------------------
-
 class TestInitFlags:
-    """Test undocumented-until-now init flags."""
+    """Removed init flags stay removed because this surface is unreleased."""
 
-    def test_init_private(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize(
+        "flag",
+        ["--private", "--public", "--review-policy", "--push-policy", "--remote", "--no-hook"],
+    )
+    def test_legacy_init_flags_error(self, tmp_path, monkeypatch, flag):
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: False)
         runner = CliRunner()
-        result = runner.invoke(main, [
-            "init", "--private", "--review-policy", "review",
-            "--no-hook", "--start-fresh",
-        ])
-        assert result.exit_code == 0
-        config = json.loads((tmp_path / ".opentraces.json").read_text())
-        # Post-restructure: --private flows to default_visibility (project-level
-        # default for newly-added remotes).
-        assert config.get("default_visibility") == "private"
-
-    def test_init_public(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: False)
-        runner = CliRunner()
-        result = runner.invoke(main, [
-            "init", "--public", "--review-policy", "review",
-            "--no-hook", "--start-fresh",
-        ])
-        assert result.exit_code == 0
-        config = json.loads((tmp_path / ".opentraces.json").read_text())
-        assert config.get("default_visibility") == "public"
+        args = ["init", flag]
+        if flag in {"--review-policy", "--push-policy", "--remote"}:
+            args.append("value")
+        result = runner.invoke(main, args)
+        assert result.exit_code == 2
 
 
 # ---------------------------------------------------------------------------
@@ -684,10 +437,7 @@ class TestUpgrade:
         monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: False)
         runner = CliRunner()
         # Init normally
-        runner.invoke(main, [
-            "init", "--review-policy", "review",
-            "--remote", "test/opentraces", "--no-hook", "--start-fresh",
-        ])
+        runner.invoke(main, ["init", "--start-fresh"])
         # Corrupt config: remove agents key
         config_path = tmp_path / ".opentraces.json"
         cfg = json.loads(config_path.read_text())

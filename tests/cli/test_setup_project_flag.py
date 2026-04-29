@@ -2,8 +2,8 @@
 
 The plan's intent is uniform config-scope control. Hook installers
 (claude-code, git, skill) write to system locations regardless of
-scope; their --project would be misleading. Only the config-writing
-subcommands get the flag: trufflehog, review-llm, review-policy.
+scope; their --project would be misleading. Only the global security setup
+commands that write config get the flag: trufflehog and llm-review.
 
 These tests confirm the flag is accepted at the Click parsing layer.
 End-to-end behavior (project marker vs global config) is exercised
@@ -23,7 +23,7 @@ def runner():
     return CliRunner()
 
 
-@pytest.mark.parametrize("subcommand", ["trufflehog", "llm-review", "review-policy"])
+@pytest.mark.parametrize("subcommand", ["trufflehog", "llm-review"])
 def test_setup_subcommand_accepts_project_flag(runner, subcommand) -> None:
     """`--help` succeeds and lists --project."""
     result = runner.invoke(main, ["setup", subcommand, "--help"])
@@ -33,9 +33,7 @@ def test_setup_subcommand_accepts_project_flag(runner, subcommand) -> None:
     )
 
 
-def test_setup_review_policy_help_describes_scope(runner) -> None:
-    """review-policy is the canonical per-project setup verb; help should
-    mention scope flags."""
+def test_setup_review_policy_is_not_registered(runner) -> None:
     result = runner.invoke(main, ["setup", "review-policy", "--help"])
-    assert result.exit_code == 0
-    assert "--project" in result.output
+    assert result.exit_code == 2
+    assert "No such command" in result.output

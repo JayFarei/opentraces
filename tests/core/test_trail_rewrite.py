@@ -9,7 +9,7 @@ from opentraces.core.trails import (
     GitObjectID,
     TrailEventDraft,
     append_event_batch,
-    follow_patch,
+    sync_patch,
     read_events,
     reconcile_commit_anchors,
     supersede_anchors_for_rewrite,
@@ -89,7 +89,7 @@ def test_amend_supersedes_old_anchor_and_creates_new(tmp_path: Path) -> None:
 
     The substrate must:
 
-    1. Mark the old anchor superseded so trail follow can route around
+    1. Mark the old anchor superseded so trail sync can route around
        the now-unreachable old commit.
     2. Create a new anchor at the amended commit so survival can be
        computed against current HEAD.
@@ -143,8 +143,8 @@ def test_amend_supersedes_old_anchor_and_creates_new(tmp_path: Path) -> None:
     anchor_commits = {(e.payload.get("commit_id") or {}).get("hex") for e in anchor_events}
     assert anchor_commits == {old_commit, new_commit}
 
-    # follow_patch routes through the new anchor (latest event_sequence).
-    result = follow_patch(tmp_path, "tracepatch-sha256:amend")
+    # sync_patch routes through the new anchor (latest event_sequence).
+    result = sync_patch(tmp_path, "tracepatch-sha256:amend")
     survival_states = {
         obs["survival_state"] for obs in result["current_observations"]
     }

@@ -907,7 +907,7 @@ def forget_trace_cascade(
     *,
     reason: str = "user-request",
 ) -> dict[str, Any]:
-    """Cascade ``ot trace forget`` across every local dataset.
+    """Cascade source-trace withdrawal across every local dataset.
 
     Resolves all dataset rows whose ``source_trace_id`` matches ``trace_id``
     and emits a row-level withdrawal for each one. Datasets with no matching

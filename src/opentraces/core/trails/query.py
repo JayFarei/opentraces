@@ -17,7 +17,7 @@ from typing import Any
 
 from .contract import enrich_trail_row, projection_digest
 from .event_log import EVENT_LOG_REF, read_events
-from .follow import follow_patch
+from .sync import sync_patch
 from .ids import id_from_payload, normalize_id
 from .models import TrailEvent
 from .slices import resource_refs_for_patch, trace_slice_for_event
@@ -179,7 +179,7 @@ class TrailQueryProjection:
         trace_patch_id = out.get("trace_patch_id")
         if not trace_patch_id:
             return enrich_trail_row(out)
-        trail = follow_patch(self.repo, trace_patch_id)
+        trail = sync_patch(self.repo, trace_patch_id)
         current = trail.get("current_survival") or {}
         out["current_survival"] = current
         out["survival_state"] = current.get("survival_state") or "unknown"
@@ -212,7 +212,7 @@ class TrailQueryProjection:
         for patch_id, patch in sorted(self.patches_by_id.items()):
             if not patch.get("git_anchors"):
                 continue
-            trail = follow_patch(self.repo, patch_id)
+            trail = sync_patch(self.repo, patch_id)
             current = trail.get("current_survival") or {}
             if current.get("survival_state") != "reverted":
                 continue

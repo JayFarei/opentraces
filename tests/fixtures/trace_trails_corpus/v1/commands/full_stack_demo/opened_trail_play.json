@@ -2,7 +2,7 @@
   "event_count": 10,
   "event_log_ref": "refs/opentraces/local/events/v1",
   "limitations": [],
-  "schema_version": "opentraces.trail_play.v1",
+  "schema_version": "opentraces.trail_timeline.v1",
   "timeline": [
     {
       "capture_method": [

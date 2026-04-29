@@ -1,4 +1,4 @@
-"""``ot graph`` — GitButler-style ASCII visualization of commit + trace history.
+"""``ot trail graph`` — GitButler-style ASCII visualization of commit + trace history.
 
 Commit-primary by default: the git log is the spine, and each commit shows
 the traces that contributed to it as nested segments above a ``┊●`` dot.
@@ -26,14 +26,14 @@ from ..clients.text import graph_renderer as _gr
     "graph",
     cls=OpentracesCommand,
     examples=[
-        "opentraces graph",
-        "opentraces graph --limit 50",
-        "opentraces graph --trace abc12",
-        "opentraces graph --since HEAD~20 --until HEAD",
+        "opentraces trail graph",
+        "opentraces trail graph --limit 50",
+        "opentraces trail graph --trace abc12",
+        "opentraces trail graph --since HEAD~20 --until HEAD",
     ],
     see_also=[
-        ("opentraces blame", "show per-commit attribution for a SHA."),
-        ("opentraces show", "view the full trace for an id."),
+        ("opentraces trail blame", "show per-commit attribution for a SHA."),
+        ("opentraces trace get", "view the full trace for an id."),
     ],
     option_groups=[
         ("Pagination", ["limit", "page", "show_all"]),

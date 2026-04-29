@@ -137,7 +137,7 @@ def test_init_import_existing_flag_imports_backlog(tmp_path, monkeypatch):
         os.chdir(project_dir)
         result = runner.invoke(
             main,
-            ["init", "--review-policy", "review", "--push-policy", "manual", "--import-existing", "--no-hook"],
+            ["init", "--import-existing"],
         )
     finally:
         os.chdir(prev_cwd)
@@ -180,7 +180,7 @@ def test_init_start_fresh_skips_backlog_import(tmp_path, monkeypatch):
         os.chdir(project_dir)
         result = runner.invoke(
             main,
-            ["init", "--review-policy", "review", "--push-policy", "manual", "--start-fresh", "--no-hook"],
+            ["init", "--start-fresh"],
         )
     finally:
         os.chdir(prev_cwd)

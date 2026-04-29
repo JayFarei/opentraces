@@ -1,4 +1,4 @@
-"""``ot blame <sha>`` — per-commit attribution lookup.
+"""``ot trail blame <sha>`` — per-commit attribution lookup.
 
 Post-043 layout:
 
@@ -1341,16 +1341,16 @@ def _resolve_blame_target(cwd: Path, arg: str) -> tuple[str, str] | tuple[None, 
     cls=OpentracesCommand,
     context_settings={"ignore_unknown_options": False},
     examples=[
-        "opentraces blame abc1234",
-        "opentraces blame c:abc1234 src/main.py",
-        "opentraces blame t:4dccb032",
-        "opentraces blame src/app.py:42 --json",
-        "opentraces blame abc1234 --lines",
-        "opentraces blame abc1234 --json",
+        "opentraces trail blame abc1234",
+        "opentraces trail blame c:abc1234 src/main.py",
+        "opentraces trail blame t:4dccb032",
+        "opentraces trail blame src/app.py:42 --json",
+        "opentraces trail blame abc1234 --lines",
+        "opentraces trail blame abc1234 --json",
     ],
     see_also=[
-        ("opentraces graph", "render commit + trace history."),
-        ("opentraces show", "view the full trace for an id."),
+        ("opentraces trail graph", "render commit + trace history."),
+        ("opentraces trace get", "view the full trace for an id."),
     ],
     option_groups=[
         ("Scope", ["show_lines", "show_entities", "project_dir",

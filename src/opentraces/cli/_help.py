@@ -7,14 +7,14 @@ examples, see-also, subcommands). Section headers are bold; command and
 option names are cyan. Individual commands pass structured metadata via
 decorator kwargs:
 
-    @main.command(
-        "push",
+    @dataset_group.command(
+        "publish",
         examples=[
-            "opentraces push",
-            "opentraces push --private",
+            "opentraces dataset publish bug-fixes",
+            "opentraces dataset publish bug-fixes --check-only",
         ],
         see_also=[
-            ("opentraces assess", "score traces before upload"),
+            ("opentraces dataset review", "review rows before publication"),
         ],
         option_groups=[
             ("Visibility", ["private", "public"]),

@@ -70,97 +70,7 @@ def error_response(*a, **k):
 
 @click.group("trace", cls=OpentracesGroup)
 def trace_group() -> None:
-    """Search, map, retrieve, and forget retained traces."""
-
-
-@trace_group.group("workspace", cls=OpentracesGroup)
-def trace_workspace_group() -> None:
-    """Portable Trace Workspace commands."""
-
-
-@trace_workspace_group.command(
-    "export",
-    cls=OpentracesCommand,
-    examples=[
-        "opentraces trace workspace export tr1 --output ./tr1.trace-workspace",
-    ],
-    option_groups=[
-        ("Scope", ["trace_id"]),
-        ("Output", ["output", "as_json"]),
-    ],
-)
-@click.argument("trace_id")
-@click.option(
-    "--output",
-    "output",
-    required=True,
-    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
-    help="Directory to write the Trace Workspace package.",
-)
-@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def trace_workspace_export(trace_id: str, output: Path, as_json: bool) -> None:
-    """Export a trace and retained Git evidence as a portable workspace."""
-    from ..core.trails import export_trace_workspace
-
-    try:
-        payload = export_trace_workspace(Path.cwd(), trace_id, output)
-    except ValueError as exc:
-        click.echo(str(exc), err=True)
-        sys.exit(3)
-    except Exception as exc:
-        click.echo(f"Unable to export Trace Workspace: {exc}", err=True)
-        sys.exit(2)
-
-    if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
-        return
-    click.echo(f"Trace Workspace exported: {payload['output']}")
-    click.echo(f"  events:    {payload['event_count']}")
-    click.echo(f"  snapshots: {payload['snapshot_count']}")
-
-
-@trace_workspace_group.command(
-    "open",
-    cls=OpentracesCommand,
-    examples=[
-        "opentraces trace workspace open ./tr1.trace-workspace --project ./blank --json",
-    ],
-    option_groups=[
-        ("Scope", ["workspace", "project"]),
-        ("Output", ["as_json"]),
-    ],
-)
-@click.argument(
-    "workspace",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-)
-@click.option(
-    "--project",
-    "project",
-    required=True,
-    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
-    help="Blank directory where the Trace Workspace should be opened.",
-)
-@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def trace_workspace_open(workspace: Path, project: Path, as_json: bool) -> None:
-    """Open a portable Trace Workspace into a blank project directory."""
-    from ..core.trails import open_trace_workspace
-
-    try:
-        payload = open_trace_workspace(workspace, project)
-    except ValueError as exc:
-        click.echo(str(exc), err=True)
-        sys.exit(3)
-    except Exception as exc:
-        click.echo(f"Unable to open Trace Workspace: {exc}", err=True)
-        sys.exit(2)
-
-    if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
-        return
-    click.echo(f"Trace Workspace opened: {payload['project']}")
-    click.echo(f"  events:    {payload['event_count']}")
-    click.echo(f"  snapshots: {payload['snapshot_count']}")
+    """Search, map, and retrieve retained traces."""
 
 
 @trace_group.command("query", cls=OpentracesCommand)
@@ -486,118 +396,6 @@ def trace_get(ref: str, as_json: bool) -> None:
         click.echo(payload["resource"].get("resource_type", ref))
 
 
-trace_group.add_command(trace_query, name="search")
-trace_group.add_command(trace_get, name="show")
-
-
-@trace_group.command(
-    "forget",
-    cls=OpentracesCommand,
-    examples=[
-        "opentraces trace forget trace-doomed --cascade",
-        "opentraces trace forget trace-doomed --cascade --reason legal --json",
-    ],
-    option_groups=[
-        ("Scope", ["trace_id"]),
-        ("Behaviour", ["cascade", "reason", "as_json"]),
-    ],
-)
-@click.argument("trace_id")
-@click.option(
-    "--cascade",
-    is_flag=True,
-    help="Withdraw rows referencing this trace_id across every local dataset.",
-)
-@click.option(
-    "--reason",
-    default="user-request",
-    help="Withdrawal reason code (default: user-request).",
-)
-@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def trace_forget(trace_id: str, cascade: bool, reason: str, as_json: bool) -> None:
-    """Forget a trace; with ``--cascade`` emit row-level withdrawals across datasets.
-
-    Plan 058 "Withdrawal semantics": this is the trace-scoped workflow. It
-    resolves all dataset rows whose ``source_trace_id`` matches ``trace_id``
-    and emits row-level withdrawals for each one. Without ``--cascade`` the
-    command is currently a no-op stub (trace-only forget is not in scope for
-    M3 — only the dataset cascade is implemented).
-    """
-
-    if not cascade:
-        if as_json:
-            click.echo(
-                json.dumps(
-                    {
-                        "status": "ok",
-                        "trace_id": trace_id,
-                        "cascade": False,
-                        "message": "no cascade requested; pass --cascade to withdraw dataset rows",
-                    },
-                    indent=2,
-                    sort_keys=True,
-                )
-            )
-            return
-        click.echo(
-            "trace forget without --cascade is a no-op; pass --cascade to withdraw "
-            "dataset rows referencing this trace_id."
-        )
-        return
-
-    from ..core.datasets import forget_trace_cascade
-
-    summary = forget_trace_cascade(trace_id, reason=reason)
-    if as_json:
-        click.echo(
-            json.dumps(
-                {"status": "ok", "trace_forget": summary},
-                indent=2,
-                sort_keys=True,
-            )
-        )
-        return
-    click.echo(
-        f"Cascaded forget for {trace_id}: "
-        f"{summary['withdrawn_count']} row(s) withdrawn across "
-        f"{len(summary['affected'])} dataset(s)."
-    )
-
-
-@click.command(
-    "show",
-    cls=OpentracesCommand,
-    examples=[
-        "opentraces show abc12",
-        "opentraces show tu:<trace-id>:trace --json",
-        "opentraces show ot://trace/<id>/map --json",
-    ],
-)
-@click.argument("ref")
-@click.option("--verbose", is_flag=True, default=False, help="Show full step content for legacy staged traces.")
-@click.option("--markdown", is_flag=True, default=False, help="Emit a markdown wrapper for legacy staged traces.")
-@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON for trace get refs.")
-@click.pass_context
-def trace_show_root(
-    ctx: click.Context,
-    ref: str,
-    verbose: bool,
-    markdown: bool,
-    as_json: bool,
-) -> None:
-    """Root compatibility wrapper for legacy show and Plan 56 trace get."""
-    if ref.startswith(("ot://", "tu:", "tmn:")):
-        if verbose or markdown:
-            click.echo("--verbose and --markdown only apply to staged trace IDs.", err=True)
-            sys.exit(2)
-        ctx.invoke(trace_get, ref=ref, as_json=as_json)
-        return
-    if verbose or markdown or _local_trace_exists(ref):
-        ctx.invoke(trace_show, trace_id=ref, verbose=verbose, markdown=markdown)
-        return
-    ctx.invoke(trace_get, ref=ref, as_json=as_json)
-
-
 def _trace_id_from_ref(ref: str) -> str:
     if ref.startswith("ot://trace/"):
         path = ref.removeprefix("ot://trace/")
@@ -617,21 +415,6 @@ def _trace_id_from_ref(ref: str) -> str:
         if len(parts) >= 3:
             return parts[1]
     return ref
-
-
-def _local_trace_exists(trace_id: str) -> bool:
-    try:
-        from ..core.config import get_project_traces_dir, project_is_opted_in
-
-        project_dir = Path.cwd()
-        if not project_is_opted_in(project_dir):
-            return False
-        record, _staging_file = _load_trace_record(get_project_traces_dir(project_dir), trace_id)
-        return record is not None
-    except SystemExit:
-        return False
-    except Exception:
-        return False
 
 
 def _candidate_node_id(trace_map, candidate: str) -> str | None:
@@ -932,11 +715,11 @@ def trace_show(trace_id: str, verbose: bool, markdown: bool) -> None:
         # session identifier (foreign concept). The label makes that explicit.
         human_echo(
             f"{_cli._dim('Source session:')} {record.session_id[:18]}…  "
-            f"{_cli._dim(f'(opentraces resume {short_trace_id(record.trace_id)})')}"
+            f"{_cli._dim(f'(opentraces trail resume {short_trace_id(record.trace_id)})')}"
         )
 
     # Reverse-view: which commits did this trace produce?
-    # Complements `opentraces blame <sha>` which goes commit → traces.
+    # Complements `opentraces trail blame <sha>` which goes commit → traces.
     if record.git_links:
         human_echo("")
         n = len(record.git_links)
@@ -1145,7 +928,7 @@ def trace_discard(trace_id: str, confirmed: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ``ot resume`` — hand control back to the upstream agent.
+# ``ot trail resume`` — hand control back to the upstream agent.
 #
 # For claude-code traces we execvp into ``claude --resume <session_id>``
 # so the user drops straight into their native REPL. Other agents fall
@@ -1157,12 +940,12 @@ def trace_discard(trace_id: str, confirmed: bool) -> None:
     "resume",
     cls=OpentracesCommand,
     examples=[
-        "opentraces resume abc12",
-        "opentraces resume abc12 --dry-run",
+        "opentraces trail resume abc12",
+        "opentraces trail resume abc12 --dry-run",
     ],
     see_also=[
-        ("opentraces show", "inspect the trace before resuming."),
-        ("opentraces list", "browse trace ids."),
+        ("opentraces trace get", "inspect the trace before resuming."),
+        ("opentraces trace query", "browse trace ids."),
     ],
 )
 @click.argument("trace_id")

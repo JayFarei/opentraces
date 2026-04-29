@@ -54,7 +54,7 @@ def test_dataset_schedule_cli_manages_local_state_without_remote_publish():
     assert logs.exit_code == 0, logs.output
     assert "schedule added" in "\n".join(json.loads(logs.output)["logs"])
 
-    removed = runner.invoke(dataset_group, ["schedule", "rm", "scheduled-intents", "--json"])
+    removed = runner.invoke(dataset_group, ["schedule", "remove", "scheduled-intents", "--json"])
     assert removed.exit_code == 0, removed.output
     assert json.loads(removed.output)["removed"]["dataset"] == "scheduled-intents"
     assert not trigger_file.exists()

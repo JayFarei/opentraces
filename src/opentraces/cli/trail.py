@@ -15,7 +15,7 @@ from ..clients.text.colors import Role, detect_color, paint, render_handle
 
 @click.group("trail", cls=OpentracesGroup)
 def trail_group() -> None:
-    """Explain VCS-anchored Trace Trails."""
+    """Inspect and sync VCS-anchored Trace Trails."""
 
 
 @trail_group.command(
@@ -27,8 +27,8 @@ def trail_group() -> None:
         "opentraces trail explain --commit abc1234 --json",
     ],
     see_also=[
-        ("opentraces blame", "show commit attribution."),
-        ("opentraces graph", "render commit + trace history."),
+        ("opentraces trail blame", "show commit attribution."),
+        ("opentraces trail graph", "render commit + trace history."),
     ],
     option_groups=[
         ("Scope", ["trace_id", "step_index", "commit", "project_dir"]),
@@ -131,6 +131,7 @@ def explain_cmd(
 @trail_group.command(
     "resolve",
     cls=OpentracesCommand,
+    hidden=True,
     examples=[
         "opentraces trail resolve ot://trace-patch/sha256/4f2ff6541cdee78eaea8bd2910157a7176e3c21f5d936a7f4f4561d08f024982/trail --json",
         "opentraces trail resolve ot://git-anchor/sha256/8354f2b00a5b4e80975bf0e763651c782249098f5cdb74b6e32720613a1bfc8a --json",
@@ -138,7 +139,7 @@ def explain_cmd(
     ],
     see_also=[
         ("opentraces trail explain", "explain the evidence chain for a Trace Patch."),
-        ("opentraces trail follow", "follow a Trace Patch through Git history."),
+        ("opentraces trail sync", "sync a Trace Patch with current Git history."),
     ],
     option_groups=[
         ("Scope", ["resource", "project_dir"]),
@@ -181,11 +182,11 @@ def resolve_cmd(resource: str, as_json: bool, project_dir: Path | None) -> None:
 
 
 @trail_group.command(
-    "follow",
+    "sync",
     cls=OpentracesCommand,
     examples=[
-        "opentraces trail follow --patch 4f2ff6541cdee78eaea8bd2910157a7176e3c21f5d936a7f4f4561d08f024982 --json",
-        "opentraces trail follow --anchor 8354f2b00a5b4e80975bf0e763651c782249098f5cdb74b6e32720613a1bfc8a --json",
+        "opentraces trail sync --patch 4f2ff6541cdee78eaea8bd2910157a7176e3c21f5d936a7f4f4561d08f024982 --json",
+        "opentraces trail sync --anchor 8354f2b00a5b4e80975bf0e763651c782249098f5cdb74b6e32720613a1bfc8a --json",
     ],
     see_also=[
         ("opentraces trail explain", "explain the evidence chain for a Trace Patch."),
@@ -196,8 +197,8 @@ def resolve_cmd(resource: str, as_json: bool, project_dir: Path | None) -> None:
         ("Output", ["as_json"]),
     ],
 )
-@click.option("--patch", "trace_patch_id", default=None, help="Trace Patch id to follow.")
-@click.option("--anchor", "git_anchor_id", default=None, help="Git Anchor id to follow.")
+@click.option("--patch", "trace_patch_id", default=None, help="Trace Patch id to sync.")
+@click.option("--anchor", "git_anchor_id", default=None, help="Git Anchor id to sync.")
 @click.option(
     "--history-limit",
     "history_limit",
@@ -213,15 +214,15 @@ def resolve_cmd(resource: str, as_json: bool, project_dir: Path | None) -> None:
     default=None,
     help="Project directory (default: CWD).",
 )
-def follow_cmd(
+def sync_cmd(
     trace_patch_id: str | None,
     git_anchor_id: str | None,
     history_limit: int | None,
     as_json: bool,
     project_dir: Path | None,
 ) -> None:
-    """Follow a Trace Patch through later Git history."""
-    from ..core.trails import follow_anchor, follow_patch
+    """Sync OpenTraces' trail state with the latest Git history."""
+    from ..core.trails import sync_anchor, sync_patch
 
     if bool(trace_patch_id) == bool(git_anchor_id):
         click.echo("Provide exactly one of --patch or --anchor.", err=True)
@@ -230,15 +231,15 @@ def follow_cmd(
     repo = Path(project_dir or Path.cwd()).resolve()
     try:
         payload = (
-            follow_patch(repo, trace_patch_id, history_limit=history_limit)
+            sync_patch(repo, trace_patch_id, history_limit=history_limit)
             if trace_patch_id
-            else follow_anchor(repo, git_anchor_id or "", history_limit=history_limit)
+            else sync_anchor(repo, git_anchor_id or "", history_limit=history_limit)
         )
     except ValueError as exc:
         click.echo(f"Trace Trail event log is invalid: {exc}", err=True)
         sys.exit(3)
     except Exception as exc:
-        click.echo(f"Unable to follow trace trail: {exc}", err=True)
+        click.echo(f"Unable to sync trace trail: {exc}", err=True)
         sys.exit(2)
 
     if as_json:
@@ -251,7 +252,7 @@ def follow_cmd(
         if payload.get("git_anchor_id")
         else _patch_handle(payload, color=False)
     )
-    click.echo(f"Patch Trail {label}")
+    click.echo(f"Trail sync {label}")
     click.echo(f"  survival: {current.get('survival_state') or 'unknown'}")
     path = current.get("path")
     line_range = current.get("range") or {}
@@ -266,13 +267,14 @@ def follow_cmd(
 @trail_group.command(
     "snapshots",
     cls=OpentracesCommand,
+    hidden=True,
     examples=[
         "opentraces trail snapshots --trace tr1",
         "opentraces trail snapshots --trace tr1 --json",
     ],
     see_also=[
         ("opentraces trail snapshot checkout", "materialize a rewind point."),
-        ("opentraces resume", "fork from a snapshot-backed step."),
+        ("opentraces trail resume", "fork from a snapshot-backed step."),
     ],
     option_groups=[
         ("Scope", ["trace_id", "project_dir"]),
@@ -321,7 +323,7 @@ def snapshots_cmd(trace_id: str, as_json: bool, project_dir: Path | None) -> Non
             click.echo(f"    limitation: {limitation}")
 
 
-@trail_group.group("snapshot", cls=OpentracesGroup)
+@trail_group.group("snapshot", cls=OpentracesGroup, hidden=True)
 def snapshot_group() -> None:
     """Trace Snapshot rewind commands."""
 
@@ -397,15 +399,15 @@ def snapshot_checkout_cmd(
 
 
 @trail_group.command(
-    "play",
+    "timeline",
     cls=OpentracesCommand,
     examples=[
-        "opentraces trail play tr1 --json",
-        "opentraces trail play tr1 --table",
+        "opentraces trail timeline tr1 --json",
+        "opentraces trail timeline tr1 --table",
     ],
     see_also=[
         ("opentraces trail explain", "explain canonical evidence."),
-        ("opentraces resume", "fork from a snapshot-backed step."),
+        ("opentraces trail resume", "fork from a snapshot-backed step."),
     ],
     option_groups=[
         ("Scope", ["trace_id", "project_dir"]),
@@ -422,13 +424,13 @@ def snapshot_checkout_cmd(
     default=None,
     help="Project directory (default: CWD).",
 )
-def play_cmd(
+def timeline_cmd(
     trace_id: str,
     as_table: bool,
     as_json: bool,
     project_dir: Path | None,
 ) -> None:
-    """Play back the observed Trace Trails timeline for a trace."""
+    """Show the observed Trace Trails timeline for a trace."""
     from ..core.trails import play_trace_timeline
 
     if as_table and as_json:
@@ -442,7 +444,7 @@ def play_cmd(
         click.echo(f"Trace Trail event log is invalid: {exc}", err=True)
         sys.exit(3)
     except Exception as exc:
-        click.echo(f"Unable to play trace timeline: {exc}", err=True)
+        click.echo(f"Unable to show trace timeline: {exc}", err=True)
         sys.exit(2)
 
     if as_json:
@@ -454,6 +456,96 @@ def play_cmd(
         return
 
     click.echo(_render_trail_play_graph(repo, payload))
+
+
+@trail_group.group("teleport", cls=OpentracesGroup)
+def teleport_group() -> None:
+    """Move a trace and its retained Git evidence between workspaces."""
+
+
+@teleport_group.command(
+    "export",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail teleport export tr1 --output ./tr1.trace-workspace",
+    ],
+    option_groups=[
+        ("Scope", ["trace_id"]),
+        ("Output", ["output", "as_json"]),
+    ],
+)
+@click.argument("trace_id")
+@click.option(
+    "--output",
+    "output",
+    required=True,
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    help="Directory to write the portable trace workspace.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def teleport_export_cmd(trace_id: str, output: Path, as_json: bool) -> None:
+    """Export a trace and retained Git evidence as a portable workspace."""
+    from ..core.trails import export_trace_workspace
+
+    try:
+        payload = export_trace_workspace(Path.cwd(), trace_id, output)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to export trace workspace: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Trace teleported: {payload['output']}")
+    click.echo(f"  events:    {payload['event_count']}")
+    click.echo(f"  snapshots: {payload['snapshot_count']}")
+
+
+@teleport_group.command(
+    "open",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail teleport open ./tr1.trace-workspace --project ./blank --json",
+    ],
+    option_groups=[
+        ("Scope", ["workspace", "project"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.argument(
+    "workspace",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+)
+@click.option(
+    "--project",
+    "project",
+    required=True,
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    help="Blank directory where the trace workspace should be opened.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def teleport_open_cmd(workspace: Path, project: Path, as_json: bool) -> None:
+    """Open a portable trace workspace into a blank project directory."""
+    from ..core.trails import open_trace_workspace
+
+    try:
+        payload = open_trace_workspace(workspace, project)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to open trace workspace: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Trace workspace opened: {payload['project']}")
+    click.echo(f"  events:    {payload['event_count']}")
+    click.echo(f"  snapshots: {payload['snapshot_count']}")
 
 
 def _load_trace_step_summaries(repo: Path, trace_id: str) -> dict[str, str]:
@@ -671,7 +763,7 @@ def _append_trail_play_snapshot_lines(
     )
     if role == "after":
         lines.append(
-            f"{detail_prefix}resume: opentraces resume {trace_id} --at-step {step_id}"
+            f"{detail_prefix}resume: opentraces trail resume {trace_id} --at-step {step_id}"
         )
 
 
@@ -715,7 +807,7 @@ def _render_trail_play_graph(repo: Path, payload: dict[str, Any]) -> str:
     trace = _trace_handle(str(trace_id), color=False)
 
     lines = [
-        f"Trace play for {trace}",
+        f"Trace timeline for {trace}",
         f"Workspace: {workspace_label}",
         f"Source repo: {source_repo}",
         _trail_play_count_summary(timeline),
@@ -1153,7 +1245,7 @@ def _render_trace_search(
             "",
             "Next:",
             f"  otd trail explain --trace {first.get('trace_id')} --step {first_step}",
-            f"  otd trail follow --patch {first.get('trace_patch_id')}",
+            f"  otd trail sync --patch {first.get('trace_patch_id')}",
         ]
     )
     return "\n".join(lines)
@@ -1383,8 +1475,8 @@ def _render_search_results(
     ],
     see_also=[
         ("opentraces trail explain", "explain the canonical evidence chain."),
-        ("opentraces blame", "show reviewer-facing attribution."),
-        ("opentraces graph", "render commit + trace navigation."),
+        ("opentraces trail blame", "show reviewer-facing attribution."),
+        ("opentraces trail graph", "render commit + trace navigation."),
     ],
     option_groups=[
         ("Scope", ["trace_id", "commit", "path", "survival", "project_dir"]),
@@ -1554,6 +1646,7 @@ def search_cmd(
 @trail_group.command(
     "diff",
     cls=OpentracesCommand,
+    hidden=True,
     examples=[
         "opentraces trail diff --trace tr1 --from-step 1 --to-step 2",
         "opentraces trail diff --trace tr1 --from-step 1 --to-step 2 --json",
@@ -1612,13 +1705,14 @@ def diff_cmd(
 @trail_group.command(
     "attach",
     cls=OpentracesCommand,
+    hidden=True,
     examples=[
         "opentraces trail attach --trace tr_abc --commit HEAD",
         "opentraces trail attach --trace tr_abc --commit abc1234 --json",
     ],
     see_also=[
         ("opentraces trail explain", "show evidence chain for a trace step."),
-        ("opentraces blame", "show commit attribution."),
+        ("opentraces trail blame", "show commit attribution."),
     ],
     option_groups=[
         ("Scope", ["trace_id", "commit", "project_dir"]),
@@ -1696,6 +1790,7 @@ def attach_cmd(
 @trail_group.command(
     "mature",
     cls=OpentracesCommand,
+    hidden=True,
     examples=[
         "opentraces trail mature",
         "opentraces trail mature --commits 100 --json",
@@ -1780,6 +1875,7 @@ def mature_cmd(
 @trail_group.command(
     "rebuild",
     cls=OpentracesCommand,
+    hidden=True,
     examples=[
         "opentraces trail rebuild",
         "opentraces trail rebuild --json",

@@ -7,8 +7,8 @@ Phase 5 capture limitations section.
 
 These tags describe what the *capture pipeline* observed during a session.
 They are deliberately distinct from the projection-time ``trail_limitations``
-and per-observation ``limitations`` reported by ``trail follow``, which
-describe what the follow projection could compute from current repo state.
+and per-observation ``limitations`` reported by ``trail sync``, which
+describe what the sync projection could compute from current repo state.
 """
 from __future__ import annotations
 

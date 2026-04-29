@@ -1,8 +1,8 @@
 # opentraces
 
-Open schema + CLI for collecting, reviewing, and publishing agent traces to Hugging Face Hub.
+Open schema + CLI for capturing agent traces, linking them to Git evidence, building local datasets, and publishing reviewed dataset rows to Hugging Face Hub.
 
-Every coding session leaves behind the data you actually want: prompts, tool calls, reasoning, edits, outcome signals, and eventually the code that shipped. opentraces captures that locally, runs layered security passes, lets you review it, and publishes sharded JSONL datasets in an open schema.
+Every coding session leaves behind the data you actually want: prompts, tool calls, reasoning, edits, outcome signals, and eventually the code that shipped. opentraces captures that locally, runs layered security passes, exposes Trace Trails over the Git evidence, and lets workflows turn traces into datasets.
 
 > Sharing traces can leak secrets, credentials, internal paths, or customer data. opentraces reduces that risk, but it does not remove it. Read the [security docs](https://opentraces.ai/docs/security/tiers) before you publish anything.
 
@@ -11,11 +11,10 @@ Every coding session leaves behind the data you actually want: prompts, tool cal
 1. Capture traces from supported agents such as Claude Code.
 2. Enrich them with task, model, token, dependency, and git metadata.
 3. Run regex, entropy, optional TruffleHog, and optional LLM review passes.
-4. Stage traces locally for review in the terminal, browser, or CLI inbox.
-5. Publish them as immutable JSONL shards to a Hugging Face dataset.
-6. Correlate traces to later commits via `blame`, `graph`, and Trace Trails.
-7. Export staged traces to downstream formats such as `atif` and `agent-trace`.
-8. Import existing datasets with `opentraces pull --parser hermes`, routed through the same security and staging flow.
+4. Search and map retained traces without loading full transcripts.
+5. Correlate traces to later commits via Trace Trails, blame, graph, and resume.
+6. Run local workflow skills that append schema-valid rows to local datasets.
+7. Review dataset rows and publish approved rows to Hugging Face remotes.
 
 ## Install
 
@@ -50,8 +49,6 @@ pip install -e ".[dev]"
 
 Use plain `pip install opentraces` only in CI or disposable environments.
 
-Both review surfaces (`opentraces web`, `opentraces tui`) ship in the default install, no extras required.
-
 ## Quick Start
 
 opentraces has a two-phase bootstrap: `setup` wires the machine once, `init` wires each repo.
@@ -60,18 +57,22 @@ opentraces has a two-phase bootstrap: `setup` wires the machine once, `init` wir
 # one-time machine setup (capture hooks, watcher, HF login, optional tiers)
 opentraces setup
 
-# initialize this repo (agents, review policy, remote dataset)
+# initialize this repo (agents and project enrollment)
 opentraces init
 
-# review traces locally
-opentraces web
-# or: opentraces tui
+# search retained trace evidence
+opentraces trace query --lex "bug fix failing test"
 
-# stage reviewed traces for upload
-opentraces add --all
+# inspect Git-anchored trace evidence
+opentraces trail sync --patch <trace_patch_id>
 
-# publish the staged set
-opentraces push
+# create and run a local dataset workflow
+opentraces workflow create bug-fix-curator
+opentraces dataset new bug-fixes
+opentraces dataset run bug-fixes --dry-run --limit 5
+
+# publish reviewed dataset rows when a remote is bound
+opentraces dataset publish bug-fixes --check-only
 ```
 
 `init` writes the committable marker at `.opentraces.json`. Captured traces, runtime state, and upload bookkeeping stay machine-local under `~/.opentraces/projects/<slug>/`.
@@ -79,21 +80,18 @@ opentraces push
 Useful follow-ups:
 
 - `opentraces doctor` checks auth, integrations, and pipeline health.
-- `opentraces blame <sha>` and `opentraces graph` show commit-to-trace attribution (run `opentraces setup git` first to install the post-commit correlator).
+- `opentraces setup auth` logs in to Hugging Face for dataset remotes.
+- `opentraces trace query/map/get` searches, maps, and retrieves retained traces.
+- `opentraces trail blame <sha>` and `opentraces trail graph` show commit-to-trace attribution (run `opentraces setup git` first to install the post-commit correlator).
 - `opentraces trail explain --trace <id> --step <n>` explains Trace Trails evidence rebuilt from the local Git event log.
 - `opentraces trail explain <path>:<line>` resolves a Git-side file line back to Trace Patch evidence when an exact anchor exists.
-- `opentraces trail diff --trace <id> --from-step <a> --to-step <b>` shows the Trace Patch between captured step snapshots.
-- `opentraces trail follow --patch <id>` follows an anchored Trace Patch through Git history and reports current `HEAD` survival.
-- `opentraces trail resolve ot://... --json` resolves stable Trace Trail resource IDs for Trace Patches, Git Anchors, and file-line origins.
-- `opentraces trail attach --trace <id> --commit <sha>` retroactively attaches a trace to a commit when the post-commit hook missed it.
-- `opentraces trail rebuild` re-derives advisory snapshot projections from the canonical event log after manual ref cleanup or branch surgery.
+- `opentraces trail sync --patch <id>` synchronizes an anchored Trace Patch with current Git history and reports current `HEAD` survival.
+- `opentraces trail timeline <trace-id>` shows the observed Trace Trails timeline for a trace.
+- `opentraces trail teleport export/open` moves a trace and retained Git evidence between workspaces.
 - `opentraces setup trufflehog` enables Tier 1.5 scanning.
 - `opentraces setup llm-review` configures Tier 2 semantic review.
-- `opentraces push --llm-review` gates uploads on a clean Tier 2 verdict.
-- `opentraces assess` scores trace quality locally or across a remote dataset.
-- `opentraces pull owner/dataset --parser hermes` imports traces from an existing Hugging Face dataset.
-- `opentraces log` lists recent pushes grouped by date; `-v` expands to per-trace rows with tokens and cost.
-- `opentraces resume <trace-id>` reopens the upstream agent session behind a trace.
+- `opentraces trail resume <trace-id>` reopens the upstream agent session behind a trace.
+- `opentraces dataset review/approve/reject/publish` manages dataset row publication.
 
 ## Tell Your Agent
 
@@ -108,8 +106,8 @@ Set up opentraces in this project.
 2. Run the one-time machine setup:
    `opentraces setup`
 
-   This walks each integration (capture hooks, watcher, entity parser,
-   HuggingFace login, optional TruffleHog, optional LLM review).
+   This walks each integration (capture hooks, watcher, HuggingFace login,
+   optional TruffleHog, optional LLM review).
 
 3. Confirm authentication:
    `opentraces auth whoami`
@@ -118,26 +116,25 @@ Set up opentraces in this project.
 
 4. Initialize the repo:
    `opentraces init`
-   This prompts for agents, review policy, and the HuggingFace remote.
+   This enrolls the project. Dataset remotes and review policy live under
+   `opentraces dataset ...`.
 
 5. After init, the daily workflow is:
    - `opentraces status`
-   - `opentraces web` or `opentraces tui`
-   - `opentraces add --all`
-   - `opentraces push`
+   - `opentraces trace query ...`
+   - `opentraces trail sync ...`
+   - `opentraces dataset run <name>`
+   - `opentraces dataset publish <name>`
 
 6. Optional hardening:
    - `opentraces doctor`
    - `opentraces setup trufflehog`
    - `opentraces setup llm-review`
-   - `opentraces push --llm-review`
+   - `opentraces dataset publish <name> --check-only`
 
 7. Attribution queries (run `opentraces setup git` once to install the post-commit correlator):
-   - `opentraces blame <sha>`
-   - `opentraces graph`
-
-8. Import from an existing dataset:
-   - `opentraces pull owner/dataset --parser hermes`
+   - `opentraces trail blame <sha>`
+   - `opentraces trail graph`
 ~~~
 
 ## Security

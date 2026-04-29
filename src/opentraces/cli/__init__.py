@@ -32,7 +32,6 @@ from ..core.workflow import (
     OPENTRACES_TAGLINE,
     SUPPORTED_AGENTS,
     normalize_agents,
-    normalize_push_policy,
     normalize_review_policy,
     resolve_visible_stage,
 )
@@ -50,56 +49,46 @@ _json_mode = False
 
 COMMAND_SECTIONS = [
     (
-        "Trace and Evidence",
-        [
-            "trace",
-            "trail",
-            "blame",
-            "graph",
-            "resume",
-        ],
-    ),
-    (
-        "Datasets and Workflows",
-        [
-            "dataset",
-            "workflow",
-        ],
-    ),
-    (
-        "Project and Setup",
+        "Global Setup",
         [
             "setup",
+            "auth",
+            "config",
+            "completions",
+        ],
+    ),
+    (
+        "Project Setup",
+        [
             "init",
             "status",
             "doctor",
             "remove",
-            "auth",
-            "config",
-            "completions",
             "watcher",
         ],
     ),
     (
-        "Compatibility",
+        "Trace",
         [
-            "list",
-            "show",
-            "add",
-            "reject",
-            "push",
-            "pull",
-            "web",
-            "tui",
-            "remote",
-            "reset",
-            "redact",
-            "discard",
-            "llm-review",
-            "export",
-            "stats",
-            "log",
-            "assess",
+            "trace",
+        ],
+    ),
+    (
+        "Trail",
+        [
+            "trail",
+        ],
+    ),
+    (
+        "Workflow",
+        [
+            "workflow",
+        ],
+    ),
+    (
+        "Dataset",
+        [
+            "dataset",
         ],
     ),
 ]
@@ -279,9 +268,8 @@ class GroupedGroup(OpentracesGroup):
         return styled
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        # Journey-first sectioned listing. The canonical Plan 54/56/57/58
-        # surfaces lead; one-minor legacy aliases are grouped last so users
-        # can discover them without mistaking them for the primary model.
+        # Journey-first sectioned listing. Keep the unreleased development
+        # surface narrow: no compatibility block, no old inbox-first aliases.
         sections: list[tuple[str, list[tuple[str, str]]]] = []
         for section_name, cmd_names in COMMAND_SECTIONS:
             rows: list[tuple[str, str]] = []
@@ -635,21 +623,6 @@ def _agent_placeholder() -> str:
     return ",".join(SUPPORTED_AGENTS[:2]) or DEFAULT_AGENT
 
 
-def _emit_alias_deprecation(old_cmd: str, new_cmd: str) -> None:
-    """Plan 058 V21: warn that ``old_cmd`` is a deprecated alias for ``new_cmd``.
-
-    Stays on stderr so JSON consumers do not see it on stdout, and uses
-    plain ``click.echo`` so the standard CliRunner stream split picks it
-    up. Ride-along with every compatibility-alias entry point so users
-    moving from the inbox-first flow learn the new dataset surface.
-    """
-
-    click.echo(
-        f"warning: `{old_cmd}` is deprecated; use `{new_cmd}` instead.",
-        err=True,
-    )
-
-
 def _schedule_browser_open(url: str) -> None:
     try:
         import threading
@@ -886,7 +859,7 @@ def _validate_and_save(token_value: str, save_credentials, credentials_path) -> 
     save_credentials(token_value)
     click.echo(f"  Authenticated as {username}.")
     click.echo(f"  Token saved to {credentials_path}")
-    click.echo("\n  You can now push traces with 'opentraces push'.")
+    click.echo("\n  You can now bind dataset remotes with 'opentraces dataset remote ...'.")
 
     emit_json({
         "status": "ok",
@@ -1467,7 +1440,7 @@ def _plan043_finalize_identity(project_dir: Path) -> None:
             [
                 _PkOption(
                     value="Y", label="Backfill now",
-                    hint=f"powers 'opentraces blame' over {len(corpus)} past session(s)",
+                    hint=f"powers 'opentraces trail blame' over {len(corpus)} past session(s)",
                 ),
                 _PkOption(
                     value="declined", label="Skip for now",
@@ -1483,7 +1456,7 @@ def _plan043_finalize_identity(project_dir: Path) -> None:
     except ImportError:
         try:
             raw = click.prompt(
-                "Backfill commit attribution now? Powers 'opentraces blame' — "
+                "Backfill commit attribution now? Powers 'opentraces trail blame' — "
                 f"points each committed line back to the trace that wrote it. "
                 f"({len(corpus)} past session(s)) [Y/n/never]",
                 default="Y",
@@ -1554,70 +1527,28 @@ def _plan043_finalize_identity(project_dir: Path) -> None:
         ("opentraces setup claude-code", "install Claude Code capture hooks"),
         ("opentraces setup git", "install or remove the git post-commit hook"),
         ("opentraces dataset remote create", "create or bind a dataset remote"),
-        ("opentraces auth login", "authenticate with HuggingFace"),
+        ("opentraces setup auth", "authenticate with HuggingFace"),
     ],
     option_groups=[
         ("Agents", ["agents", "import_existing"]),
     ],
 )
 @click.option("--agent", "agents", multiple=True, type=click.Choice(list(SUPPORTED_AGENTS)), help="Agent runtime to connect")
-# Plan 058 V22: --review-policy / --no-hook / --remote / --manifest are kept
-# for one minor version after the CLI lifecycle migration so existing
-# scripts keep working, but they're hidden from --help and emit a
-# deprecation warning when used. Migration targets: setup git, setup
-# <agent>, and dataset remote commands.
-@click.option("--review-policy", type=click.Choice(["review", "auto"]), default=None, hidden=True, help="[deprecated] Use `ot dataset remote create --policy ...`")
-@click.option("--push-policy", type=click.Choice(["manual", "auto-push"]), default=None, hidden=True, help="Legacy: derived from review policy")
 @click.option(
     "--import-existing/--start-fresh",
     "import_existing",
     default=None,
     help="Import existing Claude Code traces for this repo",
 )
-@click.option("--mode", type=click.Choice(["auto", "review"]), default=None, hidden=True, help="Legacy alias for --review-policy")
-@click.option("--remote", type=str, default=None, hidden=True, help="[deprecated] Use `ot dataset remote create`")
-@click.option("--manifest", "manifest_path", type=str, default=None, hidden=True, help="[deprecated] Use `ot dataset apply <manifest>`")
-@click.option("--private/--public", "is_private", default=None, hidden=True, help="[deprecated] Use `ot dataset remote create --private/--public`")
-@click.option("--no-hook", is_flag=True, hidden=True, help="[deprecated] Use `ot setup git --remove`")
 def init(
     agents: tuple[str, ...],
-    review_policy: str | None,
-    push_policy: str | None,
     import_existing: bool | None,
-    mode: str | None,
-    remote: str | None,
-    manifest_path: str | None,
-    is_private: bool | None,
-    no_hook: bool,
 ) -> None:
     """Initialize opentraces in the current project.
 
-    Sets up the repo-local inbox, agent hooks, and policies. Dataset
-    remotes belong to ``ot dataset remote ...`` after Plan 058; legacy
-    flags are accepted for one minor version with a deprecation warning.
+    Enrolls the current repository and connects selected local agent hooks.
+    Dataset remotes and review policy belong to ``ot dataset ...``.
     """
-    # Plan 058 V22: surface a deprecation warning if the caller still
-    # passes the legacy flags. We continue to honour them — the bridge
-    # is informational, not a blocker.
-    _legacy_init_hints: list[tuple[str, str]] = []
-    if remote is not None:
-        _legacy_init_hints.append(("--remote", "ot dataset remote create <dataset> <owner/name>"))
-    if review_policy is not None:
-        _legacy_init_hints.append(("--review-policy", "ot dataset remote create <dataset> --policy ..."))
-    if no_hook:
-        _legacy_init_hints.append(("--no-hook", "ot setup git --remove"))
-    if manifest_path is not None:
-        _legacy_init_hints.append(("--manifest", "ot dataset apply <manifest>"))
-    if is_private is not None:
-        _legacy_init_hints.append(("--private/--public", "ot dataset remote create --private/--public"))
-    if _legacy_init_hints:
-        click.echo(
-            "warning: `ot init` flags are deprecated and will be removed next minor version:",
-            err=True,
-        )
-        for flag, target in _legacy_init_hints:
-            click.echo(f"  {flag} -> {target}", err=True)
-
     from ..core.config import _marker_path, load_project_config, save_project_config
 
     project_dir = Path.cwd()
@@ -1657,31 +1588,16 @@ def init(
         )
         return
 
-    # Legacy --mode mapping
-    if review_policy is None and mode is not None:
-        review_policy = "auto" if mode == "auto" else "review"
-    review_policy = normalize_review_policy(review_policy)
-    # Push policy is derived from review policy: auto → auto-push, review → manual
-    if push_policy is None:
-        push_policy = "auto-push" if review_policy == "auto" else "manual"
-    push_policy = normalize_push_policy(push_policy)
+    review_policy = DEFAULT_REVIEW_POLICY
+    push_policy = "manual"
     selected_agents = normalize_agents(list(agents))
 
-    # Resolve visibility from --private/--public flags
-    if is_private is True:
-        visibility = "private"
-    elif is_private is False:
-        visibility = "public"
-    else:
-        visibility = "private"  # default, may be overridden by interactive selector
-
-    if _is_interactive_terminal() and (not agents or review_policy == DEFAULT_REVIEW_POLICY and remote is None):
+    if _is_interactive_terminal() and not agents:
         try:
-            from pyclack.prompts import confirm, select, text
-            from pyclack.core import Option
+            from pyclack.prompts import text
             import asyncio
 
-            async def _interactive_setup() -> tuple[list[str], str, str | None, str]:
+            async def _interactive_setup() -> list[str]:
                 if len(SUPPORTED_AGENTS) == 1:
                     chosen_agents = list(SUPPORTED_AGENTS)
                     click.echo(f"Supported agent detected: {chosen_agents[0]}")
@@ -1702,65 +1618,20 @@ def init(
                         validate=_validate_agents,
                     )
                     chosen_agents = _parse_agent_selection(chosen_agents_text)
-                chosen_review = await select(
-                    "Which review policy should this inbox use?",
-                    [
-                        Option(value="review", label="Review every trace", hint="Traces land in Inbox for you to review"),
-                        Option(value="auto", label="Fully automatic", hint="Capture, sanitize, commit, and push automatically"),
-                    ],
-                    initial_value=review_policy,
-                )
+                return normalize_agents(chosen_agents)
 
-                chosen_remote = remote
-                chosen_visibility = "private"
-                # Remote setup: login if needed, then select
-                cfg = load_config()
-                if not cfg.hf_token:
-                    should_login = await confirm(
-                        "Log into HuggingFace now?",
-                        initial_value=True,
-                        active="Login",
-                        inactive="Skip",
-                    )
-                    if should_login:
-                        from ..core.config import save_credentials, CREDENTIALS_PATH
-
-                        _login_with_device_code(save_credentials, CREDENTIALS_PATH)
-                identity = _auth_identity(load_config().hf_token)
-                if identity:
-                    chosen_remote, chosen_visibility = await _choose_remote_interactively_async(_default_repo(identity))
-                return normalize_agents(chosen_agents), normalize_review_policy(chosen_review), chosen_remote, chosen_visibility or "private"
-
-            selected_agents, review_policy, remote, visibility = asyncio.run(_interactive_setup())
+            selected_agents = asyncio.run(_interactive_setup())
         except ImportError:
-            visibility = "private"
             if not agents:
                 selected_agents = list(SUPPORTED_AGENTS) if len(SUPPORTED_AGENTS) == 1 else _prompt_agents_with_click()
-            if review_policy == DEFAULT_REVIEW_POLICY:
-                review_policy = click.prompt(
-                    "Review policy",
-                    type=click.Choice(["review", "auto"]),
-                    default=DEFAULT_REVIEW_POLICY,
-                )
-            if remote is None:
-                identity = _auth_identity(load_config().hf_token)
-                if identity:
-                    remote, visibility = _choose_remote_interactively(_default_repo(identity))
-                    visibility = visibility or "private"
-
-    # visibility may be set by interactive selector or --private/--public flags
-    if not isinstance(visibility, str) or visibility not in ("private", "public"):
-        visibility = "private"
 
     proj_config: dict = {
         "mode": "auto" if review_policy == "auto" else "review",
         "review_policy": review_policy,
         "push_policy": push_policy,
         "agents": selected_agents,
-        "visibility": visibility,
+        "visibility": "private",
     }
-    if remote:
-        proj_config["remote"] = remote
     save_project_config(project_dir, proj_config)
 
     # Register this project in the global opted-in list. This is the
@@ -1776,9 +1647,7 @@ def init(
     # so the only opentraces artifact in the repo is the .opentraces.json marker —
     # which is meant to be committed. No .gitignore changes needed.
 
-    hook_installed = False
-    if not no_hook:
-        hook_installed = _install_capture_hook(project_dir, selected_agents)
+    hook_installed = _install_capture_hook(project_dir, selected_agents)
 
     skill_installed = _install_skill(project_dir, selected_agents)
 
@@ -1833,10 +1702,6 @@ def init(
     click.echo()
     print_banner(tagline=_ok("initialized"))
     click.echo(f"{_dim('Project: ')} {_bold(project_dir.name)}  {_dim(f'({review_policy} policy)')}")
-    if remote:
-        click.echo(f"  {_dim('Remote: ')} {remote}")
-    else:
-        click.echo(f"  {_dim('Remote: ')} {_warn('not set')} {_dim('(run')} opentraces remote set <owner>/<repo>{_dim(')')}")
     from ..core.config import get_project_traces_dir
     traces_dir = get_project_traces_dir(project_dir)
     click.echo(f"  Marker:  {marker_file}")
@@ -1856,21 +1721,21 @@ def init(
             click.echo("  Existing traces were left untouched; new traces will capture automatically.")
     click.echo("\nRecommended flow:")
     if existing_session_count and imported_existing:
-        click.echo("  1. Review the imported inbox with 'opentraces web' or 'opentraces tui'")
+        click.echo("  1. Build or apply a dataset, then review it with 'opentraces dataset review'")
     elif existing_session_count:
         click.echo("  1. Decide whether to import past traces or just start from now on")
         click.echo(f"     Session dir: {existing_session_dir}")
     else:
         click.echo("  1. Start a connected agent; capture is automatic from now on")
-    click.echo("  2. Review and stage inbox traces with 'opentraces add --all'")
-    click.echo("  3. Publish staged traces with 'opentraces push'")
+    click.echo("  2. Query traces with 'opentraces trace query'")
+    click.echo("  3. Publish dataset rows with 'opentraces dataset publish <name>'")
 
     emit_json({
         "status": "ok",
         "mode": proj_config["mode"],
         "review_policy": review_policy,
         "push_policy": push_policy,
-        "remote": remote,
+        "remote": None,
         "agents": selected_agents,
         "hook_installed": hook_installed,
         "skill_installed": skill_installed,
@@ -1881,13 +1746,13 @@ def init(
         "config_path": str(marker_file),
         "staging_path": str(traces_dir),
         "next_steps": [
-            "Review imported traces with opentraces web" if imported_existing else (
+            "Search imported traces with opentraces trace query" if imported_existing else (
                 "Import past traces or start a connected agent; future traces will be captured automatically"
                 if existing_session_count
                 else "Start a connected agent, traces will be captured automatically"
             ),
         ],
-        "next_command": "opentraces web" if imported_existing else "opentraces",
+        "next_command": "opentraces trace query" if imported_existing else "opentraces trace query",
     })
 
 
@@ -2361,7 +2226,7 @@ def _install_skill(project_dir: Path, agents: list[str]) -> bool:
         "opentraces status --limit 0",
     ],
     see_also=[
-        ("opentraces list", "list individual traces with filters."),
+        ("opentraces trace query", "search retained traces with filters."),
         ("opentraces doctor", "check pipeline and integration health."),
     ],
 )
@@ -2697,16 +2562,14 @@ main.add_command(_git_backfill_cmd)
 # Plan-043 phase 5 — `ot graph` GitButler-style renderer.
 from .graph import graph_cmd as _graph_cmd  # noqa: E402
 
-main.add_command(_graph_cmd)
-
 # Plan-043 phase 4 — `ot blame <sha>` per-commit attribution lookup.
 from .blame import blame_cmd as _blame_cmd  # noqa: E402
-
-main.add_command(_blame_cmd)
 
 # Plan-054 — Trace Trails VCS-anchored lineage.
 from .trail import trail_group as _trail_group  # noqa: E402
 
+_trail_group.add_command(_graph_cmd, name="graph")
+_trail_group.add_command(_blame_cmd, name="blame")
 main.add_command(_trail_group)
 
 # Plan-043 phase 3 — `ot watcher` background attribution watcher.
@@ -2718,7 +2581,7 @@ _reg_watcher(main)
 # ---------------------------------------------------------------------------
 # Step 11 — auth group (parallel surface to flat login/logout/whoami).
 # Both surfaces share the _login_impl / _logout_impl / _auth_status_impl
-# helpers defined earlier in this module. Step 15 removes the flat verbs.
+# Authentication helpers.
 # ---------------------------------------------------------------------------
 
 @main.group("auth")
@@ -2757,29 +2620,30 @@ def _auth_whoami() -> None:
     _auth_status_impl()
 
 
-# ---------------------------------------------------------------------------
-# Flat workflow verbs registered at root: add, list, show, reject, reset,
-# redact, discard. ot add refuses BLOCKED + REJECTED traces.
-# ---------------------------------------------------------------------------
+from .installers import setup_group as _setup_group  # noqa: E402
 
-# Re-register existing trace.X commands at the root with the same name.
-# Click commands are first-class objects — add_command attaches the same
-# Command to two groups without copying logic.
+
+@_setup_group.command("auth")
+@click.option(
+    "--token",
+    is_flag=True,
+    help="Paste a personal access token instead (headless / CI fallback).",
+)
+def _setup_auth(token: bool) -> None:
+    """Log in to HuggingFace Hub for dataset remotes."""
+    _login_impl(token)
+
+
+# ---------------------------------------------------------------------------
+# Trace and dataset command groups.
+# ---------------------------------------------------------------------------
 from .trace import (  # noqa: E402
     trace_group as _trace_group,
-    trace_show_root as _trace_show_cmd,
     trace_list as _trace_list_cmd,
-    trace_reject as _trace_reject_cmd,
-    trace_reset as _trace_reset_cmd,
-    trace_discard as _trace_discard_cmd,
     trace_resume as _trace_resume_cmd,
 )
 main.add_command(_trace_group, name="trace")
-main.add_command(_trace_show_cmd, name="show")
-main.add_command(_trace_reject_cmd, name="reject")
-main.add_command(_trace_reset_cmd, name="reset")
-main.add_command(_trace_discard_cmd, name="discard")
-main.add_command(_trace_resume_cmd, name="resume")
+_trail_group.add_command(_trace_resume_cmd, name="resume")
 
 from .dataset import dataset_group as _dataset_group  # noqa: E402
 from .workflow import workflow_group as _workflow_group  # noqa: E402
@@ -4205,19 +4069,6 @@ def capabilities(as_json: bool) -> None:
     click.echo(json.dumps(caps, indent=2))
 
 
-# ---------------------------------------------------------------------------
-# Plan 058 V21: compatibility aliases for the inbox-first → dataset-first
-# CLI lifecycle migration. We keep the legacy command behaviour for one
-# minor version so existing scripts/tests keep working, and emit a
-# deprecation warning on stderr that points at the new ``ot dataset *``
-# (or ``ot trace *``) verbs. The exception is ``ot pull`` — its legacy
-# binding was the HF *importer*, which is unrelated to the new
-# pull-from-dataset-remote semantics, so we replace it outright. The
-# importer remains available via a direct ``opentraces.cli.import_hf``
-# reference if a follow-up plan needs it under a new verb.
-# ---------------------------------------------------------------------------
-
-
 def _drop_command(name: str) -> None:
     """Remove ``name`` from the root group if it's currently registered."""
     try:
@@ -4226,70 +4077,32 @@ def _drop_command(name: str) -> None:
         pass
 
 
-def _wrap_legacy_with_warning(cmd_name: str, hint: str) -> None:
-    """Wrap ``main.commands[cmd_name]`` to emit a deprecation warning.
-
-    The original command's callback is invoked unchanged, so legacy
-    behaviour (and the legacy tests covering it) keeps working. The
-    deprecation hint only appears on ``stderr``.
-    """
-
-    target = main.commands.get(cmd_name)
-    if target is None:
-        return
-    original_callback = target.callback
-    if original_callback is None or getattr(
-        original_callback, "_plan058_wrapped", False
-    ):
-        return
-
-    def _wrapped(*args, **kwargs):
-        wants_json = bool(_json_mode or kwargs.get("as_json") or kwargs.get("json_mode"))
-        if not wants_json:
-            _emit_alias_deprecation(f"ot {cmd_name}", hint)
-        return original_callback(*args, **kwargs)
-
-    _wrapped._plan058_wrapped = True  # type: ignore[attr-defined]
-    target.callback = _wrapped
-    target.short_help = f"Deprecated compatibility command; use `{hint}`."
-    target.help = (
-        f"Deprecated compatibility command. Use `{hint}` for the "
-        "dataset-first CLI lifecycle. This alias remains for one minor "
-        "version and emits a warning on stderr."
-    )
-
-
-_wrap_legacy_with_warning("push", "ot dataset publish default-inbox")
-_wrap_legacy_with_warning("list", "ot trace list")
-_wrap_legacy_with_warning("show", "ot trace get")
-_wrap_legacy_with_warning("add", "ot dataset approve default-inbox")
-_wrap_legacy_with_warning("reject", "ot dataset reject default-inbox")
-_wrap_legacy_with_warning("web", "ot dataset review default-inbox --web")
-_wrap_legacy_with_warning("tui", "ot dataset review default-inbox --tui")
-
-
-# ``ot pull`` historically meant ``opentraces import_hf``. Plan 058 rebinds
-# it to ``ot dataset pull default-inbox``. The previous behaviour is
-# unrelated to the new semantics, so we replace the registration outright.
-_drop_command("pull")
-
-
-@main.command("pull")
-@click.pass_context
-def _alias_pull(ctx: click.Context) -> None:
-    """Deprecated compatibility command; use ``ot dataset pull default-inbox``."""
-    _emit_alias_deprecation("ot pull", "ot dataset pull default-inbox")
-    from .dataset import dataset_pull
-
-    ctx.invoke(
-        dataset_pull,
-        name="default-inbox",
-        remote=None,
-        with_data=False,
-        shards=None,
-        force_pull=False,
-        as_json=False,
-    )
+# Unreleased development surface: remove old flat inbox/project commands
+# instead of carrying compatibility aliases. The canonical public roots are
+# setup/init/trace/trail/workflow/dataset.
+for _legacy_root_command in [
+    "list",
+    "show",
+    "add",
+    "reject",
+    "push",
+    "pull",
+    "web",
+    "tui",
+    "remote",
+    "reset",
+    "redact",
+    "discard",
+    "llm-review",
+    "export",
+    "stats",
+    "log",
+    "assess",
+    "blame",
+    "graph",
+    "resume",
+]:
+    _drop_command(_legacy_root_command)
 
 
 @main.command(hidden=True)
@@ -4303,19 +4116,15 @@ def introspect() -> None:
         "schema_version": SCHEMA_VERSION,
         "trace_record_schema": TraceRecord.model_json_schema(),
         "commands": {
-            "init": {"description": "One-stop setup for the repo inbox", "options": ["--agent", "--review-policy", "--remote", "--private", "--public", "--no-hook"]},
-            "login": {"description": "Authenticate with HuggingFace Hub"},
-            "auth": {"description": "Show the active HuggingFace identity"},
-            "logout": {"description": "Log out from HuggingFace Hub"},
-            "web": {"description": "Open the browser inbox", "options": ["--port"]},
-            "tui": {"description": "Open the terminal inbox"},
-            "commit": {"description": "Commit inbox traces for push", "options": ["-m", "--all"]},
-            "push": {"description": "Upload staged traces to HuggingFace Hub", "options": ["--private", "--public"]},
-            "trace": {"description": "Manage individual traces", "subcommands": ["list", "show", "commit", "reject", "reset", "redact", "discard"]},
-            "remote": {"description": "Manage dataset remote", "subcommands": ["current", "list", "use", "remove"]},
-            "status": {"description": "Show repo inbox status"},
-            "stats": {"description": "Aggregate statistics (traces, tokens, cost, models)"},
-            "context": {"description": "Full project context for agent consumption"},
+            "setup": {"description": "Wire OpenTraces into the machine"},
+            "init": {"description": "Enroll the current project", "options": ["--agent", "--import-existing", "--start-fresh"]},
+            "auth": {"description": "HuggingFace identity: login, logout, whoami"},
+            "status": {"description": "Show the current project snapshot"},
+            "doctor": {"description": "Report integration and pipeline health"},
+            "trace": {"description": "Search, map, and retrieve retained traces", "subcommands": ["query", "map", "get"]},
+            "trail": {"description": "Inspect and synchronize VCS-anchored Trace Trails", "subcommands": ["blame", "explain", "graph", "resume", "search", "sync", "teleport", "timeline"]},
+            "workflow": {"description": "Manage local dataset workflow skills", "subcommands": ["list", "show", "create", "edit", "remove"]},
+            "dataset": {"description": "Manage local executable datasets"},
             "capabilities": {"description": "Machine-discoverable feature list"},
             "introspect": {"description": "Full API schema (this command)"},
         },

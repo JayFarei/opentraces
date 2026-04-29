@@ -630,13 +630,13 @@ def _run_demo_with_isolated_home(paths: DemoPaths, *, verbose: bool) -> dict[str
         ]
     )
     blame_commit = _run_cli(
-        ["blame", commit_sha, "--json", "--project", str(paths.repo)]
+        ["trail", "blame", commit_sha, "--json", "--project", str(paths.repo)]
     )
     graph_commit = _run_cli(
-        ["graph", "--json", "--project", str(paths.repo)]
+        ["trail", "graph", "--json", "--project", str(paths.repo)]
     )
     play = _run_cli(
-        ["trail", "play", trace_id, "--json", "--project", str(paths.repo)]
+        ["trail", "timeline", trace_id, "--json", "--project", str(paths.repo)]
     )
     snapshots = _run_cli(
         [
@@ -665,8 +665,8 @@ def _run_demo_with_isolated_home(paths: DemoPaths, *, verbose: bool) -> dict[str
     )
     export_payload = _run_cli(
         [
-            "trace",
-            "workspace",
+            "trail",
+            "teleport",
             "export",
             trace_id,
             "--output",
@@ -677,8 +677,8 @@ def _run_demo_with_isolated_home(paths: DemoPaths, *, verbose: bool) -> dict[str
     )
     open_payload = _run_cli(
         [
-            "trace",
-            "workspace",
+            "trail",
+            "teleport",
             "open",
             str(paths.workspace),
             "--project",
@@ -701,7 +701,7 @@ def _run_demo_with_isolated_home(paths: DemoPaths, *, verbose: bool) -> dict[str
     opened_play = _run_cli(
         [
             "trail",
-            "play",
+            "timeline",
             trace_id,
             "--json",
             "--project",
@@ -733,7 +733,7 @@ def _run_demo_with_isolated_home(paths: DemoPaths, *, verbose: bool) -> dict[str
         ),
         "graph did not expose the Trace Trail-backed trace",
     )
-    _assert(play["event_count"] >= 1, "trail play has no timeline events")
+    _assert(play["event_count"] >= 1, "trail timeline has no timeline events")
     _assert(checkout["relation"] == "snapshot_rewind", "snapshot checkout dry-run failed")
     _assert(export_payload["event_count"] >= 1, "workspace export carried no events")
     _assert(open_payload["status"] == "ok", "workspace open failed")
@@ -971,9 +971,9 @@ def _run_installed_runtime_demo_with_isolated_home(
         ]
     )
     blame_commit = _run_cli(
-        ["blame", commit_sha, "--json", "--project", str(paths.repo)]
+        ["trail", "blame", commit_sha, "--json", "--project", str(paths.repo)]
     )
-    graph_commit = _run_cli(["graph", "--json", "--project", str(paths.repo)])
+    graph_commit = _run_cli(["trail", "graph", "--json", "--project", str(paths.repo)])
     search_commit = _run_cli(
         [
             "trail",

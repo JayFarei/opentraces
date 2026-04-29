@@ -1,4 +1,4 @@
-"""Phase 5 survival states for ``trail follow``.
+"""Phase 5 survival states for trail synchronization.
 
 Phase 4 shipped five survival states (alive_on_path, alive_transformed,
 reverted, lost, unknown). Phase 5 adds the four states reserved in the
@@ -21,7 +21,7 @@ from opentraces.core.trails import (
     GitObjectID,
     TrailEventDraft,
     append_event_batch,
-    follow_patch,
+    sync_patch,
 )
 
 
@@ -125,7 +125,7 @@ def test_rename_plus_edit_reports_alive_moved(tmp_path: Path) -> None:
     """Plan §Phase 5 edge fixture #8.
 
     Agent anchored a patch in ``auth.py``. A later commit renames the
-    file to ``authentication.py`` AND edits a line. ``follow_patch``
+    file to ``authentication.py`` AND edits a line. ``sync_patch``
     must report survival_state=``alive_moved``, the current path, and
     the rename hop count so consumers can distinguish "moved" from
     "moved-and-touched".
@@ -150,7 +150,7 @@ def test_rename_plus_edit_reports_alive_moved(tmp_path: Path) -> None:
     (tmp_path / "authentication.py").write_text("def authorize():\n    return True\n# touched\n")
     _commit(tmp_path, "rename + edit")
 
-    result = follow_patch(tmp_path, "tracepatch-sha256:rename-fixture")
+    result = sync_patch(tmp_path, "tracepatch-sha256:rename-fixture")
     survival_states = {obs["survival_state"] for obs in result["observations"]}
     assert "alive_moved" in survival_states
     moved_obs = next(
@@ -164,7 +164,7 @@ def test_partial_preservation_reports_partially_preserved(tmp_path: Path) -> Non
     """Plan §Phase 5 edge fixture #10.
 
     Agent anchored a multi-line range. A later commit removes part of
-    that range while keeping another part. ``follow_patch`` must report
+    that range while keeping another part. ``sync_patch`` must report
     ``partially_preserved`` so consumers can flag the partial drift.
     """
     _init_repo(tmp_path)
@@ -186,7 +186,7 @@ def test_partial_preservation_reports_partially_preserved(tmp_path: Path) -> Non
     (tmp_path / "auth.py").write_text("def authorize():\n    line_one()\n")
     _commit(tmp_path, "trim authorize")
 
-    result = follow_patch(tmp_path, "tracepatch-sha256:partial-fixture")
+    result = sync_patch(tmp_path, "tracepatch-sha256:partial-fixture")
     survival_states = {obs["survival_state"] for obs in result["observations"]}
     assert "partially_preserved" in survival_states
     partial_obs = next(
@@ -217,7 +217,7 @@ def test_partial_preservation_when_original_range_no_longer_exists(
     (tmp_path / "auth.py").write_text("def authorize():\n    line_three()\n")
     _commit(tmp_path, "shorten authorize")
 
-    result = follow_patch(tmp_path, "tracepatch-sha256:partial-short-file-fixture")
+    result = sync_patch(tmp_path, "tracepatch-sha256:partial-short-file-fixture")
     current = result["current_survival"]
     assert current["survival_state"] == "partially_preserved"
     assert current["preserved_line_count"] == 1
@@ -260,7 +260,7 @@ def test_human_repair_reports_repaired(tmp_path: Path) -> None:
         },
     )
 
-    result = follow_patch(tmp_path, "tracepatch-sha256:repair-fixture")
+    result = sync_patch(tmp_path, "tracepatch-sha256:repair-fixture")
     survival_states = {obs["survival_state"] for obs in result["observations"]}
     assert "repaired" in survival_states
     repaired_obs = next(

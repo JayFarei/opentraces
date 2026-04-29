@@ -2,24 +2,23 @@
 
 Covers verification items V14, V18, V19, V20 from
 ``kb/plans/058-dataset-remotes-and-cli-lifecycle.md`` (section "Verification"),
-plus the routine-tombstone publish round-trip and the trace cascade workflow
-described under "Withdrawal semantics".
+plus the routine-tombstone publish round-trip and the trace-source cascade
+workflow described under "Withdrawal semantics".
 
 Conventions copied from sibling Plan 058 fake-adapter tests:
 
 - ``OPENTRACES_PLAN058_FAKE_REMOTE_ROOT`` redirects every fake adapter seam
   (``_fake_upload_folder``, ``_fake_remote_dir``, ``_remote_head``).
 - ``tests/conftest.py`` isolates ``HOME`` and ``~/.opentraces/`` per test.
-- The Click CLI is the authoritative product surface for the cascade test;
-  pure-core helpers seed and inspect state for the others.
+- The Click CLI is the authoritative product surface for row withdrawal;
+  trace-source cascade is kept as core dataset behavior rather than a public
+  ``ot trace`` command.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-
-from click.testing import CliRunner
 
 from opentraces.cli.dataset import dataset_group
 from opentraces.core.datasets import (
@@ -398,14 +397,14 @@ def test_plan058_v20_hard_delete_rewrites_only_affected_shards_byte_identically(
 
 
 # ---------------------------------------------------------------------------
-# Trace-scoped cascade workflow — ot trace forget <id> --cascade
+# Trace-scoped cascade workflow — core dataset withdrawal helper
 # ---------------------------------------------------------------------------
 
 
-def test_plan058_trace_forget_cascade_emits_row_withdrawals_across_datasets():
-    """Plan 058 "Withdrawal semantics": ``ot trace forget <trace_id>
-    --cascade`` resolves all dataset rows whose ``source_trace_id`` matches
-    and emits row-level withdrawals in each affected dataset.
+def test_plan058_trace_cascade_emits_row_withdrawals_across_datasets():
+    """Plan 058 withdrawal semantics: the core cascade helper resolves all
+    dataset rows whose ``source_trace_id`` matches and emits row-level
+    withdrawals in each affected dataset.
     """
 
     create_dataset("cascade-a", workflow_skill="curator", workflow_digest="sha256:w")
@@ -431,13 +430,10 @@ def test_plan058_trace_forget_cascade_emits_row_withdrawals_across_datasets():
         run_id="run-c",
     )
 
-    runner = CliRunner()
-    forget_cmd = _import_trace_forget_command()
-    result = runner.invoke(
-        forget_cmd,
-        ["trace-doomed", "--cascade", "--reason", "user-request"],
-    )
-    assert result.exit_code == 0, f"forget --cascade should succeed: {result.output}"
+    from opentraces.core.datasets import forget_trace_cascade
+
+    cascade = forget_trace_cascade("trace-doomed", reason="user-request")
+    assert cascade["withdrawn_count"] == 2
 
     # cascade-a: row withdrawn.
     public_a = load_public_rows("cascade-a", apply_withdrawals=True)
@@ -458,20 +454,3 @@ def test_plan058_trace_forget_cascade_emits_row_withdrawals_across_datasets():
     # row index entries from cascade-a/b are still present (routine
     # withdrawal does not rewrite shards), and shadow row IDs are recorded.
     assert summary_a.row_ids and summary_b.row_ids and summary_c.row_ids
-
-
-def _import_trace_forget_command():
-    """Locate the ``ot trace forget`` command for the cascade test.
-
-    Tries ``opentraces.cli.trace.trace_group.commands["forget"]`` first;
-    falls back to an attribute lookup so the test fails with a clear
-    AssertionError if the command is not yet wired.
-    """
-
-    from opentraces.cli.trace import trace_group
-
-    cmd = trace_group.commands.get("forget")
-    assert cmd is not None, (
-        "ot trace forget must be implemented as part of Plan 058 withdrawal semantics"
-    )
-    return cmd

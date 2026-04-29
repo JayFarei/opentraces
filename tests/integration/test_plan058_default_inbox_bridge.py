@@ -2,15 +2,11 @@
 
 Covers Plan-058 verification items:
 
-- V21: legacy ``ot push`` routes to ``ot dataset publish default-inbox`` and
-  emits a deprecation warning to stderr. The same shape applies to
-  ``ot list``, ``ot add``, ``ot reject``, ``ot pull``, ``ot web``, and
-  ``ot tui`` aliases that point at ``ot trace ...`` or
-  ``ot dataset ... default-inbox`` per the CLI lifecycle migration table.
+- V21: default-inbox migration exists for old local state, but unreleased
+  root-level compatibility commands are not exposed.
 
-- V22: ``ot init`` keeps ``--remote``, ``--review-policy``, ``--no-hook``,
-  and ``--manifest`` for one minor version but they are hidden from
-  ``--help`` and emit a deprecation warning when used.
+- V22: ``ot init`` owns only project enrollment. Remote/review/hook
+  compatibility flags are rejected instead of warn-and-accepted.
 
 The tests also cover the bootstrap path: a clean ``ot dataset *`` call does
 not create ``default-inbox`` by itself; when pre-existing per-project inbox
@@ -152,15 +148,13 @@ def test_default_inbox_bridge_migrates_inbox_decisions(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# V21 — Compatibility aliases route to dataset commands with deprecation
-# warnings on stderr. We use the in-process CliRunner so we can assert on
-# both exit code and the exact stderr text the user sees.
+# V21 — Root compatibility aliases are not exposed in the unreleased CLI.
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
 def opted_in_project(tmp_path, monkeypatch):
-    """Initialised project for alias tests so the underlying inbox calls work."""
+    """Initialised project with a pre-created default-inbox."""
     project_dir = _make_project_with_inbox_state(tmp_path)
     monkeypatch.chdir(project_dir)
     # Pre-create the default-inbox so alias targets resolve cleanly.
@@ -174,110 +168,16 @@ def _invoke_main(args: list[str]) -> object:
     return CliRunner().invoke(cli_main, args)
 
 
-def test_ot_push_alias_routes_to_dataset_publish_default_inbox(opted_in_project):
-    """V21: ``ot push`` emits a deprecation warning naming the new verb.
-
-    The legacy push command stays wired during the one-minor-version
-    compatibility window so existing scripts keep working — the
-    user-visible contract V21 cares about is the stderr deprecation
-    text and the migration target it names. ``ot dataset publish
-    default-inbox`` is the canonical surface and is exercised
-    independently in ``tests/cli/test_plan058_dataset_remote_cli.py``.
-    """
-    result = _invoke_main(["push"])
-    # `ot push` may fail on auth/upload in the isolated fixture — V21
-    # only gates on the stderr contract.
-    stderr = (result.stderr or "")
-    assert "deprecated" in stderr.lower(), stderr
-    assert "ot dataset publish default-inbox" in stderr
-
-
-def test_ot_list_alias_routes_to_trace_list(opted_in_project):
-    """V21: ``ot list`` => ``ot trace list`` + deprecation warning."""
-    result = _invoke_main(["list"])
-    # trace list may exit cleanly even with no traces; we only need to see
-    # the warning text and a non-error exit.
-    assert result.exit_code == 0, result.output
-    assert "deprecated" in result.stderr.lower(), result.stderr
-    assert "ot trace list" in result.stderr
-
-
-def test_ot_add_alias_emits_deprecation_warning_naming_dataset_approve(opted_in_project):
-    """V21: ``ot add`` emits a deprecation warning naming the new verb.
-
-    Legacy inbox staging keeps working during the compatibility window.
-    """
-    result = _invoke_main(["add", "--all"])
-    stderr = (result.stderr or "")
-    assert "deprecated" in stderr.lower(), stderr
-    assert "ot dataset approve default-inbox" in stderr
-
-
-def test_ot_reject_alias_emits_deprecation_warning_naming_dataset_reject(opted_in_project):
-    """V21: ``ot reject`` emits a deprecation warning naming the new verb."""
-    # The legacy reject expects a trace id; bare invocation may exit
-    # non-zero, but the deprecation warning fires before usage parsing.
-    result = _invoke_main(["reject", "ghost-trace"])
-    stderr = (result.stderr or "")
-    assert "deprecated" in stderr.lower(), stderr
-    assert "ot dataset reject default-inbox" in stderr
-
-
-def test_ot_pull_alias_routes_to_dataset_pull_default_inbox(opted_in_project, monkeypatch):
-    """V21: ``ot pull`` => ``ot dataset pull default-inbox`` + deprecation warning."""
-    captured: list[tuple[str, dict]] = []
-
-    def fake_pull(name, *args, **kwargs):
-        captured.append((name, kwargs))
-        from opentraces.core.datasets import DatasetPullSummary
-
-        return DatasetPullSummary(
-            dataset_name=name,
-            remote_name=None,
-            repo_id=None,
-            metadata_refreshed=False,
-            data=False,
-            imported_count=0,
-            duplicate_count=0,
-        )
-
-    monkeypatch.setattr("opentraces.cli.dataset.pull_dataset", fake_pull)
-
-    result = _invoke_main(["pull"])
-    assert result.exit_code == 0, result.output
-    assert "deprecated" in result.stderr.lower(), result.stderr
-    assert "ot dataset pull default-inbox" in result.stderr
-    assert captured and captured[0][0] == DEFAULT_INBOX
-
-
-def test_ot_web_alias_emits_deprecation_warning_naming_dataset_review(opted_in_project, monkeypatch):
-    """V21: ``ot web`` warns and points at ``ot dataset review default-inbox --web``.
-
-    The legacy launcher continues to run inside the compatibility window;
-    we monkeypatch the actual launcher so the test never actually opens
-    a Flask server, leaving us free to assert on the user-visible
-    deprecation contract.
-    """
-    monkeypatch.setattr("opentraces.cli._launch_web_ui", lambda *a, **kw: None)
-    result = _invoke_main(["web", "--no-open"])
-    stderr = (result.stderr or "")
-    assert "deprecated" in stderr.lower(), stderr
-    assert "ot dataset review default-inbox" in stderr
-
-
-def test_ot_tui_alias_emits_deprecation_warning_naming_dataset_review_tui(opted_in_project, monkeypatch):
-    """V21: ``ot tui`` warns and points at ``ot dataset review default-inbox --tui``."""
-    monkeypatch.setattr("opentraces.cli._launch_tui_ui", lambda *a, **kw: None)
-    result = _invoke_main(["tui", "--limit", "1"])
-    stderr = (result.stderr or "")
-    assert "deprecated" in stderr.lower(), stderr
-    assert "ot dataset review default-inbox" in stderr
+@pytest.mark.parametrize("cmd", ["push", "list", "add", "reject", "pull", "web", "tui"])
+def test_root_compatibility_commands_are_not_registered(opted_in_project, cmd):
+    result = _invoke_main([cmd, "--help"])
+    assert result.exit_code != 0
+    combined = (result.output or "") + (result.stderr or "")
+    assert "No such command" in combined
 
 
 # ---------------------------------------------------------------------------
-# V22 — `ot init` flag deprecation. The flags must accept input for one
-# minor version but be hidden from --help and emit a deprecation warning
-# pointing to the setup-owned replacements.
+# V22 — `ot init` no longer accepts remote/review/hook compatibility flags.
 # ---------------------------------------------------------------------------
 
 
@@ -292,8 +192,16 @@ def test_ot_init_help_hides_deprecated_flags():
     assert "--no-hook" not in help_text, help_text
 
 
-def test_ot_init_emits_deprecation_warning_for_legacy_flags(tmp_path, monkeypatch):
-    """V22: invoking ``ot init --remote ...`` warns about the migration target."""
+def test_ot_setup_help_exposes_global_auth_not_project_review_policy():
+    result = _invoke_main(["setup", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "auth" in result.output
+    assert "review-policy" not in result.output
+    assert "entity-parser" not in result.output
+
+
+def test_ot_init_rejects_legacy_flags(tmp_path, monkeypatch):
+    """V22: invoking ``ot init --remote ...`` is a usage error."""
     project_dir = tmp_path / "fresh-project"
     project_dir.mkdir()
     monkeypatch.chdir(project_dir)
@@ -310,11 +218,6 @@ def test_ot_init_emits_deprecation_warning_for_legacy_flags(tmp_path, monkeypatc
     )
 
     result = _invoke_main(["init", "--remote", "me/legacy-remote", "--no-hook"])
-    assert result.exit_code == 0, (result.output, result.stderr)
+    assert result.exit_code != 0, (result.output, result.stderr)
     combined = (result.stderr or "") + (result.output or "")
-    assert "deprecated" in combined.lower(), combined
-    # Migration target hints should mention the new commands.
-    assert (
-        "ot setup git" in combined
-        or "ot dataset remote" in combined
-    ), combined
+    assert "No such option" in combined, combined

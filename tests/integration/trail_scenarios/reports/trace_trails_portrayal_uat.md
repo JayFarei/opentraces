@@ -45,17 +45,17 @@ Pass criteria:
 - hook-boundary filesystem observation records the generated file mutation
 - watcher backstop attributes that observation to the firm step window
 - maturation creates exactly one reviewer-grade Git Anchor
-- `trail explain`, `blame`, `graph`, `trail search`, and `trail play` expose the same anchored trail
+- `trail explain`, `blame`, `graph`, `trail search`, and `trail timeline` expose the same anchored trail
 
 Reviewer commands represented in the packet:
 
 ```text
 opentraces trail explain --commit <commit_sha> --project <scratch_repo> --json
 opentraces trail explain --trace <trace_id> --step <step_index> --project <scratch_repo> --json
-opentraces blame <commit_sha> --project <scratch_repo> --json
-opentraces graph --project <scratch_repo> --json
+opentraces trail blame <commit_sha> --project <scratch_repo> --json
+opentraces trail graph --project <scratch_repo> --json
 opentraces trail search --commit <commit_sha> --project <scratch_repo> --json
-opentraces trail play <trace_id> --project <opened_workspace> --json
+opentraces trail timeline <trace_id> --project <opened_workspace> --json
 ```
 
 ## Scenario 2: installed_runtime_watcher_tick
@@ -81,8 +81,8 @@ Reviewer commands represented in the packet:
 opentraces --json setup git
 opentraces watcher tick --project <scratch_repo> --json
 opentraces trail explain --trace <trace_id> --step <step_index> --project <scratch_repo> --json
-opentraces blame <commit_sha> --project <scratch_repo> --json
-opentraces graph --project <scratch_repo> --json
+opentraces trail blame <commit_sha> --project <scratch_repo> --json
+opentraces trail graph --project <scratch_repo> --json
 opentraces trail search --commit <commit_sha> --project <scratch_repo> --json
 ```
 

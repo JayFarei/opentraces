@@ -178,12 +178,12 @@ def _full_stack_scenario(summary: dict[str, Any]) -> dict[str, Any]:
             ),
             _command(
                 "Blame commit",
-                "opentraces blame <commit_sha> --project <scratch_repo> --json",
+                "opentraces trail blame <commit_sha> --project <scratch_repo> --json",
                 "commands.blame_commit",
             ),
             _command(
                 "Graph",
-                "opentraces graph --project <scratch_repo> --json",
+                "opentraces trail graph --project <scratch_repo> --json",
                 "commands.graph",
             ),
             _command(
@@ -193,7 +193,7 @@ def _full_stack_scenario(summary: dict[str, Any]) -> dict[str, Any]:
             ),
             _command(
                 "Play trace",
-                "opentraces trail play <trace_id> --project <opened_workspace> --json",
+                "opentraces trail timeline <trace_id> --project <opened_workspace> --json",
                 "commands.opened_trail_play",
             ),
         ],
@@ -289,12 +289,12 @@ def _installed_runtime_scenario(summary: dict[str, Any]) -> dict[str, Any]:
             ),
             _command(
                 "Blame commit",
-                "opentraces blame <commit_sha> --project <scratch_repo> --json",
+                "opentraces trail blame <commit_sha> --project <scratch_repo> --json",
                 "commands.blame_commit",
             ),
             _command(
                 "Graph",
-                "opentraces graph --project <scratch_repo> --json",
+                "opentraces trail graph --project <scratch_repo> --json",
                 "commands.graph",
             ),
             _command(

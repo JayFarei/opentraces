@@ -499,14 +499,14 @@ def _anchor_observations(
     return observations, descendant_count, limitations
 
 
-def _follow(
+def _sync(
     repo: Path,
     *,
     trace_patch_id: str | None = None,
     git_anchor_id: str | None = None,
     history_limit: int | None = None,
 ) -> dict[str, Any]:
-    """Walk a Trace Patch through Git history and report survival.
+    """Sync a Trace Patch against Git history and report survival.
 
     Limitation field scoping is deliberately three-level:
 
@@ -522,7 +522,7 @@ def _follow(
     These fields are deliberately distinct from the Phase 5 ``capture_limitations``
     vocabulary on TrailEvents. Capture limitations describe what the capture
     pipeline observed during a session; trail/observation limitations describe
-    what the follow projection could compute at query time over current repo
+    what the sync projection could compute at query time over current repo
     state.
     """
     effective_limit = history_limit if history_limit is not None else PATCH_TRAIL_COMMIT_LIMIT
@@ -644,21 +644,21 @@ def _follow(
     }
 
 
-def follow_patch(
+def sync_patch(
     repo: Path,
     trace_patch_id: str,
     *,
     history_limit: int | None = None,
 ) -> dict[str, Any]:
-    """Follow survival for all Git Anchors attached to a Trace Patch."""
-    return _follow(repo, trace_patch_id=trace_patch_id, history_limit=history_limit)
+    """Sync survival for all Git Anchors attached to a Trace Patch."""
+    return _sync(repo, trace_patch_id=trace_patch_id, history_limit=history_limit)
 
 
-def follow_anchor(
+def sync_anchor(
     repo: Path,
     git_anchor_id: str,
     *,
     history_limit: int | None = None,
 ) -> dict[str, Any]:
-    """Follow survival for one Git Anchor."""
-    return _follow(repo, git_anchor_id=git_anchor_id, history_limit=history_limit)
+    """Sync survival for one Git Anchor."""
+    return _sync(repo, git_anchor_id=git_anchor_id, history_limit=history_limit)

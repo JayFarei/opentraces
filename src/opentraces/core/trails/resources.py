@@ -16,7 +16,7 @@ from .contract import (
     typed_limitations,
 )
 from .event_log import EVENT_LOG_REF, read_events
-from .follow import follow_anchor, follow_patch
+from .sync import sync_anchor, sync_patch
 from .ids import (
     git_anchor_ref,
     git_commit_ref,
@@ -395,7 +395,7 @@ def _resolve_trace_patch_trail_by_id(
             _git_anchor_view(anchor, containing_segment_id=containing_segment_id)
             for anchor, _event in anchors
         ],
-        "trail": follow_patch(repo, trace_patch_id),
+        "trail": sync_patch(repo, trace_patch_id),
         "event_log_ref": EVENT_LOG_REF,
         "source_events": [_source_event(patch_event)]
         + [_source_event(event) for _anchor, event in anchors],
@@ -440,7 +440,7 @@ def _resolve_git_anchor(repo: Path, resource: str, segments: list[str]) -> dict[
         "containing_segment_id": containing_segment_id,
         "trace_slice": trace_slice,
         "git_anchor": _git_anchor_view(anchor, containing_segment_id=containing_segment_id),
-        "trail": follow_anchor(repo, git_anchor_id),
+        "trail": sync_anchor(repo, git_anchor_id),
         "event_log_ref": EVENT_LOG_REF,
         "source_events": [_source_event(anchor_event)],
     }

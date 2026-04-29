@@ -9,7 +9,7 @@ from opentraces.cli.dataset import dataset_group
 from opentraces.core.datasets import append_rows, dataset_path
 
 
-def test_dataset_cli_new_list_show_check_export_rm_round_trip(tmp_path):
+def test_dataset_cli_new_list_show_check_export_remove_round_trip(tmp_path):
     runner = CliRunner()
 
     created = runner.invoke(
@@ -66,7 +66,7 @@ def test_dataset_cli_new_list_show_check_export_rm_round_trip(tmp_path):
     assert json.loads(exported.output)["export"]["row_count"] == 1
     assert json.loads(output.read_text()) == row
 
-    removed = runner.invoke(dataset_group, ["rm", "grill-me-intents", "--yes", "--json"])
+    removed = runner.invoke(dataset_group, ["remove", "grill-me-intents", "--yes", "--json"])
     assert removed.exit_code == 0, removed.output
     assert not dataset_path("grill-me-intents").exists()
 

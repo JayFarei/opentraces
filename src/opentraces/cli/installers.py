@@ -1,4 +1,4 @@
-"""CLI installers/admin group: setup, blame, resume, doctor, llm-review."""
+"""CLI installers/admin group: setup, doctor, and supporting setup actions."""
 from __future__ import annotations
 
 import logging
@@ -12,7 +12,6 @@ import click
 from opentraces import cli as _cli
 from . import main
 from ..core.config import save_config  # noqa: F401
-from ..core.trace_meta import short_trace_id
 
 
 def load_config():
@@ -67,11 +66,12 @@ def setup_group(ctx: click.Context) -> None:
                     Claude Code step boundaries and session transcripts.
       git           post-commit hook that correlates each commit to the
                     trace that produced it (via refs/notes/opentraces),
-                    powering `opentraces blame` and git-linked uploads.
+                    powering `opentraces trail blame`.
+      auth          HuggingFace login for dataset remotes.
       trufflehog    Tier 1.5 secret scanner. Findings redact in place
-                    and force review before push.
-      llm-review    Tier 2 third-party LLM reviewer for staged traces,
-                    used by `opentraces llm-review` and `push --llm-review`.
+                    and block unsafe dataset publication.
+      llm-review    Tier 2 third-party LLM reviewer for dataset rows,
+                    used by dataset publication gates.
 
     Run bare ``opentraces setup`` for an interactive wizard that walks every
     integration, or call a subcommand to target one directly.
@@ -107,7 +107,7 @@ def _run_setup_wizard() -> None:
 
     Order (mandatory with opt-out, then optional):
       1. claude-code / git / skill hooks  (hook installers, default yes)
-      2. watcher                          (powers 'opentraces blame', default yes)
+      2. watcher                          (powers 'opentraces trail blame', default yes)
       3. entity-parser (sem)              (richer commit diffs, default yes)
       4. HuggingFace login                (log in now or skip)
       5. trufflehog                       (global config, default no)
@@ -148,7 +148,7 @@ def _run_setup_wizard() -> None:
             for note in result.notes:
                 human_echo(f"    {_cli._err('skip')}: {note}")
 
-    # 2. Watcher — default yes. Powers "opentraces blame" by running
+    # 2. Watcher — default yes. Powers "opentraces trail blame" by running
     #    incremental backfill in the background after each commit.
     w_st = _winst.status()
     w_label = (
@@ -159,7 +159,7 @@ def _run_setup_wizard() -> None:
         if _wizard_confirm(
             "install the attribution watcher?",
             default=True,
-            hint="powers 'opentraces blame' on every new commit",
+            hint="powers 'opentraces trail blame' on every new commit",
         ):
             try:
                 path = _winst.install()
@@ -200,7 +200,7 @@ def _run_setup_wizard() -> None:
         if _wizard_confirm(
             "log into HuggingFace now?",
             default=True,
-            hint="needed to push traces; skip and run 'opentraces auth login' later",
+            hint="needed for dataset remotes; skip and run 'opentraces setup auth' later",
         ):
             try:
                 from ..core.config import save_credentials, CREDENTIALS_PATH
@@ -258,136 +258,8 @@ def _run_setup_wizard() -> None:
         f"  • to inspect health:   {_cli._bold('opentraces doctor')}"
     )
     human_echo(
-        f"  • security / review policy are per-project — set them at "
-        f"{_cli._bold('opentraces init')} time."
+        f"  • dataset review policy lives in the dataset manifest and review commands."
     )
-
-
-@main.command(
-    "blame",
-    examples=[
-        "opentraces blame",
-        "opentraces blame abc1234",
-        "opentraces blame HEAD~3 --json",
-    ],
-    see_also=[
-        ("opentraces resume", "re-open the trace's Claude session"),
-        ("opentraces setup git", "install the post-commit hook"),
-    ],
-)
-@click.argument("commit", default="HEAD")
-@click.option("--json", "json_out", is_flag=True, help="Emit machine-readable JSON")
-def blame_cmd(commit: str, json_out: bool) -> None:
-    """Resolve a commit to the traces behind it.
-
-    COMMIT is any git ref: a sha (short or full), branch name, or `HEAD~N`.
-    Traces are linked via `refs/notes/opentraces` written by the post-commit
-    hook (install with ``opentraces setup git``).
-    """
-    from ..core.config import get_project_traces_dir
-    from ..core.inbox import load_trace_records
-    from ..enrichment.git import blame as git_blame
-    from opentraces import cli as _cli
-
-    cwd = Path.cwd()
-    full_sha, hits = git_blame.blame_commit(commit, cwd)
-
-    if not hits:
-        if json_out:
-            emit_json({"commit": full_sha, "traces": []})
-            return
-        human_echo(f"no opentraces notes attached to {full_sha[:10]}")
-        human_hint(
-            "install the hook with 'opentraces setup git' and commit to "
-            "start correlating; old commits can't be backfilled."
-        )
-        return
-
-    staging = get_project_traces_dir(cwd)
-    traces_by_id = {r.trace_id: r for r in load_trace_records(staging)}
-
-    if json_out:
-        emit_json({
-            "commit": full_sha,
-            "traces": [
-                {
-                    "trace_id": h.trace_id,
-                    "session_id": getattr(traces_by_id.get(h.trace_id), "session_id", None),
-                    "url": h.url,
-                }
-                for h in hits
-            ],
-        })
-        return
-
-    human_echo(
-        f"commit {_cli._bold(full_sha[:10])} has {len(hits)} "
-        f"trace{'s' if len(hits) != 1 else ''}:"
-    )
-    human_echo("")
-    for h in hits:
-        rec = traces_by_id.get(h.trace_id)
-        session_id = getattr(rec, "session_id", None) if rec else None
-        label = None
-        if rec is not None:
-            label, _src = _cli._describe_trace(rec)
-            if label and len(label) > 70:
-                label = label[:69] + "…"
-        human_echo(f"  {_cli._dim('trace:  ')} {h.trace_id}")
-        if label:
-            human_echo(f"  {_cli._dim('task:   ')} {label}")
-        if session_id:
-            human_echo(
-                f"  {_cli._dim('resume: ')} opentraces resume {h.trace_id}  "
-                f"{_cli._dim(f'(claude session {session_id[:8]})')}"
-            )
-        if h.url:
-            human_echo(f"  {_cli._dim('url:    ')} {h.url}")
-        human_echo("")
-
-
-@main.command("resume")
-@click.argument("trace_id")
-@click.option("--exec", "do_exec", is_flag=True, help="Exec the claude resume command instead of printing it.")
-def resume_cmd(trace_id: str, do_exec: bool) -> None:
-    """Resume the agent session that produced a trace.
-
-    Looks up the trace's session_id and either prints the resume command
-    (default) or execs it with --exec. Pairs naturally with `blame <sha>`
-    to re-open the session behind a given commit.
-    """
-    from ..capture.claude_code.resume import ResumeError, resolve
-    from ..core.config import get_project_traces_dir, project_is_opted_in
-    from opentraces import cli as _cli
-
-    if not project_is_opted_in(Path.cwd()):
-        human_echo("Not an opentraces project. Run 'opentraces init' first.")
-        sys.exit(3)
-
-    staging = get_project_traces_dir(Path.cwd())
-    try:
-        target = resolve(trace_id, staging)
-    except ResumeError as e:
-        human_echo(e.message)
-        sys.exit({"NO_MATCH": 3, "AMBIGUOUS": 3, "NO_SESSION": 4}.get(e.code, 3))
-
-    if do_exec:
-        import shutil as _sh
-        if _sh.which("claude") is None:
-            human_echo("'claude' not on PATH. Install Claude Code or run the command manually.")
-            human_echo(f"  {target.command}")
-            sys.exit(5)
-        os.execvp(target.argv[0], target.argv)
-
-    human_echo(f"{_cli._dim('session:')} {target.session_id}")
-    human_echo(f"{_cli._dim('run:')}     {_cli._bold(target.command)}")
-    human_echo(f"{_cli._dim('or:')}      opentraces resume {short_trace_id(trace_id)} --exec")
-    emit_json({
-        "trace_id": target.trace_id,
-        "session_id": target.session_id,
-        "resume_command": target.command,
-    })
-
 
 @setup_group.command(
     "claude-code",
@@ -421,7 +293,7 @@ def setup_claude_code(
     """Install the Claude Code session-capture hooks.
 
     Registers two hooks in ~/.claude/settings.json so every Claude Code
-    session is enriched in place, ready for `opentraces push` to parse:
+    session is enriched in place, ready for OpenTraces ingestion:
 
     \b
       Stop         appends a git-state snapshot (branch, HEAD, dirty files)
@@ -495,7 +367,7 @@ def setup_claude_code(
         "hooks_added": result.added,
         "next_steps": [
             "Hooks are now active for all future Claude Code sessions.",
-            "Re-run 'opentraces push' after sessions to include enriched data.",
+            "Use 'opentraces trace query' and dataset workflows after sessions.",
         ],
     })
 
@@ -507,7 +379,7 @@ def setup_claude_code(
         "opentraces setup git --remove",
     ],
     see_also=[
-        ("opentraces blame", "resolve a commit to its contributing traces"),
+        ("opentraces trail blame", "resolve a commit to its contributing traces"),
         ("opentraces setup claude-code", "install session capture hooks"),
     ],
 )
@@ -520,10 +392,9 @@ def setup_git(remove: bool) -> None:
     Edit/Write tool calls produced its changes. This powers:
 
     \b
-      opentraces blame <commit>   resolve a commit back to contributing
+      opentraces trail blame <commit>
+                                  resolve a commit back to contributing
                                   traces and the agent context behind them.
-      opentraces push             uploads carry git-link metadata so
-                                  consumers can trace a line to its session.
 
     Old commits cannot be backfilled, correlation starts from the first
     commit after install. Use --remove to uninstall.
@@ -804,17 +675,17 @@ def _render_trufflehog_success(version: str, *, already_present: bool,
     elif method:
         human_echo(f"  {_cli._dim(f'installed via {method}')}")
     human_echo("")
-    human_echo(f"  {_cli._bold('From now on:')} every staged and pushed trace is scanned.")
-    human_echo(f"  {_cli._dim('Findings are redacted in place and require review before push.')}")
+    human_echo(f"  {_cli._bold('From now on:')} dataset publication gates can use TruffleHog.")
+    human_echo(f"  {_cli._dim('Findings are redacted in place and require review before publication.')}")
     human_echo("")
     human_echo(f"  {_cli._dim('disable:')}        opentraces setup trufflehog --disable")
     human_echo(f"  {_cli._dim('re-enable:')}      opentraces setup trufflehog --enable")
-    human_echo(f"  {_cli._dim('skip one push:')}  opentraces push --no-trufflehog")
+    human_echo(f"  {_cli._dim('publish gate:')}    opentraces dataset publish <name> --check-only")
     human_echo(f"  {_cli._dim('health check:')}   opentraces doctor")
 
 
 # ---------------------------------------------------------------------------
-# Review-LLM setup (opt-in Tier 2: third-party LLM review of staged traces)
+# Review-LLM setup (opt-in Tier 2: third-party LLM review for dataset egress)
 # ---------------------------------------------------------------------------
 
 
@@ -1093,13 +964,12 @@ def setup_review_llm_cmd(
     no_interactive: bool,
     scope_project: bool = False,
 ) -> None:
-    """Configure the Tier 2 LLM reviewer for staged traces.
+    """Configure the Tier 2 LLM reviewer for dataset publication gates.
 
     Points opentraces at an OpenAI-compatible, Ollama, Anthropic, or
-    fake backend that reads each staged trace and flags residual
+    fake backend that can review outgoing dataset rows and flag residual
     sensitive content the regex/entropy/TruffleHog tiers could miss
-    (semantic PII, proprietary context, policy concerns). Used by
-    `opentraces llm-review` and `opentraces push --llm-review`.
+    (semantic PII, proprietary context, policy concerns).
 
     Stored globally in ~/.opentraces/config.json under
     security.llm_review. One config per machine, projects inherit it.
@@ -1185,9 +1055,8 @@ def setup_review_llm_cmd(
         human_echo(f"  {_cli._dim('api key:   ')} ${rc.api_key_env} ({present})")
     human_echo(f"  {_cli._dim('reachable: ')} {message}")
     human_echo("")
-    human_echo(f"  {_cli._bold('To run:')} opentraces llm-review  "
-               f"{_cli._dim('(staged traces; out-of-band, not automatic)')}")
-    human_echo(f"  {_cli._dim('gate push:')}     opentraces push --llm-review")
+    human_echo(f"  {_cli._bold('To run:')} opentraces dataset publish <name> --check-only")
+    human_echo(f"  {_cli._dim('scope:')}         dataset publication gates; upload remains explicit")
     human_echo(f"  {_cli._dim('disable:')}       opentraces setup llm-review --disable")
     human_echo(f"  {_cli._dim('health check:')}  opentraces doctor")
 
@@ -1195,83 +1064,6 @@ def setup_review_llm_cmd(
         "status": "ok", "action": "install",
         "llm_review": _review_llm_config_from_cfg(cfg),
         "reachable": ok, "message": message,
-    })
-
-
-@setup_group.command("review-policy")
-@click.option("--auto", "set_auto", is_flag=True,
-              help="Skip human review for safe traces (auto-approve).")
-@click.option("--review", "set_review", is_flag=True,
-              help="Require human review on every trace.")
-@click.option("--print", "print_only", is_flag=True,
-              help="Print the current project review policy and exit.")
-@click.option("--project", "scope_project", is_flag=True, default=True,
-              help="Always scoped to project (this command's default; flag accepted for surface consistency).")
-def setup_review_policy_cmd(
-    set_auto: bool, set_review: bool, print_only: bool, scope_project: bool = True,
-) -> None:
-    """Set this project's review policy.
-
-    Flips the ``review_policy`` field in ``.opentraces/config.json``:
-
-    \b
-        opentraces setup review-policy --review   require manual approval
-        opentraces setup review-policy --auto     auto-approve safe traces into staged
-        opentraces setup review-policy --print    show current value
-
-    Equivalent to re-running ``opentraces init --review-policy ...`` but
-    without touching the rest of the project config. Must be run from a
-    directory that has already been initialized.
-    """
-    from ..core.config import (
-        ProjectConfig,
-        load_project_config,
-        project_is_opted_in,
-        save_project_config,
-    )
-
-    cwd = Path.cwd()
-    if not project_is_opted_in(cwd):
-        human_hint(
-            "no .opentraces.json marker here — run 'opentraces init' first"
-        )
-        emit_json({"status": "error", "error": "not-initialized"})
-        sys.exit(2)
-
-    raw = load_project_config(cwd)
-    current = raw.get("review_policy", "review")
-
-    if print_only or (not set_auto and not set_review):
-        human_echo(f"review policy: {_cli._bold(current)}")
-        emit_json({"status": "ok", "review_policy": current})
-        return
-
-    if set_auto and set_review:
-        human_hint("pass only one of --auto / --review")
-        emit_json({"status": "error", "error": "conflicting-flags"})
-        sys.exit(2)
-
-    new_value = "auto" if set_auto else "review"
-    if new_value == current:
-        human_echo(f"review policy already {_cli._bold(current)}")
-        emit_json({"status": "ok", "action": "noop", "review_policy": current})
-        return
-
-    raw["review_policy"] = new_value
-    # Validate before writing so we never persist a bad config.
-    ProjectConfig.model_validate(raw)
-    save_project_config(cwd, raw)
-
-    human_echo(
-        f"review policy: {_cli._dim(current)} → {_cli._bold(new_value)}"
-    )
-    if new_value == "auto":
-        human_echo(f"  {_cli._dim('safe traces will auto-approve into staged; push remains explicit')}")
-    else:
-        human_echo(f"  {_cli._dim('every trace needs manual approval before push')}")
-    emit_json({
-        "status": "ok", "action": "update",
-        "review_policy": new_value, "previous": current,
     })
 
 
@@ -1467,8 +1259,8 @@ def _tier_toggle_hint(state: str, tier: dict) -> str | None:
         return f"disable: {disable}" if disable else None
     if state == "on-demand":
         return [
-            "run: opentraces llm-review",
-            "gate push: opentraces push --llm-review",
+            "run: opentraces dataset publish <name> --check-only",
+            "upload: opentraces dataset publish <name>",
             f"reconfigure: {enable}" if enable else "",
         ]
     if state == "missing":
@@ -1646,8 +1438,8 @@ def _opted_in_section(info: dict) -> None:
     if not count:
         human_echo(f"  {_cli._dim('(none — run opentraces init in a project to opt in)')}")
         return
-    human_echo(f"  {_cli._dim(f'{count} project(s) registered — list with: opentraces list --projects')}")
-    # Show at most 3 to keep doctor compact; full list via the command.
+    human_echo(f"  {_cli._dim(f'{count} project(s) registered')}")
+    # Show at most 3 to keep doctor compact.
     for p in paths[:3]:
         human_echo(f"    {_cli._dim(p)}")
     if len(paths) > 3:
@@ -1895,7 +1687,7 @@ def _persist_llm_verdicts(staging_dir: Path, outcome, state) -> None:
     ],
     see_also=[
         ("opentraces setup llm-review", "configure the LLM"),
-        ("opentraces push --llm-review", "gate uploads on a clean verdict"),
+        ("opentraces dataset publish <name> --check-only", "run publication gates without upload"),
     ],
     option_groups=[
         ("API overrides", ["api_format", "model", "base_url", "api_key_env"]),
@@ -2116,6 +1908,7 @@ def setup_upgrade(ctx: click.Context, skill_only: bool) -> None:
 
 @setup_group.command(
     "entity-parser",
+    hidden=True,
     examples=[
         "opentraces setup entity-parser",
         "opentraces setup entity-parser --force",
@@ -2135,7 +1928,7 @@ def setup_entity_parser(force: bool) -> None:
     The entity parser is a separate binary (distributed via the opentraces
     release channel) that turns a commit diff into a structured entity
     change list: added/modified/renamed/deleted functions, classes, etc.
-    It powers the richer side of `opentraces blame` and the per-commit
+    It powers the richer side of `opentraces trail blame` and the per-commit
     entity cache under ~/.opentraces/projects/<slug>/entities/.
 
     Honours $OPENTRACES_ENTITY_BIN for airgapped installs: set it to a

@@ -257,7 +257,7 @@ def _export_workspace(
     monkeypatch.chdir(source)
     export_result = runner.invoke(
         main,
-        ["trace", "workspace", "export", trace_id, "--output", str(workspace)],
+        ["trail", "teleport", "export", trace_id, "--output", str(workspace)],
         catch_exceptions=False,
     )
     assert export_result.exit_code == 0, export_result.output
@@ -283,7 +283,7 @@ def _export_workspace_with_patch_anchor(
     monkeypatch.chdir(source)
     export_result = runner.invoke(
         main,
-        ["trace", "workspace", "export", trace_id, "--output", str(workspace)],
+        ["trail", "teleport", "export", trace_id, "--output", str(workspace)],
         catch_exceptions=False,
     )
     assert export_result.exit_code == 0, export_result.output
@@ -299,8 +299,8 @@ def _open_workspace(
     result = runner.invoke(
         main,
         [
-            "trace",
-            "workspace",
+            "trail",
+            "teleport",
             "open",
             str(workspace),
             "--project",
@@ -333,12 +333,12 @@ def test_trail_play_default_renders_human_graph(
 
     result = runner.invoke(
         main,
-        ["trail", "play", trace_id, "--project", str(imported)],
+        ["trail", "timeline", trace_id, "--project", str(imported)],
         catch_exceptions=False,
     )
 
     assert result.exit_code == 0, result.output
-    assert result.output.startswith(f"Trace play for t:{trace_id[:8]}\n")
+    assert result.output.startswith(f"Trace timeline for t:{trace_id[:8]}\n")
     assert "Workspace: trace-workspace-" in result.output
     assert "Source repo: unavailable" in result.output
     assert "2 snapshots · 1 Trace Patch anchored in Git" in result.output
@@ -348,7 +348,7 @@ def test_trail_play_default_renders_human_graph(
     assert "◇ snap:" in result.output
     assert f"tree:{recorded_tree[:8]}" in result.output
     assert "checkout: opentraces trail snapshot checkout " in result.output
-    assert f"resume: opentraces resume {trace_id} --at-step s2" in result.output
+    assert f"resume: opentraces trail resume {trace_id} --at-step s2" in result.output
     assert f"◇ tp:{ids['trace_patch_id'][:8]}  app.py  landed_exact" in result.output
     assert f"● c:{commit_sha[:8]}  ga:{ids['git_anchor_id'][:8]}" in result.output
     assert "evidence: exact range match · firm" in result.output
@@ -377,7 +377,7 @@ def test_trail_play_table_renders_scan_friendly_rows(
 
     result = runner.invoke(
         main,
-        ["trail", "play", trace_id, "--table", "--project", str(imported)],
+        ["trail", "timeline", trace_id, "--table", "--project", str(imported)],
         catch_exceptions=False,
     )
 
@@ -420,7 +420,7 @@ def test_trail_play_json_uses_imported_events_not_original_repository(
 
     result = runner.invoke(
         main,
-        ["trail", "play", trace_id, "--json", "--project", str(imported)],
+        ["trail", "timeline", trace_id, "--json", "--project", str(imported)],
         catch_exceptions=False,
     )
 
@@ -459,7 +459,7 @@ def test_trace_workspace_import_replays_and_resumes_without_source_repo(
 
     play_result = runner.invoke(
         main,
-        ["trail", "play", trace_id, "--json", "--project", str(imported)],
+        ["trail", "timeline", trace_id, "--json", "--project", str(imported)],
         catch_exceptions=False,
     )
     assert play_result.exit_code == 0, play_result.output
@@ -477,7 +477,7 @@ def test_trace_workspace_import_replays_and_resumes_without_source_repo(
     monkeypatch.chdir(imported)
     resume_result = runner.invoke(
         main,
-        ["resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
+        ["trail", "resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
         catch_exceptions=False,
     )
     assert resume_result.exit_code == 0, resume_result.output
@@ -632,8 +632,8 @@ def test_trace_workspace_export_unknown_trace_returns_error(
     result = runner.invoke(
         main,
         [
-            "trace",
-            "workspace",
+            "trail",
+            "teleport",
             "export",
             "tr-unknown",
             "--output",
@@ -666,8 +666,8 @@ def test_trace_workspace_open_rejects_missing_snapshot_tree(
     result = runner.invoke(
         main,
         [
-            "trace",
-            "workspace",
+            "trail",
+            "teleport",
             "open",
             str(workspace),
             "--project",
@@ -699,7 +699,7 @@ def test_resume_from_snapshot_packet_is_filtered_and_records_fork_lineage(
     monkeypatch.chdir(imported)
     result = runner.invoke(
         main,
-        ["resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
+        ["trail", "resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
         catch_exceptions=False,
     )
 
@@ -754,7 +754,7 @@ def test_resume_from_snapshot_execution_hands_off_to_claude_in_materialized_work
          patch("os.chdir") as chdir_mock:
         result = runner.invoke(
             main,
-            ["resume", trace_id, "--at-step", "s2"],
+            ["trail", "resume", trace_id, "--at-step", "s2"],
             catch_exceptions=False,
         )
 
@@ -809,7 +809,7 @@ def test_trace_workspace_resume_executes_claude_subprocess_end_to_end(
     workspace = tmp_path / "trace-workspace"
 
     export_result = _run_cli_subprocess(
-        ["trace", "workspace", "export", trace_id, "--output", str(workspace), "--json"],
+        ["trail", "teleport", "export", trace_id, "--output", str(workspace), "--json"],
         cwd=source,
     )
     export_payload = json.loads(export_result.stdout)
@@ -821,8 +821,8 @@ def test_trace_workspace_resume_executes_claude_subprocess_end_to_end(
     imported = tmp_path / "blank-import-subprocess"
     _run_cli_subprocess(
         [
-            "trace",
-            "workspace",
+            "trail",
+            "teleport",
             "open",
             str(workspace),
             "--project",
@@ -833,7 +833,7 @@ def test_trace_workspace_resume_executes_claude_subprocess_end_to_end(
     )
 
     play_result = _run_cli_subprocess(
-        ["trail", "play", trace_id, "--json", "--project", str(imported)],
+        ["trail", "timeline", trace_id, "--json", "--project", str(imported)],
         cwd=tmp_path,
     )
     play_payload = json.loads(play_result.stdout)
@@ -841,7 +841,7 @@ def test_trace_workspace_resume_executes_claude_subprocess_end_to_end(
     assert str(source_unavailable) not in play_result.stdout
 
     dry_run = _run_cli_subprocess(
-        ["resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
+        ["trail", "resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
         cwd=imported,
     )
     dry_payload = json.loads(dry_run.stdout)
@@ -864,7 +864,7 @@ def test_trace_workspace_resume_executes_claude_subprocess_end_to_end(
     shim.chmod(0o755)
 
     exec_result = _run_cli_subprocess(
-        ["resume", trace_id, "--at-step", "s2"],
+        ["trail", "resume", trace_id, "--at-step", "s2"],
         cwd=imported,
         env={
             "PATH": f"{shim_dir}{os.pathsep}{os.environ.get('PATH', '')}",
@@ -911,7 +911,7 @@ def test_resume_from_snapshot_reports_missing_snapshot_as_unknown(
 
     result = runner.invoke(
         main,
-        ["resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
+        ["trail", "resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
         catch_exceptions=False,
     )
 
@@ -938,7 +938,7 @@ def test_resume_from_pre_04_trace_requires_snapshot_resume_contract(
 
     result = runner.invoke(
         main,
-        ["resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
+        ["trail", "resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
         catch_exceptions=False,
     )
 
@@ -975,7 +975,7 @@ def test_resume_from_snapshot_rejects_malformed_step_without_traceback(
 
     result = runner.invoke(
         main,
-        ["resume", trace_id, "--at-step", "not-a-step", "--dry-run", "--json"],
+        ["trail", "resume", trace_id, "--at-step", "not-a-step", "--dry-run", "--json"],
         catch_exceptions=False,
     )
 
@@ -1010,7 +1010,7 @@ def test_resume_at_step_rejects_non_claude_agent(
 
     result = runner.invoke(
         main,
-        ["resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
+        ["trail", "resume", trace_id, "--at-step", "s2", "--dry-run", "--json"],
         catch_exceptions=False,
     )
 

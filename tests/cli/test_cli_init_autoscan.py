@@ -100,9 +100,6 @@ def test_init_with_import_existing_populates_inbox_via_scan(
 
     result = runner.invoke(main, [
         "init",
-        "--review-policy", "review",
-        "--remote", "test/opentraces",
-        "--no-hook",
         "--import-existing",
     ])
     assert result.exit_code == 0, result.output
@@ -147,9 +144,6 @@ def test_init_start_fresh_leaves_inbox_empty(
 
     result = runner.invoke(main, [
         "init",
-        "--review-policy", "review",
-        "--remote", "test/opentraces",
-        "--no-hook",
         "--start-fresh",
     ])
     assert result.exit_code == 0, result.output

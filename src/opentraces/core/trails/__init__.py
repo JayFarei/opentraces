@@ -17,7 +17,7 @@ from .event_log import (
 )
 from .exact import append_exact_patch_trail
 from .explain import explain_commit, explain_file_line, explain_trace_step
-from .follow import follow_anchor, follow_patch
+from .sync import sync_anchor, sync_patch
 from .models import GitObjectID, TrailEvent, TrailEventDraft
 from .maturation import MaturationSummary, has_unsearched_recent_patches, mature_trails
 from .query import (
@@ -84,8 +84,8 @@ __all__ = [
     "explain_file_line",
     "open_step_window",
     "explain_trace_step",
-    "follow_anchor",
-    "follow_patch",
+    "sync_anchor",
+    "sync_patch",
     "has_unsearched_recent_patches",
     "export_trace_workspace",
     "list_trace_snapshots",

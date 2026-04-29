@@ -130,18 +130,18 @@ def run_local() -> dict[str, Any]:
             runner = CliRunner()
             command_transcripts: list[dict[str, Any]] = []
 
-            workflow_new, workflow_payload = _invoke(
+            workflow_create, workflow_payload = _invoke(
                 runner,
                 [
                     "workflow",
-                    "new",
+                    "create",
                     "grill-me-intent-curator",
                     "--description",
                     "Build rows for the grill-me-intents dataset",
                     "--json",
                 ],
             )
-            command_transcripts.append(workflow_new)
+            command_transcripts.append(workflow_create)
             workflow_digest = workflow_payload["workflow"]["digest"]
 
             dataset_new, _ = _invoke(

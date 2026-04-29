@@ -134,7 +134,7 @@ def test_formatter_divergence_downgrades_firmness_not_identity(
     # Firmness downgraded.
     assert anchor["evidence_tier"] == "structural_match"
     assert anchor["evidence_firmness"] == "provisional"
-    # Path and range are still recorded so trail follow / explain work.
+    # Path and range are still recorded so trail sync / explain work.
     assert anchor["path"] == "config.py"
     assert anchor["range"]["start_line"] == 1
     assert anchor["range"]["end_line"] == 1

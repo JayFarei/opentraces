@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -43,6 +42,27 @@ def isolated_config(tmp_path, monkeypatch):
         monkeypatch.setattr(mod, "CONFIG_PATH", opentraces_dir / "config.json")
         monkeypatch.setattr(mod, "CREDENTIALS_PATH", opentraces_dir / "credentials")
         monkeypatch.setattr(mod, "PROJECTS_DIR", projects_dir)
+    from opentraces.core import doctor as _doctor
+    monkeypatch.setattr(_doctor, "find_trufflehog", lambda: None)
+    monkeypatch.setattr(_doctor, "_trace_index_status", lambda: {"health": "not-built"})
+    monkeypatch.setattr(_doctor, "_trail_event_log_status", lambda _cwd: {"status": "not-found"})
+    monkeypatch.setattr(_doctor, "_post_commit_hook_status", lambda _cwd: {"installed": False})
+    monkeypatch.setattr(_doctor, "_attribution_status", lambda _cwd: {"health": "not-initialized"})
+    monkeypatch.setattr(_doctor, "_entity_parser_status", lambda: {"installed": False})
+    monkeypatch.setattr(
+        _doctor,
+        "_watcher_status",
+        lambda: {
+            "platform": "test",
+            "installed": False,
+            "running": False,
+            "last_run_at": None,
+            "interval_seconds": None,
+            "unit_path": None,
+            "health": "not-installed",
+        },
+    )
+    monkeypatch.setattr(_doctor, "_hook_installers", lambda: [])
     return opentraces_dir
 
 
@@ -148,42 +168,11 @@ class TestSetupTruffleHogDisable:
         assert payload["trufflehog_enabled"] is False
 
 
-class TestSetupReviewPolicy:
-    def test_errors_without_init(self, runner, isolated_config, tmp_path) -> None:
-        with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(main, ["setup", "review-policy", "--auto"])
-            assert result.exit_code == 2, result.output
-            payload = _extract_json(result.output)
-            assert payload["error"] == "not-initialized"
-
-    def test_flips_review_to_auto(self, runner, isolated_config, tmp_path) -> None:
-        from opentraces.core.config import save_project_config, load_project_config
-        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
-            save_project_config(Path(td), {"review_policy": "review"})
-            result = runner.invoke(main, ["setup", "review-policy", "--auto"])
-            assert result.exit_code == 0, result.output
-            payload = _extract_json(result.output)
-            assert payload["review_policy"] == "auto"
-            assert payload["previous"] == "review"
-            assert load_project_config(Path(td))["review_policy"] == "auto"
-
-    def test_conflicting_flags_rejected(self, runner, isolated_config, tmp_path) -> None:
-        from opentraces.core.config import save_project_config
-        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
-            save_project_config(Path(td), {"review_policy": "review"})
-            result = runner.invoke(
-                main, ["setup", "review-policy", "--auto", "--review"]
-            )
-            assert result.exit_code == 2
-
-    def test_print_shows_current(self, runner, isolated_config, tmp_path) -> None:
-        from opentraces.core.config import save_project_config
-        with runner.isolated_filesystem(temp_dir=tmp_path) as td:
-            save_project_config(Path(td), {"review_policy": "auto"})
-            result = runner.invoke(main, ["setup", "review-policy", "--print"])
-            assert result.exit_code == 0, result.output
-            payload = _extract_json(result.output)
-            assert payload["review_policy"] == "auto"
+class TestSetupReviewPolicyRemoved:
+    def test_review_policy_setup_command_is_not_registered(self, runner, isolated_config) -> None:
+        result = runner.invoke(main, ["setup", "review-policy", "--help"])
+        assert result.exit_code == 2
+        assert "No such command" in result.output
 
 
 class TestDoctor:
@@ -269,186 +258,13 @@ class TestDoctor:
         assert th["state"] == "missing"
 
 
-class TestPushLLMReviewGate:
-    """The gate fires before auth so we can exercise it without a real HF token.
+class TestLegacyReviewCommandsRemoved:
+    def test_root_push_is_not_registered(self, runner, isolated_config) -> None:
+        result = runner.invoke(main, ["push", "--help"])
+        assert result.exit_code == 2
+        assert "No such command" in result.output
 
-    These tests install a fake StateManager that reports ``t1`` as
-    COMMITTED — post-scope-fix the gate only checks the staged set,
-    so the trace has to be COMMITTED (i.e. "staged" in display vocab)
-    for it to be considered.
-    """
-
-    @staticmethod
-    def _install_fakes(monkeypatch, isolated_config, trace_records):
-        from opentraces import cli as _cli
-
-        class _Cfg:
-            hf_token = "hf_fake"
-        monkeypatch.setattr(_cli, "load_config", lambda: _Cfg())
-
-        staging = isolated_config / "staging"
-        staging.mkdir(exist_ok=True)
-        monkeypatch.setattr(
-            "opentraces.core.config.get_project_traces_dir", lambda _: staging
-        )
-        monkeypatch.setattr(
-            "opentraces.core.inbox.load_traces", lambda _p: trace_records
-        )
-
-        committed_ids = {r["trace_id"] for r in trace_records}
-
-        class _FakeEntry:
-            def __init__(self, trace_id: str) -> None:
-                self.trace_id = trace_id
-
-        class _FakeState:
-            def __init__(self, *a, **kw) -> None:
-                pass
-
-            def get_traces_by_status(self, _status):
-                return [_FakeEntry(tid) for tid in committed_ids]
-
-            def get_trace(self, tid):
-                return None
-
-            # Swallow the rest of the StateManager surface the CLI may
-            # still poke at after the gate.
-            def __getattr__(self, name):
-                def _noop(*a, **kw):
-                    return None
-                return _noop
-
-        # publish.py imports StateManager inside the function body, so
-        # monkey-patch the source module.
-        monkeypatch.setattr("opentraces.core.state.StateManager", _FakeState)
-
-    def test_blocks_when_no_verdict_exists(
-        self, runner, isolated_config, monkeypatch, tmp_path
-    ) -> None:
-        self._install_fakes(
-            monkeypatch, isolated_config,
-            [{"trace_id": "t1", "metadata": {}}],
-        )
-        result = runner.invoke(main, ["push", "--llm-review"])
-        assert result.exit_code == 3, result.output
-        payload = _extract_json(result.output)
-        assert payload["error"]["code"] == "LLM_REVIEW_BLOCKED"
-
-    def test_blocks_when_verdict_is_no(
-        self, runner, isolated_config, monkeypatch
-    ) -> None:
-        self._install_fakes(
-            monkeypatch, isolated_config,
-            [{
-                "trace_id": "t1",
-                "metadata": {
-                    "llm_review": {
-                        "status": "complete",
-                        "shareable": "no",
-                        "missed_sensitive_data": "yes",
-                    },
-                },
-            }],
-        )
-        result = runner.invoke(main, ["push", "--llm-review"])
-        assert result.exit_code == 3
-        payload = _extract_json(result.output)
-        assert payload["error"]["code"] == "LLM_REVIEW_BLOCKED"
-
-
-class TestReviewLLMFilters:
-    """--scope and --trace narrow the slow review to a subset."""
-
-    def test_scope_staged_skips_inbox_only_traces(
-        self, runner, isolated_config, monkeypatch,
-    ) -> None:
-        """``--scope staged`` matches only post-add traces (TraceStatus.COMMITTED).
-
-        Display vocab: STAGED status → "inbox", COMMITTED status → "staged".
-        """
-        from opentraces.cli import installers as _inst
-
-        # Three fake records with distinct ids; state says only one is COMMITTED
-        # (which is "staged" in the display vocabulary).
-        records = [
-            {"trace_id": "aaa1", "content_hash": "h1", "steps": []},
-            {"trace_id": "bbb2", "content_hash": "h2", "steps": []},
-            {"trace_id": "ccc3", "content_hash": "h3", "steps": []},
-        ]
-
-        class _FakeState:
-            def get_trace(self, tid):
-                return {"ccc3": {"status": "committed"},
-                        "aaa1": {"status": "staged"},
-                        "bbb2": {"status": "staged"}}.get(tid)
-
-        monkeypatch.setattr(_inst, "load_traces", lambda _p: records, raising=False)
-        monkeypatch.setattr("opentraces.core.inbox.load_traces",
-                            lambda _p: records)
-        monkeypatch.setattr("opentraces.core.state.StateManager",
-                            lambda _p: _FakeState())
-        monkeypatch.setattr(
-            "opentraces.core.config.get_project_traces_dir",
-            lambda _: isolated_config / "staging",
-        )
-        (isolated_config / "staging").mkdir(exist_ok=True)
-
-        result = runner.invoke(
-            main, ["llm-review", "--dry-run", "--api-format", "fake",
-                   "--scope", "staged"],
-        )
-        assert result.exit_code == 0, result.output
-        payload = _extract_json(result.output)
-        assert payload["scope"] == "staged"
-        assert payload["matched"] == 1
-        assert payload["total_available"] == 3
-
-    def test_trace_prefix_selects_single_record(
-        self, runner, isolated_config, monkeypatch,
-    ) -> None:
-        from opentraces.cli import installers as _inst
-
-        records = [
-            {"trace_id": "8a3f1c2d", "content_hash": "h", "steps": []},
-            {"trace_id": "b4c90011", "content_hash": "h", "steps": []},
-        ]
-        monkeypatch.setattr(_inst, "load_traces", lambda _p: records, raising=False)
-        monkeypatch.setattr("opentraces.core.inbox.load_traces",
-                            lambda _p: records)
-        monkeypatch.setattr(
-            "opentraces.core.config.get_project_traces_dir",
-            lambda _: isolated_config / "staging",
-        )
-        (isolated_config / "staging").mkdir(exist_ok=True)
-
-        result = runner.invoke(
-            main, ["llm-review", "--dry-run", "--api-format", "fake",
-                   "--trace", "8a3f"],
-        )
-        assert result.exit_code == 0, result.output
-        payload = _extract_json(result.output)
-        assert payload["matched"] == 1
-        assert payload["trace_ids"] == ["8a3f"]
-
-
-class TestReviewLLMDryRun:
-    def test_dry_run_no_provider_call(self, runner, isolated_config, monkeypatch) -> None:
-        # Empty staging dir is fine — dry-run never calls the provider.
-        staging = isolated_config / "staging"
-        staging.mkdir(exist_ok=True)
-        # Patch the project-local staging lookup to this path.
-        monkeypatch.setattr(
-            "opentraces.core.config.get_project_traces_dir",
-            lambda _: staging,
-        )
-        monkeypatch.setattr(
-            "opentraces.core.inbox.load_traces", lambda _path: []
-        )
-        result = runner.invoke(
-            main, ["llm-review", "--dry-run", "--api-format", "fake"]
-        )
-        assert result.exit_code == 0, result.output
-        payload = _extract_json(result.output)
-        assert payload["dry_run"] is True
-        assert payload["sessions"] == 0
-        assert "estimate" in payload
+    def test_root_llm_review_is_not_registered(self, runner, isolated_config) -> None:
+        result = runner.invoke(main, ["llm-review", "--help"])
+        assert result.exit_code == 2
+        assert "No such command" in result.output

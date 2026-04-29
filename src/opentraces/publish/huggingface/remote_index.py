@@ -10,11 +10,11 @@ Persists two pieces of information per remote dataset:
   remote" hint on refresh without re-fetching every shard.
 
 The cache lives at ``~/.opentraces/projects/<slug>/remote_index.json``
-(sibling of ``state.json``). It is written by ``opentraces push`` after
-fetching and can be refreshed out-of-band by the (new) ``opentraces
-pull`` command. Consumers check ``is_stale`` against a TTL before using
-it for UX hints; staleness is non-fatal, just means the hint is
-suppressed.
+(sibling of ``state.json``). The legacy trace-publish path writes it after
+fetching and dataset remote work is migrating this responsibility under
+``opentraces dataset pull/publish``. Consumers check ``is_stale`` against a
+TTL before using it for UX hints; staleness is non-fatal, just means the hint
+is suppressed.
 """
 
 from __future__ import annotations

@@ -1258,7 +1258,7 @@ def _assert_trail_scenario(state: RunState, a: dict) -> str:
         _assert_same_trail_identity(expected, resolve_row, "trail resolve")
         state.trail_json[f"phase7:resolve:{selection_name}"] = resolve_payload
 
-        blame_payload = _run_otd_json(state, ["blame", ref, "--json"])
+        blame_payload = _run_otd_json(state, ["trail", "blame", ref, "--json"])
         blame_row = _first_row_by_patch(
             blame_payload.get("trailEvidence", []),
             sel["trace_patch_id"],
@@ -1269,7 +1269,7 @@ def _assert_trail_scenario(state: RunState, a: dict) -> str:
         state.trail_json[f"phase7:blame:{selection_name}"] = blame_payload
 
         line_target = f"{expected['file_path']}:{(expected.get('affected_range') or {}).get('start_line')}"
-        line_blame_payload = _run_otd_json(state, ["blame", line_target, "--json"])
+        line_blame_payload = _run_otd_json(state, ["trail", "blame", line_target, "--json"])
         line_blame_row = _first_row_by_patch(
             line_blame_payload.get("trailEvidence", []),
             sel["trace_patch_id"],
@@ -1281,7 +1281,7 @@ def _assert_trail_scenario(state: RunState, a: dict) -> str:
 
         graph_payload = _run_otd_json(
             state,
-            ["graph", "--limit", "1", "--no-color", "--json"],
+            ["trail", "graph", "--limit", "1", "--no-color", "--json"],
         )
         graph_rows = [
             evidence
