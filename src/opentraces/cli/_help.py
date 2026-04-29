@@ -39,6 +39,30 @@ def _cyan(text: str) -> str:
     return click.style(text, fg="cyan", bold=True)
 
 
+def _arg_signature(cmd: click.Command) -> str:
+    """Render the positional-argument signature for a command listing.
+
+    Click already produces the right metavar shape on each Argument
+    (``NAME``, ``[NAME]``, ``[NAMES]...``), so we just join them. Options
+    are intentionally excluded — the goal is to answer "what positional
+    do I type after the verb?", not to dump the whole option surface
+    (which is what ``--help`` on the leaf command is for).
+    """
+    parts: list[str] = []
+    for param in cmd.params:
+        if not isinstance(param, click.Argument):
+            continue
+        try:
+            metavar = param.make_metavar()
+        except TypeError:
+            # Newer Click signatures require a Context for make_metavar.
+            ctx_proxy = click.Context(cmd)
+            metavar = param.make_metavar(ctx_proxy)
+        if metavar:
+            parts.append(metavar)
+    return " ".join(parts)
+
+
 def _command_path(ctx: click.Context) -> str:
     """Full invocation path for display, e.g. 'opentraces setup claude-code'.
 
@@ -232,7 +256,12 @@ class OpentracesGroup(click.Group, OpentracesCommand):
             if cmd is None or cmd.hidden:
                 continue
             help_str = cmd.get_short_help_str(limit=formatter.width) or ""
-            rows.append((_cyan(name), help_str))
+            sig = _arg_signature(cmd)
+            if sig:
+                term = f"{_cyan(name)} {click.style(sig, dim=True)}"
+            else:
+                term = _cyan(name)
+            rows.append((term, help_str))
         if rows:
             with self._section(formatter, "Commands"):
                 formatter.write_dl(rows)
