@@ -31,7 +31,6 @@ from ..core.datasets import (
     normalize_hf_repo_id,
     publish_dataset,
     pull_dataset,
-    read_publication_state,
     read_row_index,
     remove_dataset_remote,
     repo_id_from_remote,

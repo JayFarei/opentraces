@@ -1210,6 +1210,24 @@ def _has_publishable_unpublished_rows(name: str, remote_name: str) -> bool:
     )
 
 
+def _download_hf_snapshot(
+    repo_id: str,
+    token: str | None,
+    *,
+    allow_patterns: list[str],
+) -> Path:
+    from huggingface_hub import snapshot_download
+
+    return Path(
+        snapshot_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            token=token,
+            allow_patterns=allow_patterns,
+        )
+    )
+
+
 def _fake_remote_dir(repo_id: str) -> Path | None:
     root = os.environ.get("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT")
     if not root:
