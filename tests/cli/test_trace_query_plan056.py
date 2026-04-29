@@ -369,11 +369,19 @@ def test_trace_query_reserved_hyde_mode_exits_10():
 
 
 def test_trace_query_include_superseded_returns_older_generations(tmp_path):
+    """Plan-59 D1=(b): supersession is now an explicit writer-declared marker.
+
+    A trace whose ``metadata.superseded_by`` points at another trace is the
+    only trace dropped under ``--latest-generation``; siblings sharing a
+    ``session_id`` but missing the marker are preserved as distinct results.
+    """
+
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")
     old = _trace()
     old.trace_id = "trace-plan056-cli-old"
     old.generation_index = 1
+    old.metadata = {**old.metadata, "superseded_by": "trace-plan056-cli-new"}
     new = _trace()
     new.trace_id = "trace-plan056-cli-new"
     new.generation_index = 2

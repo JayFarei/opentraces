@@ -24,6 +24,10 @@ web/site/.vercel/
 kb/
 .opentraces/staging/
 .opentraces/config.json
+
+# Plan-59 parity harness emits its run-time JSON summary here. It is
+# regenerated on every pytest run; never check it in.
+tests/integration/parity_report.json
 .agents/skills/opentraces
 .claude/*
 !.claude/skills/

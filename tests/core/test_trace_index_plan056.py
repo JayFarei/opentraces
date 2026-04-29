@@ -206,8 +206,14 @@ def test_rebuild_index_creates_sqlite_fts_and_query_returns_bounded_packets(tmp_
         }
     assert "units_fts" in fts_tables
 
+    # Plan-59 D1=(b): session_id/generation_index alone is no longer treated
+    # as supersession. Both generations are returned because neither carries
+    # an explicit `metadata.superseded_by` marker.
     skill_packets = query_index(skill="grill-me")
-    assert [packet.trace_id for packet in skill_packets] == ["trace-plan056-new"]
+    assert sorted(packet.trace_id for packet in skill_packets) == [
+        "trace-plan056-new",
+        "trace-plan056-old",
+    ]
     assert skill_packets[0].facets[0].name == "skill.name"
 
     packets = query_index(
@@ -215,8 +221,11 @@ def test_rebuild_index_creates_sqlite_fts_and_query_returns_bounded_packets(tmp_
         signal="tested_successful_fix_candidate",
         latest_generation=True,
     )
-    assert [packet.trace_id for packet in packets] == ["trace-plan056-new"]
-    packet = packets[0]
+    assert sorted(packet.trace_id for packet in packets) == [
+        "trace-plan056-new",
+        "trace-plan056-old",
+    ]
+    packet = next(p for p in packets if p.trace_id == "trace-plan056-new")
     assert packet.unit_type == "trace"
     assert packet.map_ref == "ot://trace/trace-plan056-new/map"
     assert packet.map_node_refs

@@ -56,7 +56,31 @@ _TEST_COMMAND_RE = re.compile(
     r"vitest|jest|rspec|mvn\s+test|gradle\s+test)\b",
     re.IGNORECASE,
 )
-_URL_RE = re.compile(r"https?://[^\s'\"<>]+")
+_URL_RE = re.compile(r"https?://[^\s'\"<>$`{}|^\\]+")
+_DEPENDENCY_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_./-]*$")
+_COMMAND_FAMILY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_./-]*$")
+_SHELL_KEYWORDS = frozenset(
+    {
+        "for", "while", "until", "do", "done", "if", "then", "else", "elif",
+        "fi", "case", "esac", "in", "select", "function", "{", "}", "(", ")",
+        "[", "]", "[[", "]]", "&&", "||", "|", ";", ">", ">>", "<", "<<",
+        "2>", "2>>", "&>", "!",
+    }
+)
+CANDIDATE_KIND_CHOICES: tuple[str, ...] = (
+    "bug_fix",
+    "trace",
+    "trace_map_node",
+    "trace_slice",
+    "trace_intent_candidate",
+    "patch",
+    "skill_invocation",
+    "tool_sequence",
+    "test_or_error_signal",
+    "git_anchor",
+)
+FILE_OP_CHOICES: tuple[str, ...] = ("edit", "read")
+BASH_ACTION_CHOICES: tuple[str, ...] = ("test", "service_probe")
 
 
 @dataclass(frozen=True)
@@ -91,22 +115,28 @@ def rebuild_index(index_path: Path | None = None) -> RebuildSummary:
         with sqlite3.connect(tmp_path) as conn:
             _create_schema(conn)
             project_sources = _project_sources_by_slug()
+            for source in _iter_trace_sources():
+                trace_path = source.trace_path
+                project_slug = source.project_slug
+                layer = source.layer
+                records = _iter_trace_file_records(trace_path)
+                for record in records:
+                    _delete_trace_ids(conn, [record.trace_id])
+                    trace_map = build_trace_map(record)
+                    units = _build_units(record, trace_map, project_slug, layer=layer)
+                    _insert_trace(conn, record, project_slug, trace_path, trace_map)
+                    for unit in units:
+                        _insert_unit(conn, unit)
+                    for node in trace_map.nodes:
+                        _insert_map_node(conn, node)
+                    for edge in trace_map.edges:
+                        _insert_map_edge(conn, edge)
+                _record_source(conn, trace_path, len(records))
+            # Rebuild trail projections per canonical project home, regardless
+            # of whether the project has any trace JSONL yet — Trail Patch
+            # units originate from refs/opentraces, not from the trace store.
             for project_home in _iter_project_homes():
                 project_slug = project_home.name
-                for trace_path in _iter_trace_paths(project_home):
-                    records = _iter_trace_file_records(trace_path)
-                    for record in records:
-                        _delete_trace_ids(conn, [record.trace_id])
-                        trace_map = build_trace_map(record)
-                        units = _build_units(record, trace_map, project_slug)
-                        _insert_trace(conn, record, project_slug, trace_path, trace_map)
-                        for unit in units:
-                            _insert_unit(conn, unit)
-                        for node in trace_map.nodes:
-                            _insert_map_node(conn, node)
-                        for edge in trace_map.edges:
-                            _insert_map_edge(conn, edge)
-                    _record_source(conn, trace_path, len(records))
                 source_repo = project_sources.get(project_slug)
                 if source_repo and source_repo.exists():
                     _rebuild_trail_projection(conn, project_slug, source_repo)
@@ -138,40 +168,41 @@ def refresh_index(index_path: Path | None = None) -> RebuildSummary:
 
         project_sources = _project_sources_by_slug()
         seen_sources: set[str] = set()
-        for project_home in _iter_project_homes():
-            project_slug = project_home.name
-            for trace_path in _iter_trace_paths(project_home):
-                source_key = str(trace_path)
-                seen_sources.add(source_key)
-                stat = trace_path.stat()
-                existing = conn.execute(
-                    "select mtime_ns, size from sources where path = ?",
+        for source in _iter_trace_sources():
+            trace_path = source.trace_path
+            project_slug = source.project_slug
+            layer = source.layer
+            source_key = str(trace_path)
+            seen_sources.add(source_key)
+            stat = trace_path.stat()
+            existing = conn.execute(
+                "select mtime_ns, size from sources where path = ?",
+                (source_key,),
+            ).fetchone()
+            if (
+                existing
+                and int(existing["mtime_ns"]) == stat.st_mtime_ns
+                and int(existing["size"]) == stat.st_size
+            ):
+                continue
+            old_trace_ids = [
+                str(row["trace_id"])
+                for row in conn.execute(
+                    "select trace_id from traces where trace_path = ?",
                     (source_key,),
-                ).fetchone()
-                if (
-                    existing
-                    and int(existing["mtime_ns"]) == stat.st_mtime_ns
-                    and int(existing["size"]) == stat.st_size
-                ):
-                    continue
-                old_trace_ids = [
-                    str(row["trace_id"])
-                    for row in conn.execute(
-                        "select trace_id from traces where trace_path = ?",
-                        (source_key,),
-                    )
-                ]
-                records = _iter_trace_file_records(trace_path)
-                _delete_trace_ids(
-                    conn,
-                    [*old_trace_ids, *[record.trace_id for record in records]],
                 )
-                for record in records:
-                    trace_map = build_trace_map(record)
-                    _insert_trace(conn, record, project_slug, trace_path, trace_map)
-                    for unit in _build_units(record, trace_map, project_slug):
-                        _insert_unit(conn, unit)
-                _record_source(conn, trace_path, len(records))
+            ]
+            records = _iter_trace_file_records(trace_path)
+            _delete_trace_ids(
+                conn,
+                [*old_trace_ids, *[record.trace_id for record in records]],
+            )
+            for record in records:
+                trace_map = build_trace_map(record)
+                _insert_trace(conn, record, project_slug, trace_path, trace_map)
+                for unit in _build_units(record, trace_map, project_slug, layer=layer):
+                    _insert_unit(conn, unit)
+            _record_source(conn, trace_path, len(records))
 
         stale_sources = [
             str(row["path"])
@@ -202,6 +233,7 @@ def refresh_index(index_path: Path | None = None) -> RebuildSummary:
                     "delete from trail_sources where project_slug = ?",
                     (project_slug,),
                 )
+        # Staging traces have no associated workspace repo; nothing to project.
 
         stale_trail_projects = [
             str(row["project_slug"])
@@ -245,7 +277,9 @@ def query_index(
     survival: str | None = None,
     since: str | None = None,
     success: bool | None = None,
+    success_unknown: bool = False,
     committed: bool | None = None,
+    committed_unknown: bool = False,
     candidate_kind: str | None = None,
     latest_generation: bool = True,
     project: str | None = None,
@@ -277,7 +311,9 @@ def query_index(
         survival=survival,
         since=since,
         success=success,
+        success_unknown=success_unknown,
         committed=committed,
+        committed_unknown=committed_unknown,
         candidate_kind=candidate_kind,
         latest_generation=latest_generation,
         project=project,
@@ -311,7 +347,9 @@ def query_index_page(
     survival: str | None = None,
     since: str | None = None,
     success: bool | None = None,
+    success_unknown: bool = False,
     committed: bool | None = None,
+    committed_unknown: bool = False,
     candidate_kind: str | None = None,
     latest_generation: bool = True,
     project: str | None = None,
@@ -381,17 +419,29 @@ def query_index_page(
         candidates = [unit for unit in candidates if _matches_facet_filters(unit, named_filters)]
     if since_dt:
         candidates = [unit for unit in candidates if _unit_timestamp(unit) >= since_dt]
+    if success_unknown and success is not None:
+        raise ValueError("Use --success/--no-success or --unknown-success, not both.")
+    if committed_unknown and committed is not None:
+        raise ValueError("Use --committed/--uncommitted or --unknown-committed, not both.")
     if success is not None:
         candidates = [
             unit
             for unit in candidates
             if _bool_facet(unit, "outcome.success") is success
         ]
+    elif success_unknown:
+        candidates = [
+            unit for unit in candidates if _bool_facet(unit, "outcome.success") is None
+        ]
     if committed is not None:
         candidates = [
             unit
             for unit in candidates
             if _bool_facet(unit, "outcome.committed") is committed
+        ]
+    elif committed_unknown:
+        candidates = [
+            unit for unit in candidates if _bool_facet(unit, "outcome.committed") is None
         ]
     if candidate_kind:
         candidates = [
@@ -430,6 +480,8 @@ def query_index_page(
         )
         or bool(parsed_facets)
         or bool(parsed_metadata)
+        or success_unknown
+        or committed_unknown
     )
     for unit in candidates:
         lexical_score, matched_fields = _lexical_score(unit, terms)
@@ -647,6 +699,36 @@ def _iter_project_homes() -> list[Path]:
     if not paths.PROJECTS_DIR.exists():
         return []
     return sorted(path for path in paths.PROJECTS_DIR.iterdir() if path.is_dir())
+
+
+STAGING_PROJECT_SLUG = "_staging"
+
+
+@dataclass(frozen=True)
+class TraceSource:
+    layer: str            # "canonical" | "staging"
+    project_slug: str
+    trace_path: Path
+
+
+def _iter_trace_sources() -> list[TraceSource]:
+    """Yield every JSONL trace shard the index should ingest, tagged by layer.
+
+    Bundle C / Bug #1: projects/<slug>/traces/*.jsonl is the canonical layer
+    (per-project, opted-in) and the new top-level staging/*.jsonl is the
+    Plan 58 default-inbox staging layer. Both must be indexed so query callers
+    do not silently miss staged-but-unmoved traces.
+    """
+    sources: list[TraceSource] = []
+    for project_home in _iter_project_homes():
+        slug = project_home.name
+        for trace_path in _iter_trace_paths(project_home):
+            sources.append(TraceSource("canonical", slug, trace_path))
+    staging_root = getattr(paths, "STAGING_DIR", None)
+    if staging_root and staging_root.exists() and staging_root.is_dir():
+        for trace_path in sorted(staging_root.glob("*.jsonl")):
+            sources.append(TraceSource("staging", STAGING_PROJECT_SLUG, trace_path))
+    return sources
 
 
 def _schema_supports_refresh(conn: sqlite3.Connection) -> bool:
@@ -1007,13 +1089,20 @@ def _unit_facets(unit: TraceUnit) -> list[TraceFacet]:
     return facets
 
 
-def _build_units(record: TraceRecord, trace_map: TraceMap, project_slug: str) -> list[TraceUnit]:
+def _build_units(
+    record: TraceRecord,
+    trace_map: TraceMap,
+    project_slug: str,
+    *,
+    layer: str = "canonical",
+) -> list[TraceUnit]:
     files = _trace_files(trace_map)
     skills = _trace_skills(record)
     tools = _trace_tools(record)
     test_commands = _test_commands(record)
     signals = _trace_signals(record, trace_map)
     facets = _trace_facets(record, project_slug, skills, tools, files)
+    facets.append(TraceFacet(name="source_layer", value=layer, source="exact_schema"))
     title = _index_text(record.task.description or _first_user_text(record) or record.trace_id)
     unit = TraceUnit(
         unit_id=f"tu:{record.trace_id}:trace",
@@ -1100,6 +1189,63 @@ def _build_units(record: TraceRecord, trace_map: TraceMap, project_slug: str) ->
                 },
             )
         )
+    units = _propagate_supersession(units, record)
+    return _rollup_child_facets(units)
+
+
+def _propagate_supersession(
+    units: list[TraceUnit], record: TraceRecord
+) -> list[TraceUnit]:
+    """Bundle S / Bug #3 helper: hoist record-level supersession onto units.
+
+    ``_latest_units`` runs over indexed :class:`TraceUnit` rows, so the
+    writer-declared supersession markers must live in unit metadata. Without
+    this propagation a record-scope ``metadata.superseded_by`` is invisible
+    to the dedupe pass.
+    """
+
+    superseded_by = record.metadata.get("superseded_by")
+    superseded_ids = record.metadata.get("superseded_trace_ids")
+    if not superseded_by and not superseded_ids:
+        return units
+    new_units: list[TraceUnit] = []
+    for unit in units:
+        merged = dict(unit.metadata)
+        if superseded_by and "superseded_by" not in merged:
+            merged["superseded_by"] = superseded_by
+        if superseded_ids and "superseded_trace_ids" not in merged:
+            merged["superseded_trace_ids"] = list(superseded_ids)
+        new_units.append(unit.model_copy(update={"metadata": merged}))
+    return new_units
+
+
+def _rollup_child_facets(units: list[TraceUnit]) -> list[TraceUnit]:
+    """Bundle C / Bug #2: roll up every child unit's facets onto the parent trace.
+
+    Default queries return one row per trace (unit_type='trace'). For the
+    rollup to be lossless, the trace unit's facet list must be a superset of
+    every child unit's facets. Child units keep their own facet lists for
+    `--candidate-kind` escape-hatch queries.
+    """
+
+    if not units:
+        return units
+    parent_idx = next((i for i, u in enumerate(units) if u.unit_type == "trace"), None)
+    if parent_idx is None:
+        return units
+    parent = units[parent_idx]
+    seen: set[tuple[str, str]] = {(f.name, str(f.value)) for f in parent.facets}
+    rolled: list[TraceFacet] = list(parent.facets)
+    for unit in units:
+        if unit is parent:
+            continue
+        for facet in unit.facets:
+            key = (facet.name, str(facet.value))
+            if key in seen:
+                continue
+            seen.add(key)
+            rolled.append(facet)
+    units[parent_idx] = parent.model_copy(update={"facets": rolled})
     return units
 
 
@@ -1530,16 +1676,34 @@ def _unit_from_row(row: sqlite3.Row) -> TraceUnit:
 
 
 def _latest_units(units: list[TraceUnit]) -> list[TraceUnit]:
-    latest_by_session: dict[str, int] = {}
+    """Bundle S / Bug #3: dedupe only when supersession is writer-declared.
+
+    Plan-59 D1=(b): different content under the same ``session_id`` is **not**
+    treated as supersession. Only a unit whose ``metadata.superseded_by`` is
+    explicitly set by the parser/writer is dropped — that is the only signal
+    we trust for "this trace was replaced." A trace that exposes a
+    superseded-by chain via ``metadata.superseded_trace_ids`` (the inverse
+    pointer used by some writers) is also honoured.
+    """
+
+    superseded_unit_ids: set[str] = set()
+    superseded_trace_ids: set[str] = set()
     for unit in units:
-        session_id = str(unit.metadata.get("session_id") or unit.trace_id)
-        generation = int(unit.metadata.get("generation_index") or 0)
-        latest_by_session[session_id] = max(latest_by_session.get(session_id, -1), generation)
+        marker = unit.metadata.get("superseded_by")
+        if marker:
+            superseded_unit_ids.add(unit.unit_id)
+        replaced = unit.metadata.get("superseded_trace_ids") or []
+        if isinstance(replaced, list):
+            for trace_id in replaced:
+                if trace_id:
+                    superseded_trace_ids.add(str(trace_id))
+    if not superseded_unit_ids and not superseded_trace_ids:
+        return list(units)
     return [
         unit
         for unit in units
-        if int(unit.metadata.get("generation_index") or 0)
-        == latest_by_session.get(str(unit.metadata.get("session_id") or unit.trace_id), 0)
+        if unit.unit_id not in superseded_unit_ids
+        and unit.trace_id not in superseded_trace_ids
     ]
 
 
@@ -1659,7 +1823,24 @@ def _parse_key_value_filters(filters: tuple[str, ...]) -> tuple[tuple[str, str],
 
 
 def _matches_facet_filters(unit: TraceUnit, filters: tuple[tuple[str, str], ...]) -> bool:
-    return all(value in _facet_values(unit, name) for name, value in filters)
+    """Bundle V / Bug #12: boolean facet comparisons are case-insensitive.
+
+    Schema-derived booleans serialize as Python ``True`` / ``False`` whose
+    ``str`` is title-cased, but ``--facet outcome.success=true`` and the
+    canonical ``--success`` flag both produce lowercase tokens. Without this
+    fold, ``--facet outcome.success=true`` silently zero-results on every
+    real trace.
+    """
+
+    for name, value in filters:
+        values = _facet_values(unit, name)
+        if value in values:
+            continue
+        lowered = value.lower()
+        if lowered in {"true", "false"} and any(v.lower() == lowered for v in values):
+            continue
+        return False
+    return True
 
 
 def _matches_metadata_filters(unit: TraceUnit, filters: tuple[tuple[str, str], ...]) -> bool:
@@ -1931,7 +2112,7 @@ def _trace_facets(
         facets.append(TraceFacet(name="tool.name", value=tool, source="exact_schema"))
     for link in record.git_links:
         facets.append(TraceFacet(name="git_link_tier", value=link.tier, source="exact_schema"))
-    for dependency in record.dependencies:
+    for dependency in _validated_dependencies(record):
         facets.append(TraceFacet(name="dependency.name", value=dependency, source="dependency"))
     for state in _survival_states(record):
         facets.append(TraceFacet(name="survival.state", value=state, source="exact_schema"))
@@ -1956,12 +2137,74 @@ def _provider_kind(record: TraceRecord) -> str | None:
 
 
 def _survival_states(record: TraceRecord) -> list[str]:
+    """Bundle L / Bug #6: derive survival from real liveness signals.
+
+    The legacy reader only consulted ``record.metadata.survival_state``,
+    which is empty on the vast majority of captured traces because the
+    Trace-Trails reconciler writes survival projections into the
+    ``refs/opentraces/local/events/v1`` event log instead of the trace
+    record itself. This helper now derives a best-effort survival vocabulary
+    from ``git_links[].content_alive`` / ``commit_reachable`` whenever the
+    record metadata is silent. The canonical phase-4 vocabulary is preserved
+    (``alive_on_path | alive_transformed | reverted | lost | unknown``); the
+    sync-projection-driven phase-5 states (``alive_moved``,
+    ``partially_preserved``, ``repaired``) and the trail event projections
+    are still consumed when the writer pre-populated them.
+    """
+
     raw = record.metadata.get("survival_state") or record.metadata.get("survival_states")
-    if raw is None:
-        return []
-    if isinstance(raw, list):
-        return sorted({str(item) for item in raw if item})
-    return [str(raw)]
+    if raw is not None:
+        if isinstance(raw, list):
+            states = sorted({str(item) for item in raw if item})
+        else:
+            states = [str(raw)]
+        if states:
+            return states
+
+    states: set[str] = set()
+    for link in record.git_links:
+        alive = link.content_alive
+        reachable = link.commit_reachable
+        if alive is True:
+            states.add("alive_on_path")
+        elif alive is False:
+            if reachable is False:
+                states.add("reverted")
+            else:
+                states.add("lost")
+        elif reachable is False:
+            states.add("reverted")
+    if not states and record.git_links:
+        states.add("unknown")
+    return sorted(states)
+
+
+def _validated_dependencies(record: TraceRecord) -> list[str]:
+    """Bundle V / Bug #11: drop garbage dependency tokens.
+
+    ``record.dependencies`` is populated upstream by parser/enrichment code
+    and on real traces routinely contains shell artefacts like ``2``, ``#``,
+    ``\\``, or partial command lines. We only honour entries that look like
+    a package identifier and that are not a shell keyword. Version
+    specifiers (``foo==1.2``, ``foo@^1``) are stripped before validation
+    so common ecosystems still flow through.
+    """
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for dep in record.dependencies:
+        if not isinstance(dep, str):
+            continue
+        bare = re.split(r"[<>=~!@\s]", dep, maxsplit=1)[0].strip()
+        if not bare or bare in seen:
+            continue
+        if bare in _SHELL_KEYWORDS:
+            continue
+        if not _DEPENDENCY_NAME_RE.match(bare):
+            continue
+        seen.add(bare)
+        out.append(bare)
+    return out
 
 
 def _command_facets(record: TraceRecord) -> list[TraceFacet]:
@@ -2064,14 +2307,30 @@ def _dedupe_facets(facets: list[TraceFacet]) -> list[TraceFacet]:
 
 
 def _command_family(command: str) -> str | None:
-    stripped = command.strip()
-    if not stripped:
+    """Bundle V / Bug #11: only return a real command identifier.
+
+    Reject shell control keywords (``for``, ``while``, ``if``…), comments,
+    pipes, redirections, and any token that is not shaped like a binary
+    name. Without this guard the index emits ``bash.command_family=for``
+    or ``=#`` from arbitrary script shapes which then pollute every
+    ``--cmd-family`` query with garbage values.
+    """
+
+    stripped = command.lstrip()
+    if not stripped or stripped.startswith("#"):
         return None
     parts = stripped.split()
-    if len(parts) >= 2 and parts[0] in {"npm", "pnpm", "yarn", "go", "cargo", "mvn", "gradle"}:
+    if not parts:
+        return None
+    first = parts[0]
+    if first in _SHELL_KEYWORDS:
+        return None
+    if not _COMMAND_FAMILY_RE.match(first):
+        return None
+    if len(parts) >= 2 and first in {"npm", "pnpm", "yarn", "go", "cargo", "mvn", "gradle"}:
         if parts[1] == "test":
-            return f"{parts[0]} test"
-    return parts[0]
+            return f"{first} test"
+    return first
 
 
 def _bash_action(command: str) -> str | None:

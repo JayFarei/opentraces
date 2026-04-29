@@ -80,13 +80,23 @@ def trace_group() -> None:
 @click.option("--tool", default=None, help="Exact tool.name facet.")
 @click.option("--files", default=None, help="File glob filter over indexed paths.")
 @click.option("--file-kind", default=None, help="File extension/kind filter.")
-@click.option("--file-op", default=None, help="Derived file.operation filter.")
+@click.option(
+    "--file-op",
+    type=click.Choice(["edit", "read"], case_sensitive=False),
+    default=None,
+    help="Derived file.operation filter (closed vocabulary).",
+)
 @click.option("--signal", default=None, help="Deterministic signal filter.")
 @click.option("--facet", "facet_filters", multiple=True, help="Generic facet filter as name=value.")
 @click.option("--metadata", "metadata_filters", multiple=True, help="Indexed unit metadata filter as key=value.")
 @click.option("--provider", default=None, help="Exact provider.kind facet.")
 @click.option("--cmd-family", default=None, help="Derived bash.command_family facet.")
-@click.option("--bash-action", default=None, help="Derived bash.action facet.")
+@click.option(
+    "--bash-action",
+    type=click.Choice(["test", "service_probe"], case_sensitive=False),
+    default=None,
+    help="Derived bash.action facet (closed vocabulary).",
+)
 @click.option("--test", "test_framework", default=None, help="Derived test.framework facet.")
 @click.option("--service", default=None, help="Derived service.name facet.")
 @click.option("--service-channel", default=None, help="Derived service.channel facet.")
@@ -94,9 +104,40 @@ def trace_group() -> None:
 @click.option("--git-tier", default=None, help="Exact git_link_tier facet.")
 @click.option("--survival", default=None, help="Derived Trace Trail survival state.")
 @click.option("--since", default=None, help="ISO date/time or duration such as 7d.")
-@click.option("--candidate-kind", default=None, help="Soft candidate label filter.")
-@click.option("--success/--no-success", default=None, help="Filter outcome.success.")
-@click.option("--committed/--uncommitted", default=None, help="Filter outcome.committed.")
+@click.option(
+    "--candidate-kind",
+    type=click.Choice(
+        [
+            "bug_fix",
+            "trace",
+            "trace_map_node",
+            "trace_slice",
+            "trace_intent_candidate",
+            "patch",
+            "skill_invocation",
+            "tool_sequence",
+            "test_or_error_signal",
+            "git_anchor",
+        ],
+        case_sensitive=False,
+    ),
+    default=None,
+    help="Candidate label / unit-type escape hatch (closed vocabulary).",
+)
+@click.option("--success/--no-success", default=None, help="Filter outcome.success (explicit True/False).")
+@click.option(
+    "--unknown-success",
+    is_flag=True,
+    default=False,
+    help="Match traces whose outcome.success is null/missing (mutually exclusive with --success/--no-success).",
+)
+@click.option("--committed/--uncommitted", default=None, help="Filter outcome.committed (explicit True/False).")
+@click.option(
+    "--unknown-committed",
+    is_flag=True,
+    default=False,
+    help="Match traces whose outcome.committed is null/missing (mutually exclusive with --committed/--uncommitted).",
+)
 @click.option("--project", default=None, help="Project slug to search.")
 @click.option("--cwd", "current_cwd", is_flag=True, help="Search only the current opted-in project.")
 @click.option("--limit", type=int, default=20, show_default=True, help="Maximum candidates.")
@@ -136,7 +177,9 @@ def trace_query(
     since: str | None,
     candidate_kind: str | None,
     success: bool | None,
+    unknown_success: bool,
     committed: bool | None,
+    unknown_committed: bool,
     project: str | None,
     current_cwd: bool,
     limit: int,
@@ -175,6 +218,18 @@ def trace_query(
             click.echo("Not an opentraces project. Run 'opentraces init' first.", err=True)
             sys.exit(3)
         project = get_project_dir(cwd).name
+    if unknown_success and success is not None:
+        click.echo(
+            "Use either --success/--no-success or --unknown-success, not both.",
+            err=True,
+        )
+        sys.exit(2)
+    if unknown_committed and committed is not None:
+        click.echo(
+            "Use either --committed/--uncommitted or --unknown-committed, not both.",
+            err=True,
+        )
+        sys.exit(2)
     if not any([
         lex,
         skill,
@@ -197,13 +252,16 @@ def trace_query(
         since,
         candidate_kind,
         success is not None,
+        unknown_success,
         committed is not None,
+        unknown_committed,
         project,
     ]):
         click.echo(
             "Provide --lex, --skill, --tool, --files, --signal, --facet, "
             "--metadata, named filters, --candidate-kind, --success, "
-            "--committed, --cwd, or --project.",
+            "--committed, --unknown-success, --unknown-committed, --cwd, "
+            "or --project.",
             err=True,
         )
         sys.exit(3)
@@ -232,7 +290,9 @@ def trace_query(
             survival=survival,
             since=since,
             success=success,
+            success_unknown=unknown_success,
             committed=committed,
+            committed_unknown=unknown_committed,
             candidate_kind=candidate_kind,
             latest_generation=latest_generation,
             project=project,

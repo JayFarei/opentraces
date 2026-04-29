@@ -42,10 +42,14 @@ def _isolate_opentraces_global_state(tmp_path_factory, monkeypatch):
     opentraces_dir.mkdir()
     projects_dir = opentraces_dir / "projects"
     projects_dir.mkdir()
+    staging_dir = opentraces_dir / "staging"
+    staging_dir.mkdir()
 
     for mod in (_paths, _config):
         monkeypatch.setattr(mod, "OPENTRACES_DIR", opentraces_dir)
         monkeypatch.setattr(mod, "CONFIG_PATH", opentraces_dir / "config.json")
         monkeypatch.setattr(mod, "CREDENTIALS_PATH", opentraces_dir / "credentials")
         monkeypatch.setattr(mod, "PROJECTS_DIR", projects_dir)
+        if hasattr(mod, "STAGING_DIR"):
+            monkeypatch.setattr(mod, "STAGING_DIR", staging_dir)
     yield opentraces_dir
