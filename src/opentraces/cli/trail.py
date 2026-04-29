@@ -21,14 +21,15 @@ def trail_group() -> None:
 @trail_group.command(
     "explain",
     cls=OpentracesCommand,
+    hidden=True,
     examples=[
         "opentraces trail explain --trace tr1 --step 1",
         "opentraces trail explain --trace tr1 --step 1 --json",
         "opentraces trail explain --commit abc1234 --json",
     ],
     see_also=[
+        ("opentraces trail track", "walk and render trace lineage."),
         ("opentraces trail blame", "show commit attribution."),
-        ("opentraces trail graph", "render commit + trace history."),
     ],
     option_groups=[
         ("Scope", ["trace_id", "step_index", "commit", "project_dir"]),
@@ -184,12 +185,13 @@ def resolve_cmd(resource: str, as_json: bool, project_dir: Path | None) -> None:
 @trail_group.command(
     "sync",
     cls=OpentracesCommand,
+    hidden=True,
     examples=[
         "opentraces trail sync --patch 4f2ff6541cdee78eaea8bd2910157a7176e3c21f5d936a7f4f4561d08f024982 --json",
         "opentraces trail sync --anchor 8354f2b00a5b4e80975bf0e763651c782249098f5cdb74b6e32720613a1bfc8a --json",
     ],
     see_also=[
-        ("opentraces trail explain", "explain the evidence chain for a Trace Patch."),
+        ("opentraces trail track", "walk lineage with --patch/--anchor scope."),
     ],
     option_groups=[
         ("Scope", ["trace_patch_id", "git_anchor_id", "project_dir"]),
@@ -401,13 +403,13 @@ def snapshot_checkout_cmd(
 @trail_group.command(
     "timeline",
     cls=OpentracesCommand,
+    hidden=True,
     examples=[
         "opentraces trail timeline tr1 --json",
         "opentraces trail timeline tr1 --table",
     ],
     see_also=[
-        ("opentraces trail explain", "explain canonical evidence."),
-        ("opentraces trail resume", "fork from a snapshot-backed step."),
+        ("opentraces trail track", "walk and render trace lineage."),
     ],
     option_groups=[
         ("Scope", ["trace_id", "project_dir"]),
@@ -455,6 +457,201 @@ def timeline_cmd(
         click.echo(_render_trail_play_table(payload))
         return
 
+    click.echo(_render_trail_play_graph(repo, payload))
+
+
+def _render_sync_summary(payload: dict[str, Any]) -> str:
+    """Compact render of a sync_patch / sync_anchor payload."""
+    current = payload.get("current_survival") or {}
+    label = (
+        _anchor_handle(payload, color=False)
+        if payload.get("git_anchor_id")
+        else _patch_handle(payload, color=False)
+    )
+    lines = [f"Trail track {label}"]
+    lines.append(f"  survival: {current.get('survival_state') or 'unknown'}")
+    path = current.get("path")
+    line_range = current.get("range") or {}
+    if path:
+        lines.append(f"  at: {path}:{line_range.get('start_line') or '?'}")
+    for limitation in (
+        payload.get("trail_limitations") or current.get("limitations") or []
+    ):
+        lines.append(f"  limitation: {limitation}")
+    return "\n".join(lines)
+
+
+def _render_explain_step(payload: dict[str, Any]) -> str:
+    """Compact render of an explain_trace_step payload (the --step branch)."""
+    lines = [f"Trace {payload['trace_id']} {payload['step_id']}"]
+    if payload.get("relation") == "anchored_in_git":
+        anchor = payload.get("git_anchor") or {}
+        lines.append(
+            "  anchored in git: "
+            f"{(anchor.get('commit_sha') or '')[:12]} "
+            f"{anchor.get('path')}:{(anchor.get('range') or {}).get('start_line')}"
+        )
+        lines.append(
+            f"  evidence: {payload.get('evidence_tier')} "
+            f"({payload.get('evidence_firmness')})"
+        )
+    elif payload.get("patch_status") == "no_patch":
+        lines.append("  patch status: no_patch")
+        lines.append("  relation: no_patch")
+    else:
+        lines.append("  relation: unknown")
+        for limitation in payload.get("limitations") or []:
+            lines.append(f"  limitation: {limitation}")
+    for claim in payload.get("unavailable_stronger_claims") or []:
+        lines.append(f"  unavailable: {claim}")
+    return "\n".join(lines)
+
+
+@trail_group.command(
+    "track",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trail track tr1",
+        "opentraces trail track tr1 --step 2",
+        "opentraces trail track --patch 4f2ff654...",
+        "opentraces trail track --anchor 8354f2b0...",
+        "opentraces trail track tr1 --silent",
+    ],
+    see_also=[
+        ("opentraces trail blame", "map commits/files back to producing traces."),
+        ("opentraces trail graph", "render commit + trace history."),
+    ],
+    option_groups=[
+        ("Scope", ["trace_id", "trace_patch_id", "git_anchor_id", "step_index", "project_dir"]),
+        ("Output", ["silent", "as_table", "as_json"]),
+        ("History", ["history_limit"]),
+    ],
+)
+@click.argument("trace_id", required=False)
+@click.option(
+    "--patch",
+    "trace_patch_id",
+    default=None,
+    help="Track a single Trace Patch (no TRACE_ID needed).",
+)
+@click.option(
+    "--anchor",
+    "git_anchor_id",
+    default=None,
+    help="Track a single Git Anchor (no TRACE_ID needed).",
+)
+@click.option(
+    "--step",
+    "step_index",
+    default=None,
+    type=int,
+    help="With TRACE_ID: focus on a single trace step's evidence.",
+)
+@click.option(
+    "--silent",
+    "silent",
+    is_flag=True,
+    help="Run the walk without printing the rendered output (scripts/CI).",
+)
+@click.option("--table", "as_table", is_flag=True, help="Compact tabular event view.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+@click.option(
+    "--history-limit",
+    "history_limit",
+    type=click.IntRange(min=2),
+    default=None,
+    help="Max commits walked per Git Anchor (default 500).",
+)
+@click.option(
+    "--project",
+    "project_dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: CWD).",
+)
+def track_cmd(
+    trace_id: str | None,
+    trace_patch_id: str | None,
+    git_anchor_id: str | None,
+    step_index: int | None,
+    silent: bool,
+    as_table: bool,
+    as_json: bool,
+    history_limit: int | None,
+    project_dir: Path | None,
+) -> None:
+    """Walk and render trace lineage through Git history.
+
+    Three scopes:
+      * ``track <TRACE_ID>``        — full trace lineage (default)
+      * ``track <TRACE_ID> --step N`` — single step's evidence
+      * ``track --patch <ID>``      — one Trace Patch's survival
+      * ``track --anchor <ID>``     — one Git Anchor's survival
+
+    ``--silent`` runs the operation without printing — useful from
+    scripts and CI. ``--json`` emits the full structured payload.
+    """
+    from ..core.trails import (
+        explain_trace_step,
+        play_trace_timeline,
+        sync_anchor,
+        sync_patch,
+    )
+
+    if as_table and as_json:
+        click.echo("Provide only one of --table or --json.", err=True)
+        sys.exit(2)
+
+    selectors = sum(1 for s in (trace_id, trace_patch_id, git_anchor_id) if s)
+    if selectors == 0:
+        click.echo("Provide TRACE_ID, --patch, or --anchor.", err=True)
+        sys.exit(2)
+    if selectors > 1:
+        click.echo("Provide only one of TRACE_ID, --patch, or --anchor.", err=True)
+        sys.exit(2)
+    if step_index is not None and not trace_id:
+        click.echo("--step requires a TRACE_ID.", err=True)
+        sys.exit(2)
+    if as_table and (trace_patch_id or git_anchor_id or step_index is not None):
+        click.echo("--table is only valid with the full-trace view.", err=True)
+        sys.exit(2)
+
+    repo = Path(project_dir or Path.cwd()).resolve()
+
+    try:
+        if trace_patch_id:
+            payload = sync_patch(repo, trace_patch_id, history_limit=history_limit)
+            renderer = _render_sync_summary
+        elif git_anchor_id:
+            payload = sync_anchor(repo, git_anchor_id, history_limit=history_limit)
+            renderer = _render_sync_summary
+        elif step_index is not None:
+            payload = explain_trace_step(repo, trace_id, step_index)
+            renderer = _render_explain_step
+        else:
+            payload = play_trace_timeline(repo, trace_id)
+            renderer = None  # rendered below via graph/table helpers
+    except ValueError as exc:
+        click.echo(f"Trace Trail event log is invalid: {exc}", err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to track trail: {exc}", err=True)
+        sys.exit(2)
+
+    if silent:
+        return
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if renderer is not None:
+        click.echo(renderer(payload))
+        return
+
+    if as_table:
+        click.echo(_render_trail_play_table(payload))
+        return
     click.echo(_render_trail_play_graph(repo, payload))
 
 
@@ -1467,6 +1664,7 @@ def _render_search_results(
 @trail_group.command(
     "search",
     cls=OpentracesCommand,
+    hidden=True,
     examples=[
         "opentraces trail search --trace tr1 --json",
         "opentraces trail search --commit HEAD --json",
@@ -1474,7 +1672,7 @@ def _render_search_results(
         "opentraces trail search --survival reverted --json",
     ],
     see_also=[
-        ("opentraces trail explain", "explain the canonical evidence chain."),
+        ("opentraces trail track", "trace-scoped walk + render."),
         ("opentraces trail blame", "show reviewer-facing attribution."),
         ("opentraces trail graph", "render commit + trace navigation."),
     ],
