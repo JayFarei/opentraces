@@ -655,9 +655,9 @@ def track_cmd(
     click.echo(_render_trail_play_graph(repo, payload))
 
 
-@trail_group.group("teleport", cls=OpentracesGroup)
+@trail_group.group("teleport", cls=OpentracesGroup, hidden=True)
 def teleport_group() -> None:
-    """Move a trace and its retained Git evidence between workspaces."""
+    """Deprecated alias for ``ot trace teleport``."""
 
 
 @teleport_group.command(

@@ -538,6 +538,107 @@ def _load_project_state():
     return state, staging_dir
 
 
+# ---------------------------------------------------------------------------
+# ``ot trace teleport`` — portable trace workspaces.
+#
+# The export side takes a trace_id and produces a directory containing a
+# Git bundle (the trail event log), the trace JSONL, and a manifest. The
+# open side takes such a directory and reconstitutes a fresh project.
+# Both sides operate on a trace handle, which is why the verbs live under
+# ``trace`` rather than ``trail`` (the trail evidence is bundled along).
+# ---------------------------------------------------------------------------
+
+
+@trace_group.group("teleport", cls=OpentracesGroup)
+def teleport_group() -> None:
+    """Move a trace and its retained Git evidence between workspaces."""
+
+
+@teleport_group.command(
+    "export",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trace teleport export tr1 --output ./tr1.trace-workspace",
+    ],
+    option_groups=[
+        ("Scope", ["trace_id"]),
+        ("Output", ["output", "as_json"]),
+    ],
+)
+@click.argument("trace_id")
+@click.option(
+    "--output",
+    "output",
+    required=True,
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    help="Directory to write the portable trace workspace.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def teleport_export_cmd(trace_id: str, output: Path, as_json: bool) -> None:
+    """Export a trace and retained Git evidence as a portable workspace."""
+    from ..core.trails import export_trace_workspace
+
+    try:
+        payload = export_trace_workspace(Path.cwd(), trace_id, output)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to export trace workspace: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Trace teleported: {payload['output']}")
+    click.echo(f"  events:    {payload['event_count']}")
+    click.echo(f"  snapshots: {payload['snapshot_count']}")
+
+
+@teleport_group.command(
+    "open",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trace teleport open ./tr1.trace-workspace --project ./blank --json",
+    ],
+    option_groups=[
+        ("Scope", ["workspace", "project"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.argument(
+    "workspace",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+)
+@click.option(
+    "--project",
+    "project",
+    required=True,
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    help="Blank directory where the trace workspace should be opened.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def teleport_open_cmd(workspace: Path, project: Path, as_json: bool) -> None:
+    """Open a portable trace workspace into a blank project directory."""
+    from ..core.trails import open_trace_workspace
+
+    try:
+        payload = open_trace_workspace(workspace, project)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    except Exception as exc:
+        click.echo(f"Unable to open trace workspace: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Trace workspace opened: {payload['project']}")
+    click.echo(f"  events:    {payload['event_count']}")
+    click.echo(f"  snapshots: {payload['snapshot_count']}")
+
+
 def _load_trace_record(staging_dir: Path, trace_id: str):
     """Load a TraceRecord from staging by trace_id.
 

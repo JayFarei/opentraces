@@ -196,21 +196,34 @@ def test_old_verbs_still_callable_as_hidden_aliases(tmp_path):
 
 
 def test_help_listing_hides_old_verbs(tmp_path):
-    """`ot trail --help` should list the 4 visible verbs only:
-    track, blame, graph, teleport."""
+    """`ot trail --help` should list 3 visible verbs (track, blame, graph).
+    Teleport moved to ``ot trace teleport``."""
     runner = CliRunner()
     result = runner.invoke(main, ["trail", "--help"], color=False)
     assert result.exit_code == 0, result.output
-    # Visible verbs
-    for verb in ("track", "blame", "graph", "teleport"):
+    # Visible trail verbs
+    for verb in ("track", "blame", "graph"):
         assert f"  {verb}" in result.output, f"missing verb: {verb}"
-    # Hidden verbs must not appear in the listing
+    # Hidden under trail (callable, but not advertised)
     listing_block = result.output.split("Commands:", 1)[-1]
-    for verb in ("timeline", "explain", "sync", "search"):
-        # row pattern: leading spaces then verb name as a word
-        # avoid matching "explain" as substring of other help text by anchoring
+    for verb in ("timeline", "explain", "sync", "search", "teleport"):
         bad_prefix = f"  {verb} "
         bad_only = f"  {verb}\n"
         assert bad_prefix not in listing_block and bad_only not in listing_block, (
-            f"hidden verb {verb!r} leaked into help: {listing_block!r}"
+            f"hidden verb {verb!r} leaked into trail help: {listing_block!r}"
         )
+
+
+def test_teleport_now_lives_under_trace(tmp_path):
+    """``ot trace teleport`` is the canonical home; trail teleport stays
+    callable as a hidden alias for one release."""
+    runner = CliRunner()
+    trace_help = runner.invoke(main, ["trace", "--help"], color=False)
+    assert trace_help.exit_code == 0, trace_help.output
+    assert "  teleport" in trace_help.output
+
+    # The trail-side teleport must still dispatch (hidden alias).
+    trail_teleport_help = runner.invoke(main, ["trail", "teleport", "--help"], color=False)
+    assert trail_teleport_help.exit_code == 0, trail_teleport_help.output
+    assert "export" in trail_teleport_help.output
+    assert "open" in trail_teleport_help.output
