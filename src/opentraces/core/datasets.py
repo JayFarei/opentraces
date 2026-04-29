@@ -100,17 +100,6 @@ class DatasetPublishSummary:
 
 
 @dataclass(frozen=True)
-class DatasetPullSummary:
-    dataset_name: str
-    remote_name: str
-    repo_id: str
-    metadata_refreshed: bool
-    data: bool
-    imported_count: int
-    duplicate_count: int
-
-
-@dataclass(frozen=True)
 class DatasetWithdrawalRecord:
     target: str
     target_id: str
@@ -724,158 +713,6 @@ def publish_dataset(
         )
 
 
-def clone_remote_dataset(
-    remote: str,
-    *,
-    as_name: str | None = None,
-    read_only: bool = False,
-    token: str | None = None,
-) -> LocalDataset:
-    repo_id = normalize_hf_repo_id(remote)
-    name = validate_dataset_name(as_name or repo_id.rsplit("/", 1)[-1])
-    root = dataset_path(name)
-    if root.exists():
-        raise FileExistsError(f"dataset already exists: {name}")
-    remote_root = _fake_remote_dir(repo_id)
-    if remote_root is None:
-        remote_root = _download_hf_snapshot(
-            repo_id,
-            token,
-            allow_patterns=["README.md", "dataset_infos.json", "schemas/**"],
-        )
-    elif not remote_root.exists():
-        raise FileNotFoundError(f"remote dataset not found: {repo_id}")
-
-    (root / "schemas").mkdir(parents=True)
-    (root / "data").mkdir()
-    (root / ".opentraces" / "runs").mkdir(parents=True)
-    _copy_public_metadata(remote_root, root, include_withdrawals=False)
-    train = root / "data" / "train.jsonl"
-    train.write_text("", encoding="utf-8")
-    (root / ".opentraces" / "row_index.jsonl").write_text("", encoding="utf-8")
-    (root / ".opentraces" / "cursors.yaml").write_text("queries: {}\n", encoding="utf-8")
-    manifest = _manifest_from_public_card(root, name, repo_id, read_only=read_only)
-    save_manifest(root, manifest)
-    return LocalDataset(name=name, path=root, manifest=manifest)
-
-
-def pull_dataset(
-    name: str,
-    *,
-    remote: str | None = None,
-    data: bool = False,
-    force_pull: bool = False,
-    token: str | None = None,
-) -> DatasetPullSummary:
-    dataset = load_dataset(name)
-    remote_name = remote or dataset.manifest.active_remote
-    if not remote_name or remote_name not in dataset.manifest.remotes:
-        raise ValueError("dataset has no matching remote")
-    repo_id = repo_id_from_remote(remote_name, dataset.manifest.remotes[remote_name])
-    remote_root = _fake_remote_dir(repo_id)
-    if remote_root is None:
-        patterns = ["README.md", "dataset_infos.json", "schemas/**", "_withdrawals/**"]
-        if data:
-            patterns.extend(["data/**", "quality.json"])
-        remote_root = _download_hf_snapshot(repo_id, token, allow_patterns=patterns)
-    elif not remote_root.exists():
-        raise FileNotFoundError(f"remote dataset not found: {repo_id}")
-
-    if data and _has_publishable_unpublished_rows(name, remote_name) and not force_pull:
-        raise ValueError(
-            "local publishable unpublished rows exist for this remote; publish first or pass --force-pull"
-        )
-    _copy_public_metadata(remote_root, dataset.path, include_withdrawals=True)
-    imported_count = 0
-    duplicate_count = 0
-    if data:
-        existing = set(read_row_index(name)[i].row_id for i in range(len(read_row_index(name))))
-        missing_rows: list[dict[str, Any]] = []
-        for row in _read_remote_rows(remote_root):
-            row_id = f"row_{row_identity_hash(row, dataset.manifest.identity).removeprefix('sha256:')[:16]}"
-            if row_id in existing:
-                duplicate_count += 1
-                continue
-            missing_rows.append(row)
-            existing.add(row_id)
-        if missing_rows:
-            summary = append_rows(name, missing_rows, run_id=f"pull_{_safe_slug(repo_id)}")
-            imported_count = summary.appended_count
-            _mark_rows_uploaded(name, summary.row_ids, remote_name)
-    return DatasetPullSummary(
-        dataset_name=name,
-        remote_name=remote_name,
-        repo_id=repo_id,
-        metadata_refreshed=True,
-        data=data,
-        imported_count=imported_count,
-        duplicate_count=duplicate_count,
-    )
-
-
-def doctor_byte_identity(name: str) -> dict[str, Any]:
-    dataset = load_dataset(name)
-    event = _last_publication_event(dataset.path)
-    if event is None:
-        return {"status": "unknown", "message": "no publication event recorded", "mismatches": []}
-    repo_id = event.get("repo_id")
-    remote_root = _fake_remote_dir(str(repo_id))
-    mismatches: list[dict[str, str]] = []
-    for rel, expected_digest in (event.get("files") or {}).items():
-        if remote_root is None:
-            continue
-        remote_path = remote_root / rel
-        if not remote_path.exists():
-            mismatches.append({"path": rel, "reason": "missing"})
-            continue
-        actual = file_digest(remote_path)
-        if actual != expected_digest:
-            mismatches.append(
-                {"path": rel, "reason": "digest_mismatch", "expected": expected_digest, "actual": actual}
-            )
-    return {
-        "status": "error" if mismatches else "ok",
-        "repo_id": repo_id,
-        "run_id": event.get("run_id"),
-        "remote_head": event.get("remote_head_after"),
-        "mismatches": mismatches,
-    }
-
-
-def remote_status_summary(
-    name: str,
-    *,
-    remote_name: str | None = None,
-    token: str | None = None,
-) -> dict[str, Any]:
-    """Return remote `head`, `withdrawals`, and `byte_identity` summary.
-
-    Surfaces the bound remote's head ref, remote-side withdrawal
-    tombstones, and the byte-identity check in one payload for
-    higher-level callers.
-    """
-
-    dataset = load_dataset(name)
-    resolved = remote_name or dataset.manifest.active_remote
-    summary: dict[str, Any] = {
-        "head": None,
-        "withdrawals": {"count": 0, "files": []},
-        "byte_identity": doctor_byte_identity(name),
-    }
-    if not resolved or resolved not in dataset.manifest.remotes:
-        return summary
-    repo_id = repo_id_from_remote(resolved, dataset.manifest.remotes[resolved])
-    summary["head"] = _remote_head(repo_id, token)
-    remote_root = _fake_remote_dir(repo_id)
-    if remote_root is not None and (remote_root / "_withdrawals").exists():
-        files = sorted(
-            path.name
-            for path in (remote_root / "_withdrawals").glob("*.jsonl")
-        )
-        summary["withdrawals"] = {"count": len(files), "files": files}
-    return summary
-
-
 def withdraw_dataset_row(
     name: str,
     row_id: str,
@@ -1263,56 +1100,6 @@ def _refresh_fake_head(remote_root: Path) -> None:
     (remote_root / ".fake_head").write_text(f"fake-{digest.hexdigest()[:16]}\n", encoding="utf-8")
 
 
-def _copy_public_metadata(source: Path, target: Path, *, include_withdrawals: bool) -> None:
-    for rel in ("README.md", "dataset_infos.json", "schemas/row.schema.json", "quality.json"):
-        src = source / rel
-        if not src.exists():
-            continue
-        dst = target / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dst)
-    if include_withdrawals:
-        withdrawals = source / "_withdrawals"
-        if withdrawals.exists():
-            for item in sorted(withdrawals.glob("*.jsonl")):
-                dst = target / "_withdrawals" / item.name
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(item, dst)
-
-
-def _manifest_from_public_card(
-    root: Path,
-    name: str,
-    repo_id: str,
-    *,
-    read_only: bool,
-) -> DatasetManifest:
-    card = root / "README.md"
-    contract: dict[str, Any] = {}
-    if card.exists():
-        contract = _read_card_contract(card.read_text(encoding="utf-8"))
-    schema = contract.get("schema") or {"path": "schemas/row.schema.json", "version": "1.0.0"}
-    schema_path = root / schema.get("path", "schemas/row.schema.json")
-    if schema_path.exists() and not schema.get("digest"):
-        schema["digest"] = file_digest(schema_path)
-    workflow = contract.get("workflow") or {
-        "skill": "remote-read-only" if read_only else f"{name}-workflow",
-        "digest": "sha256:remote-read-only" if read_only else "sha256:remote",
-    }
-    identity = contract.get("identity") or {"mode": "payload_hash"}
-    policy = contract.get("publication_policy") or {"review": "required"}
-    return DatasetManifest(
-        name=name,
-        description=contract.get("description"),
-        schema=schema,
-        workflow=workflow,
-        identity=identity,
-        publication_policy=policy,
-        remotes={repo_id: DatasetRemote(url=hf_url(repo_id), visibility="private")},
-        active_remote=repo_id,
-    )
-
-
 def _read_card_contract(text: str) -> dict[str, Any]:
     if not text.startswith("---"):
         return {}
@@ -1325,45 +1112,6 @@ def _read_card_contract(text: str) -> dict[str, Any]:
         return {}
     contract = frontmatter.get("opentraces")
     return contract if isinstance(contract, dict) else {}
-
-
-def _read_remote_rows(remote_root: Path) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    data_dir = remote_root / "data"
-    if not data_dir.exists():
-        return rows
-    for shard in sorted(data_dir.glob("*.jsonl")):
-        for line in shard.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                rows.append(json.loads(line))
-    return rows
-
-
-def _has_publishable_unpublished_rows(name: str, remote_name: str) -> bool:
-    state = evaluate_publication_state(name)
-    return any(
-        entry.status in {"publishable", "published"}
-        and remote_name not in entry.uploaded_to
-        for entry in state.rows.values()
-    )
-
-
-def _download_hf_snapshot(
-    repo_id: str,
-    token: str | None,
-    *,
-    allow_patterns: list[str],
-) -> Path:
-    from huggingface_hub import snapshot_download
-
-    return Path(
-        snapshot_download(
-            repo_id=repo_id,
-            repo_type="dataset",
-            token=token,
-            allow_patterns=allow_patterns,
-        )
-    )
 
 
 def _fake_remote_dir(repo_id: str) -> Path | None:
@@ -1519,26 +1267,6 @@ def rebuild_row_index(name: str) -> RebuildSummary:
     )
     digest = digest_payload([entry.model_dump(mode="json") for entry in entries])
     return RebuildSummary(dataset_name=name, rebuilt_count=len(entries), digest=digest)
-
-
-def export_jsonl(name: str, output: Path) -> dict[str, Any]:
-    dataset = load_dataset(name)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    sources = _iter_data_files(dataset.path)
-    row_count = 0
-    with output.open("w", encoding="utf-8") as stream:
-        for data_file in sources:
-            for line in data_file.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                stream.write(line + "\n")
-                row_count += 1
-    return {
-        "dataset": name,
-        "output": str(output),
-        "row_count": row_count,
-        "digest": file_digest(output),
-    }
 
 
 def _iter_data_files(root: Path) -> list[Path]:

@@ -132,56 +132,6 @@ def test_plan058_publish_stages_only_publishable_rows_and_never_uploads_control_
     assert state.rows[blocked.row_ids[0]].status == "blocked"
 
 
-def test_plan058_clone_and_pull_are_metadata_first_and_data_pull_is_additive(
-    tmp_path,
-    monkeypatch,
-):
-    from opentraces.core.datasets import (
-        add_dataset_remote,
-        append_rows,
-        clone_remote_dataset,
-        create_dataset,
-        pull_dataset,
-        publish_dataset,
-        read_row_index,
-    )
-
-    monkeypatch.setenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", str(tmp_path / "remotes"))
-    create_dataset(
-        "source",
-        workflow_skill="curator",
-        workflow_digest="sha256:workflow",
-        publication_policy={"review": "auto"},
-    )
-    add_dataset_remote("source", "me/source", visibility="private")
-    append_rows("source", [_row("Remote row.", trace_id="trace-remote")], run_id="run-1")
-    publish_dataset("source", contributor="tester")
-
-    cloned = clone_remote_dataset("hf://me/source", as_name="copy", read_only=True)
-    assert cloned.manifest.active_remote == "me/source"
-    assert read_row_index("copy") == []
-    assert (cloned.path / "data" / "train.jsonl").read_text() == ""
-
-    metadata_only = pull_dataset("copy", data=False)
-    assert metadata_only.imported_count == 0
-    assert read_row_index("copy") == []
-
-    imported = pull_dataset("copy", data=True)
-    assert imported.imported_count == 1
-    assert len(read_row_index("copy")) == 1
-
-    append_rows("copy", [_row("Local unpublished.", trace_id="trace-local")], run_id="run-local")
-    try:
-        pull_dataset("copy", data=True)
-    except ValueError as exc:
-        assert "--force-pull" in str(exc)
-    else:
-        raise AssertionError("pull with local publishable rows should require --force-pull")
-
-    forced = pull_dataset("copy", data=True, force_pull=True)
-    assert forced.imported_count == 0
-
-
 def test_plan058_withdrawal_tombstones_filter_wrapper_and_hard_delete_requires_confirmation():
     from opentraces.core.datasets import (
         append_rows,
