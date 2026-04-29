@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-from pathlib import Path
 
 import click
 
 from ._help import OpentracesCommand, OpentracesGroup
+from ..core.datasets import list_datasets
 from ..core.workflows import (
     WorkflowPackage,
     create_workflow,
     list_workflows,
-    load_workflow,
     remove_workflow,
 )
 
@@ -25,33 +22,48 @@ def workflow_group() -> None:
     """Manage local dataset workflow skills."""
 
 
+def _datasets_by_workflow_skill() -> dict[str, list[str]]:
+    """Reverse-index dataset bindings: ``skill_name -> [dataset_name, ...]``.
+
+    The cross-reference is the only thing the CLI uniquely knows. Browsing
+    files is the shell's job; computing which datasets bind a workflow
+    requires reading every dataset manifest and is what justifies a CLI
+    command at all.
+    """
+    index: dict[str, list[str]] = {}
+    for dataset in list_datasets():
+        skill = dataset.manifest.workflow.skill
+        if skill:
+            index.setdefault(skill, []).append(dataset.name)
+    return index
+
+
 @workflow_group.command("list", cls=OpentracesCommand)
+@click.option("--digest", "show_digest", is_flag=True, help="Also show the content digest.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def workflow_list(as_json: bool) -> None:
-    """List installed dataset workflow skill packages."""
-    workflows = [_workflow_payload(workflow) for workflow in list_workflows()]
+def workflow_list(show_digest: bool, as_json: bool) -> None:
+    """List installed workflows with their path and bound datasets."""
+    bindings = _datasets_by_workflow_skill()
+    workflows = list_workflows()
+    payload = [
+        {
+            **_workflow_payload(workflow),
+            "datasets": sorted(bindings.get(workflow.name, [])),
+        }
+        for workflow in workflows
+    ]
     if as_json:
-        click.echo(json.dumps({"status": "ok", "workflows": workflows}, indent=2, sort_keys=True))
+        click.echo(json.dumps({"status": "ok", "workflows": payload}, indent=2, sort_keys=True))
         return
-    for workflow in workflows:
-        click.echo(f"{workflow['name']}  {workflow['digest']}")
-
-
-@workflow_group.command("show", cls=OpentracesCommand)
-@click.argument("name")
-@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def workflow_show(name: str, as_json: bool) -> None:
-    """Show one dataset workflow package and digest."""
-    try:
-        workflow = load_workflow(name)
-    except (FileNotFoundError, ValueError) as exc:
-        click.echo(str(exc), err=True)
-        sys.exit(3)
-    payload = {"status": "ok", "workflow": _workflow_payload(workflow)}
-    if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+    if not workflows:
+        click.echo("No workflows installed.")
         return
-    click.echo(f"{workflow.name}  {workflow.digest}")
+    for entry in payload:
+        users = ", ".join(entry["datasets"]) or "<unused>"
+        line = f"{entry['name']}\t{entry['path']}\t{users}"
+        if show_digest:
+            line = f"{line}\t{entry['digest']}"
+        click.echo(line)
 
 
 @workflow_group.command("create", cls=OpentracesCommand)
@@ -75,34 +87,7 @@ def workflow_create(
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
-    click.echo(f"Workflow created: {workflow.name}")
-
-
-@workflow_group.command("edit", cls=OpentracesCommand)
-@click.argument("name")
-@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def workflow_edit(name: str, as_json: bool) -> None:
-    """Open a local dataset workflow skill for editing."""
-    try:
-        workflow = load_workflow(name)
-    except (FileNotFoundError, ValueError) as exc:
-        click.echo(str(exc), err=True)
-        sys.exit(3)
-    skill_path = workflow.path / "SKILL.md"
-    payload = {
-        "status": "ok",
-        "workflow": _workflow_payload(workflow),
-        "edit_path": str(skill_path),
-    }
-    if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
-        return
-    editor = os.environ.get("EDITOR")
-    if editor:
-        raise SystemExit(subprocess.call([editor, str(skill_path)]))
-    click.echo(f"Workflow path: {workflow.path}")
-    click.echo(f"Skill file:     {skill_path}")
-    click.echo("Set EDITOR to open it directly.")
+    click.echo(f"Workflow created: {workflow.name}  {workflow.path}")
 
 
 @workflow_group.command("remove", cls=OpentracesCommand)

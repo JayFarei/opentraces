@@ -156,7 +156,7 @@ def test_legacy_verbs_are_not_advertised():
         (["dataset", "--help"], ["clone", "Clone a remote HF dataset", "publish", "review"]),
         (["dataset", "remote", "--help"], ["add", "Connect a local dataset", "create"]),
         (["dataset", "schedule", "--help"], ["add", "Add a local schedule", "pause"]),
-        (["workflow", "--help"], ["create", "edit", "remove"]),
+        (["workflow", "--help"], ["create", "list", "remove"]),
     ],
 )
 def test_plan057_058_groups_have_populated_command_help(args, expected):
