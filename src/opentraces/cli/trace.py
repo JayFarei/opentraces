@@ -406,9 +406,40 @@ def trace_map_cmd(
 
 @trace_group.command("get", cls=OpentracesCommand)
 @click.argument("ref")
+@click.option(
+    "--resume",
+    "resume",
+    is_flag=True,
+    help="Hand control back to the upstream agent (Claude Code) for this trace.",
+)
+@click.option(
+    "--at-step",
+    "at_step",
+    default=None,
+    help="With --resume: fork a new session from a specific step id (e.g. s42).",
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    help="With --resume: print the resume command instead of exec'ing it.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def trace_get(ref: str, as_json: bool) -> None:
-    """Resolve a trace, trace unit, map node, or ot:// Trail resource."""
+def trace_get(
+    ref: str,
+    resume: bool,
+    at_step: str | None,
+    dry_run: bool,
+    as_json: bool,
+) -> None:
+    """Resolve a trace, trace unit, map node, or ot:// Trail resource.
+
+    Pass ``--resume`` to hand control back to the upstream agent
+    (Claude Code) instead of printing the trace details.
+    """
+    if resume:
+        _resume_trace_impl(ref, at_step, dry_run, as_json)
+        return
     from opentraces_schema import TraceRecord
 
     from ..core.trace_index import get_map_node, get_trace_path, get_unit
@@ -996,38 +1027,17 @@ def trace_discard(trace_id: str, confirmed: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-@click.command(
-    "resume",
-    cls=OpentracesCommand,
-    examples=[
-        "opentraces trail resume abc12",
-        "opentraces trail resume abc12 --dry-run",
-    ],
-    see_also=[
-        ("opentraces trace get", "inspect the trace before resuming."),
-        ("opentraces trace query", "browse trace ids."),
-    ],
-)
-@click.argument("trace_id")
-@click.option(
-    "--at-step",
-    "at_step",
-    help="Fork a new Claude Code session from a specific step id (for example: s42).",
-)
-@click.option("--dry-run", "dry_run", is_flag=True,
-              help="Print the resume command instead of exec'ing it.")
-@click.option("--json", "as_json", is_flag=True, help="Emit a structured resume packet.")
-def trace_resume(
+def _resume_trace_impl(
     trace_id: str,
     at_step: str | None,
     dry_run: bool,
     as_json: bool,
 ) -> None:
-    """Resume the upstream agent session that produced a trace.
+    """Hand control back to the upstream agent for a given trace.
 
-    Accepts the full trace_id or a ``t:XX`` / ``XX`` prefix (>=2 chars).
-    For claude-code the command execs ``claude --resume <session_id>``;
-    other agents print the native resume command instead.
+    Shared between the canonical ``ot trace get <id> --resume`` flag form
+    and the deprecated ``ot trail resume <id>`` alias kept for backwards
+    compatibility with existing scripts and tests.
     """
     from ..core.trace_meta import (
         resolve_trace_id_prefix,
@@ -1178,3 +1188,35 @@ def trace_resume(
 
     # Non-claude-code: print the native resume hint and exit 0.
     print_generic_hint(agent_name, session_id)
+
+
+@click.command(
+    "resume",
+    cls=OpentracesCommand,
+    hidden=True,
+    examples=[
+        "opentraces trace get abc12 --resume",
+        "opentraces trace get abc12 --resume --dry-run",
+    ],
+    see_also=[
+        ("opentraces trace get", "inspect the trace before resuming."),
+        ("opentraces trace query", "browse trace ids."),
+    ],
+)
+@click.argument("trace_id")
+@click.option(
+    "--at-step",
+    "at_step",
+    help="Fork a new Claude Code session from a specific step id (for example: s42).",
+)
+@click.option("--dry-run", "dry_run", is_flag=True,
+              help="Print the resume command instead of exec'ing it.")
+@click.option("--json", "as_json", is_flag=True, help="Emit a structured resume packet.")
+def trace_resume(
+    trace_id: str,
+    at_step: str | None,
+    dry_run: bool,
+    as_json: bool,
+) -> None:
+    """Deprecated alias for ``ot trace get <id> --resume``."""
+    _resume_trace_impl(trace_id, at_step, dry_run, as_json)

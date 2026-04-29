@@ -141,6 +141,20 @@ def test_resume_bare_prefix(runner, resume_project):
     assert "--resume ff00aa11-sess-id-5678" in result.output
 
 
+def test_resume_via_trace_get_flag(runner, resume_project):
+    """Canonical shape: ``ot trace get <id> --resume`` mirrors trail resume."""
+    from opentraces.cli import main
+    with patch("shutil.which", return_value="/usr/local/bin/claude"):
+        result = runner.invoke(
+            main,
+            ["trace", "get", "t:b7", "--resume", "--dry-run"],
+        )
+    assert result.exit_code == 0, result.output
+    assert "claude" in result.output
+    assert "--resume" in result.output
+    assert "ff00aa11-sess-id-5678" in result.output
+
+
 def test_resume_missing_claude_returns_127(runner, resume_project):
     from opentraces.cli import main
     with patch("shutil.which", return_value=None):
