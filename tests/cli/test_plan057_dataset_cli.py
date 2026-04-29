@@ -9,7 +9,7 @@ from opentraces.cli.dataset import dataset_group
 from opentraces.core.datasets import append_rows, dataset_path
 
 
-def test_dataset_cli_new_list_show_check_export_remove_round_trip(tmp_path):
+def test_dataset_cli_new_list_show_export_remove_round_trip(tmp_path):
     runner = CliRunner()
 
     created = runner.invoke(
@@ -50,12 +50,6 @@ def test_dataset_cli_new_list_show_check_export_remove_round_trip(tmp_path):
         "summary": "CLI export row.",
     }
     append_rows("grill-me-intents", [row], run_id="run_cli")
-
-    checked = runner.invoke(dataset_group, ["check", "grill-me-intents", "--json"])
-    assert checked.exit_code == 0, checked.output
-    check_payload = json.loads(checked.output)
-    assert check_payload["row_count"] == 1
-    assert check_payload["row_index_count"] == 1
 
     output = tmp_path / "rows.jsonl"
     exported = runner.invoke(

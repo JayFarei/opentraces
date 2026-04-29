@@ -134,7 +134,11 @@ def run_fake() -> dict[str, Any]:
         published = _invoke(runner, ["publish", "acceptance", "--json"])
         os.environ.pop("OPENTRACES_PLAN058_FAKE_CONFLICT_ROW", None)
 
-        doctor = _invoke(runner, ["doctor", "acceptance", "--byte-identity", "--json"])
+        from opentraces.core.datasets import withdraw_dataset_row
+
+        status_after_publish = _invoke(
+            runner, ["status", "acceptance", "--remote", "--json"]
+        )
         remote_files = [
             str(path.relative_to(remote_root / "me" / "acceptance"))
             for path in (remote_root / "me" / "acceptance").rglob("*")
@@ -148,16 +152,10 @@ def run_fake() -> dict[str, Any]:
         )
         pulled = _invoke(runner, ["pull", "copy", "--data", "--json"])
 
-        withdrawal = _invoke(
-            runner,
-            [
-                "withdraw",
-                "copy",
-                read_row_index("copy")[0].row_id,
-                "--reason",
-                "user-request",
-                "--json",
-            ],
+        withdrawal_record = withdraw_dataset_row(
+            "copy",
+            read_row_index("copy")[0].row_id,
+            reason="user-request",
         )
 
         _invoke(
@@ -194,11 +192,16 @@ def run_fake() -> dict[str, Any]:
             "blocked_row_id": blocked.row_ids[0],
             "check_only": check_only["publish"],
             "published": published["publish"],
-            "doctor": doctor["byte_identity"],
+            "doctor": status_after_publish["remote"]["byte_identity"],
             "no_control_plane_leak": no_control_plane_leak,
             "applied_dataset": applied["dataset"]["name"],
             "pull": pulled["pull"],
-            "withdrawal": withdrawal["withdrawal"],
+            "withdrawal": {
+                "target": withdrawal_record.target,
+                "target_id": withdrawal_record.target_id,
+                "reason": withdrawal_record.reason,
+                "requested_at": withdrawal_record.requested_at,
+            },
             "wrapper_visible_rows_after_withdrawal": len(load_public_rows("copy")),
             "no_write_access": {
                 "exit_code": denied_result.exit_code,

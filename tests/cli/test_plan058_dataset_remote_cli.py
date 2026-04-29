@@ -13,7 +13,6 @@ from opentraces.core.datasets import (
     publish_dataset,
     read_publication_state,
     read_row_index,
-    load_public_rows,
 )
 
 
@@ -159,9 +158,7 @@ def test_dataset_publish_check_only_and_status_json(tmp_path, monkeypatch):
     assert status_payload["publication"]["published"] == 1
     assert status_payload["remote"]["active_remote"] == "me/publish-cli"
 
-    doctor = runner.invoke(dataset_group, ["doctor", "publish-cli", "--byte-identity", "--json"])
-    assert doctor.exit_code == 0, doctor.output
-    assert json.loads(doctor.output)["byte_identity"]["status"] == "ok"
+    assert status_payload["remote"]["byte_identity"]["status"] == "ok"
 
 
 def test_dataset_clone_and_pull_cli_use_hf_shaped_remote(tmp_path, monkeypatch):
@@ -275,53 +272,3 @@ def test_dataset_apply_alias_still_works_and_warns(tmp_path, monkeypatch):
     assert "deprecated" in applied.stderr
 
 
-def test_dataset_withdraw_cli_emits_tombstone_and_hard_delete_requires_confirmation():
-    runner = CliRunner()
-    runner.invoke(
-        dataset_group,
-        ["new", "withdraw-cli", "--workflow", "curator", "--workflow-digest", "sha256:w"],
-    )
-    summary = append_rows(
-        "withdraw-cli",
-        [
-            {
-                "source_trace_id": "trace-1",
-                "source_unit_id": "tu:trace-1:trace",
-                "summary": "Withdraw me.",
-            }
-        ],
-        run_id="run-1",
-    )
-    row_id = summary.row_ids[0]
-
-    withdrawn = runner.invoke(
-        dataset_group,
-        ["withdraw", "withdraw-cli", row_id, "--reason", "user-request", "--json"],
-    )
-    assert withdrawn.exit_code == 0, withdrawn.output
-    assert json.loads(withdrawn.output)["withdrawal"]["target_id"] == row_id
-    assert load_public_rows("withdraw-cli", apply_withdrawals=True) == []
-
-    hard_missing = runner.invoke(
-        dataset_group,
-        ["withdraw", "withdraw-cli", row_id, "--reason", "legal", "--hard"],
-    )
-    assert hard_missing.exit_code != 0
-    assert "HARD_DELETE" in hard_missing.output
-
-    hard = runner.invoke(
-        dataset_group,
-        [
-            "withdraw",
-            "withdraw-cli",
-            row_id,
-            "--reason",
-            "legal",
-            "--hard",
-            "--confirm",
-            "HARD_DELETE",
-            "--json",
-        ],
-    )
-    assert hard.exit_code == 0, hard.output
-    assert read_row_index("withdraw-cli") == []

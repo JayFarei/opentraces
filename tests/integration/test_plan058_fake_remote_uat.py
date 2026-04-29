@@ -570,18 +570,9 @@ def test_v17_dataset_status_remote_json_reports_head_withdrawals_byte_identity(
     assert publish_result.exit_code == 0, publish_result.output
 
     # Add a withdrawal so the withdrawals counter is non-zero.
-    withdraw = runner.invoke(
-        dataset_group,
-        [
-            "withdraw",
-            "v17-status",
-            row_id,
-            "--reason",
-            "user-request",
-            "--json",
-        ],
-    )
-    assert withdraw.exit_code == 0, withdraw.output
+    from opentraces.core.datasets import withdraw_dataset_row
+
+    withdraw_dataset_row("v17-status", row_id, reason="user-request")
     # Republish so the withdrawal tombstone reaches the remote — V17 mandates
     # the status payload reports remote-side withdrawals.
     runner.invoke(dataset_group, ["publish", "v17-status", "--json"])
@@ -622,15 +613,15 @@ def test_v17_dataset_status_remote_json_reports_head_withdrawals_byte_identity(
 
 
 # ---------------------------------------------------------------------------
-# V23 — `dataset doctor --byte-identity` flags drift
+# V23 — `dataset status --remote --json` reports byte-identity drift
 # ---------------------------------------------------------------------------
 
 
-def test_v23_doctor_byte_identity_detects_remote_file_drift(
+def test_v23_status_remote_byte_identity_detects_remote_file_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """V23: `doctor --byte-identity` flags when a published file differs on the remote."""
+    """V23: `status --remote --json` flags when a published file differs on the remote."""
     _setup_fake_remote(monkeypatch, tmp_path)
     runner = CliRunner()
     create_dataset(
@@ -648,14 +639,14 @@ def test_v23_doctor_byte_identity_detects_remote_file_drift(
     publish_result = runner.invoke(dataset_group, ["publish", "v23-drift", "--json"])
     assert publish_result.exit_code == 0, publish_result.output
 
-    # Sanity: doctor should be ok right after publish.
+    # Sanity: byte-identity should be ok right after publish.
     healthy = runner.invoke(
         dataset_group,
-        ["doctor", "v23-drift", "--byte-identity", "--json"],
+        ["status", "v23-drift", "--remote", "--json"],
     )
     assert healthy.exit_code == 0, healthy.output
     healthy_payload = json.loads(healthy.output)
-    assert healthy_payload["byte_identity"]["status"] == "ok", healthy_payload
+    assert healthy_payload["remote"]["byte_identity"]["status"] == "ok", healthy_payload
 
     # Mutate the remote README.md on disk to simulate drift away from the
     # remembered staged digest.
@@ -666,12 +657,10 @@ def test_v23_doctor_byte_identity_detects_remote_file_drift(
 
     drifted = runner.invoke(
         dataset_group,
-        ["doctor", "v23-drift", "--byte-identity", "--json"],
+        ["status", "v23-drift", "--remote", "--json"],
     )
-    # The CLI emits exit 0 with status=error embedded — assert the embedded
-    # status faithfully reports drift, regardless of process exit code.
     drifted_payload = json.loads(drifted.output)
-    bi = drifted_payload["byte_identity"]
+    bi = drifted_payload["remote"]["byte_identity"]
     assert bi["status"] == "error", bi
     mismatches = bi.get("mismatches") or []
     assert any(item.get("path") == "README.md" for item in mismatches), bi
@@ -707,18 +696,9 @@ def test_v25_remote_repo_never_contains_dot_opentraces_files(
     publish_one = runner.invoke(dataset_group, ["publish", "v25-leak", "--json"])
     assert publish_one.exit_code == 0, publish_one.output
 
-    withdraw = runner.invoke(
-        dataset_group,
-        [
-            "withdraw",
-            "v25-leak",
-            row_id,
-            "--reason",
-            "user-request",
-            "--json",
-        ],
-    )
-    assert withdraw.exit_code == 0, withdraw.output
+    from opentraces.core.datasets import withdraw_dataset_row
+
+    withdraw_dataset_row("v25-leak", row_id, reason="user-request")
 
     publish_two = runner.invoke(dataset_group, ["publish", "v25-leak", "--json"])
     assert publish_two.exit_code == 0, publish_two.output
