@@ -89,12 +89,20 @@ COMMAND_SECTIONS = [
         [
             "dataset",
         ],
+        [
+            ("Lifecycle", ["new", "clone", "list", "remove"]),
+            ("Inspect", ["show", "status"]),
+            ("Work", ["run", "schedule", "review", "approve", "reject"]),
+            ("Sync", ["publish", "pull", "export", "remote"]),
+        ],
     ),
 ]
 
 # Sections whose entries should also list their non-hidden subcommands
 # inline, so the root --help reveals the verbs each group exposes.
-EXPANDED_SECTIONS = {"Trace", "Trail", "Workflow", "Dataset"}
+# Sections that carry a third tuple element (sub-categories) handle
+# their own expansion via the sub-category map, so they're not in this set.
+EXPANDED_SECTIONS = {"Trace", "Trail", "Workflow"}
 
 
 # -- Color helpers ------------------------------------------------------------
@@ -273,16 +281,40 @@ class GroupedGroup(OpentracesGroup):
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         # Journey-first sectioned listing. Keep the unreleased development
         # surface narrow: no compatibility block, no old inbox-first aliases.
-        sections: list[tuple[str, list[tuple[str, str]]]] = []
-        for section_name, cmd_names in COMMAND_SECTIONS:
+        # A section entry may carry an optional 3rd element — a list of
+        # (sub_label, [subcommand_names]) tuples — to bucket a group's
+        # subcommands under labelled sub-headings.
+        sections: list[tuple[str, list[tuple[str, str]], list[tuple[str, list[tuple[str, str]]]]]] = []
+        for entry in COMMAND_SECTIONS:
+            if len(entry) == 3:
+                section_name, cmd_names, sub_categories = entry
+            else:
+                section_name, cmd_names = entry
+                sub_categories = None
             rows: list[tuple[str, str]] = []
-            expand = section_name in EXPANDED_SECTIONS
+            sub_buckets: list[tuple[str, list[tuple[str, str]]]] = []
+            expand = sub_categories is None and section_name in EXPANDED_SECTIONS
             for name in cmd_names:
                 cmd = self.commands.get(name)
                 if cmd is None or cmd.hidden:
                     continue
                 rows.append((name, cmd.get_short_help_str(limit=formatter.width)))
-                if expand and isinstance(cmd, click.Group):
+                if sub_categories is not None and isinstance(cmd, click.Group):
+                    for sub_label, sub_cmd_names in sub_categories:
+                        bucket: list[tuple[str, str]] = []
+                        for sub_cmd_name in sub_cmd_names:
+                            sub = cmd.get_command(ctx, sub_cmd_name)
+                            if sub is None or sub.hidden:
+                                continue
+                            bucket.append(
+                                (
+                                    f"{name} {sub_cmd_name}",
+                                    sub.get_short_help_str(limit=formatter.width),
+                                )
+                            )
+                        if bucket:
+                            sub_buckets.append((sub_label, bucket))
+                elif expand and isinstance(cmd, click.Group):
                     for sub_name in cmd.list_commands(ctx):
                         sub = cmd.get_command(ctx, sub_name)
                         if sub is None or sub.hidden:
@@ -293,18 +325,31 @@ class GroupedGroup(OpentracesGroup):
                                 sub.get_short_help_str(limit=formatter.width),
                             )
                         )
-            if rows:
-                sections.append((section_name, rows))
+            if rows or sub_buckets:
+                sections.append((section_name, rows, sub_buckets))
         # Cross-section width alignment: pick the widest name across all
         # sections so descriptions align in one column from top to bottom.
         name_width = max(
-            (len(n) for _, rows in sections for n, _ in rows),
+            (
+                len(n)
+                for _, rows, sub_buckets in sections
+                for n, _ in rows + [item for _, bucket in sub_buckets for item in bucket]
+            ),
             default=0,
         )
-        for section_name, rows in sections:
+        for section_name, rows, sub_buckets in sections:
             heading = f"{section_name.upper()} COMMANDS"
             with self._section(formatter, heading):
-                formatter.write_dl(self._style_rows(rows, name_width))
+                if rows:
+                    formatter.write_dl(self._style_rows(rows, name_width))
+                for sub_label, bucket in sub_buckets:
+                    formatter.write_paragraph()
+                    indent = " " * formatter.current_indent
+                    formatter.write(
+                        f"{indent}{click.style(sub_label + ':', dim=True, italic=True)}\n"
+                    )
+                    with formatter.indentation():
+                        formatter.write_dl(self._style_rows(bucket, name_width))
 
 
 def emit_json(data: dict) -> None:
