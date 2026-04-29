@@ -275,3 +275,15 @@ def test_complete_dataset_name_works_for_remote_subcommand(runner, datasets_proj
     names = [ln.split("\t")[0] for ln in lines]
     assert "alpha-traces" in names
     assert "beta-traces" in names
+
+
+def test_complete_dataset_name_works_for_review(runner, datasets_project):
+    # `dataset review` is special: its first positional is a variadic
+    # named `args` (because it overloads `review <name>` and
+    # `review reset <name> [row_ids]`). The completer must still
+    # propose dataset names — earlier the strict ``name`` arg check
+    # missed this command and TAB returned nothing useful.
+    lines = _complete(runner, "dataset", "review", "")
+    names = [ln.split("\t")[0] for ln in lines]
+    assert "alpha-traces" in names
+    assert "beta-traces" in names

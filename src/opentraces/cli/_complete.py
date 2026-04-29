@@ -243,11 +243,15 @@ def _dataset_name_candidates(
     """Emit local dataset names for ``ot dataset <verb> <NAME>``.
 
     Fires only inside the ``dataset`` tree and only when the resolved
-    leaf command takes a positional ``name`` argument that refers to an
+    leaf command takes a first positional argument that refers to an
     existing local dataset. ``dataset new`` is excluded since the user
-    is typing a name that doesn't exist yet; ``clone``/``apply`` take
-    ``remote`` (an HF repo id) as their first arg, so the arg-name
-    check naturally skips them.
+    is typing a name that doesn't exist yet; ``clone``/``apply`` are
+    excluded because their first positional is named ``remote`` (an HF
+    repo id, not a local dataset). ``review`` is special-cased: its
+    first positional is a variadic named ``args`` because the command
+    overloads ``review <name>`` and ``review reset <name> [row_ids]``,
+    but in both shapes the user eventually types a dataset name in a
+    completable position.
     """
     if partial.startswith("-"):
         return []
@@ -255,11 +259,13 @@ def _dataset_name_candidates(
         return []
     if getattr(cmd, "name", "") == "new":
         return []
-    wants = any(
-        isinstance(p, click.Argument) and p.name == "name"
-        for p in cmd.params
+    first_arg = next(
+        (p for p in cmd.params if isinstance(p, click.Argument)),
+        None,
     )
-    if not wants:
+    if first_arg is None:
+        return []
+    if first_arg.name == "remote":
         return []
     try:
         from ..core.datasets import list_datasets
