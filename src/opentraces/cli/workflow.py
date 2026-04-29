@@ -27,6 +27,7 @@ def workflow_group() -> None:
 @workflow_group.command("list", cls=OpentracesCommand)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def workflow_list(as_json: bool) -> None:
+    """List installed dataset workflow skill packages."""
     workflows = [_workflow_payload(workflow) for workflow in list_workflows()]
     if as_json:
         click.echo(json.dumps({"status": "ok", "workflows": workflows}, indent=2, sort_keys=True))
@@ -39,6 +40,7 @@ def workflow_list(as_json: bool) -> None:
 @click.argument("name")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def workflow_show(name: str, as_json: bool) -> None:
+    """Show one dataset workflow package and digest."""
     try:
         workflow = load_workflow(name)
     except (FileNotFoundError, ValueError) as exc:
@@ -62,6 +64,7 @@ def workflow_new(
     description: str | None,
     as_json: bool,
 ) -> None:
+    """Scaffold a new local dataset workflow skill."""
     try:
         workflow = create_workflow(name, description=description, template=template)
     except (FileExistsError, ValueError) as exc:
@@ -79,6 +82,7 @@ def workflow_new(
 @click.option("--replace", is_flag=True, help="Replace an existing workflow with the same name.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def workflow_install(path: Path, replace: bool, as_json: bool) -> None:
+    """Install a workflow skill package from a local directory."""
     try:
         workflow = install_workflow(path, replace=replace)
     except (FileExistsError, ValueError) as exc:
@@ -96,6 +100,7 @@ def workflow_install(path: Path, replace: bool, as_json: bool) -> None:
 @click.option("--yes", is_flag=True, help="Confirm removal.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def workflow_rm(name: str, yes: bool, as_json: bool) -> None:
+    """Remove an installed workflow skill package."""
     if not yes:
         click.echo("Pass --yes to remove a workflow.", err=True)
         sys.exit(2)

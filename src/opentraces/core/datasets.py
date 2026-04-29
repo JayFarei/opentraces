@@ -128,6 +128,12 @@ PUBLIC_SURFACE_PATTERNS = [
 ]
 
 
+# Bounded retry budget for ``publish_dataset`` parent_commit conflicts. Plan 058
+# verification requires concurrent publishers to retry 412 conflicts without
+# looping forever.
+MAX_PARENT_COMMIT_RETRIES = 5
+
+
 def datasets_dir() -> Path:
     return paths.OPENTRACES_DIR / "datasets"
 
@@ -587,7 +593,7 @@ def publish_dataset(
     resume: str | None = None,
     contributor: str | None = None,
     token: str | None = None,
-    max_retries: int = 1,
+    max_retries: int = MAX_PARENT_COMMIT_RETRIES,
 ) -> DatasetPublishSummary:
     dataset = load_dataset(name)
     remote_name = to or dataset.manifest.active_remote
@@ -896,7 +902,49 @@ def withdraw_dataset_row(
     return record
 
 
+def forget_trace_cascade(
+    trace_id: str,
+    *,
+    reason: str = "user-request",
+) -> dict[str, Any]:
+    """Cascade ``ot trace forget`` across every local dataset.
+
+    Resolves all dataset rows whose ``source_trace_id`` matches ``trace_id``
+    and emits a row-level withdrawal for each one. Datasets with no matching
+    rows are untouched.
+    """
+
+    affected: list[dict[str, Any]] = []
+    for dataset in list_datasets():
+        rows = read_rows_by_id(dataset.name)
+        matches = [
+            row_id
+            for row_id, row in rows.items()
+            if row.get("source_trace_id") == trace_id
+        ]
+        if not matches:
+            continue
+        withdrawn_ids: list[str] = []
+        for row_id in matches:
+            withdraw_dataset_row(dataset.name, row_id, reason=reason)
+            withdrawn_ids.append(row_id)
+        affected.append({"dataset": dataset.name, "row_ids": withdrawn_ids})
+    return {
+        "trace_id": trace_id,
+        "reason": reason,
+        "affected": affected,
+        "withdrawn_count": sum(len(entry["row_ids"]) for entry in affected),
+    }
+
+
 def load_public_rows(name: str, *, apply_withdrawals: bool = True) -> list[dict[str, Any]]:
+    """Read public rows, filtering withdrawal tombstones by default.
+
+    Plain ``datasets.load_dataset(...)`` reads raw shards and does not apply
+    OpenTraces tombstones. This helper is the OpenTraces wrapper for consumers
+    that want withdrawal-aware reads.
+    """
+
     rows = read_rows_by_id(name)
     withdrawn = _withdrawn_row_ids(name) if apply_withdrawals else set()
     return [row for row_id, row in rows.items() if row_id not in withdrawn]
@@ -966,6 +1014,19 @@ class DatasetRemoteSchemaAheadError(RuntimeError):
         self.local_version = local_version
 
 
+class DatasetSecurityFindingsError(RuntimeError):
+    """Raised when publication-time security re-scan finds matches."""
+
+    classification = "security_findings"
+    exit_code = 8
+
+    def __init__(self, findings: list[dict[str, Any]]) -> None:
+        super().__init__(
+            f"publication blocked: {len(findings)} security finding(s) in withdrawal records"
+        )
+        self.findings = findings
+
+
 def _stage_publication(
     dataset: LocalDataset,
     rows: list[tuple[str, dict[str, Any]]],
@@ -992,11 +1053,25 @@ def _stage_publication(
         staged.append("quality.json")
     withdrawals = dataset.path / "_withdrawals"
     if withdrawals.exists():
+        scan_findings: list[dict[str, Any]] = []
         for item in sorted(withdrawals.glob("*.jsonl")):
             target = staging / "_withdrawals" / item.name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(item, target)
             staged.append(str(target.relative_to(staging)))
+            scan = scan_serialized(item.read_bytes())
+            if scan.matches:
+                for match in scan.matches:
+                    scan_findings.append(
+                        {
+                            "path": str(target.relative_to(staging)),
+                            "pattern": match.pattern_name,
+                            "field": getattr(match, "field_type", None)
+                            and match.field_type.value,
+                        }
+                    )
+        if scan_findings:
+            raise DatasetSecurityFindingsError(scan_findings)
     if rows:
         digest = hashlib.sha256()
         lines: list[str] = []
@@ -1120,6 +1195,7 @@ def _fake_upload_folder(repo_id: str, staging: Path, *, parent_commit: str | Non
     if os.environ.get("OPENTRACES_PLAN058_FAKE_DENY_WRITE"):
         raise DatasetRemotePermissionError(f"write access denied for {repo_id}")
     _maybe_fake_conflict_once(remote_root)
+    _maybe_fake_conflict(remote_root)
     for path in _iter_files(staging):
         rel = path.relative_to(staging)
         rel_text = str(rel)
@@ -1148,6 +1224,34 @@ def _maybe_fake_conflict_once(remote_root: Path) -> None:
         stream.write(_canonical_json(row) + "\n")
     _refresh_fake_head(remote_root)
     raise RemoteHeadConflict("simulated concurrent remote update")
+
+
+def _maybe_fake_conflict(remote_root: Path) -> None:
+    """Raise a configured number of fake remote-head conflicts."""
+
+    raw = os.environ.get("OPENTRACES_PLAN058_FAKE_CONFLICT_COUNT")
+    if not raw:
+        return
+    try:
+        budget = int(raw)
+    except ValueError:
+        return
+    if budget <= 0:
+        return
+    counter_path = remote_root / ".fake_conflict_count"
+    seen = 0
+    if counter_path.exists():
+        try:
+            seen = int(counter_path.read_text(encoding="utf-8").strip() or "0")
+        except ValueError:
+            seen = 0
+    if seen >= budget:
+        return
+    counter_path.write_text(f"{seen + 1}\n", encoding="utf-8")
+    _refresh_fake_head(remote_root)
+    raise RemoteHeadConflict(
+        f"simulated concurrent remote update ({seen + 1}/{budget})"
+    )
 
 
 def _refresh_fake_head(remote_root: Path) -> None:

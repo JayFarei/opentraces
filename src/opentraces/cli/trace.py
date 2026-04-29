@@ -70,7 +70,7 @@ def error_response(*a, **k):
 
 @click.group("trace", cls=OpentracesGroup)
 def trace_group() -> None:
-    """Trace subcommands."""
+    """Search, map, retrieve, and forget retained traces."""
 
 
 @trace_group.group("workspace", cls=OpentracesGroup)
@@ -488,6 +488,80 @@ def trace_get(ref: str, as_json: bool) -> None:
 
 trace_group.add_command(trace_query, name="search")
 trace_group.add_command(trace_get, name="show")
+
+
+@trace_group.command(
+    "forget",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces trace forget trace-doomed --cascade",
+        "opentraces trace forget trace-doomed --cascade --reason legal --json",
+    ],
+    option_groups=[
+        ("Scope", ["trace_id"]),
+        ("Behaviour", ["cascade", "reason", "as_json"]),
+    ],
+)
+@click.argument("trace_id")
+@click.option(
+    "--cascade",
+    is_flag=True,
+    help="Withdraw rows referencing this trace_id across every local dataset.",
+)
+@click.option(
+    "--reason",
+    default="user-request",
+    help="Withdrawal reason code (default: user-request).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_forget(trace_id: str, cascade: bool, reason: str, as_json: bool) -> None:
+    """Forget a trace; with ``--cascade`` emit row-level withdrawals across datasets.
+
+    Plan 058 "Withdrawal semantics": this is the trace-scoped workflow. It
+    resolves all dataset rows whose ``source_trace_id`` matches ``trace_id``
+    and emits row-level withdrawals for each one. Without ``--cascade`` the
+    command is currently a no-op stub (trace-only forget is not in scope for
+    M3 — only the dataset cascade is implemented).
+    """
+
+    if not cascade:
+        if as_json:
+            click.echo(
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "trace_id": trace_id,
+                        "cascade": False,
+                        "message": "no cascade requested; pass --cascade to withdraw dataset rows",
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
+        click.echo(
+            "trace forget without --cascade is a no-op; pass --cascade to withdraw "
+            "dataset rows referencing this trace_id."
+        )
+        return
+
+    from ..core.datasets import forget_trace_cascade
+
+    summary = forget_trace_cascade(trace_id, reason=reason)
+    if as_json:
+        click.echo(
+            json.dumps(
+                {"status": "ok", "trace_forget": summary},
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return
+    click.echo(
+        f"Cascaded forget for {trace_id}: "
+        f"{summary['withdrawn_count']} row(s) withdrawn across "
+        f"{len(summary['affected'])} dataset(s)."
+    )
 
 
 @click.command(

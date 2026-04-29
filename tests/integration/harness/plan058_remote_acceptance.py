@@ -23,7 +23,6 @@ from opentraces.core import config as config_mod
 from opentraces.core import paths as paths_mod
 from opentraces.core.datasets import (
     append_rows,
-    dataset_path,
     load_public_rows,
     read_publication_state,
     read_row_index,
@@ -280,8 +279,8 @@ def run_hf_live() -> dict[str, Any]:
             tmp = Path(tmp_raw)
             _isolate(tmp)
             # Important: do NOT set OPENTRACES_PLAN058_FAKE_REMOTE_ROOT. The
-            # absence of that env var is what routes core.datasets through
-            # the real huggingface_hub adapter.
+            # absence of that env var routes core.datasets through the real
+            # huggingface_hub adapter.
             os.environ.pop("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", None)
 
             create_dataset(
@@ -327,7 +326,6 @@ def run_hf_live() -> dict[str, Any]:
             pulled = pull_dataset("live-clone", data=True, token=token)
             clone_row_count = len(read_row_index("live-clone"))
 
-            # V24 mirror via datasets.load_dataset on the clone.
             try:
                 import datasets as _hf_datasets
 
@@ -336,7 +334,7 @@ def run_hf_live() -> dict[str, Any]:
                     loaded["train"].num_rows if "train" in loaded else 0
                 )
                 load_dataset_ok = load_dataset_rows == len(originals)
-            except Exception as exc:  # noqa: BLE001 — surface error in payload
+            except Exception as exc:  # noqa: BLE001 - surface error in payload
                 load_dataset_rows = 0
                 load_dataset_ok = False
                 cleanup_error = f"load_dataset failed: {exc!r}"
@@ -373,7 +371,7 @@ def run_hf_live() -> dict[str, Any]:
                 repo_type="dataset",
                 missing_ok=True,
             )
-        except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+        except Exception as exc:  # noqa: BLE001 - best-effort cleanup
             cleanup_error = f"delete_repo failed: {exc!r}"
 
 
