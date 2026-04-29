@@ -81,7 +81,7 @@ Focused Trace Trails validation:
 Trace Trails test capabilities:
 
 - `tests/integration/test_trace_trails_full_stack_demo.py` runs the deterministic full-stack mock project: hook-boundary mutation observation, ingest, delayed Git Anchor maturation, Trace Workspace export/open, and user-facing `trail`/`blame`/`graph` projections.
-- `tests/integration/test_trace_trails_installed_runtime_uat.py` exercises installed runtime surfaces: `opentraces --json setup git`, a real Git post-commit hook invocation, and `opentraces watcher tick --project ... --json` driving session ingest, watcher reconciliation, and anchor maturation.
+- `tests/integration/test_trace_trails_installed_runtime_uat.py` exercises installed runtime surfaces: `opentraces --json setup git`, a real Git post-commit hook invocation, and `opentraces setup watcher tick --project ... --json` driving session ingest, watcher reconciliation, and anchor maturation.
 - `tests/integration/test_trace_trails_portrayal.py` builds the reviewer-facing portrayal packet and checks UAT judgement points for usefulness/usability across watcher, attribution, maturation, and projection surfaces. Human-readable criteria live in `tests/integration/trail_scenarios/reports/trace_trails_portrayal_uat.md`.
 - `tests/integration/test_trace_trails_corpus.py` verifies the versioned synthetic corpus at `tests/fixtures/trace_trails_corpus/v1`, including normalized command/API outputs, TrailEvents, Trace Workspace rows, and HF-style dataset artifacts.
 - `tests/integration/harness/trace_trails_corpus.py --check` confirms the committed corpus is current; `--update` intentionally regenerates it after accepted scenario changes.

@@ -64,7 +64,6 @@ COMMAND_SECTIONS = [
             "status",
             "doctor",
             "remove",
-            "watcher",
         ],
     ),
     (
@@ -92,6 +91,10 @@ COMMAND_SECTIONS = [
         ],
     ),
 ]
+
+# Sections whose entries should also list their non-hidden subcommands
+# inline, so the root --help reveals the verbs each group exposes.
+EXPANDED_SECTIONS = {"Trace", "Trail", "Workflow", "Dataset"}
 
 
 # -- Color helpers ------------------------------------------------------------
@@ -273,11 +276,23 @@ class GroupedGroup(OpentracesGroup):
         sections: list[tuple[str, list[tuple[str, str]]]] = []
         for section_name, cmd_names in COMMAND_SECTIONS:
             rows: list[tuple[str, str]] = []
+            expand = section_name in EXPANDED_SECTIONS
             for name in cmd_names:
                 cmd = self.commands.get(name)
                 if cmd is None or cmd.hidden:
                     continue
                 rows.append((name, cmd.get_short_help_str(limit=formatter.width)))
+                if expand and isinstance(cmd, click.Group):
+                    for sub_name in cmd.list_commands(ctx):
+                        sub = cmd.get_command(ctx, sub_name)
+                        if sub is None or sub.hidden:
+                            continue
+                        rows.append(
+                            (
+                                f"{name} {sub_name}",
+                                sub.get_short_help_str(limit=formatter.width),
+                            )
+                        )
             if rows:
                 sections.append((section_name, rows))
         # Cross-section width alignment: pick the widest name across all
@@ -635,7 +650,17 @@ def _schedule_browser_open(url: str) -> None:
         logger.debug("Could not schedule browser open: %s", e)
 
 
-@click.group(cls=GroupedGroup, invoke_without_command=True)
+@click.group(
+    cls=GroupedGroup,
+    invoke_without_command=True,
+    # Let descriptions use the full terminal width instead of Click's
+    # default 80-column cap. Click takes ``min(terminal_width,
+    # max_content_width)`` when formatting, so a generous ceiling here
+    # means narrow terminals still wrap correctly while wide ones get
+    # the room they have. Children inherit ``max_content_width`` from
+    # this root context.
+    context_settings={"max_content_width": 10_000},
+)
 @click.version_option(version=__version__)
 @click.option("--json", "json_mode", is_flag=True, help="Emit only machine-readable JSON output")
 @click.pass_context
@@ -2572,10 +2597,11 @@ _trail_group.add_command(_graph_cmd, name="graph")
 _trail_group.add_command(_blame_cmd, name="blame")
 main.add_command(_trail_group)
 
-# Plan-043 phase 3 — `ot watcher` background attribution watcher.
-from ._watcher_register import register_watcher_commands as _reg_watcher  # noqa: E402
-
-_reg_watcher(main)
+# The watcher CLI surface lives under ``ot setup watcher`` (group with
+# install/uninstall/start/stop/restart/status/tick subcommands). It is a
+# system-level service, so its full lifecycle is co-located with the
+# rest of the global ``setup`` namespace rather than getting its own
+# top-level verb.
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ This test drives the command/install surfaces a customer machine depends on:
 
 * install the Git hook with ``opentraces --json setup git``;
 * let a real ``git commit`` execute the installed post-commit shim;
-* run ``opentraces watcher tick --project ... --json`` to ingest the session
+* run ``opentraces setup watcher tick --project ... --json`` to ingest the session
   transcript, reconcile the boundary-observed filesystem mutation, and mature
   the Git Anchor.
 """

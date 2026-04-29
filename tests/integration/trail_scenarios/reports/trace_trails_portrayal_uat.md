@@ -71,7 +71,7 @@ Pass criteria:
 - `opentraces --json setup git` installs the Git post-commit hook
 - a real `git commit` executes the installed hook and records no premature anchors
 - pre-tick state has a filesystem observation but no attribution or Git Anchor
-- `opentraces watcher tick --project <scratch_repo> --json` ingests the synthetic session and matures one anchor
+- `opentraces setup watcher tick --project <scratch_repo> --json` ingests the synthetic session and matures one anchor
 - final event log contains observation, attribution, and exactly one Git Anchor
 - `trail explain`, `blame`, `graph`, and `trail search` expose the anchored trail
 
@@ -79,7 +79,7 @@ Reviewer commands represented in the packet:
 
 ```text
 opentraces --json setup git
-opentraces watcher tick --project <scratch_repo> --json
+opentraces setup watcher tick --project <scratch_repo> --json
 opentraces trail explain --trace <trace_id> --step <step_index> --project <scratch_repo> --json
 opentraces trail blame <commit_sha> --project <scratch_repo> --json
 opentraces trail graph --project <scratch_repo> --json

@@ -833,8 +833,8 @@ def run_installed_runtime_demo(root: Path, *, verbose: bool = False) -> dict[str
     * ``git commit`` executes that hook before any Trace Patch exists.
     * The installed Claude hook boundary observer records the concrete
       filesystem transition without direct attribution.
-    * ``opentraces watcher tick --project ... --json`` performs session ingest,
-      watcher reconciliation, and Trail maturation.
+    * ``opentraces setup watcher tick --project ... --json`` performs session
+      ingest, watcher reconciliation, and Trail maturation.
 
     The only white-box part is the synthetic Claude transcript itself. That is
     deliberate: this UAT is about the OpenTraces runtime surfaces, not launching
@@ -859,7 +859,7 @@ def _run_installed_runtime_demo_with_isolated_home(
 ) -> dict[str, Any]:
     _init_demo_repo(paths.repo)
 
-    watcher_status = _run_cli(["watcher", "status", "--json"])
+    watcher_status = _run_cli(["setup", "watcher", "status", "--json"])
     setup_git = _run_cli(["--json", "setup", "git"], cwd=paths.repo)
     _assert(setup_git["status"] == "ok", "setup git did not report ok")
     _assert(
@@ -893,7 +893,7 @@ def _run_installed_runtime_demo_with_isolated_home(
     )
 
     tick = _run_cli(
-        ["watcher", "tick", "--project", str(paths.repo), "--json"],
+        ["setup", "watcher", "tick", "--project", str(paths.repo), "--json"],
     )
     _assert(isinstance(tick, list) and len(tick) == 1, "watcher tick did not return one report")
     tick_report = tick[0]

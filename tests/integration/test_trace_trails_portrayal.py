@@ -279,7 +279,7 @@ def _installed_runtime_scenario(summary: dict[str, Any]) -> dict[str, Any]:
             ),
             _command(
                 "Watcher tick",
-                "opentraces watcher tick --project <scratch_repo> --json",
+                "opentraces setup watcher tick --project <scratch_repo> --json",
                 "watcher_tick",
             ),
             _command(

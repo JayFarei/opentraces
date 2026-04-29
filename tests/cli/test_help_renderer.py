@@ -11,7 +11,7 @@ from opentraces.cli import main
 
 
 GLOBAL_SETUP_VERBS = ["setup", "auth", "config", "completions"]
-PROJECT_SETUP_VERBS = ["init", "status", "doctor", "remove", "watcher"]
+PROJECT_SETUP_VERBS = ["init", "status", "doctor", "remove"]
 TRACE_VERBS = ["trace"]
 TRAIL_VERBS = ["trail"]
 WORKFLOW_VERBS = ["workflow"]

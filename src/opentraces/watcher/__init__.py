@@ -6,7 +6,7 @@ Installed as a launchd agent on macOS or a systemd user timer on Linux.
 
 Public API lives in :mod:`opentraces.watcher.daemon` and
 :mod:`opentraces.watcher.installer`. The CLI surface is
-``ot watcher {status,start,stop,restart,uninstall,tick}``.
+``ot setup watcher {install,uninstall,start,stop,restart,status,tick}``.
 """
 
 from .daemon import TickReport, discover_enlisted_projects, run_forever, run_once
