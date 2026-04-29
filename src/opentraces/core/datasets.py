@@ -836,6 +836,41 @@ def doctor_byte_identity(name: str) -> dict[str, Any]:
     }
 
 
+def remote_status_summary(
+    name: str,
+    *,
+    remote_name: str | None = None,
+    token: str | None = None,
+) -> dict[str, Any]:
+    """Return remote `head`, `withdrawals`, and `byte_identity` for V17 status.
+
+    Plan 058 verification §17 mandates that ``dataset status --remote --json``
+    exposes the bound remote's head, the list of remote-side withdrawal
+    tombstones, and the byte-identity check in one payload. Centralising
+    this read keeps the CLI surgical without growing new private surfaces.
+    """
+
+    dataset = load_dataset(name)
+    resolved = remote_name or dataset.manifest.active_remote
+    summary: dict[str, Any] = {
+        "head": None,
+        "withdrawals": {"count": 0, "files": []},
+        "byte_identity": doctor_byte_identity(name),
+    }
+    if not resolved or resolved not in dataset.manifest.remotes:
+        return summary
+    repo_id = repo_id_from_remote(resolved, dataset.manifest.remotes[resolved])
+    summary["head"] = _remote_head(repo_id, token)
+    remote_root = _fake_remote_dir(repo_id)
+    if remote_root is not None and (remote_root / "_withdrawals").exists():
+        files = sorted(
+            path.name
+            for path in (remote_root / "_withdrawals").glob("*.jsonl")
+        )
+        summary["withdrawals"] = {"count": len(files), "files": files}
+    return summary
+
+
 def withdraw_dataset_row(
     name: str,
     row_id: str,

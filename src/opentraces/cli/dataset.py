@@ -32,6 +32,7 @@ from ..core.datasets import (
     publish_dataset,
     pull_dataset,
     read_row_index,
+    remote_status_summary,
     remove_dataset_remote,
     repo_id_from_remote,
     set_dataset_remote_visibility,
@@ -752,13 +753,17 @@ def dataset_status(name: str, include_remote: bool, as_json: bool) -> None:
             "row_index_count": len(read_row_index(name)),
         }
         if include_remote:
-            payload["remote"] = {
+            remote_block: dict[str, object] = {
                 "active_remote": dataset.manifest.active_remote,
                 "remotes": {
                     remote_name: remote.model_dump(mode="json")
                     for remote_name, remote in dataset.manifest.remotes.items()
                 },
             }
+            # Plan 058 V17: surface remote head, withdrawal tombstones, and the
+            # byte-identity check in a single status payload.
+            remote_block.update(remote_status_summary(name))
+            payload["remote"] = remote_block
     except (FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
@@ -766,6 +771,48 @@ def dataset_status(name: str, include_remote: bool, as_json: bool) -> None:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
     click.echo(f"{name}: rows={payload['row_index_count']} publication={payload['publication']}")
+
+
+@dataset_group.command("info", cls=OpentracesCommand)
+@click.argument("name")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_info(name: str, as_json: bool) -> None:
+    """Show local manifest plus remote summary for a dataset.
+
+    Plan 058 surfaces ``ot dataset info <name>`` as the human-readable
+    counterpart to the JSON-rich ``status --remote`` output. It composes
+    the manifest, publication counts, row-index size, and the same remote
+    summary block (head/withdrawals/byte_identity) used by V17 status.
+    """
+
+    try:
+        dataset = load_dataset(name)
+        state = evaluate_publication_state(name)
+        payload = {
+            "status": "ok",
+            "dataset": _dataset_payload(dataset),
+            "publication": _publication_counts(state),
+            "row_index_count": len(read_row_index(name)),
+            "remote": {
+                "active_remote": dataset.manifest.active_remote,
+                "remotes": {
+                    remote_name: remote.model_dump(mode="json")
+                    for remote_name, remote in dataset.manifest.remotes.items()
+                },
+                **remote_status_summary(name),
+            },
+        }
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    active = payload["remote"]["active_remote"] or "<no remote>"
+    click.echo(
+        f"{name}: rows={payload['row_index_count']} active_remote={active} "
+        f"publication={payload['publication']}"
+    )
 
 
 @dataset_group.command("approve", cls=OpentracesCommand)
