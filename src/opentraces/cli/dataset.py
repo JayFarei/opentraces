@@ -57,8 +57,15 @@ from ..core.schedules import (
 
 
 @click.group("dataset", cls=OpentracesGroup)
-def dataset_group() -> None:
+@click.pass_context
+def dataset_group(_ctx: click.Context) -> None:
     """Manage local executable datasets."""
+    # Plan 058: migrate legacy inbox state into default-inbox only when
+    # there is actual legacy project state. Clean dataset-only users should
+    # not see a synthetic default-inbox entry.
+    from ..core.default_inbox import run_bridge_once
+
+    run_bridge_once()
 
 
 @dataset_group.group("remote", cls=OpentracesGroup)
@@ -124,6 +131,7 @@ def _hf_auth() -> tuple[str | None, str | None]:
 @click.argument("repo")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_remote_add(name: str, repo: str, as_json: bool) -> None:
+    """Connect a local dataset to an existing HuggingFace dataset remote."""
     token, username = _hf_auth()
     try:
         repo_id = normalize_hf_repo_id(repo, username)
@@ -153,6 +161,7 @@ def dataset_remote_add(name: str, repo: str, as_json: bool) -> None:
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_remote_create(name: str, repo: str, is_private: bool, as_json: bool) -> None:
+    """Create a private-by-default HuggingFace dataset remote and bind it."""
     token, username = _hf_auth()
     try:
         repo_id = normalize_hf_repo_id(repo, username)
@@ -175,6 +184,7 @@ def dataset_remote_create(name: str, repo: str, is_private: bool, as_json: bool)
 @click.option("-v", "--verbose", is_flag=True, help="Also show full URLs.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_remote_list(name: str, verbose: bool, as_json: bool) -> None:
+    """List remotes bound to a local dataset."""
     try:
         remotes = list_dataset_remotes(name)
     except FileNotFoundError as exc:
@@ -215,6 +225,7 @@ def dataset_remote_remove(
     confirmed: bool,
     as_json: bool,
 ) -> None:
+    """Disconnect a dataset remote, optionally deleting the HF dataset."""
     try:
         dataset = load_dataset(name)
         resolved = remote or (
@@ -255,6 +266,7 @@ def dataset_remote_visibility(
     make_private: bool | None,
     as_json: bool,
 ) -> None:
+    """Change a bound HuggingFace dataset remote between private and public."""
     if make_private is None:
         click.echo("Specify --private or --public.", err=True)
         sys.exit(2)
@@ -289,6 +301,7 @@ def dataset_remote_visibility(
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_schedule_add(name: str, every: str, executor: str, as_json: bool) -> None:
+    """Add a local schedule for running a dataset workflow."""
     try:
         schedule = add_schedule(name, every=every, executor=executor)
     except (FileNotFoundError, ValueError) as exc:
@@ -300,6 +313,7 @@ def dataset_schedule_add(name: str, every: str, executor: str, as_json: bool) ->
 @dataset_schedule_group.command("list", cls=OpentracesCommand)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_schedule_list(as_json: bool) -> None:
+    """List local dataset workflow schedules."""
     schedules = [_schedule_payload(schedule) for schedule in list_schedules()]
     if as_json:
         click.echo(json.dumps({"status": "ok", "schedules": schedules}, indent=2, sort_keys=True))
@@ -312,6 +326,7 @@ def dataset_schedule_list(as_json: bool) -> None:
 @click.argument("name")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_schedule_show(name: str, as_json: bool) -> None:
+    """Show one dataset workflow schedule."""
     try:
         schedule = read_schedule(name)
     except FileNotFoundError as exc:
@@ -324,6 +339,7 @@ def dataset_schedule_show(name: str, as_json: bool) -> None:
 @click.argument("name")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_schedule_pause(name: str, as_json: bool) -> None:
+    """Pause a dataset workflow schedule."""
     try:
         schedule = pause_schedule(name)
     except FileNotFoundError as exc:
@@ -336,6 +352,7 @@ def dataset_schedule_pause(name: str, as_json: bool) -> None:
 @click.argument("name")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_schedule_resume(name: str, as_json: bool) -> None:
+    """Resume a paused dataset workflow schedule."""
     try:
         schedule = resume_schedule(name)
     except FileNotFoundError as exc:
@@ -349,6 +366,7 @@ def dataset_schedule_resume(name: str, as_json: bool) -> None:
 @click.option("--tail", is_flag=True, help="Show only recent schedule logs.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_schedule_logs(name: str, tail: bool, as_json: bool) -> None:
+    """Show local scheduler log lines for a dataset."""
     try:
         logs = read_schedule_logs(name, tail=tail)
     except FileNotFoundError as exc:
@@ -366,6 +384,7 @@ def dataset_schedule_logs(name: str, tail: bool, as_json: bool) -> None:
 @click.argument("name")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_schedule_rm(name: str, as_json: bool) -> None:
+    """Remove a dataset workflow schedule."""
     try:
         schedule = remove_schedule(name)
     except FileNotFoundError as exc:
@@ -387,6 +406,7 @@ def dataset_schedule_rm(name: str, as_json: bool) -> None:
 @dataset_group.command("list", cls=OpentracesCommand)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_list(as_json: bool) -> None:
+    """List local HF-shaped datasets."""
     datasets = [_dataset_payload(dataset) for dataset in list_datasets()]
     if as_json:
         click.echo(json.dumps({"status": "ok", "datasets": datasets}, indent=2, sort_keys=True))
@@ -408,6 +428,7 @@ def dataset_new(
     workflow_digest: str,
     as_json: bool,
 ) -> None:
+    """Create a local HF-shaped dataset with an OpenTraces sidecar."""
     try:
         dataset = create_dataset(
             name,
@@ -430,6 +451,7 @@ def dataset_new(
 @click.option("--row", "row_id", default=None, help="Show a row by row_id.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_show(name: str, row_id: str | None, as_json: bool) -> None:
+    """Show a dataset manifest or one public row by row_id."""
     try:
         dataset = load_dataset(name)
         if row_id:
@@ -453,6 +475,7 @@ def dataset_show(name: str, row_id: str | None, as_json: bool) -> None:
 @click.argument("name")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_check(name: str, as_json: bool) -> None:
+    """Validate the local dataset layout, schema, and row files."""
     try:
         payload = _check_dataset(name)
     except (FileNotFoundError, ValueError) as exc:
@@ -504,6 +527,7 @@ def dataset_run(
     resume: str | None,
     as_json: bool,
 ) -> None:
+    """Run the dataset workflow in dry-run, current-agent, or headless mode."""
     if resume:
         click.echo("--resume is reserved for future interrupted-run recovery.", err=True)
         sys.exit(10)
@@ -559,6 +583,7 @@ def dataset_run(
 @click.option("--web", "mode", flag_value="web", help="Open web review.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_review(name: str, mode: str | None, as_json: bool) -> None:
+    """Review publication state for rows in a local dataset."""
     try:
         state = evaluate_publication_state(name)
     except (FileNotFoundError, ValueError) as exc:
@@ -596,6 +621,7 @@ def dataset_publish(
     resume: str | None,
     as_json: bool,
 ) -> None:
+    """Publish reviewed dataset rows and contract files to the active remote."""
     try:
         summary = publish_dataset(name, to=remote, check_only=check_only, resume=resume)
     except DatasetRemotePermissionError as exc:
@@ -642,6 +668,7 @@ def dataset_publish(
 @click.option("--read-only", is_flag=True, help="Apply without workflow contribution setup.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_apply(remote: str, as_name: str | None, read_only: bool, as_json: bool) -> None:
+    """Create a local dataset from a remote HF dataset contract."""
     try:
         dataset = apply_remote_dataset(remote, as_name=as_name, read_only=read_only)
     except (FileExistsError, FileNotFoundError, ValueError) as exc:
@@ -669,6 +696,7 @@ def dataset_pull(
     force_pull: bool,
     as_json: bool,
 ) -> None:
+    """Refresh a dataset remote contract and optionally import row shards."""
     if shards and not with_data:
         click.echo("--shards requires --data.", err=True)
         sys.exit(2)
@@ -710,6 +738,7 @@ def dataset_withdraw(
     confirm: str | None,
     as_json: bool,
 ) -> None:
+    """Record a row withdrawal tombstone, or hard-delete with confirmation."""
     try:
         record = withdraw_dataset_row(
             name,
@@ -742,6 +771,7 @@ def dataset_withdraw(
 @click.option("--remote", "include_remote", is_flag=True, help="Include remote binding status.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_status(name: str, include_remote: bool, as_json: bool) -> None:
+    """Show dataset row, publication, and optional remote status."""
     try:
         dataset = load_dataset(name)
         state = evaluate_publication_state(name)
@@ -821,6 +851,7 @@ def dataset_info(name: str, as_json: bool) -> None:
 @click.option("--all", "all_rows", is_flag=True, help="Approve every reviewable row.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_approve(name: str, row_ids: tuple[str, ...], all_rows: bool, as_json: bool) -> None:
+    """Mark selected dataset rows as publishable."""
     _dataset_review_transition(name, list(row_ids), all_rows, "publishable", as_json)
 
 
@@ -830,6 +861,7 @@ def dataset_approve(name: str, row_ids: tuple[str, ...], all_rows: bool, as_json
 @click.option("--all", "all_rows", is_flag=True, help="Reject every row.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_reject(name: str, row_ids: tuple[str, ...], all_rows: bool, as_json: bool) -> None:
+    """Reject selected dataset rows from publication."""
     _dataset_review_transition(name, list(row_ids), all_rows, "rejected", as_json)
 
 
@@ -844,6 +876,7 @@ def dataset_reset_review(
     all_rows: bool,
     as_json: bool,
 ) -> None:
+    """Reset selected rows to the dataset publication policy default."""
     _dataset_review_transition(name, list(row_ids), all_rows, "reset", as_json)
 
 
@@ -852,6 +885,7 @@ def dataset_reset_review(
 @click.option("--byte-identity", is_flag=True, help="Check remembered published files against the remote.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_doctor(name: str, byte_identity: bool, as_json: bool) -> None:
+    """Run dataset health checks, including optional remote byte identity."""
     payload = _check_dataset(name)
     payload["doctor"] = {
         "status": "ok" if payload["valid"] else "error",
@@ -873,6 +907,7 @@ def dataset_doctor(name: str, byte_identity: bool, as_json: bool) -> None:
 @click.option("--output", required=True, type=click.Path(dir_okay=False, path_type=Path))
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_export(name: str, fmt: str, output: Path, as_json: bool) -> None:
+    """Export public dataset rows as plain JSONL."""
     try:
         export = export_jsonl(name, output)
     except (FileNotFoundError, ValueError) as exc:
@@ -890,6 +925,7 @@ def dataset_export(name: str, fmt: str, output: Path, as_json: bool) -> None:
 @click.option("--yes", is_flag=True, help="Confirm removal.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_rm(name: str, yes: bool, as_json: bool) -> None:
+    """Remove a local dataset after explicit confirmation."""
     if not yes:
         click.echo("Pass --yes to remove a dataset.", err=True)
         sys.exit(2)

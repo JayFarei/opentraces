@@ -50,40 +50,58 @@ _json_mode = False
 
 COMMAND_SECTIONS = [
     (
-        "Core",
+        "Trace and Evidence",
         [
-            "add",
-            "push",
-            "pull",
-            "list",
-            "show",
-            "status",
+            "trace",
             "trail",
-            "dataset",
-            "workflow",
             "blame",
+            "graph",
             "resume",
         ],
     ),
     (
-        "Inbox",
+        "Datasets and Workflows",
         [
+            "dataset",
+            "workflow",
+        ],
+    ),
+    (
+        "Project and Setup",
+        [
+            "setup",
+            "init",
+            "status",
+            "doctor",
+            "remove",
+            "auth",
+            "config",
+            "completions",
+            "watcher",
+        ],
+    ),
+    (
+        "Compatibility",
+        [
+            "list",
+            "show",
+            "add",
             "reject",
+            "push",
+            "pull",
+            "web",
+            "tui",
+            "remote",
             "reset",
             "redact",
             "discard",
             "llm-review",
             "export",
-            "tui",
-            "web",
             "stats",
             "log",
-            "graph",
             "assess",
         ],
     ),
-    ("Project", ["init", "doctor", "remove"]),
-    ("Resource", ["remote", "auth", "config", "setup", "completions"]),
 ]
 
 
@@ -261,7 +279,9 @@ class GroupedGroup(OpentracesGroup):
         return styled
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        # gh-style sectioned listing: CORE / INBOX / PROJECT / RESOURCE.
+        # Journey-first sectioned listing. The canonical Plan 54/56/57/58
+        # surfaces lead; one-minor legacy aliases are grouped last so users
+        # can discover them without mistaking them for the primary model.
         sections: list[tuple[str, list[tuple[str, str]]]] = []
         for section_name, cmd_names in COMMAND_SECTIONS:
             rows: list[tuple[str, str]] = []
@@ -613,6 +633,21 @@ def _prompt_agents_with_click(default_agents: list[str] | None = None) -> list[s
 
 def _agent_placeholder() -> str:
     return ",".join(SUPPORTED_AGENTS[:2]) or DEFAULT_AGENT
+
+
+def _emit_alias_deprecation(old_cmd: str, new_cmd: str) -> None:
+    """Plan 058 V21: warn that ``old_cmd`` is a deprecated alias for ``new_cmd``.
+
+    Stays on stderr so JSON consumers do not see it on stdout, and uses
+    plain ``click.echo`` so the standard CliRunner stream split picks it
+    up. Ride-along with every compatibility-alias entry point so users
+    moving from the inbox-first flow learn the new dataset surface.
+    """
+
+    click.echo(
+        f"warning: `{old_cmd}` is deprecated; use `{new_cmd}` instead.",
+        err=True,
+    )
 
 
 def _schedule_browser_open(url: str) -> None:
@@ -1512,21 +1547,26 @@ def _plan043_finalize_identity(project_dir: Path) -> None:
 @main.command(
     examples=[
         "opentraces init",
-        "opentraces init --agent claude-code --review-policy auto",
-        "opentraces init --remote owner/my-traces --public",
+        "opentraces init --agent claude-code",
+        "opentraces init --start-fresh",
     ],
     see_also=[
         ("opentraces setup claude-code", "install Claude Code capture hooks"),
+        ("opentraces setup git", "install or remove the git post-commit hook"),
+        ("opentraces dataset remote create", "create or bind a dataset remote"),
         ("opentraces auth login", "authenticate with HuggingFace"),
     ],
     option_groups=[
-        ("Agents", ["agents", "no_hook", "import_existing"]),
-        ("Policy", ["review_policy"]),
-        ("Remote", ["remote", "is_private"]),
+        ("Agents", ["agents", "import_existing"]),
     ],
 )
 @click.option("--agent", "agents", multiple=True, type=click.Choice(list(SUPPORTED_AGENTS)), help="Agent runtime to connect")
-@click.option("--review-policy", type=click.Choice(["review", "auto"]), default=None, help="Whether safe traces require review")
+# Plan 058 V22: --review-policy / --no-hook / --remote / --manifest are kept
+# for one minor version after the CLI lifecycle migration so existing
+# scripts keep working, but they're hidden from --help and emit a
+# deprecation warning when used. Migration targets: setup git, setup
+# <agent>, and dataset remote commands.
+@click.option("--review-policy", type=click.Choice(["review", "auto"]), default=None, hidden=True, help="[deprecated] Use `ot dataset remote create --policy ...`")
 @click.option("--push-policy", type=click.Choice(["manual", "auto-push"]), default=None, hidden=True, help="Legacy: derived from review policy")
 @click.option(
     "--import-existing/--start-fresh",
@@ -1535,9 +1575,10 @@ def _plan043_finalize_identity(project_dir: Path) -> None:
     help="Import existing Claude Code traces for this repo",
 )
 @click.option("--mode", type=click.Choice(["auto", "review"]), default=None, hidden=True, help="Legacy alias for --review-policy")
-@click.option("--remote", type=str, default=None, help="HF dataset repo (owner/name)")
-@click.option("--private/--public", "is_private", default=None, help="Dataset visibility (default: private)")
-@click.option("--no-hook", is_flag=True, help="Skip Claude Code hook installation")
+@click.option("--remote", type=str, default=None, hidden=True, help="[deprecated] Use `ot dataset remote create`")
+@click.option("--manifest", "manifest_path", type=str, default=None, hidden=True, help="[deprecated] Use `ot dataset apply <manifest>`")
+@click.option("--private/--public", "is_private", default=None, hidden=True, help="[deprecated] Use `ot dataset remote create --private/--public`")
+@click.option("--no-hook", is_flag=True, hidden=True, help="[deprecated] Use `ot setup git --remove`")
 def init(
     agents: tuple[str, ...],
     review_policy: str | None,
@@ -1545,13 +1586,38 @@ def init(
     import_existing: bool | None,
     mode: str | None,
     remote: str | None,
+    manifest_path: str | None,
     is_private: bool | None,
     no_hook: bool,
 ) -> None:
     """Initialize opentraces in the current project.
 
-    Sets up the repo-local inbox, agent hooks, policies, and optional remote.
+    Sets up the repo-local inbox, agent hooks, and policies. Dataset
+    remotes belong to ``ot dataset remote ...`` after Plan 058; legacy
+    flags are accepted for one minor version with a deprecation warning.
     """
+    # Plan 058 V22: surface a deprecation warning if the caller still
+    # passes the legacy flags. We continue to honour them — the bridge
+    # is informational, not a blocker.
+    _legacy_init_hints: list[tuple[str, str]] = []
+    if remote is not None:
+        _legacy_init_hints.append(("--remote", "ot dataset remote create <dataset> <owner/name>"))
+    if review_policy is not None:
+        _legacy_init_hints.append(("--review-policy", "ot dataset remote create <dataset> --policy ..."))
+    if no_hook:
+        _legacy_init_hints.append(("--no-hook", "ot setup git --remove"))
+    if manifest_path is not None:
+        _legacy_init_hints.append(("--manifest", "ot dataset apply <manifest>"))
+    if is_private is not None:
+        _legacy_init_hints.append(("--private/--public", "ot dataset remote create --private/--public"))
+    if _legacy_init_hints:
+        click.echo(
+            "warning: `ot init` flags are deprecated and will be removed next minor version:",
+            err=True,
+        )
+        for flag, target in _legacy_init_hints:
+            click.echo(f"  {flag} -> {target}", err=True)
+
     from ..core.config import _marker_path, load_project_config, save_project_config
 
     project_dir = Path.cwd()
@@ -2746,6 +2812,8 @@ def list_cmd(
     directory that has run ot init. With --remote <name>, filter traces to
     those missing on that remote.
     """
+    # Plan 058 V21: a deprecation warning is wired by ``_wrap_legacy_with_warning``
+    # at registration time, so we don't emit it here.
     if list_projects:
         ctx.invoke(projects_list_cmd)
         return
@@ -2926,7 +2994,7 @@ def redact_cmd(trace_id: str, pattern: str, use_regex: bool, field: str | None, 
 @main.group(invoke_without_command=True)
 @click.pass_context
 def remote(ctx) -> None:
-    """Manage the HF dataset remote."""
+    """Legacy project remote commands; use ``ot dataset remote``."""
     if ctx.invoked_subcommand is None:
         project_dir = Path.cwd()
         proj_config, remotes = _read_remotes(project_dir)
@@ -4135,6 +4203,93 @@ def capabilities(as_json: bool) -> None:
         },
     }
     click.echo(json.dumps(caps, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Plan 058 V21: compatibility aliases for the inbox-first → dataset-first
+# CLI lifecycle migration. We keep the legacy command behaviour for one
+# minor version so existing scripts/tests keep working, and emit a
+# deprecation warning on stderr that points at the new ``ot dataset *``
+# (or ``ot trace *``) verbs. The exception is ``ot pull`` — its legacy
+# binding was the HF *importer*, which is unrelated to the new
+# pull-from-dataset-remote semantics, so we replace it outright. The
+# importer remains available via a direct ``opentraces.cli.import_hf``
+# reference if a follow-up plan needs it under a new verb.
+# ---------------------------------------------------------------------------
+
+
+def _drop_command(name: str) -> None:
+    """Remove ``name`` from the root group if it's currently registered."""
+    try:
+        del main.commands[name]
+    except KeyError:
+        pass
+
+
+def _wrap_legacy_with_warning(cmd_name: str, hint: str) -> None:
+    """Wrap ``main.commands[cmd_name]`` to emit a deprecation warning.
+
+    The original command's callback is invoked unchanged, so legacy
+    behaviour (and the legacy tests covering it) keeps working. The
+    deprecation hint only appears on ``stderr``.
+    """
+
+    target = main.commands.get(cmd_name)
+    if target is None:
+        return
+    original_callback = target.callback
+    if original_callback is None or getattr(
+        original_callback, "_plan058_wrapped", False
+    ):
+        return
+
+    def _wrapped(*args, **kwargs):
+        wants_json = bool(_json_mode or kwargs.get("as_json") or kwargs.get("json_mode"))
+        if not wants_json:
+            _emit_alias_deprecation(f"ot {cmd_name}", hint)
+        return original_callback(*args, **kwargs)
+
+    _wrapped._plan058_wrapped = True  # type: ignore[attr-defined]
+    target.callback = _wrapped
+    target.short_help = f"Deprecated compatibility command; use `{hint}`."
+    target.help = (
+        f"Deprecated compatibility command. Use `{hint}` for the "
+        "dataset-first CLI lifecycle. This alias remains for one minor "
+        "version and emits a warning on stderr."
+    )
+
+
+_wrap_legacy_with_warning("push", "ot dataset publish default-inbox")
+_wrap_legacy_with_warning("list", "ot trace list")
+_wrap_legacy_with_warning("show", "ot trace get")
+_wrap_legacy_with_warning("add", "ot dataset approve default-inbox")
+_wrap_legacy_with_warning("reject", "ot dataset reject default-inbox")
+_wrap_legacy_with_warning("web", "ot dataset review default-inbox --web")
+_wrap_legacy_with_warning("tui", "ot dataset review default-inbox --tui")
+
+
+# ``ot pull`` historically meant ``opentraces import_hf``. Plan 058 rebinds
+# it to ``ot dataset pull default-inbox``. The previous behaviour is
+# unrelated to the new semantics, so we replace the registration outright.
+_drop_command("pull")
+
+
+@main.command("pull")
+@click.pass_context
+def _alias_pull(ctx: click.Context) -> None:
+    """Deprecated compatibility command; use ``ot dataset pull default-inbox``."""
+    _emit_alias_deprecation("ot pull", "ot dataset pull default-inbox")
+    from .dataset import dataset_pull
+
+    ctx.invoke(
+        dataset_pull,
+        name="default-inbox",
+        remote=None,
+        with_data=False,
+        shards=None,
+        force_pull=False,
+        as_json=False,
+    )
 
 
 @main.command(hidden=True)
