@@ -5,7 +5,11 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from opentraces.core.datasets import append_rows, create_dataset, dataset_path
+
+pytest.importorskip("datasets", reason="huggingface datasets library not installed")
 
 
 def test_local_dataset_loads_with_huggingface_datasets_without_opentraces_pythonpath(tmp_path):

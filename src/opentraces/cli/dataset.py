@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -11,13 +12,33 @@ import click
 
 from ._help import OpentracesCommand, OpentracesGroup
 from ..core.datasets import (
+    add_dataset_remote,
+    apply_remote_dataset,
     create_dataset,
+    DatasetRemotePermissionError,
+    DatasetRemoteSchemaAheadError,
     dataset_path,
+    doctor_byte_identity,
+    fake_remote_create,
+    fake_remote_delete,
+    fake_remote_probe,
+    fake_remote_set_visibility,
+    evaluate_publication_state,
     export_jsonl,
     list_datasets,
+    list_dataset_remotes,
     load_dataset,
+    normalize_hf_repo_id,
+    publish_dataset,
+    pull_dataset,
+    read_publication_state,
     read_row_index,
+    remove_dataset_remote,
+    repo_id_from_remote,
+    set_dataset_remote_visibility,
+    set_publication_review_status,
     validate_row,
+    withdraw_dataset_row,
 )
 from ..core.workflow_runner import (
     DatasetRunLockError,
@@ -40,17 +61,229 @@ def dataset_group() -> None:
     """Manage local executable datasets."""
 
 
+@dataset_group.group("remote", cls=OpentracesGroup)
+def dataset_remote_group() -> None:
+    """Manage dataset-scoped HuggingFace remotes."""
+
+
 @dataset_group.group("schedule", cls=OpentracesGroup)
 def dataset_schedule_group() -> None:
     """Manage local dataset schedules."""
 
 
+def _remote_probe(repo_id: str, token: str | None) -> dict | None:
+    fake = fake_remote_probe(repo_id)
+    if fake is not None:
+        return fake
+    if os.environ.get("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT"):
+        return None
+    from opentraces import cli as root_cli
+
+    return root_cli._remote_probe(repo_id, token)
+
+
+def _remote_create(repo_id: str, private: bool, token: str | None) -> bool:
+    if fake_remote_create(repo_id, private):
+        return True
+    if os.environ.get("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT"):
+        return False
+    from opentraces import cli as root_cli
+
+    return root_cli._remote_create(repo_id, private, token)
+
+
+def _remote_delete(repo_id: str, token: str | None) -> None:
+    if os.environ.get("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT"):
+        fake_remote_delete(repo_id)
+        return
+    from opentraces import cli as root_cli
+
+    root_cli._remote_delete(repo_id, token)
+
+
+def _remote_set_visibility(repo_id: str, private: bool, token: str | None) -> None:
+    if os.environ.get("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT"):
+        fake_remote_set_visibility(repo_id, private)
+        return
+    from opentraces import cli as root_cli
+
+    root_cli._remote_set_visibility(repo_id, private, token)
+
+
+def _hf_auth() -> tuple[str | None, str | None]:
+    from opentraces import cli as root_cli
+
+    cfg = root_cli.load_config()
+    identity = root_cli._auth_identity(cfg.hf_token) if cfg.hf_token else None
+    username = identity.get("name") if identity else None
+    return cfg.hf_token, username
+
+
+@dataset_remote_group.command("add", cls=OpentracesCommand)
+@click.argument("name")
+@click.argument("repo")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_remote_add(name: str, repo: str, as_json: bool) -> None:
+    token, username = _hf_auth()
+    try:
+        repo_id = normalize_hf_repo_id(repo, username)
+        info = _remote_probe(repo_id, token)
+        if info is None:
+            raise ValueError(
+                f"No dataset at {repo_id} on HuggingFace. "
+                f"Run: opentraces dataset remote create {name} {repo_id}"
+            )
+        repo_id = info.get("id") or repo_id
+        visibility = "private" if info.get("private") else "public"
+        summary = add_dataset_remote(name, repo_id, visibility=visibility)
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    _emit_remote_payload(summary, as_json=as_json, verb="connected")
+
+
+@dataset_remote_group.command("create", cls=OpentracesCommand)
+@click.argument("name")
+@click.argument("repo")
+@click.option(
+    "--private/--public",
+    "is_private",
+    default=True,
+    help="HF dataset visibility. Defaults to private.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_remote_create(name: str, repo: str, is_private: bool, as_json: bool) -> None:
+    token, username = _hf_auth()
+    try:
+        repo_id = normalize_hf_repo_id(repo, username)
+        created = _remote_create(repo_id, is_private, token)
+        if not created:
+            raise ValueError(
+                f"{repo_id} already exists on HuggingFace. "
+                f"Run: opentraces dataset remote add {name} {repo_id}"
+            )
+        visibility = "private" if is_private else "public"
+        summary = add_dataset_remote(name, repo_id, visibility=visibility)
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    _emit_remote_payload(summary, as_json=as_json, verb="created")
+
+
+@dataset_remote_group.command("list", cls=OpentracesCommand)
+@click.argument("name")
+@click.option("-v", "--verbose", is_flag=True, help="Also show full URLs.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_remote_list(name: str, verbose: bool, as_json: bool) -> None:
+    try:
+        remotes = list_dataset_remotes(name)
+    except FileNotFoundError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    payload = {
+        remote.name: {
+            "url": remote.url,
+            "visibility": remote.visibility,
+            "active": remote.active,
+        }
+        for remote in remotes
+    }
+    if as_json:
+        click.echo(json.dumps({"status": "ok", "dataset": name, "remotes": payload}, indent=2, sort_keys=True))
+        return
+    if not remotes:
+        click.echo("No remotes connected.")
+        return
+    for remote in remotes:
+        marker = "*" if remote.active else " "
+        line = f"  {marker} {remote.name} ({remote.visibility})"
+        if verbose:
+            line = f"{line}\t{remote.url}"
+        click.echo(line)
+
+
+@dataset_remote_group.command("remove", cls=OpentracesCommand)
+@click.argument("name")
+@click.argument("remote", required=False, default=None)
+@click.option("--delete-remote", is_flag=True, help="Also delete the HF dataset.")
+@click.option("--yes", "confirmed", is_flag=True, help="Skip destructive confirmation.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_remote_remove(
+    name: str,
+    remote: str | None,
+    delete_remote: bool,
+    confirmed: bool,
+    as_json: bool,
+) -> None:
+    try:
+        dataset = load_dataset(name)
+        resolved = remote or (
+            dataset.manifest.active_remote
+            if len(dataset.manifest.remotes) != 1
+            else next(iter(dataset.manifest.remotes), None)
+        )
+        if delete_remote:
+            if not confirmed:
+                click.echo("Pass --yes to delete the remote dataset.", err=True)
+                sys.exit(2)
+            if resolved is None or resolved not in dataset.manifest.remotes:
+                raise ValueError(f"remote not found: {resolved}")
+            token, _username = _hf_auth()
+            repo_id = repo_id_from_remote(resolved, dataset.manifest.remotes[resolved])
+            _remote_delete(repo_id, token)
+        summary = remove_dataset_remote(name, remote)
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    payload = _remote_payload(summary)
+    payload["deleted_remote"] = delete_remote
+    if as_json:
+        click.echo(json.dumps({"status": "ok", "remote": payload}, indent=2, sort_keys=True))
+        return
+    click.echo(f"Disconnected {summary.name}.")
+
+
+@dataset_remote_group.command("visibility", cls=OpentracesCommand)
+@click.argument("name")
+@click.argument("remote", required=False, default=None)
+@click.option("--private", "make_private", flag_value=True, default=None)
+@click.option("--public", "make_private", flag_value=False)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_remote_visibility(
+    name: str,
+    remote: str | None,
+    make_private: bool | None,
+    as_json: bool,
+) -> None:
+    if make_private is None:
+        click.echo("Specify --private or --public.", err=True)
+        sys.exit(2)
+    try:
+        dataset = load_dataset(name)
+        resolved = remote or (
+            dataset.manifest.active_remote
+            if len(dataset.manifest.remotes) != 1
+            else next(iter(dataset.manifest.remotes), None)
+        )
+        if resolved is None or resolved not in dataset.manifest.remotes:
+            raise ValueError(f"remote not found: {resolved}")
+        token, _username = _hf_auth()
+        repo_id = repo_id_from_remote(resolved, dataset.manifest.remotes[resolved])
+        _remote_set_visibility(repo_id, make_private, token)
+        visibility = "private" if make_private else "public"
+        summary = set_dataset_remote_visibility(name, resolved, visibility=visibility)
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    _emit_remote_payload(summary, as_json=as_json, verb="updated")
+
+
 @dataset_schedule_group.command("add", cls=OpentracesCommand)
 @click.argument("name")
-@click.option("--every", required=True, help="Local interval such as 2h.")
+@click.option("--every", required=True, help="Local interval such as 30s, 15m, 2h, or 1d.")
 @click.option(
     "--executor",
-    type=click.Choice(["claude-code-headless"]),
+    type=click.Choice(["current-agent", "claude-code-headless"]),
     default="claude-code-headless",
     show_default=True,
 )
@@ -320,15 +553,268 @@ def dataset_run(
         )
 
 
+@dataset_group.command("review", cls=OpentracesCommand)
+@click.argument("name")
+@click.option("--tui", "mode", flag_value="tui", default=None, help="Open TUI review.")
+@click.option("--web", "mode", flag_value="web", help="Open web review.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_review(name: str, mode: str | None, as_json: bool) -> None:
+    try:
+        state = evaluate_publication_state(name)
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    payload = {
+        "status": "ok",
+        "dataset": name,
+        "mode": mode or "cli",
+        "counts": _publication_counts(state),
+        "rows": {
+            row_id: entry.model_dump(mode="json", exclude_none=True)
+            for row_id, entry in sorted(state.rows.items())
+        },
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(
+        f"{name}: {payload['counts'].get('needs_review', 0)} rows need review, "
+        f"{payload['counts'].get('publishable', 0)} publishable"
+    )
+
+
+@dataset_group.command("publish", cls=OpentracesCommand)
+@click.argument("name")
+@click.option("--to", "remote", default=None, help="Remote name or owner/name override.")
+@click.option("--check-only", is_flag=True, help="Run all gates and stage without upload.")
+@click.option("--resume", default=None, help="Resume a previous publication run id.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_publish(
+    name: str,
+    remote: str | None,
+    check_only: bool,
+    resume: str | None,
+    as_json: bool,
+) -> None:
+    try:
+        summary = publish_dataset(name, to=remote, check_only=check_only, resume=resume)
+    except DatasetRemotePermissionError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    except DatasetRemoteSchemaAheadError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    payload = {
+        "status": "ok",
+        "publish": {
+            "dataset": summary.dataset_name,
+            "remote": summary.remote_name,
+            "repo_id": summary.repo_id,
+            "run_id": summary.run_id,
+            "uploaded": summary.uploaded,
+            "check_only": summary.check_only,
+            "new_row_count": summary.new_row_count,
+            "duplicate_count": summary.duplicate_count,
+            "needs_review_count": summary.needs_review_count,
+            "blocked_count": summary.blocked_count,
+            "staged_files": summary.staged_files,
+            "remote_head_before": summary.remote_head_before,
+            "remote_head_after": summary.remote_head_after,
+            "attempts": summary.attempts,
+            "message": summary.message,
+        },
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(
+        f"{summary.message}: rows={summary.new_row_count} "
+        f"needs_review={summary.needs_review_count} blocked={summary.blocked_count}"
+    )
+
+
+@dataset_group.command("apply", cls=OpentracesCommand)
+@click.argument("remote")
+@click.option("--as", "as_name", default=None, help="Local dataset name.")
+@click.option("--read-only", is_flag=True, help="Apply without workflow contribution setup.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_apply(remote: str, as_name: str | None, read_only: bool, as_json: bool) -> None:
+    try:
+        dataset = apply_remote_dataset(remote, as_name=as_name, read_only=read_only)
+    except (FileExistsError, FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    payload = {"status": "ok", "dataset": _dataset_payload(dataset)}
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Dataset applied: {dataset.name}")
+
+
+@dataset_group.command("pull", cls=OpentracesCommand)
+@click.argument("name")
+@click.option("--remote", default=None, help="Remote name.")
+@click.option("--data", "with_data", is_flag=True, help="Download and import row shards.")
+@click.option("--shards", default=None, help="Reserved shard range selector.")
+@click.option("--force-pull", is_flag=True, help="Allow additive pull with unpublished local rows.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_pull(
+    name: str,
+    remote: str | None,
+    with_data: bool,
+    shards: str | None,
+    force_pull: bool,
+    as_json: bool,
+) -> None:
+    if shards and not with_data:
+        click.echo("--shards requires --data.", err=True)
+        sys.exit(2)
+    try:
+        summary = pull_dataset(name, remote=remote, data=with_data, force_pull=force_pull)
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    payload = {
+        "status": "ok",
+        "pull": {
+            "dataset": summary.dataset_name,
+            "remote": summary.remote_name,
+            "repo_id": summary.repo_id,
+            "metadata_refreshed": summary.metadata_refreshed,
+            "data": summary.data,
+            "imported_count": summary.imported_count,
+            "duplicate_count": summary.duplicate_count,
+        },
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Pulled {summary.imported_count} row(s) into {summary.dataset_name}")
+
+
+@dataset_group.command("withdraw", cls=OpentracesCommand)
+@click.argument("name")
+@click.argument("row_id")
+@click.option("--reason", required=True, help="Withdrawal reason code.")
+@click.option("--hard", is_flag=True, help="Rewrite local shards for legal hard-delete.")
+@click.option("--confirm", default=None, help="Required literal HARD_DELETE for --hard.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_withdraw(
+    name: str,
+    row_id: str,
+    reason: str,
+    hard: bool,
+    confirm: str | None,
+    as_json: bool,
+) -> None:
+    try:
+        record = withdraw_dataset_row(
+            name,
+            row_id,
+            reason=reason,
+            hard=hard,
+            confirm=confirm,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    payload = {
+        "status": "ok",
+        "withdrawal": {
+            "target": record.target,
+            "target_id": record.target_id,
+            "reason": record.reason,
+            "requested_at": record.requested_at,
+            "hard": hard,
+        },
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Withdrawal recorded: {record.target_id}")
+
+
+@dataset_group.command("status", cls=OpentracesCommand)
+@click.argument("name")
+@click.option("--remote", "include_remote", is_flag=True, help="Include remote binding status.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_status(name: str, include_remote: bool, as_json: bool) -> None:
+    try:
+        dataset = load_dataset(name)
+        state = evaluate_publication_state(name)
+        counts = _publication_counts(state)
+        payload = {
+            "status": "ok",
+            "dataset": _dataset_payload(dataset),
+            "publication": counts,
+            "row_index_count": len(read_row_index(name)),
+        }
+        if include_remote:
+            payload["remote"] = {
+                "active_remote": dataset.manifest.active_remote,
+                "remotes": {
+                    remote_name: remote.model_dump(mode="json")
+                    for remote_name, remote in dataset.manifest.remotes.items()
+                },
+            }
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"{name}: rows={payload['row_index_count']} publication={payload['publication']}")
+
+
+@dataset_group.command("approve", cls=OpentracesCommand)
+@click.argument("name")
+@click.argument("row_ids", nargs=-1)
+@click.option("--all", "all_rows", is_flag=True, help="Approve every reviewable row.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_approve(name: str, row_ids: tuple[str, ...], all_rows: bool, as_json: bool) -> None:
+    _dataset_review_transition(name, list(row_ids), all_rows, "publishable", as_json)
+
+
+@dataset_group.command("reject", cls=OpentracesCommand)
+@click.argument("name")
+@click.argument("row_ids", nargs=-1)
+@click.option("--all", "all_rows", is_flag=True, help="Reject every row.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_reject(name: str, row_ids: tuple[str, ...], all_rows: bool, as_json: bool) -> None:
+    _dataset_review_transition(name, list(row_ids), all_rows, "rejected", as_json)
+
+
+@dataset_group.command("reset-review", cls=OpentracesCommand)
+@click.argument("name")
+@click.argument("row_ids", nargs=-1)
+@click.option("--all", "all_rows", is_flag=True, help="Reset every row to policy defaults.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_reset_review(
+    name: str,
+    row_ids: tuple[str, ...],
+    all_rows: bool,
+    as_json: bool,
+) -> None:
+    _dataset_review_transition(name, list(row_ids), all_rows, "reset", as_json)
+
+
 @dataset_group.command("doctor", cls=OpentracesCommand)
 @click.argument("name")
+@click.option("--byte-identity", is_flag=True, help="Check remembered published files against the remote.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def dataset_doctor(name: str, as_json: bool) -> None:
+def dataset_doctor(name: str, byte_identity: bool, as_json: bool) -> None:
     payload = _check_dataset(name)
     payload["doctor"] = {
         "status": "ok" if payload["valid"] else "error",
         "message": "local dataset is readable" if payload["valid"] else "local dataset has errors",
     }
+    if byte_identity:
+        payload["byte_identity"] = doctor_byte_identity(name)
+        if payload["byte_identity"]["status"] == "error":
+            payload["doctor"]["status"] = "error"
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
@@ -381,6 +867,24 @@ def _dataset_payload(dataset) -> dict[str, object]:
     }
 
 
+def _remote_payload(summary) -> dict[str, object]:
+    return {
+        "dataset": summary.dataset_name,
+        "name": summary.name,
+        "url": summary.url,
+        "visibility": summary.visibility,
+        "active": summary.active,
+    }
+
+
+def _emit_remote_payload(summary, *, as_json: bool, verb: str) -> None:
+    payload = _remote_payload(summary)
+    if as_json:
+        click.echo(json.dumps({"status": "ok", "remote": payload}, indent=2, sort_keys=True))
+        return
+    click.echo(f"Remote {verb}: {summary.name} ({summary.visibility})")
+
+
 def _schedule_payload(schedule) -> dict[str, object]:
     return {
         "dataset": schedule.dataset,
@@ -427,6 +931,45 @@ def _check_dataset(name: str) -> dict[str, object]:
         "row_index_count": row_index_count,
         "validation_errors": validation_errors,
     }
+
+
+def _publication_counts(state) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for entry in state.rows.values():
+        counts[entry.status] = counts.get(entry.status, 0) + 1
+    return counts
+
+
+def _dataset_review_transition(
+    name: str,
+    row_ids: list[str],
+    all_rows: bool,
+    status: str,
+    as_json: bool,
+) -> None:
+    try:
+        current = evaluate_publication_state(name)
+        selected = (
+            list(current.rows)
+            if all_rows
+            else row_ids
+        )
+        if not selected:
+            raise ValueError("provide at least one row_id or pass --all")
+        state = set_publication_review_status(name, selected, status)
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    payload = {
+        "status": "ok",
+        "dataset": name,
+        "counts": _publication_counts(state),
+        "row_ids": selected,
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"{name}: updated {len(selected)} row(s)")
 
 
 def _load_row(root: Path, row_id: str) -> dict[str, object]:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -90,16 +92,40 @@ def install_workflow(source: Path, *, replace: bool = False) -> WorkflowPackage:
     if not source_skill.exists():
         raise ValueError(f"workflow source has no SKILL.md: {source}")
 
+    _reject_symlinks(source)
+
     metadata = _read_skill_frontmatter(source_skill)
     name = validate_workflow_name(str(metadata.get("name") or source.name))
     destination = workflows_dir() / name
-    if destination.exists():
-        if not replace:
-            raise FileExistsError(f"workflow already exists: {name}")
-        shutil.rmtree(destination)
+    if destination.exists() and not replace:
+        raise FileExistsError(f"workflow already exists: {name}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, destination)
+    staging = destination.parent / f".tmp-install-{name}-{uuid.uuid4().hex}"
+    shutil.copytree(source, staging, symlinks=False)
+    if destination.exists():
+        backup = destination.parent / f".tmp-replace-{name}-{uuid.uuid4().hex}"
+        os.rename(destination, backup)
+        try:
+            os.rename(staging, destination)
+        except OSError:
+            os.rename(backup, destination)
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
+    else:
+        os.rename(staging, destination)
     return load_workflow(name)
+
+
+def _reject_symlinks(source: Path) -> None:
+    if source.is_symlink():
+        raise ValueError(f"workflow source must not be a symlink: {source}")
+    for entry in source.rglob("*"):
+        if entry.is_symlink():
+            raise ValueError(
+                "workflow contains symlink which would dereference outside the "
+                f"package on install: {entry.relative_to(source)}"
+            )
 
 
 def load_workflow(name: str) -> WorkflowPackage:

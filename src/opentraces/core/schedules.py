@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,10 @@ import yaml
 from opentraces_schema import DatasetSchedule
 
 from .datasets import list_datasets, load_dataset, save_manifest
+
+_INTERVAL_RE = re.compile(r"^\s*(\d+)\s*([smhd])\s*$")
+_INTERVAL_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+_SCHEDULE_LOG_LINE_LIMIT = 5000
 
 
 @dataclass(frozen=True)
@@ -24,7 +29,20 @@ class ScheduleState:
     last_run_status: str | None = None
 
 
+def parse_interval_seconds(every: str) -> int:
+    match = _INTERVAL_RE.match(every or "")
+    if not match:
+        raise ValueError(
+            "schedule --every must look like '30s', '15m', '2h', or '1d'"
+        )
+    quantity = int(match.group(1))
+    if quantity <= 0:
+        raise ValueError("schedule --every must be greater than zero")
+    return quantity * _INTERVAL_UNIT_SECONDS[match.group(2)]
+
+
 def add_schedule(name: str, *, every: str, executor: str) -> ScheduleState:
+    parse_interval_seconds(every)
     dataset = load_dataset(name)
     state = _state(
         dataset.name,
@@ -80,6 +98,9 @@ def pause_schedule(name: str) -> ScheduleState:
         last_run_status=state.last_run_status,
     )
     _write_state(dataset.path, updated)
+    trigger_path = dataset.path / ".opentraces" / "schedule.trigger"
+    if trigger_path.exists():
+        trigger_path.unlink()
     _append_log(dataset.path, "schedule paused")
     dataset.manifest.schedule = DatasetSchedule(
         enabled=False,
@@ -185,3 +206,14 @@ def _append_log(root: Path, message: str) -> None:
     log_path = root / ".opentraces" / "schedule.log"
     with log_path.open("a", encoding="utf-8") as stream:
         stream.write(message + "\n")
+    _rotate_log(log_path)
+
+
+def _rotate_log(log_path: Path) -> None:
+    if not log_path.exists():
+        return
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    if len(lines) <= _SCHEDULE_LOG_LINE_LIMIT:
+        return
+    trimmed = lines[-_SCHEDULE_LOG_LINE_LIMIT:]
+    log_path.write_text("\n".join(trimmed) + "\n", encoding="utf-8")

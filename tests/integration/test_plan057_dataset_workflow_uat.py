@@ -176,3 +176,40 @@ def test_successful_scheduled_zero_row_run_advances_cursor(monkeypatch):
     assert "last_successful_run_id" in (
         dataset_path("grill-me-intents") / ".opentraces" / "cursors.yaml"
     ).read_text()
+
+
+def test_failed_scheduled_run_does_not_advance_cursor_and_writes_failed_summary(monkeypatch):
+    """A failing executor must leave cursors untouched and record status=failed."""
+
+    runner = CliRunner()
+    _create_dataset(runner)
+    monkeypatch.delenv("OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS", raising=False)
+
+    result = runner.invoke(
+        dataset_group,
+        [
+            "run",
+            "grill-me-intents",
+            "--executor",
+            "claude-code-headless",
+            "--scheduled",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 3, result.output
+    cursors = (
+        dataset_path("grill-me-intents") / ".opentraces" / "cursors.yaml"
+    ).read_text()
+    assert "last_successful_run_id" not in cursors
+
+    runs_dir = dataset_path("grill-me-intents") / ".opentraces" / "runs"
+    failed_runs = sorted(runs_dir.iterdir())
+    assert failed_runs, "expected a run directory to be persisted on failure"
+    summary_path = failed_runs[-1] / "summary.json"
+    assert summary_path.exists()
+    summary = json.loads(summary_path.read_text())
+    assert summary["run"]["status"] == "failed"
+    assert summary["cursor_advanced"] is False
+    log_text = (failed_runs[-1] / "log.txt").read_text()
+    assert "ExecutorUnavailableError" in log_text or "claude-code-headless" in log_text

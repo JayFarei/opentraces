@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
+## [0.4.0] - 2026-04-29
+
+Adds the local dataset/workflow contract for Plan 057 (Milestone 2), with the
+manifest-level scaffolding Plan 058 (Milestone 3) layers remote sync on top of.
+Strictly additive on top of `0.3.0`.
+
+See [RATIONALE-0.4.0.md](RATIONALE-0.4.0.md) for design notes.
+
+### Added
+
+**Dataset / workflow models (Plan 057)**
+
+- `DatasetSchemaRef`, `WorkflowRef`, `ExecutorConfig`, `DatasetIdentity`,
+  `DatasetCandidateQuery`, `DatasetSchedule`, `DatasetDiscoverability`,
+  `DatasetManifest`, `DatasetRunRecord`, `DatasetRowIndexEntry` — local
+  HF-shaped dataset contract.
+- `ExecutorName`, `DatasetScope`, `DatasetIdentityMode`, `DatasetRunStatus`
+  Literal aliases.
+- `DatasetIdentity` validates that `mode="fields"` requires a non-empty
+  `fields` list; `DatasetSchedule` validates that `enabled=True` requires a
+  non-empty `every` interval string.
+
+**Plan 058 scaffolding (eager evaluation surface only)**
+
+- `DatasetRemote`, `DatasetPublicationPolicy`, `DatasetPublicationStateEntry`,
+  `DatasetPublicationState`, plus `DatasetRemoteVisibility`,
+  `DatasetRemoteSchemaPolicy`, `DatasetPublicationReviewPolicy`,
+  `DatasetPublicationSecurityPolicy`, `DatasetPublicationLLMReviewPolicy`,
+  `DatasetPublicationStatus` Literal aliases. Carrying these in `0.4.0` lets
+  Plan 058 land remote sync without bumping the schema again.
+
+### Changed
+
+- All dataset models now declare `extra="forbid"` so unknown manifest keys
+  fail validation instead of being silently ignored.
+- `DatasetManifest` keeps `populate_by_name=True` so the on-disk
+  `schema:` alias and the in-Python `schema_ref` attribute name both work.
+
+### Compatibility
+
+- Strictly additive wrt `0.3.0`. `TraceRecord` is unchanged; existing
+  traces load without any field defaults shifting.
+
 ## [0.3.0] - 2026-04-16
 
 First public schema release since `0.2.0`. A coherent single bump that folds

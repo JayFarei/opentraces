@@ -84,9 +84,11 @@ def run_dataset_workflow(
         "limit": limit,
     }
     _write_run_packet(run_dir, dataset.manifest, schema, run_packet)
+    lock_path = dataset.path / ".opentraces" / ".lock"
 
     if selected_executor == "current-agent":
-        output_path.write_text("", encoding="utf-8")
+        with _dataset_lock(lock_path, run_id):
+            output_path.write_text("", encoding="utf-8")
         append_summary = AppendSummary(
             dataset_name=name,
             run_id=run_id,
@@ -103,6 +105,7 @@ def run_dataset_workflow(
             schema_digest=schema_digest,
             started_at=started_at,
             append_summary=append_summary,
+            status="succeeded",
         )
         _write_run_summary(run_dir, run_record, append_summary, cursor_advanced=False)
         return DatasetRunResult(
@@ -114,15 +117,39 @@ def run_dataset_workflow(
             cursor_advanced=False,
         )
 
-    _execute_claude_code_headless(run_packet, output_path)
-    rows = _read_output_rows(output_path)
-    lock_path = dataset.path / ".opentraces" / ".lock"
-    with _dataset_lock(lock_path, run_id):
-        append_summary = append_rows(name, rows, run_id=run_id, dry_run=dry_run)
-        cursor_advanced = False
-        if not dry_run:
-            _advance_cursor(dataset.path, dataset.manifest, run_id)
-            cursor_advanced = True
+    try:
+        _execute_claude_code_headless(run_packet, output_path)
+        rows = _read_output_rows(output_path)
+        with _dataset_lock(lock_path, run_id):
+            append_summary = append_rows(name, rows, run_id=run_id, dry_run=dry_run)
+            cursor_advanced = False
+            if not dry_run:
+                _advance_cursor(dataset.path, dataset.manifest, run_id)
+                cursor_advanced = True
+    except Exception as exc:
+        empty_summary = AppendSummary(
+            dataset_name=name,
+            run_id=run_id,
+            dry_run=dry_run,
+            emitted_count=0,
+        )
+        failed_record = _run_record(
+            run_id=run_id,
+            dataset_name=name,
+            dry_run=dry_run,
+            executor=selected_executor,
+            scope=run_packet["scope"],
+            workflow_digest=workflow_digest,
+            schema_digest=schema_digest,
+            started_at=started_at,
+            append_summary=empty_summary,
+            status="failed",
+        )
+        (run_dir / "log.txt").write_text(
+            f"{type(exc).__name__}: {exc}\n", encoding="utf-8"
+        )
+        _write_run_summary(run_dir, failed_record, empty_summary, cursor_advanced=False)
+        raise
     run_record = _run_record(
         run_id=run_id,
         dataset_name=name,
@@ -133,6 +160,7 @@ def run_dataset_workflow(
         schema_digest=schema_digest,
         started_at=started_at,
         append_summary=append_summary,
+        status="succeeded",
     )
     _write_run_summary(run_dir, run_record, append_summary, cursor_advanced=cursor_advanced)
     return DatasetRunResult(
@@ -215,6 +243,7 @@ def _run_record(
     schema_digest: str,
     started_at: str,
     append_summary: AppendSummary,
+    status: str = "succeeded",
 ) -> DatasetRunRecord:
     return DatasetRunRecord(
         run_id=run_id,
@@ -231,7 +260,7 @@ def _run_record(
         appended_count=append_summary.appended_count,
         duplicate_count=append_summary.duplicate_count,
         validation_error_count=append_summary.validation_error_count,
-        status="succeeded",
+        status=status,
         artefacts={
             "run_packet": "run_packet.json",
             "output_rows": "output_rows.jsonl",
