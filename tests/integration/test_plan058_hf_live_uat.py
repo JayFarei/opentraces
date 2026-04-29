@@ -13,7 +13,8 @@ When unlocked, it:
   1. Creates a disposable private HF dataset with a random name.
   2. Adds a couple of rows locally and publishes them through the same
      ``publish_dataset`` code path the fake-mode harness exercises.
-  3. Pulls metadata only, then ``pull --data``, into a fresh local clone.
+  3. Clones the contract via ``clone_remote_dataset`` and imports row
+     shards via ``pull_dataset(data=True)`` into a fresh local copy.
   4. Asserts byte-identity between the staged shard files and the remote
      files at the published revision.
   5. Asserts the remote tree contains no ``.opentraces/**`` entry (V25).

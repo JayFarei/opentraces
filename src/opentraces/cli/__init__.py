@@ -89,12 +89,6 @@ COMMAND_SECTIONS = [
         [
             "dataset",
         ],
-        [
-            ("Lifecycle", ["new", "clone", "list", "remove"]),
-            ("Inspect", ["show", "status"]),
-            ("Work", ["run", "schedule", "review", "approve", "reject"]),
-            ("Sync", ["publish", "pull", "export", "remote"]),
-        ],
     ),
 ]
 
@@ -102,7 +96,7 @@ COMMAND_SECTIONS = [
 # inline, so the root --help reveals the verbs each group exposes.
 # Sections that carry a third tuple element (sub-categories) handle
 # their own expansion via the sub-category map, so they're not in this set.
-EXPANDED_SECTIONS = {"Trace", "Trail", "Workflow"}
+EXPANDED_SECTIONS = {"Trace", "Trail", "Workflow", "Dataset"}
 
 
 # -- Color helpers ------------------------------------------------------------

@@ -245,10 +245,8 @@ def _dataset_name_candidates(
     Fires only inside the ``dataset`` tree and only when the resolved
     leaf command takes a first positional argument that refers to an
     existing local dataset. ``dataset new`` is excluded since the user
-    is typing a name that doesn't exist yet; ``clone``/``apply`` are
-    excluded because their first positional is named ``remote`` (an HF
-    repo id, not a local dataset). ``review`` is special-cased: its
-    first positional is a variadic named ``args`` because the command
+    is typing a name that doesn't exist yet. ``review`` is special-cased:
+    its first positional is a variadic named ``args`` because the command
     overloads ``review <name>`` and ``review reset <name> [row_ids]``,
     but in both shapes the user eventually types a dataset name in a
     completable position.
@@ -264,8 +262,6 @@ def _dataset_name_candidates(
         None,
     )
     if first_arg is None:
-        return []
-    if first_arg.name == "remote":
         return []
     try:
         from ..core.datasets import list_datasets

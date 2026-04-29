@@ -237,7 +237,7 @@ def datasets_project(tmp_path, monkeypatch):
 
 
 def test_complete_dataset_name_full_list(runner, datasets_project):
-    lines = _complete(runner, "dataset", "show", "")
+    lines = _complete(runner, "dataset", "remove", "")
     names = [ln.split("\t")[0] for ln in lines]
     assert "alpha-traces" in names
     assert "beta-traces" in names

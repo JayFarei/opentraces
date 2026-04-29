@@ -1,10 +1,10 @@
 """Plan 058 V24 + V25 proof — local-as-remote loadability via ``datasets.load_dataset``.
 
 This test publishes a local dataset to a fake HF remote (via
-``OPENTRACES_PLAN058_FAKE_REMOTE_ROOT``), clones it back through
-``ot dataset clone`` + ``ot dataset pull --data``, and proves that the cloned
-local dataset path is loadable by the standard HuggingFace ``datasets`` library
-and yields rows equivalent to the originals (V24).
+``OPENTRACES_PLAN058_FAKE_REMOTE_ROOT``), clones it back through the
+``clone_remote_dataset`` + ``pull_dataset`` core APIs, and proves that the
+cloned local dataset path is loadable by the standard HuggingFace ``datasets``
+library and yields rows equivalent to the originals (V24).
 
 It also asserts that no ``.opentraces/**`` directory leaks into the fake remote
 tree (V25 fake-mode mirror of the live UAT).

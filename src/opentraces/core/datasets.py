@@ -848,12 +848,11 @@ def remote_status_summary(
     remote_name: str | None = None,
     token: str | None = None,
 ) -> dict[str, Any]:
-    """Return remote `head`, `withdrawals`, and `byte_identity` for V17 status.
+    """Return remote `head`, `withdrawals`, and `byte_identity` summary.
 
-    Plan 058 verification §17 mandates that ``dataset status --remote --json``
-    exposes the bound remote's head, the list of remote-side withdrawal
-    tombstones, and the byte-identity check in one payload. Centralising
-    this read keeps the CLI surgical without growing new private surfaces.
+    Surfaces the bound remote's head ref, remote-side withdrawal
+    tombstones, and the byte-identity check in one payload for
+    higher-level callers.
     """
 
     dataset = load_dataset(name)
