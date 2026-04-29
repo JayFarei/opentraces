@@ -209,6 +209,32 @@ def run_fake() -> dict[str, Any]:
         }
 
 
+def _hf_token() -> str | None:
+    return os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+
+
+def _list_hf_remote_files(repo_id: str, token: str | None) -> list[str]:
+    """Recursively list every file path in the live HF dataset tree."""
+    from huggingface_hub import list_repo_tree
+
+    files: list[str] = []
+    stack = [""]
+    while stack:
+        prefix = stack.pop()
+        for entry in list_repo_tree(
+            repo_id=repo_id,
+            repo_type="dataset",
+            path_in_repo=prefix or None,
+            token=token,
+        ):
+            kind = getattr(entry, "type", None)
+            if entry.__class__.__name__ == "RepoFolder" or kind == "directory":
+                stack.append(entry.path)
+            else:
+                files.append(entry.path)
+    return sorted(files)
+
+
 def run_hf_live() -> dict[str, Any]:
     if os.environ.get("OPENTRACES_RUN_LIVE_PLAN058_HF") != "1":
         return {
@@ -216,17 +242,139 @@ def run_hf_live() -> dict[str, Any]:
             "mode": "hf-live",
             "reason": "set OPENTRACES_RUN_LIVE_PLAN058_HF=1 to run live HF acceptance",
         }
-    if not os.environ.get("HF_TOKEN") and not os.environ.get("HUGGINGFACE_TOKEN"):
+    token = _hf_token()
+    if not token:
         return {
             "status": "skipped",
             "mode": "hf-live",
             "reason": "HF_TOKEN or HUGGINGFACE_TOKEN is required for live HF acceptance",
         }
-    return {
-        "status": "skipped",
-        "mode": "hf-live",
-        "reason": "live HF adapter is gated; fake mode covers acceptance in CI",
-    }
+
+    import secrets
+    from huggingface_hub import HfApi
+
+    from opentraces.core.datasets import (
+        add_dataset_remote,
+        apply_remote_dataset,
+        create_dataset,
+        dataset_path,
+        publish_dataset,
+        pull_dataset,
+        read_row_index,
+    )
+
+    api = HfApi(token=token)
+    user = api.whoami()["name"]
+    suffix = secrets.token_hex(4)
+    repo_id = f"{user}/opentraces-plan058-uat-{suffix}"
+    api.create_repo(
+        repo_id=repo_id,
+        repo_type="dataset",
+        private=True,
+        exist_ok=False,
+    )
+
+    cleanup_error: str | None = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="opentraces-plan058-hf-live-") as tmp_raw:
+            tmp = Path(tmp_raw)
+            _isolate(tmp)
+            # Important: do NOT set OPENTRACES_PLAN058_FAKE_REMOTE_ROOT. The
+            # absence of that env var is what routes core.datasets through
+            # the real huggingface_hub adapter.
+            os.environ.pop("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", None)
+
+            create_dataset(
+                "live-source",
+                workflow_skill="curator",
+                workflow_digest="sha256:workflow",
+                publication_policy={"review": "auto"},
+            )
+            add_dataset_remote("live-source", repo_id, visibility="private")
+            from opentraces.core.datasets import append_rows
+
+            originals = [
+                {
+                    "source_trace_id": "trace-live-1",
+                    "source_unit_id": "tu:trace-live-1:trace",
+                    "summary": "Live row one.",
+                },
+                {
+                    "source_trace_id": "trace-live-2",
+                    "source_unit_id": "tu:trace-live-2:trace",
+                    "summary": "Live row two.",
+                },
+            ]
+            append_rows("live-source", originals, run_id="run-live")
+
+            published = publish_dataset(
+                "live-source",
+                contributor="tester",
+                token=token,
+            )
+
+            remote_files = _list_hf_remote_files(repo_id, token)
+            no_control_plane_leak = not any(
+                ".opentraces" in Path(rel).parts for rel in remote_files
+            )
+
+            apply_remote_dataset(
+                f"hf://{repo_id}",
+                as_name="live-clone",
+                read_only=True,
+                token=token,
+            )
+            pulled = pull_dataset("live-clone", data=True, token=token)
+            clone_row_count = len(read_row_index("live-clone"))
+
+            # V24 mirror via datasets.load_dataset on the clone.
+            try:
+                import datasets as _hf_datasets
+
+                loaded = _hf_datasets.load_dataset(str(dataset_path("live-clone")))
+                load_dataset_rows = (
+                    loaded["train"].num_rows if "train" in loaded else 0
+                )
+                load_dataset_ok = load_dataset_rows == len(originals)
+            except Exception as exc:  # noqa: BLE001 — surface error in payload
+                load_dataset_rows = 0
+                load_dataset_ok = False
+                cleanup_error = f"load_dataset failed: {exc!r}"
+
+            return {
+                "status": "ok",
+                "mode": "hf-live",
+                "repo_id": repo_id,
+                "published": {
+                    "uploaded": published.uploaded,
+                    "new_row_count": published.new_row_count,
+                    "attempts": published.attempts,
+                    "staged_files": published.staged_files,
+                    "remote_head_after": published.remote_head_after,
+                },
+                "remote_file_count": len(remote_files),
+                "no_control_plane_leak": no_control_plane_leak,
+                "pull": {
+                    "imported_count": pulled.imported_count,
+                    "duplicate_count": pulled.duplicate_count,
+                    "metadata_refreshed": pulled.metadata_refreshed,
+                },
+                "clone_row_count": clone_row_count,
+                "load_dataset": {
+                    "ok": load_dataset_ok,
+                    "rows": load_dataset_rows,
+                },
+                "cleanup_error": cleanup_error,
+            }
+    finally:
+        try:
+            api.delete_repo(
+                repo_id=repo_id,
+                repo_type="dataset",
+                missing_ok=True,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort cleanup
+            cleanup_error = f"delete_repo failed: {exc!r}"
 
 
 def main() -> None:
