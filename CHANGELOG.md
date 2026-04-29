@@ -5,6 +5,63 @@ All notable changes to the opentraces CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## MERGED-B — Trace Map Projections & Bursts
+
+Cluster B / Plan 54 trace-map projection work. Targets the "1.6 MB
+trace map for one heavy trace" pain point: ships a compactness filter,
+a first-class burst projection, intent propagation, and path
+normalization so consumers can pull "all bursts in the last 12h with
+intent + patches + git anchor" with a one-line jq.
+
+### Added
+
+- `opentraces trace map <id> --actions <comma-list>` projection filter.
+  Keeps only nodes whose `action_type` is in the comma-separated list,
+  drops edges that cross removed nodes, preserves the structural
+  skeleton. Default behavior unchanged. Canonical lineage subset:
+  `user_instruction,file_edit,patch_created,git_anchor,test_run,error_signal,final_response`
+  (typically ~50% size reduction on heavy traces).
+- `opentraces trace map <id> --bursts [--burst-gap N]` projection.
+  Detects change bursts deterministically by clustering `file_edit`
+  and `patch_created` nodes by `step_index` proximity (default
+  gap=35), emits one virtual `change_burst` node per burst carrying
+  `step_range`, `intent_user_step`, `intent_text`, `unique_files`,
+  `patches[{patch_id, git_anchor_id, commit_sha, evidence_firmness, evidence_tier}]`,
+  `unique_git_anchors`, and `has_git_anchor`. Edges between
+  consecutive bursts are emitted as `previous_next` for ordering.
+- `opentraces trace get <id> --bursts [--burst-gap N]` convenience.
+  Returns only the burst summary list (no map skeleton) for one-shot
+  consumers. Same algorithm as `trace map --bursts`.
+- `TraceMapNode.active_user_step: int | None` — populated on every
+  node by a single forward pass during `build_trace_map`. Points back
+  to the most recent preceding `user_instruction` (or `None` if none
+  precedes). Eliminates the "walk back to find intent" pattern.
+- `TraceMapNode` action_type Literal extended with `change_burst`.
+
+### Changed
+
+- Path normalization in `files_modified` / `files_read`. The trace
+  map builder now resolves the project's repo root from
+  `metadata.cwd` or `metadata.hook_pre_tool_use[*].trail.worktree_root`
+  and strips that prefix from absolute tool-call paths. Absolute
+  siblings are preserved in
+  `node.metadata.files_modified_absolute` /
+  `node.metadata.files_read_absolute` for downstream needs. Paths
+  outside the determined root remain absolute. When no root can be
+  determined, traces with absolute paths surface a
+  `path_normalization_failed` limitation on the map.
+- `_files_for_tool` (read mode) now also reads the `file_path` key
+  alongside `file`/`path` so Claude Code Read invocations populate
+  `files_read` correctly.
+
+### Internal
+
+- New module `opentraces.core.bursts` with `detect_bursts`,
+  `bursts_to_trace_map`, and a `Burst` dataclass.
+- New tests: `tests/core/test_bursts.py`,
+  `tests/core/test_trace_map_actions_filter.py`,
+  `tests/cli/test_trace_map_cli.py`.
+
 ## [0.4.0] - 2026-04-26
 
 This release ships **Trace Trails Phase 5**: a VCS-anchored evidence
