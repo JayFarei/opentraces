@@ -95,6 +95,10 @@ class TraceMapNode(BaseModel):
         "snapshot",
         "security_finding",
         "final_response",
+        # Cluster B / Plan 54: virtual aggregate node introduced by the
+        # `--bursts` projection. Carries the burst summary in ``metadata``
+        # (step_range, unique_files, patches, unique_git_anchors).
+        "change_burst",
     ]
     step_index: int | None = None
     parent_node_id: str | None = None
@@ -109,6 +113,11 @@ class TraceMapNode(BaseModel):
     signal_refs: list[str] = Field(default_factory=list)
     text_preview: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Cluster B / Plan 54: forward-pass propagation. The ``step_index`` of
+    # the most recent ``user_instruction`` whose step <= this node's step,
+    # or ``None`` if none precedes. Lets consumers attach intent without
+    # walking back through every preceding node.
+    active_user_step: int | None = None
     confidence: NodeConfidence = "deterministic"
 
 

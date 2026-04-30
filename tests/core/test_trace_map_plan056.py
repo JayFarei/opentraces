@@ -3,6 +3,10 @@
 from opentraces_schema import Agent, Observation, Step, ToolCall, TraceRecord
 
 
+# Re-exported so newer tests can extend without duplicating the fixture.
+__all__ = ["_bug_fix_trace"]
+
+
 def _bug_fix_trace() -> TraceRecord:
     return TraceRecord(
         trace_id="trace-plan056-map",
@@ -143,3 +147,110 @@ def test_build_trace_map_marks_sorted_last_agent_text_as_final_response():
     assert len(final_nodes) == 1
     assert final_nodes[0].step_index == 5
     assert final_nodes[0].text_preview == "Implemented the parser fix and verified pytest passes."
+
+
+def _abs_paths_trace() -> TraceRecord:
+    """A trace whose tool calls mix absolute and repo-relative paths.
+
+    The repo root is communicated via ``metadata.cwd`` so the trace map
+    builder can normalize ``/Users/.../foo.py`` and ``foo.py`` into the
+    same logical entry.
+    """
+    return TraceRecord(
+        trace_id="trace-paths",
+        session_id="session-paths",
+        agent=Agent(name="claude-code", model="claude-opus-4-6"),
+        task={"description": "edit foo and bar"},
+        steps=[
+            Step(step_index=1, role="user", content="edit foo.py and bar.py"),
+            Step(
+                step_index=2,
+                role="agent",
+                tool_calls=[
+                    ToolCall(
+                        tool_call_id="tc-abs",
+                        tool_name="Edit",
+                        input={
+                            "file_path": "/Users/dev/repo/foo.py",
+                            "old_string": "a",
+                            "new_string": "b",
+                        },
+                    ),
+                ],
+            ),
+            Step(
+                step_index=3,
+                role="agent",
+                tool_calls=[
+                    ToolCall(
+                        tool_call_id="tc-rel",
+                        tool_name="Edit",
+                        input={
+                            "file_path": "foo.py",
+                            "old_string": "c",
+                            "new_string": "d",
+                        },
+                    ),
+                ],
+            ),
+            Step(
+                step_index=4,
+                role="agent",
+                tool_calls=[
+                    ToolCall(
+                        tool_call_id="tc-read",
+                        tool_name="Read",
+                        input={"file_path": "/Users/dev/repo/bar.py"},
+                    ),
+                ],
+            ),
+        ],
+        metadata={"cwd": "/Users/dev/repo"},
+    )
+
+
+def test_active_user_step_populated_on_action_nodes():
+    """Every action node should carry active_user_step pointing back to the
+    most recent preceding user_instruction. Nodes before any user_instruction
+    leave the field unset.
+    """
+    from opentraces.core.trace_map import build_trace_map
+
+    trace_map = build_trace_map(_bug_fix_trace())
+
+    user_steps = sorted({step.step_index for step in _bug_fix_trace().steps if step.role == "user"})
+    for node in trace_map.nodes:
+        if node.action_type in {"file_edit", "patch_created", "git_anchor", "test_run"}:
+            assert node.active_user_step is not None, f"node {node.node_id} missing active_user_step"
+            assert node.active_user_step in user_steps
+
+
+def test_path_normalization_dedupes_abs_and_relative():
+    """Paths in files_modified must be repo-relative; absolute siblings live
+    in metadata for downstream needs. The same logical file must not appear
+    twice in different forms.
+    """
+    from opentraces.core.trace_map import build_trace_map
+
+    trace_map = build_trace_map(_abs_paths_trace())
+
+    edits = [n for n in trace_map.nodes if n.action_type == "file_edit"]
+    assert edits, "expected at least one file_edit node"
+    # Combine all files_modified across edits — there should be no duplicates
+    # like both "foo.py" and "/Users/dev/repo/foo.py" present.
+    all_modified: list[str] = []
+    for node in edits:
+        all_modified.extend(node.files_modified)
+    assert "/Users/dev/repo/foo.py" not in all_modified
+    assert "foo.py" in all_modified
+
+    # Per-node: the absolute sibling lives in metadata.
+    for node in edits:
+        if "/Users/dev/repo/foo.py" in node.metadata.get("files_modified_absolute", []):
+            assert node.files_modified == ["foo.py"], node.files_modified
+
+    reads = [n for n in trace_map.nodes if n.action_type == "file_read"]
+    assert reads, "expected at least one file_read node"
+    for node in reads:
+        assert "/Users/dev/repo/bar.py" not in node.files_read
+        assert "bar.py" in node.files_read

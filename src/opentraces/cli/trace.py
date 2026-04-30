@@ -329,6 +329,29 @@ def trace_query(
 @click.option("--walk", type=click.Choice(["back", "forward"]), default=None, help="Walk direction for --from-node.")
 @click.option("--until", "until_actions", multiple=True, help="Action type that stops --walk.")
 @click.option("--max-steps", type=int, default=40, show_default=True, help="Maximum nodes in candidate slice.")
+@click.option(
+    "--actions",
+    "actions_filter",
+    default=None,
+    help=(
+        "Comma-separated action types to keep (compactness filter). "
+        "Canonical lineage subset: "
+        "user_instruction,file_edit,patch_created,git_anchor,test_run,error_signal,final_response."
+    ),
+)
+@click.option(
+    "--bursts",
+    "as_bursts",
+    is_flag=True,
+    help="Project the map as `change_burst` aggregate nodes (one per cluster).",
+)
+@click.option(
+    "--burst-gap",
+    "burst_gap",
+    type=int,
+    default=None,
+    help="Step-index gap between adjacent edits within a burst (default 35).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_map_cmd(
     target: str,
@@ -339,11 +362,20 @@ def trace_map_cmd(
     walk: str | None,
     until_actions: tuple[str, ...],
     max_steps: int,
+    actions_filter: str | None,
+    as_bursts: bool,
+    burst_gap: int | None,
     as_json: bool,
 ) -> None:
     """Show a deterministic Trace Map or bounded candidate slice."""
+    from ..core.bursts import DEFAULT_BURST_GAP, bursts_to_trace_map, detect_bursts
     from ..core.trace_index import get_trace_map
-    from ..core.trace_map import slice_trace_map_for_candidate, trace_map_around, walk_trace_map
+    from ..core.trace_map import (
+        filter_trace_map_actions,
+        slice_trace_map_for_candidate,
+        trace_map_around,
+        walk_trace_map,
+    )
 
     trace_id = _trace_id_from_ref(target)
     trace_map = get_trace_map(trace_id)
@@ -391,6 +423,15 @@ def trace_map_cmd(
         click.echo("--walk requires --from-node.", err=True)
         sys.exit(2)
 
+    if as_bursts:
+        gap = burst_gap if burst_gap is not None else DEFAULT_BURST_GAP
+        bursts = detect_bursts(selected, gap=gap)
+        selected = bursts_to_trace_map(selected, bursts)
+    elif actions_filter:
+        keep = {part.strip() for part in actions_filter.split(",") if part.strip()}
+        if keep:
+            selected = filter_trace_map_actions(selected, keep)
+
     payload = {
         "status": "ok",
         "trace_id": trace_id,
@@ -424,22 +465,44 @@ def trace_map_cmd(
     is_flag=True,
     help="With --resume: print the resume command instead of exec'ing it.",
 )
+@click.option(
+    "--bursts",
+    "as_bursts",
+    is_flag=True,
+    help="Return only the change-burst summary list for this trace (no map skeleton).",
+)
+@click.option(
+    "--burst-gap",
+    "burst_gap",
+    type=int,
+    default=None,
+    help="Step-index gap between adjacent edits within a burst (default 35).",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_get(
     ref: str,
     resume: bool,
     at_step: str | None,
     dry_run: bool,
+    as_bursts: bool,
+    burst_gap: int | None,
     as_json: bool,
 ) -> None:
     """Resolve a trace, trace unit, map node, or ot:// Trail resource.
 
     Pass ``--resume`` to hand control back to the upstream agent
-    (Claude Code) instead of printing the trace details.
+    (Claude Code) instead of printing the trace details. Pass
+    ``--bursts`` to return the change-burst summary for the trace
+    without re-walking the full Trace Map.
     """
     if resume:
         _resume_trace_impl(ref, at_step, dry_run, as_json)
         return
+
+    if as_bursts:
+        _trace_get_bursts_impl(ref, burst_gap, as_json)
+        return
+
     from opentraces_schema import TraceRecord
 
     from ..core.trace_index import get_map_node, get_trace_path, get_unit
@@ -485,6 +548,40 @@ def trace_get(
         click.echo(payload["map_node"]["node_id"])
     else:
         click.echo(payload["resource"].get("resource_type", ref))
+
+
+def _trace_get_bursts_impl(ref: str, burst_gap: int | None, as_json: bool) -> None:
+    """Convenience: emit the bursts list for ``ref`` directly.
+
+    Same algorithm as ``trace map --bursts``, just trimmed for one-shot
+    consumers — no map skeleton, just the burst metadata array.
+    """
+    from ..core.bursts import DEFAULT_BURST_GAP, detect_bursts
+    from ..core.trace_index import get_trace_map
+
+    trace_id = _trace_id_from_ref(ref)
+    trace_map = get_trace_map(trace_id)
+    if trace_map is None:
+        click.echo(f"Trace Map not found: {ref}", err=True)
+        sys.exit(6)
+    gap = burst_gap if burst_gap is not None else DEFAULT_BURST_GAP
+    bursts = detect_bursts(trace_map, gap=gap)
+    payload = {
+        "status": "ok",
+        "trace_id": trace_id,
+        "burst_gap": gap,
+        "bursts": [b.to_metadata() for b in bursts],
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for index, b in enumerate(bursts, 1):
+        files = sum(b.unique_files.values())
+        anchors = len(b.unique_git_anchors)
+        click.echo(
+            f"#{index} steps {b.step_range[0]}..{b.step_range[1]}  "
+            f"files={files}  patches={len(b.patches)}  anchors={anchors}"
+        )
 
 
 def _trace_id_from_ref(ref: str) -> str:
