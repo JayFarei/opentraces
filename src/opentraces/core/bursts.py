@@ -118,6 +118,14 @@ class Burst:
         "commit_subject": None,
         "commit_body": None,
     })
+    # Cluster F D11/D12: per-burst quality signals (commit message
+    # quality + tool-call density + error/test correlations).
+    quality_signals: dict[str, Any] = field(default_factory=dict)
+    # Cluster F: enriched patches with survival info from the project
+    # event log. Empty when the trace has no matching trace_patch_created
+    # events — at that point ``patches`` carries the synthesized
+    # file_edit entries with no survival_state.
+    patches_with_survival: list[dict[str, Any]] = field(default_factory=list)
     # Internal: the contributing node ids from the source trace map.
     contributing_node_ids: list[str] = field(default_factory=list)
 
@@ -131,6 +139,8 @@ class Burst:
             "burst_commit_sha": self.burst_commit_sha,
             "unique_files": dict(self.unique_files),
             "patches": [dict(p) for p in self.patches],
+            "patches_with_survival": [dict(p) for p in self.patches_with_survival],
+            "quality_signals": dict(self.quality_signals),
             "unique_git_anchors": list(self.unique_git_anchors),
             "has_git_anchor": self.has_git_anchor,
         }
@@ -256,6 +266,25 @@ def detect_bursts(
 
     commit_index = _build_commit_index(trace_record) if trace_record is not None else []
 
+    # Cluster F: load the project's TrailEvent log once and use it both
+    # for survival enrichment and quality-signal correlation. Cheap to
+    # do here even when no patches match — read_events handles missing
+    # refs gracefully.
+    trail_events: list[Any] | None = None
+    trace_id_attr = getattr(trace_record, "trace_id", None)
+    if trace_id_attr is None and isinstance(trace_record, dict):
+        trace_id_attr = trace_record.get("trace_id")
+    if (
+        commit_lookup
+        and repo_path_obj is not None
+        and trace_id_attr
+    ):
+        try:
+            from .trails import read_events as _read_events
+            trail_events = _read_events(repo_path_obj)
+        except Exception:
+            trail_events = None
+
     for burst in bursts:
         _augment_intent_chain(burst, user_instruction_nodes)
         _augment_burst_commit_sha(burst, commit_index)
@@ -306,6 +335,25 @@ def detect_bursts(
         elif trig is not None:
             burst.intent_user_step = trig.get("step")
             burst.intent_text = trig.get("text")
+
+        # Cluster F D11: commit message quality tier.
+        _augment_commit_message_quality(burst)
+
+        # Cluster F: survival enrichment — when the project's event log
+        # carries trace_patch_created events for this burst, sync each
+        # patch and emit ``patches_with_survival``.
+        if trail_events is not None and trace_id_attr and repo_path_obj is not None:
+            _augment_patches_with_survival(
+                burst,
+                events=trail_events,
+                trace_id=str(trace_id_attr),
+                repo=repo_path_obj,
+            )
+
+    # Cluster F D12: per-burst error / tool-call density signals.
+    if nodes:
+        for burst in bursts:
+            _augment_quality_signals(burst, nodes=nodes)
 
     return bursts
 
@@ -1000,3 +1048,209 @@ def _git_log_subject_body(
     else:
         body = None
     return subject, body, None
+
+
+# ---------------------------------------------------------------------------
+# Cluster F — survival enrichment + quality signals
+# ---------------------------------------------------------------------------
+
+_CONVENTIONAL_COMMIT_RE = re.compile(
+    r"^(feat|fix|refactor|chore|test|docs|perf|style|build|ci|revert)"
+    r"(\(.+\))?:\s"
+)
+
+
+def _commit_message_quality(subject: str | None, body: str | None) -> dict[str, Any]:
+    """Cluster F D11: classify a commit message into a quality tier.
+
+    Tiers (from the spec):
+
+    * ``bare`` — subject only, no body
+    * ``terse`` — subject + 1 body paragraph ≤ 140 chars
+    * ``descriptive`` — subject + body 140-500 chars
+    * ``detailed`` — subject + body > 500 chars OR ≥ 2 paragraphs
+    """
+    subj = subject or ""
+    bod = body or ""
+    subject_length = len(subj)
+    body_length = len(bod)
+    has_conv = bool(_CONVENTIONAL_COMMIT_RE.match(subj))
+    paragraphs = [p for p in re.split(r"\n\s*\n", bod) if p.strip()] if bod else []
+    paragraph_count = len(paragraphs)
+
+    if not bod:
+        tier = "bare"
+    elif body_length > 500 or paragraph_count >= 2:
+        tier = "detailed"
+    elif body_length >= 140:
+        tier = "descriptive"
+    else:
+        tier = "terse"
+
+    return {
+        "tier": tier,
+        "subject_length": subject_length,
+        "body_length": body_length,
+        "has_conventional_prefix": has_conv,
+        "paragraph_count": paragraph_count,
+    }
+
+
+def _augment_commit_message_quality(burst: Burst) -> None:
+    """Stamp ``intent.commit_message_quality`` based on subject/body."""
+    quality = _commit_message_quality(
+        burst.intent.get("commit_subject"),
+        burst.intent.get("commit_body"),
+    )
+    burst.intent["commit_message_quality"] = quality
+
+
+def _augment_quality_signals(
+    burst: Burst,
+    *,
+    nodes: list[TraceMapNode],
+) -> None:
+    """Cluster F D12: count error / test / tool-call density inside the
+    burst's step_range. Reads from the same TraceMap nodes already in
+    scope so no extra trace traversal is paid.
+    """
+    if not burst.step_range or len(burst.step_range) != 2:
+        return
+    start, end = burst.step_range
+    span = max(end - start + 1, 1)
+
+    error_count = 0
+    test_run_count = 0
+    tool_call_count = 0
+    for node in nodes:
+        si = node.step_index
+        if si is None or si < start or si > end:
+            continue
+        atype = node.action_type
+        if atype == "error_signal":
+            error_count += 1
+        elif atype == "test_run":
+            test_run_count += 1
+        elif atype == "tool_call":
+            tool_call_count += 1
+
+    burst.quality_signals = {
+        "error_signal_count": error_count,
+        "test_run_count": test_run_count,
+        "tool_call_count": tool_call_count,
+        "tool_call_density": round(tool_call_count / span, 4) if span else 0.0,
+    }
+
+
+def _augment_patches_with_survival(
+    burst: Burst,
+    *,
+    events: list[Any],
+    trace_id: str,
+    repo: Path,
+) -> None:
+    """Cluster F: enrich ``burst.patches_with_survival`` by syncing each
+    Trace Patch belonging to ``trace_id`` whose step_index falls inside
+    ``burst.step_range`` against the live repo.
+
+    The list mirrors ``burst.patches`` shape (carrying ``patch_id``,
+    ``file_path``, ``step_index``) but adds ``survival_state``,
+    ``retention_fraction``, ``retention_fraction_at_anchor``,
+    ``retention_fraction_at_original_range``, ``evidence_firmness``,
+    ``evidence_tier``, ``lost_kind``, ``lost_at_commit_sha``, and
+    ``commit_sha`` (anchor commit). Patches not in the burst's range
+    are skipped.
+
+    Uses one shared ``lost_attribution_cache`` and a single events list
+    so a 27-patch burst pays one ``read_events`` and at most a few
+    ``git log --diff-filter=D`` calls (cached by file).
+    """
+    from .trails import sync_patch as _sync_patch
+
+    if not burst.step_range or len(burst.step_range) != 2:
+        return
+    start, end = burst.step_range
+
+    # Gather the patches that belong to this trace AND fall inside the
+    # burst's step window. Index by (file_path, step_index) so we can
+    # join back to the synthetic burst.patches entries later if needed.
+    candidate_patches: list[tuple[str, dict[str, Any]]] = []
+    for event in events:
+        if event.event_type != "trace_patch_created":
+            continue
+        if event.trace_id != trace_id:
+            continue
+        si = event.step_index
+        if si is None or si < start or si > end:
+            continue
+        patch_id = event.payload.get("trace_patch_id")
+        if not isinstance(patch_id, str) or not patch_id:
+            continue
+        candidate_patches.append((patch_id, event.payload))
+
+    if not candidate_patches:
+        return
+
+    # Filter to the burst's commit's file set if known: when the burst
+    # is anchored to a specific commit and ``unique_files`` was clipped,
+    # the patches we want are exactly those whose file_path matches a
+    # tracked file. This mirrors the dataset-row contract.
+    tracked_files: set[str] = set()
+    for path in burst.unique_files.keys():
+        tracked_files.add(path)
+        # also accept normalized-stripped form
+        if path.startswith("/"):
+            tracked_files.add(path.split("/")[-1])
+
+    lost_cache: dict[tuple[str, str, str], tuple[str | None, str]] = {}
+    enriched: list[dict[str, Any]] = []
+    for patch_id, payload in candidate_patches:
+        # When the burst has been clipped to specific files, restrict
+        # the survival join to those. When unique_files is empty we
+        # accept everything in the trace+range window.
+        file_path = payload.get("file_path")
+        if tracked_files and file_path and file_path not in tracked_files:
+            # Try the normalized-relative form (foreign agent prefix /
+            # repo_root prefix were already stripped from unique_files).
+            normalized = file_path
+            for prefix in FOREIGN_AGENT_PATH_PREFIXES:
+                if normalized.startswith(prefix):
+                    normalized = normalized[len(prefix):]
+                    break
+            if normalized not in tracked_files:
+                continue
+            file_path = normalized
+        try:
+            sync_payload = _sync_patch(
+                repo,
+                patch_id,
+                events=events,
+                lost_attribution_cache=lost_cache,
+            )
+        except Exception:
+            continue
+        current = sync_payload.get("current_survival") or {}
+        row = {
+            "patch_id": patch_id,
+            "trace_patch_id": patch_id,
+            "file_path": file_path,
+            "step_index": payload.get("step_index"),
+            "survival_state": current.get("survival_state"),
+            "retention_fraction": current.get("retention_fraction"),
+            "retention_fraction_at_anchor": current.get(
+                "retention_fraction_at_anchor"
+            ),
+            "retention_fraction_at_original_range": current.get(
+                "retention_fraction_at_original_range"
+            ),
+            "evidence_firmness": current.get("evidence_firmness"),
+            "evidence_tier": current.get("evidence_tier"),
+            "lost_kind": current.get("lost_kind"),
+            "lost_at_commit_sha": current.get("lost_at_commit_sha"),
+            "commit_sha": (current.get("anchor_commit_id") or {}).get("hex"),
+            "current_path": current.get("current_path"),
+        }
+        enriched.append(row)
+
+    if enriched:
+        burst.patches_with_survival = enriched

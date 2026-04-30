@@ -5,6 +5,72 @@ All notable changes to the opentraces CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## MERGED-F — Survivorship Hygiene
+
+- **`trace_id` in batch `trail track` output (D1).** Every JSONL row
+  emitted by `trail track --since` / `--all` / `--patches-from` now
+  carries a top-level `trace_id` looked up from the
+  `trace_patch_created` event payload. JSONL consumers can group rows
+  by trace in one `jq` expression without a sidecar projection.
+- **`lost_at_commit_sha` on lost patches (D2).** When a patch's
+  survival_state is `lost` because the file was deleted, the row now
+  carries the killer commit's SHA. Resolution walks
+  `git log --diff-filter=D` once per `(file_path, anchor_commit, head)`
+  triple — a per-batch cache shared across all patches keeps a
+  27-patch survey at a handful of git calls. The cache is exposed as
+  the new `lost_attribution_cache` parameter on `sync_patch`,
+  `sync_anchor`, and the internal `_compute_survival`.
+  `lost_attribution_failed` is appended to `limitations` when the
+  resolver runs but cannot identify a single deletion commit.
+- **`lost_kind` discriminator (D3).** Every `lost` survival row now
+  also carries `lost_kind: "file_deleted" | "hunk_removed"`. File-alive
+  cases (the hunk's authored lines vanished while the file lives on)
+  intentionally leave `lost_at_commit_sha` as `None` — line-level
+  attribution via `git log -L` is too expensive and ambiguous for the
+  cheap path. Reviewers can now sort lost patches by recoverability.
+- **Retention fraction split (D4).** `_compute_survival` now emits
+  three retention fields on every alive observation:
+  `retention_fraction_at_anchor` (1.0 when the anchor's range still
+  resolves, measures lineage strength), `retention_fraction_at_original_range`
+  (the existing literal preserved/authored ratio), and
+  `retention_fraction` (alias preferring `_at_anchor`). For
+  `alive_transformed` patches the alias is now 1.0 instead of 0.0,
+  truthfully signaling "the anchor lives, lines drifted." For
+  `partially_preserved` and `alive_moved` the literal fraction is
+  preserved.
+- **`dataset publish --min-retention X --exclude-state STATE` (D8).**
+  Two new filter flags drop low-quality rows in flight before staging.
+  `--min-retention` (0.0-1.0) drops rows whose mean
+  `retention_fraction` across `patches_with_survival` is below the
+  threshold; `--exclude-state STATE` (repeatable) drops rows that have
+  any patch with `survival_state == STATE`. Both compose; under
+  `--check-only` the drop counts surface in `publish.filter` JSON
+  without uploading.
+- **`dataset list / status` row_quality summary (D9).**
+  `--json` output now carries a `row_quality` block:
+  `{total_rows, rows_with_anchored_patches, rows_with_lost_patches,
+   rows_fully_alive, mean_row_retention, survival_distribution}`.
+  Computed once per call from the dataset's row JSONL, catches
+  low-quality datasets before publish.
+- **Burst commit-message quality tier (D11).** `intent.commit_message_quality`
+  on every `change_burst` carries `{tier, subject_length, body_length,
+  has_conventional_prefix, paragraph_count}`. Tiers: `bare` (subject
+  only) / `terse` (≤140 char body, single paragraph) / `descriptive`
+  (140-500 char body) / `detailed` (>500 chars or ≥2 paragraphs).
+- **Burst error / tool-call signals (D12).** `change_burst.quality_signals`
+  carries `{error_signal_count, test_run_count, tool_call_count,
+  tool_call_density}` — counted from TraceMap nodes whose step_index
+  falls within the burst's range. Pure count-as-you-go pass with no
+  extra trace traversal.
+- **`patches_with_survival` on bursts.** `detect_bursts` now enriches
+  each burst with a `patches_with_survival` list when the project's
+  TrailEvent log carries matching `trace_patch_created` events for the
+  burst's trace_id and step window. Each row joins the patch's anchor
+  identity (`commit_sha`, `evidence_firmness`, `evidence_tier`) with
+  its current survival observation (`survival_state`,
+  `retention_fraction*`, `lost_kind`, `lost_at_commit_sha`). All
+  patches share one `lost_attribution_cache`.
+
 ## MERGED-E — Intent Richness
 
 - **Structured `intent` object on `change_burst` nodes (I7).**

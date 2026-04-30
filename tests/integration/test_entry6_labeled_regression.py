@@ -93,6 +93,8 @@ def _burst_to_dict(burst: Any) -> dict[str, Any]:
         "intent",
         "unique_files",
         "patches",
+        "patches_with_survival",
+        "quality_signals",
         "unique_git_anchors",
         "has_git_anchor",
         "burst_commit_sha",

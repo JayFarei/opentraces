@@ -134,6 +134,13 @@ def _emit_batch_track(
     Reads the project's TrailEvent log once and threads the result into
     ``sync_patch`` so a batch of 100+ patches doesn't pay the read cost
     100+ times.
+
+    Cluster F D1: each row also carries ``trace_id`` (looked up from the
+    ``trace_patch_created`` event payload) so JSONL consumers can group
+    rows by trace without a sidecar projection. Cluster F D2/D3: a
+    ``lost_attribution_cache`` is threaded across all patches so a batch
+    of patches on the same file pays one ``git log --diff-filter=D``
+    lookup, not N.
     """
     from ..core.trails import read_events, sync_patch
 
@@ -142,6 +149,24 @@ def _emit_batch_track(
     except Exception:
         cached_events = None
 
+    # Build trace_id lookup once (Cluster F D1).
+    trace_id_for_patch: dict[str, str] = {}
+    if cached_events is not None:
+        for event in cached_events:
+            if event.event_type != "trace_patch_created":
+                continue
+            payload_patch_id = event.payload.get("trace_patch_id")
+            if not isinstance(payload_patch_id, str) or not payload_patch_id:
+                continue
+            tid = event.trace_id or event.payload.get("trace_id")
+            if isinstance(tid, str) and tid:
+                trace_id_for_patch.setdefault(payload_patch_id, tid)
+
+    # Single attribution cache shared across the whole batch
+    # (keyed by (path, anchor, head_sha)) so two lost patches on the
+    # same file resolve their killer commit with one git log call.
+    lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] = {}
+
     for patch_id in patch_ids:
         try:
             payload = sync_patch(
@@ -149,6 +174,7 @@ def _emit_batch_track(
                 patch_id,
                 history_limit=history_limit,
                 events=cached_events,
+                lost_attribution_cache=lost_attribution_cache,
             )
         except Exception as exc:  # noqa: BLE001 — keep the batch alive
             payload = {
@@ -161,6 +187,12 @@ def _emit_batch_track(
             # can group rows back to their input even when sync_patch
             # normalizes the canonical id.
             payload["trace_patch_id"] = patch_id
+            # D1: trace_id at top level, looked up via the event log.
+            tid = trace_id_for_patch.get(patch_id)
+            if tid:
+                payload["trace_id"] = tid
+            else:
+                payload.setdefault("trace_id", None)
         # Emit one JSON object per line (no indent) so jq -s can stream.
         click.echo(json.dumps(payload, sort_keys=True))
 
