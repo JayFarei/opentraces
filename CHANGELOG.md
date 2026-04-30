@@ -136,6 +136,60 @@ intent + patches + git anchor" with a one-line jq.
   optional pre-loaded `events: list[TrailEvent]` so batch callers can
   amortize the one-time read cost across many patches.
 
+## MERGED-D — CLI ergonomics & ad-hoc datasets
+
+### Added
+
+- Top-level `--json` flag now propagates to every subcommand. When
+  set on the root group (e.g. `opentraces --json trace query`), the
+  resolved leaf command receives `--json` automatically if it
+  exposes the option, so an agent-level "JSON mode" toggle no
+  longer needs to be repeated at the verb. Implemented as a hook on
+  `click.Command.make_context` that injects `--json` into
+  sub-command args when the root context has `json_mode` set and
+  the resolved command has a `--json` option. Idempotent and a
+  no-op for commands that don't expose `--json`. The `status`
+  command's human prelude (Rich header, table, footer rule, hint
+  block) is also gated on `_json_mode` so its JSON tail is
+  reachable via the documented `---OPENTRACES_JSON---` sentinel
+  without table noise on stdout.
+- Ad-hoc dataset path: `opentraces dataset new <name> --rows-file
+  <jsonl> --schema <json-schema>` synthesizes a manual dataset
+  without requiring a workflow skill. Manifest is marked with
+  `workflow.skill = "manual"`, schema is copied to
+  `schemas/row.schema.json`, and rows are validated against the
+  supplied JSON Schema and appended via the standard
+  `core.datasets.append_rows` path so they participate in the same
+  identity / deduplication / publication-state machinery as
+  workflow-driven datasets. `--rows-file` and `--schema` must be
+  provided together; either alone is rejected with a usage error
+  before the dataset directory is created.
+- `dataset list` and the new `dataset status <name>` command expose
+  `manual: true` plus a `row_count` field for ad-hoc datasets so
+  agents can detect them without re-reading the manifest skill
+  string.
+- `dataset run <name>` short-circuits on a manual dataset and emits
+  `{"status": "manual_dataset_no_run_action", ...}` instead of
+  invoking the workflow runner; `review` / `approve` / `reject` /
+  `publish` work unchanged on manual datasets.
+- New `opentraces dataset status <name>` command emits row count and
+  publication-state counts (e.g. `needs_review`, `publishable`) as
+  JSON or a one-line human summary.
+
+### Tests
+
+- `tests/cli/test_global_json_propagation.py` (7 cases) pins the
+  propagation contract for `status`, `trace query`, `trace map`,
+  `trail track`, `dataset list`, `doctor`, and the
+  subcommand-scoped `--json` regression.
+- `tests/cli/test_dataset_rows_file.py` (6 cases) covers manifest
+  shape, dataset-list visibility, status row count, JSONL
+  validation, mutual `--rows-file` / `--schema` requirement, and
+  `dataset run` no-op behavior.
+- `tests/integration/test_dataset_adhoc_roundtrip.py` exercises the
+  full create / list / status / review / approve / run loop on a
+  manual dataset.
+
 ## [0.4.0] - 2026-04-26
 
 This release ships **Trace Trails Phase 5**: a VCS-anchored evidence

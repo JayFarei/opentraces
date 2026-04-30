@@ -45,6 +45,55 @@ SENTINEL = "---OPENTRACES_JSON---"
 _json_mode = False
 
 
+# -- D1: top-level --json propagation -----------------------------------------
+#
+# The root group exposes ``--json`` as a global flag, but historically only
+# subcommands that use ``emit_json()`` (gated on the ``_json_mode`` global)
+# honored it. Subcommands with their own per-command ``--json`` option (most
+# of them) ignored the global one, so ``opentraces --json trace query`` would
+# emit human text while ``opentraces trace query --json`` emitted JSON.
+#
+# Fix: hook ``click.Command.make_context``. When the parent context's root
+# context has ``json_mode=True`` and the resolved sub-command exposes its own
+# ``--json`` option, inject ``--json`` into the sub-command's args before it
+# parses. Idempotent (skips if already present), recursive across nested
+# groups (each ``make_context`` call is independent), and a no-op for groups
+# / commands that don't have a ``--json`` option.
+
+_original_make_context = click.Command.make_context
+
+
+def _command_has_json_option(cmd: click.Command) -> bool:
+    for param in cmd.params:
+        if isinstance(param, click.Option) and "--json" in (param.opts or []):
+            return True
+    return False
+
+
+def _root_json_mode(parent: click.Context | None) -> bool:
+    if parent is None:
+        return False
+    root = parent.find_root()
+    obj = root.obj
+    if isinstance(obj, dict) and obj.get("json_mode"):
+        return True
+    return False
+
+
+def _patched_make_context(self, info_name, args, parent=None, **extra):  # type: ignore[override]
+    if (
+        parent is not None
+        and _root_json_mode(parent)
+        and _command_has_json_option(self)
+        and "--json" not in args
+    ):
+        args = list(args) + ["--json"]
+    return _original_make_context(self, info_name, args, parent=parent, **extra)
+
+
+click.Command.make_context = _patched_make_context  # type: ignore[assignment]
+
+
 # -- Grouped help formatting --------------------------------------------------
 
 COMMAND_SECTIONS = [
@@ -2317,7 +2366,14 @@ def status(limit: int) -> None:
     project_dir = Path.cwd()
 
     if not project_is_opted_in(project_dir):
-        click.echo("Not an opentraces project. Run 'opentraces init' first.")
+        if _json_mode:
+            emit_json(error_response(
+                "PROJECT_NOT_OPTED_IN",
+                "config",
+                "Not an opentraces project. Run 'opentraces init' first.",
+            ))
+        else:
+            click.echo("Not an opentraces project. Run 'opentraces init' first.")
         sys.exit(3)
 
     proj_config = load_project_config(project_dir)
@@ -2340,24 +2396,25 @@ def status(limit: int) -> None:
     tracked = sum(counts.values())
     counts["inbox"] += max(0, total_files - tracked)
 
-    # Project header — compact single-line banner + details, set off by a rule.
-    from rich.console import Console as _HdrConsole
-    from rich.rule import Rule as _HdrRule
-    _hdr = _HdrConsole()
-    _hdr.print()
-    _hdr.print(
-        f"  [bold]{project_name}[/]  "
-        f"[dim]inbox · {proj_config.get('review_policy', 'review')} · "
-        f"{', '.join(proj_config['agents'])}[/]",
-        highlight=False,
-    )
-    visibility = proj_config.get("visibility", "private")
-    if remote:
-        _hdr.print(f"  [dim]remote:[/] {remote} [dim]({visibility})[/]", highlight=False)
-    else:
-        _hdr.print("  [dim]remote:[/] [yellow]not set[/]", highlight=False)
-    _hdr.print(_HdrRule(style="dim"))
-    _hdr.print()
+    if not _json_mode:
+        # Project header — compact single-line banner + details, set off by a rule.
+        from rich.console import Console as _HdrConsole
+        from rich.rule import Rule as _HdrRule
+        _hdr = _HdrConsole()
+        _hdr.print()
+        _hdr.print(
+            f"  [bold]{project_name}[/]  "
+            f"[dim]inbox · {proj_config.get('review_policy', 'review')} · "
+            f"{', '.join(proj_config['agents'])}[/]",
+            highlight=False,
+        )
+        visibility = proj_config.get("visibility", "private")
+        if remote:
+            _hdr.print(f"  [dim]remote:[/] {remote} [dim]({visibility})[/]", highlight=False)
+        else:
+            _hdr.print("  [dim]remote:[/] [yellow]not set[/]", highlight=False)
+        _hdr.print(_HdrRule(style="dim"))
+        _hdr.print()
 
     # Machine-readable mirror of visible rows for --json consumers.
     session_summary: list[dict] = []
@@ -2365,7 +2422,8 @@ def status(limit: int) -> None:
     # Session list — sort by record timestamp_end desc (actual age), not
     # file mtime, so the table order matches the "Age" column.
     if total_files == 0:
-        click.echo("0 traces in inbox")
+        if not _json_mode:
+            click.echo("0 traces in inbox")
     else:
         from opentraces_schema import TraceRecord
         from rich.console import Console as _Console
@@ -2402,15 +2460,16 @@ def status(limit: int) -> None:
             loaded = loaded[:limit]
 
         shown = len(loaded)
-        if shown < total_files:
-            pages = (total_files + shown - 1) // shown if shown else 1
-            click.echo(
-                f"{_bold(f'showing {shown} of {total_files}')} traces  "
-                f"{_dim(f'(page 1 of ~{pages}; use --limit N or --limit 0 for more)')}"
-            )
-        else:
-            click.echo(f"{_bold(str(total_files))} trace{'s' if total_files != 1 else ''}")
-        click.echo()
+        if not _json_mode:
+            if shown < total_files:
+                pages = (total_files + shown - 1) // shown if shown else 1
+                click.echo(
+                    f"{_bold(f'showing {shown} of {total_files}')} traces  "
+                    f"{_dim(f'(page 1 of ~{pages}; use --limit N or --limit 0 for more)')}"
+                )
+            else:
+                click.echo(f"{_bold(str(total_files))} trace{'s' if total_files != 1 else ''}")
+            click.echo()
 
         now = _time.time()
         console = _Console()
@@ -2532,57 +2591,59 @@ def status(limit: int) -> None:
                     "[red]?[/]", "[red]?[/]", "[red]?[/]", "[red]?[/]", "[red]?[/]",
                 )
 
-        console.print(table)
-        console.print()
-        console.print(
-            "  [green]✓[/][dim] reviewed[/]    "
-            "[yellow]○[/][dim] pending[/]    "
-            "[dim]· disabled[/]    "
-            "[dim]· copy an ID to continue (e.g. `ot show <id>`)[/]",
-            highlight=False,
-        )
+        if not _json_mode:
+            console.print(table)
+            console.print()
+            console.print(
+                "  [green]✓[/][dim] reviewed[/]    "
+                "[yellow]○[/][dim] pending[/]    "
+                "[dim]· disabled[/]    "
+                "[dim]· copy an ID to continue (e.g. `ot show <id>`)[/]",
+                highlight=False,
+            )
 
-        # Setup hints — only shown when coverage is low across the visible
-        # window. Dim and terse so they don't nag once hooks are active.
-        if rows_rendered > 0:
-            hints = []
-            git_hook_installed = (project_dir / ".git" / "hooks" / "post-commit").exists()
+            # Setup hints — only shown when coverage is low across the visible
+            # window. Dim and terse so they don't nag once hooks are active.
+            if rows_rendered > 0:
+                hints = []
+                git_hook_installed = (project_dir / ".git" / "hooks" / "post-commit").exists()
 
-            if git_link_hits == 0:
-                if git_hook_installed:
-                    hints.append(
-                        "no git links yet  "
-                        f"{_dim('— links populate on next git commit')}"
-                    )
-                else:
-                    hints.append(
-                        "no git links  "
-                        f"{_dim('— run')} opentraces setup git "
-                        f"{_dim('to install the post-commit hook')}"
-                    )
+                if git_link_hits == 0:
+                    if git_hook_installed:
+                        hints.append(
+                            "no git links yet  "
+                            f"{_dim('— links populate on next git commit')}"
+                        )
+                    else:
+                        hints.append(
+                            "no git links  "
+                            f"{_dim('— run')} opentraces setup git "
+                            f"{_dim('to install the post-commit hook')}"
+                        )
 
-            if hints:
-                console.print()
-                for h in hints:
-                    console.print(f"  {_warn('hint:')} {h}", highlight=False)
+                if hints:
+                    console.print()
+                    for h in hints:
+                        console.print(f"  {_warn('hint:')} {h}", highlight=False)
 
     # Footer summary — set apart with a dim rule so the eye finds it last.
-    try:
-        from rich.console import Console as _Console
-        from rich.rule import Rule as _Rule
-        _footer_console = _Console()
-        _footer_console.print()
-        _footer_console.print(_Rule(style="dim"))
-    except Exception:
+    if not _json_mode:
+        try:
+            from rich.console import Console as _Console
+            from rich.rule import Rule as _Rule
+            _footer_console = _Console()
+            _footer_console.print()
+            _footer_console.print(_Rule(style="dim"))
+        except Exception:
+            click.echo()
+            click.echo(_dim("─" * 60))
+        click.echo(
+            f"  {_stage_c('inbox', 'inbox')} {_bold(str(counts['inbox']))}    "
+            f"{_stage_c('staged', 'staged')} {_bold(str(counts['staged']))}    "
+            f"{_stage_c('pushed', 'pushed')} {_bold(str(counts['pushed']))}    "
+            f"{_stage_c('rejected', 'rejected')} {_bold(str(counts['rejected']))}"
+        )
         click.echo()
-        click.echo(_dim("─" * 60))
-    click.echo(
-        f"  {_stage_c('inbox', 'inbox')} {_bold(str(counts['inbox']))}    "
-        f"{_stage_c('staged', 'staged')} {_bold(str(counts['staged']))}    "
-        f"{_stage_c('pushed', 'pushed')} {_bold(str(counts['pushed']))}    "
-        f"{_stage_c('rejected', 'rejected')} {_bold(str(counts['rejected']))}"
-    )
-    click.echo()
 
     emit_json({
         "status": "ok",

@@ -12,6 +12,7 @@ import click
 from ._help import OpentracesCommand, OpentracesGroup
 from ..core.datasets import (
     add_dataset_remote,
+    append_rows,
     create_dataset,
     DatasetRemotePermissionError,
     DatasetRemoteSchemaAheadError,
@@ -26,6 +27,7 @@ from ..core.datasets import (
     load_dataset,
     normalize_hf_repo_id,
     publish_dataset,
+    read_row_index,
     remove_dataset_remote,
     repo_id_from_remote,
     set_dataset_remote_visibility,
@@ -406,20 +408,101 @@ def dataset_list(as_json: bool) -> None:
         click.echo(f"{dataset['name']}  {dataset['path']}")
 
 
+@dataset_group.command("status", cls=OpentracesCommand)
+@click.argument("name")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def dataset_status(name: str, as_json: bool) -> None:
+    """Show row count and publication-state breakdown for a dataset."""
+    try:
+        dataset = load_dataset(name)
+    except FileNotFoundError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    try:
+        state = evaluate_publication_state(name)
+    except (FileNotFoundError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    row_count = len(read_row_index(name))
+    payload: dict[str, object] = {
+        "status": "ok",
+        "dataset": name,
+        "path": str(dataset.path),
+        "row_count": row_count,
+        "counts": _publication_counts(state),
+    }
+    if _is_manual_dataset(dataset):
+        payload["manual"] = True
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    counts = payload["counts"]
+    summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "no rows"
+    click.echo(f"{name}: rows={row_count}  {summary}")
+
+
 @dataset_group.command("new", cls=OpentracesCommand)
 @click.argument("name")
 @click.option("--description", default=None, help="Dataset description.")
 @click.option("--workflow", default=None, help="Workflow skill name.")
 @click.option("--workflow-digest", default="sha256:unconfigured", help="Workflow digest.")
+@click.option(
+    "--rows-file",
+    "rows_file",
+    type=click.Path(exists=True, dir_okay=False, readable=True),
+    default=None,
+    help=(
+        "Ad-hoc mode: JSONL file of rows to seed the dataset with. Requires "
+        "--schema. Skips workflow creation and marks the dataset as manual."
+    ),
+)
+@click.option(
+    "--schema",
+    "schema_file",
+    type=click.Path(exists=True, dir_okay=False, readable=True),
+    default=None,
+    help=(
+        "Ad-hoc mode: JSON Schema file describing rows in --rows-file. "
+        "Required when --rows-file is set."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_new(
     name: str,
     description: str | None,
     workflow: str | None,
     workflow_digest: str,
+    rows_file: str | None,
+    schema_file: str | None,
     as_json: bool,
 ) -> None:
-    """Create a local HF-shaped dataset with an OpenTraces sidecar."""
+    """Create a local HF-shaped dataset with an OpenTraces sidecar.
+
+    Two modes:
+
+    * Workflow mode (default): synthesizes a workflow-driven dataset
+      that is filled by ``opentraces dataset run``.
+    * Ad-hoc mode (``--rows-file`` + ``--schema``): seeds a manual
+      dataset directly from a JSONL file. ``dataset run`` is a no-op
+      for manual datasets; review/approve/publish work as usual.
+    """
+    if rows_file or schema_file:
+        if not (rows_file and schema_file):
+            click.echo(
+                "--rows-file and --schema must be provided together "
+                "(ad-hoc dataset mode requires both).",
+                err=True,
+            )
+            sys.exit(2)
+        _create_manual_dataset(
+            name=name,
+            description=description,
+            rows_file=rows_file,
+            schema_file=schema_file,
+            as_json=as_json,
+        )
+        return
+
     try:
         dataset = create_dataset(
             name,
@@ -435,6 +518,114 @@ def dataset_new(
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
     click.echo(f"Dataset created: {dataset.name}")
+
+
+# Sentinel value placed in ``manifest.workflow.skill`` to mark a dataset as
+# ad-hoc / manual. The schema requires ``skill`` to be a non-empty string,
+# so we use a recognizable string instead of None. Treated as "no workflow"
+# by ``dataset run`` and exposed as ``manual: true`` on dataset payloads.
+MANUAL_WORKFLOW_SKILL = "manual"
+
+
+def _is_manual_dataset(dataset) -> bool:
+    return dataset.manifest.workflow.skill == MANUAL_WORKFLOW_SKILL
+
+
+def _create_manual_dataset(
+    *,
+    name: str,
+    description: str | None,
+    rows_file: str,
+    schema_file: str,
+    as_json: bool,
+) -> None:
+    """Synthesize a manual ad-hoc dataset from a JSONL + JSON Schema pair."""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    schema_path = Path(schema_file)
+    rows_path = Path(rows_file)
+
+    # Load + validate the schema file is JSON.
+    try:
+        schema_payload = json.loads(schema_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        click.echo(f"failed to read --schema {schema_file}: {exc}", err=True)
+        sys.exit(2)
+    if not isinstance(schema_payload, dict):
+        click.echo("--schema must point to a JSON object schema", err=True)
+        sys.exit(2)
+
+    # Parse the JSONL rows file up-front so we fail before creating the
+    # dataset directory if the file is malformed.
+    rows: list[dict[str, object]] = []
+    try:
+        with rows_path.open("r", encoding="utf-8") as stream:
+            for line_no, raw in enumerate(stream, start=1):
+                stripped = raw.strip()
+                if not stripped:
+                    continue
+                try:
+                    row = json.loads(stripped)
+                except json.JSONDecodeError as exc:
+                    click.echo(
+                        f"--rows-file line {line_no} is not valid JSON: {exc}",
+                        err=True,
+                    )
+                    sys.exit(2)
+                if not isinstance(row, dict):
+                    click.echo(
+                        f"--rows-file line {line_no} must be a JSON object",
+                        err=True,
+                    )
+                    sys.exit(2)
+                rows.append(row)
+    except OSError as exc:
+        click.echo(f"failed to read --rows-file {rows_file}: {exc}", err=True)
+        sys.exit(2)
+
+    try:
+        dataset = create_dataset(
+            name,
+            description=description,
+            workflow_skill=MANUAL_WORKFLOW_SKILL,
+            workflow_digest="sha256:manual",
+            row_schema=schema_payload,
+        )
+    except (FileExistsError, ValueError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+
+    if rows:
+        run_id = (
+            "manual_"
+            + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        )
+        try:
+            summary = append_rows(name, rows, run_id=run_id)
+        except (FileNotFoundError, ValueError) as exc:
+            # Cleanup partially-created dataset to leave a clean slate.
+            shutil.rmtree(dataset.path, ignore_errors=True)
+            click.echo(str(exc), err=True)
+            sys.exit(3)
+        if summary.validation_error_count:
+            shutil.rmtree(dataset.path, ignore_errors=True)
+            errors = summary.validation_errors[:3]
+            click.echo(
+                f"--rows-file failed schema validation: "
+                f"{summary.validation_error_count} row(s) invalid; "
+                f"first errors: {errors}",
+                err=True,
+            )
+            sys.exit(2)
+
+    # Reload dataset so manifest reflects any updates.
+    dataset = load_dataset(name)
+    payload = {"status": "ok", "dataset": _dataset_payload(dataset)}
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Manual dataset created: {dataset.name} ({len(rows)} row(s))")
 
 
 @dataset_group.command("run", cls=OpentracesCommand)
@@ -481,6 +672,27 @@ def dataset_run(
     if resume:
         click.echo("--resume is reserved for future interrupted-run recovery.", err=True)
         sys.exit(10)
+    # Manual / ad-hoc datasets have no workflow to execute. Emit a
+    # structured no-op response so agents can detect this cleanly
+    # instead of getting a workflow_runner error.
+    try:
+        existing = load_dataset(name)
+    except FileNotFoundError:
+        existing = None
+    if existing is not None and _is_manual_dataset(existing):
+        payload = {
+            "status": "manual_dataset_no_run_action",
+            "dataset": name,
+            "message": (
+                "manual datasets are seeded by `dataset new --rows-file`; "
+                "use review/approve/publish for the lifecycle"
+            ),
+        }
+        if as_json:
+            click.echo(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        click.echo(payload["message"])
+        return
     scope_payload = {"scope": scope}
     if project:
         scope_payload["project"] = project
@@ -668,11 +880,20 @@ def dataset_remove(name: str, yes: bool, as_json: bool) -> None:
 
 
 def _dataset_payload(dataset) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "name": dataset.name,
         "path": str(dataset.path),
         "manifest": dataset.manifest.model_dump(mode="json", by_alias=True, exclude_none=True),
     }
+    # Surface the manual marker + row count for ad-hoc datasets so agents
+    # can detect them without re-reading the manifest skill string.
+    if _is_manual_dataset(dataset):
+        payload["manual"] = True
+        try:
+            payload["row_count"] = len(read_row_index(dataset.name))
+        except (FileNotFoundError, OSError):
+            payload["row_count"] = 0
+    return payload
 
 
 def _remote_payload(summary) -> dict[str, object]:
