@@ -56,6 +56,30 @@ opentraces trace get <trace_id> --json
 workflow-neutral evidence map or candidate slice. `trace get` is the explicit
 full retrieval step.
 
+### Bursts and intent
+
+`trace map --bursts` (or `trace get <ref> --bursts`) projects the trace's
+file_edit / patch_created nodes into one virtual `change_burst` node per
+cluster of nearby edits. Each burst exposes:
+
+- `step_range` — `[min_step, max_step]` of the underlying nodes
+- `unique_files` — repo-relative path → hunk count (deduped: absolute and
+  relative variants of the same file collapse onto one entry)
+- `patches` — one entry per Edit/Write tool call (NOT one per file)
+- `burst_commit_sha` — modal commit across the burst's patches, fallback to
+  the first git commit seen via the post-tool hook trail
+- `intent` — structured object: `{trigger, most_substantive_spec, spec_chain,
+  burst_commit_sha, commit_subject, commit_body}`. The trigger is the short
+  imperative authorising the action ("ok", "let's go ahead and commit");
+  the spec is the most recent substantive user instruction before the
+  burst. `intent_text` / `intent_user_step` remain as legacy aliases for
+  `intent.most_substantive_spec.{text, step}`.
+
+Pass `--no-commit-lookup` to skip the per-burst `git log` lookup when running
+offline or in a hot CLI path. The burst commit's SHA is a separate concept
+from the trace's `outcome.commit_sha` (which is the *last* commit of the
+session).
+
 ## Trace Trails
 
 Trace Trails are the Git-anchored evidence chain for what a trace changed and

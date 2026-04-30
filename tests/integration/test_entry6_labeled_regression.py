@@ -60,11 +60,17 @@ def burst_row(labels: dict[str, Any], trace_record: dict[str, Any]) -> dict[str,
     This is the assertion target. The same fixture function should produce
     progressively richer output as each cluster lands.
     """
-    from opentraces.core.bursts import detect_bursts, bursts_to_trace_map  # type: ignore
+    from opentraces.core.bursts import detect_bursts  # type: ignore
     from opentraces.core.trace_map import build_trace_map  # type: ignore
+    from opentraces_schema import TraceRecord  # type: ignore
 
-    tm = build_trace_map(trace_record)
-    bursts = detect_bursts(tm.nodes)
+    record = TraceRecord.model_validate(trace_record)
+    tm = build_trace_map(record)
+    bursts = detect_bursts(
+        tm.nodes,
+        trace_record=record,
+        repo_path=REPO_ROOT,
+    )
     target_range = labels["burst"]["step_range"]
     for b in bursts:
         if list(b.step_range) == target_range:
