@@ -9,15 +9,21 @@ from .capture_limitations import (
     is_known_capture_limitation,
 )
 from .event_log import (
+    CACHED_SURVIVAL_EVENT_TYPE,
     EVENT_LOG_REF,
     append_event_batch,
+    append_survival_cache_events,
+    build_survival_cache_index,
     event_log_status,
+    get_cached_survival,
+    invalidate_read_events_cache,
+    make_survival_cache_draft,
     read_events,
     verify_event_log,
 )
 from .exact import append_exact_patch_trail
 from .explain import explain_commit, explain_file_line, explain_trace_step
-from .sync import sync_anchor, sync_patch
+from .sync import BatchSyncContext, batch_sync, sync_anchor, sync_patch
 from .models import GitObjectID, TrailEvent, TrailEventDraft
 from .maturation import MaturationSummary, has_unsearched_recent_patches, mature_trails
 from .query import (
@@ -58,6 +64,7 @@ from .snapshots import (
 )
 
 __all__ = [
+    "CACHED_SURVIVAL_EVENT_TYPE",
     "CAPTURE_LIMITATIONS",
     "EVENT_LOG_REF",
     "GitObjectID",
@@ -69,12 +76,18 @@ __all__ = [
     "StepTrailEmissionResult",
     "StepWindowOpenResult",
     "DEFAULT_TRACE_SLICE_STEP_RADIUS",
+    "BatchSyncContext",
     "append_event_batch",
     "append_exact_patch_trail",
     "append_step_snapshot",
+    "append_survival_cache_events",
     "assert_known_capture_limitations",
+    "batch_sync",
     "attach_trace_to_commit",
+    "build_survival_cache_index",
     "build_trail_query_projection",
+    "get_cached_survival",
+    "make_survival_cache_draft",
     "is_known_capture_limitation",
     "close_step_window_with_snapshot",
     "diff_step_snapshots",
@@ -82,6 +95,7 @@ __all__ = [
     "event_log_status",
     "explain_commit",
     "explain_file_line",
+    "invalidate_read_events_cache",
     "open_step_window",
     "explain_trace_step",
     "sync_anchor",

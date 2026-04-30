@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import subprocess
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
-from .event_log import EVENT_LOG_REF, read_events
+from .event_log import (
+    EVENT_LOG_REF,
+    append_survival_cache_events,
+    build_survival_cache_index,
+    make_survival_cache_draft,
+    read_events,
+)
 from .ids import id_from_payload, normalize_id
 from .models import GitObjectID
 
@@ -83,6 +91,314 @@ def _git_ok(repo: Path, *args: str) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# Cluster G — P3: BatchSyncContext
+# ---------------------------------------------------------------------------
+#
+# When ``sync_patch`` is called many times in a single batch (e.g. from
+# ``trail track --since`` or ``detect_bursts`` per-burst enrichment) the git
+# subprocess overhead dominates. Two amortizations:
+#
+# 1. Ancestry set: one ``git rev-list HEAD`` resolves "is X reachable from
+#    HEAD" for every anchor in O(n) memory, instead of one
+#    ``git merge-base --is-ancestor`` per anchor.
+#
+# 2. Cat-file pipe: a long-lived ``git cat-file --batch`` process serves
+#    every blob read (``git show <ref>:<path>``) without paying the ~6ms
+#    process-start cost per call.
+
+
+@dataclass
+class _CatFilePipe:
+    """Long-lived ``git cat-file --batch`` pipe for blob reads.
+
+    The pipe is opened lazily on first request and closed when the parent
+    BatchSyncContext exits its ``with``/``__exit__`` lifecycle. Each request
+    sends ``<rev>:<path>\\n`` and reads one header line + one blob.
+    """
+
+    repo: Path
+    proc: subprocess.Popen[bytes] | None = None
+    _missing: object = field(default_factory=object)
+
+    def _ensure(self) -> subprocess.Popen[bytes]:
+        if self.proc is None:
+            # ``stderr=DEVNULL`` so that cat-file's diagnostic output never
+            # fills its stderr buffer and dead-locks the pipe. Use the
+            # default buffer size for stdout — pipes are buffered streams,
+            # but we still need ``read_exactly`` semantics for blob bodies.
+            self.proc = subprocess.Popen(
+                ["git", "cat-file", "--batch"],
+                cwd=str(self.repo),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        return self.proc
+
+    @staticmethod
+    def _read_exactly(stream: Any, count: int) -> bytes:
+        """Read exactly ``count`` bytes from a pipe stream.
+
+        ``BufferedReader.read(n)`` may return fewer than ``n`` bytes from a
+        pipe — common when the producer is slow. ``read_exactly`` loops
+        until we have the full payload or the pipe ends.
+        """
+        if count <= 0:
+            return b""
+        chunks: list[bytes] = []
+        remaining = count
+        while remaining > 0:
+            chunk = stream.read(remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+
+    def show(self, ref: str, path: str) -> str | None:
+        """Return the blob content for ``ref:path`` or ``None`` when missing.
+
+        Returns ``None`` for any non-blob result (missing, tree, dangling),
+        matching ``_show_file`` semantics. On any framing error the pipe
+        is closed so the next request gets a fresh process — caller falls
+        back to a one-shot ``git show`` until the next batch.
+        """
+        if not ref or not path:
+            return None
+        proc = self._ensure()
+        assert proc.stdin is not None
+        assert proc.stdout is not None
+        request = f"{ref}:{path}\n".encode("utf-8", errors="surrogateescape")
+        try:
+            proc.stdin.write(request)
+            proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            self.close()
+            return None
+        header = proc.stdout.readline()
+        if not header:
+            self.close()
+            return None
+        # Header is either ``<oid> <type> <size>\n`` or ``<key> missing\n``.
+        parts = header.strip().split()
+        if len(parts) == 2 and parts[1] == b"missing":
+            return None
+        if len(parts) != 3:
+            # Unexpected header — the pipe is now out of sync. Close it
+            # so subsequent calls re-open a clean process.
+            self.close()
+            return None
+        _oid, object_type, raw_size = parts
+        try:
+            size = int(raw_size)
+        except ValueError:
+            self.close()
+            return None
+        if object_type != b"blob":
+            # Drain content (size bytes + trailing LF) so the next
+            # request reads a clean header.
+            self._read_exactly(proc.stdout, size + 1)
+            return None
+        data = self._read_exactly(proc.stdout, size)
+        if len(data) != size:
+            # Truncated read — pipe died mid-blob.
+            self.close()
+            return None
+        # Consume the trailing newline; tolerate EOF here.
+        proc.stdout.read(1)
+        return data.decode("utf-8", errors="replace")
+
+    def close(self) -> None:
+        if self.proc is None:
+            return
+        try:
+            if self.proc.stdin is not None:
+                self.proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            self.proc.terminate()
+            self.proc.wait(timeout=2)
+        except Exception:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+        self.proc = None
+
+
+@dataclass
+class BatchSyncContext:
+    """Amortize git operations across many ``sync_patch`` calls.
+
+    Instantiate once for a batch and pass into ``sync_patch(events=...)`` /
+    ``sync_anchor(events=...)`` via the ``batch_ctx=`` keyword. The
+    context owns:
+
+    * ``ancestry_from_head`` — a set of commit shas reachable from HEAD,
+      computed lazily on first ``is_ancestor_of_head`` call.
+    * ``cat_file`` — a long-lived ``git cat-file --batch`` pipe used by
+      ``show_file`` to satisfy blob reads without paying process startup
+      per call.
+    * ``head_sha`` — the cached HEAD sha at batch start, so survival rows
+      key against a stable HEAD even if a writer advances HEAD mid-batch.
+    * ``pending_cache_drafts`` — unflushed ``patch_survival_cached`` event
+      drafts. Coalescing the writes amortizes the ``git update-ref`` cost
+      across the batch (one transaction instead of N).
+
+    The context is best-used inside a ``with`` block; ``close()`` flushes
+    cache drafts then shuts the cat-file pipe down. Forgetting to close
+    leaves the cat-file subprocess and unflushed cache drafts dangling
+    until ``atexit`` cleans them up.
+    """
+
+    repo: Path
+    head_sha: str | None = None
+    _ancestry: set[str] | None = None
+    _ancestry_failed: bool = False
+    _cat_file: _CatFilePipe | None = None
+    pending_cache_drafts: list[Any] = field(default_factory=list)
+    # In-process cache index — populated from the events list at first
+    # cache lookup and updated as writes are queued. Lets later sync_patch
+    # calls in the same batch hit the cache for rows we just computed.
+    _cache_index: dict[tuple[str, str], dict[str, Any]] | None = None
+    # ``calls`` counts batched operations. Tests use these to assert
+    # amortization (e.g. ancestry_uncached_probes==0 means batching worked).
+    calls: dict[str, int] = field(default_factory=lambda: {
+        "ancestry_probes": 0,
+        "ancestry_uncached_probes": 0,
+        "show_file": 0,
+        "show_file_uncached": 0,
+        "cache_writes_queued": 0,
+        "cache_writes_flushed": 0,
+        "cache_hits": 0,
+    })
+
+    def __post_init__(self) -> None:
+        self.repo = Path(self.repo).resolve()
+        if self.head_sha is None:
+            try:
+                self.head_sha = _git(self.repo, "rev-parse", "HEAD", check=False).strip() or None
+            except Exception:
+                self.head_sha = None
+
+    def __enter__(self) -> "BatchSyncContext":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def close(self) -> None:
+        # Flush any queued cache writes before tearing the pipe down.
+        try:
+            self.flush_cache()
+        except Exception:
+            pass
+        if self._cat_file is not None:
+            self._cat_file.close()
+            self._cat_file = None
+
+    # -- cache ----------------------------------------------------------
+    def cache_index(self, events: list[Any] | None) -> dict[tuple[str, str], dict[str, Any]]:
+        """Lazily build (and cache) a survival-cache lookup table.
+
+        ``events`` is the caller-provided event list; we read it once
+        and project to ``{(patch_id, head_sha): payload}``. Subsequent
+        calls return the same dict, which we mutate as writes are queued
+        so within-batch lookups for freshly-computed rows hit the cache.
+        """
+        if self._cache_index is None:
+            self._cache_index = build_survival_cache_index(events or [])
+        return self._cache_index
+
+    def queue_cache_write(self, draft: Any, payload_key_value: dict[str, Any]) -> None:
+        """Queue a cache event for the end-of-batch flush.
+
+        ``payload_key_value`` is the ``{(patch_id, head_sha): survival}``
+        entry that should be visible to subsequent in-batch lookups so we
+        don't recompute the same row twice in one loop.
+        """
+        self.pending_cache_drafts.append(draft)
+        self.calls["cache_writes_queued"] += 1
+        if self._cache_index is None:
+            self._cache_index = {}
+        for key, survival in payload_key_value.items():
+            self._cache_index[key] = survival
+
+    def flush_cache(self) -> None:
+        """Persist all queued cache events as one append batch."""
+        if not self.pending_cache_drafts:
+            return
+        flushed = list(self.pending_cache_drafts)
+        self.pending_cache_drafts.clear()
+        try:
+            append_survival_cache_events(self.repo, flushed)
+        except Exception:
+            # Best-effort: cache writes never block the caller.
+            return
+        self.calls["cache_writes_flushed"] += len(flushed)
+
+    # -- ancestry --------------------------------------------------------
+    def _ensure_ancestry(self) -> set[str] | None:
+        if self._ancestry is not None or self._ancestry_failed:
+            return self._ancestry
+        try:
+            out = _git(self.repo, "rev-list", "HEAD", check=False)
+        except Exception:
+            self._ancestry_failed = True
+            return None
+        if not out:
+            self._ancestry = set()
+            return self._ancestry
+        self._ancestry = {line.strip() for line in out.splitlines() if line.strip()}
+        return self._ancestry
+
+    def is_ancestor_of_head(self, commit_sha: str) -> bool:
+        """Return ``commit_sha in ancestry-from-HEAD``.
+
+        First call materializes the ancestry set with one ``git rev-list``
+        and amortizes across the batch. When the ancestry probe failed
+        (e.g. corrupt repo), falls back to ``git merge-base --is-ancestor``
+        per call so the batch still works correctly.
+        """
+        self.calls["ancestry_probes"] += 1
+        ancestry = self._ensure_ancestry()
+        if ancestry is not None:
+            return commit_sha in ancestry
+        # Ancestry resolution failed; fall back to per-call merge-base.
+        self.calls["ancestry_uncached_probes"] += 1
+        return _git_ok(self.repo, "merge-base", "--is-ancestor", commit_sha, "HEAD")
+
+    # -- cat-file pipe ---------------------------------------------------
+    def show_file(self, ref: str, path: str) -> str | None:
+        """Read ``ref:path`` via the long-lived cat-file pipe.
+
+        On any failure mode the pipe closes itself and the call falls back
+        to a one-shot ``git show``. This keeps the batch alive when the
+        pipe encounters a malformed object.
+        """
+        self.calls["show_file"] += 1
+        if self._cat_file is None:
+            self._cat_file = _CatFilePipe(repo=self.repo)
+        result = self._cat_file.show(ref, path)
+        if result is None and self._cat_file.proc is None:
+            # Pipe closed itself due to a transport error; fall back.
+            self.calls["show_file_uncached"] += 1
+            return _show_file(self.repo, ref, path)
+        return result
+
+
+@contextmanager
+def batch_sync(repo: Path) -> Iterator[BatchSyncContext]:
+    """Convenience context manager that yields a :class:`BatchSyncContext`."""
+    ctx = BatchSyncContext(repo=Path(repo).resolve())
+    try:
+        yield ctx
+    finally:
+        ctx.close()
+
+
 def _oid(hex_value: str | None) -> dict[str, str] | None:
     if not hex_value:
         return None
@@ -122,6 +438,23 @@ def _commit_time(repo: Path, ref: str) -> int | None:
 def _show_file(repo: Path, ref: str, path: str) -> str | None:
     out = _git(repo, "show", f"{ref}:{path}", check=False)
     return out if out else None
+
+
+def _show_file_via(
+    repo: Path,
+    ref: str,
+    path: str,
+    *,
+    batch_ctx: "BatchSyncContext | None" = None,
+) -> str | None:
+    """Read ``ref:path`` via batch_ctx when available, else per-call git show.
+
+    Centralized so every blob-read site in this module shares one batching
+    decision. Callers continue to handle ``None`` as "file missing/empty".
+    """
+    if batch_ctx is not None:
+        return batch_ctx.show_file(ref, path)
+    return _show_file(repo, ref, path)
 
 
 def _parse_log_line(line: str) -> tuple[str, int | None]:
@@ -246,6 +579,7 @@ def _resolve_lost_attribution(
     observed_ref: str,
     authored_lines: list[str],
     cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
+    batch_ctx: "BatchSyncContext | None" = None,
 ) -> tuple[str | None, str]:
     """Cluster F D2/D3 — return ``(killer_commit_sha, lost_kind)``.
 
@@ -260,13 +594,23 @@ def _resolve_lost_attribution(
     so a batch ``trail track --since`` survey reuses one resolver result
     across every patch on the same file.
     """
-    head_sha = _git(repo, "rev-parse", observed_ref, check=False).strip()
+    # When a batch_ctx is available and the observed ref is HEAD, the
+    # context already cached the head_sha for the whole batch. This lets
+    # the lost-attribution cache stay sticky across patches.
+    if (
+        batch_ctx is not None
+        and observed_ref == "HEAD"
+        and batch_ctx.head_sha
+    ):
+        head_sha = batch_ctx.head_sha
+    else:
+        head_sha = _git(repo, "rev-parse", observed_ref, check=False).strip()
     cache_key = (path, anchor_commit, head_sha)
     if cache is not None and cache_key in cache:
         return cache[cache_key]
 
     # Cheap probe: does the file exist at observed_ref?
-    file_text_at_head = _show_file(repo, observed_ref, path)
+    file_text_at_head = _show_file_via(repo, observed_ref, path, batch_ctx=batch_ctx)
     if file_text_at_head is None:
         # File deleted somewhere between anchor and observed_ref.
         # ``git log --diff-filter=D --format=%H -1 -- <path>`` finds
@@ -319,6 +663,8 @@ def _compute_survival(
     head_id: dict[str, str] | None = None,
     observed_commit_time: int | None = None,
     lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
+    batch_ctx: BatchSyncContext | None = None,
+    skip_ancestry_check: bool = False,
 ) -> dict[str, Any]:
     observed_commit_id = _commit_id(repo, observed_ref)
     if head_id is None:
@@ -354,7 +700,32 @@ def _compute_survival(
         # Cluster C-2: keep ``unknown`` as the fallback for the genuinely
         # indeterminate case (no anchor commit, no path, no observed ref).
         return {**base, "survival_state": "unknown", "retention_fraction": None}
-    if not _git_ok(repo, "merge-base", "--is-ancestor", anchor_commit, observed_ref):
+    # Cluster G — P3: when batch_ctx is available *and* the observed ref
+    # resolves to the cached HEAD (either the literal ``"HEAD"`` or the
+    # exact head sha that matches), resolve ``is-ancestor`` against the
+    # cached ancestry set (one ``git rev-list`` for the whole batch).
+    # For non-HEAD refs we still fall back to ``git merge-base
+    # --is-ancestor`` per call. ``skip_ancestry_check`` is the third
+    # short-circuit: ``_anchor_observations`` only walks commits already
+    # known to be in ``anchor..HEAD``, so the per-observation ancestor
+    # probe is redundant and would dominate the wall-clock budget.
+    observed_ref_is_head = (
+        observed_ref == "HEAD"
+        or (
+            batch_ctx is not None
+            and batch_ctx.head_sha
+            and observed_ref == batch_ctx.head_sha
+        )
+    )
+    if skip_ancestry_check:
+        ancestor_ok = True
+    elif batch_ctx is not None and observed_ref_is_head:
+        ancestor_ok = batch_ctx.is_ancestor_of_head(anchor_commit)
+    else:
+        ancestor_ok = _git_ok(
+            repo, "merge-base", "--is-ancestor", anchor_commit, observed_ref
+        )
+    if not ancestor_ok:
         limitations.append(
             "anchor_commit_not_reachable_from_head"
             if observed_ref == "HEAD"
@@ -364,13 +735,28 @@ def _compute_survival(
         # ancestry. ``orphan_branch`` is the specific signal.
         return {**base, "survival_state": "orphan_branch", "retention_fraction": None}
 
-    revert_commit, revert_search_truncated = _find_revert_commit(
-        repo,
-        anchor_commit=anchor_commit,
-        observed_ref=observed_ref,
-    )
-    if revert_search_truncated:
-        limitations.append("revert_search_truncated")
+    # Cluster G — P3: defer the revert search. ``_find_revert_commit``
+    # runs ``git log --max-count=2001 anchor..observed_ref`` which is one
+    # of the costliest calls in the survival pipeline. We only need the
+    # answer when classification reaches the file-deleted or
+    # preserved-zero branches (the two ``revert_commit`` consumers
+    # below). For the alive cases we never read it. The lazy resolver
+    # caches the first call so a single observation pays at most once.
+    _revert_cache: dict[str, tuple[str | None, bool]] = {}
+
+    def _lazy_revert() -> str | None:
+        cached = _revert_cache.get("result")
+        if cached is None:
+            commit, truncated = _find_revert_commit(
+                repo,
+                anchor_commit=anchor_commit,
+                observed_ref=observed_ref,
+            )
+            if truncated:
+                limitations.append("revert_search_truncated")
+            _revert_cache["result"] = (commit, truncated)
+            return commit
+        return cached[0]
 
     authored_lines = _authored_lines(patch)
     if not authored_lines:
@@ -383,7 +769,7 @@ def _compute_survival(
             "retention_fraction": None,
         }
 
-    current_text = _show_file(repo, observed_ref, path)
+    current_text = _show_file_via(repo, observed_ref, path, batch_ctx=batch_ctx)
     if current_text is None:
         # File missing at observed_ref. Phase 5 tries rename detection
         # before declaring the patch lost.
@@ -394,7 +780,9 @@ def _compute_survival(
             original_path=path,
         )
         if new_path != path and rename_hops > 0:
-            moved_text = _show_file(repo, observed_ref, new_path)
+            moved_text = _show_file_via(
+                repo, observed_ref, new_path, batch_ctx=batch_ctx
+            )
             if moved_text is not None:
                 preserved = _count_preserved_lines(authored_lines, moved_text)
                 if preserved > 0:
@@ -412,6 +800,7 @@ def _compute_survival(
                         "retention_fraction_at_original_range": moved_fraction,
                         "retention_fraction_at_anchor": moved_fraction,
                     }
+        revert_commit = _lazy_revert()
         if revert_commit:
             return {
                 **base,
@@ -428,6 +817,7 @@ def _compute_survival(
             observed_ref=observed_ref,
             authored_lines=authored_lines,
             cache=lost_attribution_cache,
+            batch_ctx=batch_ctx,
         )
         out_lost = {
             **base,
@@ -483,13 +873,15 @@ def _compute_survival(
                     "retention_fraction_at_anchor": repaired_fraction,
                 }
 
-    if preserved == 0 and revert_commit:
-        return {
-            **base,
-            "survival_state": "reverted",
-            "revert_commit_id": _oid(revert_commit),
-            "retention_fraction": None,
-        }
+    if preserved == 0:
+        revert_commit = _lazy_revert()
+        if revert_commit:
+            return {
+                **base,
+                "survival_state": "reverted",
+                "revert_commit_id": _oid(revert_commit),
+                "retention_fraction": None,
+            }
     if 0 < preserved < len(authored_lines):
         # Cluster F D4: split retention into two semantically distinct
         # observations. ``at_original_range`` is the existing literal
@@ -650,6 +1042,7 @@ def _anchor_observations(
     head_id: dict[str, str] | None,
     history_limit: int,
     lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
+    batch_ctx: BatchSyncContext | None = None,
 ) -> tuple[list[dict[str, Any]], int | None, list[str]]:
     commit_id = anchor.get("commit_id") or {}
     anchor_commit = commit_id.get("hex")
@@ -660,6 +1053,7 @@ def _anchor_observations(
             anchor=anchor,
             head_id=head_id,
             lost_attribution_cache=lost_attribution_cache,
+            batch_ctx=batch_ctx,
         )
         observation["anchor_trail_index"] = 0
         observation["anchor_descendant_count"] = None
@@ -668,6 +1062,15 @@ def _anchor_observations(
     commits, descendant_count, limitations = _commits_from_anchor_to_head(
         repo, anchor_commit, history_limit=history_limit
     )
+    # Cluster G — P3: when ``descendant_count is not None`` the helper
+    # already proved the anchor is reachable from HEAD and the returned
+    # commits are exactly that ancestry path. Re-running
+    # ``merge-base --is-ancestor`` per observation costs one git
+    # invocation per descendant — pure overhead because the answer is
+    # always True. Skip it. ``descendant_count is None`` means "anchor
+    # unreachable from HEAD"; we keep the per-observation probe so
+    # ``orphan_branch`` etc. still classify correctly.
+    skip_per_obs_ancestry = descendant_count is not None
     observations: list[dict[str, Any]] = []
     for index, (commit_sha, commit_time) in enumerate(commits):
         observation = _compute_survival(
@@ -678,6 +1081,8 @@ def _anchor_observations(
             head_id=head_id,
             observed_commit_time=commit_time,
             lost_attribution_cache=lost_attribution_cache,
+            batch_ctx=batch_ctx,
+            skip_ancestry_check=skip_per_obs_ancestry,
         )
         observation["anchor_trail_index"] = index
         observation["anchor_descendant_count"] = descendant_count
@@ -693,6 +1098,7 @@ def _sync(
     history_limit: int | None = None,
     events: list[Any] | None = None,
     lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
+    batch_ctx: BatchSyncContext | None = None,
 ) -> dict[str, Any]:
     """Sync a Trace Patch against Git history and report survival.
 
@@ -776,7 +1182,9 @@ def _sync(
         survival_state = "unknown"
         survival_limitations: list[str] = []
         if patch_path and head_id is not None:
-            current_text = _show_file(repo, "HEAD", patch_path)
+            current_text = _show_file_via(
+                repo, "HEAD", patch_path, batch_ctx=batch_ctx
+            )
             if current_text is not None:
                 survival_state = "never_committed"
                 survival_limitations.append("no_git_anchor_event")
@@ -816,6 +1224,7 @@ def _sync(
             head_id=head_id,
             history_limit=effective_limit,
             lost_attribution_cache=lost_attribution_cache,
+            batch_ctx=batch_ctx,
         )
         trail_limitations.extend(anchor_limitations)
         for observation in anchor_observations:
@@ -854,6 +1263,96 @@ def _sync(
     }
 
 
+# ``_AUTO_BATCH_CTX_BY_EVENTS_ID`` caches a BatchSyncContext per
+# ``(id(events), repo, fingerprint)`` so a CLI batch loop that passes
+# the same ``events`` list to many ``sync_patch`` calls amortizes the
+# cat-file pipe and ancestry probes without having to know about
+# :class:`BatchSyncContext`.
+#
+# We pair ``id(events)`` with a fingerprint built from the list's length
+# and (if present) the first event's id so that a recycled object id —
+# events list got freed and a new one took the slot — does not return
+# a stale context.
+_AUTO_BATCH_CTX_BY_EVENTS_ID: dict[
+    tuple[int, str, int, str | None],
+    BatchSyncContext,
+] = {}
+
+
+def _events_fingerprint(events: list[Any]) -> tuple[int, str | None]:
+    """Cheap fingerprint of an events list for cache-key disambiguation."""
+    length = len(events)
+    if length == 0:
+        return (0, None)
+    head_id: str | None = None
+    head = events[0]
+    if hasattr(head, "event_id"):
+        head_id = getattr(head, "event_id")
+    return (length, head_id)
+
+
+def _auto_batch_ctx(
+    repo: Path,
+    events: list[Any] | None,
+) -> BatchSyncContext | None:
+    """Return a shared :class:`BatchSyncContext` for repeated batch calls.
+
+    The CLI batch path (``cli/trail.py::_emit_batch_track``) reads events
+    once and passes that same list to every ``sync_patch`` call. This
+    helper caches a context per ``(id(events), repo, fingerprint)`` so
+    the cat-file pipe and ancestry set survive across the loop. The
+    fingerprint guards against ``id()`` recycling.
+
+    The cache leaks one ``BatchSyncContext`` per unique events list per
+    process lifetime. This is bounded in practice (each top-level batch
+    creates exactly one events list), and the cat-file pipe is a single
+    file descriptor — well within the 256 fd default limit.
+    """
+    if events is None:
+        return None
+    fp_len, fp_head = _events_fingerprint(events)
+    repo_str = str(repo)
+    key = (id(events), repo_str, fp_len, fp_head)
+    cached = _AUTO_BATCH_CTX_BY_EVENTS_ID.get(key)
+    if cached is not None:
+        return cached
+
+    ctx = BatchSyncContext(repo=Path(repo).resolve())
+    _AUTO_BATCH_CTX_BY_EVENTS_ID[key] = ctx
+    return ctx
+
+
+def _close_auto_batch_contexts() -> None:
+    """Close every auto-created batch context. Called at process exit."""
+    for ctx in list(_AUTO_BATCH_CTX_BY_EVENTS_ID.values()):
+        try:
+            ctx.close()
+        except Exception:
+            pass
+    _AUTO_BATCH_CTX_BY_EVENTS_ID.clear()
+
+
+import atexit as _atexit
+_atexit.register(_close_auto_batch_contexts)
+
+
+def _resolve_head_sha(
+    repo: Path,
+    *,
+    batch_ctx: BatchSyncContext | None = None,
+) -> str | None:
+    """Return the current HEAD sha, prefer the batch context's cached value.
+
+    Reading HEAD per call costs one ``git rev-parse``. When a batch context
+    is in play it already cached HEAD at batch open, so survival cache
+    keys remain stable across the batch even if a writer advances HEAD.
+    """
+    if batch_ctx is not None and batch_ctx.head_sha:
+        return batch_ctx.head_sha
+    out = _git(repo, "rev-parse", "HEAD", check=False).strip()
+    return out or None
+
+
 def sync_patch(
     repo: Path,
     trace_patch_id: str,
@@ -861,6 +1360,9 @@ def sync_patch(
     history_limit: int | None = None,
     events: list[Any] | None = None,
     lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
+    batch_ctx: BatchSyncContext | None = None,
+    use_cache: bool = True,
+    write_cache: bool = True,
 ) -> dict[str, Any]:
     """Sync survival for all Git Anchors attached to a Trace Patch.
 
@@ -871,14 +1373,122 @@ def sync_patch(
     ``lost_attribution_cache`` is an optional dict that batch callers may
     thread through across patches to avoid repeated ``git log
     --diff-filter=D`` lookups for the same file (Cluster F D2).
+
+    ``batch_ctx`` (Cluster G — P3) is an optional :class:`BatchSyncContext`
+    that holds a long-lived ``git cat-file --batch`` pipe and a cached
+    ancestry-from-HEAD set so a 100-patch batch pays one git rev-list
+    instead of 100 merge-base probes.
+
+    ``use_cache`` / ``write_cache`` (Cluster G — P2) control the
+    ``patch_survival_cached`` event keyed by ``(trace_patch_id,
+    observed_head_sha)``. ``use_cache=True`` (default) returns the cached
+    row immediately when it matches the current HEAD; ``write_cache=True``
+    appends a fresh cache event after a miss. Disabling them lets
+    callers force a re-compute (e.g. doctor / debug) without poisoning
+    the cache.
     """
-    return _sync(
+    # Cluster G — P3: when the CLI batch path passes the same ``events``
+    # list across many ``sync_patch`` calls, share a BatchSyncContext so
+    # the cat-file pipe and ancestry-from-HEAD set amortize across the
+    # whole loop. Explicit ``batch_ctx`` overrides the auto-share.
+    if batch_ctx is None:
+        batch_ctx = _auto_batch_ctx(repo, events)
+
+    head_sha = _resolve_head_sha(repo, batch_ctx=batch_ctx) if (use_cache or write_cache) else None
+    normalized_patch_id = normalize_id(trace_patch_id) if trace_patch_id else trace_patch_id
+
+    # Cluster G — P2: serve from cache when (patch_id, head_sha) matches.
+    # Use the batch context's in-process cache index when available so
+    # within-batch lookups for rows we just queued for write also hit.
+    if (
+        use_cache
+        and head_sha
+        and normalized_patch_id
+    ):
+        if batch_ctx is not None:
+            cache_index = batch_ctx.cache_index(events)
+        else:
+            cache_index = (
+                build_survival_cache_index(events) if events is not None else {}
+            )
+        cached = cache_index.get((normalized_patch_id, head_sha))
+        if cached is not None:
+            if batch_ctx is not None:
+                batch_ctx.calls["cache_hits"] += 1
+            return {
+                "trace_patch_id": normalized_patch_id,
+                "git_anchor_id": None,
+                "relation": "patch_trail_observed_cached",
+                "current_survival": cached,
+                "current_observations": [cached],
+                "observations": [cached],
+                "observation_scope": OBSERVATION_SCOPE,
+                "history_limit": history_limit if history_limit is not None else PATCH_TRAIL_COMMIT_LIMIT,
+                "trail_limitations": [],
+                "event_log_ref": EVENT_LOG_REF,
+                "phase4_survival_states": PHASE4_SURVIVAL_STATES,
+                "reserved_survival_states": RESERVED_PHASE5_SURVIVAL_STATES,
+                "source_events": [],
+                "cache": {
+                    "hit": True,
+                    "key": {
+                        "trace_patch_id": normalized_patch_id,
+                        "observed_head_sha": head_sha,
+                    },
+                },
+            }
+
+    result = _sync(
         repo,
         trace_patch_id=trace_patch_id,
         history_limit=history_limit,
         events=events,
         lost_attribution_cache=lost_attribution_cache,
+        batch_ctx=batch_ctx,
     )
+
+    # Cluster G — P2: persist the freshly-computed row so the next call
+    # against the same HEAD can short-circuit. Inside a batch we queue
+    # the draft on the context for one coalesced flush at close-time;
+    # in the per-call (no-batch) path we append immediately.
+    if (
+        write_cache
+        and head_sha
+        and isinstance(result, dict)
+    ):
+        result_patch_id = result.get("trace_patch_id") or normalized_patch_id
+        survival = result.get("current_survival") or {}
+        if (
+            isinstance(result_patch_id, str)
+            and result_patch_id
+            and isinstance(survival, dict)
+            and survival.get("survival_state") not in (None,)
+        ):
+            draft = make_survival_cache_draft(
+                trace_patch_id=result_patch_id,
+                observed_head_sha=head_sha,
+                survival=survival,
+            )
+            if batch_ctx is not None:
+                batch_ctx.queue_cache_write(
+                    draft,
+                    {(result_patch_id, head_sha): survival},
+                )
+            else:
+                append_survival_cache_events(repo, [draft])
+
+    if isinstance(result, dict):
+        result.setdefault(
+            "cache",
+            {
+                "hit": False,
+                "key": {
+                    "trace_patch_id": result.get("trace_patch_id"),
+                    "observed_head_sha": head_sha,
+                },
+            },
+        )
+    return result
 
 
 def sync_anchor(
@@ -888,16 +1498,22 @@ def sync_anchor(
     history_limit: int | None = None,
     events: list[Any] | None = None,
     lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
+    batch_ctx: BatchSyncContext | None = None,
 ) -> dict[str, Any]:
     """Sync survival for one Git Anchor.
 
-    See ``sync_patch`` for the optional ``events`` and
-    ``lost_attribution_cache`` parameters.
+    See ``sync_patch`` for the optional ``events``,
+    ``lost_attribution_cache``, and ``batch_ctx`` parameters. Anchor-scoped
+    sync does not consult the survival cache because the cache is keyed
+    by ``trace_patch_id`` (which an anchor implies but is not enforced).
     """
+    if batch_ctx is None:
+        batch_ctx = _auto_batch_ctx(repo, events)
     return _sync(
         repo,
         git_anchor_id=git_anchor_id,
         history_limit=history_limit,
         events=events,
         lost_attribution_cache=lost_attribution_cache,
+        batch_ctx=batch_ctx,
     )
