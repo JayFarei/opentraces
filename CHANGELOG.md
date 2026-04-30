@@ -5,6 +5,85 @@ All notable changes to the opentraces CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## MERGED-E — Intent Richness
+
+- **Structured `intent` object on `change_burst` nodes (I7).**
+  `trace map --bursts` and `trace get --bursts` now expose an `intent`
+  dict on each burst node's metadata:
+  `{trigger, most_substantive_spec, spec_chain, burst_commit_sha,
+  commit_subject, commit_body}`. The legacy `intent_text` and
+  `intent_user_step` fields remain as aliases for
+  `intent.most_substantive_spec.{text, step}` (or trigger when no spec
+  exists). `intent_text` is now considered deprecated.
+- **Trigger detection (I1).** New `core/intent.py::is_trigger`
+  recognises short imperatives that authorise a discussed action
+  ("yes", "ok", "go ahead", "let's go ahead and commit", "ship it",
+  "why don't we...") and refuses to flag long messages that merely
+  *start* with a trigger phrase ("yes implement the redis migration
+  with TLS..."). Image placeholders (`[Image: ...]`, `[Image #N]`) are
+  stripped before pattern matching so a hybrid screenshot+question
+  message still surfaces the question as a spec.
+- **Spec walkback / spec_chain (I2).**
+  `core/intent.py::derive_intent_chain` walks every `user_instruction`
+  node up to the burst's first step, splits triggers from specs, and
+  returns `most_substantive_spec` (latest non-trigger before the burst)
+  plus `spec_chain` (every non-trigger user instruction from the start
+  of the trace up to and including most_substantive_spec, ordered by
+  step_index). Trigger-only bursts have `most_substantive_spec=None`
+  and an empty chain.
+- **Commit body lookup (I3).** When a burst has any patch carrying
+  `metadata.commit_sha`, `detect_bursts` computes the modal commit
+  across patches and runs `git log -1 --format=%s/%b <sha>` to populate
+  `intent.commit_subject` (one line) and `intent.commit_body`
+  (multi-line, capped at 5,000 chars). Subprocess failures (missing
+  `git`, missing repo, unknown SHA) are absorbed into
+  `intent.commit_lookup_error` rather than raised. New
+  `--no-commit-lookup` flag on `trace map` and `trace get` skips the
+  lookup entirely for offline / hot-path runs. When the trace map has
+  no `patch_created` nodes (the integration-regression path) the
+  burst commit falls back to the first git commit observed in the
+  burst's step range via the trace's post-tool hook trail.
+- **`burst_commit_sha` first-class (D5).** The modal commit_sha is
+  surfaced at the top level of the burst node's metadata as
+  `burst_commit_sha`, not buried inside `intent`. Critically this is
+  *not* the trace's `outcome.commit_sha`: a single trace can ship
+  multiple commits, and the burst's commit is the one corresponding to
+  the burst's edits (often the *first* commit in the burst's step
+  range, not the last commit of the session).
+- **`unique_files` dedup (D6).** Foreign-agent absolute prefixes
+  (e.g. `/Users/06506792/...`) and the resolved repo root are stripped
+  before incrementing the per-file counter, so absolute and
+  repo-relative variants of the same file collapse onto one entry.
+  When the burst has a known commit, the file set is filtered to
+  files in that commit, edits past the commit step are clipped (so a
+  burst spanning multiple commits represents only its own commit's
+  work), and a final reconcile pass caps each file's count at the
+  Git diff's hunk count when the gap is small (≤ 2) so per-file
+  counts match the canonical hunk-per-file shape downstream consumers
+  reason about. Larger gaps preserve the Edit count (the authoring
+  trail tells us more than the merged diff in those cases).
+- **CLAUDE.md / SKILL.md clarifications (D7).** New paragraph in
+  CLAUDE.md and a "Bursts and intent" subsection in `skill/SKILL.md`
+  document that one trace patch = one Edit/Write tool call (not one
+  file), `unique_files` is per-file (deduped) while `patches` is
+  per-hunk, and `burst_commit_sha` is distinct from the trace's
+  `outcome.commit_sha`.
+
+Acceptance: Cluster E pushes
+`tests/integration/test_entry6_labeled_regression.py` from 4/13 hard
+labels passing to 13/13. The structured intent object is visible on
+`./otd --json trace map 185b0a55-... --bursts`:
+
+    .map.nodes[] | select(.action_type == "change_burst") | .metadata.intent
+
+surfaces the trigger (step 26 — "lets go ahead and make a commit about
+this fix"), the most substantive spec (step 19 — "How do I reference a
+given dataset? ... I'm interested in your apply command ... how is that
+different from pull?"), the spec chain (steps 1, 12, 19), the burst's
+commit SHA `68d6723dbb`, its subject "refactor(dataset): rename `apply`
+to `clone`, add `--data` for one-step setup", and its body explaining
+why `apply` was opaque.
+
 ## MERGED-A — Indexer Reliability
 
 - **Trail-projection cache self-heals after staleness.** `_build_trail_units`

@@ -246,3 +246,224 @@ def test_bursts_to_trace_map_emits_change_burst_nodes():
     # Ordering edges between consecutive bursts as previous_next.
     assert all(edge.edge_type == "previous_next" for edge in burst_map.edges)
     assert len(burst_map.edges) == max(0, len(burst_map.nodes) - 1)
+
+
+# ─── Cluster E extensions ─────────────────────────────────────────────────
+
+
+def test_burst_intent_object_present():
+    """Every burst must carry the structured ``intent`` dict (Cluster E I7)."""
+    from opentraces.core.bursts import detect_bursts
+
+    trace_id = "t-intent-shape"
+    nodes = [
+        _node(ordinal=1, trace_id=trace_id, action_type="user_instruction", step_index=1, text_preview="please refactor the cache"),
+        _node(ordinal=2, trace_id=trace_id, action_type="user_instruction", step_index=5, text_preview="ok"),
+        _node(ordinal=3, trace_id=trace_id, action_type="file_edit", step_index=10, files_modified=["a.py"], active_user_step=5),
+        _node(ordinal=4, trace_id=trace_id, action_type="file_edit", step_index=12, files_modified=["a.py"], active_user_step=5),
+    ]
+    trace_map = _trace_map(trace_id, nodes)
+    bursts = detect_bursts(trace_map, gap=35)
+    assert len(bursts) == 1
+    burst = bursts[0]
+    intent = burst.intent
+    assert isinstance(intent, dict)
+    # Required structural keys.
+    for key in (
+        "trigger",
+        "most_substantive_spec",
+        "spec_chain",
+        "burst_commit_sha",
+        "commit_subject",
+        "commit_body",
+    ):
+        assert key in intent, f"intent missing {key!r}"
+    # Trigger and spec come from the user_instructions before the burst.
+    assert intent["trigger"] is not None
+    assert intent["trigger"]["step"] == 5
+    assert intent["most_substantive_spec"]["step"] == 1
+    assert [item["step"] for item in intent["spec_chain"]] == [1]
+
+
+def test_burst_unique_files_dedup_normalises_abs_and_rel():
+    """abs and repo-relative paths to the same file collapse onto one entry (D6)."""
+    from opentraces.core.bursts import FOREIGN_AGENT_PATH_PREFIXES, detect_bursts
+
+    trace_id = "t-dedup"
+    foreign_root = FOREIGN_AGENT_PATH_PREFIXES[0]
+    nodes = [
+        _node(
+            ordinal=1,
+            trace_id=trace_id,
+            action_type="file_edit",
+            step_index=10,
+            files_modified=[f"{foreign_root}src/foo.py"],
+            active_user_step=None,
+        ),
+        _node(
+            ordinal=2,
+            trace_id=trace_id,
+            action_type="file_edit",
+            step_index=11,
+            files_modified=["src/foo.py"],
+            active_user_step=None,
+        ),
+        _node(
+            ordinal=3,
+            trace_id=trace_id,
+            action_type="file_edit",
+            step_index=12,
+            files_modified=[f"{foreign_root}src/bar.py"],
+            active_user_step=None,
+        ),
+    ]
+    trace_map = _trace_map(trace_id, nodes)
+    bursts = detect_bursts(trace_map, gap=35, commit_lookup=False)
+    assert len(bursts) == 1
+    files = bursts[0].unique_files
+    # Two unique files (src/foo.py and src/bar.py), not three.
+    assert len(files) == 2
+    assert "src/foo.py" in files
+    assert "src/bar.py" in files
+
+
+def test_burst_unique_files_dedup_preserves_hunk_counts():
+    """Dedup must SUM the per-file edit counts, not silently drop them."""
+    from opentraces.core.bursts import FOREIGN_AGENT_PATH_PREFIXES, detect_bursts
+
+    trace_id = "t-dedup-counts"
+    foreign_root = FOREIGN_AGENT_PATH_PREFIXES[0]
+    nodes = [
+        _node(
+            ordinal=i + 1,
+            trace_id=trace_id,
+            action_type="file_edit",
+            step_index=10 + i,
+            files_modified=[
+                f"{foreign_root}src/foo.py" if i % 2 == 0 else "src/foo.py"
+            ],
+        )
+        for i in range(5)
+    ]
+    trace_map = _trace_map(trace_id, nodes)
+    bursts = detect_bursts(trace_map, gap=35, commit_lookup=False)
+    files = bursts[0].unique_files
+    # 5 edits to src/foo.py (3 abs + 2 rel) collapse onto one key with count 5.
+    assert files == {"src/foo.py": 5}
+
+
+def test_burst_commit_sha_modal_across_patches():
+    """``burst_commit_sha`` is the modal commit_sha across patches (D5)."""
+    from opentraces.core.bursts import detect_bursts
+
+    trace_id = "t-modal"
+    nodes = [
+        _node(
+            ordinal=1,
+            trace_id=trace_id,
+            action_type="patch_created",
+            step_index=10,
+            files_modified=["a.py"],
+            metadata={
+                "trace_patch_id": "p1",
+                "git_anchor_id": "anchor-1",
+                "commit_sha": "alpha111",
+                "evidence_firmness": "firm",
+                "evidence_tier": "tool_emitted",
+            },
+        ),
+        _node(
+            ordinal=2,
+            trace_id=trace_id,
+            action_type="patch_created",
+            step_index=11,
+            files_modified=["b.py"],
+            metadata={
+                "trace_patch_id": "p2",
+                "git_anchor_id": "anchor-2",
+                "commit_sha": "alpha111",
+                "evidence_firmness": "firm",
+                "evidence_tier": "tool_emitted",
+            },
+        ),
+        _node(
+            ordinal=3,
+            trace_id=trace_id,
+            action_type="patch_created",
+            step_index=12,
+            files_modified=["c.py"],
+            metadata={
+                "trace_patch_id": "p3",
+                "git_anchor_id": "anchor-3",
+                "commit_sha": "beta222",
+                "evidence_firmness": "firm",
+                "evidence_tier": "tool_emitted",
+            },
+        ),
+    ]
+    trace_map = _trace_map(trace_id, nodes)
+    bursts = detect_bursts(trace_map, gap=35, commit_lookup=False)
+    assert len(bursts) == 1
+    burst = bursts[0]
+    # Modal commit is alpha111 (2 patches); beta222 has only 1.
+    assert burst.burst_commit_sha == "alpha111"
+
+
+def test_burst_commit_lookup_handles_missing_repo_gracefully():
+    """If the configured repo path doesn't exist, lookup absorbs the failure."""
+    from pathlib import Path
+
+    from opentraces.core.bursts import detect_bursts
+
+    trace_id = "t-no-repo"
+    nodes = [
+        _node(
+            ordinal=1,
+            trace_id=trace_id,
+            action_type="patch_created",
+            step_index=10,
+            files_modified=["a.py"],
+            metadata={
+                "trace_patch_id": "p1",
+                "commit_sha": "deadbeef0000000000000000000000000000",
+                "evidence_firmness": "firm",
+                "evidence_tier": "tool_emitted",
+            },
+        ),
+    ]
+    trace_map = _trace_map(trace_id, nodes)
+    # Non-existent path; commit lookup must defensively absorb the
+    # failure rather than raising.
+    bursts = detect_bursts(
+        trace_map,
+        gap=35,
+        repo_path=Path("/nonexistent/path/that/does/not/exist"),
+        commit_lookup=True,
+    )
+    assert len(bursts) == 1
+    burst = bursts[0]
+    assert burst.burst_commit_sha == "deadbeef0000000000000000000000000000"
+    # Lookup either skipped (repo path didn't exist so we never ran
+    # git) or recorded an error — never raised.
+    assert burst.intent.get("commit_subject") in (None,)
+    assert burst.intent.get("commit_body") in (None,)
+
+
+def test_burst_intent_text_legacy_alias_remains():
+    """Old consumers reading ``intent_text`` / ``intent_user_step`` keep working."""
+    from opentraces.core.bursts import detect_bursts
+
+    trace_id = "t-legacy"
+    nodes = [
+        _node(ordinal=1, trace_id=trace_id, action_type="user_instruction", step_index=1, text_preview="please add foo to bar"),
+        _node(ordinal=2, trace_id=trace_id, action_type="user_instruction", step_index=5, text_preview="ok"),
+        _node(ordinal=3, trace_id=trace_id, action_type="file_edit", step_index=10, files_modified=["a.py"], active_user_step=5),
+    ]
+    trace_map = _trace_map(trace_id, nodes)
+    bursts = detect_bursts(trace_map, gap=35, commit_lookup=False)
+    burst = bursts[0]
+    # Legacy single-string intent points at the spec, not the trigger.
+    assert burst.intent_user_step == 1
+    assert burst.intent_text and "please add foo to bar" in burst.intent_text
+    # Structured intent agrees on the spec.
+    assert burst.intent["most_substantive_spec"]["step"] == 1

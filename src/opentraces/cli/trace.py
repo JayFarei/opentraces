@@ -352,6 +352,15 @@ def trace_query(
     default=None,
     help="Step-index gap between adjacent edits within a burst (default 35).",
 )
+@click.option(
+    "--no-commit-lookup",
+    "no_commit_lookup",
+    is_flag=True,
+    help=(
+        "Skip the per-burst `git log` lookup (commit subject + body). "
+        "Useful for offline runs and hot CLI paths that don't need the prose."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_map_cmd(
     target: str,
@@ -365,6 +374,7 @@ def trace_map_cmd(
     actions_filter: str | None,
     as_bursts: bool,
     burst_gap: int | None,
+    no_commit_lookup: bool,
     as_json: bool,
 ) -> None:
     """Show a deterministic Trace Map or bounded candidate slice."""
@@ -425,7 +435,19 @@ def trace_map_cmd(
 
     if as_bursts:
         gap = burst_gap if burst_gap is not None else DEFAULT_BURST_GAP
-        bursts = detect_bursts(selected, gap=gap)
+        # Best-effort: load the underlying TraceRecord so the burst pass
+        # can mine the hook trail for git commit transitions and pull
+        # the full user-instruction text (the trace map's text_preview
+        # is truncated for compact listing). Failure is non-fatal —
+        # we fall back to record=None which still produces correct
+        # bursts, just without intent.commit_subject / commit_body.
+        record = _try_load_trace_record(trace_id)
+        bursts = detect_bursts(
+            selected,
+            gap=gap,
+            trace_record=record,
+            commit_lookup=not no_commit_lookup,
+        )
         selected = bursts_to_trace_map(selected, bursts)
     elif actions_filter:
         keep = {part.strip() for part in actions_filter.split(",") if part.strip()}
@@ -478,6 +500,15 @@ def trace_map_cmd(
     default=None,
     help="Step-index gap between adjacent edits within a burst (default 35).",
 )
+@click.option(
+    "--no-commit-lookup",
+    "no_commit_lookup",
+    is_flag=True,
+    help=(
+        "With --bursts: skip the per-burst `git log` lookup "
+        "(commit subject + body)."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_get(
     ref: str,
@@ -486,6 +517,7 @@ def trace_get(
     dry_run: bool,
     as_bursts: bool,
     burst_gap: int | None,
+    no_commit_lookup: bool,
     as_json: bool,
 ) -> None:
     """Resolve a trace, trace unit, map node, or ot:// Trail resource.
@@ -500,7 +532,7 @@ def trace_get(
         return
 
     if as_bursts:
-        _trace_get_bursts_impl(ref, burst_gap, as_json)
+        _trace_get_bursts_impl(ref, burst_gap, as_json, commit_lookup=not no_commit_lookup)
         return
 
     from opentraces_schema import TraceRecord
@@ -550,7 +582,13 @@ def trace_get(
         click.echo(payload["resource"].get("resource_type", ref))
 
 
-def _trace_get_bursts_impl(ref: str, burst_gap: int | None, as_json: bool) -> None:
+def _trace_get_bursts_impl(
+    ref: str,
+    burst_gap: int | None,
+    as_json: bool,
+    *,
+    commit_lookup: bool = True,
+) -> None:
     """Convenience: emit the bursts list for ``ref`` directly.
 
     Same algorithm as ``trace map --bursts``, just trimmed for one-shot
@@ -565,7 +603,13 @@ def _trace_get_bursts_impl(ref: str, burst_gap: int | None, as_json: bool) -> No
         click.echo(f"Trace Map not found: {ref}", err=True)
         sys.exit(6)
     gap = burst_gap if burst_gap is not None else DEFAULT_BURST_GAP
-    bursts = detect_bursts(trace_map, gap=gap)
+    record = _try_load_trace_record(trace_id)
+    bursts = detect_bursts(
+        trace_map,
+        gap=gap,
+        trace_record=record,
+        commit_lookup=commit_lookup,
+    )
     payload = {
         "status": "ok",
         "trace_id": trace_id,
@@ -582,6 +626,31 @@ def _trace_get_bursts_impl(ref: str, burst_gap: int | None, as_json: bool) -> No
             f"#{index} steps {b.step_range[0]}..{b.step_range[1]}  "
             f"files={files}  patches={len(b.patches)}  anchors={anchors}"
         )
+
+
+def _try_load_trace_record(trace_id: str):
+    """Best-effort load of the staging TraceRecord by ``trace_id``.
+
+    Used by the burst projection to pull the full step content (the
+    Trace Map's per-node text_preview is truncated for display) and
+    the hook trail (post-tool ``git_head`` transitions). Returns
+    ``None`` on any failure — callers must handle that gracefully.
+    """
+    try:
+        from opentraces_schema import TraceRecord
+
+        from ..core.trace_index import get_trace_path
+
+        trace_path = get_trace_path(trace_id)
+        if trace_path is None or not trace_path.exists():
+            return None
+        with trace_path.open() as fh:
+            line = fh.readline()
+        if not line:
+            return None
+        return TraceRecord.model_validate_json(line)
+    except Exception:
+        return None
 
 
 def _trace_id_from_ref(ref: str) -> str:
