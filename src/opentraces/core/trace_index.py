@@ -620,6 +620,17 @@ def query_index_page(
     selected = scored[offset : offset + page_size]
     next_offset = offset + page_size
     next_page_token = f"offset:{next_offset}" if next_offset < len(scored) else None
+
+    # Cluster G — P1: lazy survival lookup at query time. ``_build_trail_units``
+    # no longer calls ``sync_patch`` per anchor (that was a 6+ git ops × 315
+    # anchors = 10+ minute refresh). Instead we look up the cached survival
+    # row for each git_anchor unit going into this page and patch the
+    # ``trail.survival_state`` facet in-place. Misses leave the facet as
+    # ``"unknown"`` and the caller can run ``trail track --patch <id>`` for
+    # fresh data.
+    selected_units = [unit for _score, _parts, _matched, unit in selected]
+    _apply_lazy_survival(db_path, selected_units)
+
     candidates_page = [
         _candidate_packet(
             unit,
@@ -637,6 +648,102 @@ def query_index_page(
         next_page_token=next_page_token,
         total=len(scored),
     )
+
+
+def _apply_lazy_survival(db_path: Path, units: list[TraceUnit]) -> None:
+    """Patch ``trail.survival_state`` facets using the per-project cache.
+
+    Reads each project's survival cache once (via ``read_events`` against
+    the project's repo) and updates the facet in-place for every
+    git_anchor unit that resolves a cached row. Misses are left alone:
+    the unit keeps ``"unknown"`` and the user can run ``trail track`` to
+    populate the cache.
+
+    All work is wrapped in a top-level try/except so a missing repo or
+    broken event log never breaks the query.
+    """
+    git_anchor_units = [unit for unit in units if unit.unit_type == "git_anchor"]
+    if not git_anchor_units:
+        return
+
+    # Group by project slug so we only read the cache per-project once.
+    by_project: dict[str, list[TraceUnit]] = {}
+    for unit in git_anchor_units:
+        if unit.project_slug:
+            by_project.setdefault(unit.project_slug, []).append(unit)
+    if not by_project:
+        return
+
+    # Resolve project slug → repo path once.
+    repo_paths: dict[str, str] = {}
+    try:
+        with _connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            for slug in by_project:
+                row = conn.execute(
+                    "select repo_path from trail_sources where project_slug = ?",
+                    (slug,),
+                ).fetchone()
+                if row and row["repo_path"]:
+                    repo_paths[slug] = row["repo_path"]
+    except sqlite3.Error:
+        return
+
+    # Lazy import to avoid trails ↔ trace_index circularity at module load.
+    from .trails import build_survival_cache_index, read_events
+
+    for slug, slug_units in by_project.items():
+        repo_str = repo_paths.get(slug)
+        if not repo_str:
+            continue
+        repo = Path(repo_str)
+        if not repo.exists():
+            continue
+        try:
+            events = read_events(repo, verify=False)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+            continue
+        # Resolve current HEAD once.
+        try:
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(repo),
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if not head:
+            continue
+        cache_index = build_survival_cache_index(events)
+        for unit in slug_units:
+            patch_id = None
+            for facet in unit.facets:
+                if facet.name == "trace_patch.id":
+                    patch_id = facet.value
+                    break
+            if not patch_id:
+                continue
+            cached = cache_index.get((patch_id, head))
+            if cached is None:
+                continue
+            survival_state = cached.get("survival_state") or "unknown"
+            new_facets: list[TraceFacet] = []
+            for facet in unit.facets:
+                if facet.name == "trail.survival_state":
+                    new_facets.append(
+                        TraceFacet(
+                            name=facet.name,
+                            value=str(survival_state),
+                            source=facet.source,
+                            confidence=facet.confidence,
+                            evidence_ref=facet.evidence_ref,
+                        )
+                    )
+                else:
+                    new_facets.append(facet)
+            unit.facets = new_facets
 
 
 def get_trace_map(trace_id: str, *, index_path: Path | None = None) -> TraceMap | None:
@@ -1622,17 +1729,16 @@ def _build_trail_units(repo: Path, project_slug: str) -> list[TraceUnit]:
             continue
         file_path = anchor.get("file_path") or anchor.get("path")
         commit_sha = anchor.get("commit_sha")
-        # Cluster A — A4: enrich the anchor row with the current survival
-        # state so the resulting facet reflects what ``trail sync`` would
-        # report. ``with_current_survival`` is read-only against Git; we
-        # absorb its failures and fall back to ``unknown`` so a failing
-        # syncer never poisons the indexer.
-        survival_row = _anchor_with_survival(projection, anchor)
-        survival_state = (
-            (survival_row.get("current_survival") or {}).get("survival_state")
-            or survival_row.get("survival_state")
-            or "unknown"
-        )
+        # Cluster G — P1: defer the per-anchor ``sync_patch`` call out of
+        # the refresh path. Calling ``with_current_survival`` here cost
+        # 6+ git invocations per anchor; a project with 315 anchors took
+        # 10+ minutes to refresh. Survival is now resolved lazily at
+        # query-time by reading the ``patch_survival_cached`` events the
+        # batch ``trail track`` flow writes. When no cache is available
+        # the facet says ``"unknown"`` and the caller can run
+        # ``trail track --patch <id>`` for fresh data.
+        survival_row = anchor
+        survival_state = "unknown"
         anchor_facets = _trail_facets(survival_row)
         anchor_facets.append(
             TraceFacet(

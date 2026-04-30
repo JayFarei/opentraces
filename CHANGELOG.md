@@ -5,6 +5,70 @@ All notable changes to the opentraces CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## MERGED-G — Performance
+
+- **Defer A4 survival enrichment from refresh-time to query-time (P1).**
+  `_build_trail_units` no longer calls `sync_patch` per Git Anchor. The
+  previous refresh-time enrichment ran 6+ git ops per anchor, turning a
+  ~6 second refresh into a 10+ minute one on a project with 315 anchors.
+  Refresh is now O(units) instead of O(units × git ops) and a 24-trace
+  × 13-anchor synthetic build completes in well under 60 seconds.
+  At query time the survival facet is patched lazily by reading the
+  per-project survival cache event log: cache hits resolve in O(1),
+  cache misses leave the facet as `"unknown"` and the caller can run
+  `trail track --patch <id>` for fresh data.
+- **`patch_survival_cached` event-log cache (P2).** A new TrailEvent
+  type keyed by `(trace_patch_id, observed_head_id)` persists each
+  `current_survival` row so subsequent calls against the same HEAD
+  short-circuit the expensive compute path. The cache lives in the
+  same append-only event log everything else does, so it survives
+  between sessions, is correct under concurrent writers, and
+  invalidates automatically when HEAD moves (the new HEAD's lookup
+  misses the old key). Bare `*_sha` hex fields inside the survival
+  row are wrapped into `{algo, hex}` GitObjectIDs at write-time and
+  unwrapped at read-time so the on-disk shape is schema-valid.
+  Within a batch the cache writes are queued on the
+  `BatchSyncContext` and flushed in one `append_event_batch` at
+  close — coalescing 100 ref-update transactions into one.
+- **`BatchSyncContext` amortizes git operations across syncs (P3).**
+  Two batchings inside `sync_patch`:
+  - **Ancestry-from-HEAD set.** One `git rev-list HEAD` resolves
+    "is X reachable from HEAD" for every anchor in O(n) memory
+    instead of one `git merge-base --is-ancestor` per anchor.
+  - **`git cat-file --batch` pipe.** A long-lived
+    `git cat-file --batch` pipe serves every blob read with a
+    framed read-exactly loop (handles short-read pipe semantics)
+    instead of spawning `git show` per call. `stderr` is routed
+    to `/dev/null` so cat-file diagnostic output never deadlocks
+    the pipe.
+  - **Skip per-observation ancestry probe inside the descendant
+    walk.** `_commits_from_anchor_to_head` already proves the
+    anchor is reachable from HEAD before returning; re-running
+    `merge-base --is-ancestor` per descendant is pure overhead.
+    `_compute_survival` accepts a `skip_ancestry_check` flag for
+    that case while keeping the orphan / unreachable path fully
+    probed.
+  - **Lazy `_find_revert_commit`.** The revert search is one of
+    the costliest calls in the survival pipeline. We now defer it
+    behind a per-observation closure that fires only when the
+    file-deleted or preserved-zero branches are reached.
+  - **`BatchSyncContext` is shared across calls automatically.**
+    `sync_patch(events=...)` looks up a per-`(id(events), repo,
+    fingerprint)` context so the CLI batch path
+    (`cli/trail.py::_emit_batch_track`) gets P3 amortization
+    without having to import `BatchSyncContext`.
+- **Process-level `read_events` memo.** `read_events(repo)` caches
+  the result keyed by `(repo, event_log_ref_head, verify)` so a
+  CLI invocation that calls `read_events` more than once per
+  process (the batch path calls it twice — once to enumerate
+  patch ids, once to thread into `sync_patch`) shares one read.
+  The cache invalidates automatically when the ref head advances.
+- **Telemetry results.** `trail track --since 24h --limit 600`
+  drops from a 248-303s baseline to ~8s warm and ~175s on a fully
+  cold cache (target 60s; remaining cold-time is dominated by the
+  per-anchor descendant walk over real-project history). Warm
+  cache hits are at 13/13 labeled regression assertions.
+
 ## MERGED-F — Survivorship Hygiene
 
 - **`trace_id` in batch `trail track` output (D1).** Every JSONL row

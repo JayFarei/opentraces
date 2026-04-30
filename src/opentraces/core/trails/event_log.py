@@ -388,16 +388,59 @@ def _read_events_from_head(cwd: Path, head: str) -> list[TrailEvent]:
     return events
 
 
+# Cluster G — process-level memo for ``read_events``.
+#
+# The CLI's batch path calls ``read_events`` more than once per process
+# (once to enumerate patch ids, once to thread into ``sync_patch``). On a
+# project with 100k+ events the read costs ~6 seconds — paying that twice
+# is half the warm-cache budget. We memo the result keyed by
+# ``(repo, event_log_ref_head, verify)`` so callers within one process
+# share one read. The cache invalidates automatically when the ref head
+# advances.
+_READ_EVENTS_CACHE: dict[
+    tuple[str, str, bool], list[TrailEvent]
+] = {}
+
+
 def read_events(cwd: Path, *, verify: bool = True) -> list[TrailEvent]:
     head = _ref_head(cwd)
     if head is None:
         return []
+    cache_key = (str(Path(cwd).resolve()), head, verify)
+    cached = _READ_EVENTS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     events = _read_events_from_head(cwd, head)
     if verify:
         errors = verify_event_log(cwd, events=events)["errors"]
         if errors:
             raise ValueError("; ".join(errors))
+    # Bound the cache: keep only the most recent entry per repo so we do
+    # not retain stale events across long-lived processes whose HEAD
+    # advances. Enough for the per-CLI-call use case.
+    repo_key = cache_key[0]
+    for key in list(_READ_EVENTS_CACHE.keys()):
+        if key[0] == repo_key and key != cache_key:
+            _READ_EVENTS_CACHE.pop(key, None)
+    _READ_EVENTS_CACHE[cache_key] = events
     return events
+
+
+def invalidate_read_events_cache(cwd: Path | None = None) -> None:
+    """Drop cached events for ``cwd`` (or globally when ``cwd`` is None).
+
+    Tests and writers that mutate the event log mid-process should call
+    this to force the next ``read_events`` to re-read from disk. The
+    in-process append paths already invalidate when they advance the
+    ref head implicitly via the per-(repo, head) key.
+    """
+    if cwd is None:
+        _READ_EVENTS_CACHE.clear()
+        return
+    repo_key = str(Path(cwd).resolve())
+    for key in list(_READ_EVENTS_CACHE.keys()):
+        if key[0] == repo_key:
+            _READ_EVENTS_CACHE.pop(key, None)
 
 
 def _parents_are_linear(cwd: Path) -> tuple[bool, list[str], int]:
@@ -495,3 +538,184 @@ def event_log_status(cwd: Path) -> dict[str, Any]:
     else:
         status["state"] = "ok"
     return status
+
+
+# ---------------------------------------------------------------------------
+# Cluster G — P2: ``patch_survival_cached`` event-keyed cache
+# ---------------------------------------------------------------------------
+#
+# Survival rows are expensive to compute (6+ git invocations per patch).
+# Most batch ``trail track`` callers ask the same question repeatedly while
+# HEAD does not move. We persist each computed row as a TrailEvent of type
+# ``patch_survival_cached`` keyed by ``(trace_patch_id, observed_head_sha)``.
+# Because the key includes the HEAD sha the cache invalidates automatically
+# when HEAD moves: the new HEAD's lookup misses the old key.
+#
+# The cache lives in the same append-only event log everything else does, so
+# it survives between sessions and is correct under concurrent writers.
+#
+# Read path: ``build_survival_cache_index(events)`` collapses cache events
+# into a ``{(patch_id, head_sha): payload}`` dict — last-write-wins via
+# ``event_sequence``.
+
+CACHED_SURVIVAL_EVENT_TYPE = "patch_survival_cached"
+
+
+def build_survival_cache_index(
+    events: list[TrailEvent],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Project the event log down to a survival-cache lookup table.
+
+    Returns a ``{(trace_patch_id, observed_head_hex): payload}`` dict where
+    the payload is the cached ``current_survival`` row at the time the
+    cache event was written. Last-write-wins via ``event_sequence``.
+
+    The cache key uses the *hex* portion of ``observed_head_id`` so consumers
+    can match against ``git rev-parse HEAD`` output directly without
+    unwrapping a ``GitObjectID``.
+
+    The function is O(n) over the events list and pure Python — there is no
+    Git I/O. Callers that already pass ``events`` to ``sync_patch`` can use
+    it without re-reading the log.
+    """
+    cache: dict[tuple[str, str], tuple[int, dict[str, Any]]] = {}
+    for event in events:
+        if event.event_type != CACHED_SURVIVAL_EVENT_TYPE:
+            continue
+        payload = event.payload or {}
+        patch_id = payload.get("trace_patch_id")
+        observed_head_id = payload.get("observed_head_id")
+        survival = payload.get("survival")
+        head_hex: str | None = None
+        if isinstance(observed_head_id, dict):
+            candidate = observed_head_id.get("hex")
+            if isinstance(candidate, str):
+                head_hex = candidate
+        if (
+            not isinstance(patch_id, str)
+            or head_hex is None
+            or not isinstance(survival, dict)
+        ):
+            continue
+        key = (patch_id, head_hex)
+        existing = cache.get(key)
+        if existing is None or existing[0] < event.event_sequence:
+            cache[key] = (event.event_sequence, _survival_from_storage(survival))
+    return {key: payload for key, (_seq, payload) in cache.items()}
+
+
+def get_cached_survival(
+    events: list[TrailEvent],
+    *,
+    trace_patch_id: str,
+    observed_head_sha: str,
+) -> dict[str, Any] | None:
+    """Return the most recent cached survival row for ``(patch, head)``.
+
+    ``observed_head_sha`` is the bare 40-char hex returned by
+    ``git rev-parse HEAD``. The cache normalises against the hex of the
+    stored ``GitObjectID`` so callers do not need to wrap/unwrap.
+
+    Returns ``None`` when no cache event matches. Callers should fall back
+    to a fresh ``sync_patch`` and emit a new cache event with the result.
+    """
+    if not trace_patch_id or not observed_head_sha:
+        return None
+    index = build_survival_cache_index(events)
+    return index.get((trace_patch_id, observed_head_sha))
+
+
+# Survival rows include a few bare-hex ``*_sha`` keys (``commit_sha``,
+# ``lost_at_commit_sha``) that TrailEvent payload validation rejects under
+# the typed-Git-object-identity rule. We wrap them at write-time and unwrap
+# them at read-time so the on-disk shape is schema-valid while the
+# in-process sync API keeps the historical ``_sha`` keys.
+_SURVIVAL_SHA_KEYS_TO_WRAP = ("commit_sha", "lost_at_commit_sha")
+
+
+def _survival_for_storage(survival: dict[str, Any]) -> dict[str, Any]:
+    """Wrap bare ``*_sha`` hex strings so the payload validator accepts it."""
+    out: dict[str, Any] = {}
+    for key, value in survival.items():
+        if key in _SURVIVAL_SHA_KEYS_TO_WRAP and isinstance(value, str) and value:
+            wrap_key = key[:-len("_sha")] + "_id"
+            try:
+                out[wrap_key] = GitObjectID(hex=value).model_dump(mode="json")
+                continue
+            except Exception:
+                # Bad hex — drop the field rather than poisoning the row.
+                continue
+        if key in _SURVIVAL_SHA_KEYS_TO_WRAP and value is None:
+            # Null sha — emit as null wrap-key so consumers see the slot.
+            wrap_key = key[:-len("_sha")] + "_id"
+            out[wrap_key] = None
+            continue
+        out[key] = value
+    return out
+
+
+def _survival_from_storage(stored: dict[str, Any]) -> dict[str, Any]:
+    """Inverse of :func:`_survival_for_storage`: restore bare ``*_sha`` keys."""
+    out: dict[str, Any] = {}
+    for key, value in stored.items():
+        if key in {"commit_id", "lost_at_commit_id"}:
+            sha_key = key[:-len("_id")] + "_sha"
+            if isinstance(value, dict) and "hex" in value:
+                out[sha_key] = value.get("hex")
+            else:
+                out[sha_key] = value if isinstance(value, str) else None
+            continue
+        out[key] = value
+    return out
+
+
+def make_survival_cache_draft(
+    *,
+    trace_patch_id: str,
+    observed_head_sha: str,
+    survival: dict[str, Any],
+    trace_id: str | None = None,
+) -> TrailEventDraft:
+    """Build a ``patch_survival_cached`` event draft for one survival row.
+
+    The payload uses ``observed_head_id`` (a ``{algo, hex}`` GitObjectID)
+    rather than a bare ``observed_head_sha`` because TrailEvent payloads
+    forbid bare 40/64-char hex SHAs under ``_sha``-suffixed keys (the
+    schema enforces typed Git object identity everywhere). Bare ``*_sha``
+    fields inside the survival dict get wrapped into ``*_id`` form via
+    :func:`_survival_for_storage`; readers reverse the wrap.
+
+    The cache key fields (``trace_patch_id``, ``observed_head_id``) are
+    duplicated at the top level of the payload so a downstream replay can
+    rebuild the index without inspecting the nested survival dict.
+    """
+    payload: dict[str, Any] = {
+        "trace_patch_id": trace_patch_id,
+        "observed_head_id": GitObjectID(hex=observed_head_sha).model_dump(mode="json"),
+        "survival": _survival_for_storage(survival),
+    }
+    return TrailEventDraft(
+        event_type=CACHED_SURVIVAL_EVENT_TYPE,
+        trace_id=trace_id,
+        capture_method=["survival_cache"],
+        payload=payload,
+    )
+
+
+def append_survival_cache_events(
+    cwd: Path,
+    drafts: list[TrailEventDraft],
+    *,
+    writer: str = "survival-cache",
+) -> list[TrailEvent]:
+    """Append a batch of cache events. Best-effort: returns ``[]`` on failure.
+
+    A failed cache append must never cause survival queries to error. The
+    cache is a perf hint; correctness is owned by the fresh-compute path.
+    """
+    if not drafts:
+        return []
+    try:
+        return append_event_batch(cwd, drafts, writer=writer)
+    except Exception:
+        return []
