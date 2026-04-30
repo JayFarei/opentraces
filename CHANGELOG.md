@@ -5,6 +5,53 @@ All notable changes to the opentraces CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## MERGED-H — Trajectory Slicing
+
+- **Adaptive burst gap (T2).** `core/bursts.py::detect_bursts` now
+  picks `gap` per-trace from the median step-distance between
+  consecutive `file_edit` / `patch_created` nodes, multiplied by 4
+  and clamped to `[DEFAULT_BURST_GAP, ADAPTIVE_GAP_MAX]` (i.e. 35,
+  100). Sparse traces (median delta 50+) widen up to 100; dense
+  traces (median delta 1-2) stay at the 35-step default. The default
+  floor is the central design choice — without it, dense iteration
+  loops fragment at the first mid-burst pause longer than ~8 steps,
+  which the entry #6 labeled regression confirmed is the wrong call.
+  Explicit `gap=N` from callers (the `--burst-gap N` CLI flag) still
+  wins unconditionally.
+- **`tool_call_density` lifted to a top-level burst field (T6).**
+  Cluster F's `quality_signals.tool_call_density` is now also
+  exposed as `Burst.tool_call_density` and surfaces in
+  `to_metadata()` so jq consumers can read it without descending into
+  `quality_signals`. Pure aliasing; the underlying compute is
+  unchanged.
+- **`blast_radius` per burst (T7).** Each burst carries
+  `blast_radius` with `lines_added`, `lines_removed`,
+  `files_touched`, `test_files_touched`, `src_files_touched`,
+  `docs_files_touched`. Test/src/docs are derived via path-pattern
+  classification on the burst's `unique_files`; lines added/removed
+  sum the `new_string`/`old_string` content from each patch's source
+  Edit/Write tool call. Pure aggregation — no new git ops. On
+  entry #6's `[32, 289]` burst the metric reports 9 files (7 test, 2
+  src, 0 docs) and 257 lines added — matching the manual labels.
+- **Hard split on user-instruction pivot (T9).** A new
+  `hard_split_on_user_pivot=False` flag asks `detect_bursts` to
+  split a burst at any non-trigger `user_instruction` strictly
+  between two adjacent edits. Triggers (`yes`, `go ahead`, `ship
+  it`) authorise in-flight work and never split. Default-OFF after
+  a research finding: the entry #6 trace has 19 mid-burst
+  redirections that all converge on commit `68d6723db`; default-on
+  T9 fragmented that single labeled burst into 8 sub-bursts. The
+  flag is opt-in for calibration corpora and downstream consumers
+  who want the strict semantics.
+- **Burst calibration corpus v1 (T1).** A small hand-labeled corpus
+  under `tests/integration/fixtures/burst_calibration_corpus/v1/`
+  with 5 traces (clean burst, two distinct bursts, mid-burst pivot,
+  sparse session, dense loop) plus `labels.json`. The new
+  `tests/integration/test_burst_calibration.py` validator runs the
+  detector against the corpus and asserts ≥ 80 % accuracy at the
+  labeled burst boundaries. Current accuracy: 100 % (6/6 labeled
+  bursts across the two label modes).
+
 ## MERGED-G — Performance
 
 - **Defer A4 survival enrichment from refresh-time to query-time (P1).**

@@ -1,0 +1,85 @@
+{
+  "_provenance": {
+    "description": "Hand-labeled burst boundaries for the burst calibration corpus v1.",
+    "harness": "tests/integration/harness/burst_calibration_corpus.py",
+    "scope": "burst-detection only \u2014 no commit, anchor, or survival labels."
+  },
+  "trace_001_single_burst_clean": {
+    "expected_bursts": [
+      {
+        "step_range": [
+          5,
+          12
+        ],
+        "intent_summary": "rename foo->bar"
+      }
+    ]
+  },
+  "trace_002_two_distinct_bursts": {
+    "expected_bursts": [
+      {
+        "step_range": [
+          5,
+          10
+        ],
+        "intent_summary": "cache rewrite"
+      },
+      {
+        "step_range": [
+          80,
+          85
+        ],
+        "intent_summary": "logging cleanup"
+      }
+    ]
+  },
+  "trace_003_long_burst_with_user_pivot": {
+    "expected_bursts": [
+      {
+        "step_range": [
+          5,
+          25
+        ],
+        "intent_summary": "cache + type hints (default merges)"
+      }
+    ],
+    "expected_bursts_with_t9": [
+      {
+        "step_range": [
+          5,
+          10
+        ],
+        "intent_summary": "cache update"
+      },
+      {
+        "step_range": [
+          20,
+          25
+        ],
+        "intent_summary": "type-hint update after pivot"
+      }
+    ]
+  },
+  "trace_004_sparse_edits": {
+    "expected_bursts": [
+      {
+        "step_range": [
+          50,
+          200
+        ],
+        "intent_summary": "sparse investigation edits"
+      }
+    ]
+  },
+  "trace_005_dense_loop": {
+    "expected_bursts": [
+      {
+        "step_range": [
+          5,
+          49
+        ],
+        "intent_summary": "dense fix-up loop"
+      }
+    ]
+  }
+}
