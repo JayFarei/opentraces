@@ -1,0 +1,172 @@
+{
+  "_provenance": {
+    "description": "Ground-truth labels for entry #6 of the integration regression test. Manually derived from raw trace JSONL + git history during the cluster A/B/C/D testing phase. Used as the iterative regression target for Cluster E/F/G/H follow-up work.",
+    "trace_source": "~/.opentraces/projects/2026-03-27-community-traces-hf-24eb286b/traces/185b0a55-2a2a-49c7-b3c1-bbf09cadd96b.jsonl",
+    "burst_commit": "68d6723dbb2cdf046006c8a7a531e4960965d812",
+    "verified_at_branch": "integ/cli-gap-clearance",
+    "label_kinds": {
+      "hard": "derivable from trace JSONL alone — stable across branch movement",
+      "soft": "depends on git HEAD — recompute against current branch, expect drift within tolerance"
+    }
+  },
+
+  "trace": {
+    "id": "185b0a55-2a2a-49c7-b3c1-bbf09cadd96b",
+    "agent": "claude-code",
+    "total_steps": 420,
+    "outcome": {
+      "success": true,
+      "committed": true
+    }
+  },
+
+  "burst": {
+    "step_range": [32, 289],
+    "label_kind": "hard",
+    "expected_burst_count_in_trace": 2,
+    "this_burst_index": 0,
+    "patch_count": 27,
+    "unique_files_count": 9,
+    "unique_files": [
+      "src/opentraces/cli/dataset.py",
+      "src/opentraces/core/datasets.py",
+      "tests/cli/test_help_renderer.py",
+      "tests/cli/test_plan058_dataset_remote_cli.py",
+      "tests/core/test_plan058_dataset_remotes.py",
+      "tests/integration/harness/plan058_remote_acceptance.py",
+      "tests/integration/test_plan058_fake_remote_uat.py",
+      "tests/integration/test_plan058_hf_live_uat.py",
+      "tests/integration/test_plan058_load_dataset_roundtrip.py"
+    ],
+    "files_to_hunks": {
+      "tests/integration/test_plan058_fake_remote_uat.py": 10,
+      "tests/integration/test_plan058_load_dataset_roundtrip.py": 3,
+      "tests/integration/harness/plan058_remote_acceptance.py": 3,
+      "tests/cli/test_plan058_dataset_remote_cli.py": 3,
+      "src/opentraces/cli/dataset.py": 2,
+      "tests/core/test_plan058_dataset_remotes.py": 2,
+      "tests/integration/test_plan058_hf_live_uat.py": 2,
+      "src/opentraces/core/datasets.py": 1,
+      "tests/cli/test_help_renderer.py": 1
+    },
+    "burst_commit_sha": "68d6723dbb2cdf046006c8a7a531e4960965d812",
+    "burst_commit_subject": "refactor(dataset): rename `apply` to `clone`, add `--data` for one-step setup",
+    "burst_commit_body_must_contain": [
+      "`apply` was an opaque verb",
+      "overlapped with `git apply`",
+      "Renaming to `clone`"
+    ]
+  },
+
+  "intent": {
+    "label_kind": "hard",
+    "description": "Step-by-step structure of how the burst's intent should be derived from the trace's user-instruction chain. Today (Cluster B's algorithm) only step 26 is captured. Cluster E should produce the full structure below.",
+    "trigger": {
+      "step": 26,
+      "text_starts_with": "lets go ahead and make a commit",
+      "is_pure_trigger": true,
+      "rationale": "Short imperative authorising a pre-discussed action; carries no domain spec."
+    },
+    "most_substantive_spec": {
+      "step": 19,
+      "text_must_contain_any_of": [
+        "how is that different from pull",
+        "I'm interested in your apply command"
+      ],
+      "rationale": "The most recent non-trigger user_instruction before the burst — the actual question that motivated the rename."
+    },
+    "spec_chain_min_length": 3,
+    "spec_chain_must_include_steps": [1, 12, 19],
+    "spec_chain_step_24_status": "spec or trigger; both acceptable",
+    "spec_chain_must_exclude_steps": [26],
+    "commit_subject": "refactor(dataset): rename `apply` to `clone`, add `--data` for one-step setup",
+    "commit_body_min_length_chars": 200
+  },
+
+  "survival": {
+    "label_kind": "soft",
+    "tolerance_note": "Numbers are pinned at integ/cli-gap-clearance HEAD as of cluster D landing. May drift slightly if any cluster touches files in the burst's file set (e.g. cli/dataset.py).",
+    "expected_distribution_at_baseline": {
+      "alive_transformed": 18,
+      "lost": 7,
+      "partially_preserved": 2
+    },
+    "tolerance_total_pct": 10,
+    "lost_patches_expected_killer_commits": [
+      {
+        "patch_file": "tests/integration/test_plan058_hf_live_uat.py",
+        "expected_lost_at_commit_starts_with": "824f0dd06",
+        "killer_commit_subject": "refactor(datasets): drop orphaned remote-clone/pull/export core surface",
+        "patch_count_in_burst": 2
+      },
+      {
+        "patch_file": "tests/integration/harness/plan058_remote_acceptance.py",
+        "expected_lost_at_commit_starts_with": "546c3ce62",
+        "killer_commit_subject": "refactor(dataset): cut CLI to 8 visible verbs, hide approve/reject",
+        "patch_count_in_burst": 3
+      },
+      {
+        "patch_file": "tests/cli/test_plan058_dataset_remote_cli.py",
+        "expected_lost_at_commit_starts_with": null,
+        "lost_kind_expected": "hunk_removed",
+        "rationale": "File alive at HEAD; specific hunks (test_dataset_clone_and_pull_cli_use_hf_shaped_remote) were removed inline.",
+        "patch_count_in_burst": 2
+      }
+    ],
+    "anchor_evidence_breakdown": {
+      "exact_range_hash_firm": 26,
+      "structural_match_provisional": 1
+    },
+    "patches_with_authored_text_in_commit_diff": 27,
+    "retention_fraction_partially_preserved_examples": [
+      {"patch_id_starts_with": "8d5cc842", "expected_retention_within": [0.20, 0.32]},
+      {"patch_id_starts_with": "0669df36", "expected_retention_within": [0.30, 0.42]}
+    ]
+  },
+
+  "performance_targets": {
+    "label_kind": "soft",
+    "description": "Step-level wall-time targets for the canonical pipeline (skill: opentraces). Numbers are 'cluster G ships these'.",
+    "step1_trail_track_since_24h_seconds": {
+      "baseline_at_cluster_D": 101.0,
+      "target_after_cluster_G_warm": 5.0,
+      "target_after_cluster_G_cold": 30.0
+    },
+    "step2_trace_map_bursts_x11_seconds": {
+      "baseline_at_cluster_D": 1.9,
+      "target_unchanged": 5.0
+    },
+    "step5_dataset_new_seconds": {
+      "baseline_at_cluster_D": 0.4,
+      "target_unchanged": 1.0
+    },
+    "total_pipeline_seconds": {
+      "baseline_at_cluster_D": 104.0,
+      "target_after_cluster_G": 8.0
+    }
+  },
+
+  "verification_checks": {
+    "label_kind": "hard",
+    "checks": [
+      {
+        "id": "patches_to_anchor_one_to_one",
+        "description": "All 27 patches anchor to commit 68d6723dbb. The set of files in the patches equals the set of files in the commit.",
+        "git_command": "git show --name-only --format= 68d6723dbb",
+        "expected_file_count": 9
+      },
+      {
+        "id": "authored_text_in_commit_diff",
+        "description": "Each patch's authored_text appears in the commit's diff for that file (modulo the one structural_match patch).",
+        "expected_strict_match": 26,
+        "expected_structural_match": 1
+      },
+      {
+        "id": "burst_commit_not_outcome_commit",
+        "description": "The trace's outcome.commit_sha is f84eb3eb2 (later, unrelated). The burst's commit is 68d6723dbb. The two MUST NOT be conflated.",
+        "trace_outcome_commit_starts_with": "f84eb3eb2",
+        "burst_commit_starts_with": "68d6723db"
+      }
+    ]
+  }
+}
