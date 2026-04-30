@@ -93,6 +93,49 @@ intent + patches + git anchor" with a one-line jq.
 - New tests: `tests/core/test_bursts.py`,
   `tests/core/test_trace_map_actions_filter.py`,
   `tests/cli/test_trace_map_cli.py`.
+## MERGED-C — Survivorship surface & batch track
+
+### Added
+
+- `opentraces trail track --since <duration>` / `--patches-from <file>` /
+  `--all` — batch survival surveys that emit one JSONL row per Trace
+  Patch. Uses an in-process loop over `core.trails.sync.sync_patch` with
+  a single shared `read_events` snapshot, so 100 patches take under 5s
+  in-process (vs. ~5min via per-patch subprocess). `--limit N` caps
+  output. The original input id is preserved at the row level so
+  callers can group rows back to their request even after sync_patch
+  normalizes the canonical id.
+- `opentraces trail track <TRACE_ID> --warn-missing-patches` — surface
+  a `trail_capture_incomplete` limitation plus structured counts when a
+  trace has `file_edit` events but zero `trace_patch_created` events
+  (the indexer-bug fingerprint).
+- `opentraces doctor --json` now includes a `trail_capture_audit`
+  panel that scans the last 7 days of TrailEvents for traces with the
+  same `file_edit > 0 AND patch_created == 0` shape.
+- `retention_fraction: float | None` on every survival observation row.
+  Computed as `surviving_authored_lines / total_authored_lines`,
+  rounded to 3 decimal places. `1.0` for `alive_on_path`, computed for
+  `alive_transformed` / `alive_moved` / `partially_preserved` /
+  `repaired`, `None` for `lost` / `unknown` / `orphan_branch` /
+  `missing_authored_text` / `reverted`.
+
+### Changed
+
+- The overloaded `survival_state="unknown"` is split into four specific
+  causes:
+  - `orphan_branch` — anchor commit not in HEAD's ancestry (was
+    `unknown` + `anchor_commit_not_reachable_from_head`).
+  - `missing_authored_text` — patch lacks original line content (was
+    `unknown` + `missing_authored_text`).
+  - `never_committed` — patch authored but no Git Anchor matured AND
+    the file currently exists in HEAD (the patch was superseded
+    intra-trace before any commit captured it).
+  - `unknown` — kept as the fallback for genuinely indeterminate cases
+    (anchor commit / path / observed_commit_id missing).
+- `core.trails.sync.sync_patch` and `sync_anchor` now accept an
+  optional pre-loaded `events: list[TrailEvent]` so batch callers can
+  amortize the one-time read cost across many patches.
+
 ## [0.4.0] - 2026-04-26
 
 This release ships **Trace Trails Phase 5**: a VCS-anchored evidence

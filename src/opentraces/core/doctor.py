@@ -726,7 +726,26 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "trace_index": _trace_index_status(),
         "trail_event_log": _trail_event_log_status(cwd),
         "post_commit_hook": _post_commit_hook_status(cwd),
+        "trail_capture_audit": _trail_capture_audit(cwd),
     }
+
+
+def _trail_capture_audit(cwd: Path) -> dict[str, Any]:
+    """Cluster C-4: surface traces with ``file_edit`` events but zero
+    ``trace_patch_created`` events in the last 7 days. The audit logic
+    lives in ``cli.doctor`` so cluster-C tests can target it without
+    monkey-patching this aggregator."""
+    try:
+        from ..cli.doctor import audit_trail_capture
+        return audit_trail_capture(cwd, days=7)
+    except Exception as exc:  # pragma: no cover — defensive
+        return {
+            "state": "missing",
+            "error": str(exc),
+            "window_days": 7,
+            "traces_scanned": 0,
+            "incomplete": [],
+        }
 
 
 def exit_code(report_data: dict[str, Any]) -> int:
