@@ -5,6 +5,39 @@ All notable changes to the opentraces CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## MERGED-A — Indexer Reliability
+
+- **Trail-projection cache self-heals after staleness.** `_build_trail_units`
+  no longer swallows `OSError | RuntimeError | ValueError | ValidationError |
+  SubprocessError` and silently returns `[]`; `_rebuild_trail_projection`
+  catches build failures explicitly and skips recording `trail_sources` so the
+  next refresh retries instead of marking a stale-but-empty cache as fresh.
+- **Ref-advance during rebuild is captured.** `_rebuild_trail_projection`
+  now reads the event-log ref a second time after the rebuild and records the
+  post-rebuild head; if the ref advanced mid-rebuild the row is tagged with a
+  structured `trail_event_ref_advanced_during_rebuild` limitation in the new
+  `trail_sources.limitations_json` column. Schema bumped to
+  `plan056-m1-v4`.
+- **Index DB uses WAL + busy-timeout.** Every connection runs through
+  `_connect`, which sets `PRAGMA journal_mode=WAL` and `PRAGMA
+  busy_timeout=5000`. Top-level `rebuild_index` / `refresh_index` now retry
+  transient `sqlite3.OperationalError: database is locked` errors and surface
+  a typed `IndexLockedError` if the retry budget is exhausted, so concurrent
+  `trace query` invocations no longer race a raw `OperationalError`
+  traceback.
+- **Patches and git_anchors are queryable candidates.** Each `TraceUnit` of
+  `unit_type ∈ {patch, git_anchor}` now produces a `CandidatePacket` with
+  `candidate_kind ∈ {patch, git_anchor}` and matching facets. `git_anchor`
+  candidates carry a `trail.survival_state` facet sourced from the projection's
+  `current_survival.survival_state` (falling back to `unknown`). The trail
+  projection rows now expose `event_time` (and `trace_patch_event_time`) so
+  `--since` filters can age patch / git_anchor candidates.
+- **`candidate_kind` is never null.** Every candidate now reports a
+  `candidate_kind` — `bug_fix` when the signal-derived label fires, otherwise
+  the unit type (e.g. `trace`, `patch`, `git_anchor`, `skill_invocation`,
+  `tool_sequence`, `test_or_error_signal`). Tool-less prompt traces get
+  `candidate_kind=trace` instead of `null`.
+
 ## [0.4.0] - 2026-04-26
 
 This release ships **Trace Trails Phase 5**: a VCS-anchored evidence

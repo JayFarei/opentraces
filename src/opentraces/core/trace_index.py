@@ -6,11 +6,12 @@ import json
 import re
 import sqlite3
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 from urllib.parse import urlparse
 
 from pydantic import ValidationError
@@ -32,7 +33,81 @@ from .trace_map import build_trace_map
 from .trace_map import slice_trace_map_for_candidate
 
 
-INDEX_VERSION = "plan056-m1-v3"
+# Cluster A — A2 schema bump: ``trail_sources.limitations_json`` column
+# carries structured limitations like ``trail_event_ref_advanced_during_rebuild``
+# so consumers can detect cache states without re-rebuilding.
+INDEX_VERSION = "plan056-m1-v4"
+INDEX_BUSY_TIMEOUT_MS = 5000
+INDEX_WRITE_RETRY_LIMIT = 5
+INDEX_WRITE_RETRY_BASE_SECONDS = 0.05
+
+
+class IndexLockedError(RuntimeError):
+    """Raised when the index DB stays locked past the retry budget.
+
+    Surfaces a clean message instead of a raw ``sqlite3.OperationalError``
+    so the CLI can exit with a typed error code rather than a traceback.
+    """
+
+
+T = TypeVar("T")
+
+
+def _configure_connection(conn: sqlite3.Connection, *, wal: bool = True) -> None:
+    """Apply WAL + busy-timeout pragmas on every fresh connection.
+
+    ``busy_timeout`` is a per-connection setting that needs to be set on each
+    new handle. ``journal_mode=wal`` is a one-time DB-level switch but is
+    harmless to re-emit. We skip WAL for the tmp file used during
+    ``_rebuild_index_locked`` because the tmp gets atomically renamed into
+    place: a WAL-mode tmp would leave its ``-wal``/``-shm`` sidecars dangling
+    on the rename and the new live DB would surface ``disk I/O error`` on
+    the first read.
+    """
+    try:
+        conn.execute(f"PRAGMA busy_timeout={INDEX_BUSY_TIMEOUT_MS}")
+        if wal:
+            conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError:
+        # Some shapes (e.g. fresh empty DB on a read-only filesystem) cannot
+        # set journal_mode=WAL; fall back silently. busy_timeout still helps.
+        pass
+
+
+def _connect(db_path: Path, *, wal: bool = True) -> sqlite3.Connection:
+    """Open the index DB with the WAL + busy-timeout pragmas applied."""
+    conn = sqlite3.connect(db_path, timeout=INDEX_BUSY_TIMEOUT_MS / 1000.0)
+    _configure_connection(conn, wal=wal)
+    return conn
+
+
+def _is_lock_error(exc: sqlite3.OperationalError) -> bool:
+    msg = str(exc).lower()
+    return "locked" in msg or "busy" in msg
+
+
+def _retry_on_lock(action: Callable[[], T]) -> T:
+    """Run ``action`` and retry on transient SQLite lock contention.
+
+    Used to wrap the top-level write transactions (``rebuild_index`` /
+    ``refresh_index``). A persistent lock past the retry budget surfaces as
+    :class:`IndexLockedError` so the CLI can produce a clean error message.
+    """
+    delay = INDEX_WRITE_RETRY_BASE_SECONDS
+    last_exc: sqlite3.OperationalError | None = None
+    for _ in range(INDEX_WRITE_RETRY_LIMIT):
+        try:
+            return action()
+        except sqlite3.OperationalError as exc:
+            if not _is_lock_error(exc):
+                raise
+            last_exc = exc
+            time.sleep(delay)
+            delay = min(delay * 2, 1.0)
+    assert last_exc is not None
+    raise IndexLockedError(
+        f"trace index DB stayed locked after {INDEX_WRITE_RETRY_LIMIT} retries: {last_exc}"
+    )
 _M1_UNIT_TYPES = {
     "trace",
     "trace_map_node",
@@ -106,13 +181,19 @@ def rebuild_index(index_path: Path | None = None) -> RebuildSummary:
     """Rebuild the local cache from retained project trace stores."""
 
     db_path = index_path or default_index_path()
+    return _retry_on_lock(lambda: _rebuild_index_locked(db_path))
+
+
+def _rebuild_index_locked(db_path: Path) -> RebuildSummary:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = db_path.with_name(f"{db_path.name}.tmp")
     if tmp_path.exists():
         tmp_path.unlink()
 
     try:
-        with sqlite3.connect(tmp_path) as conn:
+        # Build the tmp DB in rollback-journal mode; we'll atomically rename
+        # it over the live DB which would orphan WAL sidecars otherwise.
+        with _connect(tmp_path, wal=False) as conn:
             _create_schema(conn)
             project_sources = _project_sources_by_slug()
             for source in _iter_trace_sources():
@@ -147,6 +228,12 @@ def rebuild_index(index_path: Path | None = None) -> RebuildSummary:
             summary = _index_totals(conn, db_path)
             conn.commit()
         tmp_path.replace(db_path)
+        # Cluster A — A3: switch the freshly-renamed live DB into WAL so
+        # subsequent concurrent readers and writers can coexist. We could
+        # not do this on the tmp file because WAL leaves ``-wal``/``-shm``
+        # sidecars that would not survive ``replace``.
+        with _connect(db_path) as live_conn:
+            live_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         return summary
     except Exception:
         if tmp_path.exists():
@@ -161,7 +248,11 @@ def refresh_index(index_path: Path | None = None) -> RebuildSummary:
     if not db_path.exists():
         return rebuild_index(db_path)
 
-    with sqlite3.connect(db_path) as conn:
+    return _retry_on_lock(lambda: _refresh_index_locked(db_path))
+
+
+def _refresh_index_locked(db_path: Path) -> RebuildSummary:
+    with _connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         if not _schema_supports_refresh(conn):
             return rebuild_index(db_path)
@@ -372,7 +463,7 @@ def query_index_page(
     terms = _terms(lex or "")
 
     unit_type_filter = _requested_unit_type(parsed_facets, candidate_kind)
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = _select_unit_rows(conn, terms, unit_type_filter)
 
@@ -552,7 +643,7 @@ def get_trace_map(trace_id: str, *, index_path: Path | None = None) -> TraceMap 
     db_path = index_path or default_index_path()
     if not db_path.exists():
         return None
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         nodes = [
             TraceMapNode.model_validate_json(row["payload"])
@@ -584,7 +675,7 @@ def get_unit(unit_id: str, *, index_path: Path | None = None) -> TraceUnit | Non
     db_path = index_path or default_index_path()
     if not db_path.exists():
         return None
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "select * from units where unit_id = ?",
@@ -597,7 +688,7 @@ def get_map_node(node_id: str, *, index_path: Path | None = None) -> TraceMapNod
     db_path = index_path or default_index_path()
     if not db_path.exists():
         return None
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         row = conn.execute(
             "select payload from trace_map_nodes where node_id = ?",
             (node_id,),
@@ -609,7 +700,7 @@ def get_trace_path(trace_id: str, *, index_path: Path | None = None) -> Path | N
     db_path = index_path or default_index_path()
     if not db_path.exists():
         return None
-    with sqlite3.connect(db_path) as conn:
+    with _connect(db_path) as conn:
         row = conn.execute(
             "select trace_path from traces where trace_id = ?",
             (trace_id,),
@@ -633,7 +724,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         create table trail_sources (
             project_slug text primary key,
             repo_path text not null,
-            ref_sha text not null
+            ref_sha text not null,
+            limitations_json text not null default '[]'
         );
         create table traces (
             trace_id text primary key,
@@ -775,16 +867,47 @@ def _rebuild_trail_projection(
     project_slug: str,
     source_repo: Path,
 ) -> None:
-    ref_sha = _trail_event_ref_sha(source_repo)
-    if not ref_sha:
+    """Rebuild the trail projection rows for ``project_slug``.
+
+    Cluster A — A1: previously ``_build_trail_units`` swallowed every
+    OSError/RuntimeError/ValueError/ValidationError/SubprocessError and
+    returned ``[]``, after which ``_record_trail_source`` was *still*
+    called. The cache then claimed it was fresh while holding zero units;
+    the next refresh saw a matching ref_sha and skipped the rebuild,
+    persisting the bad state forever. Now ``_build_trail_units`` raises
+    those errors; we catch here, leave ``trail_sources`` untouched
+    (intentional: next refresh retries), and propagate nothing further.
+
+    Cluster A — A2: capture the post-rebuild ref. If the trail event log
+    advanced *during* the rebuild (because the watcher / post-commit hook
+    appended new events), record the post-rebuild head and tag the row
+    with the structured ``trail_event_ref_advanced_during_rebuild``
+    limitation so consumers can detect the case.
+    """
+    pre_ref_sha = _trail_event_ref_sha(source_repo)
+    if not pre_ref_sha:
         conn.execute("delete from trail_sources where project_slug = ?", (project_slug,))
         return
-    trail_units = _build_trail_units(source_repo, project_slug)
+
+    try:
+        trail_units = _build_trail_units(source_repo, project_slug)
+    except (OSError, RuntimeError, ValueError, ValidationError, subprocess.SubprocessError):
+        # Build failed — leave trail_sources untouched so the next refresh
+        # retries instead of marking a stale-but-empty cache as fresh.
+        return
+
     for trail_map in _trail_maps_from_units(trail_units):
         _insert_trail_map(conn, trail_map)
     for unit in trail_units:
         _insert_unit(conn, unit)
-    _record_trail_source(conn, project_slug, source_repo, ref_sha)
+
+    post_ref_sha = _trail_event_ref_sha(source_repo) or pre_ref_sha
+    limitations: list[str] = []
+    if post_ref_sha != pre_ref_sha:
+        limitations.append("trail_event_ref_advanced_during_rebuild")
+    _record_trail_source(
+        conn, project_slug, source_repo, post_ref_sha, limitations=limitations
+    )
 
 
 def _refresh_trail_projection(
@@ -813,13 +936,20 @@ def _record_trail_source(
     project_slug: str,
     source_repo: Path,
     ref_sha: str,
+    *,
+    limitations: list[str] | None = None,
 ) -> None:
     conn.execute(
         """
-        insert or replace into trail_sources(project_slug, repo_path, ref_sha)
-        values (?, ?, ?)
+        insert or replace into trail_sources(project_slug, repo_path, ref_sha, limitations_json)
+        values (?, ?, ?, ?)
         """,
-        (project_slug, str(source_repo.resolve()), ref_sha),
+        (
+            project_slug,
+            str(source_repo.resolve()),
+            ref_sha,
+            json.dumps(sorted(set(limitations or []))),
+        ),
     )
 
 
@@ -1410,12 +1540,17 @@ def _tool_sequence_unit(
 
 
 def _build_trail_units(repo: Path, project_slug: str) -> list[TraceUnit]:
-    try:
-        from .trails import build_trail_query_projection
+    """Project the canonical TrailEvent log into queryable Trace Units.
 
-        projection = build_trail_query_projection(repo)
-    except (OSError, RuntimeError, ValueError, ValidationError, subprocess.SubprocessError):
-        return []
+    Cluster A — A1: this used to ``except`` every error and silently
+    return ``[]``. The bare-except is gone: callers (only
+    ``_rebuild_trail_projection``) now catch and handle failures
+    explicitly so the cache is never recorded as ``fresh-but-empty``.
+    Tests pin the contract.
+    """
+    from .trails import build_trail_query_projection
+
+    projection = build_trail_query_projection(repo)
 
     units: list[TraceUnit] = []
     for patch in projection.patches_by_id.values():
@@ -1487,6 +1622,25 @@ def _build_trail_units(repo: Path, project_slug: str) -> list[TraceUnit]:
             continue
         file_path = anchor.get("file_path") or anchor.get("path")
         commit_sha = anchor.get("commit_sha")
+        # Cluster A — A4: enrich the anchor row with the current survival
+        # state so the resulting facet reflects what ``trail sync`` would
+        # report. ``with_current_survival`` is read-only against Git; we
+        # absorb its failures and fall back to ``unknown`` so a failing
+        # syncer never poisons the indexer.
+        survival_row = _anchor_with_survival(projection, anchor)
+        survival_state = (
+            (survival_row.get("current_survival") or {}).get("survival_state")
+            or survival_row.get("survival_state")
+            or "unknown"
+        )
+        anchor_facets = _trail_facets(survival_row)
+        anchor_facets.append(
+            TraceFacet(
+                name="trail.survival_state",
+                value=str(survival_state),
+                source="trail_projection",
+            )
+        )
         units.append(
             TraceUnit(
                 unit_id=f"tu:{trace_id}:git-anchor:{anchor_id}",
@@ -1503,11 +1657,12 @@ def _build_trail_units(repo: Path, project_slug: str) -> list[TraceUnit]:
                         commit_sha,
                         anchor.get("evidence_tier"),
                         anchor.get("evidence_firmness"),
+                        survival_state,
                     )
                     if value
                 ),
                 artifact_text=" ".join(str(value) for value in (file_path, commit_sha) if value),
-                facets=_trail_facets(anchor),
+                facets=anchor_facets,
                 signals=[
                     TraceSignal(
                         name="trail_git_anchored",
@@ -1516,11 +1671,31 @@ def _build_trail_units(repo: Path, project_slug: str) -> list[TraceUnit]:
                         evidence_refs=list(_trail_refs(anchor)),
                     )
                 ],
-                metadata=_trail_metadata(anchor),
+                metadata=_trail_metadata(survival_row),
                 trail_refs=list(_trail_refs(anchor)),
             )
         )
     return units
+
+
+def _anchor_with_survival(
+    projection: Any, anchor: dict[str, Any]
+) -> dict[str, Any]:
+    """Return ``anchor`` augmented with ``current_survival`` if available.
+
+    Cluster A — A4: ``TrailQueryProjection.with_current_survival`` runs
+    ``sync_patch`` against Git which is read-only but can raise on broken
+    refs / interrupted writes. Wrap with a defensive try/except so the
+    indexer never explodes on a single misbehaving anchor; fall back to
+    a copy of the input row tagged with ``survival_state=unknown``.
+    """
+    try:
+        return projection.with_current_survival(anchor)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
+        fallback = dict(anchor)
+        fallback["current_survival"] = {"survival_state": "unknown"}
+        fallback["survival_state"] = "unknown"
+        return fallback
 
 
 def _trail_facets(row: dict[str, Any]) -> list[TraceFacet]:
@@ -1580,7 +1755,17 @@ def _trail_metadata(row: dict[str, Any]) -> dict[str, Any]:
         "range",
         "line_origin",
     )
-    return {key: row.get(key) for key in keys if row.get(key) is not None}
+    out = {key: row.get(key) for key in keys if row.get(key) is not None}
+    # Cluster A — A4: surface the originating ``event_time`` as
+    # ``timestamp_start`` / ``timestamp_end`` so ``--since`` filters can age
+    # patch / git_anchor candidates the same way they age trace units.
+    event_time = row.get("event_time")
+    patch_event_time = row.get("trace_patch_event_time") or event_time
+    if patch_event_time:
+        out["timestamp_start"] = patch_event_time
+    if event_time:
+        out["timestamp_end"] = event_time
+    return out
 
 
 def _trail_maps_from_units(units: list[TraceUnit]) -> list[TraceMap]:
@@ -2405,11 +2590,26 @@ def _observation_summaries(record: TraceRecord) -> list[str]:
     return summaries
 
 
-def _candidate_kind(unit: TraceUnit) -> str | None:
+def _candidate_kind(unit: TraceUnit) -> str:
+    """Return the canonical candidate kind for ``unit``.
+
+    Cluster A — A4 + A5: surfaces patches/git_anchors as queryable
+    candidates and guarantees that no candidate ever has a ``null``
+    candidate_kind. Priority order:
+
+    1. ``bug_fix`` if the signal-derived label fires (back-compat).
+    2. The unit type itself for the M1 closed vocabulary
+       (``patch``, ``git_anchor``, ``trace``, ``trace_slice``,
+       ``trace_intent_candidate``, ``skill_invocation``,
+       ``tool_sequence``, ``test_or_error_signal``, ``trace_map_node``).
+    3. ``trace`` as a final fallback so the value is always non-null.
+    """
     signal_names = {signal.name for signal in unit.signals}
     if "tested_successful_fix_candidate" in signal_names:
         return "bug_fix"
-    return None
+    if unit.unit_type in _M1_UNIT_TYPES:
+        return unit.unit_type
+    return "trace"
 
 
 def _match_explanation(matched_fields: dict[str, list[str]], unit: TraceUnit) -> str:
