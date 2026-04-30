@@ -243,7 +243,10 @@ def test_trail_sync_patch_aggregates_multiple_anchor_observations(tmp_path: Path
     assert payload["current_survival"]["aggregation"] == "any_alive_anchor_wins"
 
 
-def test_trail_sync_unknown_for_unreachable_anchor_commit(tmp_path: Path) -> None:
+def test_trail_sync_orphan_branch_for_unreachable_anchor_commit(tmp_path: Path) -> None:
+    """Cluster C-2: an anchor commit that is not in HEAD's ancestry now
+    reports the specific ``orphan_branch`` state instead of the generic
+    ``unknown``."""
     _init_repo(tmp_path)
     authored = "    return 'unknown-phase-four'\n"
     _append_patch(tmp_path, patch_id="unknown", authored=authored)
@@ -274,7 +277,7 @@ def test_trail_sync_unknown_for_unreachable_anchor_commit(tmp_path: Path) -> Non
     payload = _sync(tmp_path, "--patch", "tracepatch-sha256:unknown")
 
     current = payload["current_survival"]
-    assert current["survival_state"] == "unknown"
+    assert current["survival_state"] == "orphan_branch"
     assert "anchor_commit_not_reachable_from_head" in current["limitations"]
 
 

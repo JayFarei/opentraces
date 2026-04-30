@@ -22,7 +22,18 @@ PHASE5_SURVIVAL_STATES = [
     "partially_preserved",
     "repaired",
 ]
-ALL_SURVIVAL_STATES = PHASE4_SURVIVAL_STATES + PHASE5_SURVIVAL_STATES + ["orphaned"]
+# Cluster C — split unknown into specific causes.
+SPLIT_UNKNOWN_SURVIVAL_STATES = [
+    "orphan_branch",
+    "missing_authored_text",
+    "never_committed",
+]
+ALL_SURVIVAL_STATES = (
+    PHASE4_SURVIVAL_STATES
+    + PHASE5_SURVIVAL_STATES
+    + SPLIT_UNKNOWN_SURVIVAL_STATES
+    + ["orphaned"]
+)
 # Phase 5 reserves "orphaned" for reference-transaction observation
 # (deferred beyond Phase 5 — see plan §Phase 5 line 248).
 RESERVED_PHASE5_SURVIVAL_STATES = ["orphaned"]
@@ -37,6 +48,11 @@ SURVIVAL_PRECEDENCE = {
     "repaired": 32,
     "reverted": 30,
     "lost": 20,
+    # Below: split-unknown variants are still less informative than concrete
+    # observations. Order picks the most-specific cause when two are tied.
+    "orphan_branch": 15,
+    "missing_authored_text": 12,
+    "never_committed": 11,
     "unknown": 10,
 }
 
@@ -210,6 +226,18 @@ def _commit_author_email(repo: Path, commit: str) -> str | None:
     return out or None
 
 
+def _retention_fraction(preserved: int, authored: int) -> float | None:
+    """Return ``preserved/authored`` rounded to 3dp, or ``None`` when undefined.
+
+    Cluster C-3: every observation whose state implies *some* survival
+    (alive_on_path, alive_transformed, alive_moved, partially_preserved)
+    carries this fraction so reviewers can sort by lineage strength.
+    """
+    if authored <= 0:
+        return None
+    return round(preserved / authored, 3)
+
+
 def _count_preserved_lines(authored_lines: list[str], current_text: str) -> int:
     """Count authored lines that survive (whitespace-stripped) anywhere in
     the current file. Empty lines do not contribute to the count.
@@ -267,14 +295,18 @@ def _compute_survival(
 
     if not anchor_commit or not path or observed_commit_id is None:
         limitations.append("missing_git_survival_inputs")
-        return {**base, "survival_state": "unknown"}
+        # Cluster C-2: keep ``unknown`` as the fallback for the genuinely
+        # indeterminate case (no anchor commit, no path, no observed ref).
+        return {**base, "survival_state": "unknown", "retention_fraction": None}
     if not _git_ok(repo, "merge-base", "--is-ancestor", anchor_commit, observed_ref):
         limitations.append(
             "anchor_commit_not_reachable_from_head"
             if observed_ref == "HEAD"
             else "anchor_commit_not_reachable_from_observed_ref"
         )
-        return {**base, "survival_state": "unknown"}
+        # Cluster C-2: anchor exists but is on a branch not in HEAD's
+        # ancestry. ``orphan_branch`` is the specific signal.
+        return {**base, "survival_state": "orphan_branch", "retention_fraction": None}
 
     revert_commit, revert_search_truncated = _find_revert_commit(
         repo,
@@ -287,7 +319,13 @@ def _compute_survival(
     authored_lines = _authored_lines(patch)
     if not authored_lines:
         limitations.append("missing_authored_text")
-        return {**base, "survival_state": "unknown"}
+        # Cluster C-2: anchor reachable, but the patch event has no
+        # authored content to compare against — call this out explicitly.
+        return {
+            **base,
+            "survival_state": "missing_authored_text",
+            "retention_fraction": None,
+        }
 
     current_text = _show_file(repo, observed_ref, path)
     if current_text is None:
@@ -311,14 +349,18 @@ def _compute_survival(
                         "rename_hops": rename_hops,
                         "preserved_line_count": preserved,
                         "authored_line_count": len(authored_lines),
+                        "retention_fraction": _retention_fraction(
+                            preserved, len(authored_lines)
+                        ),
                     }
         if revert_commit:
             return {
                 **base,
                 "survival_state": "reverted",
                 "revert_commit_id": _oid(revert_commit),
+                "retention_fraction": None,
             }
-        return {**base, "survival_state": "lost"}
+        return {**base, "survival_state": "lost", "retention_fraction": None}
 
     current_lines = current_text.splitlines()
     start = anchor_range.get("start_line")
@@ -328,7 +370,11 @@ def _compute_survival(
     if isinstance(start, int) and isinstance(end, int) and start >= 1 and end >= start:
         current_range = current_lines[start - 1 : end]
         if current_range == authored_lines:
-            return {**base, "survival_state": "alive_on_path"}
+            return {
+                **base,
+                "survival_state": "alive_on_path",
+                "retention_fraction": 1.0,
+            }
         if len(current_lines) >= start:
             range_exists = True
             anchor_email = _commit_author_email(repo, anchor_commit)
@@ -349,6 +395,9 @@ def _compute_survival(
                     "repair_committer_email": sorted(non_anchor_committers)[0],
                     "repair_committers": sorted(non_anchor_committers),
                     "anchor_author_email": anchor_email,
+                    "retention_fraction": _retention_fraction(
+                        preserved, len(authored_lines)
+                    ),
                 }
 
     if preserved == 0 and revert_commit:
@@ -356,6 +405,7 @@ def _compute_survival(
             **base,
             "survival_state": "reverted",
             "revert_commit_id": _oid(revert_commit),
+            "retention_fraction": None,
         }
     if 0 < preserved < len(authored_lines):
         return {
@@ -363,18 +413,27 @@ def _compute_survival(
             "survival_state": "partially_preserved",
             "preserved_line_count": preserved,
             "authored_line_count": len(authored_lines),
+            "retention_fraction": _retention_fraction(
+                preserved, len(authored_lines)
+            ),
         }
     if range_exists:
-        return {**base, "survival_state": "alive_transformed"}
+        return {
+            **base,
+            "survival_state": "alive_transformed",
+            "retention_fraction": _retention_fraction(
+                preserved, len(authored_lines)
+            ),
+        }
 
-    return {**base, "survival_state": "lost"}
+    return {**base, "survival_state": "lost", "retention_fraction": None}
 
 
 def _aggregate_current_survival(
     indexed_observations: list[tuple[int, dict[str, Any]]],
 ) -> dict[str, Any]:
     if not indexed_observations:
-        return {"survival_state": "unknown"}
+        return {"survival_state": "unknown", "retention_fraction": None}
     best_index, best = max(
         indexed_observations,
         key=lambda item: (
@@ -505,6 +564,7 @@ def _sync(
     trace_patch_id: str | None = None,
     git_anchor_id: str | None = None,
     history_limit: int | None = None,
+    events: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Sync a Trace Patch against Git history and report survival.
 
@@ -527,7 +587,8 @@ def _sync(
     """
     effective_limit = history_limit if history_limit is not None else PATCH_TRAIL_COMMIT_LIMIT
     head_id = _head_id(repo)
-    events = read_events(repo)
+    if events is None:
+        events = read_events(repo)
     patches: dict[str, tuple[dict[str, Any], Any]] = {}
     anchors: list[tuple[dict[str, Any], Any]] = []
     if trace_patch_id:
@@ -563,7 +624,7 @@ def _sync(
             "trace_patch_id": trace_patch_id,
             "git_anchor_id": git_anchor_id,
             "relation": "unknown",
-            "current_survival": {"survival_state": "unknown"},
+            "current_survival": {"survival_state": "unknown", "retention_fraction": None},
             "current_observations": [],
             "observations": [],
             "observation_scope": OBSERVATION_SCOPE,
@@ -578,11 +639,31 @@ def _sync(
 
     patch, patch_event = patch_pair
     if not anchors:
+        # Cluster C-2: a Trace Patch with no Git Anchor is one of two
+        # things — ``never_committed`` if the file the patch claimed to
+        # touch still exists in HEAD (the patch was authored, then
+        # superseded intra-trace before any commit captured it), or
+        # ``unknown`` when we cannot tell (no path, no HEAD, file gone).
+        patch_path = patch.get("file_path")
+        survival_state = "unknown"
+        survival_limitations: list[str] = []
+        if patch_path and head_id is not None:
+            current_text = _show_file(repo, "HEAD", patch_path)
+            if current_text is not None:
+                survival_state = "never_committed"
+                survival_limitations.append("no_git_anchor_event")
+        current_survival: dict[str, Any] = {
+            "survival_state": survival_state,
+            "retention_fraction": None,
+            "limitations": survival_limitations,
+        }
+        if patch_path:
+            current_survival["path"] = patch_path
         return {
             "trace_patch_id": id_from_payload(patch, "trace_patch"),
             "git_anchor_id": git_anchor_id,
             "relation": "unknown",
-            "current_survival": {"survival_state": "unknown"},
+            "current_survival": current_survival,
             "current_observations": [],
             "observations": [],
             "observation_scope": OBSERVATION_SCOPE,
@@ -649,9 +730,20 @@ def sync_patch(
     trace_patch_id: str,
     *,
     history_limit: int | None = None,
+    events: list[Any] | None = None,
 ) -> dict[str, Any]:
-    """Sync survival for all Git Anchors attached to a Trace Patch."""
-    return _sync(repo, trace_patch_id=trace_patch_id, history_limit=history_limit)
+    """Sync survival for all Git Anchors attached to a Trace Patch.
+
+    ``events`` is an optional pre-loaded TrailEvent list. Batch callers
+    that survey many patches in one shot can read events once and pass
+    the list in to amortize the read cost (Cluster C-1).
+    """
+    return _sync(
+        repo,
+        trace_patch_id=trace_patch_id,
+        history_limit=history_limit,
+        events=events,
+    )
 
 
 def sync_anchor(
@@ -659,6 +751,15 @@ def sync_anchor(
     git_anchor_id: str,
     *,
     history_limit: int | None = None,
+    events: list[Any] | None = None,
 ) -> dict[str, Any]:
-    """Sync survival for one Git Anchor."""
-    return _sync(repo, git_anchor_id=git_anchor_id, history_limit=history_limit)
+    """Sync survival for one Git Anchor.
+
+    See ``sync_patch`` for the optional ``events`` cache.
+    """
+    return _sync(
+        repo,
+        git_anchor_id=git_anchor_id,
+        history_limit=history_limit,
+        events=events,
+    )

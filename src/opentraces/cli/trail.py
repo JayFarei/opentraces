@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,181 @@ import click
 
 from ._help import OpentracesCommand, OpentracesGroup
 from ..clients.text.colors import Role, detect_color, paint, render_handle
+
+
+def _parse_track_since(value: str) -> datetime:
+    """Parse a duration like ``12h`` / ``30m`` / ``2d`` / ``60s`` or an ISO
+    timestamp into a UTC ``datetime`` cutoff for batch ``trail track``.
+
+    Mirrors the trace-index parser but adds ``s`` (seconds) so the batch
+    surface can be exercised with short windows in tests.
+    """
+    stripped = value.strip()
+    now = datetime.now(timezone.utc)
+    duration = re.fullmatch(r"(\d+)([smhd])", stripped.lower())
+    if duration:
+        amount = int(duration.group(1))
+        unit = duration.group(2)
+        if unit == "s":
+            return now - timedelta(seconds=amount)
+        if unit == "m":
+            return now - timedelta(minutes=amount)
+        if unit == "h":
+            return now - timedelta(hours=amount)
+        return now - timedelta(days=amount)
+    try:
+        parsed = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            "--since must be an ISO date/time or duration like 12h, 30m, 2d, 60s"
+        ) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _event_time_to_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _read_patches_from_file(path: Path) -> list[str]:
+    """Accept either ``one id per line`` or JSONL with ``patch_id`` field."""
+    text = path.read_text()
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("{"):
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            patch_id = (
+                obj.get("patch_id")
+                or obj.get("trace_patch_id")
+                or obj.get("id")
+            )
+            if isinstance(patch_id, str) and patch_id and patch_id not in seen:
+                out.append(patch_id)
+                seen.add(patch_id)
+            continue
+        if line not in seen:
+            out.append(line)
+            seen.add(line)
+    return out
+
+
+def _collect_event_log_patch_ids(
+    repo: Path,
+    *,
+    since: datetime | None = None,
+) -> list[str]:
+    """Return patch ids from the project's TrailEvent log.
+
+    When ``since`` is provided, only Trace Patches whose ``event_time`` is
+    on/after the cutoff are included. Order preserves event_sequence so
+    the most recent patches appear last.
+    """
+    from ..core.trails import read_events
+
+    events = read_events(repo)
+    out: list[str] = []
+    seen: set[str] = set()
+    for event in events:
+        if event.event_type != "trace_patch_created":
+            continue
+        if since is not None:
+            event_dt = _event_time_to_dt(event.event_time)
+            if event_dt is None or event_dt < since:
+                continue
+        patch_id = event.payload.get("trace_patch_id")
+        if isinstance(patch_id, str) and patch_id and patch_id not in seen:
+            out.append(patch_id)
+            seen.add(patch_id)
+    return out
+
+
+def _emit_batch_track(
+    repo: Path,
+    patch_ids: list[str],
+    *,
+    history_limit: int | None,
+) -> None:
+    """Run ``sync_patch`` for every id and emit one JSON line per patch.
+
+    Emitting JSONL here (not pretty-printed JSON) is the contract: each
+    line is a wrapped sync payload, friendly to ``jq -s`` and to scripted
+    summaries. The raw input id is preserved at top level so callers can
+    correlate rows with their input list even after normalization. Errors
+    per-patch are returned in ``error`` instead of crashing the whole batch.
+
+    Reads the project's TrailEvent log once and threads the result into
+    ``sync_patch`` so a batch of 100+ patches doesn't pay the read cost
+    100+ times.
+    """
+    from ..core.trails import read_events, sync_patch
+
+    try:
+        cached_events = read_events(repo)
+    except Exception:
+        cached_events = None
+
+    for patch_id in patch_ids:
+        try:
+            payload = sync_patch(
+                repo,
+                patch_id,
+                history_limit=history_limit,
+                events=cached_events,
+            )
+        except Exception as exc:  # noqa: BLE001 — keep the batch alive
+            payload = {
+                "trace_patch_id": patch_id,
+                "error": str(exc),
+                "current_survival": {"survival_state": "unknown"},
+            }
+        if isinstance(payload, dict):
+            # Always echo back the caller-supplied id so JSONL consumers
+            # can group rows back to their input even when sync_patch
+            # normalizes the canonical id.
+            payload["trace_patch_id"] = patch_id
+        # Emit one JSON object per line (no indent) so jq -s can stream.
+        click.echo(json.dumps(payload, sort_keys=True))
+
+
+def _audit_trail_capture(repo: Path, trace_id: str) -> dict[str, Any]:
+    """Compare ``file_edit`` events to ``trace_patch_created`` for one trace.
+
+    Returns a dict with ``file_edits_count``, ``patch_created_count``, and
+    ``incomplete`` (True when file_edits > 0 AND patch_created == 0). This
+    is the C-4 signal that surfaces missing-capture bugs early.
+    """
+    from ..core.trails import read_events
+
+    file_edits = 0
+    patches = 0
+    for event in read_events(repo):
+        if event.trace_id != trace_id:
+            continue
+        if event.event_type == "file_edit":
+            file_edits += 1
+        elif event.event_type == "trace_patch_created":
+            patches += 1
+    return {
+        "file_edits_count": file_edits,
+        "patch_created_count": patches,
+        "incomplete": file_edits > 0 and patches == 0,
+    }
 
 
 @click.group("trail", cls=OpentracesGroup)
@@ -515,15 +692,31 @@ def _render_explain_step(payload: dict[str, Any]) -> str:
         "opentraces trail track tr1 --step 2",
         "opentraces trail track --patch 4f2ff654...",
         "opentraces trail track --anchor 8354f2b0...",
-        "opentraces trail track tr1 --silent",
+        "opentraces trail track --since 12h --json",
+        "opentraces trail track --all --json --limit 50",
+        "opentraces trail track --patches-from patches.txt --json",
+        "opentraces trail track tr1 --warn-missing-patches --json",
     ],
     see_also=[
         ("opentraces trail blame", "map commits/files back to producing traces."),
         ("opentraces trail graph", "render commit + trace history."),
     ],
     option_groups=[
-        ("Scope", ["trace_id", "trace_patch_id", "git_anchor_id", "step_index", "project_dir"]),
-        ("Output", ["silent", "as_table", "as_json"]),
+        (
+            "Scope",
+            [
+                "trace_id",
+                "trace_patch_id",
+                "git_anchor_id",
+                "step_index",
+                "project_dir",
+            ],
+        ),
+        ("Batch", ["since", "patches_from", "all_patches", "limit"]),
+        (
+            "Output",
+            ["silent", "as_table", "as_json", "warn_missing_patches"],
+        ),
         ("History", ["history_limit"]),
     ],
 )
@@ -546,6 +739,47 @@ def _render_explain_step(payload: dict[str, Any]) -> str:
     default=None,
     type=int,
     help="With TRACE_ID: focus on a single trace step's evidence.",
+)
+@click.option(
+    "--since",
+    "since",
+    default=None,
+    help=(
+        "Batch: track every Trace Patch whose event_time falls within the "
+        "duration window (e.g. 12h, 30m, 2d, 60s) or after an ISO timestamp."
+    ),
+)
+@click.option(
+    "--patches-from",
+    "patches_from",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    help=(
+        "Batch: read patch ids from FILE (one id per line, or JSONL with a "
+        "patch_id / trace_patch_id field)."
+    ),
+)
+@click.option(
+    "--all",
+    "all_patches",
+    is_flag=True,
+    help="Batch: track every Trace Patch in the project's trail.",
+)
+@click.option(
+    "--limit",
+    "limit",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Batch: cap the number of patches emitted.",
+)
+@click.option(
+    "--warn-missing-patches",
+    "warn_missing_patches",
+    is_flag=True,
+    help=(
+        "With TRACE_ID: surface a structured warning when the trace has "
+        "file_edits but zero trace_patch_created events (capture incomplete)."
+    ),
 )
 @click.option(
     "--silent",
@@ -574,6 +808,11 @@ def track_cmd(
     trace_patch_id: str | None,
     git_anchor_id: str | None,
     step_index: int | None,
+    since: str | None,
+    patches_from: Path | None,
+    all_patches: bool,
+    limit: int | None,
+    warn_missing_patches: bool,
     silent: bool,
     as_table: bool,
     as_json: bool,
@@ -582,11 +821,16 @@ def track_cmd(
 ) -> None:
     """Walk and render trace lineage through Git history.
 
-    Three scopes:
+    Single-target scopes:
       * ``track <TRACE_ID>``        — full trace lineage (default)
       * ``track <TRACE_ID> --step N`` — single step's evidence
       * ``track --patch <ID>``      — one Trace Patch's survival
       * ``track --anchor <ID>``     — one Git Anchor's survival
+
+    Batch scopes (emit one JSON line per patch — stream into ``jq -s``):
+      * ``track --since 12h``       — every patch within the time window
+      * ``track --all``             — every Trace Patch in the trail
+      * ``track --patches-from FILE`` — ids from a text or JSONL file
 
     ``--silent`` runs the operation without printing — useful from
     scripts and CI. ``--json`` emits the full structured payload.
@@ -602,7 +846,69 @@ def track_cmd(
         click.echo("Provide only one of --table or --json.", err=True)
         sys.exit(2)
 
+    batch_flags = sum(1 for f in (since, patches_from, all_patches) if f)
     selectors = sum(1 for s in (trace_id, trace_patch_id, git_anchor_id) if s)
+
+    if batch_flags > 0:
+        if batch_flags > 1:
+            click.echo(
+                "Provide only one of --since, --patches-from, or --all "
+                "(batch scopes are mutually exclusive).",
+                err=True,
+            )
+            sys.exit(2)
+        if selectors > 0:
+            click.echo(
+                "Batch flags (--since/--patches-from/--all) cannot be combined "
+                "with TRACE_ID/--patch/--anchor — pick one scope.",
+                err=True,
+            )
+            sys.exit(2)
+        if as_table:
+            click.echo(
+                "--table is only valid with the full-trace view, not batch.",
+                err=True,
+            )
+            sys.exit(2)
+        if step_index is not None:
+            click.echo(
+                "--step is per-trace, not a batch flag.",
+                err=True,
+            )
+            sys.exit(2)
+        if warn_missing_patches:
+            click.echo(
+                "--warn-missing-patches requires a TRACE_ID; it is not a "
+                "batch-scoped flag.",
+                err=True,
+            )
+            sys.exit(2)
+
+        repo = Path(project_dir or Path.cwd()).resolve()
+        try:
+            if since is not None:
+                cutoff = _parse_track_since(since)
+                patch_ids = _collect_event_log_patch_ids(repo, since=cutoff)
+            elif patches_from is not None:
+                patch_ids = _read_patches_from_file(patches_from)
+            else:
+                patch_ids = _collect_event_log_patch_ids(repo)
+        except ValueError as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(2)
+        except Exception as exc:
+            click.echo(f"Unable to enumerate patches: {exc}", err=True)
+            sys.exit(2)
+
+        if limit is not None:
+            patch_ids = patch_ids[:limit]
+
+        if silent:
+            return
+
+        _emit_batch_track(repo, patch_ids, history_limit=history_limit)
+        return
+
     if selectors == 0:
         click.echo("Provide TRACE_ID, --patch, or --anchor.", err=True)
         sys.exit(2)
@@ -614,6 +920,18 @@ def track_cmd(
         sys.exit(2)
     if as_table and (trace_patch_id or git_anchor_id or step_index is not None):
         click.echo("--table is only valid with the full-trace view.", err=True)
+        sys.exit(2)
+    if warn_missing_patches and not trace_id:
+        click.echo(
+            "--warn-missing-patches requires a TRACE_ID (per-trace audit).",
+            err=True,
+        )
+        sys.exit(2)
+    if limit is not None:
+        click.echo(
+            "--limit is only valid in batch mode (--since/--all/--patches-from).",
+            err=True,
+        )
         sys.exit(2)
 
     repo = Path(project_dir or Path.cwd()).resolve()
@@ -638,6 +956,18 @@ def track_cmd(
         click.echo(f"Unable to track trail: {exc}", err=True)
         sys.exit(2)
 
+    if warn_missing_patches and trace_id:
+        try:
+            audit = _audit_trail_capture(repo, trace_id)
+        except Exception as exc:
+            audit = {"error": str(exc), "incomplete": False}
+        if isinstance(payload, dict):
+            payload.setdefault("trail_capture_audit", audit)
+            limitations = list(payload.get("limitations") or [])
+            if audit.get("incomplete") and "trail_capture_incomplete" not in limitations:
+                limitations.append("trail_capture_incomplete")
+                payload["limitations"] = limitations
+
     if silent:
         return
 
@@ -647,12 +977,30 @@ def track_cmd(
 
     if renderer is not None:
         click.echo(renderer(payload))
+        if warn_missing_patches and isinstance(payload, dict) and "trail_capture_incomplete" in (
+            payload.get("limitations") or []
+        ):
+            audit = payload.get("trail_capture_audit") or {}
+            click.echo(
+                "  warning: trail_capture_incomplete "
+                f"(file_edits={audit.get('file_edits_count')}, "
+                f"patches={audit.get('patch_created_count')})"
+            )
         return
 
     if as_table:
         click.echo(_render_trail_play_table(payload))
         return
     click.echo(_render_trail_play_graph(repo, payload))
+    if warn_missing_patches and isinstance(payload, dict) and "trail_capture_incomplete" in (
+        payload.get("limitations") or []
+    ):
+        audit = payload.get("trail_capture_audit") or {}
+        click.echo(
+            "  warning: trail_capture_incomplete "
+            f"(file_edits={audit.get('file_edits_count')}, "
+            f"patches={audit.get('patch_created_count')})"
+        )
 
 
 @trail_group.group("teleport", cls=OpentracesGroup, hidden=True)
