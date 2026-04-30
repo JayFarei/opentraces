@@ -238,6 +238,61 @@ def _retention_fraction(preserved: int, authored: int) -> float | None:
     return round(preserved / authored, 3)
 
 
+def _resolve_lost_attribution(
+    repo: Path,
+    *,
+    anchor_commit: str,
+    path: str,
+    observed_ref: str,
+    authored_lines: list[str],
+    cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
+) -> tuple[str | None, str]:
+    """Cluster F D2/D3 — return ``(killer_commit_sha, lost_kind)``.
+
+    ``lost_kind`` is one of ``file_deleted`` or ``hunk_removed``. The
+    killer commit is resolved only for ``file_deleted`` (the cheap case:
+    one ``git log --diff-filter=D`` lookup). For ``hunk_removed`` we
+    deliberately leave the killer as ``None`` — line-level attribution
+    via ``git log -L`` is far slower and ambiguous when multiple
+    intervening commits touched the range.
+
+    The ``cache`` dict, when provided, is keyed by ``(path, anchor, head)``
+    so a batch ``trail track --since`` survey reuses one resolver result
+    across every patch on the same file.
+    """
+    head_sha = _git(repo, "rev-parse", observed_ref, check=False).strip()
+    cache_key = (path, anchor_commit, head_sha)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
+
+    # Cheap probe: does the file exist at observed_ref?
+    file_text_at_head = _show_file(repo, observed_ref, path)
+    if file_text_at_head is None:
+        # File deleted somewhere between anchor and observed_ref.
+        # ``git log --diff-filter=D --format=%H -1 -- <path>`` finds
+        # the most recent deletion of <path> reachable from observed_ref.
+        out = _git(
+            repo,
+            "log",
+            f"{anchor_commit}..{observed_ref}",
+            "--diff-filter=D",
+            "--format=%H",
+            "-1",
+            "--",
+            path,
+            check=False,
+        ).strip()
+        sha = out.splitlines()[0].strip() if out else None
+        result = (sha or None, "file_deleted")
+    else:
+        # File alive ⇒ classify as hunk_removed and skip line-walk.
+        result = (None, "hunk_removed")
+
+    if cache is not None:
+        cache[cache_key] = result
+    return result
+
+
 def _count_preserved_lines(authored_lines: list[str], current_text: str) -> int:
     """Count authored lines that survive (whitespace-stripped) anywhere in
     the current file. Empty lines do not contribute to the count.
@@ -263,6 +318,7 @@ def _compute_survival(
     observed_ref: str = "HEAD",
     head_id: dict[str, str] | None = None,
     observed_commit_time: int | None = None,
+    lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
 ) -> dict[str, Any]:
     observed_commit_id = _commit_id(repo, observed_ref)
     if head_id is None:
@@ -342,6 +398,9 @@ def _compute_survival(
             if moved_text is not None:
                 preserved = _count_preserved_lines(authored_lines, moved_text)
                 if preserved > 0:
+                    moved_fraction = _retention_fraction(
+                        preserved, len(authored_lines)
+                    )
                     return {
                         **base,
                         "survival_state": "alive_moved",
@@ -349,9 +408,9 @@ def _compute_survival(
                         "rename_hops": rename_hops,
                         "preserved_line_count": preserved,
                         "authored_line_count": len(authored_lines),
-                        "retention_fraction": _retention_fraction(
-                            preserved, len(authored_lines)
-                        ),
+                        "retention_fraction": moved_fraction,
+                        "retention_fraction_at_original_range": moved_fraction,
+                        "retention_fraction_at_anchor": moved_fraction,
                     }
         if revert_commit:
             return {
@@ -360,7 +419,26 @@ def _compute_survival(
                 "revert_commit_id": _oid(revert_commit),
                 "retention_fraction": None,
             }
-        return {**base, "survival_state": "lost", "retention_fraction": None}
+        # Cluster F D2/D3: surface killer commit + lost_kind for the
+        # file-deleted branch (the cheap case — one git log call).
+        killer, lost_kind = _resolve_lost_attribution(
+            repo,
+            anchor_commit=anchor_commit,
+            path=path,
+            observed_ref=observed_ref,
+            authored_lines=authored_lines,
+            cache=lost_attribution_cache,
+        )
+        out_lost = {
+            **base,
+            "survival_state": "lost",
+            "retention_fraction": None,
+            "lost_kind": lost_kind,
+            "lost_at_commit_sha": killer,
+        }
+        if killer is None and lost_kind == "file_deleted":
+            limitations.append("lost_attribution_failed")
+        return out_lost
 
     current_lines = current_text.splitlines()
     start = anchor_range.get("start_line")
@@ -374,6 +452,8 @@ def _compute_survival(
                 **base,
                 "survival_state": "alive_on_path",
                 "retention_fraction": 1.0,
+                "retention_fraction_at_original_range": 1.0,
+                "retention_fraction_at_anchor": 1.0,
             }
         if len(current_lines) >= start:
             range_exists = True
@@ -389,15 +469,18 @@ def _compute_survival(
                 range_committers - {anchor_email} if anchor_email else range_committers
             )
             if non_anchor_committers:
+                repaired_fraction = _retention_fraction(
+                    preserved, len(authored_lines)
+                )
                 return {
                     **base,
                     "survival_state": "repaired",
                     "repair_committer_email": sorted(non_anchor_committers)[0],
                     "repair_committers": sorted(non_anchor_committers),
                     "anchor_author_email": anchor_email,
-                    "retention_fraction": _retention_fraction(
-                        preserved, len(authored_lines)
-                    ),
+                    "retention_fraction": repaired_fraction,
+                    "retention_fraction_at_original_range": repaired_fraction,
+                    "retention_fraction_at_anchor": repaired_fraction,
                 }
 
     if preserved == 0 and revert_commit:
@@ -408,25 +491,61 @@ def _compute_survival(
             "retention_fraction": None,
         }
     if 0 < preserved < len(authored_lines):
+        # Cluster F D4: split retention into two semantically distinct
+        # observations. ``at_original_range`` is the existing literal
+        # (preserved-lines / authored-lines) ratio. ``at_anchor`` is the
+        # anchor-identity-strength signal: the anchor still resolves to
+        # a firm range so the patch's lineage is preserved at *its*
+        # tracked position. For partial preservation the two coincide
+        # because the literal lines themselves are what survived; for
+        # alive_transformed (preserved=0) ``at_anchor`` jumps to 1.0
+        # because the anchor's range still exists even though the
+        # literal content drifted.
+        original_range_fraction = _retention_fraction(
+            preserved, len(authored_lines)
+        )
         return {
             **base,
             "survival_state": "partially_preserved",
             "preserved_line_count": preserved,
             "authored_line_count": len(authored_lines),
-            "retention_fraction": _retention_fraction(
-                preserved, len(authored_lines)
-            ),
+            "retention_fraction": original_range_fraction,
+            "retention_fraction_at_original_range": original_range_fraction,
+            "retention_fraction_at_anchor": original_range_fraction,
         }
     if range_exists:
+        original_range_fraction = _retention_fraction(
+            preserved, len(authored_lines)
+        )
+        # The anchor's current range still resolves — its identity-by-range
+        # survived, so ``at_anchor`` is 1.0 even when literal lines drifted.
+        at_anchor_fraction: float = 1.0
         return {
             **base,
             "survival_state": "alive_transformed",
-            "retention_fraction": _retention_fraction(
-                preserved, len(authored_lines)
-            ),
+            "retention_fraction": at_anchor_fraction,
+            "retention_fraction_at_original_range": original_range_fraction,
+            "retention_fraction_at_anchor": at_anchor_fraction,
         }
 
-    return {**base, "survival_state": "lost", "retention_fraction": None}
+    # File alive at observed_ref but range doesn't exist + preserved == 0:
+    # the anchor's identity is gone. D2/D3: classify ``hunk_removed``,
+    # leave killer commit None (no cheap line-walk attribution).
+    killer, lost_kind = _resolve_lost_attribution(
+        repo,
+        anchor_commit=anchor_commit,
+        path=path,
+        observed_ref=observed_ref,
+        authored_lines=authored_lines,
+        cache=lost_attribution_cache,
+    )
+    return {
+        **base,
+        "survival_state": "lost",
+        "retention_fraction": None,
+        "lost_kind": lost_kind,
+        "lost_at_commit_sha": killer,
+    }
 
 
 def _aggregate_current_survival(
@@ -530,11 +649,18 @@ def _anchor_observations(
     anchor: dict[str, Any],
     head_id: dict[str, str] | None,
     history_limit: int,
+    lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
 ) -> tuple[list[dict[str, Any]], int | None, list[str]]:
     commit_id = anchor.get("commit_id") or {}
     anchor_commit = commit_id.get("hex")
     if not anchor_commit:
-        observation = _compute_survival(repo, patch=patch, anchor=anchor, head_id=head_id)
+        observation = _compute_survival(
+            repo,
+            patch=patch,
+            anchor=anchor,
+            head_id=head_id,
+            lost_attribution_cache=lost_attribution_cache,
+        )
         observation["anchor_trail_index"] = 0
         observation["anchor_descendant_count"] = None
         return [observation], None, []
@@ -551,6 +677,7 @@ def _anchor_observations(
             observed_ref=commit_sha,
             head_id=head_id,
             observed_commit_time=commit_time,
+            lost_attribution_cache=lost_attribution_cache,
         )
         observation["anchor_trail_index"] = index
         observation["anchor_descendant_count"] = descendant_count
@@ -565,6 +692,7 @@ def _sync(
     git_anchor_id: str | None = None,
     history_limit: int | None = None,
     events: list[Any] | None = None,
+    lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
 ) -> dict[str, Any]:
     """Sync a Trace Patch against Git history and report survival.
 
@@ -687,6 +815,7 @@ def _sync(
             anchor=anchor,
             head_id=head_id,
             history_limit=effective_limit,
+            lost_attribution_cache=lost_attribution_cache,
         )
         trail_limitations.extend(anchor_limitations)
         for observation in anchor_observations:
@@ -731,18 +860,24 @@ def sync_patch(
     *,
     history_limit: int | None = None,
     events: list[Any] | None = None,
+    lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
 ) -> dict[str, Any]:
     """Sync survival for all Git Anchors attached to a Trace Patch.
 
     ``events`` is an optional pre-loaded TrailEvent list. Batch callers
     that survey many patches in one shot can read events once and pass
     the list in to amortize the read cost (Cluster C-1).
+
+    ``lost_attribution_cache`` is an optional dict that batch callers may
+    thread through across patches to avoid repeated ``git log
+    --diff-filter=D`` lookups for the same file (Cluster F D2).
     """
     return _sync(
         repo,
         trace_patch_id=trace_patch_id,
         history_limit=history_limit,
         events=events,
+        lost_attribution_cache=lost_attribution_cache,
     )
 
 
@@ -752,14 +887,17 @@ def sync_anchor(
     *,
     history_limit: int | None = None,
     events: list[Any] | None = None,
+    lost_attribution_cache: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
 ) -> dict[str, Any]:
     """Sync survival for one Git Anchor.
 
-    See ``sync_patch`` for the optional ``events`` cache.
+    See ``sync_patch`` for the optional ``events`` and
+    ``lost_attribution_cache`` parameters.
     """
     return _sync(
         repo,
         git_anchor_id=git_anchor_id,
         history_limit=history_limit,
         events=events,
+        lost_attribution_cache=lost_attribution_cache,
     )

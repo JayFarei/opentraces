@@ -433,6 +433,10 @@ def dataset_status(name: str, as_json: bool) -> None:
     }
     if _is_manual_dataset(dataset):
         payload["manual"] = True
+    # Cluster F D9: status surfaces the same row_quality block list does.
+    rq = _compute_row_quality_summary(name)
+    if rq is not None:
+        payload["row_quality"] = rq
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
@@ -789,17 +793,52 @@ def dataset_review(args: tuple[str, ...], mode: str | None, all_rows: bool, as_j
 @click.option("--to", "remote", default=None, help="Remote name or owner/name override.")
 @click.option("--check-only", is_flag=True, help="Run all gates and stage without upload.")
 @click.option("--resume", default=None, help="Resume a previous publication run id.")
+@click.option(
+    "--min-retention",
+    "min_retention",
+    type=click.FloatRange(min=0.0, max=1.0),
+    default=None,
+    help=(
+        "Drop rows whose mean retention_fraction across patches_with_survival "
+        "is below this threshold (0.0-1.0)."
+    ),
+)
+@click.option(
+    "--exclude-state",
+    "exclude_states",
+    multiple=True,
+    default=(),
+    help=(
+        "Drop rows that have any patch with this survival_state. Repeatable: "
+        "--exclude-state lost --exclude-state never_committed."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_publish(
     name: str,
     remote: str | None,
     check_only: bool,
     resume: str | None,
+    min_retention: float | None,
+    exclude_states: tuple[str, ...],
     as_json: bool,
 ) -> None:
-    """Publish reviewed dataset rows and contract files to the active remote."""
+    """Publish reviewed dataset rows and contract files to the active remote.
+
+    Cluster F D8: ``--min-retention`` and ``--exclude-state`` filter rows by
+    survival quality before staging. Both compose. Under ``--check-only`` the
+    drop counts are reported in the JSON ``publish.filter`` block without
+    uploading.
+    """
     try:
-        summary = publish_dataset(name, to=remote, check_only=check_only, resume=resume)
+        summary = publish_dataset(
+            name,
+            to=remote,
+            check_only=check_only,
+            resume=resume,
+            min_retention=min_retention,
+            exclude_states=list(exclude_states) if exclude_states else None,
+        )
     except DatasetRemotePermissionError as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
@@ -809,33 +848,38 @@ def dataset_publish(
     except ValueError as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
-    payload = {
-        "status": "ok",
-        "publish": {
-            "dataset": summary.dataset_name,
-            "remote": summary.remote_name,
-            "repo_id": summary.repo_id,
-            "run_id": summary.run_id,
-            "uploaded": summary.uploaded,
-            "check_only": summary.check_only,
-            "new_row_count": summary.new_row_count,
-            "duplicate_count": summary.duplicate_count,
-            "needs_review_count": summary.needs_review_count,
-            "blocked_count": summary.blocked_count,
-            "staged_files": summary.staged_files,
-            "remote_head_before": summary.remote_head_before,
-            "remote_head_after": summary.remote_head_after,
-            "attempts": summary.attempts,
-            "message": summary.message,
-        },
+    publish_payload: dict[str, object] = {
+        "dataset": summary.dataset_name,
+        "remote": summary.remote_name,
+        "repo_id": summary.repo_id,
+        "run_id": summary.run_id,
+        "uploaded": summary.uploaded,
+        "check_only": summary.check_only,
+        "new_row_count": summary.new_row_count,
+        "duplicate_count": summary.duplicate_count,
+        "needs_review_count": summary.needs_review_count,
+        "blocked_count": summary.blocked_count,
+        "staged_files": summary.staged_files,
+        "remote_head_before": summary.remote_head_before,
+        "remote_head_after": summary.remote_head_after,
+        "attempts": summary.attempts,
+        "message": summary.message,
     }
+    if summary.filter_summary is not None:
+        publish_payload["filter"] = summary.filter_summary
+    payload = {"status": "ok", "publish": publish_payload}
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
-    click.echo(
+    line = (
         f"{summary.message}: rows={summary.new_row_count} "
         f"needs_review={summary.needs_review_count} blocked={summary.blocked_count}"
     )
+    if summary.filter_summary is not None:
+        line += (
+            f" filter_dropped={summary.filter_summary.get('rows_dropped_total', 0)}"
+        )
+    click.echo(line)
 
 
 @dataset_group.command("approve", cls=OpentracesCommand, hidden=True)
@@ -879,6 +923,74 @@ def dataset_remove(name: str, yes: bool, as_json: bool) -> None:
     click.echo(f"Dataset removed: {name}")
 
 
+def _compute_row_quality_summary(name: str) -> dict[str, object] | None:
+    """Cluster F D9: roll up survival info across the dataset's rows.
+
+    Returns ``None`` when the dataset has no readable rows. The summary
+    is computed from ``patches_with_survival`` on each row.
+    """
+    try:
+        from ..core.datasets import read_rows_by_id
+        rows = read_rows_by_id(name)
+    except (FileNotFoundError, OSError):
+        return None
+    if not rows:
+        # Empty datasets get a zero summary so listing a fresh dataset
+        # still shows the structure callers can rely on.
+        return {
+            "total_rows": 0,
+            "rows_with_anchored_patches": 0,
+            "rows_with_lost_patches": 0,
+            "rows_fully_alive": 0,
+            "mean_row_retention": None,
+            "survival_distribution": {},
+        }
+    total_rows = len(rows)
+    rows_with_anchored = 0
+    rows_with_lost = 0
+    rows_fully_alive = 0
+    survival_distribution: dict[str, int] = {}
+    row_means: list[float] = []
+
+    for row in rows.values():
+        psv = row.get("patches_with_survival") or []
+        if not isinstance(psv, list) or not psv:
+            continue
+        states = [
+            p.get("survival_state")
+            for p in psv
+            if isinstance(p, dict) and p.get("survival_state")
+        ]
+        if not states:
+            continue
+        rows_with_anchored += 1
+        if "lost" in states:
+            rows_with_lost += 1
+        if all(s in ("alive_on_path", "alive_transformed") for s in states):
+            rows_fully_alive += 1
+        for s in states:
+            survival_distribution[s] = survival_distribution.get(s, 0) + 1
+        fractions = [
+            p.get("retention_fraction")
+            for p in psv
+            if isinstance(p, dict) and isinstance(p.get("retention_fraction"), (int, float))
+        ]
+        if fractions:
+            row_means.append(sum(fractions) / len(fractions))
+
+    mean_row_retention: float | None = None
+    if row_means:
+        mean_row_retention = round(sum(row_means) / len(row_means), 4)
+    return {
+        "total_rows": total_rows,
+        "rows_with_anchored_patches": rows_with_anchored,
+        "rows_with_lost_patches": rows_with_lost,
+        "rows_fully_alive": rows_fully_alive,
+        "mean_row_retention": mean_row_retention,
+        "survival_distribution": survival_distribution,
+    }
+
+
 def _dataset_payload(dataset) -> dict[str, object]:
     payload: dict[str, object] = {
         "name": dataset.name,
@@ -893,6 +1005,10 @@ def _dataset_payload(dataset) -> dict[str, object]:
             payload["row_count"] = len(read_row_index(dataset.name))
         except (FileNotFoundError, OSError):
             payload["row_count"] = 0
+    # Cluster F D9: row_quality summary on every dataset payload.
+    rq = _compute_row_quality_summary(dataset.name)
+    if rq is not None:
+        payload["row_quality"] = rq
     return payload
 
 

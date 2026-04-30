@@ -97,6 +97,10 @@ class DatasetPublishSummary:
     remote_head_after: str | None
     attempts: int = 1
     message: str = ""
+    # Cluster F D8: row-level filter telemetry. ``None`` when no
+    # filters were requested so existing summary consumers stay
+    # unchanged.
+    filter_summary: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -574,6 +578,81 @@ def read_rows_by_id(name: str) -> dict[str, dict[str, Any]]:
     return rows
 
 
+def _row_mean_retention(row: dict[str, Any]) -> float | None:
+    """Cluster F D8: mean retention across patches_with_survival.
+
+    Skips ``None`` values (alive_on_path / lost rows have None or 1.0
+    mixed with nulls). Returns ``None`` when no defined fractions exist.
+    """
+    psv = row.get("patches_with_survival") or []
+    fractions = [
+        p.get("retention_fraction")
+        for p in psv
+        if isinstance(p, dict) and p.get("retention_fraction") is not None
+    ]
+    if not fractions:
+        return None
+    return sum(fractions) / len(fractions)
+
+
+def _row_has_state(row: dict[str, Any], state: str) -> bool:
+    psv = row.get("patches_with_survival") or []
+    return any(
+        isinstance(p, dict) and p.get("survival_state") == state
+        for p in psv
+    )
+
+
+def _filter_rows_for_publish(
+    selected_rows: list[tuple[str, dict[str, Any]]],
+    *,
+    min_retention: float | None,
+    exclude_states: list[str] | None,
+) -> tuple[list[tuple[str, dict[str, Any]]], dict[str, Any]]:
+    """Cluster F D8: drop rows that fail quality filters.
+
+    Returns ``(kept_rows, filter_summary)``. The summary surfaces:
+
+    * ``min_retention`` — the threshold (or ``None``)
+    * ``dropped_min_retention`` — count dropped for low retention
+    * ``exclude_states`` — list of states excluded
+    * ``dropped_by_state`` — ``{state: count}``
+    * ``rows_dropped_total`` — distinct rows dropped (one row may
+      satisfy more than one filter)
+    """
+    summary: dict[str, Any] = {
+        "min_retention": min_retention,
+        "exclude_states": list(exclude_states or []),
+        "dropped_min_retention": 0,
+        "dropped_by_state": {state: 0 for state in (exclude_states or [])},
+        "rows_dropped_total": 0,
+    }
+    if min_retention is None and not exclude_states:
+        return selected_rows, summary
+
+    kept: list[tuple[str, dict[str, Any]]] = []
+    for row_id, row in selected_rows:
+        dropped_for_state: list[str] = []
+        if exclude_states:
+            for state in exclude_states:
+                if _row_has_state(row, state):
+                    dropped_for_state.append(state)
+        below_retention = False
+        if min_retention is not None:
+            mean = _row_mean_retention(row)
+            if mean is not None and mean < min_retention:
+                below_retention = True
+        if dropped_for_state or below_retention:
+            if below_retention:
+                summary["dropped_min_retention"] += 1
+            for state in dropped_for_state:
+                summary["dropped_by_state"][state] += 1
+            summary["rows_dropped_total"] += 1
+            continue
+        kept.append((row_id, row))
+    return kept, summary
+
+
 def publish_dataset(
     name: str,
     *,
@@ -583,6 +662,8 @@ def publish_dataset(
     contributor: str | None = None,
     token: str | None = None,
     max_retries: int = MAX_PARENT_COMMIT_RETRIES,
+    min_retention: float | None = None,
+    exclude_states: list[str] | None = None,
 ) -> DatasetPublishSummary:
     dataset = load_dataset(name)
     remote_name = to or dataset.manifest.active_remote
@@ -622,6 +703,13 @@ def publish_dataset(
             if entry.status in {"publishable", "published"} and row_id in rows_by_id:
                 selected_rows.append((row_id, rows_by_id[row_id]))
 
+        # Cluster F D8: row-level filters on patches_with_survival.
+        selected_rows, filter_summary = _filter_rows_for_publish(
+            selected_rows,
+            min_retention=min_retention,
+            exclude_states=exclude_states,
+        )
+
         staging_path, staged_files = _stage_publication(
             dataset,
             selected_rows,
@@ -629,6 +717,12 @@ def publish_dataset(
             run_id=run_id,
         )
         changed_files = _changed_staged_files(repo_id, staging_path, token)
+        # Surface filter telemetry only when filters were configured.
+        emitted_filter = (
+            filter_summary
+            if (min_retention is not None or exclude_states)
+            else None
+        )
         if not changed_files:
             return DatasetPublishSummary(
                 dataset_name=name,
@@ -646,6 +740,7 @@ def publish_dataset(
                 remote_head_after=remote_head_before,
                 attempts=attempts,
                 message="nothing to publish",
+                filter_summary=emitted_filter,
             )
         if check_only:
             return DatasetPublishSummary(
@@ -664,6 +759,7 @@ def publish_dataset(
                 remote_head_after=remote_head_before,
                 attempts=attempts,
                 message="check passed",
+                filter_summary=emitted_filter,
             )
         try:
             remote_head_after = _upload_public_surface(
@@ -710,6 +806,7 @@ def publish_dataset(
             remote_head_after=remote_head_after,
             attempts=attempts,
             message="published",
+            filter_summary=emitted_filter,
         )
 
 
