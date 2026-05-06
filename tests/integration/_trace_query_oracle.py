@@ -29,6 +29,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from opentraces.core import paths
+from opentraces.core.search_projection import (
+    build_search_projection,
+    query_search_projection_page,
+)
 from opentraces.core.trace_index import (
     query_index_page,
     rebuild_index,
@@ -162,6 +166,7 @@ def _kwargs_from_cli(cli_args: list[str]) -> dict[str, Any]:
 
     OPTIONS = {
         "--lex": ("lex", "value"),
+        "--semantic": ("semantic", "value"),
         "--skill": ("skill", "value"),
         "--tool": ("tool", "value"),
         "--files": ("files", "value"),
@@ -248,6 +253,19 @@ def run_indexed_query(cli_args: list[str]) -> tuple[set[str], int, float]:
     return trace_ids, json_bytes, elapsed_ms
 
 
+def run_projected_query(cli_args: list[str]) -> tuple[set[str], int, float]:
+    """Return ``(trace_ids, json_bytes, latency_ms)`` from the search projection."""
+
+    kwargs = _kwargs_from_cli(cli_args)
+    start = time.perf_counter()
+    page = query_search_projection_page(**kwargs)
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    trace_ids = {packet.trace_id for packet in page.candidates}
+    payload = {"candidates": [{"trace_id": tid} for tid in sorted(trace_ids)]}
+    json_bytes = len(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    return trace_ids, json_bytes, elapsed_ms
+
+
 def run_oracle(
     predicate: Callable[[dict], bool],
     traces: dict[str, dict] | None = None,
@@ -280,6 +298,15 @@ def ensure_index_built() -> None:
     buf = io.StringIO()
     with redirect_stdout(buf):
         rebuild_index()
+
+
+def ensure_search_projection_built() -> None:
+    """Force-rebuild the index and bucket-shaped search projection."""
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        summary = rebuild_index()
+    build_search_projection(index_path=summary.index_path)
 
 
 # ---------------------------------------------------------------------------
@@ -399,8 +426,10 @@ __all__ = [
     "FilterCase",
     "load_oracle",
     "run_indexed_query",
+    "run_projected_query",
     "run_oracle",
     "ensure_index_built",
+    "ensure_search_projection_built",
     "_trace_skills",
     "_trace_tools",
     "_trace_files",

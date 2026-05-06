@@ -795,7 +795,7 @@ def _named_facet_filters(
             ("service.channel", service_channel),
             ("dependency.name", dependency),
             ("git_link_tier", git_tier),
-            ("trail.survival_state", survival),
+            ("survival.state", survival),
         )
         if value is not None
     )

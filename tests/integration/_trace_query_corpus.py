@@ -27,7 +27,6 @@ one true negative. Covers each bug class:
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from opentraces.core import paths
 
@@ -582,6 +581,17 @@ def _canonical_traces() -> list[dict]:
         }
     )
     traces.append(fix)
+    # 22. Semantic service discovery: the prompt does not say "mongodb";
+    # the service concept must be inferred from dependency evidence.
+    traces.append(
+        _trace(
+            "p59-c-022-mongo",
+            dependencies=["pymongo"],
+            outcome_success=True,
+            outcome_committed=False,
+            description="database client setup",
+        )
+    )
     return traces
 
 
