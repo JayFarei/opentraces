@@ -136,9 +136,18 @@ def test_trace_index_rebuild_and_status_emit_local_search_projection(tmp_path):
             "local-e2e",
             "--workflow",
             str(workflow_file),
+            "--query-name",
+            "local-clack",
+            "--query-source",
+            "projection",
+            "--query-lex",
+            "clack",
             "--json",
         ],
     )
     assert dataset.exit_code == 0, dataset.output
     dataset_payload = json.loads(dataset.output)
     assert dataset_payload["dataset"]["manifest"]["workflow"]["skill"] == "classic-local-dataset"
+    candidate_query = dataset_payload["dataset"]["manifest"]["candidate_query"]
+    assert candidate_query["name"] == "local-clack"
+    assert candidate_query["args"] == {"lex": "clack", "source": "projection"}

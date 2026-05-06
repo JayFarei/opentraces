@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover - non-POSIX platforms
     fcntl = None  # type: ignore[assignment]
 
 from opentraces_schema import (
+    DatasetCandidateQuery,
     DatasetIdentity,
     DatasetManifest,
     DatasetPublicationPolicy,
@@ -155,6 +156,7 @@ def create_dataset(
     row_schema: dict[str, Any] | None = None,
     identity: DatasetIdentity | dict[str, Any] | None = None,
     publication_policy: DatasetPublicationPolicy | dict[str, Any] | None = None,
+    candidate_query: DatasetCandidateQuery | dict[str, Any] | None = None,
     replace: bool = False,
 ) -> LocalDataset:
     validate_dataset_name(name)
@@ -175,6 +177,12 @@ def create_dataset(
         if isinstance(publication_policy, DatasetPublicationPolicy)
         else DatasetPublicationPolicy.model_validate(publication_policy or {})
     )
+    if isinstance(candidate_query, DatasetCandidateQuery):
+        query_model = candidate_query
+    elif candidate_query:
+        query_model = DatasetCandidateQuery.model_validate(candidate_query)
+    else:
+        query_model = None
     workflow = WorkflowRef(
         skill=workflow_skill or f"{name}-workflow",
         digest=workflow_digest,
@@ -187,6 +195,7 @@ def create_dataset(
         schema={"path": "schemas/row.schema.json", "version": "1.0.0"},
         workflow=workflow,
         identity=identity_model,
+        candidate_query=query_model,
         publication_policy=policy_model,
     )
     schema_digest = digest_payload(schema_payload)

@@ -452,6 +452,24 @@ def dataset_status(name: str, as_json: bool) -> None:
 @click.option("--description", default=None, help="Dataset description.")
 @click.option("--workflow", default=None, help="Workflow skill name or path to a Markdown workflow file/package.")
 @click.option("--workflow-digest", default="sha256:unconfigured", help="Workflow digest for legacy skill-name workflows.")
+@click.option("--query-name", default=None, help="Remembered trace query name for workflow runs.")
+@click.option(
+    "--query-scope",
+    type=click.Choice(["all-projects", "project", "cwd", "trace"]),
+    default="all-projects",
+    show_default=True,
+    help="Remembered trace query scope.",
+)
+@click.option("--query-lex", default=None, help="Remembered trace query lexical text.")
+@click.option(
+    "--query-source",
+    type=click.Choice(["index", "projection"]),
+    default=None,
+    help="Remembered local trace query source.",
+)
+@click.option("--query-project", default=None, help="Remembered trace query project slug.")
+@click.option("--query-candidate-kind", default=None, help="Remembered trace query candidate kind.")
+@click.option("--query-arg", "query_args", multiple=True, help="Extra remembered trace query arg as key=value.")
 @click.option(
     "--rows-file",
     "rows_file",
@@ -478,6 +496,13 @@ def dataset_new(
     description: str | None,
     workflow: str | None,
     workflow_digest: str,
+    query_name: str | None,
+    query_scope: str,
+    query_lex: str | None,
+    query_source: str | None,
+    query_project: str | None,
+    query_candidate_kind: str | None,
+    query_args: tuple[str, ...],
     rows_file: str | None,
     schema_file: str | None,
     as_json: bool,
@@ -520,6 +545,16 @@ def dataset_new(
             workflow_skill=workflow_skill,
             workflow_digest=resolved_digest,
             workflow_config=workflow_config,
+            candidate_query=_candidate_query_for_dataset(
+                dataset_name=name,
+                query_name=query_name,
+                query_scope=query_scope,
+                query_lex=query_lex,
+                query_source=query_source,
+                query_project=query_project,
+                query_candidate_kind=query_candidate_kind,
+                query_args=query_args,
+            ),
         )
     except (FileExistsError, FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
@@ -529,6 +564,44 @@ def dataset_new(
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
     click.echo(f"Dataset created: {dataset.name}")
+
+
+def _candidate_query_for_dataset(
+    *,
+    dataset_name: str,
+    query_name: str | None,
+    query_scope: str,
+    query_lex: str | None,
+    query_source: str | None,
+    query_project: str | None,
+    query_candidate_kind: str | None,
+    query_args: tuple[str, ...],
+) -> dict[str, object] | None:
+    args: dict[str, object] = {}
+    if query_lex:
+        args["lex"] = query_lex
+    if query_source:
+        args["source"] = query_source
+    if query_project:
+        args["project"] = query_project
+    if query_candidate_kind:
+        args["candidate_kind"] = query_candidate_kind
+    for raw in query_args:
+        if "=" not in raw:
+            raise ValueError("--query-arg values must use key=value syntax")
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key or not value:
+            raise ValueError("--query-arg values must use key=value syntax")
+        args[key] = value
+    if not args and not query_name:
+        return None
+    return {
+        "name": query_name or f"{dataset_name}-query",
+        "scope": query_scope,
+        "args": args,
+    }
 
 
 def _resolve_workflow_for_dataset(
