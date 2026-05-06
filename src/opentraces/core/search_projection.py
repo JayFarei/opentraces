@@ -21,6 +21,7 @@ from typing import Any
 from opentraces_schema import TraceFacet, TraceSignal, TraceUnit
 
 from . import paths
+from .semantic import expand_semantic_query, semantic_profile_from_facets
 from .trace_index import (
     QueryPage,
     candidate_packet_for_unit,
@@ -122,6 +123,7 @@ def build_search_projection(
             "search_docs": True,
             "lexical_ready": True,
             "projection_sqlite_ready": True,
+            "semantic_ready": True,
             "embedding_ready": False,
             "evidence_refs": True,
         },
@@ -231,6 +233,7 @@ def query_search_projection_page(
     dependency: str | None = None,
     git_tier: str | None = None,
     survival: str | None = None,
+    semantic: str | None = None,
     since: str | None = None,
     success: bool | None = None,
     success_unknown: bool = False,
@@ -278,8 +281,14 @@ def query_search_projection_page(
         survival=survival,
     )
     since_dt = _parse_since(since) if since else None
-    terms = _terms(lex or "")
-    docs = _select_docs(sqlite_path, terms)
+    semantic_expansion = expand_semantic_query(semantic) if semantic else None
+    semantic_ids = set((semantic_expansion or {}).get("concept_ids") or [])
+    terms = _terms(lex or semantic or "")
+    docs = (
+        _select_docs_by_semantic_ids(sqlite_path, semantic_ids)
+        if semantic_ids
+        else _select_docs(sqlite_path, terms)
+    )
     scored: list[tuple[float, dict[str, float], dict[str, list[str]], TraceUnit]] = []
     for doc in docs:
         if since_dt and _doc_timestamp(doc) < since_dt:
@@ -304,6 +313,11 @@ def query_search_projection_page(
         ):
             continue
         lexical_score, matched_fields = _lexical_score_doc(doc, terms)
+        semantic_score, semantic_matches = _semantic_score_doc(
+            doc,
+            semantic_expansion,
+        )
+        matched_fields.update(semantic_matches)
         metadata_score = _metadata_score_doc(
             doc,
             skill=skill,
@@ -322,19 +336,21 @@ def query_search_projection_page(
             committed_unknown=committed_unknown,
             candidate_kind=candidate_kind,
             since=since,
+            semantic=semantic,
         )
-        if terms and lexical_score <= 0:
+        if terms and lexical_score <= 0 and semantic_score <= 0:
             continue
-        if not terms and metadata_score <= 0:
+        if not terms and metadata_score <= 0 and semantic_score <= 0:
             continue
         unit = get_unit(str(doc["unit_id"]), index_path=db_path)
         if unit is None:
             continue
         scored.append(
             (
-                lexical_score + metadata_score,
+                lexical_score + metadata_score + semantic_score,
                 {
                     "projection_lexical": lexical_score,
+                    "projection_semantic": semantic_score,
                     "projection_metadata": metadata_score,
                 },
                 matched_fields,
@@ -396,6 +412,7 @@ def _doc_for_unit(unit: TraceUnit) -> dict[str, Any]:
         "metadata": unit.metadata,
         "trail_refs": unit.trail_refs,
         "evidence_refs": _evidence_refs(unit),
+        "semantic": semantic_profile_from_facets(unit.facets),
     }
     material["search_text"] = _projection_search_text(material)
     return {**material, "content_hash": _sha256_json(material)}
@@ -475,6 +492,25 @@ def _select_docs(sqlite_path: Path, terms: list[str]) -> list[dict[str, Any]]:
                 "select payload_json from docs order by trace_id, unit_id"
             ).fetchall()
     return [json.loads(row["payload_json"]) for row in rows]
+
+
+def _select_docs_by_semantic_ids(
+    sqlite_path: Path,
+    semantic_ids: set[str],
+) -> list[dict[str, Any]]:
+    if not semantic_ids:
+        return []
+    with sqlite3.connect(sqlite_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "select payload_json from docs order by trace_id, unit_id"
+        ).fetchall()
+    docs = [json.loads(row["payload_json"]) for row in rows]
+    return [
+        doc
+        for doc in docs
+        if semantic_ids.intersection(set((doc.get("semantic") or {}).get("concept_ids") or []))
+    ]
 
 
 def _doc_matches(
@@ -566,6 +602,29 @@ def _lexical_score_doc(
     return score, matched
 
 
+def _semantic_score_doc(
+    doc: dict[str, Any],
+    expansion: dict[str, Any] | None,
+) -> tuple[float, dict[str, list[str]]]:
+    if not expansion:
+        return 0.0, {}
+    expected_ids = set(expansion.get("concept_ids") or [])
+    doc_ids = set((doc.get("semantic") or {}).get("concept_ids") or [])
+    matched_ids = sorted(expected_ids.intersection(doc_ids))
+    if not matched_ids:
+        return 0.0, {}
+    labels: list[str] = []
+    by_id = {
+        str(concept.get("concept_id")): concept
+        for concept in (expansion.get("concepts") or [])
+        if concept.get("concept_id")
+    }
+    for concept_id in matched_ids:
+        concept = by_id.get(concept_id) or {}
+        labels.append(str(concept.get("name") or concept_id))
+    return 8.0 * len(matched_ids), {"semantic": labels}
+
+
 def _metadata_score_doc(
     doc: dict[str, Any],
     *,
@@ -585,6 +644,7 @@ def _metadata_score_doc(
     committed_unknown: bool,
     candidate_kind: str | None,
     since: str | None,
+    semantic: str | None,
 ) -> float:
     score = 0.0
     if skill:
@@ -606,6 +666,8 @@ def _metadata_score_doc(
     if candidate_kind:
         score += 2.0
     if since:
+        score += 1.0
+    if semantic:
         score += 1.0
     score += float(len(facet_filters) + len(metadata_filters) + len(named_filters))
     return score
@@ -670,6 +732,7 @@ def _projection_search_text(doc: dict[str, Any]) -> str:
         parts.append(str(signal.get("name", "")))
         parts.append(str(signal.get("value", "")))
     parts.extend(_simple_metadata_values(doc.get("metadata") or {}))
+    parts.extend(_simple_metadata_values(doc.get("semantic") or {}))
     parts.extend(str(value) for value in doc.get("trail_refs", []))
     return " ".join(part for part in parts if part)
 

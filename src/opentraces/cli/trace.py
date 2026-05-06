@@ -76,6 +76,7 @@ def trace_group() -> None:
 @trace_group.command("query", cls=OpentracesCommand)
 @click.argument("lex_terms", nargs=-1)
 @click.option("--lex", default=None, help="Lexical query text.")
+@click.option("--semantic", default=None, help="Semantic service/library query text.")
 @click.option("--skill", default=None, help="Exact skill.name facet.")
 @click.option("--tool", default=None, help="Exact tool.name facet.")
 @click.option("--files", default=None, help="File glob filter over indexed paths.")
@@ -165,6 +166,7 @@ def trace_group() -> None:
 def trace_query(
     lex_terms: tuple[str, ...],
     lex: str | None,
+    semantic: str | None,
     skill: str | None,
     tool: str | None,
     files: str | None,
@@ -208,7 +210,15 @@ def trace_query(
         if lex:
             click.echo("Use either positional search terms or --lex, not both.", err=True)
             sys.exit(2)
+        if semantic:
+            click.echo("Use either positional search terms or --semantic, not both.", err=True)
+            sys.exit(2)
         lex = " ".join(lex_terms)
+    if lex and semantic:
+        click.echo("Use either --lex or --semantic, not both.", err=True)
+        sys.exit(2)
+    if semantic and query_source == "index":
+        query_source = "projection"
     if vec or hyde:
         click.echo(
             "Vector and HyDE trace query modes are reserved in M1. "
@@ -241,6 +251,7 @@ def trace_query(
         sys.exit(2)
     if not any([
         lex,
+        semantic,
         skill,
         tool,
         files,
@@ -268,7 +279,7 @@ def trace_query(
     ]):
         click.echo(
             "Provide --lex, --skill, --tool, --files, --signal, --facet, "
-            "--metadata, named filters, --candidate-kind, --success, "
+            "--semantic, --metadata, named filters, --candidate-kind, --success, "
             "--committed, --unknown-success, --unknown-committed, --cwd, "
             "or --project.",
             err=True,
@@ -289,6 +300,7 @@ def trace_query(
             query_page = query_search_projection_page
         page = query_page(
             lex=lex,
+            semantic=semantic if query_source == "projection" else None,
             skill=skill,
             tool=tool,
             files=files,
@@ -325,6 +337,7 @@ def trace_query(
     payload = {
         "status": "ok",
         "source": query_source,
+        "semantic_query": None,
         "total": page.total,
         "total_returned": len(page.candidates),
         "limit": limit,
@@ -332,6 +345,10 @@ def trace_query(
         "has_more": page.next_page_token is not None,
         "candidates": [packet.model_dump(mode="json") for packet in page.candidates],
     }
+    if semantic:
+        from ..core.semantic import expand_semantic_query
+
+        payload["semantic_query"] = expand_semantic_query(semantic)
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return

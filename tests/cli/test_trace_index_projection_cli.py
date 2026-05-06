@@ -64,6 +64,43 @@ def _trace() -> TraceRecord:
     )
 
 
+def _mongo_trace() -> TraceRecord:
+    return TraceRecord(
+        trace_id="trace-local-semantic-mongo",
+        session_id="session-local-semantic-mongo",
+        agent=Agent(name="claude-code", model="claude-opus-4-6"),
+        task={"description": "Patch database client setup"},
+        dependencies=["pymongo"],
+        steps=[
+            Step(
+                step_index=1,
+                role="user",
+                content="Patch the database client setup and add a smoke test.",
+            ),
+            Step(
+                step_index=2,
+                role="agent",
+                tool_calls=[
+                    ToolCall(
+                        tool_call_id="tc-write",
+                        tool_name="Write",
+                        input={
+                            "file_path": "src/db.py",
+                            "content": "from pymongo import MongoClient\nclient = MongoClient(uri)\n",
+                        },
+                    ),
+                    ToolCall(
+                        tool_call_id="tc-test",
+                        tool_name="Bash",
+                        input={"command": "pytest tests/test_db.py"},
+                    ),
+                ],
+            ),
+        ],
+        outcome={"success": True, "committed": False},
+    )
+
+
 def test_trace_index_rebuild_and_status_emit_local_search_projection(tmp_path):
     project = tmp_path / "demo"
     _enroll_project(project, "1234567890abcdef1234567890abcdef")
@@ -140,8 +177,8 @@ def test_trace_index_rebuild_and_status_emit_local_search_projection(tmp_path):
             "local-clack",
             "--query-source",
             "projection",
-            "--query-lex",
-            "clack",
+            "--query-semantic",
+            "interactive prompts",
             "--json",
         ],
     )
@@ -150,4 +187,23 @@ def test_trace_index_rebuild_and_status_emit_local_search_projection(tmp_path):
     assert dataset_payload["dataset"]["manifest"]["workflow"]["skill"] == "classic-local-dataset"
     candidate_query = dataset_payload["dataset"]["manifest"]["candidate_query"]
     assert candidate_query["name"] == "local-clack"
-    assert candidate_query["args"] == {"lex": "clack", "source": "projection"}
+    assert candidate_query["args"] == {"semantic": "interactive prompts", "source": "projection"}
+
+
+def test_trace_query_semantic_uses_projection_aliases(tmp_path):
+    project = tmp_path / "demo"
+    _enroll_project(project, "abcdef1234567890abcdef1234567890")
+    _write_project_trace(project, _mongo_trace())
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["trace", "query", "--semantic", "mongodb", "--force-rebuild", "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["source"] == "projection"
+    assert payload["semantic_query"]["concept_ids"] == ["service:mongodb"]
+    assert payload["candidates"][0]["trace_id"] == "trace-local-semantic-mongo"
+    assert payload["candidates"][0]["score_parts"]["projection_semantic"] > 0
+    assert payload["candidates"][0]["matched_fields"]["semantic"] == ["mongodb"]

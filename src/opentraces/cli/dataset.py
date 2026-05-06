@@ -461,6 +461,7 @@ def dataset_status(name: str, as_json: bool) -> None:
     help="Remembered trace query scope.",
 )
 @click.option("--query-lex", default=None, help="Remembered trace query lexical text.")
+@click.option("--query-semantic", default=None, help="Remembered semantic trace query text.")
 @click.option(
     "--query-source",
     type=click.Choice(["index", "projection"]),
@@ -499,6 +500,7 @@ def dataset_new(
     query_name: str | None,
     query_scope: str,
     query_lex: str | None,
+    query_semantic: str | None,
     query_source: str | None,
     query_project: str | None,
     query_candidate_kind: str | None,
@@ -550,6 +552,7 @@ def dataset_new(
                 query_name=query_name,
                 query_scope=query_scope,
                 query_lex=query_lex,
+                query_semantic=query_semantic,
                 query_source=query_source,
                 query_project=query_project,
                 query_candidate_kind=query_candidate_kind,
@@ -572,14 +575,19 @@ def _candidate_query_for_dataset(
     query_name: str | None,
     query_scope: str,
     query_lex: str | None,
+    query_semantic: str | None,
     query_source: str | None,
     query_project: str | None,
     query_candidate_kind: str | None,
     query_args: tuple[str, ...],
 ) -> dict[str, object] | None:
+    if query_lex and query_semantic:
+        raise ValueError("Use either --query-lex or --query-semantic, not both")
     args: dict[str, object] = {}
     if query_lex:
         args["lex"] = query_lex
+    if query_semantic:
+        args["semantic"] = query_semantic
     if query_source:
         args["source"] = query_source
     if query_project:

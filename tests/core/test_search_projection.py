@@ -107,6 +107,8 @@ def test_search_projection_writes_immutable_local_bucket_build(tmp_path):
     assert "clack" in trace_doc["text"].lower()
     assert trace_doc["content_hash"]
     assert "ot://trace/trace-local-search-projection/map" in trace_doc["evidence_refs"]
+    assert "library:clack" in trace_doc["semantic"]["concept_ids"]
+    assert "interactive cli" in trace_doc["search_text"]
 
     pointer = json.loads(summary.current_path.read_text())
     assert pointer["build_id"] == summary.build_id

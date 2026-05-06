@@ -28,6 +28,7 @@ from opentraces_schema import (
 )
 
 from . import paths
+from .semantic import semantic_facets_for_trace
 from .text_redaction import redact_index_text
 from .trace_map import build_trace_map
 from .trace_map import slice_trace_map_for_candidate
@@ -383,6 +384,7 @@ def query_index(
     dependency: str | None = None,
     git_tier: str | None = None,
     survival: str | None = None,
+    semantic: str | None = None,
     since: str | None = None,
     success: bool | None = None,
     success_unknown: bool = False,
@@ -417,6 +419,7 @@ def query_index(
         dependency=dependency,
         git_tier=git_tier,
         survival=survival,
+        semantic=semantic,
         since=since,
         success=success,
         success_unknown=success_unknown,
@@ -453,6 +456,7 @@ def query_index_page(
     dependency: str | None = None,
     git_tier: str | None = None,
     survival: str | None = None,
+    semantic: str | None = None,
     since: str | None = None,
     success: bool | None = None,
     success_unknown: bool = False,
@@ -2523,6 +2527,7 @@ def _trace_facets(
         suffix = Path(file_path).suffix.lstrip(".")
         if suffix:
             facets.append(TraceFacet(name="file.kind", value=suffix, source="file_path"))
+    facets.extend(semantic_facets_for_trace(record, files=files, skills=skills))
     facets.extend(_command_facets(record))
     facets.extend(_file_operation_facets(record))
     return facets
