@@ -75,6 +75,57 @@ def test_dataset_new_accepts_markdown_workflow_path(tmp_path):
     assert workflow["config"]["entrypoint"] == str(workflow_file.resolve())
 
 
+def test_dataset_new_accepts_workflow_schema_without_seed_rows(tmp_path):
+    schema_file = tmp_path / "intent-trajectory.schema.json"
+    schema_file.write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "required": ["source_trace_id", "source_unit_id", "intent"],
+                "properties": {
+                    "source_trace_id": {"type": "string"},
+                    "source_unit_id": {"type": "string"},
+                    "intent": {"type": "string"},
+                },
+                "additionalProperties": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    created = runner.invoke(
+        dataset_group,
+        [
+            "new",
+            "hf-intents",
+            "--workflow",
+            "hf-intent-trajectory-outcome",
+            "--schema",
+            str(schema_file),
+            "--query-semantic",
+            "hugging face",
+            "--query-source",
+            "projection",
+            "--json",
+        ],
+    )
+
+    assert created.exit_code == 0, created.output
+    payload = json.loads(created.output)
+    assert payload["dataset"]["manifest"]["workflow"]["skill"] == (
+        "hf-intent-trajectory-outcome"
+    )
+    schema_payload = json.loads(
+        (dataset_path("hf-intents") / "schemas" / "row.schema.json").read_text()
+    )
+    assert schema_payload["required"] == ["source_trace_id", "source_unit_id", "intent"]
+    candidate_query = payload["dataset"]["manifest"]["candidate_query"]
+    assert candidate_query["scope"] == "all-projects"
+    assert candidate_query["args"]["semantic"] == "hugging face"
+    assert candidate_query["args"]["source"] == "projection"
+
+
 def test_dataset_and_workflow_groups_are_registered_on_root_cli():
     runner = CliRunner()
 

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 from click.testing import CliRunner
 
 from opentraces.cli import main
@@ -165,7 +164,7 @@ def test_dataset_new_rejects_invalid_jsonl(tmp_path):
     assert not dataset_path("bad-jsonl").exists()
 
 
-def test_dataset_new_requires_both_rows_file_and_schema(tmp_path):
+def test_dataset_new_rows_file_requires_schema_but_schema_can_define_workflow_contract(tmp_path):
     rows_path = tmp_path / "rows.jsonl"
     _write_rows(rows_path, [{"id": "x", "summary": "y"}])
 
@@ -182,7 +181,8 @@ def test_dataset_new_requires_both_rows_file_and_schema(tmp_path):
     assert result.exit_code != 0
     assert not dataset_path("rows-only").exists()
 
-    # --schema without --rows-file should also be rejected.
+    # --schema without --rows-file creates a workflow-backed dataset with
+    # a custom row contract.
     schema_path = rows_path.parent / "schema.json"
     schema_path.write_text(json.dumps(_basic_schema()), encoding="utf-8")
     result = runner.invoke(
@@ -193,8 +193,12 @@ def test_dataset_new_requires_both_rows_file_and_schema(tmp_path):
             "--schema", str(schema_path),
         ],
     )
-    assert result.exit_code != 0
-    assert not dataset_path("schema-only").exists()
+    assert result.exit_code == 0, result.output
+    assert dataset_path("schema-only").exists()
+    stored_schema = json.loads(
+        (dataset_path("schema-only") / "schemas" / "row.schema.json").read_text()
+    )
+    assert stored_schema == _basic_schema()
 
 
 def test_dataset_run_on_manual_dataset_is_a_noop(tmp_path):

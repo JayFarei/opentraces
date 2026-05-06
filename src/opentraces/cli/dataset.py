@@ -487,8 +487,8 @@ def dataset_status(name: str, as_json: bool) -> None:
     type=click.Path(exists=True, dir_okay=False, readable=True),
     default=None,
     help=(
-        "Ad-hoc mode: JSON Schema file describing rows in --rows-file. "
-        "Required when --rows-file is set."
+        "JSON Schema file describing dataset rows. With --rows-file this seeds "
+        "an ad-hoc dataset; without --rows-file this defines workflow output."
     ),
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
@@ -514,13 +514,14 @@ def dataset_new(
     Two modes:
 
     * Workflow mode (default): synthesizes a workflow-driven dataset
-      that is filled by ``opentraces dataset run``.
+      that is filled by ``opentraces dataset run``. Use ``--schema`` to
+      define the workflow's row contract.
     * Ad-hoc mode (``--rows-file`` + ``--schema``): seeds a manual
       dataset directly from a JSONL file. ``dataset run`` is a no-op
       for manual datasets; review/approve/publish work as usual.
     """
-    if rows_file or schema_file:
-        if not (rows_file and schema_file):
+    if rows_file:
+        if not schema_file:
             click.echo(
                 "--rows-file and --schema must be provided together "
                 "(ad-hoc dataset mode requires both).",
@@ -537,6 +538,7 @@ def dataset_new(
         return
 
     try:
+        schema_payload = _load_schema_file(schema_file) if schema_file else None
         workflow_skill, resolved_digest, workflow_config = _resolve_workflow_for_dataset(
             workflow,
             workflow_digest,
@@ -547,6 +549,7 @@ def dataset_new(
             workflow_skill=workflow_skill,
             workflow_digest=resolved_digest,
             workflow_config=workflow_config,
+            row_schema=schema_payload,
             candidate_query=_candidate_query_for_dataset(
                 dataset_name=name,
                 query_name=query_name,
@@ -567,6 +570,17 @@ def dataset_new(
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
     click.echo(f"Dataset created: {dataset.name}")
+
+
+def _load_schema_file(schema_file: str) -> dict[str, object]:
+    schema_path = Path(schema_file)
+    try:
+        schema_payload = json.loads(schema_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"failed to read --schema {schema_file}: {exc}") from exc
+    if not isinstance(schema_payload, dict):
+        raise ValueError("--schema must point to a JSON object schema")
+    return schema_payload
 
 
 def _candidate_query_for_dataset(
@@ -668,17 +682,13 @@ def _create_manual_dataset(
     from datetime import datetime, timezone
     from pathlib import Path
 
-    schema_path = Path(schema_file)
     rows_path = Path(rows_file)
 
     # Load + validate the schema file is JSON.
     try:
-        schema_payload = json.loads(schema_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        click.echo(f"failed to read --schema {schema_file}: {exc}", err=True)
-        sys.exit(2)
-    if not isinstance(schema_payload, dict):
-        click.echo("--schema must point to a JSON object schema", err=True)
+        schema_payload = _load_schema_file(schema_file)
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
         sys.exit(2)
 
     # Parse the JSONL rows file up-front so we fail before creating the
@@ -868,18 +878,35 @@ def dataset_run(
 @click.argument("args", nargs=-1)
 @click.option("--tui", "mode", flag_value="tui", default=None, help="Open TUI review.")
 @click.option("--web", "mode", flag_value="web", help="Open web review.")
-@click.option("--all", "all_rows", is_flag=True, help="With `reset`, reset every row to policy defaults.")
+@click.option(
+    "--all",
+    "all_rows",
+    is_flag=True,
+    help="With `approve`, `reject`, or `reset`, apply to every eligible row.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def dataset_review(args: tuple[str, ...], mode: str | None, all_rows: bool, as_json: bool) -> None:
-    """Review dataset rows, or reset selected rows to policy defaults."""
+    """Review, approve, reject, or reset dataset rows."""
     if not args:
-        click.echo("Usage: ot dataset review <name> OR ot dataset review reset <name> [ROW_ID...]", err=True)
+        click.echo(
+            "Usage: ot dataset review <name> OR "
+            "ot dataset review approve|reject|reset <name> [ROW_ID...]",
+            err=True,
+        )
         sys.exit(2)
-    if args[0] == "reset":
+    if args[0] in {"approve", "reject", "reset"}:
         if len(args) < 2:
-            click.echo("Usage: ot dataset review reset <name> [ROW_ID...]", err=True)
+            click.echo(
+                f"Usage: ot dataset review {args[0]} <name> [ROW_ID...]",
+                err=True,
+            )
             sys.exit(2)
-        _dataset_review_transition(args[1], list(args[2:]), all_rows, "reset", as_json)
+        decision = {
+            "approve": "publishable",
+            "reject": "rejected",
+            "reset": "reset",
+        }[args[0]]
+        _dataset_review_transition(args[1], list(args[2:]), all_rows, decision, as_json)
         return
     if len(args) > 1:
         click.echo("Usage: ot dataset review <name>", err=True)

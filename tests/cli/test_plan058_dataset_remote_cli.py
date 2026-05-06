@@ -108,7 +108,21 @@ def test_dataset_review_commands_update_publication_state_without_row_mutation()
     assert approved.exit_code == 0, approved.output
     assert read_publication_state("reviewable").rows[row_id].status == "publishable"
 
-    rejected = runner.invoke(dataset_group, ["reject", "reviewable", "--all", "--json"])
+    reset_after_approve = runner.invoke(
+        dataset_group,
+        ["review", "reset", "reviewable", "--all", "--json"],
+    )
+    assert reset_after_approve.exit_code == 0, reset_after_approve.output
+    assert read_publication_state("reviewable").rows[row_id].status == "needs_review"
+
+    reviewed_approve = runner.invoke(
+        dataset_group,
+        ["review", "approve", "reviewable", row_id, "--json"],
+    )
+    assert reviewed_approve.exit_code == 0, reviewed_approve.output
+    assert read_publication_state("reviewable").rows[row_id].status == "publishable"
+
+    rejected = runner.invoke(dataset_group, ["review", "reject", "reviewable", "--all", "--json"])
     assert rejected.exit_code == 0, rejected.output
     assert read_publication_state("reviewable").rows[row_id].status == "rejected"
 
