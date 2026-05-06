@@ -31,12 +31,13 @@ def _trace() -> TraceRecord:
         trace_id="trace-local-index-cli",
         session_id="session-local-index-cli",
         agent=Agent(name="claude-code", model="claude-opus-4-6"),
-        task={"description": "Patch local prompt workflow"},
+        task={"description": "Patch local clack prompt workflow"},
+        dependencies=["@clack/prompts"],
         steps=[
             Step(
                 step_index=1,
                 role="user",
-                content="Patch the local prompt workflow and run a focused test.",
+                content="Patch the local clack prompt workflow and run a focused test.",
             ),
             Step(
                 step_index=2,
@@ -85,3 +86,59 @@ def test_trace_index_rebuild_and_status_emit_local_search_projection(tmp_path):
     assert status_payload["index"]["trace_count"] == 1
     assert status_payload["search_projection"]["state"] == "ok"
     assert status_payload["search_projection"]["build_id"] == payload["search_projection"]["build_id"]
+
+    query = runner.invoke(
+        main,
+        [
+            "trace",
+            "query",
+            "--source",
+            "projection",
+            "--lex",
+            "clack",
+            "--json",
+        ],
+    )
+    assert query.exit_code == 0, query.output
+    query_payload = json.loads(query.output)
+    assert query_payload["source"] == "projection"
+    assert query_payload["total"] >= 1
+    assert query_payload["candidates"][0]["trace_id"] == "trace-local-index-cli"
+    assert query_payload["candidates"][0]["score_parts"]["projection_lexical"] > 0
+
+    slice_result = runner.invoke(
+        main,
+        [
+            "trace",
+            "slice",
+            "trace-local-index-cli",
+            "--from-step",
+            "1",
+            "--to-step",
+            "2",
+            "--json",
+        ],
+    )
+    assert slice_result.exit_code == 0, slice_result.output
+    slice_payload = json.loads(slice_result.output)
+    assert slice_payload["slices"][0]["trace_id"] == "trace-local-index-cli"
+
+    workflow_file = tmp_path / "classic-local-dataset.md"
+    workflow_file.write_text(
+        "---\nname: classic-local-dataset\ndescription: local E2E dataset workflow\n---\n"
+        "Use `ot trace query --source projection` and `ot trace slice` to select rows.\n"
+    )
+    dataset = runner.invoke(
+        main,
+        [
+            "dataset",
+            "new",
+            "local-e2e",
+            "--workflow",
+            str(workflow_file),
+            "--json",
+        ],
+    )
+    assert dataset.exit_code == 0, dataset.output
+    dataset_payload = json.loads(dataset.output)
+    assert dataset_payload["dataset"]["manifest"]["workflow"]["skill"] == "classic-local-dataset"

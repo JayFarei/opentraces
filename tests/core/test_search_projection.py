@@ -95,6 +95,7 @@ def test_search_projection_writes_immutable_local_bucket_build(tmp_path):
     assert summary.doc_count > 1
     assert summary.trace_count == 1
     assert summary.docs_path.exists()
+    assert summary.sqlite_path.exists()
     assert summary.manifest_path.exists()
     assert summary.current_path.exists()
 
@@ -115,4 +116,5 @@ def test_search_projection_writes_immutable_local_bucket_build(tmp_path):
     assert status["state"] == "ok"
     assert status["build_id"] == summary.build_id
     assert status["doc_count"] == summary.doc_count
+    assert status["sqlite_path"] == str(summary.sqlite_path)
     assert status["embedding_ready"] is False

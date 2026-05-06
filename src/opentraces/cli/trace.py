@@ -151,6 +151,14 @@ def trace_group() -> None:
 )
 @click.option("--max-slice-nodes", type=int, default=40, show_default=True, help="Maximum nodes for --include-slice.")
 @click.option("--force-rebuild", is_flag=True, help="Rebuild the local Trace Index before querying.")
+@click.option(
+    "--source",
+    "query_source",
+    type=click.Choice(["index", "projection"]),
+    default="index",
+    show_default=True,
+    help="Local query source.",
+)
 @click.option("--vec", default=None, help="Reserved vector query mode.")
 @click.option("--hyde", default=None, help="Reserved HyDE query mode.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
@@ -188,6 +196,7 @@ def trace_query(
     include_slice: str | None,
     max_slice_nodes: int,
     force_rebuild: bool,
+    query_source: str,
     vec: str | None,
     hyde: str | None,
     as_json: bool,
@@ -266,10 +275,19 @@ def trace_query(
         )
         sys.exit(3)
     if force_rebuild:
-        rebuild_index()
+        summary = rebuild_index()
+        if query_source == "projection":
+            from ..core.search_projection import build_search_projection
+
+            build_search_projection(index_path=summary.index_path)
 
     try:
-        page = query_index_page(
+        query_page = query_index_page
+        if query_source == "projection":
+            from ..core.search_projection import query_search_projection_page
+
+            query_page = query_search_projection_page
+        page = query_page(
             lex=lex,
             skill=skill,
             tool=tool,
@@ -306,6 +324,7 @@ def trace_query(
         sys.exit(2)
     payload = {
         "status": "ok",
+        "source": query_source,
         "total": page.total,
         "total_returned": len(page.candidates),
         "limit": limit,

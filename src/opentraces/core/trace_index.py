@@ -850,6 +850,39 @@ def list_units(
     return [_unit_from_row(row) for row in rows]
 
 
+def latest_units(units: list[TraceUnit]) -> list[TraceUnit]:
+    """Return the latest non-superseded Trace Units using index semantics."""
+
+    return _latest_units(units)
+
+
+def candidate_packet_for_unit(
+    unit: TraceUnit,
+    score: float,
+    score_parts: dict[str, float],
+    matched_fields: dict[str, list[str]],
+    *,
+    include_slice: str | None = None,
+    max_slice_nodes: int = 40,
+    index_path: Path | None = None,
+) -> CandidatePacket:
+    """Build a bounded CandidatePacket for a Trace Unit.
+
+    Projection-backed query paths use this to keep packet shape identical
+    to the SQLite index query path.
+    """
+
+    return _candidate_packet(
+        unit,
+        score,
+        score_parts,
+        matched_fields,
+        include_slice=include_slice,
+        max_slice_nodes=max_slice_nodes,
+        index_path=index_path,
+    )
+
+
 def get_map_node(node_id: str, *, index_path: Path | None = None) -> TraceMapNode | None:
     db_path = index_path or default_index_path()
     if not db_path.exists():
