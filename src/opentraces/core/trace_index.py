@@ -808,6 +808,48 @@ def get_unit(unit_id: str, *, index_path: Path | None = None) -> TraceUnit | Non
     return _unit_from_row(row) if row else None
 
 
+def list_units(
+    *,
+    index_path: Path | None = None,
+    project_slug: str | None = None,
+    trace_id: str | None = None,
+    unit_type: str | None = None,
+) -> list[TraceUnit]:
+    """Return indexed Trace Units without triggering a rebuild.
+
+    Projection builders use this as a stable read accessor over the SQLite
+    cache. If callers need fresh source files folded in, they should invoke
+    ``rebuild_index`` or ``refresh_index`` before calling this function.
+    """
+
+    db_path = index_path or default_index_path()
+    if not db_path.exists():
+        return []
+
+    clauses: list[str] = []
+    params: list[str] = []
+    if project_slug is not None:
+        clauses.append("project_slug = ?")
+        params.append(project_slug)
+    if trace_id is not None:
+        clauses.append("trace_id = ?")
+        params.append(trace_id)
+    if unit_type is not None:
+        clauses.append("unit_type = ?")
+        params.append(unit_type)
+
+    where_sql = f" where {' and '.join(clauses)}" if clauses else ""
+    sql = (
+        "select * from units"
+        f"{where_sql}"
+        " order by project_slug, trace_id, unit_type, unit_id"
+    )
+    with _connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = list(conn.execute(sql, params))
+    return [_unit_from_row(row) for row in rows]
+
+
 def get_map_node(node_id: str, *, index_path: Path | None = None) -> TraceMapNode | None:
     db_path = index_path or default_index_path()
     if not db_path.exists():

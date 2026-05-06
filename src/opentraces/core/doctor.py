@@ -30,7 +30,7 @@ def _trace_index_status() -> dict[str, Any]:
     from .trace_index import INDEX_VERSION, default_index_path
 
     index_path = default_index_path()
-    rebuild_advice = "opentraces trace query --force-rebuild"
+    rebuild_advice = "opentraces trace index rebuild"
     legacy_artifacts = _legacy_trace_index_artifacts()
     source_files = sorted(paths.PROJECTS_DIR.glob("*/traces/*.jsonl")) if paths.PROJECTS_DIR.exists() else []
     source_latest_mtime = max((p.stat().st_mtime for p in source_files), default=None)

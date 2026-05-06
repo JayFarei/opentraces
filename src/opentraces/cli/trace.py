@@ -320,6 +320,79 @@ def trace_query(
         click.echo(f"{packet.trace_id}  {packet.title}")
 
 
+@trace_group.group("index", cls=OpentracesGroup)
+def trace_index_group() -> None:
+    """Rebuild and inspect local trace search projections."""
+
+
+@trace_index_group.command("rebuild", cls=OpentracesCommand)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_index_rebuild_cmd(as_json: bool) -> None:
+    """Rebuild the local Trace Index and bucket-shaped search projection."""
+    from ..core.search_projection import build_search_projection
+    from ..core.trace_index import rebuild_index
+
+    index_summary = rebuild_index()
+    search_summary = build_search_projection(index_path=index_summary.index_path)
+    payload = {
+        "status": "ok",
+        "index": {
+            "path": str(index_summary.index_path),
+            "trace_count": index_summary.trace_count,
+            "unit_count": index_summary.unit_count,
+            "map_node_count": index_summary.map_node_count,
+        },
+        "search_projection": search_summary.as_dict(),
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    click.echo(f"Trace Index rebuilt: {index_summary.index_path}")
+    click.echo(f"  traces:    {index_summary.trace_count}")
+    click.echo(f"  units:     {index_summary.unit_count}")
+    click.echo(f"  map nodes: {index_summary.map_node_count}")
+    click.echo(f"Search projection: {search_summary.build_id}")
+    click.echo(f"  docs:      {search_summary.doc_count}")
+    click.echo(f"  path:      {search_summary.build_path}")
+
+
+@trace_index_group.command("status", cls=OpentracesCommand)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_index_status_cmd(as_json: bool) -> None:
+    """Show local Trace Index and search projection status."""
+    from ..core.search_projection import search_projection_status
+    from ..core.trace_index import default_index_path, list_units
+
+    index_path = default_index_path()
+    units = list_units(index_path=index_path)
+    projection = search_projection_status()
+    payload = {
+        "status": "ok",
+        "index": {
+            "path": str(index_path),
+            "exists": index_path.exists(),
+            "unit_count": len(units),
+            "trace_count": len({unit.trace_id for unit in units}),
+        },
+        "search_projection": projection,
+    }
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    index_state = "present" if index_path.exists() else "missing"
+    click.echo(f"Trace Index: {index_state}")
+    click.echo(f"  path:   {index_path}")
+    click.echo(f"  traces: {payload['index']['trace_count']}")
+    click.echo(f"  units:  {payload['index']['unit_count']}")
+    click.echo(f"Search projection: {projection.get('state')}")
+    if projection.get("state") == "ok":
+        click.echo(f"  build:  {projection.get('build_id')}")
+        click.echo(f"  docs:   {projection.get('doc_count')}")
+        click.echo(f"  path:   {projection.get('manifest_path')}")
+
+
 @trace_group.command("map", cls=OpentracesCommand)
 @click.argument("target")
 @click.option("--candidate", default=None, help="Candidate unit or map node to expand around.")

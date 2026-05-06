@@ -1,6 +1,7 @@
 """CLI installers/admin group: setup, doctor, and supporting setup actions."""
 from __future__ import annotations
 
+import json as _setup_watcher_json
 import logging
 import os
 import shutil
@@ -260,9 +261,7 @@ def _run_setup_wizard() -> None:
     human_echo(
         f"  • to inspect health:   {_cli._bold('opentraces doctor')}"
     )
-    human_echo(
-        f"  • dataset review policy lives in the dataset manifest and review commands."
-    )
+    human_echo("  • dataset review policy lives in the dataset manifest and review commands.")
 
 @setup_group.command(
     "claude-code",
@@ -1383,7 +1382,7 @@ def _trace_index_section(info: dict) -> None:
     if info.get("legacy_warning"):
         _row("warn", "legacy cache", "ignored", detail="canonical cache is ~/.opentraces/index/index.db")
     if state != "ok":
-        _row("warn", "rebuild", info.get("rebuild_advice") or "opentraces trace query --force-rebuild")
+        _row("warn", "rebuild", info.get("rebuild_advice") or "opentraces trace index rebuild")
 
 
 def _skill_row(h: dict) -> None:
@@ -1989,9 +1988,6 @@ def setup_entity_parser(force: bool) -> None:
 # the global ``setup`` namespace rather than being split across `setup
 # watcher` and a separate top-level `watcher` group.
 # ---------------------------------------------------------------------------
-
-import json as _setup_watcher_json
-
 
 @setup_group.group("watcher")
 def setup_watcher_group() -> None:

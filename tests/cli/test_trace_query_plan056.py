@@ -502,7 +502,7 @@ def test_trace_query_include_superseded_returns_older_generations(tmp_path):
     } == {"trace-plan056-cli-old", "trace-plan056-cli-new"}
 
 
-def test_trace_search_and_show_aliases_resolve(tmp_path):
+def test_trace_query_and_get_resolve_units(tmp_path):
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")
     _write_project_trace(project, _trace())
@@ -510,22 +510,18 @@ def test_trace_search_and_show_aliases_resolve(tmp_path):
     runner = CliRunner()
     search = runner.invoke(
         main,
-        ["trace", "search", "--skill", "grill-me", "--force-rebuild", "--json"],
+        ["trace", "query", "--skill", "grill-me", "--force-rebuild", "--json"],
     )
     assert search.exit_code == 0, search.output
     packet = json.loads(search.output)["candidates"][0]
 
-    show = runner.invoke(main, ["trace", "show", packet["unit_id"], "--json"])
-    assert show.exit_code == 0, show.output
-    assert json.loads(show.output)["unit"]["unit_id"] == packet["unit_id"]
-
-    root_show = runner.invoke(main, ["show", packet["unit_id"], "--json"])
-    assert root_show.exit_code == 0, root_show.output
-    assert json.loads(root_show.output)["unit"]["unit_id"] == packet["unit_id"]
+    get = runner.invoke(main, ["trace", "get", packet["unit_id"], "--json"])
+    assert get.exit_code == 0, get.output
+    assert json.loads(get.output)["unit"]["unit_id"] == packet["unit_id"]
 
     positional_search = runner.invoke(
         main,
-        ["trace", "search", "bug", "fix", "failing", "test", "--json"],
+        ["trace", "query", "bug", "fix", "failing", "test", "--json"],
     )
     assert positional_search.exit_code == 0, positional_search.output
     assert json.loads(positional_search.output)["candidates"][0]["trace_id"] == packet["trace_id"]
@@ -844,7 +840,7 @@ def test_doctor_reports_trace_index_status(tmp_path, monkeypatch):
     assert trace_index["trace_count"] == 1
     assert trace_index["unit_count"] > 1
     assert trace_index["map_node_count"] > 1
-    assert trace_index["rebuild_advice"] == "opentraces trace query --force-rebuild"
+    assert trace_index["rebuild_advice"] == "opentraces trace index rebuild"
     assert trace_index["legacy_warning"] is True
     assert {
         item["path"].rsplit("/", 1)[-1]
