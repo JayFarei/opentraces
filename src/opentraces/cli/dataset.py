@@ -952,11 +952,13 @@ def dataset_publish(
     uploading.
     """
     try:
+        token, _username = _hf_auth()
         summary = publish_dataset(
             name,
             to=remote,
             check_only=check_only,
             resume=resume,
+            token=token,
             min_retention=min_retention,
             exclude_states=list(exclude_states) if exclude_states else None,
         )

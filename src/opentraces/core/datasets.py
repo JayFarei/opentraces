@@ -1509,25 +1509,27 @@ def build_dataset_card(
     manifest: DatasetManifest,
 ) -> str:
     tags = manifest.discoverability.tags
-    frontmatter = yaml.safe_dump(
-        {
-            "configs": [
-                {
-                    "config_name": "default",
-                    "data_files": [{"split": "train", "path": "data/train.jsonl"}],
-                }
-            ],
-            "tags": tags,
-            "license": manifest.discoverability.license,
-            "opentraces": {
-                "name": manifest.name,
-                "description": manifest.description,
-                "schema": manifest.schema_ref.model_dump(mode="json"),
-                "workflow": manifest.workflow.model_dump(mode="json"),
-                "identity": manifest.identity.model_dump(mode="json"),
-                "publication_policy": manifest.publication_policy.model_dump(mode="json"),
-            },
+    frontmatter_payload: dict[str, Any] = {
+        "configs": [
+            {
+                "config_name": "default",
+                "data_files": [{"split": "train", "path": "data/train.jsonl"}],
+            }
+        ],
+        "tags": tags,
+        "opentraces": {
+            "name": manifest.name,
+            "description": manifest.description,
+            "schema": manifest.schema_ref.model_dump(mode="json"),
+            "workflow": manifest.workflow.model_dump(mode="json"),
+            "identity": manifest.identity.model_dump(mode="json"),
+            "publication_policy": manifest.publication_policy.model_dump(mode="json"),
         },
+    }
+    if manifest.discoverability.license:
+        frontmatter_payload["license"] = manifest.discoverability.license
+    frontmatter = yaml.safe_dump(
+        frontmatter_payload,
         sort_keys=False,
     )
     body = description or f"Local OpenTraces dataset `{name}`."

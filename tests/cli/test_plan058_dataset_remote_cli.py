@@ -6,6 +6,7 @@ from click.testing import CliRunner
 
 from opentraces.cli.dataset import dataset_group
 from opentraces.core.datasets import (
+    DatasetPublishSummary,
     add_dataset_remote,
     append_rows,
     load_dataset,
@@ -148,3 +149,42 @@ def test_dataset_publish_check_only_then_publish(tmp_path, monkeypatch):
     published_payload = json.loads(published.output)
     assert published_payload["publish"]["uploaded"] is True
     assert published_payload["publish"]["new_row_count"] == 1
+
+
+def test_dataset_publish_passes_saved_hf_token(monkeypatch):
+    runner = CliRunner()
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "opentraces.cli.dataset._hf_auth",
+        lambda: ("hf_saved_token", "me"),
+    )
+
+    def fake_publish_dataset(name: str, **kwargs):
+        observed["name"] = name
+        observed.update(kwargs)
+        return DatasetPublishSummary(
+            dataset_name=name,
+            remote_name="me/private-ds",
+            repo_id="me/private-ds",
+            run_id="pub-test",
+            uploaded=False,
+            check_only=True,
+            new_row_count=0,
+            duplicate_count=0,
+            needs_review_count=0,
+            blocked_count=0,
+            staged_files=[],
+            remote_head_before="abc",
+            remote_head_after="abc",
+            message="check-only",
+        )
+
+    monkeypatch.setattr("opentraces.cli.dataset.publish_dataset", fake_publish_dataset)
+
+    result = runner.invoke(dataset_group, ["publish", "private-ds", "--check-only", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert observed["name"] == "private-ds"
+    assert observed["token"] == "hf_saved_token"
+    assert observed["check_only"] is True

@@ -37,6 +37,8 @@ def test_dataset_creation_writes_hf_shaped_public_tree_and_private_manifest():
     assert (root / ".opentraces" / "row_index.jsonl").read_text() == ""
     assert (root / ".opentraces" / "cursors.yaml").exists()
     assert (root / ".opentraces" / "runs").is_dir()
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    assert "license: null" not in readme
 
     manifest = load_manifest(root)
     assert manifest.name == "grill-me-intents"
