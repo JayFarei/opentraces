@@ -33,7 +33,6 @@ from opentraces_schema import (
     DatasetPublicationStateEntry,
     DatasetRemote,
     DatasetRowIndexEntry,
-    DatasetSourceProvenance,
     WorkflowRef,
 )
 
@@ -43,6 +42,7 @@ from ..security.scanner import scan_serialized
 from . import paths
 
 _DATASET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+SOURCE_PROVENANCE_SCHEMA = "opentraces.dataset.source_provenance.v1"
 
 
 @dataclass(frozen=True)
@@ -158,7 +158,7 @@ def create_dataset(
     identity: DatasetIdentity | dict[str, Any] | None = None,
     publication_policy: DatasetPublicationPolicy | dict[str, Any] | None = None,
     candidate_query: DatasetCandidateQuery | dict[str, Any] | None = None,
-    source_provenance: DatasetSourceProvenance | dict[str, Any] | None = None,
+    source_provenance: dict[str, Any] | None = None,
     replace: bool = False,
 ) -> LocalDataset:
     validate_dataset_name(name)
@@ -185,12 +185,7 @@ def create_dataset(
         query_model = DatasetCandidateQuery.model_validate(candidate_query)
     else:
         query_model = None
-    if isinstance(source_provenance, DatasetSourceProvenance):
-        provenance_model = source_provenance
-    elif source_provenance:
-        provenance_model = DatasetSourceProvenance.model_validate(source_provenance)
-    else:
-        provenance_model = _source_provenance_for_query(query_model)
+    provenance_payload = source_provenance or _source_provenance_for_query(query_model)
     workflow = WorkflowRef(
         skill=workflow_skill or f"{name}-workflow",
         digest=workflow_digest,
@@ -204,7 +199,6 @@ def create_dataset(
         workflow=workflow,
         identity=identity_model,
         candidate_query=query_model,
-        source_provenance=provenance_model,
         publication_policy=policy_model,
     )
     schema_digest = digest_payload(schema_payload)
@@ -217,6 +211,8 @@ def create_dataset(
     (root / "data" / "train.jsonl").write_text("", encoding="utf-8")
     (root / ".opentraces" / "row_index.jsonl").write_text("", encoding="utf-8")
     (root / ".opentraces" / "cursors.yaml").write_text("queries: {}\n", encoding="utf-8")
+    if provenance_payload is not None:
+        write_source_provenance(root, provenance_payload)
     write_json(root / "dataset_infos.json", build_dataset_infos(name, schema_payload))
     (root / "README.md").write_text(
         build_dataset_card(name, description, manifest),
@@ -228,7 +224,7 @@ def create_dataset(
 
 def _source_provenance_for_query(
     query: DatasetCandidateQuery | None,
-) -> DatasetSourceProvenance | None:
+) -> dict[str, Any] | None:
     if query is None:
         return None
     from .bucket_store import trace_record_snapshot
@@ -249,17 +245,38 @@ def _source_provenance_for_query(
             }
     except Exception:
         projection = None
-    return DatasetSourceProvenance(
-        bucket_snapshot=trace_record_snapshot(include_objects=False),
-        projection=projection,
-        query_fingerprint=digest_payload(query.model_dump(mode="json")),
-    )
+    return {
+        "schema_version": SOURCE_PROVENANCE_SCHEMA,
+        "bucket_snapshot": trace_record_snapshot(include_objects=False),
+        "projection": projection,
+        "query_fingerprint": digest_payload(query.model_dump(mode="json")),
+    }
+
+
+def source_provenance_path(root: Path | str) -> Path:
+    return Path(root) / ".opentraces" / "source_provenance.json"
+
+
+def read_source_provenance(root: Path | str) -> dict[str, Any] | None:
+    path = source_provenance_path(root)
+    if not path.exists():
+        return None
+    payload = read_json(path)
+    return payload if isinstance(payload, dict) else None
+
+
+def write_source_provenance(root: Path | str, payload: dict[str, Any]) -> None:
+    path = source_provenance_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(path, payload)
 
 
 def load_manifest(root: Path | str) -> DatasetManifest:
     root = Path(root)
     manifest_path = root / ".opentraces" / "manifest.yaml"
     raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    if isinstance(raw, dict) and isinstance(raw.get("source_provenance"), dict):
+        write_source_provenance(root, raw.pop("source_provenance"))
     return DatasetManifest.model_validate(raw)
 
 

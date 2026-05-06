@@ -33,7 +33,6 @@ from .dataset import (
     DatasetRunRecord,
     DatasetSchedule,
     DatasetSchemaRef,
-    DatasetSourceProvenance,
     ExecutorConfig,
     WorkflowRef,
 )
@@ -67,7 +66,6 @@ __all__ = [
     "DatasetRunRecord",
     "DatasetSchedule",
     "DatasetSchemaRef",
-    "DatasetSourceProvenance",
     "Environment",
     "ExecutorConfig",
     "GitLink",

@@ -48,7 +48,7 @@ def test_dataset_creation_writes_hf_shaped_public_tree_and_private_manifest():
 
 def test_dataset_creation_persists_bucket_query_provenance():
     from opentraces.core.bucket_store import trace_record_snapshot
-    from opentraces.core.datasets import create_dataset, load_manifest
+    from opentraces.core.datasets import create_dataset, load_manifest, read_source_provenance
 
     created = create_dataset(
         "semantic-intents",
@@ -62,10 +62,12 @@ def test_dataset_creation_persists_bucket_query_provenance():
     )
 
     manifest = load_manifest(created.path)
-    assert manifest.source_provenance is not None
-    assert manifest.source_provenance.schema_version == "opentraces.dataset.source_provenance.v1"
-    assert manifest.source_provenance.query_fingerprint is not None
-    assert manifest.source_provenance.bucket_snapshot == trace_record_snapshot(include_objects=False)
+    assert not hasattr(manifest, "source_provenance")
+    provenance = read_source_provenance(created.path)
+    assert provenance is not None
+    assert provenance["schema_version"] == "opentraces.dataset.source_provenance.v1"
+    assert provenance["query_fingerprint"] is not None
+    assert provenance["bucket_snapshot"] == trace_record_snapshot(include_objects=False)
 
 
 def test_append_rows_validates_schema_dedupes_and_rebuilds_row_index():

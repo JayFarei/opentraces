@@ -96,6 +96,20 @@ def test_dataset_manifest_defaults_to_payload_hash_identity_and_current_agent_de
     assert manifest.discoverability.tags == ["opentraces", "agent-traces"]
 
 
+def test_dataset_manifest_rejects_local_source_provenance_sidecar_fields():
+    with pytest.raises(ValidationError):
+        DatasetManifest.model_validate(
+            {
+                "name": "minimal",
+                "schema": {"path": "schemas/row.schema.json", "version": "1.0.0"},
+                "workflow": {"skill": "minimal-curator", "digest": "sha256:workflow"},
+                "source_provenance": {
+                    "schema_version": "opentraces.dataset.source_provenance.v1"
+                },
+            }
+        )
+
+
 def test_field_identity_requires_declared_fields():
     with pytest.raises(ValidationError):
         DatasetIdentity(mode="fields")

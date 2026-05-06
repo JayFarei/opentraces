@@ -20,6 +20,7 @@ from .datasets import (
     digest_payload,
     load_dataset,
     read_json,
+    read_source_provenance,
     save_manifest,
 )
 
@@ -65,6 +66,7 @@ def run_dataset_workflow(
     schema = read_json(dataset.path / dataset.manifest.schema_ref.path)
     schema_digest = dataset.manifest.schema_ref.digest or digest_payload(schema)
     workflow_digest = dataset.manifest.workflow.digest
+    source_provenance = read_source_provenance(dataset.path)
     output_path = run_dir / "output_rows.jsonl"
     run_packet = {
         "run_id": run_id,
@@ -81,11 +83,7 @@ def run_dataset_workflow(
             if dataset.manifest.candidate_query
             else None
         ),
-        "source_provenance": (
-            dataset.manifest.source_provenance.model_dump(mode="json")
-            if dataset.manifest.source_provenance
-            else None
-        ),
+        "source_provenance": source_provenance,
         "scope": scope or {"scope": "all-projects"},
         "limit": limit,
     }
