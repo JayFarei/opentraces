@@ -143,6 +143,15 @@ def test_trace_index_rebuild_and_status_emit_local_search_projection(tmp_path):
     assert query_payload["candidates"][0]["trace_id"] == "trace-local-index-cli"
     assert query_payload["candidates"][0]["score_parts"]["projection_lexical"] > 0
 
+    get_result = runner.invoke(
+        main,
+        ["trace", "get", "trace-local-index-cli", "--json"],
+    )
+    assert get_result.exit_code == 0, get_result.output
+    get_payload = json.loads(get_result.output)
+    assert get_payload["trace"]["trace_id"] == "trace-local-index-cli"
+    assert get_payload["trace"]["schema_version"]
+
     slice_result = runner.invoke(
         main,
         [
@@ -159,6 +168,15 @@ def test_trace_index_rebuild_and_status_emit_local_search_projection(tmp_path):
     assert slice_result.exit_code == 0, slice_result.output
     slice_payload = json.loads(slice_result.output)
     assert slice_payload["slices"][0]["trace_id"] == "trace-local-index-cli"
+
+    burst_slice = runner.invoke(
+        main,
+        ["trace", "slice", "trace-local-index-cli", "--template", "bursts", "--json"],
+    )
+    assert burst_slice.exit_code == 0, burst_slice.output
+    burst_payload = json.loads(burst_slice.output)
+    assert burst_payload["slices"][0]["steps"]
+    assert "trace_record_unavailable" not in burst_payload["slices"][0]["limitations"]
 
     workflow_file = tmp_path / "classic-local-dataset.md"
     workflow_file.write_text(

@@ -788,8 +788,6 @@ def trace_get(
         _trace_get_bursts_impl(ref, burst_gap, as_json, commit_lookup=not no_commit_lookup)
         return
 
-    from opentraces_schema import TraceRecord
-
     from ..core.trace_index import get_map_node, get_trace_path, get_unit
 
     if ref.startswith("ot://"):
@@ -818,8 +816,7 @@ def trace_get(
         if trace_path is None or not trace_path.exists():
             click.echo(f"Trace not found: {ref}", err=True)
             sys.exit(6)
-        first_line = next((line for line in trace_path.read_text().splitlines() if line.strip()), "")
-        record = TraceRecord.model_validate_json(first_line)
+        record = _read_trace_record_from_path(trace_path)
         payload = {"status": "ok", "trace": record.model_dump(mode="json")}
 
     if as_json:
@@ -890,20 +887,31 @@ def _try_load_trace_record(trace_id: str):
     ``None`` on any failure — callers must handle that gracefully.
     """
     try:
-        from opentraces_schema import TraceRecord
-
         from ..core.trace_index import get_trace_path
 
         trace_path = get_trace_path(trace_id)
         if trace_path is None or not trace_path.exists():
             return None
-        with trace_path.open() as fh:
-            line = fh.readline()
-        if not line:
-            return None
-        return TraceRecord.model_validate_json(line)
+        return _read_trace_record_from_path(trace_path)
     except Exception:
         return None
+
+
+def _read_trace_record_from_path(trace_path: Path):
+    """Load a TraceRecord from a legacy JSONL shard or bucket object."""
+
+    from opentraces_schema import TraceRecord
+
+    from ..core.bucket_store import read_trace_record_object
+
+    bucket_obj = read_trace_record_object(trace_path)
+    if bucket_obj is not None:
+        return bucket_obj.record
+    first_line = next(
+        (line for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()),
+        "",
+    )
+    return TraceRecord.model_validate_json(first_line)
 
 
 def _trace_id_from_ref(ref: str) -> str:
