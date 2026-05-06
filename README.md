@@ -63,12 +63,14 @@ opentraces init
 # search retained trace evidence
 opentraces trace query --lex "bug fix failing test"
 
+# extract bounded trace slices for dataset rows
+opentraces trace slice <trace-id> --template bursts --json
+
 # inspect Git-anchored trace evidence
 opentraces trail sync --patch <trace_patch_id>
 
-# create and run a local dataset workflow
-opentraces workflow create bug-fix-curator
-opentraces dataset new bug-fixes
+# create and run a workflow-backed local dataset
+opentraces dataset new bug-fixes --workflow ./workflows/bug-fix-curator/WORKFLOW.md
 opentraces dataset run bug-fixes --dry-run --limit 5
 
 # publish reviewed dataset rows when a remote is bound
@@ -81,7 +83,7 @@ Useful follow-ups:
 
 - `opentraces doctor` checks auth, integrations, and pipeline health.
 - `opentraces setup auth` logs in to Hugging Face for dataset remotes.
-- `opentraces trace query/map/get` searches, maps, and retrieves retained traces.
+- `opentraces trace query/map/slice/get` searches, maps, slices, and retrieves retained traces.
 - `opentraces trail blame <sha>` and `opentraces trail graph` show commit-to-trace attribution (run `opentraces setup git` first to install the post-commit correlator).
 - `opentraces trail explain --trace <id> --step <n>` explains Trace Trails evidence rebuilt from the local Git event log.
 - `opentraces trail explain <path>:<line>` resolves a Git-side file line back to Trace Patch evidence when an exact anchor exists.
@@ -179,12 +181,13 @@ recovery, projection rebuild from canonical events, watcher-based
 backstop attribution, and adversarial reconciliation across Git
 rewrites.
 
-Trace Slices are the bounded local context around a Trace Patch: nearby
-steps, prompts, tools, observations, tests, and segment boundaries when
-known. A Trace Slice is context for audit and later dataset projections,
-not a training datum by itself. Phase 6 resolves stable
-`containing_segment_id` values and `ot://` resource paths only; resolving
-full slice content is deferred to the Phase 8 Trace Dataset projection.
+Trace Slices are the bounded local context around a Trace Patch or change
+burst: nearby steps, prompts, tools, observations, tests, and map nodes when
+known. A Trace Slice is context for audit and later dataset projections, not a
+training datum by itself. `opentraces trace slice <trace-id> --template bursts`
+materialises one deterministic slice per detected change burst; manual
+`--from-step/--to-step`, `--around-step`, and `--around-patch` modes are
+available when a workflow needs an explicit window.
 
 `opentraces trail explain --trace <id> --step <n>` rebuilds from the local
 event log and reports the Trace Snapshot references, Trace Patch identity, Git

@@ -14,7 +14,6 @@ GLOBAL_SETUP_VERBS = ["setup", "auth", "config", "completions"]
 PROJECT_SETUP_VERBS = ["init", "status", "doctor", "remove"]
 TRACE_VERBS = ["trace"]
 TRAIL_VERBS = ["trail"]
-WORKFLOW_VERBS = ["workflow"]
 DATASET_VERBS = ["dataset"]
 
 # Legacy/internal verbs still registered at the root but NOT advertised in
@@ -29,7 +28,6 @@ SECTION_HEADERS_IN_ORDER = [
     "PROJECT SETUP COMMANDS",
     "TRACE COMMANDS",
     "TRAIL COMMANDS",
-    "WORKFLOW COMMANDS",
     "DATASET COMMANDS",
 ]
 
@@ -118,13 +116,6 @@ def test_trail_block_contains_current_primary_verbs():
     out = _run_help()
     block = _section_block(out, "TRAIL COMMANDS")
     for verb in TRAIL_VERBS:
-        assert re.search(rf"\b{re.escape(verb)}\b", block), (verb, block)
-
-
-def test_workflow_block_contains_current_primary_verbs():
-    out = _run_help()
-    block = _section_block(out, "WORKFLOW COMMANDS")
-    for verb in WORKFLOW_VERBS:
         assert re.search(rf"\b{re.escape(verb)}\b", block), (verb, block)
 
 

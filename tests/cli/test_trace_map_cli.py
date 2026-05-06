@@ -14,7 +14,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from opentraces.cli import SENTINEL, main
-from opentraces_schema import Agent, Observation, Step, ToolCall, TraceRecord
+from opentraces_schema import Agent, Step, ToolCall, TraceRecord
 
 
 def _enroll_project(project_dir: Path, project_id: str) -> None:
@@ -217,3 +217,95 @@ def test_trace_map_actions_filter_compactness_via_cli(tmp_path):
     payload = json.loads(filtered.output)
     types = {n["action_type"] for n in payload["map"]["nodes"]}
     assert types <= {"user_instruction", "file_edit"}
+
+
+def test_trace_slice_template_bursts_returns_bounded_slices(tmp_path):
+    project = tmp_path / "demo"
+    _enroll_project(project, "abcdef1234567890abcdef1234567890")
+    _write_project_trace(project, _trace_with_two_bursts())
+
+    runner = CliRunner()
+    rebuild = runner.invoke(
+        main,
+        ["trace", "query", "--project", project.name, "--force-rebuild", "--json"],
+    )
+    assert rebuild.exit_code == 0, rebuild.output
+
+    res = runner.invoke(
+        main,
+        [
+            "trace",
+            "slice",
+            "trace-cluster-b-bursts",
+            "--template",
+            "bursts",
+            "--json",
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.output)
+    assert payload["mode"] == "template"
+    assert payload["template"] == "bursts"
+    slices = payload["slices"]
+    assert [item["start_step_index"] for item in slices] == [10, 80]
+    assert [item["end_step_index"] for item in slices] == [15, 82]
+    assert all(item["source"] == "template:bursts" for item in slices)
+    assert [len(item["steps"]) for item in slices] == [3, 2]
+    assert slices[0]["metadata"]["burst"]["unique_files"] == {
+        "src/parser.py": 2,
+        "src/tokens.py": 1,
+    }
+
+
+def test_trace_slice_manual_and_around_step_modes(tmp_path):
+    project = tmp_path / "demo"
+    _enroll_project(project, "abcdef1234567890abcdef1234567890")
+    _write_project_trace(project, _trace_with_two_bursts())
+
+    runner = CliRunner()
+    rebuild = runner.invoke(
+        main,
+        ["trace", "query", "--project", project.name, "--force-rebuild", "--json"],
+    )
+    assert rebuild.exit_code == 0, rebuild.output
+
+    manual = runner.invoke(
+        main,
+        [
+            "trace",
+            "slice",
+            "trace-cluster-b-bursts",
+            "--from-step",
+            "10",
+            "--to-step",
+            "12",
+            "--json",
+        ],
+    )
+    assert manual.exit_code == 0, manual.output
+    manual_payload = json.loads(manual.output)
+    manual_slice = manual_payload["slices"][0]
+    assert manual_slice["start_step_index"] == 10
+    assert manual_slice["end_step_index"] == 12
+    assert [step["step_index"] for step in manual_slice["steps"]] == [10, 12]
+
+    around = runner.invoke(
+        main,
+        [
+            "trace",
+            "slice",
+            "trace-cluster-b-bursts",
+            "--around-step",
+            "80",
+            "--radius",
+            "2",
+            "--json",
+        ],
+    )
+    assert around.exit_code == 0, around.output
+    around_payload = json.loads(around.output)
+    around_slice = around_payload["slices"][0]
+    assert around_payload["mode"] == "around_step"
+    assert around_slice["start_step_index"] == 78
+    assert around_slice["end_step_index"] == 82
+    assert [step["step_index"] for step in around_slice["steps"]] == [80, 82]

@@ -16,9 +16,9 @@ publishes reviewed dataset rows to HuggingFace remotes.
 
 - Global setup: `opentraces setup`, `opentraces setup auth`, `opentraces auth`
 - Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`
-- Trace retrieval: `opentraces trace query`, `opentraces trace map`, `opentraces trace get`
+- Trace retrieval: `opentraces trace query`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`
 - Trace Trails: `opentraces trail blame`, `graph`, `resume`, `sync`, `timeline`, `teleport`
-- Workflows: `opentraces workflow list`, `show`, `create`, `edit`, `remove`
+- Workflows: compatibility registry only, `opentraces workflow create`, `list`, `remove`
 - Datasets: `opentraces dataset new`, `run`, `review`, `approve`, `reject`, `publish`, `pull`
 
 Old flat inbox commands such as `opentraces list`, `add`, `reject`, `push`,
@@ -49,12 +49,14 @@ transcripts.
 opentraces trace query --lex "bug fix failing test" --json
 opentraces trace query --skill grill-me --json
 opentraces trace map <trace_id> --candidate <unit_id> --json
+opentraces trace slice <trace_id> --template bursts --json
 opentraces trace get <trace_id> --json
 ```
 
 `trace query` returns bounded candidate packets. `trace map` returns a
-workflow-neutral evidence map or candidate slice. `trace get` is the explicit
-full retrieval step.
+workflow-neutral evidence map or candidate slice. `trace slice` materialises
+deterministic Trace Slice packets for dataset workflows. `trace get` is the
+explicit full retrieval step.
 
 ### Bursts and intent
 
@@ -110,19 +112,18 @@ or resume it in a blank workspace.
 
 ## Workflows
 
-Workflows are local skill-format packages that know how to turn trace evidence
-into dataset rows.
+Workflows are Markdown files or skill-format packages that know how to turn
+trace evidence into dataset rows. The main user path is to bind them from the
+dataset:
 
 ```bash
-opentraces workflow list
-opentraces workflow show <name>
-opentraces workflow create <name>
-opentraces workflow edit <name>
-opentraces workflow remove <name> --yes
+opentraces dataset new <name> --workflow ./workflows/<workflow>/WORKFLOW.md
+opentraces dataset new <name> --workflow ./workflows/<workflow>/
 ```
 
-Create or edit workflows locally; avoid installing arbitrary workflow packages
-unless the product explicitly adds a trusted install path.
+The compatibility registry remains callable for local scaffolding and cleanup:
+`opentraces workflow create <name>`, `opentraces workflow list`, and
+`opentraces workflow remove <name> --yes`.
 
 ## Datasets
 
@@ -132,7 +133,7 @@ review/security gates pass.
 
 ```bash
 opentraces dataset list
-opentraces dataset new <name>
+opentraces dataset new <name> --workflow <workflow.md-or-package-dir>
 opentraces dataset run <name> --dry-run --limit 5 --verbose
 opentraces dataset run <name>
 opentraces dataset review <name>

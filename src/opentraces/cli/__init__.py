@@ -128,12 +128,6 @@ COMMAND_SECTIONS = [
         ],
     ),
     (
-        "Workflow",
-        [
-            "workflow",
-        ],
-    ),
-    (
         "Dataset",
         [
             "dataset",
@@ -145,7 +139,7 @@ COMMAND_SECTIONS = [
 # inline, so the root --help reveals the verbs each group exposes.
 # Sections that carry a third tuple element (sub-categories) handle
 # their own expansion via the sub-category map, so they're not in this set.
-EXPANDED_SECTIONS = {"Trace", "Trail", "Workflow", "Dataset"}
+EXPANDED_SECTIONS = {"Trace", "Trail", "Dataset"}
 
 
 # -- Color helpers ------------------------------------------------------------
@@ -323,7 +317,8 @@ class GroupedGroup(OpentracesGroup):
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
         # Journey-first sectioned listing. Keep the unreleased development
-        # surface narrow: no compatibility block, no old inbox-first aliases.
+# surface narrow: no compatibility block, no old inbox-first aliases, and
+# no workflow-registry section now that workflows are referenced by datasets.
         # A section entry may carry an optional 3rd element — a list of
         # (sub_label, [subcommand_names]) tuples — to bucket a group's
         # subcommands under labelled sub-headings.
@@ -4205,7 +4200,8 @@ def _drop_command(name: str) -> None:
 
 # Unreleased development surface: remove old flat inbox/project commands
 # instead of carrying compatibility aliases. The canonical public roots are
-# setup/init/trace/trail/workflow/dataset.
+# setup/init/trace/trail/dataset. The workflow registry remains directly
+# callable for compatibility but is not part of the main journey help.
 for _legacy_root_command in [
     "list",
     "show",
@@ -4247,9 +4243,9 @@ def introspect() -> None:
             "auth": {"description": "HuggingFace identity: login, logout, whoami"},
             "status": {"description": "Show the current project snapshot"},
             "doctor": {"description": "Report integration and pipeline health"},
-            "trace": {"description": "Search, map, and retrieve retained traces", "subcommands": ["query", "map", "get"]},
+            "trace": {"description": "Search, map, slice, and retrieve retained traces", "subcommands": ["query", "map", "slice", "get"]},
             "trail": {"description": "Inspect and synchronize VCS-anchored Trace Trails", "subcommands": ["blame", "explain", "graph", "resume", "search", "sync", "teleport", "timeline"]},
-            "workflow": {"description": "Manage local dataset workflow skills", "subcommands": ["list", "show", "create", "edit", "remove"]},
+            "workflow": {"description": "Compatibility registry for local dataset workflow packages", "subcommands": ["create", "list", "remove"]},
             "dataset": {"description": "Manage local executable datasets"},
             "capabilities": {"description": "Machine-discoverable feature list"},
             "introspect": {"description": "Full API schema (this command)"},

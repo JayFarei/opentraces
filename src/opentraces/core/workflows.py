@@ -21,6 +21,8 @@ class WorkflowPackage:
     path: Path
     digest: str
     description: str | None = None
+    entrypoint: Path | None = None
+    source_type: str = "package"
 
 
 def workflows_dir() -> Path:
@@ -88,9 +90,7 @@ def install_workflow(source: Path, *, replace: bool = False) -> WorkflowPackage:
     source = source.expanduser().resolve()
     if not source.is_dir():
         raise ValueError(f"workflow source is not a directory: {source}")
-    source_skill = source / "SKILL.md"
-    if not source_skill.exists():
-        raise ValueError(f"workflow source has no SKILL.md: {source}")
+    source_skill = _workflow_entrypoint(source)
 
     _reject_symlinks(source)
 
@@ -131,8 +131,9 @@ def _reject_symlinks(source: Path) -> None:
 def load_workflow(name: str) -> WorkflowPackage:
     validate_workflow_name(name)
     path = workflows_dir() / name
-    skill_path = path / "SKILL.md"
-    if not skill_path.exists():
+    try:
+        skill_path = _workflow_entrypoint(path)
+    except ValueError:
         raise FileNotFoundError(f"workflow not found: {name}")
     metadata = _read_skill_frontmatter(skill_path)
     return WorkflowPackage(
@@ -140,6 +141,8 @@ def load_workflow(name: str) -> WorkflowPackage:
         description=_optional_str(metadata.get("description")),
         path=path,
         digest=compute_workflow_digest(path),
+        entrypoint=skill_path,
+        source_type="package",
     )
 
 
@@ -149,7 +152,7 @@ def list_workflows() -> list[WorkflowPackage]:
         return []
     packages: list[WorkflowPackage] = []
     for item in sorted(root.iterdir(), key=lambda p: p.name):
-        if item.is_dir() and (item / "SKILL.md").exists():
+        if item.is_dir() and _has_workflow_entrypoint(item):
             packages.append(load_workflow(item.name))
     return packages
 
@@ -165,16 +168,62 @@ def remove_workflow(name: str) -> Path:
 
 def compute_workflow_digest(path: Path) -> str:
     path = path.expanduser().resolve()
-    if not (path / "SKILL.md").exists():
-        raise ValueError(f"workflow package has no SKILL.md: {path}")
     digest = hashlib.sha256()
-    for file_path in _workflow_files(path):
-        relative = file_path.relative_to(path).as_posix()
+    if path.is_file():
+        if path.suffix.lower() not in {".md", ".markdown"}:
+            raise ValueError(f"workflow file must be Markdown: {path}")
+        files = [path]
+        root = path.parent
+    elif path.is_dir():
+        _workflow_entrypoint(path)
+        files = _workflow_files(path)
+        root = path
+    else:
+        raise ValueError(f"workflow path does not exist: {path}")
+    for file_path in files:
+        relative = file_path.relative_to(root).as_posix()
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
         digest.update(file_path.read_bytes())
         digest.update(b"\0")
     return f"sha256:{digest.hexdigest()}"
+
+
+def resolve_workflow_reference(source: str | Path) -> WorkflowPackage:
+    """Resolve a Markdown file or workflow package directory.
+
+    This is the dataset-facing path. The legacy registry still resolves
+    by installed skill name; direct dataset creation can now pin an
+    explicit Markdown file or package folder without an install step.
+    """
+
+    path = Path(source).expanduser().resolve()
+    if path.is_file():
+        if path.suffix.lower() not in {".md", ".markdown"}:
+            raise ValueError(f"workflow file must be Markdown: {path}")
+        metadata = _read_skill_frontmatter(path)
+        name = validate_workflow_name(str(metadata.get("name") or path.stem))
+        return WorkflowPackage(
+            name=name,
+            description=_optional_str(metadata.get("description")),
+            path=path,
+            digest=compute_workflow_digest(path),
+            entrypoint=path,
+            source_type="file",
+        )
+    if path.is_dir():
+        entrypoint = _workflow_entrypoint(path)
+        metadata = _read_skill_frontmatter(entrypoint)
+        name = validate_workflow_name(str(metadata.get("name") or path.name))
+        return WorkflowPackage(
+            name=name,
+            description=_optional_str(metadata.get("description")),
+            path=path,
+            digest=compute_workflow_digest(path),
+            entrypoint=entrypoint,
+            source_type="package",
+        )
+    raise FileNotFoundError(f"workflow path not found: {source}")
 
 
 def _workflow_files(path: Path) -> list[Path]:
@@ -185,6 +234,20 @@ def _workflow_files(path: Path) -> list[Path]:
     ]
     files.sort(key=lambda file_path: file_path.relative_to(path).as_posix())
     return files
+
+
+def _has_workflow_entrypoint(path: Path) -> bool:
+    return (path / "SKILL.md").exists() or (path / "WORKFLOW.md").exists()
+
+
+def _workflow_entrypoint(path: Path) -> Path:
+    workflow_path = path / "WORKFLOW.md"
+    skill_path = path / "SKILL.md"
+    if workflow_path.exists():
+        return workflow_path
+    if skill_path.exists():
+        return skill_path
+    raise ValueError(f"workflow package has no WORKFLOW.md or SKILL.md: {path}")
 
 
 def _read_skill_frontmatter(path: Path) -> dict[str, str]:
@@ -216,6 +279,7 @@ def _default_skill_text(name: str, description: str) -> str:
         "mode: agent-skill\n"
         "requires:\n"
         "  - ot trace query\n"
+        "  - ot trace slice\n"
         "  - ot trace map\n"
         "  - ot trace get\n"
         "---\n\n"

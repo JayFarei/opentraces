@@ -12,7 +12,7 @@ Use this skill when building a workflow for `ot dataset run`.
 - The dataset schema in `schemas/row.schema.json` is the only public row shape.
 - A workflow emits plain JSONL rows to `OT_DATASET_OUTPUT`.
 - Source traces and raw sessions are immutable inputs. Do not mutate them.
-- Use `ot trace query` first, `ot trace map` for bounded verification, and `ot trace get` only when a bounded packet/slice is insufficient.
+- Use `ot trace query` first, `ot trace slice` for dataset-ready windows, `ot trace map` for bounded verification, and `ot trace get` only when a bounded packet/slice is insufficient.
 - Use `ot dataset run <name> --dry-run --limit N --verbose` while developing. Dry-runs are never promotable.
 - A real run must execute freshly and append only valid non-duplicate rows.
 
@@ -20,7 +20,7 @@ Use this skill when building a workflow for `ot dataset run`.
 
 1. Read `.opentraces/manifest.yaml` and `schemas/row.schema.json`.
 2. Run a narrow `ot trace query` with exact facets or signals.
-3. Expand one candidate with `ot trace map <trace_id> --candidate <unit_id> --json`.
+3. Materialise candidate windows with `ot trace slice <trace_id> --template bursts --json`.
 4. Write or update helper scripts under the workflow package.
 5. Emit rows to `OT_DATASET_OUTPUT`, one JSON object per line.
 6. Run the dataset in dry-run mode and inspect validation/dedupe counts.

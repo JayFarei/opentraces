@@ -150,6 +150,8 @@ def create_dataset(
     description: str | None = None,
     workflow_skill: str | None = None,
     workflow_digest: str = "sha256:unconfigured",
+    workflow_instructions: str | None = None,
+    workflow_config: dict[str, Any] | None = None,
     row_schema: dict[str, Any] | None = None,
     identity: DatasetIdentity | dict[str, Any] | None = None,
     publication_policy: DatasetPublicationPolicy | dict[str, Any] | None = None,
@@ -176,6 +178,8 @@ def create_dataset(
     workflow = WorkflowRef(
         skill=workflow_skill or f"{name}-workflow",
         digest=workflow_digest,
+        instructions=workflow_instructions,
+        config=workflow_config or {},
     )
     manifest = DatasetManifest(
         name=name,

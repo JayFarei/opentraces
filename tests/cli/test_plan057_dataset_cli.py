@@ -42,6 +42,39 @@ def test_dataset_cli_new_list_remove_round_trip(tmp_path):
     assert not dataset_path("grill-me-intents").exists()
 
 
+def test_dataset_new_accepts_markdown_workflow_path(tmp_path):
+    workflow_file = tmp_path / "classic-intent-labels.md"
+    workflow_file.write_text(
+        "---\n"
+        "name: classic-intent-labels\n"
+        "description: Classic intent trajectory labels\n"
+        "---\n\n"
+        "# Classic Intent Labels\n\n"
+        "Use `opentraces trace slice --template bursts` as the source packet.\n",
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+
+    created = runner.invoke(
+        dataset_group,
+        [
+            "new",
+            "classic-intents",
+            "--workflow",
+            str(workflow_file),
+            "--json",
+        ],
+    )
+    assert created.exit_code == 0, created.output
+    payload = json.loads(created.output)
+    workflow = payload["dataset"]["manifest"]["workflow"]
+    assert workflow["skill"] == "classic-intent-labels"
+    assert workflow["digest"].startswith("sha256:")
+    assert workflow["config"]["source"] == str(workflow_file.resolve())
+    assert workflow["config"]["source_type"] == "file"
+    assert workflow["config"]["entrypoint"] == str(workflow_file.resolve())
+
+
 def test_dataset_and_workflow_groups_are_registered_on_root_cli():
     runner = CliRunner()
 

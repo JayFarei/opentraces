@@ -70,7 +70,7 @@ def error_response(*a, **k):
 
 @click.group("trace", cls=OpentracesGroup)
 def trace_group() -> None:
-    """Search, map, and retrieve retained traces."""
+    """Search, map, slice, and retrieve retained traces."""
 
 
 @trace_group.command("query", cls=OpentracesCommand)
@@ -465,6 +465,150 @@ def trace_map_cmd(
         return
     for node in selected.nodes:
         click.echo(f"{node.node_id}  {node.action_type}  {node.text_preview or ''}")
+
+
+@trace_group.command("slice", cls=OpentracesCommand)
+@click.argument("target")
+@click.option("--from-step", "from_step", type=int, default=None, help="First step index in a manual slice.")
+@click.option("--to-step", "to_step", type=int, default=None, help="Last step index in a manual slice.")
+@click.option("--around-step", "around_step", type=int, default=None, help="Create a slice around one step.")
+@click.option("--around-patch", "around_patch", default=None, help="Create a slice around a patch id, map node, or trace-patch id.")
+@click.option("--radius", type=int, default=3, show_default=True, help="Step radius for --around-step/--around-patch.")
+@click.option(
+    "--template",
+    type=click.Choice(["bursts"], case_sensitive=False),
+    default=None,
+    help="Built-in deterministic slicing strategy.",
+)
+@click.option(
+    "--burst-gap",
+    "burst_gap",
+    type=int,
+    default=None,
+    help="With --template bursts: step-index gap between adjacent edits (default 35).",
+)
+@click.option(
+    "--no-commit-lookup",
+    "no_commit_lookup",
+    is_flag=True,
+    help="With --template bursts: skip the per-burst `git log` lookup.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_slice_cmd(
+    target: str,
+    from_step: int | None,
+    to_step: int | None,
+    around_step: int | None,
+    around_patch: str | None,
+    radius: int,
+    template: str | None,
+    burst_gap: int | None,
+    no_commit_lookup: bool,
+    as_json: bool,
+) -> None:
+    """Extract deterministic Trace Slices for dataset workflows."""
+    from ..core.bursts import DEFAULT_BURST_GAP
+    from ..core.trace_index import get_trace_map
+    from ..core.trace_slices import (
+        slice_around_patch,
+        slice_around_step,
+        slice_by_steps,
+        slices_from_bursts,
+    )
+
+    manual_range = from_step is not None or to_step is not None
+    if manual_range and (from_step is None or to_step is None):
+        click.echo("Use --from-step and --to-step together.", err=True)
+        sys.exit(2)
+    mode_count = sum(bool(value) for value in (manual_range, around_step is not None, around_patch, template))
+    if mode_count != 1:
+        click.echo(
+            "Choose exactly one slice mode: --template, --from-step/--to-step, "
+            "--around-step, or --around-patch.",
+            err=True,
+        )
+        sys.exit(2)
+
+    trace_id = _trace_id_from_ref(target)
+    trace_map = get_trace_map(trace_id)
+    if trace_map is None:
+        click.echo(f"Trace Map not found: {target}", err=True)
+        sys.exit(6)
+    record = _try_load_trace_record(trace_id)
+
+    try:
+        if template:
+            gap = burst_gap if burst_gap is not None else DEFAULT_BURST_GAP
+            slices = slices_from_bursts(
+                trace_map,
+                record,
+                gap=gap,
+                commit_lookup=not no_commit_lookup,
+            )
+            payload = {
+                "status": "ok",
+                "trace_id": trace_id,
+                "mode": "template",
+                "template": template,
+                "burst_gap": gap,
+                "slices": slices,
+            }
+        elif around_step is not None:
+            payload = {
+                "status": "ok",
+                "trace_id": trace_id,
+                "mode": "around_step",
+                "slices": [
+                    slice_around_step(
+                        trace_map,
+                        record,
+                        step_index=around_step,
+                        radius=radius,
+                    )
+                ],
+            }
+        elif around_patch:
+            payload = {
+                "status": "ok",
+                "trace_id": trace_id,
+                "mode": "around_patch",
+                "slices": [
+                    slice_around_patch(
+                        trace_map,
+                        record,
+                        patch_ref=around_patch,
+                        radius=radius,
+                    )
+                ],
+            }
+        else:
+            assert from_step is not None
+            assert to_step is not None
+            payload = {
+                "status": "ok",
+                "trace_id": trace_id,
+                "mode": "manual_step_range",
+                "slices": [
+                    slice_by_steps(
+                        trace_map,
+                        record,
+                        start_step_index=from_step,
+                        end_step_index=to_step,
+                    )
+                ],
+            }
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for item in payload["slices"]:
+        click.echo(
+            f"{item['slice_id']}  steps {item['start_step_index']}..{item['end_step_index']}  "
+            f"nodes={len(item['map']['nodes'])}  patches={len(item['trace_patch_refs'])}"
+        )
 
 
 @trace_group.command("get", cls=OpentracesCommand)

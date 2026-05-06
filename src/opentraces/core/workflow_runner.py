@@ -75,6 +75,7 @@ def run_dataset_workflow(
         "executor": selected_executor,
         "schema_path": str(dataset.path / dataset.manifest.schema_ref.path),
         "output_path": str(output_path),
+        "workflow": dataset.manifest.workflow.model_dump(mode="json"),
         "candidate_query": (
             dataset.manifest.candidate_query.model_dump(mode="json")
             if dataset.manifest.candidate_query
@@ -218,7 +219,7 @@ def _run_instructions(run_packet: dict[str, Any]) -> str:
         f"# Dataset run {run_packet['run_id']}\n\n"
         f"Dataset: `{run_packet['dataset_name']}`\n\n"
         "Read `run_packet.json` and `schema_snapshot.json`. Use `ot trace query`, "
-        "`ot trace map`, and `ot trace get` as needed. Emit plain JSONL rows "
+        "`ot trace slice`, `ot trace map`, and `ot trace get` as needed. Emit plain JSONL rows "
         f"matching the schema to `{run_packet['output_path']}`.\n\n"
         f"Set `OT_DATASET_OUTPUT={run_packet['output_path']}` when running helper scripts.\n"
     )

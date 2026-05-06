@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import sys
+from pathlib import Path
 
 import click
 
@@ -38,6 +39,7 @@ from ..core.workflow_runner import (
     ExecutorUnavailableError,
     run_dataset_workflow,
 )
+from ..core.workflows import resolve_workflow_reference
 from ..core.schedules import (
     add_schedule,
     list_schedules,
@@ -448,8 +450,8 @@ def dataset_status(name: str, as_json: bool) -> None:
 @dataset_group.command("new", cls=OpentracesCommand)
 @click.argument("name")
 @click.option("--description", default=None, help="Dataset description.")
-@click.option("--workflow", default=None, help="Workflow skill name.")
-@click.option("--workflow-digest", default="sha256:unconfigured", help="Workflow digest.")
+@click.option("--workflow", default=None, help="Workflow skill name or path to a Markdown workflow file/package.")
+@click.option("--workflow-digest", default="sha256:unconfigured", help="Workflow digest for legacy skill-name workflows.")
 @click.option(
     "--rows-file",
     "rows_file",
@@ -508,13 +510,18 @@ def dataset_new(
         return
 
     try:
+        workflow_skill, resolved_digest, workflow_config = _resolve_workflow_for_dataset(
+            workflow,
+            workflow_digest,
+        )
         dataset = create_dataset(
             name,
             description=description,
-            workflow_skill=workflow,
-            workflow_digest=workflow_digest,
+            workflow_skill=workflow_skill,
+            workflow_digest=resolved_digest,
+            workflow_config=workflow_config,
         )
-    except (FileExistsError, ValueError) as exc:
+    except (FileExistsError, FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
     payload = {"status": "ok", "dataset": _dataset_payload(dataset)}
@@ -522,6 +529,39 @@ def dataset_new(
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
     click.echo(f"Dataset created: {dataset.name}")
+
+
+def _resolve_workflow_for_dataset(
+    workflow: str | None,
+    workflow_digest: str,
+) -> tuple[str | None, str, dict[str, object] | None]:
+    if not workflow:
+        return None, workflow_digest, None
+    if not _looks_like_workflow_path(workflow):
+        return workflow, workflow_digest, None
+
+    package = resolve_workflow_reference(workflow)
+    config: dict[str, object] = {
+        "source": str(package.path),
+        "source_type": package.source_type,
+    }
+    if package.entrypoint is not None:
+        config["entrypoint"] = str(package.entrypoint)
+    if package.description:
+        config["description"] = package.description
+    return package.name, package.digest, config
+
+
+def _looks_like_workflow_path(value: str) -> bool:
+    path = Path(value).expanduser()
+    lower = value.lower()
+    return (
+        path.exists()
+        or "/" in value
+        or "\\" in value
+        or lower.endswith(".md")
+        or lower.endswith(".markdown")
+    )
 
 
 # Sentinel value placed in ``manifest.workflow.skill`` to mark a dataset as
