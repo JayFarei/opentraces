@@ -11,7 +11,6 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -24,7 +23,6 @@ from . import paths
 
 
 TRACE_RECORD_BUCKET_SCHEMA = "opentraces.bucket.trace_record.v1"
-TRACE_RECORD_BUCKET_VERSION = "v1"
 TRACE_RECORD_PROJECT_STAGING = "_staging"
 
 
@@ -48,21 +46,19 @@ class BucketSyncSummary:
     skipped: int = 0
 
 
-def trace_records_root(version: str = TRACE_RECORD_BUCKET_VERSION) -> Path:
-    """Return the bucket origin root for normalized TraceRecord envelopes."""
+def trace_records_root() -> Path:
+    """Return the local bucket root for normalized TraceRecord envelopes."""
 
-    return paths.bucket_origin_dir() / "trace-records" / version
+    return paths.bucket_dir() / "trace-records"
 
 
 def trace_record_path(
     project_slug: str,
     trace_id: str,
-    *,
-    version: str = TRACE_RECORD_BUCKET_VERSION,
 ) -> Path:
     """Return the bucket object path for a normalized TraceRecord."""
 
-    return trace_records_root(version) / _path_part(project_slug) / f"{_path_part(trace_id)}.json"
+    return trace_records_root() / _path_part(project_slug) / f"{_path_part(trace_id)}.json"
 
 
 def write_trace_record(
@@ -70,32 +66,21 @@ def write_trace_record(
     *,
     project_slug: str,
     source_layer: str,
-    source_path: Path | str | None = None,
     legacy_mirror: bool = True,
-    version: str = TRACE_RECORD_BUCKET_VERSION,
 ) -> BucketTraceRecord:
-    """Write ``record`` to bucket origin as an immutable-style envelope."""
+    """Write ``record`` to the local bucket as an immutable-style envelope."""
 
     normalized = _normalized_record(record)
     record_payload = normalized.model_dump(mode="json")
     record_hash = _digest_payload(record_payload)
-    object_path = trace_record_path(project_slug, normalized.trace_id, version=version)
+    object_path = trace_record_path(project_slug, normalized.trace_id)
     envelope = {
         "schema_version": TRACE_RECORD_BUCKET_SCHEMA,
-        "object_type": "trace_record",
-        "bucket_version": version,
         "project_slug": project_slug,
         "source_layer": source_layer,
-        "trace_id": normalized.trace_id,
-        "session_id": normalized.session_id,
-        "generation_index": normalized.generation_index,
         "record_hash": record_hash,
-        "source": {
-            "path": str(source_path) if source_path is not None else None,
-            "legacy_mirror": legacy_mirror,
-        },
+        "legacy_mirror": legacy_mirror,
         "record": record_payload,
-        "written_at": _utc_now(),
     }
     _atomic_write_json(object_path, envelope)
     return BucketTraceRecord(
@@ -119,7 +104,7 @@ def read_trace_record_object(path: Path) -> BucketTraceRecord | None:
         record = TraceRecord.model_validate(raw.get("record") or {})
         project_slug = str(raw.get("project_slug") or "")
         source_layer = str(raw.get("source_layer") or "")
-        trace_id = str(raw.get("trace_id") or record.trace_id)
+        trace_id = record.trace_id
         record_hash = str(raw.get("record_hash") or _digest_payload(record.model_dump(mode="json")))
         if not project_slug or not source_layer or not trace_id:
             return None
@@ -136,13 +121,10 @@ def read_trace_record_object(path: Path) -> BucketTraceRecord | None:
     )
 
 
-def iter_trace_record_objects(
-    *,
-    version: str = TRACE_RECORD_BUCKET_VERSION,
-) -> list[BucketTraceRecord]:
-    """Return every valid TraceRecord envelope in bucket origin."""
+def iter_trace_record_objects() -> list[BucketTraceRecord]:
+    """Return every valid TraceRecord envelope in the local bucket."""
 
-    root = trace_records_root(version)
+    root = trace_records_root()
     if not root.exists():
         return []
     out: list[BucketTraceRecord] = []
@@ -155,14 +137,13 @@ def iter_trace_record_objects(
 
 def trace_record_snapshot(
     *,
-    version: str = TRACE_RECORD_BUCKET_VERSION,
     include_objects: bool = False,
 ) -> dict[str, Any]:
     """Return a deterministic snapshot descriptor for bucket TraceRecords."""
 
-    root = trace_records_root(version)
+    root = trace_records_root()
     objects = []
-    for obj in iter_trace_record_objects(version=version):
+    for obj in iter_trace_record_objects():
         objects.append(
             {
                 "path": obj.path.relative_to(root).as_posix(),
@@ -177,7 +158,6 @@ def trace_record_snapshot(
     ]
     snapshot: dict[str, Any] = {
         "schema_version": "opentraces.bucket.trace_records_snapshot.v1",
-        "bucket_version": version,
         "root": str(root),
         "object_count": len(objects),
         "digest": _digest_payload(digest_material),
@@ -190,21 +170,20 @@ def trace_record_snapshot(
 def sync_trace_records_from_local_stores(
     *,
     prune: bool = True,
-    version: str = TRACE_RECORD_BUCKET_VERSION,
 ) -> BucketSyncSummary:
-    """Mirror legacy project/staging TraceRecord stores into bucket origin.
+    """Mirror legacy project/staging TraceRecord stores into the local bucket.
 
     This is the local migration bridge. It keeps existing project/staging stores
-    working while making bucket origin the query substrate.
+    working while making the bucket the query substrate.
     """
 
-    root = trace_records_root(version)
+    root = trace_records_root()
     written = 0
     unchanged = 0
     skipped = 0
     expected_paths: set[Path] = set()
-    for record, project_slug, source_layer, source_path in _iter_legacy_trace_records():
-        object_path = trace_record_path(project_slug, record.trace_id, version=version)
+    for record, project_slug, source_layer in _iter_legacy_trace_records():
+        object_path = trace_record_path(project_slug, record.trace_id)
         expected_paths.add(object_path)
         existing = read_trace_record_object(object_path) if object_path.exists() else None
         normalized = _normalized_record(record)
@@ -217,9 +196,7 @@ def sync_trace_records_from_local_stores(
                 normalized,
                 project_slug=project_slug,
                 source_layer=source_layer,
-                source_path=source_path,
                 legacy_mirror=True,
-                version=version,
             )
             written += 1
         except OSError:
@@ -227,11 +204,10 @@ def sync_trace_records_from_local_stores(
 
     removed = 0
     if prune and root.exists():
-        for obj in iter_trace_record_objects(version=version):
+        for obj in iter_trace_record_objects():
             if obj.path in expected_paths:
                 continue
-            source = obj.envelope.get("source") or {}
-            if source.get("legacy_mirror") is True:
+            if obj.envelope.get("legacy_mirror") is True:
                 try:
                     obj.path.unlink()
                     removed += 1
@@ -246,8 +222,8 @@ def sync_trace_records_from_local_stores(
     )
 
 
-def _iter_legacy_trace_records() -> list[tuple[TraceRecord, str, str, Path]]:
-    records: list[tuple[TraceRecord, str, str, Path]] = []
+def _iter_legacy_trace_records() -> list[tuple[TraceRecord, str, str]]:
+    records: list[tuple[TraceRecord, str, str]] = []
     projects_root = paths.PROJECTS_DIR
     if projects_root.exists():
         for project_home in sorted(path for path in projects_root.iterdir() if path.is_dir()):
@@ -256,12 +232,12 @@ def _iter_legacy_trace_records() -> list[tuple[TraceRecord, str, str, Path]]:
                 continue
             for trace_path in sorted(traces_dir.glob("*.jsonl")):
                 for record in _read_jsonl_trace_records(trace_path):
-                    records.append((record, project_home.name, "canonical", trace_path))
+                    records.append((record, project_home.name, "canonical"))
     staging_root = getattr(paths, "STAGING_DIR", None)
     if staging_root and staging_root.exists() and staging_root.is_dir():
         for trace_path in sorted(staging_root.glob("*.jsonl")):
             for record in _read_jsonl_trace_records(trace_path):
-                records.append((record, TRACE_RECORD_PROJECT_STAGING, "staging", trace_path))
+                records.append((record, TRACE_RECORD_PROJECT_STAGING, "staging"))
     return records
 
 
@@ -318,7 +294,3 @@ def _canonical_json(payload: Any, *, pretty: bool = False) -> str:
 
 def _path_part(value: str) -> str:
     return quote(str(value), safe="-._~")
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

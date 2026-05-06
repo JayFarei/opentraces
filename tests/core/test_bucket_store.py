@@ -1,4 +1,4 @@
-"""Local bucket-origin TraceRecord store behavior."""
+"""Local bucket TraceRecord store behavior."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def _trace(trace_id: str, content: str = "Patch database client setup") -> Trace
     )
 
 
-def test_local_trace_records_sync_to_bucket_origin_and_prune(tmp_path):
+def test_local_trace_records_sync_to_bucket_and_prune(tmp_path):
     from opentraces.core import paths
     from opentraces.core.bucket_store import (
         iter_trace_record_objects,
@@ -54,17 +54,22 @@ def test_local_trace_records_sync_to_bucket_origin_and_prune(tmp_path):
     first = sync_trace_records_from_local_stores()
     assert first.written == 1
     assert first.unchanged == 0
-    assert trace_records_root() == paths.OPENTRACES_DIR / "bucket" / "origin" / "trace-records" / "v1"
+    assert trace_records_root() == paths.OPENTRACES_DIR / "bucket" / "trace-records"
 
     objects = iter_trace_record_objects()
     assert [obj.trace_id for obj in objects] == ["trace-bucket-1"]
     assert objects[0].source_layer == "canonical"
     assert objects[0].project_slug != "_staging"
     assert objects[0].envelope["record_hash"].startswith("sha256:")
+    assert "bucket_version" not in objects[0].envelope
+    assert "written_at" not in objects[0].envelope
+    assert "source" not in objects[0].envelope
+    assert "trace_id" not in objects[0].envelope
 
     snapshot = trace_record_snapshot(include_objects=True)
     assert snapshot["object_count"] == 1
     assert snapshot["digest"].startswith("sha256:")
+    assert "bucket_version" not in snapshot
     assert snapshot["objects"][0]["trace_id"] == "trace-bucket-1"
 
     second = sync_trace_records_from_local_stores()
@@ -77,7 +82,7 @@ def test_local_trace_records_sync_to_bucket_origin_and_prune(tmp_path):
     assert iter_trace_record_objects() == []
 
 
-def test_trace_index_prefers_bucket_origin_and_tracks_legacy_updates(tmp_path):
+def test_trace_index_prefers_bucket_and_tracks_legacy_updates(tmp_path):
     from opentraces.core.bucket_store import iter_trace_record_objects
     from opentraces.core.trace_index import query_index, rebuild_index
 

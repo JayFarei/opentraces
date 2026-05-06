@@ -387,7 +387,6 @@ def _ingest_locked(
         final_record,
         project_slug=get_project_dir(project_dir).name,
         source_layer="canonical",
-        source_path=staging_file,
         legacy_mirror=True,
     )
 

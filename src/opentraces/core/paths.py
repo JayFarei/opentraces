@@ -5,6 +5,7 @@ Layout:
         config.json                # global config + project registry
         credentials                # HF token (0600)
         bucket/                    # local bucket-shaped sync substrate
+            trace-records/         # normalized TraceRecord envelopes
             projections/search/v1/ # immutable search projection builds
         projects/<slug>/           # per-project, machine-local (canonical layer)
             traces/*.jsonl         # captured traces
@@ -35,12 +36,6 @@ def bucket_dir() -> Path:
     """
 
     return OPENTRACES_DIR / "bucket"
-
-
-def bucket_origin_dir() -> Path:
-    """Return the local canonical/origin area for future sync payloads."""
-
-    return bucket_dir() / "origin"
 
 
 def bucket_projections_dir() -> Path:
