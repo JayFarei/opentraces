@@ -114,6 +114,19 @@ def _git_toplevel(path: Path) -> Path | None:
         return None
 
 
+def _git_common_dir(path: Path) -> Path | None:
+    out = _git(path, ["rev-parse", "--git-common-dir"], check=False)
+    if not out:
+        return None
+    try:
+        common = Path(out)
+        if not common.is_absolute():
+            common = path / common
+        return common.resolve()
+    except Exception:
+        return None
+
+
 def _trail_tree_id(repo: Path, hook_entry: dict[str, Any]) -> dict[str, str] | None:
     trail = hook_entry.get("trail") or {}
     tree_id = trail.get("tree_id")
@@ -152,7 +165,11 @@ def _trail_matches_repo(repo: Path, hook_entry: dict[str, Any]) -> bool:
         return True
     repo_top = _git_toplevel(repo_root)
     hook_top = _git_toplevel(hook_root)
-    return repo_top is not None and repo_top == hook_top
+    if repo_top is not None and repo_top == hook_top:
+        return True
+    repo_common = _git_common_dir(repo_root)
+    hook_common = _git_common_dir(hook_root)
+    return repo_common is not None and repo_common == hook_common
 
 
 def _snapshot_id(

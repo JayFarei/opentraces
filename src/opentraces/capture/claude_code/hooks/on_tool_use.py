@@ -182,7 +182,7 @@ def main() -> None:
     tool_use_id = payload.get("tool_use_id")
     session_id = payload.get("session_id")
     cwd = payload.get("cwd")
-    observer = observe_tool_boundary_for_hook(cwd, tool_name, transcript_path)
+    observer = observe_tool_boundary_for_hook(cwd, tool_name, transcript_path, tool_input)
 
     if tool_name == "Edit":
         data = _handle_edit(tool_input)
@@ -207,7 +207,7 @@ def main() -> None:
     data["session_id"] = session_id
     data["tool_input"] = tool_input
     data["tool_response"] = payload.get("tool_response") or {}
-    trail = trail_state(cwd)
+    trail = trail_state(cwd, tool_name, tool_input)
     if trail:
         data["trail"] = trail
     if observer is not None:

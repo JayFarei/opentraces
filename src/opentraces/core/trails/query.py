@@ -102,6 +102,7 @@ def _copy_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 _LEAF_WRITER_TOOLS = {"Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"}
+_DELEGATION_TOOLS = {"Agent", "Task"}
 
 
 @dataclass(frozen=True)
@@ -567,6 +568,8 @@ def _decorate_projection_with_step_hierarchy(projection: TrailQueryProjection) -
         meta = _step_metadata_for_row(row, step_metadata)
         if meta is not None:
             _apply_step_metadata(row, meta)
+            if _is_delegation_tool(meta):
+                row.setdefault("attribution_role", "delegation_envelope_unresolved")
 
     delegated: dict[str, list[dict[str, Any]]] = {}
     for row in projection.patches_by_id.values():
@@ -620,6 +623,13 @@ def _decorate_projection_with_step_hierarchy(projection: TrailQueryProjection) -
             row["owned_by_trace_patch_id"] = duplicate.get("trace_patch_id")
             row["limitations"] = _dedupe(
                 list(row.get("limitations") or []) + ["delegation_envelope_duplicate"]
+            )
+            continue
+        meta = _step_metadata_for_row(row, step_metadata)
+        if meta is not None and _is_delegation_tool(meta):
+            row["attribution_role"] = "delegation_envelope_summary"
+            row["limitations"] = _dedupe(
+                list(row.get("limitations") or []) + ["delegation_envelope_summary"]
             )
 
     for row in projection.anchors_by_id.values():
@@ -778,6 +788,10 @@ def _delegated_patch_ref(row: dict[str, Any], meta: _StepMetadata) -> dict[str, 
 
 def _is_leaf_writer_tool(meta: _StepMetadata) -> bool:
     return bool(meta.tool_name in _LEAF_WRITER_TOOLS)
+
+
+def _is_delegation_tool(meta: _StepMetadata) -> bool:
+    return bool(meta.tool_name in _DELEGATION_TOOLS and meta.subagent_trajectory_ref)
 
 
 def _delegation_key(

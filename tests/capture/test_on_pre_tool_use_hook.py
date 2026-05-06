@@ -60,6 +60,82 @@ def test_pre_tool_use_appends_boundary_state(tmp_path: Path, monkeypatch) -> Non
     assert ev["data"]["trail"]["git_head"]["algo"] == "sha1"
 
 
+def test_pre_tool_use_file_tool_snapshots_file_repo_not_subagent_cwd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from opentraces.capture.claude_code.hooks.on_pre_tool_use import main
+    from opentraces.core.trails import write_worktree_tree
+
+    _init_repo(tmp_path)
+    child = tmp_path / ".claude" / "worktrees" / "agent-linked"
+    child.parent.mkdir(parents=True)
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "agent-linked", str(child), "HEAD"],
+        cwd=tmp_path,
+        check=True,
+    )
+    transcript = tmp_path / "s.jsonl"
+    transcript.write_text("")
+    expected_tree = write_worktree_tree(tmp_path)
+    payload = {
+        "transcript_path": str(transcript),
+        "cwd": str(child),
+        "session_id": "sess",
+        "tool_name": "Edit",
+        "tool_use_id": "toolu_pre",
+        "tool_input": {"file_path": str(tmp_path / "app.py")},
+    }
+
+    _invoke(main, payload, monkeypatch)
+
+    ev = _read_events(transcript)[0]
+    assert ev["data"]["trail"]["worktree_root"] == str(tmp_path)
+    assert ev["data"]["trail"]["tree_id"] == expected_tree
+
+
+def test_pre_tool_use_bash_absolute_path_snapshots_file_repo_not_subagent_cwd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from opentraces.capture.claude_code.hooks.on_pre_tool_use import main
+    from opentraces.core.trails import write_worktree_tree
+
+    _init_repo(tmp_path)
+    child = tmp_path / ".claude" / "worktrees" / "agent-linked"
+    child.parent.mkdir(parents=True)
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "-b", "agent-linked", str(child), "HEAD"],
+        cwd=tmp_path,
+        check=True,
+    )
+    transcript = tmp_path / "s.jsonl"
+    transcript.write_text("")
+    expected_tree = write_worktree_tree(tmp_path)
+    target = tmp_path / "generated_by_bash.txt"
+    payload = {
+        "transcript_path": str(transcript),
+        "cwd": str(child),
+        "session_id": "sess",
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_pre",
+        "tool_input": {
+            "command": (
+                "python3 - <<'PY'\n"
+                "from pathlib import Path\n"
+                f"Path({str(target)!r}).write_text('generated\\n')\n"
+                "PY"
+            )
+        },
+    }
+
+    _invoke(main, payload, monkeypatch)
+
+    ev = _read_events(transcript)[0]
+    assert ev["data"]["trail"]["worktree_root"] == str(tmp_path)
+    assert ev["data"]["trail"]["tree_id"] == expected_tree
+
+
 def test_pre_tool_use_missing_transcript_exits_clean(monkeypatch) -> None:
     import pytest
     from opentraces.capture.claude_code.hooks.on_pre_tool_use import main

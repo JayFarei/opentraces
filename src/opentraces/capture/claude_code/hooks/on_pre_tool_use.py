@@ -29,17 +29,19 @@ def main() -> None:
 
     timestamp = datetime.now(timezone.utc).isoformat()
     tool_name = payload.get("tool_name")
+    tool_input = payload.get("tool_input") or {}
     observer = observe_tool_boundary_for_hook(
         payload.get("cwd"),
         tool_name,
         transcript_path,
+        tool_input,
     )
     data = {
         "session_id": payload.get("session_id"),
         "tool": tool_name,
         "tool_use_id": payload.get("tool_use_id"),
-        "tool_input": payload.get("tool_input") or {},
-        "trail": trail_state(payload.get("cwd")),
+        "tool_input": tool_input,
+        "trail": trail_state(payload.get("cwd"), tool_name, tool_input),
     }
     if observer is not None:
         data["trail_observer"] = observer
