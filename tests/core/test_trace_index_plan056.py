@@ -235,6 +235,58 @@ def test_rebuild_index_creates_sqlite_fts_and_query_returns_bounded_packets(tmp_
     assert "FAILED tests/test_parser.py::test_parser_regression" not in packet.model_dump_json()
 
 
+def test_rebuild_index_uses_metadata_skill_invocations(tmp_path):
+    from opentraces.core.trace_index import get_unit, query_index, rebuild_index
+
+    project = tmp_path / "demo"
+    _register_project(project, "1234567890abcdef1234567890abcdef")
+    _write_project_trace(
+        project,
+        TraceRecord(
+            trace_id="trace-plan056-metadata-skill",
+            session_id="session-plan056-metadata-skill",
+            agent=Agent(name="claude-code", model="anthropic/claude-opus-4-6"),
+            task={"description": "research browser-harness for VFS retrieval"},
+            steps=[
+                Step(step_index=1, role="agent", content="I will research the target."),
+                Step(
+                    step_index=2,
+                    role="agent",
+                    tool_calls=[
+                        ToolCall(
+                            tool_call_id="tc-read",
+                            tool_name="Read",
+                            input={"file_path": "kb/br/00-convention.md"},
+                        )
+                    ],
+                ),
+            ],
+            metadata={
+                "skill_invocations": [
+                    {
+                        "name": "scout-research",
+                        "source": "claude_slash_command",
+                        "command_name": "/scout-research",
+                        "args": "research browser-harness for VFS retrieval",
+                        "command_line_no": 0,
+                        "body_line_no": 1,
+                    }
+                ]
+            },
+        ),
+    )
+
+    rebuild_index()
+    packets = query_index(skill="scout-research", candidate_kind="skill_invocation")
+
+    assert [packet.trace_id for packet in packets] == ["trace-plan056-metadata-skill"]
+    assert packets[0].unit_type == "skill_invocation"
+    assert packets[0].skills == ["scout-research"]
+    unit = get_unit("tu:trace-plan056-metadata-skill:skill:metadata:0")
+    assert unit is not None
+    assert unit.metadata["source"] == "claude_slash_command"
+
+
 def test_metadata_filters_and_pagination_narrow_candidate_packets(tmp_path):
     from opentraces.core.trace_index import query_index, query_index_page, rebuild_index
 

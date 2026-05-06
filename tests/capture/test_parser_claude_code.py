@@ -403,6 +403,65 @@ class TestClaudeCodeParser:
         assert record is not None
         assert record.task.description == "Actually fix the login bug"
 
+    def test_slash_skill_command_records_skill_metadata(self, tmp_path):
+        lines = [
+            {
+                "type": "user",
+                "sessionId": "s",
+                "timestamp": "2026-05-06T13:18:37.417Z",
+                "uuid": "cmd-uuid",
+                "message": {
+                    "role": "user",
+                    "content": (
+                        "<command-message>scout-research</command-message>\n"
+                        "<command-name>/scout-research</command-name>\n"
+                        "<command-args>research browser-harness for VFS retrieval</command-args>"
+                    ),
+                },
+            },
+            {
+                "type": "user",
+                "sessionId": "s",
+                "timestamp": "2026-05-06T13:18:37.417Z",
+                "uuid": "skill-body-uuid",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "Base directory for this skill: "
+                                "/Users/me/.claude/skills/scout-research\n\n"
+                                "# Scout Research\n\nSkill instructions..."
+                            ),
+                        }
+                    ],
+                },
+            },
+        ] + _make_minimal_session()[1:]
+
+        record = ClaudeCodeParser().parse_session(_write_session(tmp_path, lines))
+
+        assert record is not None
+        assert record.task.description == "research browser-harness for VFS retrieval"
+        assert record.metadata["skill_invocations"] == [
+            {
+                "name": "scout-research",
+                "source": "claude_slash_command",
+                "timestamp": "2026-05-06T13:18:37.417Z",
+                "body_uuid": "skill-body-uuid",
+                "body_line_no": 1,
+                "command_name": "/scout-research",
+                "command_message": "scout-research",
+                "args": "research browser-harness for VFS retrieval",
+                "command_uuid": "cmd-uuid",
+                "command_line_no": 0,
+            }
+        ]
+        rendered_steps = "\n".join(step.content or "" for step in record.steps)
+        assert "<command-name>" not in rendered_steps
+        assert "Base directory for this skill" not in rendered_steps
+
     def test_first_user_message_skips_compact_resumption(self, tmp_path):
         lines = [
             {

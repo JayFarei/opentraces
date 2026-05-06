@@ -1700,6 +1700,7 @@ def _skill_invocation_units(
     trace_facets: list[TraceFacet],
 ) -> list[TraceUnit]:
     units: list[TraceUnit] = []
+    seen_invocations: set[tuple[str, str]] = set()
     for step in record.steps:
         for call in step.tool_calls:
             if "skill" not in call.tool_name.lower():
@@ -1708,6 +1709,8 @@ def _skill_invocation_units(
             if not skill:
                 continue
             skill_name = str(skill)
+            args = str(call.input.get("args") or "")
+            seen_invocations.add((skill_name, args))
             facets = [
                 facet
                 for facet in trace_facets
@@ -1744,6 +1747,57 @@ def _skill_invocation_units(
                     },
                 )
             )
+    for idx, invocation in enumerate(_metadata_skill_invocations(record)):
+        skill_name = _metadata_skill_name(invocation)
+        if not skill_name:
+            continue
+        facets = [
+            facet
+            for facet in trace_facets
+            if facet.name in {"project_slug", "agent.name", "model", "provider.kind"}
+        ]
+        facets.append(TraceFacet(name="skill.name", value=skill_name, source="exact_schema"))
+        command_name = str(invocation.get("command_name") or f"/{skill_name}")
+        command_args = str(invocation.get("args") or "")
+        invocation_key = (skill_name, command_args)
+        if invocation_key in seen_invocations:
+            continue
+        seen_invocations.add(invocation_key)
+        units.append(
+            TraceUnit(
+                unit_id=f"tu:{record.trace_id}:skill:metadata:{idx}",
+                unit_type="skill_invocation",
+                trace_id=record.trace_id,
+                project_slug=project_slug,
+                skills=[skill_name],
+                title_text=f"Skill invocation {skill_name}",
+                intent_text=_index_text(
+                    command_args or record.task.description or _first_user_text(record) or ""
+                ),
+                action_text=" ".join(part for part in [command_name, command_args] if part),
+                evidence_text=f"skill.name={skill_name}",
+                facets=facets,
+                signals=[
+                    TraceSignal(
+                        name="skill_invoked",
+                        value=[skill_name],
+                        confidence="high",
+                        evidence_refs=[],
+                    )
+                ],
+                metadata={
+                    "session_id": record.session_id,
+                    "generation_index": record.generation_index,
+                    "timestamp_start": record.timestamp_start,
+                    "timestamp_end": record.timestamp_end,
+                    "source": invocation.get("source") or "metadata",
+                    "command_name": command_name,
+                    "command_args": command_args,
+                    "command_line_no": invocation.get("command_line_no"),
+                    "body_line_no": invocation.get("body_line_no"),
+                },
+            )
+        )
     return units
 
 
@@ -2427,6 +2481,25 @@ def _trace_files(trace_map: TraceMap) -> list[str]:
     return sorted(dict.fromkeys(files))
 
 
+def _metadata_skill_invocations(record: TraceRecord) -> list[dict[str, Any]]:
+    raw = record.metadata.get("skill_invocations")
+    if not isinstance(raw, list):
+        return []
+    return [
+        item
+        for item in raw
+        if isinstance(item, dict) and item.get("source") == "claude_slash_command"
+    ]
+
+
+def _metadata_skill_name(invocation: dict[str, Any]) -> str | None:
+    value = invocation.get("name") or invocation.get("skill")
+    if value is None:
+        return None
+    skill_name = str(value).strip().lstrip("/")
+    return skill_name or None
+
+
 def _trace_skills(record: TraceRecord) -> list[str]:
     skills: list[str] = []
     for step in record.steps:
@@ -2436,6 +2509,10 @@ def _trace_skills(record: TraceRecord) -> list[str]:
                 value = call.input.get("name") or call.input.get("skill")
                 if value:
                     skills.append(str(value))
+    for invocation in _metadata_skill_invocations(record):
+        value = _metadata_skill_name(invocation)
+        if value:
+            skills.append(value)
     return sorted(dict.fromkeys(skills))
 
 
