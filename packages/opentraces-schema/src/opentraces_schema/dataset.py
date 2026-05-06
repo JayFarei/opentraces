@@ -137,6 +137,17 @@ class DatasetPublicationPolicy(BaseModel):
     llm_review: DatasetPublicationLLMReviewPolicy = "optional"
 
 
+class DatasetSourceProvenance(BaseModel):
+    """Trace-substrate provenance used to materialize dataset rows."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "opentraces.dataset.source_provenance.v1"
+    bucket_snapshot: dict[str, Any] | None = None
+    projection: dict[str, Any] | None = None
+    query_fingerprint: str | None = None
+
+
 class DatasetManifest(BaseModel):
     """Local control manifest for an executable dataset."""
 
@@ -149,6 +160,7 @@ class DatasetManifest(BaseModel):
     executor: ExecutorConfig = Field(default_factory=ExecutorConfig)
     identity: DatasetIdentity = Field(default_factory=DatasetIdentity)
     candidate_query: DatasetCandidateQuery | None = None
+    source_provenance: DatasetSourceProvenance | None = None
     schedule: DatasetSchedule | None = None
     discoverability: DatasetDiscoverability = Field(default_factory=DatasetDiscoverability)
     remotes: dict[str, DatasetRemote] = Field(default_factory=dict)

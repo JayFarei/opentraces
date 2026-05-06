@@ -81,6 +81,11 @@ def run_dataset_workflow(
             if dataset.manifest.candidate_query
             else None
         ),
+        "source_provenance": (
+            dataset.manifest.source_provenance.model_dump(mode="json")
+            if dataset.manifest.source_provenance
+            else None
+        ),
         "scope": scope or {"scope": "all-projects"},
         "limit": limit,
     }

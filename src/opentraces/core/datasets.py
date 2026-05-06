@@ -33,6 +33,7 @@ from opentraces_schema import (
     DatasetPublicationStateEntry,
     DatasetRemote,
     DatasetRowIndexEntry,
+    DatasetSourceProvenance,
     WorkflowRef,
 )
 
@@ -157,6 +158,7 @@ def create_dataset(
     identity: DatasetIdentity | dict[str, Any] | None = None,
     publication_policy: DatasetPublicationPolicy | dict[str, Any] | None = None,
     candidate_query: DatasetCandidateQuery | dict[str, Any] | None = None,
+    source_provenance: DatasetSourceProvenance | dict[str, Any] | None = None,
     replace: bool = False,
 ) -> LocalDataset:
     validate_dataset_name(name)
@@ -183,6 +185,12 @@ def create_dataset(
         query_model = DatasetCandidateQuery.model_validate(candidate_query)
     else:
         query_model = None
+    if isinstance(source_provenance, DatasetSourceProvenance):
+        provenance_model = source_provenance
+    elif source_provenance:
+        provenance_model = DatasetSourceProvenance.model_validate(source_provenance)
+    else:
+        provenance_model = _source_provenance_for_query(query_model)
     workflow = WorkflowRef(
         skill=workflow_skill or f"{name}-workflow",
         digest=workflow_digest,
@@ -196,6 +204,7 @@ def create_dataset(
         workflow=workflow,
         identity=identity_model,
         candidate_query=query_model,
+        source_provenance=provenance_model,
         publication_policy=policy_model,
     )
     schema_digest = digest_payload(schema_payload)
@@ -215,6 +224,36 @@ def create_dataset(
     )
     save_manifest(root, manifest)
     return LocalDataset(name=name, path=root, manifest=manifest)
+
+
+def _source_provenance_for_query(
+    query: DatasetCandidateQuery | None,
+) -> DatasetSourceProvenance | None:
+    if query is None:
+        return None
+    from .bucket_store import trace_record_snapshot
+
+    projection: dict[str, Any] | None = None
+    try:
+        from .search_projection import search_projection_status
+
+        status = search_projection_status()
+        if status.get("state") == "ok":
+            projection = {
+                "name": "search",
+                "version": "v1",
+                "build_id": status.get("build_id"),
+                "manifest_path": status.get("manifest_path"),
+                "doc_count": status.get("doc_count"),
+                "trace_count": status.get("trace_count"),
+            }
+    except Exception:
+        projection = None
+    return DatasetSourceProvenance(
+        bucket_snapshot=trace_record_snapshot(include_objects=False),
+        projection=projection,
+        query_fingerprint=digest_payload(query.model_dump(mode="json")),
+    )
 
 
 def load_manifest(root: Path | str) -> DatasetManifest:

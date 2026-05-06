@@ -21,6 +21,7 @@ from typing import Any
 from opentraces_schema import TraceFacet, TraceSignal, TraceUnit
 
 from . import paths
+from .bucket_store import trace_record_snapshot
 from .semantic import expand_semantic_query, semantic_profile_from_facets
 from .trace_index import (
     QueryPage,
@@ -87,6 +88,7 @@ def build_search_projection(
     docs = [_doc_for_unit(unit) for unit in units]
     doc_lines = [_canonical_json(doc) for doc in docs]
     corpus_hash = _sha256_text("\n".join(doc_lines))
+    bucket_snapshot = trace_record_snapshot(include_objects=False)
     built_at = _utc_now()
     build_id = f"{built_at.strftime('%Y%m%dT%H%M%S%fZ')}-{corpus_hash[:12]}"
 
@@ -110,6 +112,7 @@ def build_search_projection(
         "input": {
             "index_path": str(db_path),
             "trace_unit_count": len(units),
+            "bucket_trace_records": bucket_snapshot,
         },
         "corpus_hash": corpus_hash,
         "doc_count": len(docs),

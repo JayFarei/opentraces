@@ -28,6 +28,11 @@ from opentraces_schema import (
 )
 
 from . import paths
+from .bucket_store import (
+    iter_trace_record_objects,
+    read_trace_record_object,
+    sync_trace_records_from_local_stores,
+)
 from .semantic import semantic_facets_for_trace
 from .text_redaction import redact_index_text
 from .trace_map import build_trace_map
@@ -38,7 +43,7 @@ from .trails.query import TrailQueryProjection, build_trail_query_projection
 # Cluster A — A2 schema bump: ``trail_sources.limitations_json`` column
 # carries structured limitations like ``trail_event_ref_advanced_during_rebuild``
 # so consumers can detect cache states without re-rebuilding.
-INDEX_VERSION = "plan056-m1-v5"
+INDEX_VERSION = "plan056-m1-v6"
 INDEX_BUSY_TIMEOUT_MS = 5000
 INDEX_WRITE_RETRY_LIMIT = 5
 INDEX_WRITE_RETRY_BASE_SECONDS = 0.05
@@ -1007,13 +1012,21 @@ class TraceSource:
 
 
 def _iter_trace_sources() -> list[TraceSource]:
-    """Yield every JSONL trace shard the index should ingest, tagged by layer.
+    """Yield every TraceRecord object the index should ingest, tagged by layer.
 
     Bundle C / Bug #1: projects/<slug>/traces/*.jsonl is the canonical layer
     (per-project, opted-in) and the new top-level staging/*.jsonl is the
     Plan 58 default-inbox staging layer. Both must be indexed so query callers
     do not silently miss staged-but-unmoved traces.
     """
+    sync_trace_records_from_local_stores()
+    bucket_sources = [
+        TraceSource(obj.source_layer, obj.project_slug, obj.path)
+        for obj in iter_trace_record_objects()
+    ]
+    if bucket_sources:
+        return sorted(bucket_sources, key=lambda source: str(source.trace_path))
+
     sources: list[TraceSource] = []
     for project_home in _iter_project_homes():
         slug = project_home.name
@@ -1286,6 +1299,9 @@ def _iter_trace_paths(project_home: Path) -> list[Path]:
 
 
 def _iter_trace_file_records(trace_path: Path) -> list[TraceRecord]:
+    bucket_obj = read_trace_record_object(trace_path)
+    if bucket_obj is not None:
+        return [bucket_obj.record]
     records: list[TraceRecord] = []
     for line in trace_path.read_text().splitlines():
         if not line.strip():

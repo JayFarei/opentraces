@@ -46,6 +46,28 @@ def test_dataset_creation_writes_hf_shaped_public_tree_and_private_manifest():
     assert manifest.description == "Intent summaries for traces that invoked the grill-me skill."
 
 
+def test_dataset_creation_persists_bucket_query_provenance():
+    from opentraces.core.bucket_store import trace_record_snapshot
+    from opentraces.core.datasets import create_dataset, load_manifest
+
+    created = create_dataset(
+        "semantic-intents",
+        workflow_skill="curator",
+        workflow_digest="sha256:w",
+        candidate_query={
+            "name": "mongodb-query",
+            "scope": "all-projects",
+            "args": {"semantic": "mongodb", "source": "projection"},
+        },
+    )
+
+    manifest = load_manifest(created.path)
+    assert manifest.source_provenance is not None
+    assert manifest.source_provenance.schema_version == "opentraces.dataset.source_provenance.v1"
+    assert manifest.source_provenance.query_fingerprint is not None
+    assert manifest.source_provenance.bucket_snapshot == trace_record_snapshot(include_objects=False)
+
+
 def test_append_rows_validates_schema_dedupes_and_rebuilds_row_index():
     from opentraces.core.datasets import (
         append_rows,

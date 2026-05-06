@@ -152,6 +152,51 @@ def test_dataset_run_lock_prevents_overlapping_runs(monkeypatch):
     assert "already in progress" in result.output
 
 
+def test_dataset_run_packet_carries_query_source_provenance():
+    runner = CliRunner()
+
+    created = runner.invoke(
+        dataset_group,
+        [
+            "new",
+            "mongodb-intents",
+            "--workflow",
+            "curator",
+            "--workflow-digest",
+            "sha256:workflow",
+            "--query-semantic",
+            "mongodb atlas",
+            "--query-source",
+            "projection",
+            "--json",
+        ],
+    )
+    assert created.exit_code == 0, created.output
+
+    result = runner.invoke(
+        dataset_group,
+        ["run", "mongodb-intents", "--executor", "current-agent", "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    run_packet = json.loads(
+        (
+            dataset_path("mongodb-intents")
+            / ".opentraces"
+            / "runs"
+            / payload["run_id"]
+            / "run_packet.json"
+        ).read_text()
+    )
+
+    assert run_packet["candidate_query"]["args"]["semantic"] == "mongodb atlas"
+    assert run_packet["source_provenance"]["schema_version"] == (
+        "opentraces.dataset.source_provenance.v1"
+    )
+    assert run_packet["source_provenance"]["bucket_snapshot"]["object_count"] == 0
+    assert run_packet["source_provenance"]["query_fingerprint"]
+
+
 def test_successful_scheduled_zero_row_run_advances_cursor(monkeypatch):
     runner = CliRunner()
     _create_dataset(runner)

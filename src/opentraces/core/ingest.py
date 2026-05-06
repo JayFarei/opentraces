@@ -381,6 +381,15 @@ def _ingest_locked(
     staging_dir.mkdir(parents=True, exist_ok=True)
     staging_file = staging_dir / f"{trace_id}.jsonl"
     staging_file.write_text(final_record.to_jsonl_line() + "\n")
+    from .bucket_store import write_trace_record
+
+    write_trace_record(
+        final_record,
+        project_slug=get_project_dir(project_dir).name,
+        source_layer="canonical",
+        source_path=staging_file,
+        legacy_mirror=True,
+    )
 
     # Decide the status this generation enters.
     #
