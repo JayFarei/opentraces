@@ -295,10 +295,13 @@ def setup_claude_code(
 ) -> None:
     """Install the Claude Code session-capture hooks.
 
-    Registers two hooks in ~/.claude/settings.json so every Claude Code
+    Registers four hooks in ~/.claude/settings.json so every Claude Code
     session is enriched in place, ready for OpenTraces ingestion:
 
     \b
+      PreToolUse   opens a firm tool-boundary window before a tool runs.
+      PostToolUse  closes the tool window, records write metadata, and emits
+                   patch evidence when the worktree changed.
       Stop         appends a git-state snapshot (branch, HEAD, dirty files)
                    to the session transcript when the agent stops.
       PostCompact  records explicit compaction events so collapsed context

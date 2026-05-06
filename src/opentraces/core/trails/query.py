@@ -2,25 +2,31 @@
 
 This module is intentionally read-only. It rebuilds query rows from
 ``refs/opentraces/local/events/v1`` and does not consult advisory snapshot refs,
-the attribution cache, or git notes. ``trail explain`` remains the canonical
-evidence explainer; this projection is for consumer surfaces that need the same
-identifiers without re-parsing TrailEvents independently.
+the attribution cache, or git notes. When the retained TraceRecord is available
+locally, the projection uses its step hierarchy as optional row metadata so
+subagent leaf writers can be distinguished from parent delegation envelopes.
+``trail explain`` remains the canonical evidence explainer; this projection is
+for consumer surfaces that need the same identifiers without re-parsing
+TrailEvents independently.
 """
 
 from __future__ import annotations
 
 import copy
+import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from opentraces.core.config import get_project_traces_dir
+
 from .contract import enrich_trail_row, projection_digest
 from .event_log import EVENT_LOG_REF, read_events
-from .sync import sync_patch
 from .ids import id_from_payload, normalize_id
 from .models import TrailEvent
 from .slices import resource_refs_for_patch, trace_slice_for_event
+from .sync import sync_patch
 
 
 def _source_event(event: TrailEvent) -> dict[str, Any]:
@@ -95,6 +101,37 @@ def _copy_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [enrich_trail_row(copy.deepcopy(row)) for row in rows]
 
 
+_LEAF_WRITER_TOOLS = {"Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"}
+
+
+@dataclass(frozen=True)
+class _StepMetadata:
+    trace_id: str
+    generation_index: int
+    step_index: int
+    step_id: str
+    call_type: str | None = None
+    parent_step: int | None = None
+    parent_step_id: str | None = None
+    tool_name: str | None = None
+    tool_call_id: str | None = None
+    subagent_trajectory_ref: str | None = None
+
+    def as_row_metadata(self) -> dict[str, Any]:
+        return {
+            "trace_id": self.trace_id,
+            "generation_index": self.generation_index,
+            "step_index": self.step_index,
+            "step_id": self.step_id,
+            "call_type": self.call_type,
+            "parent_step": self.parent_step,
+            "parent_step_id": self.parent_step_id,
+            "tool_name": self.tool_name,
+            "tool_call_id": self.tool_call_id,
+            "subagent_trajectory_ref": self.subagent_trajectory_ref,
+        }
+
+
 @dataclass
 class TrailQueryProjection:
     """Deterministic query index rebuilt from TrailEvents."""
@@ -109,6 +146,9 @@ class TrailQueryProjection:
     anchors_by_commit: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     anchors_by_trace: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     search_events_by_patch: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    delegated_patches_by_parent_step: dict[str, list[dict[str, Any]]] = field(
+        default_factory=dict
+    )
 
     @property
     def limitations(self) -> list[str]:
@@ -163,6 +203,28 @@ class TrailQueryProjection:
         ]
         rows.sort(key=lambda row: row.get("source_refs", {}).get("trace_patch_event_sequence", 0))
         return _copy_rows(rows)
+
+    def delegated_patches_for_parent_step(
+        self,
+        trace_id: str,
+        step_index: int,
+        *,
+        generation_index: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if generation_index is None:
+            prefix = f"{trace_id}:"
+            suffix = f":{step_index}"
+            rows: list[dict[str, Any]] = []
+            for key, refs in sorted(self.delegated_patches_by_parent_step.items()):
+                if key.startswith(prefix) and key.endswith(suffix):
+                    rows.extend(refs)
+            return copy.deepcopy(rows)
+        key = _delegation_key(
+            trace_id=trace_id,
+            generation_index=generation_index,
+            step_index=step_index,
+        )
+        return copy.deepcopy(self.delegated_patches_by_parent_step.get(key, []))
 
     def anchors_for_commit(self, commit_sha: str) -> list[dict[str, Any]]:
         rows = self.anchors_by_commit.get(commit_sha, [])
@@ -470,6 +532,8 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
             )
         projection.patches_by_id[patch_id] = patch_row
 
+    _decorate_projection_with_step_hierarchy(projection)
+
     for rows in projection.anchors_by_commit.values():
         rows.sort(
             key=lambda row: (
@@ -489,6 +553,284 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
         )
 
     return projection
+
+
+def _decorate_projection_with_step_hierarchy(projection: TrailQueryProjection) -> None:
+    step_metadata = _load_step_metadata(projection.repo, projection.trace_ids())
+    if not step_metadata:
+        return
+
+    canonical_rows = list(projection.patches_by_id.values()) + list(
+        projection.anchors_by_id.values()
+    )
+    for row in canonical_rows:
+        meta = _step_metadata_for_row(row, step_metadata)
+        if meta is not None:
+            _apply_step_metadata(row, meta)
+
+    delegated: dict[str, list[dict[str, Any]]] = {}
+    for row in projection.patches_by_id.values():
+        meta = _step_metadata_for_row(row, step_metadata)
+        if meta is None:
+            continue
+        if _is_leaf_writer_tool(meta):
+            row.setdefault("attribution_role", "leaf_writer")
+        if meta.call_type != "subagent" or meta.parent_step is None:
+            continue
+        row["attribution_role"] = "leaf_writer"
+        row["delegation_parent"] = {
+            "trace_id": meta.trace_id,
+            "generation_index": meta.generation_index,
+            "step_index": meta.parent_step,
+            "step_id": meta.parent_step_id or f"step_{meta.parent_step}",
+        }
+        child_ref = _delegated_patch_ref(row, meta)
+        key = _delegation_key(
+            trace_id=meta.trace_id,
+            generation_index=meta.generation_index,
+            step_index=meta.parent_step,
+        )
+        delegated.setdefault(key, []).append(child_ref)
+
+    for refs in delegated.values():
+        refs.sort(key=lambda ref: (ref.get("step_index") or -1, ref.get("trace_patch_id") or ""))
+    projection.delegated_patches_by_parent_step = delegated
+
+    if not delegated:
+        _decorate_nested_anchor_rows(projection, step_metadata)
+        return
+
+    for row in canonical_rows:
+        trace_id = row.get("trace_id")
+        step_index = _int_or_none(row.get("step_index"))
+        if not trace_id or step_index is None:
+            continue
+        key = _delegation_key(
+            trace_id=trace_id,
+            generation_index=_int_or_zero(row.get("generation_index")),
+            step_index=step_index,
+        )
+        child_refs = delegated.get(key)
+        if not child_refs:
+            continue
+        row["delegated_patch_refs"] = copy.deepcopy(child_refs)
+        duplicate = _matching_delegated_patch(row, child_refs)
+        if duplicate is not None:
+            row["attribution_role"] = "delegation_envelope_duplicate"
+            row["owned_by_trace_patch_id"] = duplicate.get("trace_patch_id")
+            row["limitations"] = _dedupe(
+                list(row.get("limitations") or []) + ["delegation_envelope_duplicate"]
+            )
+
+    for row in projection.anchors_by_id.values():
+        patch_id = row.get("trace_patch_id")
+        patch_row = projection.patches_by_id.get(patch_id)
+        if patch_row and patch_row.get("attribution_role"):
+            row["attribution_role"] = patch_row["attribution_role"]
+            if patch_row.get("delegation_parent"):
+                row["delegation_parent"] = copy.deepcopy(patch_row["delegation_parent"])
+
+    _decorate_nested_anchor_rows(projection, step_metadata)
+
+
+def _decorate_nested_anchor_rows(
+    projection: TrailQueryProjection,
+    step_metadata: dict[tuple[str, int, int], _StepMetadata],
+) -> None:
+    for patch_row in projection.patches_by_id.values():
+        for anchor_row in patch_row.get("git_anchors") or []:
+            meta = _step_metadata_for_row(anchor_row, step_metadata)
+            if meta is not None:
+                _apply_step_metadata(anchor_row, meta)
+            anchor_id = anchor_row.get("git_anchor_id")
+            source_anchor = projection.anchors_by_id.get(anchor_id)
+            if source_anchor:
+                for key in (
+                    "attribution_role",
+                    "delegation_parent",
+                    "delegated_patch_refs",
+                    "owned_by_trace_patch_id",
+                    "limitations",
+                    "step_metadata",
+                ):
+                    if key in source_anchor:
+                        anchor_row[key] = copy.deepcopy(source_anchor[key])
+
+
+def _load_step_metadata(
+    repo: Path,
+    trace_ids: list[str],
+) -> dict[tuple[str, int, int], _StepMetadata]:
+    wanted = {trace_id for trace_id in trace_ids if trace_id}
+    if not wanted:
+        return {}
+    try:
+        traces_dir = get_project_traces_dir(repo)
+    except Exception:
+        return {}
+    if not traces_dir.exists():
+        return {}
+
+    metadata: dict[tuple[str, int, int], _StepMetadata] = {}
+    remaining = set(wanted)
+    for path in sorted(traces_dir.glob("*.jsonl")):
+        record = _read_trace_record(path)
+        if not record:
+            continue
+        trace_id = record.get("trace_id")
+        session_id = record.get("session_id")
+        if trace_id not in remaining and session_id not in remaining:
+            continue
+        resolved_trace_id = trace_id if trace_id in wanted else session_id
+        if not resolved_trace_id:
+            continue
+        generation_index = _int_or_zero(record.get("generation_index"))
+        for step in record.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            step_index = _int_or_none(step.get("step_index") or step.get("index"))
+            if step_index is None:
+                continue
+            tool_call = _first_tool_call(step)
+            parent_step = _int_or_none(step.get("parent_step"))
+            meta = _StepMetadata(
+                trace_id=resolved_trace_id,
+                generation_index=generation_index,
+                step_index=step_index,
+                step_id=f"step_{step_index}",
+                call_type=step.get("call_type"),
+                parent_step=parent_step,
+                parent_step_id=f"step_{parent_step}" if parent_step is not None else None,
+                tool_name=tool_call.get("tool_name") or tool_call.get("name"),
+                tool_call_id=tool_call.get("tool_call_id") or tool_call.get("id"),
+                subagent_trajectory_ref=step.get("subagent_trajectory_ref"),
+            )
+            metadata[(resolved_trace_id, generation_index, step_index)] = meta
+        remaining.discard(resolved_trace_id)
+        if not remaining:
+            break
+    return metadata
+
+
+def _read_trace_record(path: Path) -> dict[str, Any] | None:
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
+def _first_tool_call(step: dict[str, Any]) -> dict[str, Any]:
+    tool_calls = step.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for item in tool_calls:
+            if isinstance(item, dict):
+                return item
+    return {}
+
+
+def _step_metadata_for_row(
+    row: dict[str, Any],
+    step_metadata: dict[tuple[str, int, int], _StepMetadata],
+) -> _StepMetadata | None:
+    trace_id = row.get("trace_id")
+    step_index = _int_or_none(row.get("step_index"))
+    if not trace_id or step_index is None:
+        return None
+    key = (
+        trace_id,
+        _int_or_zero(row.get("generation_index")),
+        step_index,
+    )
+    return step_metadata.get(key)
+
+
+def _apply_step_metadata(row: dict[str, Any], meta: _StepMetadata) -> None:
+    row["step_metadata"] = meta.as_row_metadata()
+
+
+def _delegated_patch_ref(row: dict[str, Any], meta: _StepMetadata) -> dict[str, Any]:
+    return {
+        "trace_id": row.get("trace_id"),
+        "generation_index": row.get("generation_index"),
+        "step_index": row.get("step_index"),
+        "step_id": row.get("step_id"),
+        "trace_patch_id": row.get("trace_patch_id"),
+        "git_anchor_id": row.get("git_anchor_id"),
+        "commit_sha": row.get("commit_sha"),
+        "file_path": row.get("file_path") or row.get("path"),
+        "affected_range": copy.deepcopy(row.get("affected_range")),
+        "range": copy.deepcopy(row.get("range")),
+        "tool_name": meta.tool_name,
+        "tool_call_id": meta.tool_call_id,
+        "attribution_role": "leaf_writer",
+    }
+
+
+def _is_leaf_writer_tool(meta: _StepMetadata) -> bool:
+    return bool(meta.tool_name in _LEAF_WRITER_TOOLS)
+
+
+def _delegation_key(
+    *,
+    trace_id: str,
+    generation_index: int | None,
+    step_index: int,
+) -> str:
+    return f"{trace_id}:{_int_or_zero(generation_index)}:{step_index}"
+
+
+def _matching_delegated_patch(
+    row: dict[str, Any],
+    child_refs: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    own_patch_id = row.get("trace_patch_id")
+    own_key = _patch_shape_key(row)
+    if own_key is None:
+        return None
+    for ref in child_refs:
+        if ref.get("trace_patch_id") == own_patch_id:
+            continue
+        if _patch_shape_key(ref) == own_key:
+            return ref
+    return None
+
+
+def _patch_shape_key(row: dict[str, Any]) -> tuple[Any, ...] | None:
+    path = row.get("file_path") or row.get("path")
+    line_range = row.get("affected_range") or row.get("range")
+    if not path or not isinstance(line_range, dict):
+        return None
+    return (
+        path,
+        _int_or_none(line_range.get("start_line")),
+        _int_or_none(line_range.get("end_line")),
+        row.get("commit_sha"),
+    )
+
+
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        probe = value.removeprefix("step_")
+        if probe.isdigit():
+            return int(probe)
+    return None
+
+
+def _int_or_zero(value: Any) -> int:
+    parsed = _int_or_none(value)
+    return parsed if parsed is not None else 0
 
 
 def trail_query_summary(repo: Path) -> dict[str, Any]:
