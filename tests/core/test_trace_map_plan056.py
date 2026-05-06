@@ -111,6 +111,64 @@ def test_build_trace_map_classifies_broad_action_nodes_without_semantic_labels()
     assert "outcome" not in serialized
 
 
+def test_build_trace_map_upgrades_bash_tool_call_when_trail_patch_verifies_write():
+    from opentraces.core.trace_map import build_trace_map
+
+    record = TraceRecord(
+        trace_id="trace-bash-write-map",
+        session_id="session-bash-write-map",
+        agent=Agent(name="claude-code", model="claude-opus-4-6"),
+        task={"description": "generate a file through bash"},
+        steps=[
+            Step(step_index=1, role="user", content="Generate the file."),
+            Step(
+                step_index=2,
+                role="agent",
+                tool_calls=[
+                    ToolCall(
+                        tool_call_id="tc-bash-write",
+                        tool_name="Bash",
+                        input={"command": "cat > generated.txt <<'EOF'\nhello\nEOF"},
+                    )
+                ],
+            ),
+        ],
+    )
+
+    class Projection:
+        def patches_for_trace(self, trace_id):
+            assert trace_id == "trace-bash-write-map"
+            return [
+                {
+                    "trace_patch_id": "tp-bash-write",
+                    "git_anchor_id": "ga-bash-write",
+                    "commit_sha": "abc123",
+                    "file_path": "generated.txt",
+                    "affected_range": {"start_line": 1, "end_line": 1},
+                    "range": {"start_line": 1, "end_line": 1},
+                    "evidence_tier": "exact_range_hash",
+                    "evidence_firmness": "firm",
+                    "attribution_role": "leaf_writer",
+                    "step_metadata": {
+                        "tool_call_id": "tc-bash-write",
+                        "tool_name": "Bash",
+                    },
+                }
+            ]
+
+    trace_map = build_trace_map(record, trail_projection=Projection())
+
+    bash_node = next(node for node in trace_map.nodes if node.tool_name == "Bash")
+    assert bash_node.action_type == "file_edit"
+    assert bash_node.files_modified == ["generated.txt"]
+    assert bash_node.metadata["classification_source"] == "trail_projection"
+    assert bash_node.metadata["pre_verification_action_type"] == "tool_call"
+    assert bash_node.metadata["post_verification_action_type"] == "file_edit"
+    assert bash_node.metadata["write_verified"] is True
+    assert bash_node.metadata["attribution_role"] == "leaf_writer"
+    assert bash_node.metadata["trace_patches"][0]["trace_patch_id"] == "tp-bash-write"
+
+
 def test_candidate_slice_walks_from_instruction_to_nearby_verification_nodes():
     from opentraces.core.trace_map import build_trace_map, slice_trace_map_for_candidate
 

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from click.testing import CliRunner
 
 from opentraces.cli import SENTINEL, main
+from opentraces.core.trails import TrailEventDraft, append_event_batch
+from opentraces.core.trails.models import sha256_text
 from opentraces_schema import Agent, GitLink, Observation, Step, ToolCall, TraceRecord
 
 
@@ -24,6 +27,21 @@ def _write_project_trace(project_dir: Path, record: TraceRecord) -> None:
     traces_dir = get_project_traces_dir(project_dir)
     traces_dir.mkdir(parents=True, exist_ok=True)
     (traces_dir / f"{record.trace_id}.jsonl").write_text(record.model_dump_json() + "\n")
+
+
+def _register_project_source(project_dir: Path) -> None:
+    from opentraces.core.config import load_config, register_project, save_config
+
+    cfg = load_config()
+    register_project(cfg, project_dir)
+    save_config(cfg)
+
+
+def _init_git_project(project_dir: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=project_dir, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=project_dir, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=project_dir, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=project_dir, check=True)
 
 
 def _trace() -> TraceRecord:
@@ -223,6 +241,74 @@ def test_trace_query_map_get_json_cli_round_trip(tmp_path):
     get_payload = json.loads(got.output)
     assert get_payload["trace"]["trace_id"] == "trace-plan056-cli"
     assert get_payload["trace"]["steps"][0]["content"].startswith("Use grill-me")
+
+
+def test_trace_map_rebuild_upgrades_verified_bash_write_from_trail_projection(tmp_path):
+    project = tmp_path / "demo"
+    _enroll_project(project, "abcdef1234567890abcdef1234567890")
+    _register_project_source(project)
+    _init_git_project(project)
+    record = TraceRecord(
+        trace_id="trace-plan056-cli-bash-write",
+        session_id="session-plan056-cli-bash-write",
+        agent=Agent(name="claude-code", model="claude-opus-4-6"),
+        task={"description": "Generate a file through bash"},
+        steps=[
+            Step(step_index=1, role="user", content="Generate the file through bash."),
+            Step(
+                step_index=2,
+                role="agent",
+                tool_calls=[
+                    ToolCall(
+                        tool_call_id="tc-bash-write",
+                        tool_name="Bash",
+                        input={"command": "cat > generated.txt <<'EOF'\nhello\nEOF"},
+                    )
+                ],
+            ),
+        ],
+    )
+    _write_project_trace(project, record)
+    append_event_batch(
+        project,
+        [
+            TrailEventDraft(
+                event_type="trace_patch_created",
+                trace_id=record.trace_id,
+                generation_index=record.generation_index,
+                step_index=2,
+                capture_method=["hook_posttooluse"],
+                payload={
+                    "trace_patch_id": sha256_text("bash-write-patch").split(":", 1)[1],
+                    "file_path": "generated.txt",
+                    "affected_range": {"start_line": 1, "end_line": 1},
+                    "authored_text": "hello\n",
+                    "raw_authored_hash": sha256_text("hello\n"),
+                    "git_clean_hash": sha256_text("hello"),
+                    "limitations": [],
+                },
+            )
+        ],
+        writer="test-fixture",
+    )
+
+    runner = CliRunner()
+    query = runner.invoke(
+        main,
+        ["trace", "query", "--lex", "generate", "--force-rebuild", "--json"],
+    )
+    assert query.exit_code == 0, query.output
+    trace_map = runner.invoke(main, ["trace", "map", record.trace_id, "--json"])
+    assert trace_map.exit_code == 0, trace_map.output
+    payload = json.loads(trace_map.output)
+    bash_node = next(node for node in payload["map"]["nodes"] if node.get("tool_name") == "Bash")
+
+    assert bash_node["action_type"] == "file_edit"
+    assert bash_node["files_modified"] == ["generated.txt"]
+    assert bash_node["metadata"]["classification_source"] == "trail_projection"
+    assert bash_node["metadata"]["pre_verification_action_type"] == "tool_call"
+    assert bash_node["metadata"]["write_verified"] is True
+    assert bash_node["metadata"]["trace_patches"][0]["trace_patch_id"]
 
 
 def test_trace_map_accepts_ot_map_uri_and_map_node_target(tmp_path):

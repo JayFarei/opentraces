@@ -42,10 +42,14 @@ INTENT_TARGET_ACTION_TYPES: frozenset[str] = frozenset(
 )
 
 
-def build_trace_map(record: TraceRecord) -> TraceMap:
+def build_trace_map(record: TraceRecord, *, trail_projection: Any | None = None) -> TraceMap:
     """Build a workflow-neutral typed outline from a trace record."""
 
     repo_root = _resolve_repo_root(record)
+    verified_patches_by_tool_call = _verified_patches_by_tool_call(
+        record,
+        trail_projection,
+    )
 
     builder = _TraceMapBuilder(record.trace_id)
 
@@ -75,9 +79,34 @@ def build_trace_map(record: TraceRecord) -> TraceMap:
             action_type = _tool_action_type(call.tool_name, call.input)
             files_read_raw = _files_for_tool(call.tool_name, call.input, read=True)
             files_modified_raw = _files_for_tool(call.tool_name, call.input, read=False)
+            verified_patches = verified_patches_by_tool_call.get(call.tool_call_id, [])
+            if verified_patches:
+                files_modified_raw = sorted(
+                    dict.fromkeys(
+                        [
+                            *files_modified_raw,
+                            *[
+                                path
+                                for path in (
+                                    patch.get("file_path") or patch.get("path")
+                                    for patch in verified_patches
+                                )
+                                if isinstance(path, str) and path
+                            ],
+                        ]
+                    )
+                )
             files_read_norm, files_read_abs = _normalize_paths(files_read_raw, repo_root)
             files_modified_norm, files_modified_abs = _normalize_paths(files_modified_raw, repo_root)
             metadata: dict[str, Any] = {"tool_call_id": call.tool_call_id}
+            if verified_patches:
+                metadata.update(
+                    _verified_write_metadata(
+                        pre_verification_action_type=action_type,
+                        patches=verified_patches,
+                    )
+                )
+                action_type = "file_edit"
             if files_modified_abs:
                 metadata["files_modified_absolute"] = files_modified_abs
             if files_read_abs:
@@ -504,6 +533,63 @@ def _tool_action_type(tool_name: str, tool_input: dict[str, Any]) -> str:
     if "skill" in normalized:
         return "skill_invocation"
     return "tool_call"
+
+
+def _verified_patches_by_tool_call(
+    record: TraceRecord,
+    trail_projection: Any | None,
+) -> dict[str, list[dict[str, Any]]]:
+    if trail_projection is None or not hasattr(trail_projection, "patches_for_trace"):
+        return {}
+    try:
+        rows = trail_projection.patches_for_trace(record.trace_id)
+    except Exception:
+        return {}
+
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if row.get("attribution_role") != "leaf_writer":
+            continue
+        step_metadata = row.get("step_metadata") or {}
+        tool_call_id = step_metadata.get("tool_call_id") or row.get("tool_call_id")
+        if not tool_call_id:
+            continue
+        out.setdefault(str(tool_call_id), []).append(row)
+    for patches in out.values():
+        patches.sort(
+            key=lambda patch: (
+                patch.get("file_path") or patch.get("path") or "",
+                patch.get("trace_patch_id") or "",
+            )
+        )
+    return out
+
+
+def _verified_write_metadata(
+    *,
+    pre_verification_action_type: str,
+    patches: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "classification_source": "trail_projection",
+        "pre_verification_action_type": pre_verification_action_type,
+        "post_verification_action_type": "file_edit",
+        "write_verified": True,
+        "attribution_role": "leaf_writer",
+        "trace_patches": [
+            {
+                "trace_patch_id": patch.get("trace_patch_id"),
+                "git_anchor_id": patch.get("git_anchor_id"),
+                "commit_sha": patch.get("commit_sha"),
+                "file_path": patch.get("file_path") or patch.get("path"),
+                "affected_range": patch.get("affected_range"),
+                "range": patch.get("range"),
+                "evidence_tier": patch.get("evidence_tier"),
+                "evidence_firmness": patch.get("evidence_firmness"),
+            }
+            for patch in patches
+        ],
+    }
 
 
 def _files_for_tool(tool_name: str, tool_input: dict[str, Any], *, read: bool) -> list[str]:

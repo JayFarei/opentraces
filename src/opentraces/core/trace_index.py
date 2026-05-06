@@ -31,12 +31,13 @@ from . import paths
 from .text_redaction import redact_index_text
 from .trace_map import build_trace_map
 from .trace_map import slice_trace_map_for_candidate
+from .trails.query import TrailQueryProjection, build_trail_query_projection
 
 
 # Cluster A — A2 schema bump: ``trail_sources.limitations_json`` column
 # carries structured limitations like ``trail_event_ref_advanced_during_rebuild``
 # so consumers can detect cache states without re-rebuilding.
-INDEX_VERSION = "plan056-m1-v4"
+INDEX_VERSION = "plan056-m1-v5"
 INDEX_BUSY_TIMEOUT_MS = 5000
 INDEX_WRITE_RETRY_LIMIT = 5
 INDEX_WRITE_RETRY_BASE_SECONDS = 0.05
@@ -196,6 +197,7 @@ def _rebuild_index_locked(db_path: Path) -> RebuildSummary:
         with _connect(tmp_path, wal=False) as conn:
             _create_schema(conn)
             project_sources = _project_sources_by_slug()
+            trail_projection_cache: dict[str, TrailQueryProjection | None] = {}
             for source in _iter_trace_sources():
                 trace_path = source.trace_path
                 project_slug = source.project_slug
@@ -203,7 +205,14 @@ def _rebuild_index_locked(db_path: Path) -> RebuildSummary:
                 records = _iter_trace_file_records(trace_path)
                 for record in records:
                     _delete_trace_ids(conn, [record.trace_id])
-                    trace_map = build_trace_map(record)
+                    trace_map = build_trace_map(
+                        record,
+                        trail_projection=_trail_projection_for_project(
+                            project_slug,
+                            project_sources,
+                            trail_projection_cache,
+                        ),
+                    )
                     units = _build_units(record, trace_map, project_slug, layer=layer)
                     _insert_trace(conn, record, project_slug, trace_path, trace_map)
                     for unit in units:
@@ -258,6 +267,7 @@ def _refresh_index_locked(db_path: Path) -> RebuildSummary:
             return rebuild_index(db_path)
 
         project_sources = _project_sources_by_slug()
+        trail_projection_cache: dict[str, TrailQueryProjection | None] = {}
         seen_sources: set[str] = set()
         for source in _iter_trace_sources():
             trace_path = source.trace_path
@@ -289,7 +299,14 @@ def _refresh_index_locked(db_path: Path) -> RebuildSummary:
                 [*old_trace_ids, *[record.trace_id for record in records]],
             )
             for record in records:
-                trace_map = build_trace_map(record)
+                trace_map = build_trace_map(
+                    record,
+                    trail_projection=_trail_projection_for_project(
+                        project_slug,
+                        project_sources,
+                        trail_projection_cache,
+                    ),
+                )
                 _insert_trace(conn, record, project_slug, trace_path, trace_map)
                 for unit in _build_units(record, trace_map, project_slug, layer=layer):
                     _insert_unit(conn, unit)
@@ -1154,6 +1171,25 @@ def _project_sources_by_slug() -> dict[str, Path]:
         if slug:
             out[str(slug)] = Path(project_path)
     return out
+
+
+def _trail_projection_for_project(
+    project_slug: str,
+    project_sources: dict[str, Path],
+    cache: dict[str, TrailQueryProjection | None],
+) -> TrailQueryProjection | None:
+    if project_slug in cache:
+        return cache[project_slug]
+    source_repo = project_sources.get(project_slug)
+    if source_repo is None or not source_repo.exists():
+        cache[project_slug] = None
+        return None
+    try:
+        projection = build_trail_query_projection(source_repo)
+    except Exception:
+        projection = None
+    cache[project_slug] = projection
+    return projection
 
 
 def _iter_trace_records(project_home: Path) -> list[tuple[TraceRecord, Path]]:
