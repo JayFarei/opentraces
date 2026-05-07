@@ -1,4 +1,8 @@
-# opentraces
+```
+  █▀▀█ █▀▀█ █▀▀█ █▀▀▄ ▀█▀ █▀▀▄ █▀▀█ █▀▀▀ █▀▀█ █▀▀▀
+  █  █ █  █ █▀▀▀ █  █  █  █▀▀▄ █▀▀█ █    █▀▀▀ ▀▀▀█
+  ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀  ▀  ▀  ▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+```
 
 Open schema + CLI for capturing agent traces, linking them to Git evidence, building local datasets, and publishing reviewed dataset rows to Hugging Face Hub.
 
