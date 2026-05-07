@@ -50,6 +50,18 @@ class SessionParser(Protocol):
 
 The parser must populate `self.step_anchors: dict[int, dict]` during `parse_session` if you want resume support. Each entry maps `step_index` to whatever locator the agent uses to seek into the transcript (file relpath, line number, internal entry id). Without anchors, `opentraces trace resume --at-step` will not work for the agent.
 
+### Skills and command invocations
+
+Harnesses often record user-facing commands and skill execution as several adjacent transcript events: a slash-command wrapper, the user's command arguments, an injected skill body or system prompt, and then the real tool calls that follow. Parser authors must keep those surfaces distinct.
+
+- Treat explicit skill tool calls, or harness-specific high-confidence command wrappers, as structured invocation evidence. Store that evidence under `TraceRecord.metadata["skill_invocations"]` with enough raw locator data to debug it later: skill name, command name, command args, timestamp, source event ids or line numbers, and the harness-specific source label.
+- Do not treat injected skill body text as a user step, task description, or task intent. If the harness gives a slash command plus arguments, the arguments are the user's intent seed; the injected body is provenance for the command implementation.
+- Do not infer skill usage from arbitrary text mentions. A skill invocation needs an explicit tool call (`Skill`, `skill`, or the harness equivalent) or a paired command wrapper and injected skill-body marker, such as Claude Code's `<command-name>...</command-name>` event followed by `Base directory for this skill: ...`.
+- Keep built-in harness commands separate from skill invocations. Built-ins such as help, status, reset, or non-skill slash commands may be useful as command metadata, but they must not populate `skill_invocations` or pollute the trace task.
+- Preserve the original command/tool surface in metadata. Later query and dataset workflows need to know whether the trajectory came from a slash command, a named skill tool, a shell command, or another harness-specific command family.
+
+This distinction is required for command-attributed datasets: the index can only build reliable `skill_invocation` units when the parser exposes high-confidence command evidence and excludes injected implementation text from the user trajectory.
+
 ### `FormatImporter`
 
 For static dataset rows, no live session, no hooks.
