@@ -8,11 +8,14 @@ import re
 import shutil
 import uuid
 from dataclasses import dataclass
+from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
 
 from . import paths
 
 _WORKFLOW_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_BUILTIN_TEMPLATE_PACKAGE = "opentraces.workflow_templates"
 
 
 @dataclass(frozen=True)
@@ -46,14 +49,18 @@ def create_workflow(
     replace: bool = False,
 ) -> WorkflowPackage:
     validate_workflow_name(name)
-    if template != "default":
-        raise ValueError(f"unknown workflow template: {template}")
-
     destination = workflows_dir() / name
     if destination.exists():
         if not replace:
             raise FileExistsError(f"workflow already exists: {name}")
         shutil.rmtree(destination)
+
+    if template != "default":
+        source = _builtin_template(template)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _copy_traversable_tree(source, destination)
+        _rewrite_template_metadata(destination, name=name, description=description)
+        return load_workflow(name)
 
     (destination / "examples").mkdir(parents=True)
     (destination / "scripts").mkdir()
@@ -84,6 +91,15 @@ def create_workflow(
         encoding="utf-8",
     )
     return load_workflow(name)
+
+
+def list_workflow_templates() -> list[str]:
+    templates = ["default"]
+    root = resources.files(_BUILTIN_TEMPLATE_PACKAGE)
+    for item in sorted(root.iterdir(), key=lambda resource: resource.name):
+        if item.is_dir() and _traversable_has_workflow_entrypoint(item):
+            templates.append(item.name)
+    return templates
 
 
 def install_workflow(source: Path, *, replace: bool = False) -> WorkflowPackage:
@@ -234,6 +250,88 @@ def _workflow_files(path: Path) -> list[Path]:
     ]
     files.sort(key=lambda file_path: file_path.relative_to(path).as_posix())
     return files
+
+
+def _builtin_template(name: str) -> Traversable:
+    root = resources.files(_BUILTIN_TEMPLATE_PACKAGE)
+    template = root.joinpath(name)
+    if template.is_dir() and _traversable_has_workflow_entrypoint(template):
+        return template
+    known = ", ".join(list_workflow_templates())
+    raise ValueError(f"unknown workflow template: {name} (available: {known})")
+
+
+def _traversable_has_workflow_entrypoint(path: Traversable) -> bool:
+    return path.joinpath("SKILL.md").is_file() or path.joinpath("WORKFLOW.md").is_file()
+
+
+def _copy_traversable_tree(source: Traversable, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for item in source.iterdir():
+        target = destination / item.name
+        if item.is_dir():
+            _copy_traversable_tree(item, target)
+        elif item.is_file():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(item.read_bytes())
+
+
+def _rewrite_template_metadata(
+    destination: Path,
+    *,
+    name: str,
+    description: str | None,
+) -> None:
+    entrypoint = _workflow_entrypoint(destination)
+    text = entrypoint.read_text(encoding="utf-8")
+    old_metadata = _read_skill_frontmatter(entrypoint)
+    old_name = old_metadata.get("name")
+    if not text.startswith("---\n"):
+        return
+    end = text.find("\n---", 4)
+    if end == -1:
+        return
+    raw = text[4:end]
+    lines = raw.splitlines()
+    fields = {"name": name}
+    if description is not None:
+        fields["description"] = description
+    seen: set[str] = set()
+    rewritten: list[str] = []
+    for line in lines:
+        key, sep, _value = line.partition(":")
+        normalized_key = key.strip()
+        if sep and normalized_key in fields:
+            rewritten.append(f"{normalized_key}: {fields[normalized_key]}")
+            seen.add(normalized_key)
+        else:
+            rewritten.append(line)
+    for key, value in fields.items():
+        if key not in seen:
+            rewritten.insert(0 if key == "name" else len(rewritten), f"{key}: {value}")
+    updated = "---\n" + "\n".join(rewritten) + text[end:]
+    if old_name and old_name != name:
+        updated = re.sub(
+            rf"^# {re.escape(old_name)}\s*$",
+            f"# {name}",
+            updated,
+            count=1,
+            flags=re.MULTILINE,
+        )
+    entrypoint.write_text(updated, encoding="utf-8")
+    if old_name and old_name != name:
+        _replace_text_in_workflow_files(destination, old_name, name)
+
+
+def _replace_text_in_workflow_files(destination: Path, old: str, new: str) -> None:
+    for path in _workflow_files(destination):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if old not in text:
+            continue
+        path.write_text(text.replace(old, new), encoding="utf-8")
 
 
 def _has_workflow_entrypoint(path: Path) -> bool:

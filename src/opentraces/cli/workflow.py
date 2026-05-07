@@ -12,6 +12,7 @@ from ..core.datasets import list_datasets
 from ..core.workflows import (
     WorkflowPackage,
     create_workflow,
+    list_workflow_templates,
     list_workflows,
     remove_workflow,
 )
@@ -88,6 +89,18 @@ def workflow_create(
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
     click.echo(f"Workflow created: {workflow.name}  {workflow.path}")
+
+
+@workflow_group.command("templates", cls=OpentracesCommand)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def workflow_templates(as_json: bool) -> None:
+    """List built-in workflow templates available to `workflow create`."""
+    templates = list_workflow_templates()
+    if as_json:
+        click.echo(json.dumps({"status": "ok", "templates": templates}, indent=2, sort_keys=True))
+        return
+    for template in templates:
+        click.echo(template)
 
 
 @workflow_group.command("remove", cls=OpentracesCommand)

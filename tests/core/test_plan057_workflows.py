@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+
+
 def test_workflow_scaffold_creates_skill_package_and_stable_digest():
     from opentraces.core.workflows import (
         compute_workflow_digest,
@@ -50,6 +55,51 @@ def test_workflow_scaffold_creates_skill_package_and_stable_digest():
 
     assert first_digest != changed_digest
     assert changed_digest == mirrored_digest
+
+
+def test_workflow_scaffold_can_use_packaged_command_eval_template(tmp_path):
+    from opentraces.core.workflows import create_workflow, list_workflow_templates
+
+    assert "skill-command-trajectory-eval-v1" in list_workflow_templates()
+
+    created = create_workflow(
+        "custom-command-eval",
+        description="Custom command trajectory eval workflow",
+        template="skill-command-trajectory-eval-v1",
+    )
+
+    assert created.name == "custom-command-eval"
+    assert created.description == "Custom command trajectory eval workflow"
+    assert (created.path / "schemas" / "row.schema.json").exists()
+    assert (created.path / "scripts" / "build_rows.py").exists()
+    assert "custom-command-eval" in (created.path / "tests" / "README.md").read_text()
+
+    source = tmp_path / "raw-command-trajectories.jsonl"
+    example_input = json.loads(
+        (created.path / "examples" / "input-candidate-packet.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    source.write_text(
+        json.dumps(example_input, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "rows.jsonl"
+    subprocess.run(
+        [
+            sys.executable,
+            str(created.path / "scripts" / "build_rows.py"),
+            "--source",
+            str(source),
+            "--output",
+            str(output),
+        ],
+        check=True,
+    )
+
+    expected = json.loads((created.path / "examples" / "expected-row.json").read_text())
+    actual = json.loads(output.read_text(encoding="utf-8"))
+    assert actual == expected
 
 
 def test_install_workflow_copies_skill_package_without_source_path_dependency(tmp_path):

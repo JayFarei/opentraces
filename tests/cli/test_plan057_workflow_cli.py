@@ -42,6 +42,33 @@ def test_workflow_cli_create_list_remove_json_round_trip():
     assert json.loads(removed.output)["removed"]["name"] == "grill-me-intent-curator"
 
 
+def test_workflow_cli_lists_and_creates_packaged_templates():
+    runner = CliRunner()
+
+    templates = runner.invoke(workflow_group, ["templates", "--json"])
+    assert templates.exit_code == 0, templates.output
+    assert "skill-command-trajectory-eval-v1" in json.loads(templates.output)["templates"]
+
+    created = runner.invoke(
+        workflow_group,
+        [
+            "create",
+            "command-eval",
+            "--template",
+            "skill-command-trajectory-eval-v1",
+            "--description",
+            "Command eval workflow",
+            "--json",
+        ],
+    )
+    assert created.exit_code == 0, created.output
+    payload = json.loads(created.output)
+    assert payload["workflow"]["name"] == "command-eval"
+    workflow_path = Path(payload["workflow"]["path"])
+    assert (workflow_path / "schemas" / "row.schema.json").exists()
+    assert (workflow_path / "scripts" / "build_rows.py").exists()
+
+
 def test_workflow_list_reports_dataset_bindings():
     """A workflow that backs a dataset shows up in that dataset's binding list."""
     from opentraces.core.datasets import create_dataset

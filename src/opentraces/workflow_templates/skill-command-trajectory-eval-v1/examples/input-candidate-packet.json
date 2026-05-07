@@ -1,0 +1,35 @@
+{
+  "row_id": "command_trajectory_example",
+  "source_trace_id": "example-trace",
+  "source_unit_id": "tu:example:skill:metadata:0",
+  "project_slug": "example-project",
+  "command": {
+    "skill_name": "scout-research",
+    "command_name": "/scout-research",
+    "source": "claude_slash_command",
+    "args": "Research a library and write a compact brief.",
+    "trigger_text": "Research a library and write a compact brief."
+  },
+  "attribution": {
+    "confidence": "high",
+    "start_step_index": 1,
+    "end_step_index": 6,
+    "excluded_step_indices": []
+  },
+  "trajectory": {
+    "summary": {
+      "tools": ["Read", "WebFetch", "Write"],
+      "files_modified": ["kb/br/example.md"],
+      "write_operation_count": 1,
+      "patch_refs": []
+    }
+  },
+  "outcome": {
+    "success": true,
+    "committed": true,
+    "commit_sha": "abc123"
+  },
+  "quality": {
+    "limitations": []
+  }
+}
