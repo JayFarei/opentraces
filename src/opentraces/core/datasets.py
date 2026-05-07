@@ -1513,7 +1513,7 @@ def build_dataset_card(
         "configs": [
             {
                 "config_name": "default",
-                "data_files": [{"split": "train", "path": "data/train.jsonl"}],
+                "data_files": [{"split": "train", "path": "data/*.jsonl"}],
             }
         ],
         "tags": tags,

@@ -112,21 +112,23 @@ def test_plan058_published_local_path_is_loadable_by_hf_datasets(isolated_worksp
         )
     )
 
-    # V24: the published local dataset path must be loadable by the HF
-    # ``datasets`` library and must yield rows equivalent to the originals.
+    # V24: the source local dataset path and the published fake-remote
+    # dataset path must both be loadable by the HF ``datasets`` library and
+    # must yield rows equivalent to the originals.
     src_local_root = dataset_path("roundtrip-source")
-    loaded = datasets.load_dataset(str(src_local_root))
-    assert "train" in loaded
-    train = loaded["train"]
-    assert train.num_rows == 3
-    rows = list(train)
-    assert _row_id_set(rows) == _row_id_set(originals)
+    for loadable_root in (src_local_root, remote_root):
+        loaded = datasets.load_dataset(str(loadable_root))
+        assert "train" in loaded
+        train = loaded["train"]
+        assert train.num_rows == 3
+        rows = list(train)
+        assert _row_id_set(rows) == _row_id_set(originals)
 
-    by_trace = {r["source_trace_id"]: r for r in rows}
-    for original in originals:
-        cloned = by_trace[original["source_trace_id"]]
-        assert cloned["source_unit_id"] == original["source_unit_id"]
-        assert cloned["summary"] == original["summary"]
+        by_trace = {r["source_trace_id"]: r for r in rows}
+        for original in originals:
+            cloned = by_trace[original["source_trace_id"]]
+            assert cloned["source_unit_id"] == original["source_unit_id"]
+            assert cloned["summary"] == original["summary"]
 
 
 def test_plan058_dataset_infos_and_schema_present_on_remote(isolated_workspace):
