@@ -7,7 +7,7 @@ import re
 import sqlite3
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime, timedelta, timezone
 from fnmatch import fnmatch
 from pathlib import Path
@@ -40,10 +40,10 @@ from .trace_map import slice_trace_map_for_candidate
 from .trails.query import TrailQueryProjection, build_trail_query_projection
 
 
-# Cluster A — A2 schema bump: ``trail_sources.limitations_json`` column
-# carries structured limitations like ``trail_event_ref_advanced_during_rebuild``
-# so consumers can detect cache states without re-rebuilding.
-INDEX_VERSION = "plan056-m1-v6"
+# Cluster A — A2/A5 schema bump: ``trail_sources.limitations_json`` carries
+# structured limitations and ``indexed_at`` records when the trail projection
+# was last synced into the query index.
+INDEX_VERSION = "plan056-m1-v7"
 INDEX_BUSY_TIMEOUT_MS = 5000
 INDEX_WRITE_RETRY_LIMIT = 5
 INDEX_WRITE_RETRY_BASE_SECONDS = 0.05
@@ -178,6 +178,7 @@ class QueryPage:
     candidates: list[CandidatePacket]
     next_page_token: str | None
     total: int
+    warnings: list[dict[str, Any]] = dataclass_field(default_factory=list)
 
 
 def default_index_path() -> Path:
@@ -669,11 +670,63 @@ def query_index_page(
         )
         for score, score_parts, matched_fields, unit in selected
     ]
+    warnings = _trail_freshness_for_query(
+        db_path,
+        selected_units,
+        project=project,
+        survival=survival,
+        candidate_kind=candidate_kind,
+        facet_filters=facet_filters,
+    )
     return QueryPage(
         candidates=candidates_page,
         next_page_token=next_page_token,
         total=len(scored),
+        warnings=warnings,
     )
+
+
+def _trail_freshness_for_query(
+    db_path: Path,
+    units: list[TraceUnit],
+    *,
+    project: str | None,
+    survival: str | None,
+    candidate_kind: str | None,
+    facet_filters: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    project_slugs = {
+        unit.project_slug
+        for unit in units
+        if unit.project_slug and _unit_uses_trail_projection(unit)
+    }
+    trail_requested = (
+        survival is not None
+        or candidate_kind in {"patch", "git_anchor"}
+        or any(_filter_name(raw).startswith("trail.") for raw in facet_filters)
+        or bool(project_slugs)
+    )
+    if not trail_requested:
+        return []
+    if project and not project_slugs:
+        project_slugs.add(project)
+    return trail_freshness_warnings(
+        index_path=db_path,
+        project_slugs=project_slugs or None,
+        include_current=True,
+    )
+
+
+def _unit_uses_trail_projection(unit: TraceUnit) -> bool:
+    if unit.unit_type in {"patch", "git_anchor"}:
+        return True
+    if unit.trail_refs:
+        return True
+    return any(facet.name.startswith("trail.") for facet in unit.facets)
+
+
+def _filter_name(raw: str) -> str:
+    return str(raw).split("=", 1)[0].strip()
 
 
 def _apply_lazy_survival(db_path: Path, units: list[TraceUnit]) -> None:
@@ -916,6 +969,94 @@ def get_trace_path(trace_id: str, *, index_path: Path | None = None) -> Path | N
     return Path(row[0]) if row else None
 
 
+def trail_freshness_warnings(
+    *,
+    index_path: Path | None = None,
+    project_slugs: set[str] | None = None,
+    include_current: bool = False,
+) -> list[dict[str, Any]]:
+    """Return Trail projection freshness entries for query/workflow callers.
+
+    The trace index auto-refreshes trail projections when it sees the local
+    TrailEvent ref move. This helper makes that contract visible: callers can
+    show when the projection was last synced and warn if the event ref moved
+    after the index was built.
+    """
+
+    db_path = index_path or default_index_path()
+    if not db_path.exists():
+        return []
+
+    try:
+        with _connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            table = conn.execute(
+                "select name from sqlite_master where type = 'table' and name = 'trail_sources'"
+            ).fetchone()
+            if table is None:
+                return []
+            columns = {
+                str(row["name"])
+                for row in conn.execute("pragma table_info(trail_sources)")
+            }
+            if "indexed_at" not in columns:
+                return []
+            rows = list(
+                conn.execute(
+                    """
+                    select project_slug, repo_path, ref_sha, indexed_at, limitations_json
+                    from trail_sources
+                    order by project_slug
+                    """
+                )
+            )
+    except sqlite3.Error:
+        return []
+
+    selected = set(project_slugs or [])
+    entries: list[dict[str, Any]] = []
+    for row in rows:
+        project_slug = str(row["project_slug"])
+        if selected and project_slug not in selected:
+            continue
+
+        repo_path = str(row["repo_path"])
+        indexed_ref_sha = str(row["ref_sha"] or "")
+        current_ref_sha = _trail_event_ref_sha(Path(repo_path))
+        limitations = _json_list(row["limitations_json"])
+        if current_ref_sha and current_ref_sha == indexed_ref_sha:
+            state = "current"
+            severity = "info"
+            advice = None
+        elif current_ref_sha:
+            state = "stale"
+            severity = "warning"
+            advice = "opentraces trace index rebuild"
+        else:
+            state = "missing_event_log"
+            severity = "warning"
+            advice = "opentraces trail track --all"
+
+        if severity == "info" and not include_current:
+            continue
+
+        entries.append(
+            {
+                "kind": "trail_projection_freshness",
+                "severity": severity,
+                "state": state,
+                "project_slug": project_slug,
+                "repo_path": repo_path,
+                "last_synced_at": str(row["indexed_at"] or ""),
+                "indexed_ref_sha": indexed_ref_sha,
+                "current_ref_sha": current_ref_sha,
+                "limitations": limitations,
+                "advice": advice,
+            }
+        )
+    return entries
+
+
 def _create_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
@@ -933,6 +1074,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             project_slug text primary key,
             repo_path text not null,
             ref_sha text not null,
+            indexed_at text not null,
             limitations_json text not null default '[]'
         );
         create table traces (
@@ -1157,13 +1299,14 @@ def _record_trail_source(
 ) -> None:
     conn.execute(
         """
-        insert or replace into trail_sources(project_slug, repo_path, ref_sha, limitations_json)
-        values (?, ?, ?, ?)
+        insert or replace into trail_sources(project_slug, repo_path, ref_sha, indexed_at, limitations_json)
+        values (?, ?, ?, ?, ?)
         """,
         (
             project_slug,
             str(source_repo.resolve()),
             ref_sha,
+            _utc_now(),
             json.dumps(sorted(set(limitations or []))),
         ),
     )
@@ -2433,6 +2576,20 @@ def _page_offset(page_token: str | None) -> int:
         return max(0, int(page_token.split(":", 1)[1]))
     except ValueError as exc:
         raise ValueError("page token must have the form offset:<n>") from exc
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _json_list(raw: Any) -> list[Any]:
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(str(raw))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
 
 
 def _parse_since(value: str) -> datetime:

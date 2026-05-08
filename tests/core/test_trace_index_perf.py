@@ -9,7 +9,7 @@ O(units), not O(units × git ops).
 These tests pin two contracts:
 
 1. ``_build_trail_units`` makes zero ``sync_patch`` calls.
-2. A 24-trace synthetic refresh completes well under 60 seconds.
+2. A 24-trace synthetic projection over 312 anchors completes quickly.
 """
 from __future__ import annotations
 
@@ -55,42 +55,59 @@ def _seed_patch_anchor(
 ) -> None:
     append_event_batch(
         repo,
-        [
-            TrailEventDraft(
-                event_type="trace_patch_created",
-                trace_id=trace_id,
-                step_index=1,
-                capture_method=["hook_posttooluse"],
-                payload={
-                    "trace_patch_id": f"tracepatch-sha256:{patch_id}",
-                    "file_path": file_path,
-                    "affected_range": {"start_line": 1, "end_line": 2},
-                    "authored_text": text,
-                    "raw_authored_hash": sha256_text(text),
-                    "git_clean_hash": sha256_text(text.strip()),
-                    "limitations": [],
-                },
-            ),
-            TrailEventDraft(
-                event_type="git_anchor_created",
-                trace_id=trace_id,
-                step_index=1,
-                capture_method=["manual_attach"],
-                payload={
-                    "git_anchor_id": f"gitanchor-sha256:{patch_id}",
-                    "trace_patch_id": f"tracepatch-sha256:{patch_id}",
-                    "commit_id": {"algo": "sha1", "hex": anchor_commit},
-                    "path": file_path,
-                    "range": {"start_line": 1, "end_line": 2},
-                    "relation": "anchored_in_git",
-                    "evidence_tier": "exact_range_hash",
-                    "evidence_firmness": "firm",
-                    "limitations": [],
-                },
-            ),
-        ],
+        _patch_anchor_drafts(
+            trace_id=trace_id,
+            patch_id=patch_id,
+            anchor_commit=anchor_commit,
+            file_path=file_path,
+            text=text,
+        ),
         writer="test-fixture",
     )
+
+
+def _patch_anchor_drafts(
+    *,
+    trace_id: str,
+    patch_id: str,
+    anchor_commit: str,
+    file_path: str,
+    text: str,
+) -> list[TrailEventDraft]:
+    return [
+        TrailEventDraft(
+            event_type="trace_patch_created",
+            trace_id=trace_id,
+            step_index=1,
+            capture_method=["hook_posttooluse"],
+            payload={
+                "trace_patch_id": f"tracepatch-sha256:{patch_id}",
+                "file_path": file_path,
+                "affected_range": {"start_line": 1, "end_line": 2},
+                "authored_text": text,
+                "raw_authored_hash": sha256_text(text),
+                "git_clean_hash": sha256_text(text.strip()),
+                "limitations": [],
+            },
+        ),
+        TrailEventDraft(
+            event_type="git_anchor_created",
+            trace_id=trace_id,
+            step_index=1,
+            capture_method=["manual_attach"],
+            payload={
+                "git_anchor_id": f"gitanchor-sha256:{patch_id}",
+                "trace_patch_id": f"tracepatch-sha256:{patch_id}",
+                "commit_id": {"algo": "sha1", "hex": anchor_commit},
+                "path": file_path,
+                "range": {"start_line": 1, "end_line": 2},
+                "relation": "anchored_in_git",
+                "evidence_tier": "exact_range_hash",
+                "evidence_firmness": "firm",
+                "limitations": [],
+            },
+        ),
+    ]
 
 
 def test_build_trail_units_does_not_call_sync_patch(tmp_path: Path) -> None:
@@ -141,33 +158,35 @@ def test_build_trail_units_does_not_call_sync_patch(tmp_path: Path) -> None:
         )
 
 
-def test_refresh_index_under_60s_for_24_traces(tmp_path: Path) -> None:
-    """A 24-trace × 13-anchor project must build trail units in <60s.
+def test_refresh_index_fast_for_312_anchor_projection(tmp_path: Path) -> None:
+    """A 24-trace × 13-anchor projection must build trail units quickly.
 
     The real ``~/.opentraces/projects/`` fixture had ~315 anchors and
     refresh blew past 10 minutes. With P1 the refresh is O(units) and
-    a synthetic 24-trace × 13-anchor (~312 anchors) build should be
-    well under the absolute 60-second threshold.
+    a synthetic 24-trace × 13-anchor (~312 anchors) projection should not
+    need one Git commit per anchor to prove that contract.
     """
     _init_repo(tmp_path)
     (tmp_path / "main.py").write_text("first\nsecond\n")
     head = _commit(tmp_path, "seed")
 
-    # 24 traces × 13 anchors each → 312 anchors total.
+    # 24 traces × 13 anchors each → 312 anchors total. Write all events in
+    # one batch so this test measures projection cost, not append-log setup.
+    drafts: list[TrailEventDraft] = []
     for trace_index in range(24):
         for anchor_index in range(13):
             file_path = f"file_{trace_index}_{anchor_index}.py"
             text = f"line a {trace_index}-{anchor_index}\nline b\n"
-            (tmp_path / file_path).write_text(text)
-            head = _commit(tmp_path, f"seed {trace_index}-{anchor_index}")
-            _seed_patch_anchor(
-                tmp_path,
-                trace_id=f"t-{trace_index:02d}",
-                patch_id=f"{trace_index:02d}{anchor_index:02d}{'0' * 56}"[:64],
-                anchor_commit=head,
-                file_path=file_path,
-                text=text,
+            drafts.extend(
+                _patch_anchor_drafts(
+                    trace_id=f"t-{trace_index:02d}",
+                    patch_id=f"{trace_index:02d}{anchor_index:02d}{'0' * 56}"[:64],
+                    anchor_commit=head,
+                    file_path=file_path,
+                    text=text,
+                )
             )
+    append_event_batch(tmp_path, drafts, writer="test-fixture")
 
     from opentraces.core.trace_index import _build_trail_units
 
@@ -176,7 +195,7 @@ def test_refresh_index_under_60s_for_24_traces(tmp_path: Path) -> None:
     elapsed = time.time() - t0
     git_anchor_units = [u for u in units if u.unit_type == "git_anchor"]
     assert len(git_anchor_units) == 24 * 13, len(git_anchor_units)
-    assert elapsed < 60.0, (
-        f"P1 perf gate: _build_trail_units took {elapsed:.1f}s for "
-        f"{len(git_anchor_units)} anchors (target <60s)."
+    assert elapsed < 5.0, (
+        f"P1 projection gate: _build_trail_units took {elapsed:.1f}s for "
+        f"{len(git_anchor_units)} anchors (target <5s)."
     )

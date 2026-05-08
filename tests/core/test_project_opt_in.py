@@ -1,4 +1,4 @@
-"""Opt-in guarantees: capture/TUI/web/push must refuse uninitialized projects."""
+"""Opt-in guarantees for current project-scoped local commands."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -83,90 +83,22 @@ class TestCaptureGate:
         assert not (project / ".opentraces").exists()
 
 
-class TestTUIGate:
-    def test_tui_refuses_without_init(
+class TestStatusGate:
+    def test_status_refuses_without_init(
         self, runner, isolated_home, tmp_path
     ) -> None:
         # CliRunner's isolated_filesystem to chdir into an uninitialized dir.
         with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(main, ["tui"])
-            assert result.exit_code == 2
-            assert "has not opted in" in result.output
+            result = runner.invoke(main, ["status"])
+            assert result.exit_code == 3
+            assert "Not an opentraces project" in result.output
 
-    def test_tui_accepts_after_init(
-        self, runner, isolated_home, tmp_path, monkeypatch
+    def test_status_accepts_after_init(
+        self, runner, isolated_home, tmp_path
     ) -> None:
         with runner.isolated_filesystem(temp_dir=tmp_path) as td:
             save_project_config(Path(td), {"review_policy": "review"})
 
-            # Stub the TUI app so we don't actually launch Textual.
-            launched: dict[str, bool] = {"ran": False}
-
-            class _StubApp:
-                def __init__(self, *a, **kw) -> None:
-                    pass
-
-                def run(self) -> None:
-                    launched["ran"] = True
-
-            import opentraces.clients.tui as tui_mod
-            monkeypatch.setattr(tui_mod, "OpenTracesApp", _StubApp)
-
-            result = runner.invoke(main, ["tui"])
+            result = runner.invoke(main, ["status"])
             assert result.exit_code == 0, result.output
-            assert launched["ran"] is True
-
-
-class TestPushGate:
-    def test_push_refuses_without_init(
-        self, runner, isolated_home, tmp_path
-    ) -> None:
-        with runner.isolated_filesystem(temp_dir=tmp_path):
-            result = runner.invoke(main, ["push"])
-            assert result.exit_code == 2
-            assert "has not opted in" in result.output
-
-
-class TestProjectsList:
-    def test_empty_registry(self, runner, isolated_home) -> None:
-        result = runner.invoke(main, ["list", "--projects"])
-        assert result.exit_code == 0
-        assert "No projects have opted in" in result.output
-
-    def test_lists_registered(
-        self, runner, isolated_home, tmp_path
-    ) -> None:
-        from opentraces.core.config import load_config, save_config
-
-        project = tmp_path / "proj"
-        project.mkdir()
-        save_project_config(project, {"review_policy": "auto"})
-
-        cfg = load_config()
-        register_project(cfg, project)
-        save_config(cfg)
-
-        result = runner.invoke(main, ["list", "--projects"])
-        assert result.exit_code == 0
-        assert str(project.resolve()) in result.output
-
-    def test_flags_stale_registry_entries(
-        self, runner, isolated_home, tmp_path
-    ) -> None:
-        """Registered but marker file deleted → visible warning."""
-        from opentraces.core.config import load_config, save_config
-
-        project = tmp_path / "ghost"
-        project.mkdir()
-        cfg = load_config()
-        register_project(cfg, project)
-        save_config(cfg)
-        # Simulate marker deletion (e.g. user removed it manually).
-        (project / ".opentraces.json").unlink()
-
-        result = runner.invoke(main, ["list", "--projects"])
-        assert result.exit_code == 0
-        # Message text was rewritten to be more actionable; assert on
-        # the stable substring "missing .opentraces.json" so wording
-        # tweaks don't re-break this test.
-        assert "missing .opentraces.json" in result.output
+            assert "0 traces in inbox" in result.output

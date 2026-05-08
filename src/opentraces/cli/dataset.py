@@ -28,7 +28,10 @@ from ..core.datasets import (
     load_dataset,
     normalize_hf_repo_id,
     publish_dataset,
+    read_json,
     read_row_index,
+    read_row_provenance,
+    read_rows_by_id,
     remove_dataset_remote,
     repo_id_from_remote,
     set_dataset_remote_visibility,
@@ -782,6 +785,20 @@ def _create_manual_dataset(
 @click.option("--project", default=None, help="Project slug for --scope project.")
 @click.option("--trace", "trace_id", default=None, help="Trace ID for --scope trace.")
 @click.option("--limit", type=int, default=None, help="Candidate limit.")
+@click.option(
+    "--privacy-tier",
+    type=click.Choice(["off", "low", "medium", "high"]),
+    default=None,
+    help="Privacy tier to apply while appending workflow rows.",
+)
+@click.option(
+    "--trail-freshness",
+    "trail_freshness_policy",
+    type=click.Choice(["warn", "fail", "ignore"]),
+    default="warn",
+    show_default=True,
+    help="How to handle stale Trace Trail projections during composition.",
+)
 @click.option("--since-last-run", is_flag=True, help="Use the dataset cursor.")
 @click.option("--reconcile", is_flag=True, help="Run a full reconciliation scan.")
 @click.option("--scheduled", is_flag=True, help="Mark this run as scheduler initiated.")
@@ -796,6 +813,8 @@ def dataset_run(
     project: str | None,
     trace_id: str | None,
     limit: int | None,
+    privacy_tier: str | None,
+    trail_freshness_policy: str,
     since_last_run: bool,
     reconcile: bool,
     scheduled: bool,
@@ -845,6 +864,8 @@ def dataset_run(
             scope=scope_payload,
             limit=limit,
             scheduled=scheduled,
+            privacy_tier=privacy_tier,
+            trail_freshness_policy=trail_freshness_policy,
         )
     except (FileNotFoundError, ValueError, ExecutorUnavailableError, DatasetRunLockError) as exc:
         click.echo(str(exc), err=True)
@@ -914,18 +935,31 @@ def dataset_review(args: tuple[str, ...], mode: str | None, all_rows: bool, as_j
     name = args[0]
     try:
         state = evaluate_publication_state(name)
+        dataset = load_dataset(name)
+        row_schema = read_json(dataset.path / dataset.manifest.schema_ref.path)
+        rows_by_id = read_rows_by_id(name)
+        provenance_by_id = read_row_provenance(name)
     except (FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
+    review_rows = {}
+    for row_id, entry in sorted(state.rows.items()):
+        review_rows[row_id] = {
+            **entry.model_dump(mode="json", exclude_none=True),
+            "data": rows_by_id.get(row_id),
+            "provenance": provenance_by_id.get(row_id),
+        }
     payload = {
         "status": "ok",
         "dataset": name,
         "mode": mode or "cli",
-        "counts": _publication_counts(state),
-        "rows": {
-            row_id: entry.model_dump(mode="json", exclude_none=True)
-            for row_id, entry in sorted(state.rows.items())
+        "schema": {
+            "path": dataset.manifest.schema_ref.path,
+            "digest": dataset.manifest.schema_ref.digest,
+            "json_schema": row_schema,
         },
+        "counts": _publication_counts(state),
+        "rows": review_rows,
     }
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))

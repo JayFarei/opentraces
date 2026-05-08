@@ -18,7 +18,7 @@ command = "for i in $(seq 1 40); do echo line$i > f$i.txt; git add f$i.txt; git 
 
 [[steps]]
 type = "invoke_cli"
-args = ["graph", "--limit", "20", "--page", "2", "--no-color"]
+args = ["trail", "graph", "--limit", "20", "--page", "2", "--no-color"]
 
 [[assertions]]
 kind = "cli_returncode"

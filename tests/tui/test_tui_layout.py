@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -834,9 +835,13 @@ async def test_counter_updates_on_navigate(tmp_path, monkeypatch):
 # --- Visual snapshot -------------------------------------------------------
 
 
+def _normalize_svg_snapshot(svg: str) -> str:
+    return "\n".join(line.rstrip(" \t") for line in svg.split("\n"))
+
+
 @pytest.mark.skipif(os.environ.get("SKIP_SNAPSHOT") == "1",
                     reason="snapshot skipped")
-def test_snapshot_initial_layout(snap_compare, tmp_path, monkeypatch):
+def test_snapshot_initial_layout(snapshot, tmp_path, monkeypatch):
     """SVG snapshot of the two-column layout on first mount.
 
     Run with ``--snapshot-update`` to regenerate the baseline.
@@ -864,5 +869,19 @@ def test_snapshot_initial_layout(snap_compare, tmp_path, monkeypatch):
     state.set_trace_status("trace_cccccc03", TraceStatus.UPLOADED)
     save_project_config(project, {"remote": "alice/opentraces"})
 
+    from pytest_textual_snapshot import SVGImageExtension
+    from textual._doc import take_svg_screenshot
+    from opentraces.clients.tui import app as tui_app
+
+    class _FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001
+            frozen = datetime(2026, 5, 7, 12, 0, 0, tzinfo=timezone.utc)
+            return frozen if tz is not None else frozen.replace(tzinfo=None)
+
+    monkeypatch.setattr(tui_app, "datetime", _FrozenDateTime)
+
     app = OpenTracesApp(staging_dir=staging)
-    assert snap_compare(app, terminal_size=(140, 40))
+    snapshot = snapshot.use_extension(SVGImageExtension)
+    actual = take_svg_screenshot(app=app, terminal_size=(140, 40))
+    assert snapshot == _normalize_svg_snapshot(actual)

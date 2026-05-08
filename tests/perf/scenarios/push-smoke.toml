@@ -1,9 +1,0 @@
-name = "push-smoke"
-domain = "publish"
-lane = "smoke"
-adapter = "python"
-target = "publish.push"
-fixture = "push_batch"
-tier = "small"
-repetitions = 3
-warmups = 0

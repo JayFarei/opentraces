@@ -177,6 +177,10 @@ class DatasetPublicationStateEntry(BaseModel):
     reviewed_by: str | None = None
     block_reasons: list[str] = Field(default_factory=list)
     security_version: str | None = None
+    source_security_version: str | None = None
+    privacy_tier: str | None = None
+    security_stale: bool = False
+    redactions_applied: int = 0
     updated_at: str | None = None
 
 
@@ -225,3 +229,7 @@ class DatasetRowIndexEntry(BaseModel):
     line: int = Field(ge=1)
     run_id: str = Field(min_length=1)
     appended_at: str = Field(min_length=1)
+    source_trace_id: str | None = None
+    source_unit_id: str | None = None
+    source_slice_id: str | None = None
+    provenance: dict[str, Any] = Field(default_factory=dict)

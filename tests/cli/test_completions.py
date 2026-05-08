@@ -183,7 +183,7 @@ def _complete(runner, *tokens):
 
 
 def test_complete_commit_prefix_bare(runner, complete_project):
-    lines = _complete(runner, "blame", "25")
+    lines = _complete(runner, "trail", "blame", "25")
     names = [ln.split("\t")[0] for ln in lines]
     assert "2508ec10" in names
     assert "25ffffff" in names
@@ -191,26 +191,26 @@ def test_complete_commit_prefix_bare(runner, complete_project):
 
 
 def test_complete_commit_prefix_with_c_handle(runner, complete_project):
-    lines = _complete(runner, "blame", "c:25")
+    lines = _complete(runner, "trail", "blame", "c:25")
     names = [ln.split("\t")[0] for ln in lines]
     assert "c:2508ec10" in names
     assert "c:25ffffff" in names
 
 
 def test_complete_trace_prefix_bare(runner, complete_project):
-    lines = _complete(runner, "graph", "--trace", "b7")
+    lines = _complete(runner, "trail", "graph", "--trace", "b7")
     names = [ln.split("\t")[0] for ln in lines]
     assert "b73af9c8" in names
 
 
 def test_complete_trace_prefix_with_t_handle(runner, complete_project):
-    lines = _complete(runner, "graph", "--trace", "t:b7")
+    lines = _complete(runner, "trail", "graph", "--trace", "t:b7")
     names = [ln.split("\t")[0] for ln in lines]
     assert "t:b73af9c8" in names
 
 
 def test_complete_trace_ambiguous_returns_multiple(runner, complete_project):
-    lines = _complete(runner, "graph", "--trace", "")
+    lines = _complete(runner, "trail", "graph", "--trace", "")
     names = [ln.split("\t")[0] for ln in lines]
     # No filter -> both traces show up (both actionable status).
     assert "b73af9c8" in names

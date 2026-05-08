@@ -6,9 +6,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
-from click.testing import CliRunner
-
-from opentraces.cli import main
 from opentraces.clients.tui import OpenTracesApp
 from opentraces.clients.web.server import create_app
 
@@ -74,8 +71,6 @@ def build_python_callable(
         return _build_web_callable(fixture, scenario)
     if target.startswith("tui."):
         return _build_tui_callable(fixture, scenario)
-    if target == "publish.push":
-        return _build_push_callable(fixture, scenario)
     raise ValueError(f"unsupported python target {target!r}")
 
 
@@ -169,66 +164,6 @@ def _build_tui_callable(fixture: PerfFixture, scenario: PerfScenario) -> tuple[C
     if scenario.target == "tui.review_actions":
         return lambda: asyncio.run(review_actions()), _metadata(fixture, scenario)
     raise ValueError(f"unsupported tui target {scenario.target!r}")
-
-
-def _build_push_callable(fixture: PerfFixture, scenario: PerfScenario) -> tuple[Callable[[], Any], dict[str, Any]]:
-    from opentraces.cli import publish as publish_mod
-    from opentraces.core.config import Config
-    from opentraces.publish.huggingface.remote_index import RemoteIndex
-    from opentraces.publish.huggingface.upload import UploadResult
-
-    class _FakeUploader:
-        def __init__(self, token: str, repo_id: str) -> None:
-            self.token = token
-            self.repo_id = repo_id
-            self.api = type(
-                "_FakeApi",
-                (),
-                {
-                    "upload_file": staticmethod(lambda **_: None),
-                },
-            )()
-
-        def ensure_repo_exists(self, private: bool = True) -> None:
-            return None
-
-        def fetch_remote_index(self) -> RemoteIndex:
-            return RemoteIndex.empty(self.repo_id)
-
-        def upload_traces(self, records: list[Any]) -> UploadResult:
-            return UploadResult(
-                success=True,
-                trace_count=len(records),
-                shard_name="data/traces_perf.jsonl",
-                repo_url=f"https://huggingface.co/datasets/{self.repo_id}",
-                error=None,
-            )
-
-        def fetch_all_remote_traces(self) -> list[Any]:
-            return []
-
-        def set_gated(self) -> None:
-            return None
-
-    def run() -> Any:
-        runner = CliRunner()
-        cfg = Config(hf_token="perf-token", dataset_visibility="private")
-        with _cwd(fixture.project_dir):
-            from unittest.mock import patch
-
-            with patch.object(publish_mod, "load_config", return_value=cfg), patch(
-                "huggingface_hub.HfApi.whoami",
-                return_value={"name": "alice"},
-            ), patch.object(publish_mod, "_refresh_dataset_card", return_value=None), patch(
-                "opentraces.publish.huggingface.upload.HFUploader",
-                _FakeUploader,
-            ):
-                result = runner.invoke(main, ["push", "-y"])
-        if result.exit_code != 0:
-            raise AssertionError(result.output)
-        return result.output
-
-    return run, _metadata(fixture, scenario)
 
 
 def _metadata(fixture: PerfFixture, scenario: PerfScenario, **extra: Any) -> dict[str, Any]:

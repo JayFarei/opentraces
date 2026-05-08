@@ -38,7 +38,7 @@ def test_old_root_verbs_are_not_registered(verb: str) -> None:
 def test_canonical_roots_are_registered() -> None:
     result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
-    for verb in ["setup", "init", "trace", "trail", "dataset"]:
+    for verb in ["setup", "init", "trace", "trail", "bucket", "dataset"]:
         assert f"ot {verb}" in result.output
     assert "ot workflow" not in result.output
 

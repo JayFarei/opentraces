@@ -8,6 +8,7 @@ from .classifier import (
     classify_content,
     classify_trace_record,
 )
+from .privacy import DEFAULT_PRIVACY_TIER, PRIVACY_TIERS, PrivacyTier
 from .redactor import RedactingFilter, configure_logging
 from .scanner import (
     FieldType,
@@ -29,6 +30,9 @@ __all__ = [
     # version
     "SECURITY_VERSION",
     # secrets
+    "DEFAULT_PRIVACY_TIER",
+    "PRIVACY_TIERS",
+    "PrivacyTier",
     "SecretMatch",
     "scan_text",
     "redact_text",

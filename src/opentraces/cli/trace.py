@@ -63,6 +63,23 @@ def error_response(*a, **k):
     return _cli.error_response(*a, **k)
 
 
+def _format_trace_query_warning(entry: dict) -> str:
+    project = entry.get("project_slug") or "unknown-project"
+    state = entry.get("state") or "unknown"
+    last_synced_at = entry.get("last_synced_at") or "unknown"
+    indexed = str(entry.get("indexed_ref_sha") or "")[:12] or "none"
+    current = str(entry.get("current_ref_sha") or "")[:12] or "none"
+    message = (
+        f"warning: Trace Trail projection for {project} is {state}; "
+        f"last synced {last_synced_at} "
+        f"(indexed ref {indexed}, current ref {current})"
+    )
+    advice = entry.get("advice")
+    if advice:
+        message = f"{message}. Run '{advice}'."
+    return message
+
+
 # ---------------------------------------------------------------------------
 # Standalone trace commands (registered at root in cli/__init__).
 # ---------------------------------------------------------------------------
@@ -345,6 +362,15 @@ def trace_query(
         "has_more": page.next_page_token is not None,
         "candidates": [packet.model_dump(mode="json") for packet in page.candidates],
     }
+    if page.warnings:
+        payload["trail_freshness"] = page.warnings
+        warning_entries = [
+            warning
+            for warning in page.warnings
+            if warning.get("severity") == "warning"
+        ]
+        if warning_entries:
+            payload["warnings"] = warning_entries
     if semantic:
         from ..core.semantic import expand_semantic_query
 
@@ -352,6 +378,9 @@ def trace_query(
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
+    for warning in page.warnings:
+        if warning.get("severity") == "warning":
+            click.echo(_format_trace_query_warning(warning), err=True)
     for packet in page.candidates:
         click.echo(f"{packet.trace_id}  {packet.title}")
 
@@ -398,11 +427,19 @@ def trace_index_rebuild_cmd(as_json: bool) -> None:
 def trace_index_status_cmd(as_json: bool) -> None:
     """Show local Trace Index and search projection status."""
     from ..core.search_projection import search_projection_status
-    from ..core.trace_index import default_index_path, list_units
+    from ..core.trace_index import (
+        default_index_path,
+        list_units,
+        trail_freshness_warnings,
+    )
 
     index_path = default_index_path()
     units = list_units(index_path=index_path)
     projection = search_projection_status()
+    trail_freshness = trail_freshness_warnings(
+        index_path=index_path,
+        include_current=True,
+    )
     payload = {
         "status": "ok",
         "index": {
@@ -412,6 +449,7 @@ def trace_index_status_cmd(as_json: bool) -> None:
             "trace_count": len({unit.trace_id for unit in units}),
         },
         "search_projection": projection,
+        "trail_freshness": trail_freshness,
     }
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
@@ -427,6 +465,13 @@ def trace_index_status_cmd(as_json: bool) -> None:
         click.echo(f"  build:  {projection.get('build_id')}")
         click.echo(f"  docs:   {projection.get('doc_count')}")
         click.echo(f"  path:   {projection.get('manifest_path')}")
+    if trail_freshness:
+        click.echo("Trace Trail projections:")
+        for entry in trail_freshness:
+            click.echo(
+                f"  {entry.get('project_slug')}: {entry.get('state')} "
+                f"(last synced {entry.get('last_synced_at') or 'unknown'})"
+            )
 
 
 @trace_group.command("map", cls=OpentracesCommand)

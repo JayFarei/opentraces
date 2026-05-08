@@ -131,3 +131,42 @@ def test_web_resume_endpoint_returns_copyable_command(tmp_path, monkeypatch):
     assert payload["argv"][0] == "claude"
     assert payload["argv"][1] == "--resume"
     assert payload["truncated_at_line"] == 2
+
+
+def test_web_rescan_endpoint_redacts_staged_trace(tmp_path):
+    trace_id = "abc123"
+    trace = {
+        "schema_version": "0.3.0",
+        "trace_id": trace_id,
+        "session_id": "sess-web-rescan",
+        "agent": {"name": "claude-code", "model": "anthropic/claude-opus-4-6"},
+        "task": {"description": "Uses sk-proj-abcdefghijklmnopqrstuvwxyz123456"},
+        "steps": [
+            {
+                "step_index": 1,
+                "role": "user",
+                "content": "Uses sk-proj-abcdefghijklmnopqrstuvwxyz123456",
+                "timestamp": "2026-04-16T10:00:00Z",
+            },
+        ],
+        "metrics": {},
+    }
+    (tmp_path / f"{trace_id}.jsonl").write_text(json.dumps(trace) + "\n")
+    state_path = tmp_path / "state.json"
+    StateManager(state_path=state_path).set_trace_status(trace_id, TraceStatus.PARSED)
+
+    app = create_app(staging_dir=str(tmp_path), state_path=str(state_path))
+    client = app.test_client()
+
+    response = client.post(f"/api/trace/{trace_id}/rescan", json={"privacy_tier": "medium"})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["status"] == "rescanned"
+    assert payload["privacy_tier"] == "medium"
+    assert payload["redactions_applied"] >= 1
+
+    rescanned = json.loads((tmp_path / f"{trace_id}.jsonl").read_text())
+    assert "sk-proj-" not in json.dumps(rescanned)
+    assert "[REDACTED]" in json.dumps(rescanned)
+    assert rescanned["security"]["scanned"] is True
+    assert rescanned["metadata"]["security"]["privacy"]["syncable"] is True

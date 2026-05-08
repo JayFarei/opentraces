@@ -53,7 +53,12 @@ def pytest_configure(config: pytest.Config) -> None:
 
 @pytest.fixture
 def perf_runtime(pytestconfig: pytest.Config) -> PerfRuntime:
-    artifacts_dir = Path(pytestconfig.getoption("--perf-artifacts-dir")).resolve()
+    configured_artifacts_dir = Path(pytestconfig.getoption("--perf-artifacts-dir"))
+    artifacts_dir = (
+        configured_artifacts_dir
+        if configured_artifacts_dir.is_absolute()
+        else Path(pytestconfig.rootpath) / configured_artifacts_dir
+    ).resolve()
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     return PerfRuntime(
         lane=pytestconfig.getoption("--perf-lane"),

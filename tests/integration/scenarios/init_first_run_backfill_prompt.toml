@@ -28,7 +28,7 @@ text = "Y\n"
 
 [[steps]]
 type = "invoke_cli"
-args = ["init", "--no-hook"]
+args = ["init", "--start-fresh"]
 
 # The marker's first_run_backfill_decision is populated only under an
 # interactive tty. Subprocess test mode is non-tty, so the scenario

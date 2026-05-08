@@ -126,9 +126,7 @@ def _seed_committed_project(project_dir: Path, home: Path) -> tuple[Path, Path]:
     subprocess.run(
         [
             "opentraces", "init",
-            "--mode", "review",
-            "--remote", "opentraces-e2e-nonexistent/repo",
-            "--no-hook",
+            "--start-fresh",
         ],
         cwd=str(project_dir),
         env=env,
@@ -136,6 +134,22 @@ def _seed_committed_project(project_dir: Path, home: Path) -> tuple[Path, Path]:
         capture_output=True,
         text=True,
     )
+    marker_path = project_dir / ".opentraces.json"
+    marker = json.loads(marker_path.read_text())
+    marker.update(
+        {
+            "review_policy": "review",
+            "push_policy": "manual",
+            "remotes": {
+                "opentraces-e2e-nonexistent/repo": {
+                    "url": "hf://opentraces-e2e-nonexistent/repo",
+                    "visibility": "private",
+                }
+            },
+            "active_remote": "opentraces-e2e-nonexistent/repo",
+        }
+    )
+    marker_path.write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n")
 
     # Resolve the per-project state/traces dirs under the isolated HOME.
     # We import with the env patched so the ``PROJECTS_DIR`` constant

@@ -14,7 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
+from opentraces_schema import TraceRecord
+
+from .config import Config
 from .inbox import redact_pattern, redact_step
+from .pipeline import ProcessedTrace, process_imported_trace
 from .state import StateManager, TraceStatus
 
 logger = logging.getLogger(__name__)
@@ -28,6 +32,75 @@ class RedactResult:
     error: Optional[str] = None
     error_code: Optional[str] = None
     step_index: int = -1
+
+
+@dataclass
+class RescanResult:
+    """Outcome of a rescan_trace_and_persist call."""
+
+    ok: bool
+    error: Optional[str] = None
+    error_code: Optional[str] = None
+    processed: ProcessedTrace | None = None
+
+
+def rescan_trace_and_persist(
+    staging_dir: Path,
+    trace_id: str,
+    cfg: Config,
+    *,
+    privacy_tier: str | None = None,
+) -> RescanResult:
+    """Re-run security filtering for a staged trace and rewrite the JSONL row."""
+
+    staging_file = staging_dir / f"{trace_id}.jsonl"
+    if not staging_file.exists():
+        return RescanResult(
+            ok=False,
+            error=f"Staging file not found for {trace_id}",
+            error_code="NOT_FOUND",
+        )
+
+    text = staging_file.read_text().strip()
+    if not text:
+        return RescanResult(
+            ok=False,
+            error="Staging file is empty",
+            error_code="EMPTY",
+        )
+
+    try:
+        record = TraceRecord.model_validate_json(text.splitlines()[0])
+    except Exception as exc:
+        return RescanResult(
+            ok=False,
+            error=f"Invalid TraceRecord: {exc}",
+            error_code="INVALID_TRACE",
+        )
+
+    processed = process_imported_trace(record, cfg, privacy_tier=privacy_tier)
+    new_line = processed.record.to_jsonl_line()
+    fd = tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=str(staging_dir),
+        suffix=".jsonl.tmp",
+        delete=False,
+    )
+    try:
+        fd.write(new_line + "\n")
+        fd.flush()
+        os.fsync(fd.fileno())
+        fd.close()
+        os.replace(fd.name, str(staging_file))
+    except BaseException:
+        fd.close()
+        try:
+            os.unlink(fd.name)
+        except OSError:
+            logger.debug("Failed to clean up temp file: %s", fd.name)
+        raise
+
+    return RescanResult(ok=True, processed=processed)
 
 
 def redact_step_and_persist(

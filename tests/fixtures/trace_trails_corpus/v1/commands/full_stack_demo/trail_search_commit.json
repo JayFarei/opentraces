@@ -20,7 +20,7 @@
     "high_watermark": {
       "events_seen": 11,
       "last_event_id": "<trail-event:11>",
-      "projection_digest": "<content-hash:13>"
+      "projection_digest": "<content-hash:14>"
     },
     "last_event_id": "<trail-event:11>",
     "limitation_details": [],
@@ -29,7 +29,7 @@
     "object_id_algorithm": "sha256",
     "object_ref_contract": "opentraces.object_ref.v1",
     "patch_count": 1,
-    "projection_digest": "<content-hash:13>",
+    "projection_digest": "<content-hash:14>",
     "stale": false,
     "version": "v1"
   },
@@ -101,6 +101,8 @@
           "start_line": 1
         },
         "retention_fraction": 1.0,
+        "retention_fraction_at_anchor": 1.0,
+        "retention_fraction_at_original_range": 1.0,
         "selected_observation_index": 0,
         "survival_state": "alive_on_path",
         "trace_patch_id": "<trace-patch:01>"
@@ -323,6 +325,18 @@
       },
       "step_id": "step_2",
       "step_index": 2,
+      "step_metadata": {
+        "call_type": "main",
+        "generation_index": 1,
+        "parent_step": null,
+        "parent_step_id": null,
+        "step_id": "step_2",
+        "step_index": 2,
+        "subagent_trajectory_ref": null,
+        "tool_call_id": "toolu_trace_trails_full_stack_bash",
+        "tool_name": "Bash",
+        "trace_id": "<trace:01>"
+      },
       "survival_state": "alive_on_path",
       "trace_id": "<trace:01>",
       "trace_patch": {

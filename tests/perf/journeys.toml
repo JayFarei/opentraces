@@ -82,7 +82,7 @@ notes = "The perf harness uses Textual's deterministic test driver, while the tm
 
 [[journeys]]
 id = "cli-review-batch"
-title = "CLI inbox inspection and staging"
+title = "CLI trace search and bucket inspection"
 priority = "primary"
 profiled = true
 doc_refs = [
@@ -90,10 +90,10 @@ doc_refs = [
   "web/site/docs/docs/cli/commands.md",
   "web/site/docs/docs/integration/ci-cd.md",
 ]
-perf_scenarios = ["status-smoke", "add-all-smoke"]
+perf_scenarios = ["status-smoke", "trace-query-smoke", "bucket-status-smoke"]
 user_smoke_tests = []
 live_tests = []
-notes = "Representative scriptable review is modeled as a fast status snapshot followed by batch staging via add --all."
+notes = "Representative scriptable local work is modeled as a fast status snapshot, a bounded trace query over the local projection, and a bucket-readiness check."
 
 [[journeys]]
 id = "provenance-graph-blame"
@@ -121,37 +121,34 @@ notes = "This is the primary provenance workflow the docs emphasize for understa
 
 [[journeys]]
 id = "quality-and-export"
-title = "Local quality assessment and export for downstream consumers"
+title = "Local dataset quality and downstream consumption"
 priority = "secondary"
-profiled = true
+profiled = false
 doc_refs = [
   "web/site/docs/docs/workflow/quality.md",
   "web/site/docs/docs/workflow/export.md",
   "web/site/docs/docs/workflow/pushing.md",
 ]
-perf_scenarios = [
-  "assess-local-smoke",
-  "export-agent-trace-smoke",
-]
+perf_scenarios = []
 user_smoke_tests = []
 live_tests = []
-notes = "These are slower but user-visible workflows that become optimization targets once capture/review/provenance are stable."
+notes = "The old root assess/export commands are no longer part of the current local flow. Dataset-specific quality and export/consume paths should get fresh perf scenarios once the dataset workflow hardens."
 
 [[journeys]]
 id = "push-and-publish"
-title = "Batch push from staged traces, including web-triggered push"
+title = "Dataset publication and remote handoff"
 priority = "primary"
-profiled = true
+profiled = false
 doc_refs = [
   "web/site/docs/docs/getting-started/quickstart.md",
   "web/site/docs/docs/workflow/pushing.md",
   "web/site/src/components/GetStarted.tsx",
   "web/site/src/components/Hero.tsx",
 ]
-perf_scenarios = ["push-smoke"]
+perf_scenarios = []
 user_smoke_tests = ["tests/e2e/test_web_push_browser_e2e.py::test_browser_push_failure_keeps_trace_committed"]
 live_tests = ["tests/publish/test_upload.py::TestLivePushIntegration::test_push_cli_uploads_to_private_hf_repo"]
-notes = "The representative perf lane uses a fake uploader to isolate local push overhead. Browser failure handling is covered end-to-end, and the real private-HF success path remains an explicit opt-in live test."
+notes = "The old root push perf target has been removed with the staged-trace push flow. A fresh dataset publish perf target should be added once the local dataset publication contract is stable."
 
 [[journeys]]
 id = "dataset-import-and-consume"

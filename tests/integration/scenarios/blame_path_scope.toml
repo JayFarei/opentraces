@@ -59,7 +59,7 @@ lines = [
 
 [[steps]]
 type = "invoke_cli"
-args = ["blame", "HEAD", "src/foo.py", "--lines", "--no-color"]
+args = ["trail", "blame", "HEAD", "src/foo.py", "--lines", "--no-color"]
 
 [[assertions]]
 kind = "cli_returncode"

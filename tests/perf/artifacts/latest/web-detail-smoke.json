@@ -1,69 +1,69 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 19.254334,
+    "cold_ms": 134.387458,
     "extra": {},
-    "max_rss_delta_mb": 0.015625,
-    "mean_ms": 19.60160425,
-    "p50_ms": 19.254334,
-    "p95_ms": 20.652917,
-    "peak_rss_mb": 190.296875,
-    "python_heap_peak_mb": 0.7578067779541016,
+    "max_rss_delta_mb": 0.0,
+    "mean_ms": 131.22648925000001,
+    "p50_ms": 129.222083,
+    "p95_ms": 134.387458,
+    "peak_rss_mb": 1625.359375,
+    "python_heap_peak_mb": 0.7642650604248047,
     "samples": [
       {
-        "duration_ms": 19.254334,
+        "duration_ms": 134.387458,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_web_perf_web_detail_smoke0/web-detail-smoke/run-02/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-210/test_web_perf_web_detail_smoke0/web-detail-smoke/run-02/proj",
           "scenario": "web-detail-smoke",
           "trace_count": 24
         },
-        "peak_rss_mb": 190.296875,
-        "python_heap_peak_mb": 0.7578067779541016,
-        "rss_after_mb": 190.25,
-        "rss_before_mb": 190.234375,
-        "rss_delta_mb": 0.015625
-      },
-      {
-        "duration_ms": 18.565875,
-        "metadata": {
-          "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_web_perf_web_detail_smoke0/web-detail-smoke/run-04/proj",
-          "scenario": "web-detail-smoke",
-          "trace_count": 24
-        },
-        "peak_rss_mb": 190.296875,
-        "python_heap_peak_mb": 0.7575654983520508,
-        "rss_after_mb": 190.25,
-        "rss_before_mb": 190.25,
+        "peak_rss_mb": 1625.359375,
+        "python_heap_peak_mb": 0.7642650604248047,
+        "rss_after_mb": 1625.3125,
+        "rss_before_mb": 1625.3125,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 19.933291,
+        "duration_ms": 133.778083,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_web_perf_web_detail_smoke0/web-detail-smoke/run-06/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-210/test_web_perf_web_detail_smoke0/web-detail-smoke/run-04/proj",
           "scenario": "web-detail-smoke",
           "trace_count": 24
         },
-        "peak_rss_mb": 190.296875,
-        "python_heap_peak_mb": 0.7472410202026367,
-        "rss_after_mb": 190.25,
-        "rss_before_mb": 190.25,
+        "peak_rss_mb": 1625.359375,
+        "python_heap_peak_mb": 0.7640161514282227,
+        "rss_after_mb": 1625.3125,
+        "rss_before_mb": 1625.3125,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 20.652917,
+        "duration_ms": 127.518333,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_web_perf_web_detail_smoke0/web-detail-smoke/run-08/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-210/test_web_perf_web_detail_smoke0/web-detail-smoke/run-06/proj",
           "scenario": "web-detail-smoke",
           "trace_count": 24
         },
-        "peak_rss_mb": 190.296875,
-        "python_heap_peak_mb": 0.7570981979370117,
-        "rss_after_mb": 190.25,
-        "rss_before_mb": 190.25,
+        "peak_rss_mb": 1625.359375,
+        "python_heap_peak_mb": 0.7639713287353516,
+        "rss_after_mb": 1625.3125,
+        "rss_before_mb": 1625.3125,
+        "rss_delta_mb": 0.0
+      },
+      {
+        "duration_ms": 129.222083,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-210/test_web_perf_web_detail_smoke0/web-detail-smoke/run-08/proj",
+          "scenario": "web-detail-smoke",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 1625.359375,
+        "python_heap_peak_mb": 0.7640419006347656,
+        "rss_after_mb": 1625.3125,
+        "rss_before_mb": 1625.3125,
         "rss_delta_mb": 0.0
       }
     ]
@@ -71,12 +71,10 @@
   "scenario": {
     "adapter": "python",
     "budget": {
-      "max_cold_ms": 22.67,
-      "max_p50_ms": 22.9,
-      "max_p95_ms": 24.48,
+      "max_p95_ms": 180.0,
       "max_peak_rss_mb": 232.38,
-      "max_python_heap_peak_mb": 0.95,
-      "max_rss_delta_mb": 0.02
+      "max_python_heap_peak_mb": 2.0,
+      "max_rss_delta_mb": 1.0
     },
     "domain": "web",
     "fixture": "stack",

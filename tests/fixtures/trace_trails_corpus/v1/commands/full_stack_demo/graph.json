@@ -77,6 +77,8 @@
                   "start_line": 1
                 },
                 "retention_fraction": 1.0,
+                "retention_fraction_at_anchor": 1.0,
+                "retention_fraction_at_original_range": 1.0,
                 "selected_observation_index": 0,
                 "survival_state": "alive_on_path",
                 "trace_patch_id": "<trace-patch:01>"
@@ -299,6 +301,18 @@
               },
               "step_id": "step_2",
               "step_index": 2,
+              "step_metadata": {
+                "call_type": "main",
+                "generation_index": 1,
+                "parent_step": null,
+                "parent_step_id": null,
+                "step_id": "step_2",
+                "step_index": 2,
+                "subagent_trajectory_ref": null,
+                "tool_call_id": "toolu_trace_trails_full_stack_bash",
+                "tool_name": "Bash",
+                "trace_id": "<trace:01>"
+              },
               "survival_state": "alive_on_path",
               "trace_id": "<trace:01>",
               "trace_patch": {

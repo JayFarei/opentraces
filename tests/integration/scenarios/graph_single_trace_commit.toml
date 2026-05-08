@@ -1,6 +1,6 @@
 name = "graph_single_trace_commit"
 description = """
-One commit with one attributed trace. `ot graph --limit 1 --no-color`
+One commit with one attributed trace. `ot trail graph --limit 1 --no-color`
 emits the 3-line stack: trace header, commit dot line, close arc.
 """
 
@@ -26,7 +26,7 @@ data = { version = 1, coverage = { attributed = 5, total = 5, ratio = 1.0 }, tra
 
 [[steps]]
 type = "invoke_cli"
-args = ["graph", "--limit", "1", "--no-color"]
+args = ["trail", "graph", "--limit", "1", "--no-color"]
 
 [[assertions]]
 kind = "cli_returncode"

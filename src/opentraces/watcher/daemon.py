@@ -81,6 +81,9 @@ class TickReport:
     fs_patches_upgraded: int = 0
     trail_maturation_searches: int = 0
     trail_maturation_anchors: int = 0
+    bucket_sync_state: str | None = None
+    bucket_sync_digest: str | None = None
+    bucket_sync_error: str | None = None
 
 
 # --- helpers ---------------------------------------------------------------
@@ -243,6 +246,26 @@ def _run_trace_trails_runtime(
         logger.exception("Trace Trails runtime failed for %s", project_cwd)
 
 
+def _bucket_reconcile_once(*, reason: str) -> dict:
+    from ..core.bucket_remote import reconcile_once
+
+    return reconcile_once(reason=reason)
+
+
+def _run_bucket_remote_sync(report: TickReport) -> None:
+    try:
+        result = _bucket_reconcile_once(reason="watcher")
+        report.bucket_sync_state = str(result.get("state") or "")
+        digest = result.get("digest") or result.get("remote_digest") or result.get("local_digest")
+        report.bucket_sync_digest = str(digest) if digest else None
+        error = result.get("error")
+        report.bucket_sync_error = str(error) if error else None
+    except Exception as exc:  # noqa: BLE001
+        report.bucket_sync_state = "error"
+        report.bucket_sync_error = f"{type(exc).__name__}: {exc}"
+        logger.exception("bucket remote sync failed")
+
+
 # --- public API ------------------------------------------------------------
 
 def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
@@ -276,6 +299,7 @@ def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
 
         if new_commits == 0 and not jsonl_active:
             _run_trace_trails_runtime(project_cwd, report, force_maturation=False)
+            _run_bucket_remote_sync(report)
             # Quiet tick — still record that we probed.
             state.set_last_watcher_run_at()
             report.duration_ms = (time.monotonic() - t0) * 1000.0
@@ -317,6 +341,7 @@ def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
             logger.exception("session sweep failed for %s", project_cwd)
 
         _run_trace_trails_runtime(project_cwd, report, force_maturation=True)
+        _run_bucket_remote_sync(report)
 
         report.duration_ms = (time.monotonic() - t0) * 1000.0
         logger.info(
@@ -436,6 +461,9 @@ def _cli_entry(argv: list[str]) -> int:
             "fs_patches_upgraded": r.fs_patches_upgraded,
             "trail_maturation_searches": r.trail_maturation_searches,
             "trail_maturation_anchors": r.trail_maturation_anchors,
+            "bucket_sync_state": r.bucket_sync_state,
+            "bucket_sync_digest": r.bucket_sync_digest,
+            "bucket_sync_error": r.bucket_sync_error,
             "error": r.error,
         }, indent=2))
         return 1 if r.error else 0

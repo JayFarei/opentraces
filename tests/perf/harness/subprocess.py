@@ -24,6 +24,7 @@ def build_command_plan(base_dir: Path, home_dir: Path, scenario: PerfScenario) -
         return CommandPlan(
             cmd=[
                 str(OTD),
+                "trail",
                 "graph",
                 "--project",
                 str(fixture.project_dir),
@@ -42,6 +43,7 @@ def build_command_plan(base_dir: Path, home_dir: Path, scenario: PerfScenario) -
         return CommandPlan(
             cmd=[
                 str(OTD),
+                "trail",
                 "blame",
                 sha,
                 "--project",
@@ -64,36 +66,26 @@ def build_command_plan(base_dir: Path, home_dir: Path, scenario: PerfScenario) -
             env=env,
             metadata=metadata,
         )
-    if scenario.target == "cli.add_all":
-        return CommandPlan(
-            cmd=[str(OTD), "add", "--all"],
-            cwd=fixture.project_dir,
-            env=env,
-            metadata=metadata,
-        )
-    if scenario.target == "cli.assess_local":
-        cmd = [str(OTD), "assess", "--dry-run"]
-        limit = scenario.params.get("limit")
-        if limit is not None:
-            cmd.extend(["--limit", str(limit)])
-        return CommandPlan(
-            cmd=cmd,
-            cwd=fixture.project_dir,
-            env=env,
-            metadata=metadata,
-        )
-    if scenario.target == "cli.export_agent_trace":
-        output_path = base_dir / "opentraces-export.jsonl"
-        metadata["output_path"] = str(output_path)
+    if scenario.target == "cli.trace_query":
         return CommandPlan(
             cmd=[
                 str(OTD),
-                "export",
-                "--format",
-                "agent-trace",
-                "--output",
-                str(output_path),
+                "trace",
+                "query",
+                "--lex",
+                str(scenario.params.get("lex", "trace")),
+                "--limit",
+                str(scenario.params.get("limit", 20)),
+                "--force-rebuild",
+                "--json",
             ],
+            cwd=fixture.project_dir,
+            env=env,
+            metadata=metadata,
+        )
+    if scenario.target == "cli.bucket_status":
+        return CommandPlan(
+            cmd=[str(OTD), "bucket", "status", "--json"],
             cwd=fixture.project_dir,
             env=env,
             metadata=metadata,

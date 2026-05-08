@@ -144,7 +144,7 @@ def build_report() -> str:
     lines.append("")
     lines.append("## Notes")
     lines.append("")
-    lines.append("- `push-smoke` measures local push-path overhead with a fake uploader. Real private-HF success remains an opt-in live integration test.")
+    lines.append("- Dataset publish performance is intentionally unprofiled until the local dataset publication contract replaces the old root push path.")
     lines.append("- `tmux` and `agent-browser` remain separate opt-in regression smokes; they are not included in the perf latency tables because they are environment-heavy.")
     lines.append("- Budgets in `tests/perf/budgets.toml` are current smoke-lane regression thresholds, not ideal targets.")
     lines.append("")

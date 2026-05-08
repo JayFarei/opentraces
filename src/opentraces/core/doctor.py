@@ -85,6 +85,32 @@ def _trace_index_status() -> dict[str, Any]:
     }
 
 
+def _bucket_status() -> dict[str, Any]:
+    """Report local bucket health for future remote sync."""
+    try:
+        from .bucket_store import bucket_manifest
+
+        manifest = bucket_manifest(write=True, include_objects=False)
+        return {
+            "state": "ok",
+            "root": manifest.get("root"),
+            "digest": manifest.get("digest"),
+            "trace_records": manifest.get("trace_records") or {},
+            "trail": manifest.get("trail") or {},
+            "sync": manifest.get("sync") or {},
+            "manifest_path": str(
+                Path(str(manifest.get("root") or "")) / "manifest.json"
+            )
+            if manifest.get("root")
+            else None,
+        }
+    except Exception as exc:
+        return {
+            "state": "error",
+            "error": str(exc),
+        }
+
+
 def _legacy_trace_index_artifacts() -> list[dict[str, Any]]:
     from . import paths
 
@@ -723,6 +749,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "attribution": _attribution_status(cwd),
         "watcher": _watcher_status(),
         "hooks": _hook_installers(),
+        "bucket": _bucket_status(),
         "trace_index": _trace_index_status(),
         "trail_event_log": _trail_event_log_status(cwd),
         "post_commit_hook": _post_commit_hook_status(cwd),

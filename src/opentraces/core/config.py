@@ -32,10 +32,25 @@ from pathlib import Path
 from typing import Any, Literal
 
 import click
+from pydantic import BaseModel, Field
+
+from .paths import (
+    CONFIG_PATH,
+    CREDENTIALS_PATH,
+    MARKER_FILENAME,
+    OPENTRACES_DIR,
+    PROJECTS_DIR,
+)
+from .workflow import (
+    DEFAULT_AGENT,
+    DEFAULT_PUSH_POLICY,
+    DEFAULT_REVIEW_POLICY,
+    normalize_agents,
+    normalize_push_policy,
+    normalize_review_policy,
+)
 
 logger = logging.getLogger(__name__)
-
-from pydantic import BaseModel, Field
 
 
 class NotOptedInError(click.ClickException):
@@ -60,15 +75,6 @@ class NotOptedInError(click.ClickException):
     def show(self, file: Any = None) -> None:
         click.echo(self.format_message(), err=True)
 
-from .workflow import (
-    DEFAULT_AGENT,
-    DEFAULT_PUSH_POLICY,
-    DEFAULT_REVIEW_POLICY,
-    normalize_agents,
-    normalize_push_policy,
-    normalize_review_policy,
-)
-
 
 def auth_identity(token: str | None) -> dict | None:
     """Return HF whoami dict for *token*, or None on any failure."""
@@ -81,14 +87,6 @@ def auth_identity(token: str | None) -> dict | None:
     except Exception:
         return None
 
-
-from .paths import (
-    CONFIG_PATH,
-    CREDENTIALS_PATH,
-    MARKER_FILENAME,
-    OPENTRACES_DIR,
-    PROJECTS_DIR,
-)
 
 CONFIG_VERSION = "0.2.0"
 MARKER_VERSION = "2"
@@ -108,6 +106,7 @@ _PORTABLE_FIELDS = (
     "default_visibility",
     "agents",
     "post_processors",
+    "privacy_tier",
     # Plan-043 phase 6: committable repo-identity + first-run decision.
     # `root_commit_sha` is populated by `ot init`; it's the SHA of the
     # first commit and survives `git mv`/relocation. `first_run_backfill_decision`
@@ -155,8 +154,31 @@ class LLMReviewConfig(BaseModel):
 class SecurityConfig(BaseModel):
     """Root security-module config tree (Plan 032)."""
 
+    privacy_tier: Literal["off", "low", "medium", "high"] = "medium"
     trufflehog: TruffleHogConfig = Field(default_factory=TruffleHogConfig)
     llm_review: LLMReviewConfig = Field(default_factory=LLMReviewConfig)
+
+
+class BucketRemoteConfig(BaseModel):
+    """Private remote bucket sync target.
+
+    This is workspace infrastructure, not dataset publication. Datasets bind
+    their own remotes separately.
+    """
+
+    enabled: bool = False
+    provider: Literal["huggingface", "fake"] = "huggingface"
+    url: str | None = None
+    visibility: Literal["private"] = "private"
+    sync_policy: Literal["daemon", "manual"] = "daemon"
+
+
+class BucketConfig(BaseModel):
+    """Global private bucket storage policy."""
+
+    storage: Literal["local", "remote"] = "local"
+    local_cache: bool = True
+    remote: BucketRemoteConfig = Field(default_factory=BucketRemoteConfig)
 
 
 class PostProcessorConfig(BaseModel):
@@ -198,6 +220,7 @@ class ProjectConfig(BaseModel):
     default_visibility: str = Field("private", pattern="^(public|private)$")
     agents: list[str] = Field(default_factory=lambda: [DEFAULT_AGENT])
     post_processors: list[PostProcessorConfig] = Field(default_factory=list)
+    privacy_tier: Literal["off", "low", "medium", "high"] | None = None
 
 
 class ProjectRegistration(BaseModel):
@@ -228,6 +251,7 @@ class Config(BaseModel):
     classifier_sensitivity: str = Field("medium", pattern="^(low|medium|high)$")
     dataset_visibility: str = Field("private", pattern="^(public|private)$")
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+    bucket: BucketConfig = Field(default_factory=BucketConfig)
 
     model_config = {"extra": "ignore"}  # silently drop dead keys (e.g. legacy pricing_file)
 
@@ -532,6 +556,11 @@ def _normalize_project_data(data: dict) -> bool:
     agents = normalize_agents(data.get("agents"))
     if data.get("agents") != agents:
         data["agents"] = agents
+        modified = True
+
+    privacy_tier = data.get("privacy_tier")
+    if privacy_tier is not None and privacy_tier not in {"off", "low", "medium", "high"}:
+        data["privacy_tier"] = "medium"
         modified = True
 
     for legacy_key in ("tier", "mode"):

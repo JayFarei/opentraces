@@ -102,7 +102,15 @@ def test_dataset_review_commands_update_publication_state_without_row_mutation()
 
     review = runner.invoke(dataset_group, ["review", "reviewable", "--json"])
     assert review.exit_code == 0, review.output
-    assert json.loads(review.output)["counts"]["needs_review"] == 1
+    review_payload = json.loads(review.output)
+    assert review_payload["counts"]["needs_review"] == 1
+    assert review_payload["schema"]["json_schema"]["required"] == [
+        "source_trace_id",
+        "source_unit_id",
+        "summary",
+    ]
+    assert review_payload["rows"][row_id]["data"]["summary"] == "Review me."
+    assert review_payload["rows"][row_id]["provenance"]["source_refs"]["trace_id"] == "trace-1"
 
     approved = runner.invoke(dataset_group, ["approve", "reviewable", row_id, "--json"])
     assert approved.exit_code == 0, approved.output

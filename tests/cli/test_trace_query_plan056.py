@@ -9,7 +9,11 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from opentraces.cli import SENTINEL, main
-from opentraces.core.trails import TrailEventDraft, append_event_batch
+from opentraces.core.trails import (
+    TrailEventDraft,
+    append_event_batch,
+    append_exact_patch_trail,
+)
 from opentraces.core.trails.models import sha256_text
 from opentraces_schema import Agent, GitLink, Observation, Step, ToolCall, TraceRecord
 
@@ -309,6 +313,51 @@ def test_trace_map_rebuild_upgrades_verified_bash_write_from_trail_projection(tm
     assert bash_node["metadata"]["pre_verification_action_type"] == "tool_call"
     assert bash_node["metadata"]["write_verified"] is True
     assert bash_node["metadata"]["trace_patches"][0]["trace_patch_id"]
+
+
+def test_trace_query_json_includes_trail_freshness_for_patch_units(tmp_path):
+    project = tmp_path / "demo"
+    _enroll_project(project, "abcdef1234567890abcdef1234567890")
+    _register_project_source(project)
+    _init_git_project(project)
+
+    (project / "app.py").write_text("def value():\n    return 'old'\n")
+    subprocess.run(["git", "add", "app.py"], cwd=project, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=project, check=True)
+    authored_text = "    return 'trail query freshness'\n"
+    (project / "app.py").write_text("def value():\n" + authored_text)
+    subprocess.run(["git", "add", "app.py"], cwd=project, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "patch"], cwd=project, check=True)
+    commit_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=project,
+        text=True,
+    ).strip()
+    append_exact_patch_trail(
+        project,
+        trace_id="trace-plan056-cli-trail-freshness",
+        step_index=2,
+        file_path="app.py",
+        authored_text=authored_text,
+        commit_ref=commit_sha,
+        writer="test",
+        capture_method=["hook_posttooluse"],
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["trace", "query", "--candidate-kind", "patch", "--force-rebuild", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["candidates"][0]["unit_type"] == "patch"
+    assert "warnings" not in payload
+    freshness = payload["trail_freshness"][0]
+    assert freshness["kind"] == "trail_projection_freshness"
+    assert freshness["severity"] == "info"
+    assert freshness["state"] == "current"
+    assert freshness["last_synced_at"].endswith("Z")
 
 
 def test_trace_map_accepts_ot_map_uri_and_map_node_target(tmp_path):

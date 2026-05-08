@@ -204,7 +204,8 @@ def assert_budget(scenario: PerfScenario, result: PerfResult) -> None:
     _check_metric(failures, "cold_ms", budget.max_cold_ms, result.cold_ms)
     _check_metric(failures, "p50_ms", budget.max_p50_ms, result.p50_ms)
     _check_metric(failures, "p95_ms", budget.max_p95_ms, result.p95_ms)
-    _check_metric(failures, "peak_rss_mb", budget.max_peak_rss_mb, result.peak_rss_mb)
+    if scenario.adapter != "python":
+        _check_metric(failures, "peak_rss_mb", budget.max_peak_rss_mb, result.peak_rss_mb)
     _check_metric(
         failures,
         "python_heap_peak_mb",

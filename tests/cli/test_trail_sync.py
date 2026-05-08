@@ -291,11 +291,13 @@ def test_trail_sync_bounds_revert_search(tmp_path: Path, monkeypatch) -> None:
     _commit(tmp_path, "noise a")
     (tmp_path / "noise_b.txt").write_text("b\n")
     _commit(tmp_path, "noise b")
+    (tmp_path / "app.py").write_text("def value():\n    return 'bounded-revert-search-edited'\n")
+    _commit(tmp_path, "transform anchored line")
 
     payload = _sync(tmp_path, "--patch", "tracepatch-sha256:bounded")
 
     current = payload["current_survival"]
-    assert current["survival_state"] == "alive_on_path"
+    assert current["survival_state"] == "alive_transformed"
     assert "revert_search_truncated" in current["limitations"]
 
 

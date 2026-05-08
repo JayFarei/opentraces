@@ -1,9 +1,10 @@
 {
-  "event_count": 11,
+  "event_count": 18,
   "event_type_counts": {
     "filesystem_mutation_observed": 1,
     "git_anchor_created": 1,
     "git_anchor_search_completed": 1,
+    "patch_survival_cached": 7,
     "trace_patch_created": 2,
     "trace_session_closed": 1,
     "trace_snapshot_created": 2,

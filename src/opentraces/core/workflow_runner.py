@@ -51,6 +51,8 @@ def run_dataset_workflow(
     scope: dict[str, Any] | None = None,
     limit: int | None = None,
     scheduled: bool = False,
+    privacy_tier: str | None = None,
+    trail_freshness_policy: str = "warn",
 ) -> DatasetRunResult:
     dataset = load_dataset(name)
     selected_executor = executor or (
@@ -67,6 +69,20 @@ def run_dataset_workflow(
     schema_digest = dataset.manifest.schema_ref.digest or digest_payload(schema)
     workflow_digest = dataset.manifest.workflow.digest
     source_provenance = read_source_provenance(dataset.path)
+    trail_freshness = _trail_freshness_for_dataset(dataset, scope or {"scope": "all-projects"})
+    trail_warnings = [
+        item for item in trail_freshness if item.get("severity") == "warning"
+    ]
+    if trail_freshness_policy not in {"warn", "fail", "ignore"}:
+        raise ValueError("trail_freshness_policy must be warn, fail, or ignore")
+    if trail_freshness_policy == "fail" and trail_warnings:
+        projects = ", ".join(
+            sorted({str(item.get("project_slug")) for item in trail_warnings})
+        )
+        raise ValueError(
+            "Trace Trail projection is stale for dataset composition"
+            + (f": {projects}" if projects else "")
+        )
     output_path = run_dir / "output_rows.jsonl"
     run_packet = {
         "run_id": run_id,
@@ -86,6 +102,9 @@ def run_dataset_workflow(
         "source_provenance": source_provenance,
         "scope": scope or {"scope": "all-projects"},
         "limit": limit,
+        "privacy_tier": privacy_tier,
+        "trail_freshness_policy": trail_freshness_policy,
+        "trail_freshness": trail_freshness,
     }
     _write_run_packet(run_dir, dataset.manifest, schema, run_packet)
     lock_path = dataset.path / ".opentraces" / ".lock"
@@ -125,7 +144,21 @@ def run_dataset_workflow(
         _execute_claude_code_headless(run_packet, output_path)
         rows = _read_output_rows(output_path)
         with _dataset_lock(lock_path, run_id):
-            append_summary = append_rows(name, rows, run_id=run_id, dry_run=dry_run)
+            append_summary = append_rows(
+                name,
+                rows,
+                run_id=run_id,
+                dry_run=dry_run,
+                privacy_tier=privacy_tier,
+                run_provenance={
+                    "run_id": run_id,
+                    "scheduled": scheduled,
+                    "executor": selected_executor,
+                    "scope": run_packet["scope"],
+                    "limit": limit,
+                },
+                trail_freshness=trail_freshness,
+            )
             cursor_advanced = False
             if not dry_run:
                 _advance_cursor(dataset.path, dataset.manifest, run_id)
@@ -194,6 +227,28 @@ def _execute_claude_code_headless(run_packet: dict[str, Any], output_path: Path)
     )
 
 
+def _trail_freshness_for_dataset(dataset, scope: dict[str, Any]) -> list[dict[str, Any]]:
+    project_slugs: set[str] = set()
+    project = scope.get("project")
+    if isinstance(project, str) and project:
+        project_slugs.add(project)
+    query = dataset.manifest.candidate_query
+    if query is not None:
+        query_project = query.args.get("project")
+        if isinstance(query_project, str) and query_project:
+            project_slugs.add(query_project)
+    try:
+        from .trace_index import default_index_path, trail_freshness_warnings
+
+        return trail_freshness_warnings(
+            index_path=default_index_path(),
+            project_slugs=project_slugs or None,
+            include_current=True,
+        )
+    except Exception:
+        return []
+
+
 def _write_run_packet(
     run_dir: Path,
     manifest,
@@ -224,6 +279,8 @@ def _run_instructions(run_packet: dict[str, Any]) -> str:
         "Read `run_packet.json` and `schema_snapshot.json`. Use `ot trace query`, "
         "`ot trace slice`, `ot trace map`, and `ot trace get` as needed. Emit plain JSONL rows "
         f"matching the schema to `{run_packet['output_path']}`.\n\n"
+        f"Privacy tier for appended rows: `{run_packet.get('privacy_tier') or 'medium'}`.\n\n"
+        f"Trace Trail freshness policy: `{run_packet.get('trail_freshness_policy')}`.\n\n"
         f"Set `OT_DATASET_OUTPUT={run_packet['output_path']}` when running helper scripts.\n"
     )
 

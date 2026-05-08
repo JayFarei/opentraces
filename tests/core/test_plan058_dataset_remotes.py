@@ -105,7 +105,10 @@ def test_plan058_publish_stages_only_publishable_rows_and_never_uploads_control_
             )
         ],
         run_id="run-2",
+        privacy_tier="off",
     )
+    state = read_publication_state("publishable")
+    assert "privacy_tier_off" in state.rows[blocked.row_ids[0]].block_reasons
 
     checked = publish_dataset("publishable", check_only=True, contributor="tester")
     assert checked.uploaded is False
@@ -130,6 +133,101 @@ def test_plan058_publish_stages_only_publishable_rows_and_never_uploads_control_
     assert state.rows[good.row_ids[0]].status == "published"
     assert "me/publishable" in state.rows[good.row_ids[0]].uploaded_to
     assert state.rows[blocked.row_ids[0]].status == "blocked"
+
+
+def test_plan058_append_rows_redacts_by_default_and_tracks_privacy_tier():
+    from opentraces.core.datasets import (
+        append_rows,
+        create_dataset,
+        dataset_path,
+        read_publication_state,
+    )
+    from opentraces.security import SECURITY_VERSION
+
+    create_dataset(
+        "redacted-by-default",
+        workflow_skill="curator",
+        workflow_digest="sha256:workflow",
+        publication_policy={"review": "auto"},
+    )
+    summary = append_rows(
+        "redacted-by-default",
+        [
+            _row(
+                "Uses sk-proj-abcdefghijklmnopqrstuvwxyz123456 and should be filtered.",
+                trace_id="trace-secret",
+            )
+        ],
+        run_id="run-1",
+    )
+
+    data = (dataset_path("redacted-by-default") / "data" / "train.jsonl").read_text()
+    assert "sk-proj-" not in data
+    assert "[REDACTED]" in data
+    entry = read_publication_state("redacted-by-default").rows[summary.row_ids[0]]
+    assert entry.status == "publishable"
+    assert entry.privacy_tier == "medium"
+    assert entry.security_version == SECURITY_VERSION
+    assert entry.redactions_applied >= 1
+
+
+def test_plan058_append_rows_writes_row_provenance_sidecar():
+    from opentraces.core.datasets import (
+        append_rows,
+        create_dataset,
+        read_row_index,
+        read_row_provenance,
+    )
+
+    create_dataset(
+        "row-provenance",
+        workflow_skill="curator",
+        workflow_digest="sha256:workflow",
+        publication_policy={"review": "auto"},
+        row_schema={
+            "type": "object",
+            "required": ["source_trace_id", "source_unit_id", "summary"],
+            "properties": {
+                "source_trace_id": {"type": "string"},
+                "source_unit_id": {"type": "string"},
+                "source_slice_id": {"type": "string"},
+                "step_range": {"type": "object"},
+                "summary": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+    )
+    summary = append_rows(
+        "row-provenance",
+        [
+            {
+                **_row("Has provenance.", trace_id="trace-prov", unit_id="tu:trace-prov:trace"),
+                "source_slice_id": "slice-1",
+                "step_range": {"start": 2, "end": 5},
+            }
+        ],
+        run_id="run-1",
+        run_provenance={"executor": "test"},
+        trail_freshness=[
+            {
+                "kind": "trail_projection_freshness",
+                "severity": "info",
+                "state": "current",
+                "project_slug": "demo",
+            }
+        ],
+    )
+    row_id = summary.row_ids[0]
+    entry = read_row_index("row-provenance")[0]
+    provenance = read_row_provenance("row-provenance")[row_id]
+
+    assert entry.source_trace_id == "trace-prov"
+    assert entry.source_unit_id == "tu:trace-prov:trace"
+    assert entry.source_slice_id == "slice-1"
+    assert entry.provenance["source_refs"]["step_range"] == {"start": 2, "end": 5}
+    assert provenance["workflow"]["skill"] == "curator"
+    assert provenance["trail"]["freshness"][0]["state"] == "current"
+    assert provenance["run"]["executor"] == "test"
 
 
 def test_plan058_withdrawal_tombstones_filter_wrapper_and_hard_delete_requires_confirmation():

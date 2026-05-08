@@ -850,6 +850,81 @@ def test_rebuild_index_adds_trail_patch_and_git_anchor_units_without_authored_te
     assert [node.action_type for node in forward.nodes] == ["patch_created", "git_anchor"]
 
 
+def test_trail_freshness_reports_last_sync_and_stale_event_ref(tmp_path):
+    from opentraces.core.trace_index import (
+        query_index_page,
+        rebuild_index,
+        trail_freshness_warnings,
+    )
+    from opentraces.core.trails import append_exact_patch_trail
+
+    project = tmp_path / "demo"
+    project.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    subprocess.run(["git", "config", "user.email", "a@b.c"], cwd=project, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=project, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=project, check=True)
+    _register_project(project, "1234567890abcdef1234567890abcdef")
+
+    (project / "app.py").write_text("def value():\n    return 'old'\n")
+    subprocess.run(["git", "add", "app.py"], cwd=project, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=project, check=True)
+    authored_text = "    return 'trail freshness'\n"
+    (project / "app.py").write_text("def value():\n" + authored_text)
+    subprocess.run(["git", "add", "app.py"], cwd=project, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "patch"], cwd=project, check=True)
+    commit_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],
+        cwd=project,
+        text=True,
+    ).strip()
+    append_exact_patch_trail(
+        project,
+        trace_id="trace-plan056-trail-freshness",
+        step_index=3,
+        file_path="app.py",
+        authored_text=authored_text,
+        commit_ref=commit_sha,
+        writer="test",
+        capture_method=["hook_posttooluse"],
+    )
+
+    summary = rebuild_index()
+    page = query_index_page(
+        candidate_kind="patch",
+        index_path=summary.index_path,
+    )
+
+    assert page.warnings
+    freshness = page.warnings[0]
+    assert freshness["kind"] == "trail_projection_freshness"
+    assert freshness["severity"] == "info"
+    assert freshness["state"] == "current"
+    assert freshness["last_synced_at"].endswith("Z")
+    assert freshness["indexed_ref_sha"] == freshness["current_ref_sha"]
+
+    append_exact_patch_trail(
+        project,
+        trace_id="trace-plan056-trail-freshness-new",
+        step_index=4,
+        file_path="app.py",
+        authored_text=authored_text,
+        commit_ref=commit_sha,
+        writer="test",
+        capture_method=["hook_posttooluse"],
+    )
+    stale = trail_freshness_warnings(
+        index_path=summary.index_path,
+        include_current=True,
+    )[0]
+
+    assert stale["severity"] == "warning"
+    assert stale["state"] == "stale"
+    assert stale["last_synced_at"] == freshness["last_synced_at"]
+    assert stale["indexed_ref_sha"] != stale["current_ref_sha"]
+    assert stale["advice"] == "opentraces trace index rebuild"
+
+
 def test_query_reuses_unchanged_trail_projection_cache(tmp_path, monkeypatch):
     from opentraces.core import trails
     from opentraces.core.trace_index import query_index, rebuild_index

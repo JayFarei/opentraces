@@ -609,7 +609,6 @@ def _step_invoke_cli(state: RunState, params: dict) -> None:
         "returncode": r.returncode,
     }
 
-
 def _trace_ids_for_label(state: RunState, label: str) -> set[str]:
     session_or_trace_ids = state.label_to_trace.get(label)
     if not session_or_trace_ids:

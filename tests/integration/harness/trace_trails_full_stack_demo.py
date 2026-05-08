@@ -824,7 +824,12 @@ def _read_last_hook_log(repo: Path) -> dict[str, Any]:
     return json.loads(lines[-1])
 
 
-def run_installed_runtime_demo(root: Path, *, verbose: bool = False) -> dict[str, Any]:
+def run_installed_runtime_demo(
+    root: Path,
+    *,
+    verbose: bool = False,
+    bucket_remote: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Run the production-path Trace Trails UAT.
 
     This scenario uses command/install surfaces rather than direct core calls:
@@ -846,10 +851,45 @@ def run_installed_runtime_demo(root: Path, *, verbose: bool = False) -> dict[str
     paths.root.mkdir(parents=True)
     with _temporary_opentraces_home(paths.home):
         runtime_paths = replace(paths, transcript=_runtime_transcript_path(paths))
+        if bucket_remote is not None:
+            _configure_bucket_remote(bucket_remote)
         return _run_installed_runtime_demo_with_isolated_home(
             runtime_paths,
             verbose=verbose,
         )
+
+
+def _configure_bucket_remote(config: dict[str, Any]) -> None:
+    provider = str(config.get("provider") or "")
+    args = [
+        "setup",
+        "bucket",
+        "--provider",
+        provider,
+        "--sync-policy",
+        str(config.get("sync_policy") or "daemon"),
+        "--json",
+    ]
+    if provider == "fake":
+        fake_root = config.get("fake_root")
+        if fake_root is None:
+            raise AssertionError("fake bucket remote config requires fake_root")
+        args.extend(["--fake-root", str(fake_root)])
+    elif provider == "huggingface":
+        repo = config.get("repo")
+        if repo is not None:
+            args.extend(["--repo", str(repo)])
+    else:
+        raise AssertionError(f"unsupported bucket remote provider: {provider!r}")
+    configured = _run_cli(args)
+    _assert(
+        configured["bucket"]["storage"] == "remote",
+        "setup bucket did not configure remote storage",
+    )
+    _assert(
+        configured["bucket"]["remote"]["sync_policy"] == "daemon",
+        "setup bucket did not configure daemon sync",
+    )
 
 
 def _run_installed_runtime_demo_with_isolated_home(

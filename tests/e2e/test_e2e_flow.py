@@ -1,6 +1,6 @@
-"""End-to-end test of the opentraces git-analogy flow.
+"""End-to-end smoke tests for the current local opentraces flow.
 
-Tests: init -> _capture -> status -> review -> push
+Tests: init -> _capture -> status -> captured trace validation.
 Uses real Claude Code sessions from this project.
 """
 
@@ -26,6 +26,15 @@ def runner():
     return CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _restore_cwd():
+    previous = Path.cwd()
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
 @pytest.fixture
 def project_dir(tmp_path):
     """Create a minimal project directory for testing."""
@@ -39,7 +48,7 @@ def initialized_project(runner, project_dir):
     """Run init on a temp project directory and return the path."""
     with runner.isolated_filesystem(temp_dir=project_dir.parent):
         os.chdir(str(project_dir))
-        result = runner.invoke(main, ["init", "--mode", "review", "--remote", "test/opentraces", "--no-hook"])
+        result = runner.invoke(main, ["init", "--start-fresh"])
         assert result.exit_code == 0, f"init failed: {result.output}"
     return project_dir
 
@@ -62,11 +71,11 @@ class TestInit:
     """Test the init command."""
 
     def test_init_creates_config_and_staging(self, runner, project_dir):
-        """init with --mode review creates .opentraces.json marker and global traces dir."""
+        """init creates .opentraces.json marker and global traces dir."""
         from opentraces.core.config import get_project_traces_dir
 
         os.chdir(str(project_dir))
-        result = runner.invoke(main, ["init", "--mode", "review", "--remote", "test/repo", "--no-hook"])
+        result = runner.invoke(main, ["init", "--start-fresh"])
 
         assert result.exit_code == 0
         marker = project_dir / ".opentraces.json"
@@ -74,7 +83,6 @@ class TestInit:
         traces_dir = get_project_traces_dir(project_dir)
         assert traces_dir.exists(), "global traces dir not created"
 
-        import json
         content = json.loads(marker.read_text())
         assert content["review_policy"] == "review"
         assert "project_id" in content
@@ -82,8 +90,8 @@ class TestInit:
     def test_init_idempotent(self, runner, project_dir):
         """Running init twice does not error."""
         os.chdir(str(project_dir))
-        runner.invoke(main, ["init", "--mode", "review", "--remote", "test/repo", "--no-hook"])
-        result = runner.invoke(main, ["init", "--mode", "review", "--remote", "test/repo", "--no-hook"])
+        runner.invoke(main, ["init", "--start-fresh"])
+        result = runner.invoke(main, ["init", "--start-fresh"])
         assert result.exit_code == 0
         assert "Already initialized" in result.output
 
@@ -135,15 +143,15 @@ class TestStatus:
         assert "sessions in inbox" in result.output or "session" in result.output
 
     def test_status_shows_remote(self, runner, initialized_project):
-        """status shows the configured remote."""
+        """status shows that no dataset remote has been configured yet."""
         os.chdir(str(initialized_project))
         result = runner.invoke(main, ["status"])
 
         assert result.exit_code == 0
-        assert "opentraces" in result.output
+        assert "remote: not set" in result.output
 
 
-class TestReview:
+class TestCapturedTrace:
     """Test review by loading staged traces programmatically."""
 
     def test_staged_trace_has_expected_fields(
@@ -189,65 +197,6 @@ class TestReview:
             assert f"/Users/{username}/" not in serialized, "Raw user path found in trace"
 
 
-class TestPushMock:
-    """Test push with mocked HF API (no real uploads)."""
-
-    @patch("opentraces.cli.load_config")
-    def test_push_not_authenticated(self, mock_config, runner, initialized_project):
-        """push without auth exits with error."""
-        mock_cfg = MagicMock()
-        mock_cfg.hf_token = None
-        mock_config.return_value = mock_cfg
-
-        os.chdir(str(initialized_project))
-        result = runner.invoke(main, ["push"])
-        assert result.exit_code != 0 or "Not authenticated" in result.output
-
-    @patch("huggingface_hub.HfApi")
-    @patch("opentraces.cli.load_config")
-    def test_push_uses_correct_repo_id(
-        self, mock_config, mock_hf_api_cls, runner, initialized_project
-    ):
-        """push resolves repo_id to username/opentraces by default."""
-        mock_cfg = MagicMock()
-        mock_cfg.hf_token = "hf_test_token_123"
-        mock_cfg.dataset_visibility = "private"
-        mock_config.return_value = mock_cfg
-
-        mock_api = MagicMock()
-        mock_api.whoami.return_value = {"name": "testuser"}
-        mock_hf_api_cls.return_value = mock_api
-
-        os.chdir(str(initialized_project))
-        result = runner.invoke(main, ["push"])
-
-        # Should show default repo name in output or JSON
-        # Even with no traces, the repo_id should be resolved
-        assert "testuser/opentraces" in result.output or "No traces" in result.output
-
-    @patch("huggingface_hub.HfApi")
-    @patch("opentraces.cli.load_config")
-    def test_push_repo_flag_overrides(
-        self, mock_config, mock_hf_api_cls, runner, initialized_project
-    ):
-        """--repo flag takes priority over default."""
-        mock_cfg = MagicMock()
-        mock_cfg.hf_token = "hf_test_token_123"
-        mock_cfg.dataset_visibility = "private"
-        mock_config.return_value = mock_cfg
-
-        mock_api = MagicMock()
-        mock_api.whoami.return_value = {"name": "testuser"}
-        mock_hf_api_cls.return_value = mock_api
-
-        os.chdir(str(initialized_project))
-        result = runner.invoke(main, ["push", "--repo", "testuser/custom-dataset"])
-
-        # With no traces it should still resolve the repo correctly
-        output = result.output
-        assert "custom-dataset" in output or "No traces" in output
-
-
 class TestLoginMock:
     """Test login with mocked device code flow."""
 
@@ -285,50 +234,3 @@ class TestLoginMock:
                     result = runner.invoke(main, ["auth", "login"])
 
             assert mock_validate.called or "TEST-CODE" in result.output
-
-
-class TestDatasetNameResolution:
-    """Verify the priority chain: --repo flag > config remote > default."""
-
-    def test_default_resolution(self, tmp_path):
-        """No flag, no config remote -> username/opentraces."""
-        from opentraces.cli import _resolve_repo_id
-
-        # Create a project dir with no remote in config
-        proj = tmp_path / "proj"
-        proj.mkdir()
-        ot_dir = proj / ".opentraces"
-        ot_dir.mkdir()
-        (ot_dir / "config.yml").write_text("review_policy: review\n")
-
-        os.chdir(str(proj))
-        result = _resolve_repo_id("alice")
-        assert result == "alice/opentraces"
-
-    def test_config_remote_override(self, tmp_path):
-        """Config remote field takes priority over default."""
-        from opentraces.cli import _resolve_repo_id
-
-        proj = tmp_path / "proj"
-        proj.mkdir()
-        ot_dir = proj / ".opentraces"
-        ot_dir.mkdir()
-        (ot_dir / "config.yml").write_text("review_policy: review\nremote: alice/custom-traces\n")
-
-        os.chdir(str(proj))
-        result = _resolve_repo_id("alice")
-        assert result == "alice/custom-traces"
-
-    def test_repo_flag_highest_priority(self, tmp_path):
-        """--repo flag overrides both config remote and default."""
-        from opentraces.cli import _resolve_repo_id
-
-        proj = tmp_path / "proj"
-        proj.mkdir()
-        ot_dir = proj / ".opentraces"
-        ot_dir.mkdir()
-        (ot_dir / "config.yml").write_text("review_policy: review\nremote: alice/custom-traces\n")
-
-        os.chdir(str(proj))
-        result = _resolve_repo_id("alice", repo_flag="alice/override-repo")
-        assert result == "alice/override-repo"

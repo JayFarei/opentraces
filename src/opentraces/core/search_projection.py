@@ -25,6 +25,7 @@ from .bucket_store import trace_record_snapshot
 from .semantic import expand_semantic_query, semantic_profile_from_facets
 from .trace_index import (
     QueryPage,
+    _trail_freshness_for_query,
     candidate_packet_for_unit,
     default_index_path,
     get_unit,
@@ -370,6 +371,7 @@ def query_search_projection_page(
     selected = scored[offset : offset + page_size]
     next_offset = offset + page_size
     next_page_token = f"offset:{next_offset}" if next_offset < len(scored) else None
+    selected_units = [unit for _score, _parts, _matched, unit in selected]
     return QueryPage(
         candidates=[
             candidate_packet_for_unit(
@@ -385,6 +387,14 @@ def query_search_projection_page(
         ],
         next_page_token=next_page_token,
         total=len(scored),
+        warnings=_trail_freshness_for_query(
+            db_path,
+            selected_units,
+            project=project,
+            survival=survival,
+            candidate_kind=candidate_kind,
+            facet_filters=facet_filters,
+        ),
     )
 
 

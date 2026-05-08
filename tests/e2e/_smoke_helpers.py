@@ -103,11 +103,7 @@ def seed_opted_in_project(
             "-c",
             "from opentraces.cli import main; main()",
             "init",
-            "--mode",
-            "review",
-            "--remote",
-            "opentraces-smoke/repo",
-            "--no-hook",
+            "--start-fresh",
         ],
         cwd=str(project_dir),
         env=env,
@@ -115,6 +111,22 @@ def seed_opted_in_project(
         capture_output=True,
         text=True,
     )
+    marker_path = project_dir / ".opentraces.json"
+    marker = json.loads(marker_path.read_text())
+    marker.update(
+        {
+            "review_policy": "review",
+            "push_policy": "manual",
+            "remotes": {
+                "opentraces-smoke/repo": {
+                    "url": "hf://opentraces-smoke/repo",
+                    "visibility": "private",
+                }
+            },
+            "active_remote": "opentraces-smoke/repo",
+        }
+    )
+    marker_path.write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n")
 
     state_dirs = sorted(
         path

@@ -1,17 +1,13 @@
 """Flask application for the opentraces web review interface.
 
 Serves a local web UI for trace review: browse sessions,
-approve/reject/redact traces, then push to HF Hub.
+approve/reject/redact traces, and rescan records through the local
+security pipeline.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import subprocess
-import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -29,9 +25,7 @@ from ...core.config import (
     project_is_opted_in,
     save_project_config,
 )
-from ...security import SECURITY_VERSION
-from opentraces_schema import SCHEMA_VERSION
-from ...core.inbox import get_stage, load_traces, redact_step
+from ...core.inbox import get_stage, load_traces
 from ...core.state import StateManager, TraceStatus
 from ...core.workflow import (
     DEFAULT_AGENT,
@@ -123,9 +117,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         _trace_cache[0] = None
         _tree_cache.clear()
         # Drop the cached StateManager so the next _get_state() re-reads
-        # state.json from disk. Without this, mutations that happen via
-        # subprocess (push, llm-review) never become visible to the
-        # /api/traces endpoint, and the UI keeps showing stale rows.
+        # state.json from disk after review/redaction/rescan mutations.
         _state_mgr[0] = None
 
     # Default cap keeps /api/traces responsive on big inboxes (thousands
@@ -186,6 +178,7 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             "authenticated": identity is not None,
             "username": identity.get("name") if identity else None,
             "security": {
+                "privacy_tier": project_cfg.get("privacy_tier") or cfg.security.privacy_tier,
                 "trufflehog": {
                     "enabled": th_enabled,
                     "version": th_version,
@@ -447,6 +440,58 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             "step_index": step_index,
         })
 
+    @app.route("/api/trace/<trace_id>/rescan", methods=["POST"])
+    def api_rescan_trace(trace_id: str):
+        """Re-run the trace security pipeline and persist the staged record."""
+        import re as _re
+        if not _re.match(r'^[a-f0-9-]+$', trace_id):
+            return jsonify({"error": "Invalid trace ID format"}), 400
+
+        data = request.get_json(silent=True) or {}
+        privacy_tier = data.get("privacy_tier")
+        from ...core.review import rescan_trace_and_persist
+        try:
+            result = rescan_trace_and_persist(
+                staging_path,
+                trace_id,
+                load_config(),
+                privacy_tier=privacy_tier,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if not result.ok or result.processed is None:
+            return jsonify({"error": result.error}), 404
+
+        if project_is_opted_in(project_dir):
+            try:
+                from ...core.bucket_store import write_trace_record
+                from ...core.config import get_project_dir
+
+                write_trace_record(
+                    result.processed.record,
+                    project_slug=get_project_dir(project_dir).name,
+                    source_layer="canonical",
+                    legacy_mirror=True,
+                    privacy_tier=privacy_tier,
+                )
+            except Exception:
+                logger.warning(
+                    "bucket write failed during web rescan for %s",
+                    trace_id,
+                    exc_info=True,
+                )
+
+        _invalidate_cache()
+        security = result.processed.record.metadata.get("security", {}).get("privacy", {})
+        return jsonify({
+            "status": "rescanned",
+            "trace_id": trace_id,
+            "privacy_tier": security.get("privacy_tier") or privacy_tier,
+            "security_version": result.processed.record.security.classifier_version,
+            "redactions_applied": result.processed.record.security.redactions_applied,
+            "needs_review": result.processed.needs_review,
+        })
+
     @app.route("/api/trace/<trace_id>/detail")
     def api_trace_detail(trace_id: str):
         """Return full trace JSON for a single session."""
@@ -641,141 +686,12 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             "signal_kept": signal_kept,
         })
 
-    def _run_cli_push(
-        *,
-        project_dir: Path,
-        llm_review: bool,
-    ) -> Any:
-        """Run the CLI push pipeline in subprocesses and report what transitioned.
-
-        Mirrors the TUI ``PushRunnerModal``. When ``llm_review`` is True we
-        run ``opentraces llm-review --scope staged`` first and gate the push
-        with ``--llm-review``; otherwise we go straight to ``opentraces push -y``.
-        Trace counts come from a real COMMITTED-before/after diff, never from
-        optimistic local marking.
-        """
-        script = Path(sys.executable).parent / "opentraces"
-        if not script.exists():
-            return jsonify({
-                "status": "failed",
-                "stage": "push",
-                "count": 0,
-                "trace_ids": [],
-                "log": "",
-                "error": f"could not find 'opentraces' next to {sys.executable}",
-            }), 500
-
-        log_lines: list[str] = []
-
-        def run_step(cmd: list[str], header: str) -> int:
-            log_lines.append(header)
-            try:
-                proc = subprocess.run(
-                    cmd,
-                    cwd=str(project_dir),
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                )
-            except FileNotFoundError as exc:
-                log_lines.append(f"[error] {exc}")
-                return 127
-            if proc.stdout:
-                log_lines.extend(proc.stdout.rstrip().splitlines())
-            log_lines.append(f"[exit {proc.returncode}]")
-            return proc.returncode
-
-        if llm_review:
-            rc_review = run_step(
-                [str(script), "llm-review", "--scope", "staged"],
-                "→ opentraces llm-review --scope staged",
-            )
-            if rc_review != 0:
-                log_lines.append("")
-                log_lines.append("[aborting push — llm-review did not succeed]")
-                return jsonify({
-                    "status": "failed",
-                    "stage": "llm-review",
-                    "count": 0,
-                    "log": "\n".join(log_lines),
-                    "error": "LLM review did not succeed",
-                }), 200
-
-        # Snapshot the COMMITTED set from a FRESH state read (not the
-        # web process's cached view, which can lag after a prior push).
-        # We'll compare against a second fresh read after the subprocess
-        # to see exactly which traces transitioned out of COMMITTED.
-        # Prefer the closure's _state_path — it already reflects the
-        # ``state_path`` override used by tests and keeps the subprocess
-        # and the web process reading the same file when the project is
-        # opted in under a custom layout.
-        diff_state_path = _state_path or get_project_state_path(project_dir)
-        pre_committed = {
-            e.trace_id for e in
-            StateManager(state_path=diff_state_path).get_traces_by_status(TraceStatus.COMMITTED)
-        }
-
-        if llm_review:
-            push_cmd = [str(script), "push", "--llm-review", "-y"]
-            push_header = "→ opentraces push --llm-review -y"
-        else:
-            push_cmd = [str(script), "push", "-y"]
-            push_header = "→ opentraces push -y"
-        rc_push = run_step(push_cmd, push_header)
-
-        post_committed = {
-            e.trace_id for e in
-            StateManager(state_path=diff_state_path).get_traces_by_status(TraceStatus.COMMITTED)
-        }
-        actually_pushed = sorted(pre_committed - post_committed)
-
-        # The subprocess mutated state.json; drop the in-process caches
-        # so subsequent /api/traces sees the transitions (COMMITTED →
-        # UPLOADED) and the UI reflects the real inbox/staged/pushed
-        # split instead of serving stale pre-push rows.
-        _invalidate_cache()
-
-        if rc_push == 0 and actually_pushed:
-            status = "pushed"
-            error = None
-        elif rc_push == 0:
-            # Subprocess succeeded but nothing transitioned — surface the
-            # most informative line from the push log so the user sees why.
-            status = "failed"
-            tail_markers = (
-                "no valid traces to upload",
-                "no traces ready for upload",
-                "upload_load_failed",
-                "aborting:",
-            )
-            hint = ""
-            for line in reversed(log_lines):
-                low = line.lower()
-                if any(m in low for m in tail_markers):
-                    hint = line.strip()
-                    break
-            error = hint or "push completed but no traces transitioned"
-        else:
-            status = "failed"
-            error = f"push exited with {rc_push}"
-
-        return jsonify({
-            "status": status,
-            "stage": "push",
-            "count": len(actually_pushed),
-            "trace_ids": actually_pushed,
-            "log": "\n".join(log_lines),
-            "error": error,
-        }), 200
-
     @app.route("/api/push", methods=["POST"])
     def api_push():
-        """Push staged sessions to HF Hub."""
+        """Fail closed for the legacy trace-push endpoint."""
         traces = _traces()
         req_data = request.get_json(silent=True) or {}
         requested_commit_id = req_data.get("commit_id")
-        llm_review = bool(req_data.get("llm_review"))
         state = _get_state()
 
         committed_entries = state.get_committed_traces()
@@ -793,12 +709,19 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
         if not committed:
             return jsonify({"error": "No staged sessions to push"}), 400
 
-        # Delegate to the CLI subprocess in all cases — mirrors the TUI's
-        # PushRunnerModal and the LLM-review path here. The subprocess owns
-        # the HF upload, token resolution, and COMMITTED → UPLOADED
-        # transitions, so there's no in-process fail-open branch that can
-        # mark traces uploaded without actually publishing them.
-        return _run_cli_push(project_dir=project_dir, llm_review=llm_review)
+        return jsonify({
+            "status": "disabled",
+            "stage": "dataset",
+            "count": 0,
+            "trace_ids": [],
+            "log": "",
+            "error": (
+                "Legacy trace push is disabled in the v0.4 flow. "
+                "Create a dataset with `opentraces dataset run <name>` "
+                "and publish reviewed rows with `opentraces dataset publish <name>`."
+            ),
+            "next_command": "opentraces dataset publish <name>",
+        }), 410
 
     @app.route("/api/graph")
     def api_graph():

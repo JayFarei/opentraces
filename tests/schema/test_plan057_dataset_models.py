@@ -156,6 +156,10 @@ def test_dataset_run_record_and_row_index_entry_are_stable_json_contracts():
         "line": 1,
         "run_id": "run_abc",
         "appended_at": "2026-04-28T12:01:00Z",
+        "source_trace_id": None,
+        "source_unit_id": None,
+        "source_slice_id": None,
+        "provenance": {},
     }
 
 

@@ -22,7 +22,7 @@ content = "{}\n"
 
 [[steps]]
 type = "invoke_cli"
-args = ["init", "--no-hook"]
+args = ["init", "--start-fresh"]
 
 [[assertions]]
 kind = "cli_returncode"
@@ -31,7 +31,7 @@ equals = 0
 # Re-running init should succeed and not create a duplicate slug.
 [[steps]]
 type = "invoke_cli"
-args = ["init", "--no-hook"]
+args = ["init", "--start-fresh"]
 
 [[assertions]]
 kind = "cli_returncode"

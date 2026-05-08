@@ -41,7 +41,12 @@ class ScanResult:
             self.field_counts[k] = self.field_counts.get(k, 0) + v
 
 
-def scan_content(text: str, field_type: FieldType) -> ScanResult:
+def scan_content(
+    text: str,
+    field_type: FieldType,
+    *,
+    include_entropy: bool | None = None,
+) -> ScanResult:
     """Scan a single text field with rules appropriate for its context.
 
     - TOOL_INPUT / GENERAL: full regex + entropy scan
@@ -58,8 +63,9 @@ def scan_content(text: str, field_type: FieldType) -> ScanResult:
     if not text:
         return ScanResult()
 
-    include_entropy = field_type in (FieldType.TOOL_INPUT, FieldType.GENERAL)
-    matches = scan_text(text, include_entropy=include_entropy)
+    default_entropy = field_type in (FieldType.TOOL_INPUT, FieldType.GENERAL)
+    use_entropy = default_entropy if include_entropy is None else include_entropy and default_entropy
+    matches = scan_text(text, include_entropy=use_entropy)
 
     result = ScanResult(
         matches=matches,
@@ -146,24 +152,33 @@ def _classify_tool(tool_name: str) -> FieldType:
 # Record-level scanning
 # ---------------------------------------------------------------------------
 
-def _scan_dict_values(d: dict[str, Any], field_type: FieldType) -> ScanResult:
+def _scan_dict_values(
+    d: dict[str, Any],
+    field_type: FieldType,
+    *,
+    include_entropy: bool | None = None,
+) -> ScanResult:
     """Recursively scan all string values in a dict."""
     result = ScanResult()
     for v in d.values():
         if isinstance(v, str):
-            result.merge(scan_content(v, field_type))
+            result.merge(scan_content(v, field_type, include_entropy=include_entropy))
         elif isinstance(v, dict):
-            result.merge(_scan_dict_values(v, field_type))
+            result.merge(_scan_dict_values(v, field_type, include_entropy=include_entropy))
         elif isinstance(v, list):
             for item in v:
                 if isinstance(item, str):
-                    result.merge(scan_content(item, field_type))
+                    result.merge(scan_content(item, field_type, include_entropy=include_entropy))
                 elif isinstance(item, dict):
-                    result.merge(_scan_dict_values(item, field_type))
+                    result.merge(_scan_dict_values(item, field_type, include_entropy=include_entropy))
     return result
 
 
-def scan_trace_record(record: TraceRecord) -> ScanResult:
+def scan_trace_record(
+    record: TraceRecord,
+    *,
+    include_entropy: bool | None = None,
+) -> ScanResult:
     """Scan all fields of a TraceRecord with appropriate field types.
 
     Pass 1: scan individual fields with context-aware rules.
@@ -178,55 +193,59 @@ def scan_trace_record(record: TraceRecord) -> ScanResult:
 
     # System prompts (general text)
     for _hash, prompt_text in record.system_prompts.items():
-        result.merge(scan_content(prompt_text, FieldType.GENERAL))
+        result.merge(scan_content(prompt_text, FieldType.GENERAL, include_entropy=include_entropy))
 
     # Task description
     if record.task.description:
-        result.merge(scan_content(record.task.description, FieldType.GENERAL))
+        result.merge(scan_content(record.task.description, FieldType.GENERAL, include_entropy=include_entropy))
 
     # Steps
     for step in record.steps:
         # Step content
         if step.content:
-            result.merge(scan_content(step.content, FieldType.GENERAL))
+            result.merge(scan_content(step.content, FieldType.GENERAL, include_entropy=include_entropy))
 
         # Reasoning content
         if step.reasoning_content:
-            result.merge(scan_content(step.reasoning_content, FieldType.REASONING))
+            result.merge(scan_content(step.reasoning_content, FieldType.REASONING, include_entropy=include_entropy))
 
         # Tool calls
         for tc in step.tool_calls:
             ft = _classify_tool(tc.tool_name)
-            result.merge(_scan_dict_values(tc.input, ft))
+            result.merge(_scan_dict_values(tc.input, ft, include_entropy=include_entropy))
 
         # Observations (tool results)
         for obs in step.observations:
             if obs.content:
-                result.merge(scan_content(obs.content, FieldType.TOOL_RESULT))
+                result.merge(scan_content(obs.content, FieldType.TOOL_RESULT, include_entropy=include_entropy))
             if obs.output_summary:
-                result.merge(scan_content(obs.output_summary, FieldType.TOOL_RESULT))
+                result.merge(scan_content(obs.output_summary, FieldType.TOOL_RESULT, include_entropy=include_entropy))
             if obs.error:
-                result.merge(scan_content(obs.error, FieldType.TOOL_RESULT))
+                result.merge(scan_content(obs.error, FieldType.TOOL_RESULT, include_entropy=include_entropy))
 
         # Snippets
         for snippet in step.snippets:
             if snippet.text:
-                result.merge(scan_content(snippet.text, FieldType.GENERAL))
+                result.merge(scan_content(snippet.text, FieldType.GENERAL, include_entropy=include_entropy))
 
     # Outcome
     if record.outcome.description:
-        result.merge(scan_content(record.outcome.description, FieldType.GENERAL))
+        result.merge(scan_content(record.outcome.description, FieldType.GENERAL, include_entropy=include_entropy))
     if record.outcome.patch:
-        result.merge(scan_content(record.outcome.patch, FieldType.GENERAL))
+        result.merge(scan_content(record.outcome.patch, FieldType.GENERAL, include_entropy=include_entropy))
 
     # VCS diff
     if record.environment.vcs.diff:
-        result.merge(scan_content(record.environment.vcs.diff, FieldType.GENERAL))
+        result.merge(scan_content(record.environment.vcs.diff, FieldType.GENERAL, include_entropy=include_entropy))
 
     return result
 
 
-def scan_serialized(jsonl_bytes: bytes) -> ScanResult:
+def scan_serialized(
+    jsonl_bytes: bytes,
+    *,
+    include_entropy: bool | None = None,
+) -> ScanResult:
     """Pass 2: scan final serialized JSONL bytes for any remaining secrets.
 
     This catches anything introduced during enrichment or serialization
@@ -239,10 +258,14 @@ def scan_serialized(jsonl_bytes: bytes) -> ScanResult:
         ScanResult from scanning the raw serialized content.
     """
     text = jsonl_bytes.decode("utf-8", errors="replace")
-    return scan_content(text, FieldType.GENERAL)
+    return scan_content(text, FieldType.GENERAL, include_entropy=include_entropy)
 
 
-def apply_redactions(record: TraceRecord) -> int:
+def apply_redactions(
+    record: TraceRecord,
+    *,
+    include_entropy: bool = True,
+) -> int:
     """Apply redactions to all string fields in a TraceRecord in-place.
 
     Scans each field with context-appropriate rules and replaces matches
@@ -251,20 +274,20 @@ def apply_redactions(record: TraceRecord) -> int:
     total = 0
 
     for _hash, prompt_text in list(record.system_prompts.items()):
-        matches = scan_text(prompt_text)
+        matches = scan_text(prompt_text, include_entropy=include_entropy)
         if matches:
             record.system_prompts[_hash] = redact_text(prompt_text, matches)
             total += len(matches)
 
     if record.task.description:
-        matches = scan_text(record.task.description)
+        matches = scan_text(record.task.description, include_entropy=include_entropy)
         if matches:
             record.task.description = redact_text(record.task.description, matches)
             total += len(matches)
 
     for step in record.steps:
         if step.content:
-            matches = scan_text(step.content)
+            matches = scan_text(step.content, include_entropy=include_entropy)
             if matches:
                 step.content = redact_text(step.content, matches)
                 total += len(matches)
@@ -278,7 +301,7 @@ def apply_redactions(record: TraceRecord) -> int:
         for tc in step.tool_calls:
             for key, val in list(tc.input.items()):
                 if isinstance(val, str):
-                    matches = scan_text(val)
+                    matches = scan_text(val, include_entropy=include_entropy)
                     if matches:
                         tc.input[key] = redact_text(val, matches)
                         total += len(matches)
@@ -302,25 +325,25 @@ def apply_redactions(record: TraceRecord) -> int:
 
         for snippet in step.snippets:
             if snippet.text:
-                matches = scan_text(snippet.text)
+                matches = scan_text(snippet.text, include_entropy=include_entropy)
                 if matches:
                     snippet.text = redact_text(snippet.text, matches)
                     total += len(matches)
 
     if record.outcome.description:
-        matches = scan_text(record.outcome.description)
+        matches = scan_text(record.outcome.description, include_entropy=include_entropy)
         if matches:
             record.outcome.description = redact_text(record.outcome.description, matches)
             total += len(matches)
 
     if record.outcome.patch:
-        matches = scan_text(record.outcome.patch)
+        matches = scan_text(record.outcome.patch, include_entropy=include_entropy)
         if matches:
             record.outcome.patch = redact_text(record.outcome.patch, matches)
             total += len(matches)
 
     if record.environment.vcs.diff:
-        matches = scan_text(record.environment.vcs.diff)
+        matches = scan_text(record.environment.vcs.diff, include_entropy=include_entropy)
         if matches:
             record.environment.vcs.diff = redact_text(record.environment.vcs.diff, matches)
             total += len(matches)
@@ -432,7 +455,11 @@ def apply_trufflehog_redactions(record: TraceRecord, findings) -> int:
     return total
 
 
-def two_pass_scan(record: TraceRecord) -> tuple[ScanResult, ScanResult]:
+def two_pass_scan(
+    record: TraceRecord,
+    *,
+    include_entropy: bool = True,
+) -> tuple[ScanResult, ScanResult]:
     """Run the full two-pass scan on a trace record.
 
     Pass 1: Context-aware per-field scanning.
@@ -444,7 +471,7 @@ def two_pass_scan(record: TraceRecord) -> tuple[ScanResult, ScanResult]:
     Returns:
         Tuple of (pass1_result, pass2_result).
     """
-    pass1 = scan_trace_record(record)
+    pass1 = scan_trace_record(record, include_entropy=include_entropy)
     serialized = record.to_jsonl_line().encode("utf-8")
-    pass2 = scan_serialized(serialized)
+    pass2 = scan_serialized(serialized, include_entropy=include_entropy)
     return pass1, pass2

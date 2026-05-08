@@ -371,6 +371,13 @@
     }
   },
   "trail": {
+    "cache": {
+      "hit": false,
+      "key": {
+        "observed_head_sha": "<git-commit:02>",
+        "trace_patch_id": "<trace-patch:01>"
+      }
+    },
     "current_observations": [
       {
         "anchor_commit_id": {
@@ -402,6 +409,8 @@
           "start_line": 1
         },
         "retention_fraction": 1.0,
+        "retention_fraction_at_anchor": 1.0,
+        "retention_fraction_at_original_range": 1.0,
         "survival_state": "alive_on_path",
         "trace_patch_id": "<trace-patch:01>"
       }
@@ -437,6 +446,8 @@
         "start_line": 1
       },
       "retention_fraction": 1.0,
+      "retention_fraction_at_anchor": 1.0,
+      "retention_fraction_at_original_range": 1.0,
       "selected_observation_index": 0,
       "survival_state": "alive_on_path",
       "trace_patch_id": "<trace-patch:01>"
@@ -476,6 +487,8 @@
           "start_line": 1
         },
         "retention_fraction": 1.0,
+        "retention_fraction_at_anchor": 1.0,
+        "retention_fraction_at_original_range": 1.0,
         "survival_state": "alive_on_path",
         "trace_patch_id": "<trace-patch:01>"
       }

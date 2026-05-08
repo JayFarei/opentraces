@@ -26,6 +26,11 @@ from ..enrichment.metrics import compute_metrics
 from ..security import SECURITY_VERSION
 from ..security.anonymizer import anonymize_paths
 from ..security.classifier import classify_trace_record
+from ..security.privacy import (
+    DEFAULT_PRIVACY_TIER,
+    mark_record_privacy,
+    privacy_policy_for_tier,
+)
 from ..security.scanner import apply_redactions, two_pass_scan
 from ..security.scanner_trufflehog import maybe_run_trufflehog
 from ..security.trufflehog import TruffleHogReport
@@ -167,11 +172,82 @@ def _enrich_from_steps(
                 record.outcome.signal_confidence = step_outcome.signal_confidence
 
 
+def _privacy_tier_from_config(cfg: Config) -> str:
+    return getattr(cfg.security, "privacy_tier", DEFAULT_PRIVACY_TIER)
+
+
+def _run_privacy_pipeline(
+    record: TraceRecord,
+    cfg: Config,
+    *,
+    skip_trufflehog: bool,
+    privacy_tier: str | None,
+    review_on_redaction: bool,
+) -> ProcessedTrace:
+    """Apply the configured privacy/security policy to an enriched record."""
+
+    policy = privacy_policy_for_tier(
+        privacy_tier or _privacy_tier_from_config(cfg),
+        classifier_sensitivity=cfg.classifier_sensitivity,
+    )
+    if not policy.filters_enabled:
+        record.security.scanned = False
+        record.security.redactions_applied = 0
+        record.security.flags_reviewed = 0
+        record.security.classifier_version = None
+        mark_record_privacy(record, policy.tier, redactions_applied=0)
+        return ProcessedTrace(
+            record=record,
+            needs_review=False,
+            redaction_count=0,
+            trufflehog_report=None,
+        )
+
+    pass1, pass2 = two_pass_scan(record, include_entropy=policy.include_entropy)
+    redaction_count = apply_redactions(record, include_entropy=policy.include_entropy)
+    record.security.scanned = True
+    record.security.redactions_applied = redaction_count
+    needs_review = bool(pass1.matches or pass2.matches)
+    if review_on_redaction and redaction_count:
+        needs_review = True
+
+    trufflehog_report = _run_trufflehog_on_record(
+        record,
+        cfg,
+        skip_trufflehog or not policy.run_trufflehog,
+    )
+    th_redacted = _persist_trufflehog_result(record, trufflehog_report)
+    if th_redacted:
+        record.security.redactions_applied = (
+            (record.security.redactions_applied or 0) + th_redacted
+        )
+        redaction_count += th_redacted
+        needs_review = True
+
+    classifier_result = classify_trace_record(record, policy.classifier_sensitivity)
+    record.security.flags_reviewed = len(classifier_result.flags)
+    record.security.classifier_version = SECURITY_VERSION
+    if classifier_result.flags:
+        needs_review = True
+
+    if policy.anonymize_sources:
+        anonymize_record(record, cfg)
+    mark_record_privacy(record, policy.tier, redactions_applied=redaction_count)
+
+    return ProcessedTrace(
+        record=record,
+        needs_review=needs_review,
+        redaction_count=redaction_count,
+        trufflehog_report=trufflehog_report,
+    )
+
+
 def process_trace(
     record: TraceRecord,
     project_dir: Path,
     cfg: Config,
     skip_trufflehog: bool = False,
+    privacy_tier: str | None = None,
 ) -> ProcessedTrace:
     """Run the full enrichment + security pipeline on a parsed trace.
 
@@ -208,43 +284,12 @@ def process_trace(
     # 4. Metrics
     record.metrics = compute_metrics(record.steps)
 
-    # 5. Security scan + redact
-    pass1, pass2 = two_pass_scan(record)
-    redaction_count = apply_redactions(record)
-    record.security.scanned = True
-    record.security.redactions_applied = redaction_count
-    needs_review = bool(pass1.matches or pass2.matches or redaction_count)
-
-    # 5b. Tier 1.5 — TruffleHog. Opt-in via config, suppressible per-invocation
-    # via skip_trufflehog=True. Findings used to BLOCK the trace; now we
-    # redact the matches in place (same posture as Tier 1) and persist the
-    # finding provenance so the TUI can show what was caught. Always
-    # writes a status marker when the tier ran, so the TUI can show
-    # "scanned, no findings" instead of defaulting to "not run".
-    trufflehog_report = _run_trufflehog_on_record(record, cfg, skip_trufflehog)
-    th_redacted = _persist_trufflehog_result(record, trufflehog_report)
-    if th_redacted:
-        record.security.redactions_applied = (
-            (record.security.redactions_applied or 0) + th_redacted
-        )
-        redaction_count += th_redacted
-        needs_review = True
-
-    # 6. Classifier
-    classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
-    record.security.flags_reviewed = len(classifier_result.flags)
-    record.security.classifier_version = SECURITY_VERSION
-    if classifier_result.flags:
-        needs_review = True
-
-    # 7. Path anonymization
-    anonymize_record(record, cfg)
-
-    return ProcessedTrace(
-        record=record,
-        needs_review=needs_review,
-        redaction_count=redaction_count,
-        trufflehog_report=trufflehog_report,
+    return _run_privacy_pipeline(
+        record,
+        cfg,
+        skip_trufflehog=skip_trufflehog,
+        privacy_tier=privacy_tier,
+        review_on_redaction=True,
     )
 
 
@@ -252,6 +297,7 @@ def process_imported_trace(
     record: TraceRecord,
     cfg: Config,
     skip_trufflehog: bool = False,
+    privacy_tier: str | None = None,
 ) -> ProcessedTrace:
     """Enrichment + security pipeline for imported traces (no project dir).
 
@@ -265,42 +311,12 @@ def process_imported_trace(
     if record.metrics.total_steps == 0 and record.metrics.total_input_tokens == 0:
         record.metrics = compute_metrics(record.steps)
 
-    # 3. Security scan + redact
-    pass1, pass2 = two_pass_scan(record)
-    redaction_count = apply_redactions(record)
-    record.security.scanned = True
-    record.security.redactions_applied = redaction_count
-    # For imported traces, routine redactions (URLs, paths) are expected and
-    # already applied. Only flag for review when the scanner found actual
-    # security matches (secrets, credentials), not just redaction counts.
-    needs_review = bool(pass1.matches or pass2.matches)
-
-    # 3b. Tier 1.5 — TruffleHog. Mirrors the process_trace path.
-    trufflehog_report = _run_trufflehog_on_record(record, cfg, skip_trufflehog)
-    th_redacted = _persist_trufflehog_result(record, trufflehog_report)
-    if th_redacted:
-        record.security.redactions_applied = (
-            (record.security.redactions_applied or 0) + th_redacted
-        )
-        redaction_count += th_redacted
-        needs_review = True
-
-    # 4. Classifier (FIX-10: set flags_reviewed)
-    classifier_result = classify_trace_record(record, cfg.classifier_sensitivity)
-    record.security.flags_reviewed = len(classifier_result.flags)
-    record.security.classifier_version = SECURITY_VERSION
-    # Classifier flags also require review
-    if classifier_result.flags:
-        needs_review = True
-
-    # 5. Path anonymization
-    anonymize_record(record, cfg)
-
-    return ProcessedTrace(
-        record=record,
-        needs_review=needs_review,
-        redaction_count=redaction_count,
-        trufflehog_report=trufflehog_report,
+    return _run_privacy_pipeline(
+        record,
+        cfg,
+        skip_trufflehog=skip_trufflehog,
+        privacy_tier=privacy_tier,
+        review_on_redaction=False,
     )
 
 

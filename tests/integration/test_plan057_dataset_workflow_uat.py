@@ -175,7 +175,15 @@ def test_dataset_run_packet_carries_query_source_provenance():
 
     result = runner.invoke(
         dataset_group,
-        ["run", "mongodb-intents", "--executor", "current-agent", "--json"],
+        [
+            "run",
+            "mongodb-intents",
+            "--executor",
+            "current-agent",
+            "--privacy-tier",
+            "high",
+            "--json",
+        ],
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
@@ -190,11 +198,46 @@ def test_dataset_run_packet_carries_query_source_provenance():
     )
 
     assert run_packet["candidate_query"]["args"]["semantic"] == "mongodb atlas"
+    assert run_packet["privacy_tier"] == "high"
+    assert run_packet["trail_freshness_policy"] == "warn"
+    assert "trail_freshness" in run_packet
     assert run_packet["source_provenance"]["schema_version"] == (
         "opentraces.dataset.source_provenance.v1"
     )
     assert run_packet["source_provenance"]["bucket_snapshot"]["object_count"] == 0
     assert run_packet["source_provenance"]["query_fingerprint"]
+
+
+def test_dataset_run_can_fail_on_stale_trail_freshness(monkeypatch):
+    runner = CliRunner()
+    _create_dataset(runner)
+    monkeypatch.setattr(
+        "opentraces.core.workflow_runner._trail_freshness_for_dataset",
+        lambda _dataset, _scope: [
+            {
+                "kind": "trail_projection_freshness",
+                "severity": "warning",
+                "state": "stale",
+                "project_slug": "demo",
+            }
+        ],
+    )
+
+    result = runner.invoke(
+        dataset_group,
+        [
+            "run",
+            "grill-me-intents",
+            "--executor",
+            "current-agent",
+            "--trail-freshness",
+            "fail",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 3
+    assert "Trace Trail projection is stale" in result.output
 
 
 def test_successful_scheduled_zero_row_run_advances_cursor(monkeypatch):

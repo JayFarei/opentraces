@@ -897,14 +897,14 @@ class TestAutoReviewPromotion:
 
         monkeypatch.setattr(
             "opentraces.core.pipeline.two_pass_scan",
-            lambda record: (
+            lambda record, **_kwargs: (
                 SimpleNamespace(matches=[]),
                 SimpleNamespace(matches=[]),
             ),
         )
         monkeypatch.setattr(
             "opentraces.core.pipeline.apply_redactions",
-            lambda record: 0,
+            lambda record, **_kwargs: 0,
         )
         monkeypatch.setattr(
             "opentraces.core.pipeline.classify_trace_record",

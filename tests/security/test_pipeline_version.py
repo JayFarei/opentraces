@@ -43,6 +43,18 @@ class TestSecurityVersionStamp:
         result = process_imported_trace(record, cfg)
         assert result.record.security.classifier_version == SECURITY_VERSION
 
+    def test_process_imported_trace_privacy_off_marks_record_unfiltered(self):
+        """privacy_tier=off is explicit deferral, not a silent filtered record."""
+        record = _make_trace()
+        record.task.description = "Contains sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+        result = process_imported_trace(record, Config(), privacy_tier="off")
+        assert result.record.security.scanned is False
+        assert result.record.security.classifier_version is None
+        assert "sk-proj-" in result.record.task.description
+        privacy = result.record.metadata["security"]["privacy"]
+        assert privacy["privacy_tier"] == "off"
+        assert privacy["syncable"] is False
+
     def test_security_version_importable_from_submodule(self):
         """SECURITY_VERSION should be importable from both the package
         and the version submodule."""

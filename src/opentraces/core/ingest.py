@@ -346,7 +346,12 @@ def _ingest_locked(
     state.set_step_anchors(trace_id, getattr(parser, "step_anchors", {}) or {})
 
     resolved_cfg = cfg or load_config()
-    processed = process_trace(record, project_dir, resolved_cfg)
+    processed = process_trace(
+        record,
+        project_dir,
+        resolved_cfg,
+        privacy_tier=_resolve_privacy_tier(project_dir, resolved_cfg),
+    )
     final_record = processed.record
     # process_trace may leave trace_id unchanged, but be defensive —
     # override after the fact so the staging filename matches the
@@ -381,14 +386,33 @@ def _ingest_locked(
     staging_dir.mkdir(parents=True, exist_ok=True)
     staging_file = staging_dir / f"{trace_id}.jsonl"
     staging_file.write_text(final_record.to_jsonl_line() + "\n")
-    from .bucket_store import write_trace_record
+    from .bucket_store import (
+        sync_trail_events_from_repo,
+        write_raw_source_artifact,
+        write_trace_record,
+    )
 
+    project_slug = get_project_dir(project_dir).name
     write_trace_record(
         final_record,
-        project_slug=get_project_dir(project_dir).name,
+        project_slug=project_slug,
         source_layer="canonical",
         legacy_mirror=True,
     )
+    try:
+        write_raw_source_artifact(
+            jsonl_path,
+            trace_id=final_record.trace_id,
+            project_slug=project_slug,
+            source_kind="claude-code-session-jsonl",
+            parser="claude-code",
+        )
+    except Exception:
+        logger.warning("raw source bucket write failed for %s", trace_id, exc_info=True)
+    try:
+        sync_trail_events_from_repo(project_dir, repo_id=project_slug)
+    except Exception:
+        logger.warning("trail event bucket export failed for %s", trace_id, exc_info=True)
 
     # Decide the status this generation enters.
     #
@@ -491,6 +515,16 @@ def _resolve_review_policy(project_dir: Path) -> str:
         return data.get("review_policy") or "review"
     except Exception:  # noqa: BLE001
         return "review"
+
+
+def _resolve_privacy_tier(project_dir: Path, cfg: Config) -> str:
+    """Read the project's privacy tier, falling back to global config."""
+
+    try:
+        data = load_project_config(project_dir)
+        return data.get("privacy_tier") or cfg.security.privacy_tier
+    except Exception:  # noqa: BLE001
+        return cfg.security.privacy_tier
 
 
 # --------------------------------------------------------------------------- #

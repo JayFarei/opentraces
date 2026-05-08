@@ -71,7 +71,8 @@ def setup_group(ctx: click.Context) -> None:
       watcher       background attribution daemon (launchd/systemd) that
                     walks enlisted projects and matures Trace Trails.
                     Has its own subcommands: install/start/stop/status/tick.
-      auth          HuggingFace login for dataset remotes.
+      auth          HuggingFace login for private bucket sync and dataset remotes.
+      bucket        Configure the private bucket as remote-by-default or local-only.
       trufflehog    Tier 1.5 secret scanner. Findings redact in place
                     and block unsafe dataset publication.
       llm-review    Tier 2 third-party LLM reviewer for dataset rows,
@@ -106,6 +107,145 @@ def _wizard_confirm(prompt: str, *, default: bool, hint: str | None = None) -> b
         return click.confirm(f"    {full}", default=default)
 
 
+def _configure_bucket_local(cfg) -> dict:
+    from ..core.config import BucketConfig, BucketRemoteConfig, save_config
+
+    cfg.bucket = BucketConfig(
+        storage="local",
+        local_cache=True,
+        remote=BucketRemoteConfig(enabled=False),
+    )
+    save_config(cfg)
+    return cfg.bucket.model_dump(mode="json")
+
+
+def _configure_bucket_remote(
+    cfg,
+    *,
+    provider: str,
+    repo: str | None,
+    username: str | None,
+    fake_root: Path | None,
+    sync_policy: str,
+) -> dict:
+    from ..core.config import BucketConfig, BucketRemoteConfig, save_config
+    from ..core.datasets import hf_url, normalize_hf_repo_id
+
+    if provider == "fake":
+        if fake_root is None:
+            raise ValueError("--fake-root is required when --provider fake is used")
+        remote_url = fake_root.expanduser().resolve().as_uri()
+    else:
+        repo_id = normalize_hf_repo_id(repo or "opentraces-bucket", username)
+        remote_url = hf_url(repo_id)
+
+    cfg.bucket = BucketConfig(
+        storage="remote",
+        local_cache=True,
+        remote=BucketRemoteConfig(
+            enabled=True,
+            provider=provider,
+            url=remote_url,
+            visibility="private",
+            sync_policy=sync_policy,
+        ),
+    )
+    save_config(cfg)
+    return cfg.bucket.model_dump(mode="json")
+
+
+@setup_group.command(
+    "bucket",
+    examples=[
+        "opentraces setup bucket",
+        "opentraces setup bucket --local-only",
+        "opentraces setup bucket --repo me/opentraces-bucket",
+    ],
+    see_also=[
+        ("opentraces bucket status", "inspect local bucket sync readiness"),
+        ("opentraces auth login", "authenticate before using the default HF target"),
+        ("opentraces dataset remote create", "attach a publication remote to a dataset"),
+    ],
+)
+@click.option(
+    "--remote/--local-only",
+    "remote_enabled",
+    default=True,
+    show_default=True,
+    help="Configure private remote bucket sync, or opt out to local-only.",
+)
+@click.option(
+    "--provider",
+    type=click.Choice(["huggingface", "fake"]),
+    default="huggingface",
+    show_default=True,
+    help="Remote bucket provider.",
+)
+@click.option(
+    "--repo",
+    default=None,
+    help="HuggingFace bucket repo id. Defaults to <authenticated-user>/opentraces-bucket.",
+)
+@click.option(
+    "--fake-root",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Local directory used by the fake bucket remote harness.",
+)
+@click.option(
+    "--sync-policy",
+    type=click.Choice(["daemon", "manual"]),
+    default="daemon",
+    show_default=True,
+    help="How the private remote bucket should be kept current.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def setup_bucket_cmd(
+    remote_enabled: bool,
+    provider: str,
+    repo: str | None,
+    fake_root: Path | None,
+    sync_policy: str,
+    as_json: bool,
+) -> None:
+    """Configure the private bucket sync target.
+
+    The bucket is private workspace state. Dataset remotes are attached later
+    with ``opentraces dataset remote ...`` and are not created here.
+    """
+
+    cfg = load_config()
+    try:
+        if not remote_enabled:
+            bucket = _configure_bucket_local(cfg)
+        else:
+            if fake_root is not None:
+                provider = "fake"
+            identity = _cli._auth_identity(cfg.hf_token) if cfg.hf_token else None
+            username = str(identity.get("name")) if identity and identity.get("name") else None
+            bucket = _configure_bucket_remote(
+                cfg,
+                provider=provider,
+                repo=repo,
+                username=username,
+                fake_root=fake_root,
+                sync_policy=sync_policy,
+            )
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+
+    payload = {"status": "ok", "bucket": bucket}
+    if as_json:
+        click.echo(_setup_watcher_json.dumps(payload, indent=2, sort_keys=True))
+        return
+    if bucket["storage"] == "remote":
+        human_echo(f"Private bucket remote: {bucket['remote']['url']}")
+        human_echo("Dataset remotes remain explicit: opentraces dataset remote create ...")
+    else:
+        human_echo("Private bucket: local-only")
+
+
 def _run_setup_wizard() -> None:
     """Walk every integration the user should know about, one prompt each.
 
@@ -114,9 +254,10 @@ def _run_setup_wizard() -> None:
       2. watcher                          (powers 'opentraces trail blame', default yes)
       3. entity-parser (sem)              (richer commit diffs, default yes)
       4. HuggingFace login                (log in now or skip)
-      5. trufflehog                       (global config, default no)
-      6. llm-review                       (global config, default no)
-      7. closing panel — point at `opentraces init` + `opentraces doctor`
+      5. private bucket sync              (remote by default when authenticated)
+      6. trufflehog                       (global config, default no)
+      7. llm-review                       (global config, default no)
+      8. closing panel — point at `opentraces init` + `opentraces doctor`
     """
     from ..capture import get_hook_installers
     from ..security.trufflehog import find_trufflehog, install_binary
@@ -212,7 +353,44 @@ def _run_setup_wizard() -> None:
             except Exception as e:
                 human_echo(f"    {_cli._err('failed')}: {e}")
 
-    # 5. Optional: trufflehog. Default no — it's a global config
+    cfg = load_config()
+    identity = _cli._auth_identity(cfg.hf_token) if cfg.hf_token else None
+    bucket_remote = cfg.bucket.remote
+    bucket_configured = cfg.bucket.storage == "remote" and bucket_remote.enabled
+    bucket_label = (
+        _cli._ok(f"remote ({bucket_remote.url})")
+        if bucket_configured and bucket_remote.url
+        else _cli._ok("remote")
+        if bucket_configured
+        else _cli._dim("local only")
+    )
+    human_echo(f"  {_cli._bold('private bucket'):<28} {bucket_label}")
+    if not bucket_configured:
+        if identity:
+            username = str(identity.get("name") or "")
+            if _wizard_confirm(
+                "sync the private bucket remotely?",
+                default=True,
+                hint="private HuggingFace bucket; local cache remains available",
+            ):
+                configured = _configure_bucket_remote(
+                    cfg,
+                    provider="huggingface",
+                    repo=None,
+                    username=username,
+                    fake_root=None,
+                    sync_policy="daemon",
+                )
+                human_echo(f"    {_cli._ok('configured')} {configured['remote']['url']}")
+            else:
+                _configure_bucket_local(cfg)
+                human_echo(f"    {_cli._dim('local-only')}")
+        else:
+            human_hint(
+                "    private bucket sync will stay local until HuggingFace auth is configured."
+            )
+
+    # 6. Optional: trufflehog. Default no — it's a global config
     #    change; users can override per-project via `opentraces init`.
     th_version = find_trufflehog()
     th_enabled = cfg.security.trufflehog.enabled
@@ -239,7 +417,7 @@ def _run_setup_wizard() -> None:
                 save_config(cfg)
                 human_echo(f"    {_cli._ok('enabled')}")
 
-    # 6. Optional: LLM review. Also a global config change.
+    # 7. Optional: LLM review. Also a global config change.
     llm_enabled = getattr(cfg.security, "llm_review", None) and getattr(cfg.security.llm_review, "enabled", False)
     llm_label = _cli._ok("enabled") if llm_enabled else _cli._dim("disabled")
     human_echo(f"  {_cli._bold('llm-review'):<28} {llm_label}")
@@ -1475,11 +1653,41 @@ def _render_doctor_human(report: dict) -> None:
     _entity_parser_section(report.get("entity_parser") or {})
     _attribution_section(report.get("attribution") or {})
     _watcher_section(report.get("watcher") or {})
+    _bucket_section(report.get("bucket") or {})
     _trace_index_section(report.get("trace_index") or {})
     _hooks_section(report["hooks"])
     _post_commit_hook_section(report.get("post_commit_hook") or {})
     _trail_event_log_section(report.get("trail_event_log") or {})
     human_echo("")
+
+
+def _bucket_section(info: dict) -> None:
+    """Render local bucket health for remote-sync readiness."""
+    _section("Bucket")
+    state = info.get("state") or "missing"
+    if state != "ok":
+        _row("err", "status", state, detail=info.get("error"))
+        return
+    trace_records = info.get("trace_records") or {}
+    trail = info.get("trail") or {}
+    sync = info.get("sync") or {}
+    _row("ok", "root", str(info.get("root") or "?"))
+    _row("ok", "trace records", str(trace_records.get("object_count") or 0))
+    stale_sec = int(trace_records.get("security_stale_count") or 0)
+    unfiltered = int(trace_records.get("unfiltered_count") or 0)
+    _row("ok" if stale_sec == 0 else "warn", "stale security", str(stale_sec))
+    _row("ok" if unfiltered == 0 else "warn", "unfiltered", str(unfiltered))
+    trail_stale = int(trail.get("stale_count") or 0)
+    _row("ok" if trail_stale == 0 else "warn", "stale trails", str(trail_stale))
+    last_sync = trail.get("last_projection_sync_at")
+    if last_sync:
+        _row("ok", "trail sync", str(last_sync))
+    _row(
+        "ok" if sync.get("eligible") else "warn",
+        "remote eligible",
+        "yes" if sync.get("eligible") else "no",
+        detail=", ".join(sync.get("blocked_reasons") or []) or None,
+    )
 
 
 def _attribution_section(info: dict) -> None:
@@ -2168,6 +2376,9 @@ def setup_watcher_tick(project_dir: Path | None, json_out: bool) -> None:
                 "fs_patches_upgraded": r.fs_patches_upgraded,
                 "trail_maturation_searches": r.trail_maturation_searches,
                 "trail_maturation_anchors": r.trail_maturation_anchors,
+                "bucket_sync_state": r.bucket_sync_state,
+                "bucket_sync_digest": r.bucket_sync_digest,
+                "bucket_sync_error": r.bucket_sync_error,
                 "error": r.error,
             } for r in reports
         ], indent=2))
@@ -2180,5 +2391,6 @@ def setup_watcher_tick(project_dir: Path | None, json_out: bool) -> None:
             f"backfilled={r.commits_processed} "
             f"fs_obs={r.fs_observations} "
             f"anchors={r.trail_maturation_anchors} "
+            f"bucket_sync={r.bucket_sync_state or 'n/a'} "
             f"duration={r.duration_ms:.1f}ms"
         )

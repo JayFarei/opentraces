@@ -37,6 +37,8 @@ from opentraces_schema import (
 )
 
 from ..security import SECURITY_VERSION
+from ..security.dataset_rows import DatasetRowSecurity, sanitize_dataset_row
+from ..security.privacy import DEFAULT_PRIVACY_TIER, normalize_privacy_tier
 from ..security.scanner import scan_serialized
 
 from . import paths
@@ -210,6 +212,7 @@ def create_dataset(
     write_json(root / "schemas" / "row.schema.json", schema_payload)
     (root / "data" / "train.jsonl").write_text("", encoding="utf-8")
     (root / ".opentraces" / "row_index.jsonl").write_text("", encoding="utf-8")
+    (root / ".opentraces" / "row_provenance.jsonl").write_text("", encoding="utf-8")
     (root / ".opentraces" / "cursors.yaml").write_text("queries: {}\n", encoding="utf-8")
     if provenance_payload is not None:
         write_source_provenance(root, provenance_payload)
@@ -227,7 +230,7 @@ def _source_provenance_for_query(
 ) -> dict[str, Any] | None:
     if query is None:
         return None
-    from .bucket_store import trace_record_snapshot
+    from .bucket_store import bucket_manifest, trace_record_snapshot
 
     projection: dict[str, Any] | None = None
     try:
@@ -245,9 +248,18 @@ def _source_provenance_for_query(
             }
     except Exception:
         projection = None
+    manifest_snapshot = bucket_manifest(write=False, include_objects=False)
     return {
         "schema_version": SOURCE_PROVENANCE_SCHEMA,
         "bucket_snapshot": trace_record_snapshot(include_objects=False),
+        "bucket_manifest": {
+            "digest": manifest_snapshot.get("digest"),
+            "updated_at": manifest_snapshot.get("updated_at"),
+            "trace_records": manifest_snapshot.get("trace_records"),
+            "raw_sources": manifest_snapshot.get("raw_sources"),
+            "trail_events": manifest_snapshot.get("trail_events"),
+            "sync": manifest_snapshot.get("sync"),
+        },
         "projection": projection,
         "query_fingerprint": digest_payload(query.model_dump(mode="json")),
     }
@@ -436,20 +448,28 @@ def append_rows(
     *,
     run_id: str,
     dry_run: bool = False,
+    privacy_tier: str | None = DEFAULT_PRIVACY_TIER,
+    run_provenance: dict[str, Any] | None = None,
+    trail_freshness: list[dict[str, Any]] | None = None,
 ) -> AppendSummary:
     dataset = load_dataset(name)
+    resolved_privacy_tier = normalize_privacy_tier(privacy_tier)
     schema = read_json(dataset.path / dataset.manifest.schema_ref.path)
     schema_digest = dataset.manifest.schema_ref.digest or digest_payload(schema)
     existing = read_row_index(name)
     existing_identity_hashes = {entry.identity_hash for entry in existing}
     appended_entries: list[DatasetRowIndexEntry] = []
     appended_rows: list[dict[str, Any]] = []
+    appended_provenance: list[dict[str, Any]] = []
     duplicate_count = 0
     validation_errors: list[dict[str, Any]] = []
     would_append_count = 0
     current_line = _line_count(dataset.path / "data" / "train.jsonl")
+    row_security_by_id: dict[str, DatasetRowSecurity] = {}
 
     for index, row in enumerate(rows, start=1):
+        sanitized = sanitize_dataset_row(row, privacy_tier=resolved_privacy_tier)
+        row = sanitized.row
         errors = validate_row(row, schema)
         if errors:
             validation_errors.append({"line": index, "errors": errors})
@@ -465,6 +485,16 @@ def append_rows(
         payload_hash = row_payload_hash(row)
         current_line += 1
         row_id = f"row_{identity_hash.removeprefix('sha256:')[:16]}"
+        row_security_by_id[row_id] = sanitized.security
+        provenance = _build_row_provenance(
+            row,
+            dataset=dataset,
+            row_id=row_id,
+            run_id=run_id,
+            run_provenance=run_provenance,
+            trail_freshness=trail_freshness,
+            row_security=sanitized.security,
+        )
         appended_entries.append(
             DatasetRowIndexEntry(
                 row_id=row_id,
@@ -475,14 +505,20 @@ def append_rows(
                 line=current_line,
                 run_id=run_id,
                 appended_at=_utc_now(),
+                source_trace_id=provenance["source_refs"].get("trace_id"),
+                source_unit_id=provenance["source_refs"].get("unit_id"),
+                source_slice_id=provenance["source_refs"].get("slice_id"),
+                provenance=provenance,
             )
         )
         appended_rows.append(row)
+        appended_provenance.append(provenance)
         existing_identity_hashes.add(identity_hash)
 
     if appended_rows:
         data_file = dataset.path / "data" / "train.jsonl"
         row_index = dataset.path / ".opentraces" / "row_index.jsonl"
+        row_provenance = row_provenance_path(name)
         with _append_lock(dataset.path):
             with data_file.open("a", encoding="utf-8") as stream:
                 for row in appended_rows:
@@ -494,7 +530,17 @@ def append_rows(
                     stream.write(entry.model_dump_json() + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
-        evaluate_publication_state(name, row_ids=[entry.row_id for entry in appended_entries])
+            with row_provenance.open("a", encoding="utf-8") as stream:
+                for provenance in appended_provenance:
+                    stream.write(_canonical_json(provenance) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+        evaluate_publication_state(
+            name,
+            row_ids=[entry.row_id for entry in appended_entries],
+            row_security=row_security_by_id,
+            privacy_tier=resolved_privacy_tier,
+        )
 
     return AppendSummary(
         dataset_name=name,
@@ -521,6 +567,126 @@ def read_row_index(name: str) -> list[DatasetRowIndexEntry]:
     return entries
 
 
+def row_provenance_path(name: str) -> Path:
+    return dataset_path(name) / ".opentraces" / "row_provenance.jsonl"
+
+
+def read_row_provenance(name: str) -> dict[str, dict[str, Any]]:
+    path = row_provenance_path(name)
+    if not path.exists():
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict) and payload.get("row_id"):
+            out[str(payload["row_id"])] = payload
+    return out
+
+
+def _build_row_provenance(
+    row: dict[str, Any],
+    *,
+    dataset: LocalDataset,
+    row_id: str,
+    run_id: str,
+    run_provenance: dict[str, Any] | None,
+    trail_freshness: list[dict[str, Any]] | None,
+    row_security: DatasetRowSecurity,
+) -> dict[str, Any]:
+    source_refs = _extract_row_source_refs(row)
+    dataset_source = read_source_provenance(dataset.path) or {}
+    bucket_snapshot = dataset_source.get("bucket_snapshot") or {}
+    bucket_manifest_snapshot = dataset_source.get("bucket_manifest") or {}
+    trail_events = bucket_manifest_snapshot.get("trail_events") or {}
+    trace_record_ref = _bucket_record_ref(source_refs.get("trace_id"))
+    return {
+        "schema_version": "opentraces.dataset.row_provenance.v1",
+        "row_id": row_id,
+        "run_id": run_id,
+        "dataset": dataset.name,
+        "source_refs": source_refs,
+        "workflow": {
+            "skill": dataset.manifest.workflow.skill,
+            "digest": dataset.manifest.workflow.digest,
+            "config": dataset.manifest.workflow.config,
+        },
+        "bucket": {
+            "manifest_digest": bucket_manifest_snapshot.get("digest"),
+            "snapshot_digest": bucket_snapshot.get("digest"),
+            "object_count": bucket_snapshot.get("object_count"),
+            "source_trace_record": trace_record_ref,
+        },
+        "trail": {
+            "freshness": list(trail_freshness or []),
+            "event_count": trail_events.get("event_count"),
+            "repository_count": trail_events.get("repository_count"),
+            "sampled_at": _utc_now(),
+        },
+        "privacy": {
+            "privacy_tier": row_security.privacy_tier,
+            "security_version": row_security.security_version,
+            "redactions_applied": row_security.redactions_applied,
+        },
+        "run": run_provenance or {},
+    }
+
+
+def _extract_row_source_refs(row: dict[str, Any]) -> dict[str, Any]:
+    refs: dict[str, Any] = {
+        "trace_id": _first_str(row, "source_trace_id", "trace_id"),
+        "unit_id": _first_str(row, "source_unit_id", "unit_id", "candidate_id"),
+        "slice_id": _first_str(row, "source_slice_id", "slice_id"),
+    }
+    if isinstance(row.get("source"), dict):
+        source = row["source"]
+        refs["trace_id"] = refs["trace_id"] or _first_str(source, "trace_id", "id")
+        refs["unit_id"] = refs["unit_id"] or _first_str(source, "unit_id", "candidate_id")
+        refs["slice_id"] = refs["slice_id"] or _first_str(source, "slice_id")
+    for key in ("step_range", "steps", "source_steps"):
+        if key in row:
+            refs["step_range"] = row[key]
+            break
+    return {key: value for key, value in refs.items() if value not in (None, "")}
+
+
+def _bucket_record_ref(trace_id: Any) -> dict[str, Any] | None:
+    if not isinstance(trace_id, str) or not trace_id:
+        return None
+    try:
+        from . import paths
+        from .bucket_store import iter_trace_record_objects
+
+        for obj in iter_trace_record_objects():
+            if obj.trace_id != trace_id:
+                continue
+            try:
+                object_path = obj.path.relative_to(paths.bucket_dir()).as_posix()
+            except ValueError:
+                object_path = str(obj.path)
+            return {
+                "trace_id": obj.trace_id,
+                "project_slug": obj.project_slug,
+                "record_hash": obj.record_hash,
+                "object_path": object_path,
+            }
+    except Exception:
+        return None
+    return None
+
+
+def _first_str(mapping: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def publication_state_path(name: str) -> Path:
     return dataset_path(name) / ".opentraces" / "publication_state.json"
 
@@ -542,6 +708,8 @@ def evaluate_publication_state(
     name: str,
     *,
     row_ids: list[str] | None = None,
+    row_security: dict[str, DatasetRowSecurity] | None = None,
+    privacy_tier: str | None = None,
 ) -> DatasetPublicationState:
     """Ensure every row has a publication-state sidecar entry.
 
@@ -562,13 +730,45 @@ def evaluate_publication_state(
         if row is None:
             continue
         existing = state.rows.get(entry.row_id)
-        scan = scan_serialized((_canonical_json(row) + "\n").encode("utf-8"))
-        if scan.matches:
+        security = (row_security or {}).get(entry.row_id)
+        entry_privacy_tier = (
+            security.privacy_tier
+            if security
+            else existing.privacy_tier
+            if existing and existing.privacy_tier
+            else normalize_privacy_tier(privacy_tier, default=DEFAULT_PRIVACY_TIER)
+        )
+        entry_security_version = (
+            security.security_version
+            if security
+            else existing.security_version
+            if existing and existing.security_version
+            else (None if entry_privacy_tier == "off" else SECURITY_VERSION)
+        )
+        redactions_applied = (
+            security.redactions_applied
+            if security
+            else existing.redactions_applied
+            if existing
+            else 0
+        )
+        scan = scan_serialized(
+            (_canonical_json(row) + "\n").encode("utf-8"),
+            include_entropy=entry_privacy_tier != "low",
+        )
+        block_reasons = sorted({match.pattern_name for match in scan.matches})
+        if entry_privacy_tier == "off":
+            block_reasons.append("privacy_tier_off")
+        security_stale = bool(
+            entry_privacy_tier != "off" and entry_security_version != SECURITY_VERSION
+        )
+        if security_stale:
+            block_reasons.append("security_version_stale")
+        block_reasons = sorted(set(block_reasons))
+        if block_reasons:
             status = "blocked"
-            block_reasons = sorted({match.pattern_name for match in scan.matches})
         elif existing and existing.status in {"rejected", "published", "publishable"}:
             status = existing.status
-            block_reasons = []
         else:
             status = (
                 "publishable"
@@ -583,7 +783,17 @@ def evaluate_publication_state(
             reviewed_at=existing.reviewed_at if existing else None,
             reviewed_by=existing.reviewed_by if existing else None,
             block_reasons=block_reasons,
-            security_version=SECURITY_VERSION,
+            security_version=entry_security_version,
+            source_security_version=(
+                security.security_version
+                if security
+                else existing.source_security_version
+                if existing
+                else entry_security_version
+            ),
+            privacy_tier=entry_privacy_tier,
+            security_stale=security_stale,
+            redactions_applied=redactions_applied,
             updated_at=_utc_now(),
         )
     write_publication_state(name, state)

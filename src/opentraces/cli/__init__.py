@@ -128,6 +128,12 @@ COMMAND_SECTIONS = [
         ],
     ),
     (
+        "Bucket",
+        [
+            "bucket",
+        ],
+    ),
+    (
         "Dataset",
         [
             "dataset",
@@ -139,7 +145,7 @@ COMMAND_SECTIONS = [
 # inline, so the root --help reveals the verbs each group exposes.
 # Sections that carry a third tuple element (sub-categories) handle
 # their own expansion via the sub-category map, so they're not in this set.
-EXPANDED_SECTIONS = {"Trace", "Trail", "Dataset"}
+EXPANDED_SECTIONS = {"Trace", "Trail", "Bucket", "Dataset"}
 
 
 # -- Color helpers ------------------------------------------------------------
@@ -1186,6 +1192,7 @@ def _capture_sessions_into_project(
 
     proj_config = load_project_config(project_dir)
     review_policy = normalize_review_policy(proj_config.get("review_policy"))
+    privacy_tier = proj_config.get("privacy_tier") or cfg.security.privacy_tier
 
     staging = get_project_traces_dir(project_dir)
     staging.mkdir(parents=True, exist_ok=True)
@@ -1215,7 +1222,7 @@ def _capture_sessions_into_project(
             if record is None:
                 continue
 
-            result = process_trace(record, project_dir, cfg)
+            result = process_trace(record, project_dir, cfg, privacy_tier=privacy_tier)
             staging_file = staging / f"{result.record.trace_id}.jsonl"
             staging_file.write_text(result.record.to_jsonl_line() + "\n")
 
@@ -2768,7 +2775,9 @@ _trail_group.add_command(_trace_resume_cmd, name="resume")
 
 from .dataset import dataset_group as _dataset_group  # noqa: E402
 from .workflow import workflow_group as _workflow_group  # noqa: E402
+from .bucket import bucket_group as _bucket_group  # noqa: E402
 
+main.add_command(_bucket_group, name="bucket")
 main.add_command(_dataset_group, name="dataset")
 main.add_command(_workflow_group, name="workflow")
 

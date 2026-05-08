@@ -470,40 +470,19 @@ class TestHFUploaderQuality:
         assert result is None
 
 
-# --- CLI assess command Tests ---
+# --- Quality CLI compatibility tests ---
 
 
 class TestAssessCLI:
-    def test_assess_help_visible(self):
-        """assess command is visible (not hidden)."""
-        from opentraces.cli import main
-        from click.testing import CliRunner
-
-        runner = CliRunner()
-        result = runner.invoke(main, ["--help"])
-        assert "assess" in result.output
-
-    def test_assess_has_dataset_option(self):
-        """assess command has --dataset and --dry-run options."""
+    def test_root_assess_command_is_not_registered(self):
+        """The old root assess command is no longer part of the public CLI."""
         from opentraces.cli import main
         from click.testing import CliRunner
 
         runner = CliRunner()
         result = runner.invoke(main, ["assess", "--help"])
-        assert "--dataset" in result.output
-        assert "--dry-run" in result.output
-        assert "--explain" in result.output
-
-    def test_assess_no_traces(self):
-        """assess with no staged traces shows helpful message."""
-        from opentraces.cli import main
-        from click.testing import CliRunner
-
-        runner = CliRunner()
-        with runner.isolated_filesystem():
-            result = runner.invoke(main, ["assess"])
-            # Should handle missing staging gracefully
-            assert result.exit_code == 0
+        assert result.exit_code == 2
+        assert "No such command" in result.output
 
     def test_assess_remote_no_hfmount(self):
         """_assess-remote fails gracefully when hf-mount not installed."""

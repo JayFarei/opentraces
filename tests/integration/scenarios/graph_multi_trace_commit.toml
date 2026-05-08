@@ -27,7 +27,7 @@ data = { version = 1, coverage = { attributed = 18, total = 18, ratio = 1.0 }, t
 
 [[steps]]
 type = "invoke_cli"
-args = ["graph", "--limit", "1", "--no-color"]
+args = ["trail", "graph", "--limit", "1", "--no-color"]
 
 [[assertions]]
 kind = "cli_returncode"

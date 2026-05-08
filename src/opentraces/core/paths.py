@@ -5,7 +5,9 @@ Layout:
         config.json                # global config + project registry
         credentials                # HF token (0600)
         bucket/                    # local bucket-shaped sync substrate
-            trace-records/         # normalized TraceRecord envelopes
+            objects/traces/v1/     # content-addressed normalized TraceRecord envelopes
+            objects/raw/v1/        # optional local raw source artifacts
+            events/trail/v1/       # portable Trace Trail event exports
             projections/search/v1/ # immutable search projection builds
         projects/<slug>/           # per-project, machine-local (canonical layer)
             traces/*.jsonl         # captured traces
