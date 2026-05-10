@@ -199,6 +199,8 @@ def _configure_bucket_remote(
     show_default=True,
     help="How the private remote bucket should be kept current.",
 )
+@click.option("--push-now", is_flag=True, help="Upload the existing local bucket after setup.")
+@click.option("--pull-now", is_flag=True, help="Restore the local bucket from the remote after setup.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def setup_bucket_cmd(
     remote_enabled: bool,
@@ -206,6 +208,8 @@ def setup_bucket_cmd(
     repo: str | None,
     fake_root: Path | None,
     sync_policy: str,
+    push_now: bool,
+    pull_now: bool,
     as_json: bool,
 ) -> None:
     """Configure the private bucket sync target.
@@ -215,7 +219,14 @@ def setup_bucket_cmd(
     """
 
     cfg = load_config()
+    remote_sync: dict[str, object] | None = None
+    from ..core.bucket_remote import BucketRemoteError
+
     try:
+        if push_now and pull_now:
+            raise ValueError("--push-now and --pull-now are mutually exclusive")
+        if not remote_enabled and (push_now or pull_now):
+            raise ValueError("--push-now/--pull-now require remote bucket setup")
         if not remote_enabled:
             bucket = _configure_bucket_local(cfg)
         else:
@@ -231,17 +242,27 @@ def setup_bucket_cmd(
                 fake_root=fake_root,
                 sync_policy=sync_policy,
             )
-    except ValueError as exc:
+            if push_now or pull_now:
+                from ..core.bucket_remote import remote_pull, remote_push
+
+                remote_sync = (
+                    remote_push(force=True) if push_now else remote_pull(force=True)
+                )
+    except (BucketRemoteError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
 
     payload = {"status": "ok", "bucket": bucket}
+    if remote_sync is not None:
+        payload["remote_sync"] = remote_sync
     if as_json:
         click.echo(_setup_watcher_json.dumps(payload, indent=2, sort_keys=True))
         return
     if bucket["storage"] == "remote":
         human_echo(f"Private bucket remote: {bucket['remote']['url']}")
         human_echo("Dataset remotes remain explicit: opentraces dataset remote create ...")
+        if remote_sync is not None:
+            human_echo(f"Bucket remote sync: {remote_sync.get('state')}")
     else:
         human_echo("Private bucket: local-only")
 

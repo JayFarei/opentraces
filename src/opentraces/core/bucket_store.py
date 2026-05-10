@@ -90,6 +90,75 @@ def bucket_manifest_path() -> Path:
     return paths.bucket_dir() / "manifest.json"
 
 
+def bucket_sync_state_path() -> Path:
+    return paths.bucket_dir() / "sync_state.json"
+
+
+def read_bucket_sync_state() -> dict[str, Any]:
+    path = bucket_sync_state_path()
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {}
+
+
+def write_bucket_sync_state(
+    *,
+    provider: str,
+    target: str,
+    digest: str | None,
+    direction: str,
+    remote_digest: str | None = None,
+) -> dict[str, Any]:
+    state = {
+        "schema_version": "opentraces.bucket.sync_state.v1",
+        "provider": provider,
+        "target": target,
+        "last_sync_digest": digest,
+        "last_remote_digest": remote_digest or digest,
+        "last_direction": direction,
+        "synced_at": _utc_now(),
+    }
+    _atomic_write_json(bucket_sync_state_path(), state)
+    return state
+
+
+def classify_bucket_remote_state(
+    *,
+    provider: str,
+    target: str,
+    local_digest: str | None,
+    remote_digest: str | None,
+) -> dict[str, Any]:
+    """Classify local/remote relation using the last successful sync point."""
+
+    if remote_digest is None:
+        return {"state": "missing", "last_sync_digest": None}
+    if remote_digest == local_digest:
+        return {"state": "current", "last_sync_digest": remote_digest}
+    sync_state = read_bucket_sync_state()
+    last = (
+        sync_state.get("last_sync_digest")
+        if sync_state.get("provider") == provider and sync_state.get("target") == target
+        else None
+    )
+    if not last:
+        return {"state": "different", "last_sync_digest": None}
+    local_at_last = local_digest == last
+    remote_at_last = remote_digest == last
+    if local_at_last and not remote_at_last:
+        state = "remote_ahead"
+    elif remote_at_last and not local_at_last:
+        state = "local_ahead"
+    elif not local_at_last and not remote_at_last:
+        state = "diverged"
+    else:
+        state = "different"
+    return {"state": state, "last_sync_digest": last}
+
+
 def trace_record_path(
     project_slug: str,
     trace_id: str,
@@ -424,6 +493,97 @@ def sync_trail_events_from_repo(
     return head
 
 
+def read_trail_event_export(
+    repo_id: str | None = None,
+) -> tuple[dict[str, Any], list[Any]]:
+    """Read a bucket-exported TrailEvent stream.
+
+    When ``repo_id`` is omitted, exactly one repository export must exist.
+    """
+
+    from .trails import TrailEvent
+
+    root = trail_events_root() / "repositories"
+    if repo_id:
+        head_paths = [root / _path_part(repo_id) / "head.json"]
+    else:
+        head_paths = sorted(root.glob("*/head.json")) if root.exists() else []
+    head_paths = [path for path in head_paths if path.exists()]
+    if not head_paths:
+        raise FileNotFoundError(
+            f"no bucket TrailEvent export found for repo_id={repo_id!r}"
+        )
+    if len(head_paths) > 1:
+        repo_ids = []
+        for path in head_paths:
+            try:
+                repo_ids.append(json.loads(path.read_text(encoding="utf-8")).get("repo_id"))
+            except (OSError, ValueError, json.JSONDecodeError):
+                repo_ids.append(path.parent.name)
+        raise ValueError(
+            "multiple bucket TrailEvent exports found; pass --repo-id "
+            + ", ".join(str(item) for item in repo_ids)
+        )
+    head = json.loads(head_paths[0].read_text(encoding="utf-8"))
+    if head.get("schema_version") != TRAIL_EVENT_EXPORT_SCHEMA:
+        raise ValueError(f"unsupported TrailEvent export schema: {head.get('schema_version')}")
+    events = []
+    segment_lines: list[str] = []
+    for segment in head.get("segments") or []:
+        segment_path = paths.bucket_dir() / str(segment.get("path") or "")
+        if not segment_path.exists():
+            raise FileNotFoundError(f"missing TrailEvent export segment: {segment_path}")
+        lines = [
+            line
+            for line in segment_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        expected_digest = segment.get("digest")
+        actual_digest = _digest_payload(lines)
+        if expected_digest and actual_digest != expected_digest:
+            raise ValueError(
+                f"TrailEvent export segment digest mismatch: {segment.get('path')}"
+            )
+        segment_lines.extend(lines)
+    for line in segment_lines:
+        events.append(TrailEvent.model_validate_json(line))
+    events.sort(key=lambda event: event.event_sequence)
+    if int(head.get("event_count") or 0) != len(events):
+        raise ValueError(
+            f"TrailEvent export count mismatch: head={head.get('event_count')} "
+            f"segments={len(events)}"
+        )
+    return head, events
+
+
+def restore_trail_events_to_repo(
+    repo: Path,
+    *,
+    repo_id: str | None = None,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Restore bucket-exported Trace Trails into a supplied Git repository."""
+
+    from .trails import import_event_log
+
+    head, events = read_trail_event_export(repo_id)
+    if not events:
+        return {
+            "state": "empty",
+            "repo": str(repo),
+            "repo_id": head.get("repo_id"),
+            "event_count": 0,
+            "events_imported": 0,
+        }
+    imported = import_event_log(repo, events, writer="bucket-restore", force=force)
+    return {
+        **imported,
+        "repo": str(repo),
+        "repo_id": head.get("repo_id"),
+        "export_event_log_head": head.get("event_log_head"),
+    }
+
+
 def trail_event_snapshot(*, include_objects: bool = False) -> dict[str, Any]:
     """Return a deterministic snapshot of portable trail event exports."""
 
@@ -624,12 +784,19 @@ def fake_remote_status(remote_root: Path | None = None) -> dict[str, Any]:
             "remote_digest": None,
         }
     remote_digest = remote.get("digest")
+    relation = classify_bucket_remote_state(
+        provider="fake",
+        target=str(root),
+        local_digest=local.get("digest"),
+        remote_digest=remote_digest,
+    )
     return {
         "schema_version": BUCKET_REMOTE_SCHEMA,
-        "state": "current" if remote_digest == local.get("digest") else "different",
+        "state": relation["state"],
         "remote_root": str(root),
         "local_digest": local.get("digest"),
         "remote_digest": remote_digest,
+        "last_sync_digest": relation.get("last_sync_digest"),
         "remote_updated_at": remote.get("updated_at"),
     }
 
@@ -638,11 +805,12 @@ def fake_remote_diff(remote_root: Path | None = None) -> dict[str, Any]:
     status = fake_remote_status(remote_root)
     return {
         **status,
-        "different": status.get("state") in {"missing", "different", "error"},
+        "different": status.get("state")
+        in {"missing", "different", "local_ahead", "remote_ahead", "diverged", "error"},
     }
 
 
-def fake_remote_push(remote_root: Path | None = None) -> dict[str, Any]:
+def fake_remote_push(remote_root: Path | None = None, *, force: bool = False) -> dict[str, Any]:
     root = remote_root or fake_remote_root()
     if root is None:
         raise ValueError("set OPENTRACES_FAKE_BUCKET_REMOTE_ROOT")
@@ -656,8 +824,21 @@ def fake_remote_push(remote_root: Path | None = None) -> dict[str, Any]:
             "bucket is not eligible for remote sync"
             + (f": {reasons}" if reasons else "")
         )
+    status = fake_remote_status(root)
+    if status.get("state") in {"remote_ahead", "diverged"} and not force:
+        raise ValueError(
+            "remote bucket has changes that are not in the local bucket; "
+            "pull first or pass --force to overwrite"
+        )
     copied = _copy_bucket_tree(local_bucket, root)
     _atomic_write_json(root / "manifest.json", manifest)
+    write_bucket_sync_state(
+        provider="fake",
+        target=str(root),
+        digest=manifest.get("digest"),
+        remote_digest=manifest.get("digest"),
+        direction="push",
+    )
     return {
         "schema_version": BUCKET_REMOTE_SCHEMA,
         "state": "pushed",
@@ -667,7 +848,7 @@ def fake_remote_push(remote_root: Path | None = None) -> dict[str, Any]:
     }
 
 
-def fake_remote_pull(remote_root: Path | None = None) -> dict[str, Any]:
+def fake_remote_pull(remote_root: Path | None = None, *, force: bool = False) -> dict[str, Any]:
     root = remote_root or fake_remote_root()
     if root is None:
         raise ValueError("set OPENTRACES_FAKE_BUCKET_REMOTE_ROOT")
@@ -677,11 +858,24 @@ def fake_remote_pull(remote_root: Path | None = None) -> dict[str, Any]:
     local_bucket = paths.bucket_dir()
     if root.resolve() == local_bucket.resolve():
         raise ValueError("fake remote root must be separate from the local bucket")
+    status = fake_remote_status(root)
+    if status.get("state") in {"local_ahead", "diverged"} and not force:
+        raise ValueError(
+            "local bucket has changes that are not in the remote bucket; "
+            "push first or pass --force to overwrite"
+        )
     if local_bucket.exists():
         shutil.rmtree(local_bucket)
     local_bucket.mkdir(parents=True, exist_ok=True)
     copied = _copy_bucket_tree(root, local_bucket, skip_names={"manifest.json"})
     manifest = bucket_manifest(write=True, include_objects=False)
+    write_bucket_sync_state(
+        provider="fake",
+        target=str(root),
+        digest=manifest.get("digest"),
+        remote_digest=manifest.get("digest"),
+        direction="pull",
+    )
     return {
         "schema_version": BUCKET_REMOTE_SCHEMA,
         "state": "pulled",

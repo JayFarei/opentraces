@@ -145,9 +145,9 @@ def test_huggingface_bucket_push_status_and_pull(monkeypatch, tmp_path):
         source_layer="canonical",
         legacy_mirror=False,
     )
-    assert remote_status()["state"] == "different"
+    assert remote_status()["state"] == "local_ahead"
 
-    pulled = remote_pull()
+    pulled = remote_pull(force=True)
     assert pulled["state"] == "pulled"
     assert [obj.trace_id for obj in iter_trace_record_objects()] == ["trace-hf-bucket-1"]
 

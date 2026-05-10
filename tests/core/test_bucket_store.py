@@ -243,9 +243,11 @@ def test_bucket_manifest_status_and_fake_remote(tmp_path, monkeypatch):
         source_layer="canonical",
         legacy_mirror=False,
     )
-    assert fake_remote_diff()["different"] is True
+    dirty = fake_remote_diff()
+    assert dirty["different"] is True
+    assert dirty["state"] == "local_ahead"
 
-    pulled = fake_remote_pull()
+    pulled = fake_remote_pull(force=True)
     assert pulled["state"] == "pulled"
     assert [obj.trace_id for obj in iter_trace_record_objects()] == ["trace-bucket-manifest"]
 

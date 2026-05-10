@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 
 from click.testing import CliRunner
 from opentraces_schema import Agent, Step, TraceRecord
@@ -134,3 +135,152 @@ def test_setup_bucket_fake_remote_feeds_bucket_remote_harness(tmp_path):
     diff = runner.invoke(main, ["bucket", "remote", "diff", "--json"])
     assert diff.exit_code == 0, diff.output
     assert json.loads(diff.output)["remote"]["different"] is False
+
+
+def test_bucket_remote_reports_ahead_and_blocks_unsafe_push(monkeypatch, tmp_path):
+    record = _trace("trace-conflict-base")
+    record.security.scanned = True
+    record.security.classifier_version = SECURITY_VERSION
+    write_trace_record(
+        record,
+        project_slug="demo",
+        source_layer="canonical",
+        legacy_mirror=False,
+    )
+    runner = CliRunner()
+    remote_root = tmp_path / "remote-bucket"
+    monkeypatch.setenv("OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", str(remote_root))
+
+    pushed = runner.invoke(main, ["bucket", "remote", "push", "--json"])
+    assert pushed.exit_code == 0, pushed.output
+    assert json.loads(pushed.output)["remote"]["state"] == "pushed"
+
+    remote_manifest = json.loads((remote_root / "manifest.json").read_text())
+    remote_manifest["digest"] = "sha256:" + "a" * 64
+    (remote_root / "manifest.json").write_text(json.dumps(remote_manifest), encoding="utf-8")
+
+    remote_ahead = runner.invoke(main, ["bucket", "remote", "status", "--json"])
+    assert remote_ahead.exit_code == 0, remote_ahead.output
+    assert json.loads(remote_ahead.output)["remote"]["state"] == "remote_ahead"
+
+    blocked = runner.invoke(main, ["bucket", "remote", "push", "--json"])
+    assert blocked.exit_code == 3
+    assert "remote bucket has changes" in blocked.output
+
+    forced = runner.invoke(main, ["bucket", "remote", "push", "--force", "--json"])
+    assert forced.exit_code == 0, forced.output
+    assert json.loads(forced.output)["remote"]["state"] == "pushed"
+
+
+def test_bucket_remote_reports_diverged_and_blocks_unsafe_pull(monkeypatch, tmp_path):
+    record = _trace("trace-diverged-base")
+    record.security.scanned = True
+    record.security.classifier_version = SECURITY_VERSION
+    write_trace_record(
+        record,
+        project_slug="demo",
+        source_layer="canonical",
+        legacy_mirror=False,
+    )
+    runner = CliRunner()
+    remote_root = tmp_path / "remote-bucket"
+    monkeypatch.setenv("OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", str(remote_root))
+
+    pushed = runner.invoke(main, ["bucket", "remote", "push", "--json"])
+    assert pushed.exit_code == 0, pushed.output
+
+    local = _trace("trace-diverged-local")
+    local.security.scanned = True
+    local.security.classifier_version = SECURITY_VERSION
+    write_trace_record(
+        local,
+        project_slug="demo",
+        source_layer="canonical",
+        legacy_mirror=False,
+    )
+    remote_manifest = json.loads((remote_root / "manifest.json").read_text())
+    remote_manifest["digest"] = "sha256:" + "b" * 64
+    (remote_root / "manifest.json").write_text(json.dumps(remote_manifest), encoding="utf-8")
+
+    diverged = runner.invoke(main, ["bucket", "remote", "status", "--json"])
+    assert diverged.exit_code == 0, diverged.output
+    assert json.loads(diverged.output)["remote"]["state"] == "diverged"
+
+    blocked = runner.invoke(main, ["bucket", "remote", "pull", "--json"])
+    assert blocked.exit_code == 3
+    assert "local bucket has changes" in blocked.output
+
+
+def test_setup_bucket_fake_remote_push_now(tmp_path):
+    record = _trace("trace-setup-push-now")
+    record.security.scanned = True
+    record.security.classifier_version = SECURITY_VERSION
+    write_trace_record(
+        record,
+        project_slug="demo",
+        source_layer="canonical",
+        legacy_mirror=False,
+    )
+    runner = CliRunner()
+    remote_root = tmp_path / "configured-fake-bucket"
+
+    configured = runner.invoke(
+        main,
+        [
+            "setup",
+            "bucket",
+            "--provider",
+            "fake",
+            "--fake-root",
+            str(remote_root),
+            "--push-now",
+            "--json",
+        ],
+    )
+
+    assert configured.exit_code == 0, configured.output
+    payload = json.loads(configured.output)
+    assert payload["remote_sync"]["state"] == "pushed"
+    assert (remote_root / "manifest.json").exists()
+
+
+def test_setup_bucket_fake_remote_pull_now(tmp_path, monkeypatch):
+    from opentraces.core import paths
+    from opentraces.core.bucket_store import iter_trace_record_objects
+
+    record = _trace("trace-setup-pull-now")
+    record.security.scanned = True
+    record.security.classifier_version = SECURITY_VERSION
+    write_trace_record(
+        record,
+        project_slug="demo",
+        source_layer="canonical",
+        legacy_mirror=False,
+    )
+    runner = CliRunner()
+    remote_root = tmp_path / "configured-fake-bucket"
+    monkeypatch.setenv("OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", str(remote_root))
+    pushed = runner.invoke(main, ["bucket", "remote", "push", "--json"])
+    assert pushed.exit_code == 0, pushed.output
+
+    shutil_root = paths.bucket_dir()
+    shutil.rmtree(shutil_root)
+
+    configured = runner.invoke(
+        main,
+        [
+            "setup",
+            "bucket",
+            "--provider",
+            "fake",
+            "--fake-root",
+            str(remote_root),
+            "--pull-now",
+            "--json",
+        ],
+    )
+
+    assert configured.exit_code == 0, configured.output
+    payload = json.loads(configured.output)
+    assert payload["remote_sync"]["state"] == "pulled"
+    assert [obj.trace_id for obj in iter_trace_record_objects()] == ["trace-setup-pull-now"]

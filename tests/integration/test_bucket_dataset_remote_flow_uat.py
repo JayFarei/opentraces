@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 from opentraces.core.datasets import dataset_path, read_row_index, read_row_provenance
@@ -125,6 +126,49 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
             ["trail", "search", "--commit", commit_sha, "--json", "--project", str(repo)]
         )
         assert trail["result_count"] >= 1
+
+        replay_repo = tmp_path / "fresh-replay-repo"
+        subprocess.run(
+            ["git", "clone", "--quiet", str(repo), str(replay_repo)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(replay_repo), "update-ref", "-d", "refs/opentraces/local/events/v1"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        before_replay = _run_cli(
+            [
+                "trail",
+                "search",
+                "--commit",
+                commit_sha,
+                "--json",
+                "--project",
+                str(replay_repo),
+            ]
+        )
+        assert before_replay["result_count"] == 0
+
+        replay = _run_cli(["bucket", "replay", "--repo", str(replay_repo), "--json"])
+        assert replay["replay"]["state"] == "imported"
+        assert replay["replay"]["events_imported"] >= 1
+
+        after_replay = _run_cli(
+            [
+                "trail",
+                "search",
+                "--commit",
+                commit_sha,
+                "--json",
+                "--project",
+                str(replay_repo),
+            ]
+        )
+        assert after_replay["result_count"] >= 1
 
         schema_path = _write_dataset_schema(tmp_path / "restored-bucket-row.schema.json")
         created = _run_cli(

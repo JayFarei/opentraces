@@ -134,9 +134,11 @@ def test_remote_ready_bucket_round_trip_and_sync_blockers(monkeypatch, tmp_path)
     )
     dirty_diff = runner.invoke(main, ["bucket", "remote", "diff", "--json"])
     assert dirty_diff.exit_code == 0, dirty_diff.output
-    assert json.loads(dirty_diff.output)["remote"]["different"] is True
+    dirty_payload = json.loads(dirty_diff.output)
+    assert dirty_payload["remote"]["different"] is True
+    assert dirty_payload["remote"]["state"] == "local_ahead"
 
-    pulled = runner.invoke(main, ["bucket", "remote", "pull", "--json"])
+    pulled = runner.invoke(main, ["bucket", "remote", "pull", "--force", "--json"])
     assert pulled.exit_code == 0, pulled.output
     assert [obj.trace_id for obj in iter_trace_record_objects()] == ["trace-hf-bucket-1"]
 

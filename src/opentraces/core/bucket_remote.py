@@ -21,11 +21,13 @@ except Exception:  # pragma: no cover
 from . import paths
 from .bucket_store import (
     bucket_manifest,
+    classify_bucket_remote_state,
     fake_remote_diff,
     fake_remote_pull,
     fake_remote_push,
     fake_remote_root,
     fake_remote_status,
+    write_bucket_sync_state,
 )
 from .config import load_config
 
@@ -65,36 +67,37 @@ def remote_diff(*, fake_root: Path | None = None) -> dict[str, Any]:
     status = remote_status()
     return {
         **status,
-        "different": status.get("state") in {"missing", "different", "error"},
+        "different": status.get("state")
+        in {"missing", "different", "local_ahead", "remote_ahead", "diverged", "error"},
     }
 
 
-def remote_push(*, fake_root: Path | None = None) -> dict[str, Any]:
+def remote_push(*, fake_root: Path | None = None, force: bool = False) -> dict[str, Any]:
     if fake_root is not None:
-        return _fake_payload(fake_remote_push(fake_root))
+        return _fake_payload(fake_remote_push(fake_root, force=force))
     cfg = load_config()
     remote = cfg.bucket.remote
     if cfg.bucket.storage != "remote" or not remote.enabled:
         if fake_remote_root() is not None:
-            return _fake_payload(fake_remote_push())
+            return _fake_payload(fake_remote_push(force=force))
         raise BucketRemoteError("private bucket remote is not configured")
     if remote.provider == "fake":
-        return _fake_payload(fake_remote_push())
-    return _hf_push(remote.url, cfg.hf_token)
+        return _fake_payload(fake_remote_push(force=force))
+    return _hf_push(remote.url, cfg.hf_token, force=force)
 
 
-def remote_pull(*, fake_root: Path | None = None) -> dict[str, Any]:
+def remote_pull(*, fake_root: Path | None = None, force: bool = False) -> dict[str, Any]:
     if fake_root is not None:
-        return _fake_payload(fake_remote_pull(fake_root))
+        return _fake_payload(fake_remote_pull(fake_root, force=force))
     cfg = load_config()
     remote = cfg.bucket.remote
     if cfg.bucket.storage != "remote" or not remote.enabled:
         if fake_remote_root() is not None:
-            return _fake_payload(fake_remote_pull())
+            return _fake_payload(fake_remote_pull(force=force))
         raise BucketRemoteError("private bucket remote is not configured")
     if remote.provider == "fake":
-        return _fake_payload(fake_remote_pull())
-    return _hf_pull(remote.url, cfg.hf_token)
+        return _fake_payload(fake_remote_pull(force=force))
+    return _hf_pull(remote.url, cfg.hf_token, force=force)
 
 
 def reconcile_once(*, reason: str = "manual") -> dict[str, Any]:
@@ -109,7 +112,7 @@ def reconcile_once(*, reason: str = "manual") -> dict[str, Any]:
     status = remote_status()
     if status.get("state") == "current":
         return {**status, "reason": reason}
-    if status.get("state") not in {"missing", "different"}:
+    if status.get("state") not in {"missing", "local_ahead"}:
         return {**status, "reason": reason}
     pushed = remote_push()
     return {**pushed, "reason": reason}
@@ -155,16 +158,23 @@ def _hf_status(url: str | None, token: str | None) -> dict[str, Any]:
             error=str(exc),
         )
     remote_digest = remote_manifest.get("digest")
-    return _hf_status_payload(
-        repo_id,
-        state="current" if remote_digest == local.get("digest") else "different",
+    relation = classify_bucket_remote_state(
+        provider="huggingface",
+        target=repo_id,
         local_digest=local.get("digest"),
         remote_digest=remote_digest,
+    )
+    return _hf_status_payload(
+        repo_id,
+        state=relation["state"],
+        local_digest=local.get("digest"),
+        remote_digest=remote_digest,
+        last_sync_digest=relation.get("last_sync_digest"),
         remote_updated_at=remote_manifest.get("updated_at"),
     )
 
 
-def _hf_push(url: str | None, token: str | None) -> dict[str, Any]:
+def _hf_push(url: str | None, token: str | None, *, force: bool = False) -> dict[str, Any]:
     repo_id = _hf_repo_id(url)
     api = _hf_api(token)
     manifest = bucket_manifest(write=True, include_objects=False)
@@ -174,6 +184,12 @@ def _hf_push(url: str | None, token: str | None) -> dict[str, Any]:
         raise BucketRemoteError(
             "bucket is not eligible for remote sync"
             + (f": {reasons}" if reasons else "")
+        )
+    status = _hf_status(url, token)
+    if status.get("state") in {"remote_ahead", "diverged"} and not force:
+        raise BucketRemoteError(
+            "remote bucket has changes that are not in the local bucket; "
+            "pull first or pass --force to overwrite"
         )
     api.create_repo(
         repo_id=repo_id,
@@ -193,6 +209,13 @@ def _hf_push(url: str | None, token: str | None) -> dict[str, Any]:
             repo_type="dataset",
         )
         files_uploaded += 1
+    write_bucket_sync_state(
+        provider="huggingface",
+        target=repo_id,
+        digest=manifest.get("digest"),
+        remote_digest=manifest.get("digest"),
+        direction="push",
+    )
     return {
         "schema_version": REMOTE_SCHEMA,
         "provider": "huggingface",
@@ -203,7 +226,7 @@ def _hf_push(url: str | None, token: str | None) -> dict[str, Any]:
     }
 
 
-def _hf_pull(url: str | None, token: str | None) -> dict[str, Any]:
+def _hf_pull(url: str | None, token: str | None, *, force: bool = False) -> dict[str, Any]:
     repo_id = _hf_repo_id(url)
     api = _hf_api(token)
     try:
@@ -212,6 +235,12 @@ def _hf_pull(url: str | None, token: str | None) -> dict[str, Any]:
         raise BucketRemoteError(f"remote bucket is not readable: {repo_id}: {exc}") from exc
     if "manifest.json" not in files:
         raise BucketRemoteError(f"remote bucket is missing manifest.json: {repo_id}")
+    status = _hf_status(url, token)
+    if status.get("state") in {"local_ahead", "diverged"} and not force:
+        raise BucketRemoteError(
+            "local bucket has changes that are not in the remote bucket; "
+            "push first or pass --force to overwrite"
+        )
     with tempfile.TemporaryDirectory(prefix="opentraces-bucket-pull-") as tmp_name:
         tmp_root = Path(tmp_name) / "bucket"
         tmp_root.mkdir(parents=True)
@@ -236,6 +265,13 @@ def _hf_pull(url: str | None, token: str | None) -> dict[str, Any]:
         local.mkdir(parents=True, exist_ok=True)
         _copy_tree(tmp_root, local)
     manifest = bucket_manifest(write=True, include_objects=False)
+    write_bucket_sync_state(
+        provider="huggingface",
+        target=repo_id,
+        digest=manifest.get("digest"),
+        remote_digest=manifest.get("digest"),
+        direction="pull",
+    )
     return {
         "schema_version": REMOTE_SCHEMA,
         "provider": "huggingface",
@@ -302,6 +338,7 @@ def _hf_status_payload(
     state: str,
     local_digest: str | None,
     remote_digest: str | None,
+    last_sync_digest: str | None = None,
     remote_updated_at: str | None = None,
     error: str | None = None,
 ) -> dict[str, Any]:
@@ -312,6 +349,7 @@ def _hf_status_payload(
         "repo_id": repo_id,
         "local_digest": local_digest,
         "remote_digest": remote_digest,
+        "last_sync_digest": last_sync_digest,
     }
     if remote_updated_at:
         payload["remote_updated_at"] = remote_updated_at

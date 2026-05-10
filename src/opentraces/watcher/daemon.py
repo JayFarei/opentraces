@@ -242,6 +242,18 @@ def _run_trace_trails_runtime(
                     project_cwd,
                     "; ".join(summary.errors[:3]),
                 )
+        try:
+            from ..core.bucket_store import sync_trail_events_from_repo
+            from ..core.config import get_project_dir
+
+            project_slug = get_project_dir(project_cwd).name
+            sync_trail_events_from_repo(project_cwd, repo_id=project_slug)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "bucket TrailEvent export refresh failed for %s",
+                project_cwd,
+                exc_info=True,
+            )
     except Exception:  # noqa: BLE001
         logger.exception("Trace Trails runtime failed for %s", project_cwd)
 

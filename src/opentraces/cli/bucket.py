@@ -136,13 +136,14 @@ def bucket_remote_diff_cmd(remote_root: Path | None, as_json: bool) -> None:
     default=None,
     help="Fake remote root override. Defaults to configured bucket remote.",
 )
+@click.option("--force", is_flag=True, help="Overwrite a remote-ahead or diverged bucket.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def bucket_remote_push_cmd(remote_root: Path | None, as_json: bool) -> None:
+def bucket_remote_push_cmd(remote_root: Path | None, force: bool, as_json: bool) -> None:
     """Mirror the local bucket into the configured private remote."""
     from ..core.bucket_remote import BucketRemoteError, remote_push
 
     try:
-        remote = remote_push(fake_root=remote_root)
+        remote = remote_push(fake_root=remote_root, force=force)
     except (BucketRemoteError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
@@ -164,13 +165,14 @@ def bucket_remote_push_cmd(remote_root: Path | None, as_json: bool) -> None:
     default=None,
     help="Fake remote root override. Defaults to configured bucket remote.",
 )
+@click.option("--force", is_flag=True, help="Overwrite a local-ahead or diverged bucket.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def bucket_remote_pull_cmd(remote_root: Path | None, as_json: bool) -> None:
+def bucket_remote_pull_cmd(remote_root: Path | None, force: bool, as_json: bool) -> None:
     """Restore the local bucket from the configured private remote."""
     from ..core.bucket_remote import BucketRemoteError, remote_pull
 
     try:
-        remote = remote_pull(fake_root=remote_root)
+        remote = remote_pull(fake_root=remote_root, force=force)
     except (BucketRemoteError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
@@ -182,3 +184,42 @@ def bucket_remote_pull_cmd(remote_root: Path | None, as_json: bool) -> None:
     click.echo(
         f"  files: {remote.get('files_copied', remote.get('files_downloaded', 0))}"
     )
+
+
+@bucket_group.command("replay", cls=OpentracesCommand)
+@click.option(
+    "--repo",
+    "repo",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    required=True,
+    help="Git repository to receive the bucket-exported Trace Trails ref.",
+)
+@click.option(
+    "--repo-id",
+    default=None,
+    help="Bucket TrailEvents repo id. Required when the bucket has multiple exports.",
+)
+@click.option("--force", is_flag=True, help="Replace an existing differing Trace Trails ref.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def bucket_replay_cmd(
+    repo: Path,
+    repo_id: str | None,
+    force: bool,
+    as_json: bool,
+) -> None:
+    """Replay bucket-exported Trace Trails into a Git repository."""
+    from ..core.bucket_store import restore_trail_events_to_repo
+
+    try:
+        replay = restore_trail_events_to_repo(repo, repo_id=repo_id, force=force)
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(3)
+    payload = {"status": "ok", "replay": replay}
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    click.echo(f"Bucket replay: {replay.get('state')}")
+    click.echo(f"  repo: {replay.get('repo')}")
+    click.echo(f"  repo id: {replay.get('repo_id')}")
+    click.echo(f"  events: {replay.get('events_imported', 0)}")

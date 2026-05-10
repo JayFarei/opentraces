@@ -327,6 +327,96 @@ def append_event_batch(
     )
 
 
+def _validate_import_events(events: list[TrailEvent]) -> list[TrailEvent]:
+    ordered = sorted(events, key=lambda event: event.event_sequence)
+    previous_event_id: str | None = None
+    for index, event in enumerate(ordered, start=1):
+        if event.event_sequence != index:
+            raise ValueError(
+                "imported TrailEvents must have contiguous event_sequence values "
+                f"starting at 1; saw {event.event_sequence} at position {index}"
+            )
+        if event.previous_event_id != previous_event_id:
+            raise ValueError(
+                "imported TrailEvents have an invalid previous_event_id chain "
+                f"at sequence {event.event_sequence}"
+            )
+        expected = expected_event_id(event)
+        if event.event_id != expected:
+            raise ValueError(
+                "imported TrailEvents have an invalid event_id "
+                f"at sequence {event.event_sequence}"
+            )
+        if event.content_hash != payload_content_hash(event.payload):
+            raise ValueError(
+                "imported TrailEvents have an invalid content_hash "
+                f"at sequence {event.event_sequence}"
+            )
+        previous_event_id = event.event_id
+    return ordered
+
+
+def import_event_log(
+    cwd: Path,
+    events: list[TrailEvent | dict[str, Any]],
+    *,
+    writer: str = "bucket-restore",
+    force: bool = False,
+) -> dict[str, Any]:
+    """Materialize a complete TrailEvent stream into ``EVENT_LOG_REF``.
+
+    Bucket sync exports Trace Trails as file-shaped JSONL segments. This helper
+    rebuilds the local Git ref from that stream so normal trail commands can run
+    against a repo supplied by the user.
+    """
+
+    cwd = cwd.resolve()
+    parsed = [
+        event if isinstance(event, TrailEvent) else TrailEvent.model_validate(event)
+        for event in events
+    ]
+    ordered = _validate_import_events(parsed)
+    head = _ref_head(cwd)
+    if head is not None:
+        existing = read_events(cwd, verify=False)
+        existing_ids = [event.event_id for event in existing]
+        incoming_ids = [event.event_id for event in ordered]
+        if existing_ids == incoming_ids:
+            return {
+                "state": "current",
+                "ref": EVENT_LOG_REF,
+                "head": head,
+                "event_count": len(existing),
+                "events_imported": 0,
+            }
+        if not force:
+            raise ValueError(
+                f"{EVENT_LOG_REF} already exists and differs; pass --force to replace it"
+            )
+
+    batch_id = f"bucket-restore-{uuid.uuid4().hex}"
+    batch = {
+        "batch_id": batch_id,
+        "writer": writer,
+        "previous_event_log_head": None,
+        "event_count": len(ordered),
+        "imported": True,
+    }
+    tree_sha = _write_batch_tree(cwd, ordered, batch)
+    commit_sha = _commit_batch(cwd, tree_sha, None, batch_id)
+    if not _update_event_log_ref(cwd, commit_sha, head):
+        raise RuntimeError(f"{EVENT_LOG_REF} moved during import")
+    invalidate_read_events_cache(cwd)
+    return {
+        "state": "imported",
+        "ref": EVENT_LOG_REF,
+        "head": commit_sha,
+        "event_count": len(ordered),
+        "events_imported": len(ordered),
+        "replaced_head": head,
+    }
+
+
 def _event_blob_entries(cwd: Path, commits: list[str]) -> list[tuple[str, str]]:
     entries: list[tuple[str, str]] = []
     for commit in commits:
