@@ -9,19 +9,19 @@ const modes = [
     name: "Auto",
     label: "auto",
     color: "var(--accent)",
-    desc: "Safe traces are scanned, redacted, and auto-approved into the staged set. Push is still explicit.",
+    desc: "Safe traces are scanned, redacted, and auto-approved at capture time. Publish is still explicit.",
     terminal: [
-      { p: "~$", c: "ot init", f: "--review-policy", s: "auto" },
+      { p: "~$", c: "ot config set review_policy auto", f: "--project" },
       { gap: true },
-      { ok: "\u2713", di: " review policy: auto" },
-      { ok: "\u2713", di: " created private dataset ", s: "jayfarei/opentraces" },
-      { ok: "\u2713", di: " installed agent session hook" },
+      { ok: "\u2713", di: " review_policy = ", s: "auto" },
       { gap: true },
-      { di: "--- end of Claude session ---" },
+      { p: "~$", c: "ot dataset new my-set" },
+      { ok: "\u2713", di: " created dataset ", s: "my-set" },
       { gap: true },
-      { di: "ot: scanning session..." },
+      { p: "~$", c: "ot dataset run my-set" },
+      { di: "ot: scanning rows..." },
       { di: "auto-redacted ", n: "4", diEnd: " secrets (JWT, API key, email, DB URL)" },
-      { ok: "\u2713", di: " auto-approved 1 trace into ", s: "staged" },
+      { ok: "\u2713", di: " auto-approved 1 row into ", s: "approved" },
     ],
   },
   {
@@ -29,23 +29,22 @@ const modes = [
     name: "Review",
     label: "review (default)",
     color: "var(--text)",
-    desc: "Traces land in your local inbox. Review in the TUI or browser, then stage and push the ones you want to share.",
+    desc: "Rows land in the dataset for review. Open the TUI or browser, then approve the ones you want to publish.",
     terminal: [
-      { p: "~$", c: "ot init" },
+      { p: "~$", c: "ot dataset new my-set" },
       { gap: true },
-      { ok: "\u2713", di: " review policy: review (default)" },
-      { ok: "\u2713", di: " installed agent session hook" },
+      { ok: "\u2713", di: " created dataset ", s: "my-set" },
       { gap: true },
-      { p: "~$", c: "ot status" },
-      { di: "inbox: 8 traces pending review" },
-      { di: "  stage / redact / reject each trace" },
+      { p: "~$", c: "ot dataset status my-set" },
+      { di: "rows: 8 inbox" },
+      { di: "  approve / redact / reject each row" },
       { gap: true },
-      { p: "~$", c: "ot add --all" },
-      { di: "staged 6 traces" },
+      { p: "~$", c: "ot dataset review my-set --web" },
+      { di: "approved 6 rows" },
       { gap: true },
-      { p: "~$", c: "ot push" },
+      { p: "~$", c: "ot dataset publish my-set" },
       { di: "auto-redacted ", n: "3", diEnd: " secrets" },
-      { ok: "\u2713", di: " uploaded 6 staged traces \u2192 ", s: "jayfarei/opentraces" },
+      { ok: "\u2713", di: " uploaded 6 approved rows \u2192 ", s: "jayfarei/opentraces" },
     ],
   },
 ];
@@ -104,7 +103,7 @@ export default function PrivacyTrust() {
       <div className="privacy-grid">
         <div style={{ display: "flex", flexDirection: "column" }}>
           <p className="section-sub" style={{ marginBottom: 20 }}>
-            Layered scanning: 30+ regex patterns, Shannon entropy, optional TruffleHog (800+ detectors, opt-in), and optional local LLM review. Stable placeholders like [EMAIL_1] preserve referential meaning across a trace.
+            Layered scanning: 30 regex patterns, Shannon entropy, optional TruffleHog (800+ detectors, opt-in), and optional local LLM review. Stable placeholders like [EMAIL_1] preserve referential meaning across a trace.
           </p>
 
           {/* Pipeline flow: four connected boxes */}

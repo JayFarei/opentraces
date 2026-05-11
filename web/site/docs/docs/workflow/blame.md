@@ -1,8 +1,8 @@
 # Blame
 
-When agents write the code, `git blame` tells you the commit, not the prompt. `opentraces blame` closes that gap: given a commit it returns the sessions that produced the committed bytes; given a trace id it returns the commits that carry that session's output. See [How It Works](#how-it-works) for the mechanism.
+When agents write the code, `git blame` tells you the commit, not the prompt. `opentraces trail blame` closes that gap: given a commit it returns the sessions that produced the committed bytes; given a trace id it returns the commits that carry that session's output. See [How It Works](#how-it-works) for the mechanism.
 
-> **Experimental — not 100% accurate yet.** Attribution rests on three moving parts (capture hook, post-commit correlator, and watcher-driven audit refs) and any one of them falling behind produces incomplete or misleading results. Treat coverage numbers as best-effort until the pipeline stabilises, and cross-check against `opentraces doctor`, `opentraces graph`, and the raw `refs/notes/opentraces` notes when a number looks wrong.
+> **Experimental — not 100% accurate yet.** Attribution rests on three moving parts (capture hook, post-commit correlator, and watcher-driven audit refs) and any one of them falling behind produces incomplete or misleading results. Treat coverage numbers as best-effort until the pipeline stabilises, and cross-check against `opentraces doctor`, `opentraces trail graph`, and the raw `refs/notes/opentraces` notes when a number looks wrong.
 
 ## Prerequisites
 
@@ -15,10 +15,10 @@ Blame needs three things to produce trustworthy output:
    opentraces setup git
    ```
 
-3. **Watcher installed.** The background watcher polls the repo, rebuilds the attribution cache from the audit ref, and keeps the entity graph in sync. Running blame without the watcher means the cache can lag HEAD — percentages will read low, traces will read as orphans, and hook-linked commits will not pick up per-line attribution. Install it once per machine:
+3. **Watcher installed.** The background watcher polls the repo, rebuilds the attribution cache from the audit ref, and keeps the entity graph in sync. Running blame without the watcher means the cache can lag HEAD, percentages will read low, traces will read as orphans, and hook-linked commits will not pick up per-line attribution. Install it once per machine:
 
    ```bash
-   opentraces setup watcher
+   opentraces setup watcher install
    ```
 
    `opentraces doctor` surfaces the watcher status alongside capture and git-hook state; if any of the three is red, blame output should be treated as preliminary.
@@ -30,13 +30,13 @@ Old commits cannot be backfilled by the hook — the hook only sees commits afte
 
 ## Graph View
 
-`opentraces graph` renders the git log as a spine. Each commit shows the sessions that contributed to it, with inline entity summaries and a coverage percentage.
+`opentraces trail graph` renders the git log as a spine. Each commit shows the sessions that contributed to it, with inline entity summaries and a coverage percentage.
 
 ```bash
-opentraces graph --limit 8
+opentraces trail graph --limit 8
 ```
 
-![opentraces graph --limit 8](/docs/assets/blame/graph-limit-8.png)
+![opentraces trail graph --limit 8](/docs/assets/blame/graph-limit-8.png)
 
 Reading the spine:
 
@@ -45,7 +45,7 @@ Reading the spine:
 | `●` | Commit node |
 | `╭┄` / `├┄` | Session contributing to the next commit |
 | `├╯` | End of a commit's session group |
-| `c:<sha>` | Commit id (prefix-resolvable by `opentraces show`, `opentraces blame`) |
+| `c:<sha>` | Commit id (prefix-resolvable by `opentraces trace get`, `opentraces trail blame`) |
 | `s:<id>` | Session id (trace prefix) |
 | `+N ~M -K fns` | Added / modified / deleted functions or entities |
 | `100%` | Fraction of the commit's diff covered by bytes recorded in the session's audit ref (Edit/Write tool calls plus reconstructed Bash effects) |
@@ -55,21 +55,21 @@ Commits with no attached sessions (`c:7c3b1927 marketing skill`) appear as bare 
 ### Graph flags
 
 ```bash
-opentraces graph --trace <id>                     # Pivot to trace-primary view
-opentraces graph --since HEAD~20 --until HEAD     # Scope by ref range
-opentraces graph --entities                       # Expand entity subline per session
-opentraces graph --all                            # Disable pagination
+opentraces trail graph --trace <id>                     # Pivot to trace-primary view
+opentraces trail graph --since HEAD~20 --until HEAD     # Scope by ref range
+opentraces trail graph --entities                       # Expand entity subline per session
+opentraces trail graph --all                            # Disable pagination
 ```
 
 ## Blame for a Commit
 
-`opentraces blame <sha>` resolves one commit to its contributing traces, with per-trace diff coverage, entity-level deltas, and per-file attribution counts.
+`opentraces trail blame <sha>` resolves one commit to its contributing traces, with per-trace diff coverage, entity-level deltas, and per-file attribution counts.
 
 ```bash
-opentraces blame ac019172
+opentraces trail blame ac019172
 ```
 
-![opentraces blame ac019172](/docs/assets/blame/blame-commit.png)
+![opentraces trail blame ac019172](/docs/assets/blame/blame-commit.png)
 
 The output is four sections:
 
@@ -83,30 +83,30 @@ Traces that the hook linked but whose per-line attribution isn't in the cache ye
 ### Blame flags
 
 ```bash
-opentraces blame <sha>                            # Commit-scoped summary
-opentraces blame c:<sha> <path>                   # Single-file slice
-opentraces blame <sha> <path> --lines             # Per-line (git-blame-style)
-opentraces blame <sha> --entities                 # Expand per-trace entity lists
-opentraces blame <sha> --json                     # Structured output for consumers
+opentraces trail blame <sha>                            # Commit-scoped summary
+opentraces trail blame c:<sha> <path>                   # Single-file slice
+opentraces trail blame <sha> <path> --lines             # Per-line (git-blame-style)
+opentraces trail blame <sha> --entities                 # Expand per-trace entity lists
+opentraces trail blame <sha> --json                     # Structured output for consumers
 ```
 
 ## Blame for a Trace (inverse blame)
 
-Given a trace id instead of a commit, `opentraces blame` walks the relationship in the other direction: which commits carry this session's output.
+Given a trace id instead of a commit, `opentraces trail blame` walks the relationship in the other direction: which commits carry this session's output.
 
 ```bash
-opentraces blame t:2cfe7e14                       # Canonical (ingested) trace
-opentraces blame s:6606fc1f                       # Attribution-only session (upstream, pre-init, or forked)
-opentraces blame 2cfe7e14-…-full-uuid             # Bare hyphenated UUID auto-detects
-opentraces blame t:2cfe7e14 --include-overlapping # Include weak file+time links
-opentraces blame t:2cfe7e14 --json                # Structured output for consumers
+opentraces trail blame t:2cfe7e14                       # Canonical (ingested) trace
+opentraces trail blame s:6606fc1f                       # Attribution-only session (upstream, pre-init, or forked)
+opentraces trail blame 2cfe7e14-…-full-uuid             # Bare hyphenated UUID auto-detects
+opentraces trail blame t:2cfe7e14 --include-overlapping # Include weak file+time links
+opentraces trail blame t:2cfe7e14 --json                # Structured output for consumers
 ```
 
 The argument accepts either prefix form. `t:` resolves against canonical traces in the local inbox; `s:` resolves against the staging session ids or attribution-cache entries (useful for forks, or for sessions that never landed in the inbox). A bare hyphenated UUID auto-detects as a trace id; a bare hex string is treated as a commit first and falls back to trace resolution if the commit does not exist.
 
 Output is a trace header and a list of commits this trace contributed to:
 
-![opentraces blame t:2cfe7e14](/docs/assets/blame/blame-trace.png)
+![opentraces trail blame t:2cfe7e14](/docs/assets/blame/blame-trace.png)
 
 Rows with line-level attribution show real line counts and a coverage percentage; hook-linked rows (where the post-commit hook recorded a link but the attribution cache doesn't yet have per-line data) show a tier badge instead. `--include-overlapping` additionally shows commits with only a weak file+timestamp overlap — off by default because that's coincidence rather than contribution.
 
@@ -114,9 +114,9 @@ Rows with line-level attribution show real line counts and a coverage percentage
 
 ## Web Viewer
 
-`opentraces web` exposes the same blame data in the browser. Switch to the `graph` tab to browse the commit spine on the left and the per-commit blame on the right.
+`opentraces dataset review <name> --web` exposes the same blame data in the browser. Switch to the `graph` tab to browse the commit spine on the left and the per-commit blame on the right.
 
-![opentraces web — graph / blame view](/docs/assets/blame/web-blame-view.png)
+![opentraces dataset review --web — graph / blame view](/docs/assets/blame/web-blame-view.png)
 
 The viewer is keyboard-first: `j`/`k` navigates commits, `enter` loads the blame panel, `q` quits. The trace-side panel mirrors the CLI, with hook-linked commits collapsed under a `▸ N hook-linked commits (no line counts)` disclosure so the primary list stays dense with line-attributed rows.
 
@@ -135,7 +135,7 @@ The tier appears in `git_links[].tier` on every trace and in the `--json` output
 
 ## How It Works
 
-`opentraces blame` isn't a wrapper around `git blame`. It builds a parallel Git history — an *audit ref* — that records exactly what each session wrote, then blames against that. You don't need this section to use blame, but it helps when reading the raw refs, debugging coverage, or thinking about where semantic attribution is headed.
+`opentraces trail blame` isn't a wrapper around `git blame`. It builds a parallel Git history — an *audit ref* — that records exactly what each session wrote, then blames against that. You don't need this section to use blame, but it helps when reading the raw refs, debugging coverage, or thinking about where semantic attribution is headed.
 
 ### Git in four primitives
 
@@ -193,7 +193,7 @@ With the audit graph in place, per-line attribution reduces to a familiar primit
 git blame --line-porcelain <path> <audit_ref>
 ```
 
-...run against the audit ref instead of `main`. Every line comes back attributed to the session that wrote it, because the author email is `<trace_id>@opentraces.local`. `opentraces blame` wraps this with the correlation from `refs/notes/opentraces` so you can start from either side — a commit SHA or a trace ID — and land on the other.
+...run against the audit ref instead of `main`. Every line comes back attributed to the session that wrote it, because the author email is `<trace_id>@opentraces.local`. `opentraces trail blame` wraps this with the correlation from `refs/notes/opentraces` so you can start from either side — a commit SHA or a trace ID — and land on the other.
 
 The [evidence tiers](#evidence-tiers) above aren't subjective labels either: they're hash comparisons between the audit ref's tree and the real commit's tree.
 
@@ -213,16 +213,16 @@ The merge result tells you whether the committed code still carries the session'
 
 ```bash
 git blame src/auth.py | head -5      # Find the commit
-opentraces blame <sha> src/auth.py   # Find the session(s)
-opentraces show s:<id>               # Read the prompt + reasoning
+opentraces trail blame <sha> src/auth.py   # Find the session(s)
+opentraces trace get s:<id>          # Read the prompt + reasoning
 ```
 
 ### "Which commits carry this session's output?"
 
 ```bash
-opentraces blame t:<trace-id>                        # Canonical inbox trace
-opentraces blame s:<session-id>                      # Upstream / fork / pre-init
-opentraces blame t:<trace-id> --include-overlapping  # Include weak file+time links
+opentraces trail blame t:<trace-id>                        # Canonical inbox trace
+opentraces trail blame s:<session-id>                      # Upstream / fork / pre-init
+opentraces trail blame t:<trace-id> --include-overlapping  # Include weak file+time links
 ```
 
 ### "Rebuild attribution after a rebase or squash"
@@ -240,7 +240,7 @@ opentraces git-backfill
 opentraces git-backfill --max-commits 2000 --window-hours 48
 ```
 
-Walks first-parent history and retro-correlates inbox traces against each commit. Writes `refs/notes/opentraces` and persists `git_links` onto the staged trace JSONLs so old commits start showing up in `ot graph`, `ot blame c:<sha>`, and `ot blame t:<id>`. Safe to re-run: notes dedupe on append and `git_links` dedupe before rewrite.
+Walks first-parent history and retro-correlates inbox traces against each commit. Writes `refs/notes/opentraces` and persists `git_links` onto the staged trace JSONLs so old commits start showing up in `ot trail graph`, `ot trail blame c:<sha>`, and `ot trail blame t:<id>`. Safe to re-run: notes dedupe on append and `git_links` dedupe before rewrite.
 
 ### "Filter a pushed dataset to tool-emitted traces"
 
@@ -257,5 +257,5 @@ clean = ds.filter(
 
 - [Schema — Outcome & Attribution](/docs/schema/outcome-attribution) — `GitLink`, `Attribution.revision`, `AttributionRange`
 - [Schema — Versioning](/docs/schema/versioning) — schema 0.3.0 additive changes
-- [CLI Reference — `blame`, `graph`, `backfill`](/docs/cli/commands)
+- [CLI Reference — `trail blame`, `trail graph`, `backfill`](/docs/cli/commands)
 - [Carol Nichols, "Taming Git complexity with Rust and Gitoxide" (FOSDEM 2026)](https://www.youtube.com/watch?v=iSAMvE3yzfc) — the four-primitive framing this page's "How It Works" section is built on.

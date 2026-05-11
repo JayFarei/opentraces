@@ -35,8 +35,8 @@ Current behavior:
 - TruffleHog is opt-in
 - it runs locally with `verify_secrets = false`
 - findings are redacted in place
-- findings force human review before upload
-- `opentraces push --no-trufflehog` skips it for one push only
+- findings force human review before publication
+- the dataset workflow may expose a one-shot override for skipping it on a particular run
 
 Use `opentraces doctor --security` to confirm whether the binary is installed and enabled.
 
@@ -107,38 +107,26 @@ Full flag set:
 | `--no-interactive` | Skip the preset picker when no flags are given |
 | `--project` | Scope this change to the project marker instead of global config |
 
-### Run Tier 2 On Demand
+### Run Tier 2 In The Dataset Workflow
+
+In 0.4 Tier 2 review is invoked inside dataset workflows. The workflow steps the row through:
+
+1. capture (capture-time review policy)
+2. workflow row synthesis
+3. optional Tier 2 LLM verdict (when the workflow declares it)
+4. human approval via `opentraces dataset review`
+5. publish via `opentraces dataset publish`
+
+Verdicts are cached into the dataset row's metadata so downstream gates and the review TUI can see them. A bad verdict blocks the row from being approved, and unapproved rows are filtered out at publish time.
+
+### Gate The Publication
 
 ```bash
-opentraces llm-review                          # every staged trace
-opentraces llm-review --scope staged           # second line of defence before push
-opentraces llm-review --scope inbox            # pre-add only
-opentraces llm-review --trace 8a3f1c           # one trace (short id ok; repeatable)
-opentraces llm-review --limit 5                # cap the batch
-opentraces llm-review --force                  # re-review cached verdicts
-opentraces llm-review --dry-run                # estimate sessions, chars, tokens, cost
-opentraces llm-review --context-file AGENTS.md # project context (README/AGENTS.md up to 10KB)
+opentraces dataset publish my-dataset --check-only
+opentraces dataset publish my-dataset
 ```
 
-Per-run overrides match the setup flags so you can try a different backend without touching config:
-
-```bash
-opentraces llm-review \
-  --api-format openai-compat \
-  --base-url https://api.groq.com/openai/v1 \
-  --api-key-env GROQ_API_KEY \
-  --model llama-3.3-70b-versatile
-```
-
-Verdicts are cached into `metadata.llm_review` on each trace so downstream gates and the TUI can see them. A bad verdict also blocks the trace in state so later push flows skip it.
-
-### Gate The Push
-
-```bash
-opentraces push --llm-review
-```
-
-This fails upload unless every staged trace has a clean Tier 2 verdict. Typical flow before a public dataset push: `opentraces llm-review --scope staged` followed by `opentraces push --llm-review`.
+`--check-only` runs all gates and stages the upload without sending it; gate failures surface in the JSON output. The dataset's bound workflow declares whether Tier 2 verdicts are required.
 
 ### Doctor Output
 
@@ -151,29 +139,29 @@ This fails upload unless every staged trace has a clean Tier 2 verdict. Typical 
 - probe status, including model count at the endpoint and whether your configured model is in the list; flagged as `not found` when the endpoint answers but does not expose the model, `not installed` when the binary is missing, or `not set` when a required API key env var is empty
 - toggle hints for `run`, `gate push`, `reconfigure`, and `disable`
 
-Use `doctor` to confirm the tier is healthy before relying on `push --llm-review` as an upload gate.
+Use `doctor` to confirm the tier is healthy before relying on `dataset publish` as a release gate.
 
 ## Tier 3: Human Review
 
 Human review is always available through:
 
 ```bash
-opentraces web
-opentraces tui
-opentraces list --stage inbox
-opentraces show <trace-id>
-opentraces redact <trace-id>
+opentraces dataset review my-dataset --web
+opentraces dataset review my-dataset --tui
+opentraces dataset review my-dataset
+opentraces dataset review my-dataset approve <row-id>
+opentraces dataset review my-dataset reject <row-id>
 ```
 
-This is the final check for project-specific context, sensitive business details, and traces that are technically safe but not worth publishing.
+This is the final check for project-specific context, sensitive business details, and rows that are technically safe but not worth publishing. For ad-hoc trace inspection (outside a dataset), use `opentraces trace query` and `opentraces trace get`.
 
 ## Review Policy
 
 Each repo carries a review policy in `.opentraces.json`:
 
 ```bash
-opentraces setup review-policy --review
-opentraces setup review-policy --auto
+opentraces config set review_policy review --project
+opentraces config set review_policy auto --project
 ```
 
 | Policy | Effect |
@@ -189,6 +177,6 @@ The user-facing pipeline is designed to redact and route most issues into review
 
 - parse errors
 - missing required integrations you explicitly enabled
-- `push --llm-review` when staged traces lack a clean Tier 2 verdict
+- dataset publication gates when rows lack a required clean Tier 2 verdict
 
-Use `opentraces doctor` for pipeline failures and `opentraces list --stage blocked` for traces that still need intervention.
+Use `opentraces doctor` for pipeline failures, `opentraces dataset status <name>` for dataset-level state, and `opentraces trace query --candidate-kind ...` for trace-level search.

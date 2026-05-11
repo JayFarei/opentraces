@@ -37,6 +37,16 @@ See [RATIONALE-0.4.0.md](RATIONALE-0.4.0.md) for design notes.
   `DatasetPublicationStatus` Literal aliases. Carrying these in `0.4.0` lets
   Plan 058 land remote sync without bumping the schema again.
 
+**Trace index / Trace Map / Candidate Packet (Plan 056)**
+
+- `TraceUnit`, `TraceFacet`, `TraceSignal`: addressable, bounded search
+  documents derived from trace evidence (the public document model for
+  `opentraces trace query` and `opentraces trace index`).
+- `TraceMap`, `TraceMapNode`, `TraceMapEdge`: workflow-neutral evidence
+  graph backing `opentraces trace map`.
+- `CandidatePacket`: bounded search-result envelope returned by
+  `opentraces trace query`.
+
 ### Changed
 
 - All dataset models now declare `extra="forbid"` so unknown manifest keys

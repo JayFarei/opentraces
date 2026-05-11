@@ -117,7 +117,7 @@ export default function Attribution() {
           <div className="attr-pane">
             <div className="terminal-bar">
               <span>graph</span>
-              <span>opentraces graph --limit 4</span>
+              <span>opentraces trail graph --limit 4</span>
             </div>
             <div className="terminal-body attr-body">
               <GraphView />
@@ -126,7 +126,7 @@ export default function Attribution() {
           <div className="attr-pane attr-pane-right">
             <div className="terminal-bar">
               <span>blame</span>
-              <span>opentraces blame ac019172</span>
+              <span>opentraces trail blame ac019172</span>
             </div>
             <div className="terminal-body attr-body">
               <BlameView />

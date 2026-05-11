@@ -9,7 +9,7 @@ OUT="$SITE_DIR/public/llms.txt"
 cat > "$OUT" << 'HEADER'
 # open traces
 
-> Open-source CLI for repo-local agent trace capture, review, and upload to Hugging Face Hub. React inbox, terminal inbox, and structured JSONL schema.
+> Open-source CLI for repo-local agent trace capture, dataset authoring, and publication to Hugging Face Hub. Local bucket store with optional private-remote sync, VCS-anchored Trace Trails, executable dataset workflows, and a structured JSONL schema.
 
 ## Links
 
@@ -36,6 +36,7 @@ for f in \
   "$DOCS_DIR/workflow/blame.md" \
   "$DOCS_DIR/workflow/pushing.md" \
   "$DOCS_DIR/workflow/consume.md" \
+  "$DOCS_DIR/workflow/export.md" \
   "$DOCS_DIR/schema/overview.md" \
   "$DOCS_DIR/schema/trace-record.md" \
   "$DOCS_DIR/schema/steps.md" \
@@ -48,6 +49,7 @@ for f in \
   "$DOCS_DIR/integration/agent-setup.md" \
   "$DOCS_DIR/integration/ci-cd.md" \
   "$DOCS_DIR/integration/post-processor-contract.md" \
+  "$DOCS_DIR/integration/capture-integration.md" \
   "$DOCS_DIR/contributing/development.md" \
   "$DOCS_DIR/contributing/schema-changes.md"; do
   if [ -f "$f" ]; then

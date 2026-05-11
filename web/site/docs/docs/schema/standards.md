@@ -41,7 +41,7 @@ A code attribution spec (CC BY 4.0) that records which lines of code came from w
 
 Adoption is additive — pre-0.3.0 traces validate unchanged.
 
-`opentraces export --format agent-trace` emits Agent Trace v0.1.0 JSONL based on these fields.
+The Agent Trace v0.1.0 serializer lives in `src/opentraces/publish/agent_trace.py` and is consumed by dataset workflows that need to emit Agent Trace JSONL. See [Export](/docs/workflow/export) for details.
 
 ## OTel GenAI Semantic Conventions
 

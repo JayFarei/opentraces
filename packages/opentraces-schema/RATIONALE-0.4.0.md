@@ -1,10 +1,19 @@
 # Rationale: opentraces-schema 0.4.0
 
-`0.4.0` introduces the dataset/workflow contract used by Plan 057
-(Milestone 2 — local HF-shaped datasets and agent-skill workflows) and the
-remote/publication scaffolding that Plan 058 (Milestone 3) layers sync on
-top of. The bump is strictly additive over `0.3.0`; `TraceRecord` and the
-trace-side enrichment models are unchanged.
+`0.4.0` introduces three independent additive surfaces over `0.3.0`:
+
+1. The dataset/workflow contract used by Plan 057 (Milestone 2, local
+   HF-shaped datasets and agent-skill workflows).
+2. The remote/publication scaffolding that Plan 058 (Milestone 3) layers
+   sync on top of.
+3. The trace-index contract (Plan 056) used by `opentraces trace query`,
+   `opentraces trace map`, and `opentraces trace slice`: `TraceUnit`,
+   `TraceFacet`, `TraceSignal`, `TraceMap`, `TraceMapNode`,
+   `TraceMapEdge`, and `CandidatePacket`.
+
+The bump is strictly additive over `0.3.0`. `TraceRecord` and the trace-side
+enrichment models are unchanged; the new models are net-new public types
+that previously lived only in CLI internals.
 
 ## Why a single bump for M2 + M3 scaffolding
 
@@ -42,10 +51,13 @@ was `"fields"`; that validator is unchanged.
 
 ## What is *not* in this bump
 
-- No changes to `TraceRecord`, `Step`, `Attribution`, `GitLink`,
-  `CandidatePacket`, `TraceMap`, or the trace-side index models.
+- No changes to `TraceRecord`, `Step`, `Attribution`, `GitLink`, or any
+  existing field on the trace-side enrichment models.
 - No new enum values added to existing Literal types on existing models.
 - No renames, removals, or type narrowings on any existing field.
+
+The trace-index models (`TraceUnit`, `TraceMap`, `CandidatePacket`, etc.)
+are net-new additions, not modifications of existing types.
 
 The `0.3.0` → `0.4.0` upgrade is therefore safe under the additive
 contract: a `0.3.0` consumer that only reads `TraceRecord` can ignore

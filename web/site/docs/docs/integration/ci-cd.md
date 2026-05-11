@@ -1,6 +1,6 @@
 # CI/CD & Automation
 
-Use the same explicit workflow in automation that you use locally: initialize, inspect, stage, push.
+Use the same explicit workflow in automation that you use locally: initialize, capture, run dataset workflows, publish.
 
 ## Authentication
 
@@ -17,22 +17,24 @@ You do not need to run `opentraces auth login` when `HF_TOKEN` is already set in
 For headless runs:
 
 ```bash
-opentraces init --review-policy review --remote my-org/opentraces --no-hook
-opentraces list
-opentraces add --all
-opentraces push --private --yes
+opentraces init --agent claude-code
+opentraces dataset new my-dataset --workflow my-workflow --schema schema.json
+opentraces dataset run my-dataset --executor claude-code-headless
+opentraces dataset review my-dataset approve --all
+opentraces dataset publish my-dataset --to my-org/dataset
 ```
 
-If the runner needs to import traces from another dataset first:
+If the runner is seeding from an existing JSONL file instead of running a workflow:
 
 ```bash
-opentraces pull owner/dataset --parser hermes --auto
-opentraces push --private --yes
+opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
+opentraces dataset review my-import approve --all
+opentraces dataset publish my-import --to my-org/dataset
 ```
 
 ## Health Checks
 
-Run these before a gated push:
+Run these before a gated publish:
 
 ```bash
 opentraces doctor
@@ -52,26 +54,32 @@ Those commands assume the required binary or endpoint is already available.
 
 ```yaml
 - name: Install opentraces
-  run: pip install opentraces
+  run: pipx install opentraces
 
 - name: Initialize project
   env:
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  run: opentraces init --review-policy review --remote my-org/opentraces --no-hook
+  run: opentraces init --agent claude-code
 
-- name: Stage traces
+- name: Create dataset and run workflow
   env:
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  run: opentraces add --all
+  run: |
+    opentraces dataset new ci-dataset --workflow ci-workflow --schema schema.json
+    opentraces dataset run ci-dataset --executor claude-code-headless
 
-- name: Push traces
+- name: Approve and publish
   env:
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  run: opentraces push --private --yes
+  run: |
+    opentraces dataset review ci-dataset approve --all
+    opentraces dataset remote create ci-dataset my-org/dataset --private
+    opentraces dataset publish ci-dataset
 ```
 
 ## Notes
 
-- Use `--private` for proprietary codebases
-- Use `--repo owner/dataset` or `--remote ...` for shared team datasets
-- Use `push --llm-review` only if llm-review is already configured and reachable on the runner
+- Use `--private` (the default for `dataset remote create`) for proprietary codebases
+- Use `dataset publish --to owner/dataset` for one-shot destination overrides
+- Use `dataset publish --check-only` to validate gates without uploading
+- Tier 2 LLM review runs inside the workflow; rows arrive at `publish` already verdicted

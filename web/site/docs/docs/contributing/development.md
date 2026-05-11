@@ -63,5 +63,5 @@ The CLI version lives in `src/opentraces/__init__.py`. The schema version lives 
 ## Notes
 
 - The current live-capture adapter is Claude Code
-- Hermes currently ships as an import path via `opentraces pull --parser hermes`
-- The public inbox workflow is `web/tui/list/show -> add/reject/redact -> push`
+- Hermes currently ships as a registered `FormatImporter` consumed by dataset workflows or the schema package directly
+- The public 0.4 workflow is `init -> trace query -> dataset new -> dataset run -> dataset review -> dataset publish`

@@ -15,10 +15,11 @@ Every coding session leaves behind the data you actually want: prompts, tool cal
 1. Capture traces from supported agents such as Claude Code.
 2. Enrich them with task, model, token, dependency, and git metadata.
 3. Run regex, entropy, optional TruffleHog, and optional LLM review passes.
-4. Search and map retained traces without loading full transcripts.
-5. Correlate traces to later commits via Trace Trails, blame, graph, and resume.
-6. Run local workflow skills that append schema-valid rows to local datasets.
-7. Review dataset rows and publish approved rows to Hugging Face remotes.
+4. Search, map, and slice retained traces without loading full transcripts.
+5. Correlate traces to later commits via Trace Trails: blame, graph, and track.
+6. Sync a private bucket of captured traces to a HuggingFace remote on demand.
+7. Run local workflow skills that turn traces into schema-valid dataset rows.
+8. Review dataset rows and publish approved rows to HuggingFace remotes.
 
 ## Install
 
@@ -70,8 +71,12 @@ opentraces trace query --lex "bug fix failing test"
 # extract bounded trace slices for dataset rows
 opentraces trace slice <trace-id> --template bursts --json
 
-# inspect Git-anchored trace evidence
-opentraces trail sync --patch <trace_patch_id>
+# walk Git-anchored trace lineage
+opentraces trail track <trace-id>
+
+# inspect or push the private bucket of captured traces
+opentraces bucket status
+opentraces bucket remote push
 
 # create and run a workflow-backed local dataset
 opentraces dataset new bug-fixes --workflow ./workflows/bug-fix-curator/WORKFLOW.md
@@ -86,18 +91,20 @@ opentraces dataset publish bug-fixes --check-only
 Useful follow-ups:
 
 - `opentraces doctor` checks auth, integrations, and pipeline health.
-- `opentraces setup auth` logs in to Hugging Face for dataset remotes.
+- `opentraces setup auth` logs in to HuggingFace for dataset remotes.
 - `opentraces trace query/map/slice/get` searches, maps, slices, and retrieves retained traces.
+- `opentraces trace index rebuild` rebuilds the local Trace Index after capture changes.
+- `opentraces trace teleport` moves a trace and retained Git evidence between workspaces.
 - `opentraces trail blame <sha>` and `opentraces trail graph` show commit-to-trace attribution (run `opentraces setup git` first to install the post-commit correlator).
-- `opentraces trail explain --trace <id> --step <n>` explains Trace Trails evidence rebuilt from the local Git event log.
-- `opentraces trail explain <path>:<line>` resolves a Git-side file line back to Trace Patch evidence when an exact anchor exists.
-- `opentraces trail sync --patch <id>` synchronizes an anchored Trace Patch with current Git history and reports current `HEAD` survival.
-- `opentraces trail timeline <trace-id>` shows the observed Trace Trails timeline for a trace.
-- `opentraces trail teleport export/open` moves a trace and retained Git evidence between workspaces.
+- `opentraces trail track <trace-id>` walks a trace's lineage through Git history and reports current `HEAD` survival.
+- `opentraces bucket status` and `opentraces bucket manifest` inspect the local private trace bucket.
+- `opentraces bucket remote push/pull/status/diff` syncs the private bucket with a HuggingFace remote when one is configured via `opentraces setup bucket`.
+- `opentraces bucket replay` replays bucket-exported Trace Trails into a Git repository.
+- `opentraces workflow create/list/templates/remove` manages local dataset workflow skill packages.
+- `opentraces dataset list/new/run/review/publish/status` manages local datasets and row publication; `opentraces dataset remote create` binds a HuggingFace remote, and `opentraces dataset schedule` controls recurring runs.
 - `opentraces setup trufflehog` enables Tier 1.5 scanning.
 - `opentraces setup llm-review` configures Tier 2 semantic review.
-- `opentraces trail resume <trace-id>` reopens the upstream agent session behind a trace.
-- `opentraces dataset review/approve/reject/publish` manages dataset row publication.
+- `opentraces setup upgrade` upgrades the CLI and refreshes the project skill file.
 
 ## Tell Your Agent
 
@@ -128,7 +135,7 @@ Set up opentraces in this project.
 5. After init, the daily workflow is:
    - `opentraces status`
    - `opentraces trace query ...`
-   - `opentraces trail sync ...`
+   - `opentraces trail track <trace-id>`
    - `opentraces dataset run <name>`
    - `opentraces dataset publish <name>`
 
@@ -141,6 +148,12 @@ Set up opentraces in this project.
 7. Attribution queries (run `opentraces setup git` once to install the post-commit correlator):
    - `opentraces trail blame <sha>`
    - `opentraces trail graph`
+   - `opentraces trail track <trace-id>`
+
+8. Private bucket sync (optional):
+   - `opentraces setup bucket` to configure a remote-by-default private bucket
+   - `opentraces bucket status` to inspect local bucket health
+   - `opentraces bucket remote push/pull` to sync with the configured remote
 ~~~
 
 ## Security
@@ -169,7 +182,7 @@ The trace format lives in [`packages/opentraces-schema/`](packages/opentraces-sc
 - security metadata
 - optional attribution and commit correlation data
 
-The schema is a superset of ATIF and borrows ideas from Agent Trace, ADP, and OTel GenAI. Current schema version: `0.3.0`.
+The schema is a superset of ATIF and borrows ideas from Agent Trace, ADP, and OTel GenAI. Current schema version: `0.4.0`, which adds the dataset/workflow contract and the trace-index contract (TraceUnit, TraceMap, CandidatePacket) on top of `0.3.0`.
 
 ## Trace Trails
 
@@ -193,48 +206,29 @@ materialises one deterministic slice per detected change burst; manual
 `--from-step/--to-step`, `--around-step`, and `--around-patch` modes are
 available when a workflow needs an explicit window.
 
-`opentraces trail explain --trace <id> --step <n>` rebuilds from the local
-event log and reports the Trace Snapshot references, Trace Patch identity, Git
-Anchor, evidence tier, firmness, source events, and any limitations.
-`opentraces trail diff --trace <id> --from-step <a> --to-step <b>` compares
-captured snapshot trees and emits the resulting Trace Patch. The delayed Git
-Anchor reconciler can search a later commit for existing Trace Patches and
-record exact anchors, which can be queried from `--commit <sha>` or
-`<path>:<line>`.
+The visible Trail commands are `trail blame`, `trail graph`, and
+`trail track`. `trail track <trace-id>` walks a trace's lineage through Git
+history; pass `--patch <id>` or `--anchor <id>` to track a single Trace
+Patch or Git Anchor, `--since 12h` or `--all` for batch JSONL output, and
+`--history-limit N` to bound the per-anchor commit walk (default 500). The
+walker reports `current_observations` (one latest observation per anchor)
+and `current_survival` (any alive anchor wins over later lost anchors),
+plus `observation_sequence`, `anchor_trail_index`,
+`observed_commit_time`, and `anchor_descendant_count` so consumers can
+sort, group, or compute truncation gaps without re-walking Git.
 
-`opentraces trail resolve ot://... --json` resolves stable resource paths:
-`ot://trace/<trace_id>/patches/<trace_patch_id>/trail`,
-`ot://git-anchor/<git_anchor_id>`, and
-`ot://file/<path>/line/<n>/origin`. Resolution returns IDs and metadata,
-including `containing_segment_id`, without embedding full Trace Slice
-content.
-
-`opentraces trail attach --trace <id> --commit <sha>` retroactively
-connects a trace's evidence to a Git commit when the post-commit
-correlator missed (hook failure, daemon crash, out-of-order
-backfill). New events carry `capture_method=["manual_attach"]` so
-downstream consumers can distinguish manual from automatic capture.
-Source events are byte-identical after attach; the operation is fully
-append-only and idempotent.
-
-`opentraces trail rebuild` re-derives advisory snapshot refs from the
-canonical event log. The append-only event log is the source of truth;
-projections can be dropped and rebuilt without losing replayability,
-even after `git gc --prune=now --aggressive`, because batch commits
-embed snapshot trees as subtrees so Git GC cannot prune them.
-
-Trace-side history is the append-only sequence of snapshots, patches, searches,
-and anchors observed by OpenTraces. Git-side Patch Trails are computed from Git
-history and repository state after a patch has a Git Anchor. `opentraces trail
-follow --patch <trace_patch_id>` and `--anchor <git_anchor_id>` report bounded
-chronological survival observations from each Git Anchor to current `HEAD`;
-`current_observations` contains one latest observation per anchor, and
-`current_survival` aggregates those latest answers so any alive anchor wins over
-later lost anchors. Each observation carries `observation_sequence` (global,
-contiguous), `anchor_trail_index` (per-anchor), `observed_commit_time`, and
-`anchor_descendant_count` so consumers can sort, group, or compute truncation
-gaps without re-walking Git. Use `--history-limit N` to bound how many commits
-per anchor are observed (default 500).
+Substrate-level introspection commands stay available for advanced
+debugging: `trail explain --trace <id> --step <n>` rebuilds evidence from
+the local event log, `trail explain <path>:<line>` resolves a Git-side
+file line back to Trace Patch evidence, `trail sync --patch <id>`
+synchronizes a Trace Patch against current Git history,
+`trail timeline <trace-id>` shows the observed event timeline,
+`trail resolve ot://...` resolves stable resource paths
+(`ot://trace/<id>/patches/<id>/trail`, `ot://git-anchor/<id>`,
+`ot://file/<path>/line/<n>/origin`), `trail attach --trace <id> --commit
+<sha>` retroactively connects a trace's evidence to a commit when the
+post-commit hook missed, and `trail rebuild` re-derives advisory
+snapshot refs from the canonical event log.
 
 Survival states. Phase 4 ships `alive_on_path`, `alive_transformed`,
 `reverted`, `lost`, and `unknown`. Phase 5 adds three computed states:
@@ -335,18 +329,21 @@ packages/
   opentraces-schema/
   opentraces-ui/
 src/opentraces/
-  cli/
-  core/
-  capture/
-  publish/
-  enrichment/
-  quality/
-  security/
-  clients/
+  cli/                  # Click command groups: trace, trail, bucket, dataset, workflow, setup, ...
+  core/                 # Domain glue: config, paths, state, pipeline, datasets, bursts, intent, ...
+    trails/             # VCS-anchored Trace Trails substrate (event log, snapshots, anchors, ...)
+  capture/              # Inbound boundary: claude_code, hermes, git, fs_watcher, tool_boundary
+  publish/              # Outbound boundary: format serializers and HuggingFace publisher
+  enrichment/           # Read-only enrichers: git signals, attribution, dependencies, metrics
+  quality/              # Trace quality assessment and rubrics
+  security/             # Secret scanning, anonymization, classification
+  clients/              # Presentation layers (text, tui, web)
+  workflow_templates/   # Bundled dataset workflow skill templates
 web/
-  viewer/
-  site/
-  coming-soon/
+  viewer/               # React SPA trace review UI
+  site/                 # Next.js marketing site
+  coming-soon/          # Static coming-soon page (Vercel)
+skill/                  # Claude Code skill definition (skills.sh convention)
 tests/
 ```
 

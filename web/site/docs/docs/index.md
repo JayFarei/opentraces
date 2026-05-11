@@ -7,17 +7,17 @@ opentraces is built around a simple rule: capture locally, review locally, push 
 ## Workflow
 
 ```bash
-opentraces setup            # wire opentraces into your system
-opentraces init             # initialize the project marker
-opentraces web              # or: opentraces tui   — review the inbox
-opentraces blame <sha>      # or: opentraces graph  — inspect attribution
-opentraces trail explain --trace <id> --step <n>   # explain VCS-anchored evidence
-opentraces add <id>         # stage a trace for the next push
-opentraces push             # upload staged traces
-opentraces reject <id>      # say no, keep local only
-opentraces redact <id>      # find-and-replace before re-pushing
-opentraces push             # upload
-opentraces pull             # import traces from a remote dataset
+opentraces setup                          # wire opentraces into your system
+opentraces init                           # initialize the project marker
+opentraces status                         # snapshot of inbox stages and recent traces
+opentraces trace query --since 7d         # search retained traces
+opentraces trail blame <sha>              # which traces contributed to a commit
+opentraces trail graph                    # commit + trace history
+opentraces trail track <trace-id>         # walk trace lineage through Git history
+opentraces dataset new my-dataset --workflow my-workflow
+opentraces dataset run my-dataset         # synthesize dataset rows from retained traces
+opentraces dataset review my-dataset --tui  # approve, reject, redact
+opentraces dataset publish my-dataset     # upload reviewed rows to the active remote
 ```
 
 `init` writes the committable project marker at `.opentraces.json`. Captured traces, runtime state, and upload bookkeeping stay machine-local under `~/.opentraces/projects/<slug>/`.
@@ -47,8 +47,8 @@ The [schema](/docs/schema/overview) is a standalone package and the contract bet
 | **[Authentication](/docs/getting-started/authentication)** | OAuth, PATs, `HF_TOKEN`, auth precedence |
 | **[Quick Start](/docs/getting-started/quickstart)** | Initialize a repo, review traces, upload your first shard |
 | **[Commands](/docs/cli/commands)** | Current 0.4 command reference |
-| **[Inbox & Review](/docs/workflow/review)** | Web viewer, TUI, and CLI review loop |
-| **[Push](/docs/workflow/pushing)** | Upload behavior, remotes, visibility, migration, quality badges |
+| **[Inbox & Review](/docs/workflow/review)** | Dataset review (TUI and web) and CLI review loop |
+| **[Publish](/docs/workflow/pushing)** | Dataset publication, remotes, visibility, migration, quality badges |
 | **[Security Tiers](/docs/security/tiers)** | Regex, entropy, TruffleHog, Tier 2 review, human approval |
 | **[Security Configuration](/docs/security/configuration)** | Global config, project marker, exclusions, custom redaction |
 | **[Schema](/docs/schema/overview)** | Trace structure and field semantics |

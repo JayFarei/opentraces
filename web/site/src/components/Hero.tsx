@@ -7,7 +7,7 @@ import { AGENT_PROMPT } from "@/lib/agent-prompt";
 import pkg from "@/lib/version.json";
 import type { HeroMetricItem } from "@/lib/homepage-metrics";
 
-const tabLabels = ["setup", "init", "status", "review", "blame", "push", "consume"];
+const tabLabels = ["setup", "init", "status", "review", "blame", "publish", "consume"];
 const AGENT_LINES = AGENT_PROMPT.split("\n").length;
 
 const installMethods = [
@@ -46,11 +46,11 @@ function MetricIcon({ icon }: { icon: HeroMetricItem["icon"] }) {
 function SetupContent() {
   const rows: [string, string, string][] = [
     ["agent", "detect?", "claude-code"],
-    ["hooks", "install?", "Stop, PostCompact"],
+    ["hooks", "install?", "PreToolUse, Stop"],
     ["git hook", "install?", "post-commit"],
     ["skill", "install?", "registered"],
     ["watcher", "install?", "powers blame"],
-    ["parser", "install?", "richer diffs"],
+    ["bucket", "configure?", "remote sync"],
     ["hf login", "log in?", "alice-dev"],
     ["trufflehog", "Tier 1.5?", "v3.63.1"],
     ["llm review", "enable?", "gemma4:latest"],
@@ -93,9 +93,9 @@ function InitContent() {
   type Row = { label: string; value: string; valCls: string; status?: string; statusCls?: string };
   const rows: Row[] = [
     { label: "agent", value: "claude-code", valCls: "di", status: "detected", statusCls: "di" },
-    { label: "policy", value: "review every trace", valCls: "f", status: "inbox gated", statusCls: "di" },
+    { label: "hook", value: "PreToolUse, Stop, PostCompact", valCls: "f", status: "installed", statusCls: "ok" },
+    { label: "git hook", value: "post-commit", valCls: "f", status: "linked", statusCls: "ok" },
     { label: "hf login", value: "alice-dev", valCls: "s", status: "✓", statusCls: "ok" },
-    { label: "remote", value: "jayfarei/opentraces", valCls: "s", status: "private", statusCls: "di" },
     { label: "import", value: "42 traces", valCls: "f", status: "✓ imported", statusCls: "ok" },
   ];
   return (
@@ -143,7 +143,7 @@ function StatusContent() {
       <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 5h ago    </span><span className="s">{"\u201C"}fix billing webhook{"\u201D"}</span>        <span className="n">23</span> <span className="di">steps</span>  <span className="w">1 flag {"\u26A0"}</span></span>
       <span className="terminal-line"><span className="di">  {"\u2514\u2500\u2500"} yesterday </span><span className="s">{"\u201C"}add settings page{"\u201D"}</span>          <span className="n">65</span> <span className="di">steps</span>  <span className="di">inbox</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  next: opentraces web</span></span>
+      <span className="terminal-line"><span className="di">  next: opentraces dataset review --web</span></span>
     </>
   );
 }
@@ -175,8 +175,8 @@ function ReviewContent() {
         </div>
       </div>
       <div className="tui-row tui-footer">
-        <span>inbox: 3 · committed: 0</span>
-        <span>j/k navigate · c commit · r reject · q quit</span>
+        <span>inbox: 3 · approved: 0</span>
+        <span>j/k navigate · space approve · r refresh · q quit</span>
       </div>
     </div>
   );
@@ -185,7 +185,7 @@ function ReviewContent() {
 function BlameContent() {
   return (
     <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces blame ac019172</span></span>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces trail blame ac019172</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">{"\u2502"}</span></span>
       <span className="terminal-line">
@@ -233,7 +233,7 @@ function BlameContent() {
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line">
         <span className="di">  next: </span>
-        <span className="c">opentraces show 6606fc1f</span>
+        <span className="c">opentraces trace get 6606fc1f</span>
       </span>
     </>
   );
@@ -242,14 +242,14 @@ function BlameContent() {
 function PushContent() {
   return (
     <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces push</span></span>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces dataset publish my-dataset</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Pushing 3 staged traces (private)...</span></span>
+      <span className="terminal-line"><span className="di">  Publishing 3 approved rows (private)...</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Pushed {"\u2192"}</span> <span className="s">Jayfarei/opentraces</span> <span className="di">(private)</span></span>
       <span className="terminal-line"><span className="di">    135 steps {"\u00B7"} 42,891 tokens {"\u00B7"} $3.21 estimated</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Run </span><span className="c">opentraces push --publish</span><span className="di"> to make public.</span></span>
+      <span className="terminal-line"><span className="di">  Run </span><span className="c">opentraces dataset remote visibility my-dataset --public</span><span className="di"> to make public.</span></span>
     </>
   );
 }

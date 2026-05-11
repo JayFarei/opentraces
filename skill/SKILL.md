@@ -14,22 +14,29 @@ publishes reviewed dataset rows to HuggingFace remotes.
 
 ## Current Command Model
 
-- Global setup: `opentraces setup`, `opentraces setup auth`, `opentraces auth`
-- Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`
-- Trace retrieval: `opentraces trace query`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`
-- Trace Trails: `opentraces trail blame`, `graph`, `resume`, `sync`, `timeline`, `teleport`
-- Workflows: compatibility registry only, `opentraces workflow create`, `list`, `remove`
-- Datasets: `opentraces dataset new`, `run`, `review`, `approve`, `reject`, `publish`, `pull`
+- Global setup: `opentraces setup`, `opentraces setup auth`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces auth`
+- Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`, `opentraces remove`
+- Trace retrieval and search: `opentraces trace query`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
+- Trace Trails (visible surface): `opentraces trail blame`, `opentraces trail graph`, `opentraces trail track`
+- Bucket (private capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
+- Workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`
+- Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`.
 
 Old flat inbox commands such as `opentraces list`, `add`, `reject`, `push`,
-`pull`, `web`, and `tui` are not part of the public command tree on this
-development branch.
+`pull`, `web`, and `tui` are not part of the public command tree. Several
+Trace Trails substrate commands (`trail explain`, `sync`, `timeline`,
+`teleport`, `resolve`, `attach`, `rebuild`, `diff`, `resume`, `follow`,
+`snapshots`, `snapshot checkout`) remain callable for scripting and
+debugging but are hidden from `--help` after the CLI spine simplification.
 
 ## Setup
 
 ```bash
 opentraces setup
 opentraces setup auth
+opentraces setup bucket          # opt into remote-by-default private bucket sync
+opentraces setup skill           # install the opentraces skill into agent harnesses
+opentraces setup upgrade         # upgrade CLI + refresh project skill file
 opentraces auth whoami
 opentraces init
 opentraces status
@@ -38,7 +45,9 @@ opentraces doctor
 
 `setup` is machine-global: hooks, auth, watcher, TruffleHog, LLM review, and
 supporting binaries. `init` is project enrollment only; dataset remotes and
-review policy belong under `opentraces dataset ...`.
+review policy belong under `opentraces dataset ...`. Private bucket
+configuration belongs under `opentraces setup bucket` and `opentraces
+bucket remote`.
 
 ## Trace Retrieval
 
@@ -48,15 +57,19 @@ transcripts.
 ```bash
 opentraces trace query --lex "bug fix failing test" --json
 opentraces trace query --skill grill-me --json
+opentraces trace index rebuild --json
 opentraces trace map <trace_id> --candidate <unit_id> --json
 opentraces trace slice <trace_id> --template bursts --json
 opentraces trace get <trace_id> --json
+opentraces trace teleport export <trace_id> --output <dir>
 ```
 
-`trace query` returns bounded candidate packets. `trace map` returns a
-workflow-neutral evidence map or candidate slice. `trace slice` materialises
-deterministic Trace Slice packets for dataset workflows. `trace get` is the
-explicit full retrieval step.
+`trace query` returns bounded candidate packets over the local BM25 +
+semantic Trace Index. `trace index` rebuilds and inspects that projection.
+`trace map` returns a workflow-neutral evidence map or candidate slice.
+`trace slice` materialises deterministic Trace Slice packets for dataset
+workflows. `trace get` is the explicit full retrieval step. `trace
+teleport` moves a trace and its retained Git evidence between workspaces.
 
 ### Bursts and intent
 
@@ -85,45 +98,83 @@ session).
 ## Trace Trails
 
 Trace Trails are the Git-anchored evidence chain for what a trace changed and
-where that change lives now.
+where that change lives now. The visible top-level surface is `trail blame`,
+`trail graph`, and `trail track`.
 
 ```bash
+# Visible surface
+opentraces trail blame <sha>
+opentraces trail blame t:<trace_id>
+opentraces trail graph
+opentraces trail graph --trace <trace_id>
+opentraces trail track <trace_id>
+opentraces trail track --patch <trace_patch_id>
+opentraces trail track --anchor <git_anchor_id>
+opentraces trail track --since 12h --json
+opentraces trail track --all --json --limit 50
+
+# Hidden substrate commands (still callable from scripts and JSON automation)
 opentraces trail explain --trace <id> --step <n>
 opentraces trail explain <path>:<line>
 opentraces trail sync --patch <trace_patch_id>
 opentraces trail sync --anchor <git_anchor_id>
-opentraces trail blame <sha>
-opentraces trail graph
-opentraces trail resume <trace_id>
 opentraces trail timeline <trace_id>
+opentraces trail resume <trace_id>
 opentraces trail teleport export <trace_id> --output <dir>
 opentraces trail teleport open <bundle> --project <blank-dir>
+opentraces trail resolve ot://trace/<id>/patches/<id>/trail --json
+opentraces trail attach --trace <id> --commit <sha>
+opentraces trail rebuild
 ```
 
-`trail sync` is the renamed follow operation: it synchronizes OpenTraces'
-current understanding of a Trace Patch or Git Anchor with the latest Git
-history and reports the current survival state.
+`trail track` walks a trace's lineage through Git history and reports
+current `HEAD` survival across all anchors, with batch JSONL output via
+`--since`, `--all`, and `--patches-from`. The substrate `trail sync`
+synchronizes OpenTraces' current understanding of a Trace Patch or Git
+Anchor with the latest Git history. `trail timeline` shows the observed
+timeline of snapshots, patches, anchors, and survival observations.
+`trail teleport` moves a trace plus the retained Git evidence needed to
+inspect or resume it in a blank workspace.
 
-`trail timeline` shows the observed timeline of snapshots, patches, anchors,
-and survival observations for a trace.
+## Bucket
 
-`trail teleport` moves a trace plus the retained Git evidence needed to inspect
-or resume it in a blank workspace.
+The bucket is the project-local private store of every captured trace, under
+`~/.opentraces/projects/<slug>/bucket/`. It is local-only by default. Opt into
+remote-by-default sync with `opentraces setup bucket`; sync is always
+explicit.
+
+```bash
+opentraces bucket status --json
+opentraces bucket manifest --json
+opentraces bucket remote status --json
+opentraces bucket remote push --json
+opentraces bucket remote pull --json
+opentraces bucket remote diff --json
+opentraces bucket replay --project <repo-dir>
+```
+
+Buckets are distinct from datasets. A bucket holds raw captured traces; a
+dataset holds workflow-projected rows. `bucket replay` replays
+bucket-exported Trace Trails into a Git repository (useful when a teammate
+hands you a bucket and you need to materialise its evidence locally).
 
 ## Workflows
 
-Workflows are Markdown files or skill-format packages that know how to turn
-trace evidence into dataset rows. The main user path is to bind them from the
-dataset:
+Workflows are skill-format packages (or Markdown files) that know how to turn
+trace evidence into dataset rows. The main path is to scaffold one with
+`opentraces workflow create` and then bind it to a dataset:
 
 ```bash
+opentraces workflow templates --json
+opentraces workflow create <name> --template skill-command-trajectory-eval-v1
+opentraces workflow list --json
+opentraces workflow remove <name> --yes
 opentraces dataset new <name> --workflow ./workflows/<workflow>/WORKFLOW.md
 opentraces dataset new <name> --workflow ./workflows/<workflow>/
 ```
 
-The compatibility registry remains callable for local scaffolding and cleanup:
-`opentraces workflow create <name>`, `opentraces workflow list`, and
-`opentraces workflow remove <name> --yes`.
+The bundled `skill-command-trajectory-eval-v1` template materialises a ready
+workflow that emits command-trajectory evaluation rows.
 
 ## Datasets
 
@@ -132,24 +183,30 @@ local, or it can be bound to a HuggingFace dataset remote and published after
 review/security gates pass.
 
 ```bash
-opentraces dataset list
+opentraces dataset list --json
 opentraces dataset new <name> --workflow <workflow.md-or-package-dir>
+opentraces dataset status <name> --json
 opentraces dataset run <name> --dry-run --limit 5 --verbose
 opentraces dataset run <name>
 opentraces dataset review <name>
-opentraces dataset approve <name> <row_id>
-opentraces dataset reject <name> <row_id>
+opentraces dataset review approve <name> <row_id>
+opentraces dataset review reject <name> <row_id>
 opentraces dataset review reset <name> <row_id>
 opentraces dataset remote create <name> <owner/name> --private
+opentraces dataset remote add <name> <owner/name>
+opentraces dataset remote list <name>
+opentraces dataset remote visibility <name> --public
 opentraces dataset publish <name> --check-only
 opentraces dataset publish <name>
-opentraces dataset pull <name> --data
-opentraces dataset withdraw <name> <row_id> --reason <code>
+opentraces dataset publish <name> --min-retention 0.5 --exclude-state lost
+opentraces dataset schedule list
+opentraces dataset remove <name> --yes
 ```
 
 Manual review means rows remain local until approved. Automatic review policy
 may mark rows publishable, but remote egress is still explicit: publish is a
-separate user action.
+separate user action. `dataset publish --min-retention` and `--exclude-state`
+filter rows by survival quality before staging.
 
 ## JSON Mode
 
@@ -158,8 +215,10 @@ Prefer `--json` for agent automation:
 ```bash
 opentraces --json status
 opentraces --json trace query --skill grill-me
-opentraces --json trail sync --patch <patch_id>
-opentraces --json dataset status <name> --remote
+opentraces --json trace map <trace_id>
+opentraces --json trail track <trace_id>
+opentraces --json bucket status
+opentraces --json dataset status <name>
 ```
 
 ## Troubleshooting
@@ -169,5 +228,6 @@ opentraces --json dataset status <name> --remote
 | Not initialized | Run `opentraces init` |
 | Auth missing | Run `opentraces setup auth` or `opentraces auth login` |
 | No traces visible | Check `opentraces setup claude-code`, then `opentraces status` |
-| Trace Trail event log invalid | Run `opentraces doctor`; rebuild support is an internal repair path |
-| Publish blocked | Run `opentraces dataset status <name> --remote --json` and `opentraces dataset publish <name> --check-only` |
+| Trace Trail event log invalid | Run `opentraces doctor`; `opentraces trail rebuild` re-derives advisory projections |
+| Bucket not syncing | Run `opentraces setup bucket` to configure a remote, then `opentraces bucket remote status` |
+| Publish blocked | Run `opentraces dataset status <name> --json` and `opentraces dataset publish <name> --check-only` |

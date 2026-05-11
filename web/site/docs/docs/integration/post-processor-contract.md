@@ -1,7 +1,7 @@
 # Post-processor contract
 
 opentraces can pipe any trace through an ordered chain of external
-commands pre-upload (during `opentraces push`). A post-processor is any
+commands pre-upload (during `opentraces dataset publish`). A post-processor is any
 executable on `PATH` (or an absolute path) that speaks this small
 contract.
 

@@ -23,11 +23,24 @@ line = record.to_jsonl_line()
 
 ## Version
 
-The schema version (`0.3.0`) lives in `src/opentraces_schema/version.py` as the
+The schema version (`0.4.0`) lives in `src/opentraces_schema/version.py` as the
 single source of truth. See [VERSION-POLICY.md](VERSION-POLICY.md) for semver
 semantics and the bump checklist.
 
-`0.3.0` adds the current commit-correlation surface: `GitLink`,
+`0.4.0` is strictly additive over `0.3.0`. It introduces the local dataset
+and workflow contract used by the CLI's `dataset` and `workflow` commands
+(`DatasetManifest`, `DatasetSchemaRef`, `WorkflowRef`, `ExecutorConfig`,
+`DatasetIdentity`, `DatasetCandidateQuery`, `DatasetSchedule`,
+`DatasetDiscoverability`, `DatasetRunRecord`, `DatasetRowIndexEntry`) plus
+the remote/publication scaffolding (`DatasetRemote`,
+`DatasetPublicationPolicy`, `DatasetPublicationState`,
+`DatasetPublicationStateEntry`) that powers private bucket sync and dataset
+remotes. It also publishes the trace-index contract used by `trace query`,
+`trace map`, and `trace slice`: `TraceUnit`, `TraceMap`, `TraceMapNode`,
+`TraceMapEdge`, `CandidatePacket`, `TraceFacet`, and `TraceSignal`. The
+`TraceRecord` model is unchanged from `0.3.0`.
+
+`0.3.0` added the commit-correlation surface: `GitLink`,
 `TraceRecord.lifecycle`, `TraceRecord.generation_index`,
 `TraceRecord.git_links`, `Task.repository_url`,
 `Attribution.revision`, `Attribution.unaccounted_files`,
@@ -41,7 +54,7 @@ Every version of the schema ships with a rationale document explaining why each
 model and field exists, grounded in public standards (ATIF, Agent Trace, ADP, OTel)
 and empirical observations from real agent traces.
 
-The current rationale is [RATIONALE-0.3.0.md](RATIONALE-0.3.0.md). Each version
+The current rationale is [RATIONALE-0.4.0.md](RATIONALE-0.4.0.md). Each version
 has its own rationale file linked from the [CHANGELOG](CHANGELOG.md).
 
 ## Contributing
@@ -62,6 +75,8 @@ for details.
 
 - [CHANGELOG.md](CHANGELOG.md) - What changed in each version
 - [VERSION-POLICY.md](VERSION-POLICY.md) - What version numbers mean for a schema package
-- [RATIONALE-0.3.0.md](RATIONALE-0.3.0.md) - Current rationale for v0.3.0
+- [FIELD-MAPPINGS.md](FIELD-MAPPINGS.md) - Field maps to ATIF, ADP, and OTel GenAI
+- [RATIONALE-0.4.0.md](RATIONALE-0.4.0.md) - Current rationale for v0.4.0
+- [RATIONALE-0.3.0.md](RATIONALE-0.3.0.md) - Rationale for v0.3.0
 - [RATIONALE-0.2.0.md](RATIONALE-0.2.0.md) - Design rationale for v0.2.0
 - [RATIONALE-0.1.0.md](RATIONALE-0.1.0.md) - Design rationale for v0.1.0

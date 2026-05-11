@@ -1,75 +1,67 @@
-# Push
+# Publish
 
-`opentraces push` uploads staged traces to Hugging Face Hub as a new JSONL shard. It never appends to an existing shard in place.
+In 0.4 publication is dataset-scoped. `opentraces dataset publish <name>` uploads reviewed rows and contract files for a named dataset to its active HuggingFace remote as a new JSONL shard. It never appends to an existing shard in place.
 
-If nothing is staged yet, review first and run:
+If nothing is approved yet, review first:
 
 ```bash
-opentraces add --all
+opentraces dataset review my-dataset approve --all
 ```
 
 ## Options
 
 ```bash
-opentraces push
-opentraces push --private
-opentraces push --public
-opentraces push --publish
-opentraces push --gated
-opentraces push --no-assess
-opentraces push --repo user/custom-dataset
-opentraces push --llm-review
-opentraces push --no-trufflehog
+opentraces dataset publish my-dataset
+opentraces dataset publish my-dataset --to owner/team-dataset
+opentraces dataset publish my-dataset --check-only
+opentraces dataset publish my-dataset --min-retention 0.5
+opentraces dataset publish my-dataset --exclude-state lost --exclude-state never_committed
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--private` | off | Force private visibility |
-| `--public` | off | Force public visibility |
-| `--publish` | off | Change an existing private dataset to public |
-| `--gated` | off | Enable gated access on the dataset |
-| `--assess / --no-assess` | on | Run quality scoring and include badges in the dataset card |
-| `--llm-review` | off | Require a clean Tier 2 LLM verdict on every staged trace before upload |
-| `--no-trufflehog` | off | One-shot override: skip Tier 1.5 TruffleHog for this push only |
-| `--repo` | `{username}/opentraces` | Target HF dataset repo |
-| `--migrate-remote / --no-migrate-remote` | prompt | Auto-migrate older schema shards on the remote |
-| `-y, --yes` | off | Skip interactive prompts, including migration confirmation |
+| `--to TEXT` | bound remote | Remote name or `owner/name` override |
+| `--check-only` | off | Run all gates and stage without uploading |
+| `--resume TEXT` | off | Resume a previous publication run id |
+| `--min-retention FLOAT` | off | Drop rows whose mean `retention_fraction` across `patches_with_survival` is below this threshold (0.0-1.0) |
+| `--exclude-state TEXT` | off | Drop rows that have any patch with this `survival_state`. Repeatable |
+| `--json` | off | Emit structured JSON |
 
-`--approved-only` is not part of the current CLI.
+Under `--check-only` the drop counts surface in the JSON `publish.filter` block without uploading.
 
 ## Security Gates
 
-Two optional gates can run at push time:
+Two optional gates can run at publish time:
 
-- `--llm-review` blocks the upload unless every staged trace carries a clean completed Tier 2 verdict in `metadata.llm_review`.
-- `--no-trufflehog` is a one-shot escape hatch for projects where Tier 1.5 TruffleHog is enabled in config but you want to skip it just for this push. It does not change the persisted config.
+- **Tier 1.5 TruffleHog** runs automatically when enabled via `opentraces setup trufflehog`. Findings are redacted in place and force review before the row can be approved.
+- **Tier 2 LLM review** runs out-of-band via `opentraces setup llm-review` and the dataset workflow. Approved rows carry a clean verdict; rows without one are not eligible for publication when the dataset's publication policy requires it.
 
-When `--llm-review` aborts, the CLI exits `3` and prints `opentraces llm-review` as the hint.
+When a gate aborts, the CLI exits `3` and prints a remediation hint.
 
 ## How Upload Works
 
-Each push creates a new JSONL shard. Existing data is never overwritten or appended to.
+Each publish creates a new JSONL shard. Existing data is never overwritten or appended to.
 
 ```text
 data/
-  traces_20260329T142300Z_a1b2c3d4.jsonl
-  traces_20260401T091500Z_e5f6a7b8.jsonl   <- new shard from this push
+  rows_20260329T142300Z_a1b2c3d4.jsonl
+  rows_20260401T091500Z_e5f6a7b8.jsonl   <- new shard from this publish
 ```
 
 That means:
 
-- Each push is atomic
+- Each publish is atomic
 - No merge conflicts between contributors
 - Dataset history grows by shard
 
 ## Dataset Card
 
-`push` generates or updates a `README.md` dataset card on every successful upload. The card aggregates statistics across **all** shards in the repo, not just the current batch, so counts are always accurate.
+`dataset publish` generates or updates a `README.md` dataset card on every successful upload. The card aggregates statistics across **all** shards in the repo, not just the current batch, so counts are always accurate.
 
 The card records:
 
 - schema version
-- trace counts, steps, and tokens
+- row counts, steps, and tokens
 - model and agent distribution
 - date range
 - average cost and success rate (when available)
@@ -78,21 +70,19 @@ A machine-readable JSON block is embedded for programmatic consumers:
 
 ```html
 <!-- opentraces:stats
-{"total_traces":1639,"avg_steps_per_session":42,...}
+{"total_rows":1639,"avg_steps_per_session":42,...}
 -->
 ```
 
-### Quality scorecard (`--assess`)
+### Quality scorecard
 
-Quality scoring is enabled by default during push. The resulting scorecard is embedded into the dataset card with badges, a persona breakdown, and a `quality.json` sidecar.
-
-Use `--no-assess` if you want to skip that pass for a particular upload.
+Quality scoring is part of the workflow. The resulting scorecard is embedded into the dataset card with badges, a persona breakdown, and a `quality.json` sidecar.
 
 Here's what the scorecard looks like on a live dataset:
 
 [![Overall Quality 78.1%](https://img.shields.io/badge/Overall_Quality-78.1%25-ffc107)](https://opentraces.ai) [![Gate FAILING](https://img.shields.io/badge/Gate-FAILING-dc3545)](https://opentraces.ai) ![Conformance 88.4%](https://img.shields.io/badge/Conformance-88.4%25-28a745) ![Training 89.0%](https://img.shields.io/badge/Training-89.0%25-28a745) ![RL 73.4%](https://img.shields.io/badge/RL-73.4%25-ffc107) ![Analytics 55.7%](https://img.shields.io/badge/Analytics-55.7%25-fd7e14) ![Domain 84.1%](https://img.shields.io/badge/Domain-84.1%25-28a745)
 
-The scorecard embeds per-persona scores as shields.io badges, a breakdown table with PASS / WARN / FAIL per rubric, and a `quality.json` sidecar for machine consumers. See [Assess](/docs/workflow/quality) for scoring details.
+The scorecard embeds per-persona scores as shields.io badges, a breakdown table with PASS / WARN / FAIL per rubric, and a `quality.json` sidecar for machine consumers.
 
 ## Visibility
 
@@ -102,33 +92,36 @@ The scorecard embeds per-persona scores as shields.io badges, a breakdown table 
 | Public | Anyone | Open-source contributions |
 | Gated | Anyone who requests access | Controlled sharing |
 
-## Push Behavior by Mode
+Set visibility via `opentraces dataset remote create <name> <repo> --private/--public` or change after the fact with `opentraces dataset remote visibility`.
 
-In `review` mode, every trace waits in Inbox until a human stages it.
+## Publish Behavior by Mode
 
-In `auto` mode, clean traces are auto-approved into the `staged` set. Push is still explicit.
+In `review` mode, every trace waits in Inbox until a human approves it (capture-time policy, set with `opentraces config set review_policy review --project`).
 
-## Remotes
+In `auto` mode, clean traces are auto-approved at capture time. Dataset publication is still explicit.
 
-Use `opentraces remote` to manage which Hugging Face dataset this repo pushes to:
+## Dataset Remotes
 
-```bash
-opentraces remote list
-opentraces remote add owner/dataset
-opentraces remote create owner/team-traces --private
-opentraces remote visibility owner/dataset --public
-opentraces remote remove owner/dataset
-```
-
-`push --repo owner/dataset` is a one-shot override for the destination. The project's active remote remains unchanged unless you update it through `opentraces remote`.
-
-## Export
-
-Export is now part of the public CLI for staged traces:
+Use `opentraces dataset remote` to manage which HuggingFace datasets a local dataset publishes to:
 
 ```bash
-opentraces export --format agent-trace
-opentraces export --format atif
+opentraces dataset remote list my-dataset
+opentraces dataset remote add my-dataset owner/dataset
+opentraces dataset remote create my-dataset owner/team-traces --private
+opentraces dataset remote visibility my-dataset owner/dataset --public
+opentraces dataset remote remove my-dataset owner/dataset
 ```
 
-`agent-trace` emits Agent Trace JSONL. `atif` is present but still a lighter path. Start from the schema docs if you need a custom converter.
+`dataset publish --to owner/dataset` is a one-shot override for the destination. The dataset's bound remotes remain unchanged unless you update them through `dataset remote`.
+
+## Bucket Sync vs Dataset Publish
+
+The local trace bucket (your private workspace state, retained traces, Trace Trails, attribution cache) syncs separately from dataset publication:
+
+```bash
+opentraces bucket remote push
+opentraces bucket remote pull
+opentraces bucket remote status
+```
+
+Configure the bucket remote up front with `opentraces setup bucket`. Dataset publication is independent: a published dataset is the curated output, while the bucket is the working substrate.

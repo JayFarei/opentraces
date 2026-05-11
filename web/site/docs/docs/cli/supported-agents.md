@@ -7,9 +7,9 @@
 | Mode | Identifier | Status | Notes |
 |------|------------|--------|-------|
 | Live capture | `claude-code` | Supported | Installed via `opentraces init` or `opentraces setup claude-code` |
-| Dataset import | `hermes` | Supported | Used with `opentraces pull --parser hermes` |
+| Dataset import | `hermes` | Supported | Registered `FormatImporter`. Invoked from dataset workflows or via the schema package's serializers |
 
-Planned adapters can follow the same contracts without changing the inbox, push, or schema layers.
+Planned adapters can follow the same contracts without changing the review, publish, or schema layers.
 
 ## Live Capture vs Import
 
@@ -21,7 +21,7 @@ That distinction matters in the public CLI:
 
 ```bash
 opentraces init --agent claude-code
-opentraces pull owner/dataset --parser hermes
+opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 ```
 
 ## Adapter Contracts

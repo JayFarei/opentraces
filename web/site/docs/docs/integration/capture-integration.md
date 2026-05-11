@@ -76,7 +76,7 @@ class FormatImporter(Protocol):
     def map_record(self, row: dict, index: int, source_info: dict | None = None) -> TraceRecord | None: ...
 ```
 
-- `format_name`: registry key for `opentraces pull --parser <format_name>`.
+- `format_name`: registry key resolved through `opentraces.capture.resolve_import_format()` and consumed by dataset workflows that need to ingest external rows.
 - `file_extensions`: list of accepted suffixes (`[".jsonl"]`, `[".jsonl", ".json"]`).
 - `import_traces`: walk a local file and return all valid records. `max_records=0` means unlimited.
 - `map_record`: convert one row dict to a `TraceRecord`, or return `None` to skip. This is also called by the streaming HF importer in `cli/import_hf.py`, so any per-row logic must live here, not in `import_traces`.
@@ -155,15 +155,16 @@ This makes `opentraces setup skill --harness codex-cli` symlink the bundled skil
 
 ### Known coupling that must be generalized for live agents
 
-Three call sites in the existing code path import `ClaudeCodeParser` directly instead of going through the registry. Adding a second live-agent parser requires generalizing them:
+Several call sites in the existing code path import `ClaudeCodeParser` (or the per-agent `resume` module) directly instead of going through the registry. Adding a second live-agent parser requires generalizing them:
 
 | File:line | Current state | What to do |
 |-----------|---------------|------------|
 | `src/opentraces/core/ingest.py:46` | `from ..capture.claude_code.parse import ClaudeCodeParser` | Look up parser via `get_parsers()[agent_name]` based on the project's `agents` config |
-| `src/opentraces/quality/engine.py:575` | `from ..capture.claude_code.parse import ClaudeCodeParser` | Same |
-| `src/opentraces/cli/__init__.py:2123-2125` | `if "claude-code" not in agents: return False` (in `_install_capture_hook`) | Iterate over the project's `agents` and dispatch to the matching `HookInstaller` |
-| `src/opentraces/cli/__init__.py:4181` | `"agents": ["claude-code"]` (capabilities endpoint) | Return `list(get_parsers().keys())` |
-| `src/opentraces/clients/web/server.py:480`, `src/opentraces/cli/trace.py:612` | `from ..capture.claude_code.resume import ...` | Add a `resume` registry, or accept that resume is per-agent until then |
+| `src/opentraces/quality/engine.py:575` | `from ..capture.claude_code import ClaudeCodeParser` | Same |
+| `src/opentraces/cli/__init__.py:1181` | `from ..capture.claude_code import ClaudeCodeParser` (inside `_capture_sessions_into_project`) | Iterate over the project's `agents` and dispatch to the matching parser |
+| `src/opentraces/cli/__init__.py:2181` | `if "claude-code" not in agents: return False` (in `_install_capture_hook`) | Iterate over the project's `agents` and dispatch to the matching `HookInstaller` |
+| `src/opentraces/cli/__init__.py:4180` | `"agents": ["claude-code"]` (capabilities endpoint) | Return `list(get_parsers().keys())` |
+| `src/opentraces/clients/web/server.py:525`, `src/opentraces/cli/trace.py:1621` | `from ..capture.claude_code.resume import ...` | Add a `resume` registry, or accept that resume is per-agent until then |
 
 These are pre-existing TODOs from when the codebase was Claude-Code-only. They are not your spec's fault, but you will hit them. Generalizing the registry dispatch is part of "adding the second live agent."
 
@@ -190,7 +191,7 @@ class MyFormatParser:
 
 Register in `_register_defaults()`. Write `tests/capture/test_parser_my_format.py` modeled on `tests/capture/test_parser_hermes.py`. Done.
 
-Users invoke it with `opentraces pull <dataset> --parser my-format` for HF datasets or `opentraces import <file>` for local files.
+In 0.4 importers are consumed by dataset workflows rather than a dedicated top-level CLI verb. The most direct user-facing entrypoint is `opentraces dataset new <name> --rows-file <file> --schema <schema>` for ad-hoc seeding; workflows can also call registered importers through `opentraces.capture.resolve_import_format()`.
 
 ## Tier 2: Live session parser
 
@@ -252,7 +253,7 @@ subprocess.Popen(
 )
 ```
 
-Reference: `src/opentraces/capture/claude_code/hooks/on_stop.py:136-154`.
+Reference: `src/opentraces/capture/claude_code/hooks/on_stop.py:136` (`_spawn_ingest`).
 
 ### The installer
 
@@ -265,11 +266,11 @@ Implement `HookInstaller`. Idempotency is the load-bearing requirement. Steps:
 5. Prune stale earlier-version opentraces entries (older script paths, `python3` fallbacks).
 6. Atomic write: stage to `<settings>.tmp`, then `os.replace`.
 
-Reference implementation: `src/opentraces/capture/claude_code/install.py:36-310`. The `EVENT_SCRIPTS` constant maps event names to script files, the rest is plumbing.
+Reference implementation: `src/opentraces/capture/claude_code/install.py`. The `EVENT_SCRIPTS` constant at line 36 maps event names (`PreToolUse`, `PostToolUse`, `Stop`, `PostCompact`) to script files; the rest is plumbing.
 
 ## Tier 4: Trace Trails capture
 
-This is the deepest layer, plan-54 integration. It gives you VCS-anchored patch lineage, git anchor correlation on commit, and `trail explain / search / blame / graph` participation.
+This is the deepest layer, plan-54 integration. It gives you VCS-anchored patch lineage, git anchor correlation on commit, and `trail track / blame / graph` participation (the 0.4 surface that replaced the older `trail explain / search / sync / timeline` verbs).
 
 ### What the agent must provide
 
@@ -289,7 +290,7 @@ trail = {
 }
 ```
 
-Embed `trail` in the event's `data` dict. `write_worktree_tree` is a synchronous in-process `git add -A && git write-tree` over a scratch GIT_INDEX_FILE, it does not touch the user's index. Reference: `src/opentraces/core/trails/snapshots.py:251-263`.
+Embed `trail` in the event's `data` dict. `write_worktree_tree` is a synchronous in-process `git add -A && git write-tree` over a scratch GIT_INDEX_FILE, it does not touch the user's index. Reference: `src/opentraces/core/trails/snapshots.py:290`.
 
 The synchronous-at-boundary call is load-bearing. If the agent's hook is async or out-of-process, the worktree could change between the tool finishing and the tree SHA being captured, producing `hook_payload_state_mismatch` capture limitations.
 
@@ -301,7 +302,7 @@ Index the captured hook events into `record.metadata` under exactly these keys (
 - `metadata["hook_post_tool_use"]`: dict keyed by `tool_call_id` to `{timestamp, tool, file_path, start_line, end_line, content_hash, confidence, capture_status, limitations, trail}`
 - `metadata["hook_stop"]`: list of stop event dicts
 
-If you use other key names, the existing bridge function `emit_step_window_events_from_record()` (in `src/opentraces/core/trails/snapshots.py:487-801`) will not find them. Two options:
+If you use other key names, the existing bridge function `emit_step_window_events_from_record()` (in `src/opentraces/core/trails/snapshots.py:594`) will not find them. Two options:
 
 1. Normalize your hook output into the expected keys at parse time (recommended, cheaper).
 2. Add a parallel `emit_step_window_events_from_<agent>_record()` that reads from your custom keys.
@@ -323,13 +324,13 @@ Once the parser produces the correct `metadata` shape, ingest automatically:
 5. The git post-commit hook (agent-agnostic, install separately via `opentraces setup git`) emits `git_anchor_created` events that correlate the commit to the patches.
 6. The watcher backstop catches mutations outside any tool call and emits `filesystem_mutation_observed` events.
 
-All of this lands in `refs/opentraces/local/events/v1` as an append-only Git ref, hash-chained, gc-safe. `trail explain`, `trail search`, `trail follow`, `blame`, and `graph` all read from it.
+All of this lands in `refs/opentraces/local/events/v1` as an append-only Git ref, hash-chained, gc-safe. `trail track`, `trail blame`, `trail graph`, and `trace get` (for `ot://` resources) all read from it.
 
 ## Watcher integration
 
 The watcher daemon (`src/opentraces/watcher/daemon.py`) is mostly agent-agnostic. It polls per-project, runs an mtime probe over agent session files, and calls `core.ingest.scan_project` on activity.
 
-What is agent-specific: `_claude_jsonl_dir(project_cwd)` (daemon.py:97) is the only Claude-Code-specific path probe. To add a new live agent's storage path:
+What is agent-specific: `_claude_jsonl_dir(project_cwd)` (daemon.py:106) is the only Claude-Code-specific path probe. To add a new live agent's storage path:
 
 1. Add a per-agent dir resolver, e.g. `_codex_session_dir(project_cwd)`.
 2. Extend `_jsonl_activity_since` to check both directories, or refactor it to iterate over a list returned by `[parser.session_dir(cwd) for parser in get_parsers().values()]` (cleanest, requires adding `session_dir` to `SessionParser`).
@@ -386,7 +387,7 @@ Each row is a behavior; each column is an integration tier. MUST = required to m
 | `tool_call_id` pairing across pre/post hooks | N/A | N/A | N/A | N/A | MUST | N/A |
 | `mark_skipped("missing_pre_or_post_hook")` negative case | N/A | N/A | N/A | N/A | MUST | N/A |
 | `capture_method` array contains expected hook tier tags | N/A | N/A | N/A | N/A | MUST | N/A |
-| Phase-7 UAT: `trail explain`, `trail search`, `blame`, `graph` work via `append_exact_patch_trail()` with your `writer` and `capture_method` | N/A | N/A | N/A | N/A | SHOULD | N/A |
+| Phase-7 UAT: `trail track`, `trail blame`, `trail graph` work via `append_exact_patch_trail()` with your `writer` and `capture_method` | N/A | N/A | N/A | N/A | SHOULD | N/A |
 | Per-agent session-dir resolver returns correct path | N/A | N/A | N/A | N/A | N/A | MUST |
 | Active tick → `scan_project()` invoked; quiet tick → not invoked | N/A | N/A | N/A | N/A | N/A | MUST |
 | Sweep failure swallowed, does not break backfill | N/A | N/A | N/A | N/A | N/A | SHOULD |
@@ -400,7 +401,7 @@ The substrate, security pipeline, and quality engine all operate on the `TraceRe
 | Coverage area | FREE (inherited) | MUST ADD (new work) |
 |---------------|------------------|---------------------|
 | Trail substrate invariants | Linear fast-forward, hash chain, GC-safety, CAS retry, anchor reconciliation, rebuild idempotence, watcher reconciliation, survival states. All proved against synthetic events in `tests/core/test_trail_*.py` | Nothing |
-| Phase-7 lineage consumers | `trail search`, `blame`, `graph` participate via `append_exact_patch_trail()` with your `writer` + `capture_method`; the existing fixtures cover commit-by-commit, line-by-line, and trace-by-trace lookups | One Phase-7 fixture using `append_exact_patch_trail()` with your agent's tags, asserting the same lineage-consumer agreement as `tests/cli/test_trail_search_phase7.py` |
+| Phase-7 lineage consumers | `trail track`, `trail blame`, `trail graph` participate via `append_exact_patch_trail()` with your `writer` + `capture_method`; the existing fixtures cover commit-by-commit, line-by-line, and trace-by-trace lookups | One Phase-7 fixture using `append_exact_patch_trail()` with your agent's tags, asserting the same lineage-consumer agreement as `tests/cli/test_trail_search_phase7.py` |
 | Security pipeline | `scan_trace_record`, `classify_trace_record`, `two_pass_scan`, `apply_redactions`, TruffleHog, PII, LLM review. All in `tests/security/*` operate on synthetic `TraceRecord` inputs | Nothing, unless you add a novel field type not exercised by any `TestScanTraceRecord` test |
 | Persona quality rubrics | All 34 deterministic checks (training/RL/analytics/domain) tested against synthetic records in `tests/quality/test_persona_rubrics.py` | Nothing |
 | Quality gate (`meets_quality_threshold`) | The gate logic itself is schema-driven | Your parser must call `meets_quality_threshold(record)` before returning, and test: trivial session rejected, empty-tool-calls rejected, minimum-valid passes |
@@ -419,9 +420,9 @@ The "Known coupling" section above lists five sites where `ClaudeCodeParser` is 
 |---------------|--------------------------------------------------|------|
 | `core/ingest.py:46` | `tests/core/test_ingest.py`, calls `ingest_one_session` with synthetic Claude Code JSONL. Catches dispatch-failure (returns `None`, raises) but not silent-wrong-parser (test fixture is parseable by either) | Medium |
 | `quality/engine.py:575` (`assess_multi_project`) | None. `tests/quality/test_multi_project_eval.py` uses synthetic sessions and never reaches this dispatch path | **High, passes silently** |
-| `cli/__init__.py:1049` | None. Inside `_capture_sessions_into_project` dead-code path (comment at 3599 confirms) | Low, unreachable |
-| `cli/__init__.py:3602` | None. Legacy `parse` CLI command, no CliRunner tests for this verb | **High, passes silently** |
-| `cli/__init__.py:4181` (capabilities hardcoded list) | None | **High, passes silently** |
+| `cli/__init__.py:1181` | None. Inside `_capture_sessions_into_project` (likely dead-code path; tests live alongside the watcher tick) | Low, unreachable |
+| `cli/__init__.py` legacy `parse` command | None. Legacy `parse` CLI command, no CliRunner tests for this verb | **High, passes silently** |
+| `cli/__init__.py:4180` (capabilities hardcoded list) | None | **High, passes silently** |
 
 **Required tests to add before refactoring** (without these, the second live agent's PR is unsafe to merge):
 
@@ -501,7 +502,7 @@ Pattern: real git repo via subprocess, emit synthesized hook lines into a JSONL,
 
 Negative case: emit a `TraceRecord` with one tool call having only the pre-hook (or only the post-hook) and assert `StepTrailEmissionResult.skipped_tool_calls == 1` with `mark_skipped("missing_pre_or_post_hook")`.
 
-References: `tests/capture/test_on_pre_tool_use_hook.py`, `tests/capture/test_on_tool_use_hook.py`, `tests/core/test_trail_event_log.py`. The Phase-7 UAT participation pattern lives in `tests/cli/test_trail_search_phase7.py:54` (`_append_anchored_patch`); copy that with your `writer` and `capture_method` to inherit the lineage-consumer test coverage.
+References: `tests/capture/test_on_pre_tool_use_hook.py`, `tests/capture/test_on_tool_use_hook.py`, `tests/core/test_trail_event_log.py`. The Phase-7 UAT participation pattern lives in `tests/cli/test_trail_search_phase7.py:59` (`_append_anchored_patch`); copy that with your `writer` and `capture_method` to inherit the lineage-consumer test coverage.
 
 #### Watcher
 
@@ -515,7 +516,7 @@ Agent-agnostic. Real git repo, `.opentraces.json` marker, call `_wd.run_once(pro
 | `_init_repo(tmp_path)` | many test files | Standard 5-command git init pattern |
 | `_invoke_hook(main, payload, monkeypatch)` | `tests/capture/test_hooks.py:21` | Patches stdin, calls Python hook `main()` in-process |
 | `_run_hook_with_payload(payload)` | `tests/capture/test_hook_ingest_spawn.py:29` | Subprocess invocation pattern, copy and adapt for non-Python hooks |
-| `_append_anchored_patch(tmp_path)` | `tests/cli/test_trail_search_phase7.py:54` | One-call setup for Phase-7 UAT participation: writes a file, commits, calls `append_exact_patch_trail()`, returns the anchor |
+| `_append_anchored_patch(tmp_path)` | `tests/cli/test_trail_search_phase7.py:59` | One-call setup for Phase-7 UAT participation: writes a file, commits, calls `append_exact_patch_trail()`, returns the anchor |
 | `CliRunner()` from `click.testing` | CLI tests | Run CLI commands without spawning subprocesses |
 | `tests/fixtures/watcher/*.expected` | golden files | Watcher install renderers, only relevant if you change the daemon shim |
 | `tests/fixtures/trace_record_stability/v02_sample.jsonl` | sample records | Add one line from your agent here to gain round-trip stability coverage |

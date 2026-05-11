@@ -10,41 +10,83 @@ opentraces [--json] <command> ...
 
 Use `--json` on any command when you want machine-readable output instead of the TTY view.
 
-The current public root commands are:
+The 0.4 command surface is grouped into six top-level command groups (`auth`, `bucket`, `config`, `dataset`, `setup`, `trace`, `trail`, `workflow`) plus a handful of project-level verbs.
+
+### Global setup
 
 | Command | What it does |
 |---------|---------------|
-| `auth` | Log in to Hugging Face, log out, or inspect the active identity |
-| `init` | Initialize opentraces in the current repo |
-| `remove` | Remove opentraces from the current repo |
-| `status` | Show a project snapshot and recent traces |
-| `list` | List traces, or list initialized projects with `--projects` |
-| `show` | Show one trace in detail |
-| `add` | Stage Inbox traces for the next push |
-| `reject` | Mark a trace local-only |
-| `reset` | Move a trace back to Inbox |
-| `redact` | Rewrite sensitive text in a trace |
-| `discard` | Permanently delete a local trace |
-| `push` | Upload staged traces to Hugging Face Hub |
-| `pull` | Import traces from a Hugging Face dataset |
-| `llm-review` | Run Tier 2 semantic review over traces |
-| `assess` | Score trace quality locally or on a dataset |
-| `web` | Open the browser inbox UI |
-| `tui` | Open the terminal inbox UI |
-| `trail` | Explain VCS-anchored Trace Trails and resolve `ot://` resources |
-| `blame` | Show per-commit attribution for a SHA (optionally one file) |
-| `graph` | Render commit + trace history (commit-primary or trace-primary) |
-| `resume` | Resume the upstream agent session behind a trace |
-| `export` | Export staged traces to another format |
-| `log` | List uploaded traces grouped by date |
-| `stats` | Show aggregate inbox statistics |
-| `remote` | Manage dataset remotes |
-| `config` | Show or set config values |
-| `setup` | Install integrations like hooks, TruffleHog, and llm-review |
-| `doctor` | Check security pipeline and integration health |
-| `completions` | Print or install shell completions |
+| `setup` | Wire opentraces into your system (claude-code, git, watcher, auth, bucket, trufflehog, llm-review, skill, upgrade) |
+| `auth` | HuggingFace identity (`login`, `logout`, `whoami`) |
+| `config` | Show or set configuration (`show`, `set`) |
+| `completions` | Print or install shell completion scripts |
 
-Three more commands are available but intentionally omitted from the default `--help` listing because they are advanced or typically driven by other surfaces: `backfill` (called by `watcher` and `init --import-existing`), `git-backfill` (retroactively correlates inbox traces to past commits after first install of the post-commit hook), and `watcher` (managed by `setup watcher`). All three are documented under [Advanced Commands](#advanced-commands) below.
+### Project setup
+
+| Command | What it does |
+|---------|---------------|
+| `init` | Initialize opentraces in the current project |
+| `status` | Show project status, inbox stage counts, and recent traces |
+| `doctor` | Report security pipeline and integration health |
+| `remove` | Remove opentraces from the current project |
+
+### Trace commands
+
+| Command | What it does |
+|---------|---------------|
+| `trace` | Search, map, slice, and retrieve retained traces |
+| `trace get` | Resolve a trace, trace unit, map node, or `ot://` Trail resource |
+| `trace index` | Rebuild and inspect local trace search projections |
+| `trace map` | Show a deterministic Trace Map or bounded candidate slice |
+| `trace query` | Search local retained traces and return bounded candidate packets |
+| `trace slice` | Extract deterministic Trace Slices for dataset workflows |
+| `trace teleport` | Move a trace and its retained Git evidence between workspaces |
+
+### Trail commands
+
+| Command | What it does |
+|---------|---------------|
+| `trail` | Inspect and sync VCS-anchored Trace Trails |
+| `trail blame` | Attribution between traces and commits |
+| `trail graph` | Render commit + trace history |
+| `trail track` | Walk and render trace lineage through Git history (subsumes the former `trail timeline`, `trail explain`, `trail sync`, and `trail search` surfaces) |
+
+### Bucket commands
+
+| Command | What it does |
+|---------|---------------|
+| `bucket` | Inspect and troubleshoot the local trace bucket |
+| `bucket manifest` | Materialize and print the local bucket manifest |
+| `bucket remote` | Manage the configured private bucket remote (`status`, `diff`, `push`, `pull`) |
+| `bucket replay` | Replay bucket-exported Trace Trails into a Git repository |
+| `bucket status` | Show local bucket health, sync eligibility, and trail freshness |
+
+### Dataset commands
+
+| Command | What it does |
+|---------|---------------|
+| `dataset` | Manage local executable datasets |
+| `dataset list` | List local HF-shaped datasets |
+| `dataset new` | Create a local HF-shaped dataset with an OpenTraces sidecar |
+| `dataset publish` | Publish reviewed dataset rows and contract files to the active remote |
+| `dataset remote` | Manage dataset-scoped HuggingFace remotes (`add`, `create`, `list`, `remove`, `visibility`) |
+| `dataset remove` | Remove a local dataset after explicit confirmation |
+| `dataset review` | Review, approve, reject, or reset dataset rows (TUI and web review entrypoints) |
+| `dataset run` | Run the dataset workflow in dry-run, current-agent, or headless mode |
+| `dataset schedule` | Manage local dataset schedules (`add`, `list`, `logs`, `pause`, `remove`, `resume`, `show`) |
+| `dataset status` | Show row count and publication-state breakdown for a dataset |
+
+### Workflow commands
+
+| Command | What it does |
+|---------|---------------|
+| `workflow` | Manage local dataset workflow skills |
+| `workflow create` | Scaffold a new local dataset workflow skill |
+| `workflow list` | List installed workflows with their path and bound datasets |
+| `workflow templates` | List built-in workflow templates available to `workflow create` |
+| `workflow remove` | Remove an installed workflow skill package |
+
+A few advanced commands are real but intentionally omitted from the default `--help` listing because they are typically driven by other surfaces: `backfill`, `git-backfill`, `parse`, `discover`, `context`, `migrate`, `introspect`, and `capabilities`. The active ones are documented under [Advanced Commands](#advanced-commands) below.
 
 ## Authentication
 
@@ -80,22 +122,17 @@ opentraces auth login --token
 
 ```bash
 opentraces init
-opentraces init --review-policy review
-opentraces init --review-policy auto
-opentraces init --remote owner/my-traces --public
+opentraces init --agent claude-code
+opentraces init --start-fresh
 opentraces init --import-existing
 ```
 
-Initializes the current repo, writes `.opentraces.json`, registers machine-local state under `~/.opentraces/projects/<slug>/`, and installs the capture hook unless you pass `--no-hook`.
+Initializes the current repo, writes `.opentraces.json`, registers machine-local state under `~/.opentraces/projects/<slug>/`, and installs the capture hook for the selected agent. Dataset remotes and review policy are configured separately via `opentraces dataset remote ...` and `opentraces config set review_policy review --project`.
 
 | Flag | Description |
 |------|-------------|
 | `--agent [claude-code]` | Agent runtime to connect |
-| `--no-hook` | Skip Claude Code hook installation |
 | `--import-existing / --start-fresh` | Backfill existing Claude Code traces for this repo, or start from the next run |
-| `--review-policy [review&#124;auto]` | Whether safe traces require manual review |
-| `--remote TEXT` | Hugging Face dataset repo in `owner/name` form |
-| `--private / --public` | Default visibility when creating the remote |
 
 ### `opentraces remove`
 
@@ -104,7 +141,7 @@ opentraces remove
 opentraces remove --all
 ```
 
-Uninstalls the capture hook, deletes the `.opentraces.json` marker, unregisters the repo from the global registry, and removes the machine-local `~/.opentraces/projects/<slug>/` directory. Pushed datasets on Hugging Face are left untouched.
+Uninstalls the capture hook, deletes the `.opentraces.json` marker, and unregisters the repo from the global registry. Pushed datasets on Hugging Face are left untouched.
 
 | Flag | Description |
 |------|-------------|
@@ -123,238 +160,482 @@ Shows stage counts, the active remote, and recent traces (default limit `10`).
 |------|-------------|
 | `--limit INTEGER` | How many recent traces to show, `0` for all. Default `10`. |
 
-## Review And Inbox Commands
+## Trace Commands
 
-### `opentraces list`
+The `trace` group is the search and retrieval surface over locally retained traces. It replaces the old flat `list` / `show` verbs.
+
+### `opentraces trace query`
 
 ```bash
-opentraces list
-opentraces list --stage inbox
-opentraces list --remote origin
-opentraces list --projects
-opentraces list --by-commit
+opentraces trace query
+opentraces trace query "redact secrets"
+opentraces trace query --skill opentraces --since 7d
+opentraces trace query --candidate-kind bug_fix --limit 20
+opentraces trace query --files "src/**/*.py" --signal failing-test
 ```
+
+Searches local retained traces and returns bounded candidate packets. Supports lexical, semantic, faceted, and survival-state filters.
+
+Highlights:
 
 | Flag | Description |
 |------|-------------|
-| `--projects` | List initialized projects instead of traces |
-| `--remote TEXT` | Filter to traces missing on the named remote |
-| `--stage TEXT` | Filter by visible stage |
-| `--model TEXT` | Filter by model |
-| `--agent TEXT` | Filter by agent |
-| `--limit INTEGER` | Max rows to show |
-| `--by-commit` | Group results by commit |
+| `--lex TEXT` | Lexical query text |
+| `--semantic TEXT` | Semantic service/library query text |
+| `--skill TEXT` | Exact `skill.name` facet |
+| `--tool TEXT` | Exact `tool.name` facet |
+| `--files TEXT` | File glob filter over indexed paths |
+| `--candidate-kind` | Closed-vocabulary candidate type (`bug_fix`, `trace`, `trace_map_node`, `trace_slice`, `trace_intent_candidate`, `patch`, `skill_invocation`, `tool_sequence`, `test_or_error_signal`, `git_anchor`) |
+| `--since TEXT` | ISO date/time or duration such as `7d` |
+| `--success / --no-success` | Filter `outcome.success` (explicit True/False) |
+| `--committed / --uncommitted` | Filter `outcome.committed` (explicit True/False) |
+| `--project TEXT` / `--cwd` | Scope to one project or only the current opted-in project |
+| `--limit INTEGER` | Maximum candidates. Default `20`. |
+| `--include-slice [intent\|evidence]` | Embed a bounded Trace Map slice in each candidate |
+| `--source [index\|projection]` | Local query source. Default `index`. |
 
-Visible stages are `inbox`, `staged`, `pushed`, `rejected`, and `blocked`.
-
-### `opentraces show`
+### `opentraces trace get`
 
 ```bash
-opentraces show <trace-id>
-opentraces show <trace-id> --verbose
-opentraces show <trace-id> --markdown
+opentraces trace get tr_abc123
+opentraces trace get tr_abc123 --bursts
+opentraces trace get tr_abc123 --resume
+opentraces trace get tr_abc123 --resume --at-step s42 --dry-run
 ```
 
-`show` prints the trace prompt, steps, tool calls, observations, and outcome. Human output truncates long step content unless you pass `--verbose`.
+Resolves a trace, trace unit, map node, or `ot://` Trail resource. With `--resume`, hands control back to the upstream agent (Claude Code) instead of printing trace details.
 
 | Flag | Description |
 |------|-------------|
-| `--verbose` | Show full step content |
-| `--markdown` | Emit the trace wrapped for safe LLM handoff |
+| `--resume` | Hand control back to the upstream agent for this trace |
+| `--at-step TEXT` | With `--resume`: fork a new session from a specific step id (e.g. `s42`) |
+| `--dry-run` | With `--resume`: print the resume command instead of exec'ing it |
+| `--bursts` | Return only the change-burst summary list for this trace |
+| `--burst-gap INTEGER` | Step-index gap between adjacent edits within a burst (default `35`) |
+| `--no-commit-lookup` | With `--bursts`: skip the per-burst `git log` lookup |
+| `--json` | Emit structured JSON |
 
-### `opentraces add`
+### `opentraces trace index`
+
+Rebuild and inspect local trace search projections.
 
 ```bash
-opentraces add <trace-id>
-opentraces add abc12 def34
-opentraces add --all
+opentraces trace index rebuild
+opentraces trace index status
 ```
 
-Stages Inbox traces for the next push.
+### `opentraces trace map`
+
+```bash
+opentraces trace map tr_abc123
+opentraces trace map tr_abc123 --bursts
+opentraces trace map tr_abc123 --around s42 --depth 2
+opentraces trace map tr_abc123 --from-node s10 --walk forward
+```
+
+Shows a deterministic Trace Map or a bounded candidate slice.
 
 | Flag | Description |
 |------|-------------|
-| `--all` | Stage every Inbox trace |
+| `--candidate TEXT` | Candidate unit or map node to expand around |
+| `--around TEXT` | Map node or unit to show a local neighborhood around |
+| `--depth INTEGER` | Neighborhood depth for `--around`. Default `2` |
+| `--from-node TEXT` | Map node or unit where a directional walk starts |
+| `--walk [back\|forward]` | Walk direction for `--from-node` |
+| `--until TEXT` | Action type that stops `--walk` |
+| `--max-steps INTEGER` | Maximum nodes in the candidate slice. Default `40` |
+| `--actions TEXT` | Comma-separated action types to keep |
+| `--bursts` | Project the map as `change_burst` aggregate nodes (one per cluster) |
+| `--burst-gap INTEGER` | Step-index gap between adjacent edits within a burst (default `35`) |
+| `--no-commit-lookup` | Skip the per-burst `git log` lookup |
 
-`add` refuses `blocked` and `rejected` traces.
-
-### `opentraces reject`
-
-```bash
-opentraces reject <trace-id>
-```
-
-Marks a trace local-only so it will not be pushed.
-
-### `opentraces reset`
-
-```bash
-opentraces reset <trace-id>
-```
-
-Moves a trace back to Inbox.
-
-### `opentraces redact`
+### `opentraces trace slice`
 
 ```bash
-opentraces redact <trace-id> <pattern>
-opentraces redact <trace-id> "ACME_INTERNAL_TOKEN"
-opentraces redact <trace-id> "sk-[A-Za-z0-9]+" --regex
-opentraces redact <trace-id> "secret" --field observations --step 3
+opentraces trace slice tr_abc123 --from-step 5 --to-step 12
+opentraces trace slice tr_abc123 --around-step 7 --radius 3
+opentraces trace slice tr_abc123 --template bursts
 ```
 
-Find and replace text in a stored trace. `PATTERN` is a required positional argument; without `--regex` it is treated as a literal string.
+Extracts deterministic Trace Slices for dataset workflows.
 
 | Flag | Description |
 |------|-------------|
-| `--regex` | Treat `PATTERN` as a regular expression instead of a literal string |
-| `--field TEXT` | Limit the rewrite to one field (e.g. `prompt`, `observations`, `outcome`) |
-| `--step INTEGER` | Limit the rewrite to a specific step index |
+| `--from-step INTEGER` / `--to-step INTEGER` | First and last step indices in a manual slice |
+| `--around-step INTEGER` | Create a slice around one step |
+| `--around-patch TEXT` | Create a slice around a patch id, map node, or trace-patch id |
+| `--radius INTEGER` | Step radius for `--around-step` / `--around-patch`. Default `3` |
+| `--template [bursts]` | Built-in deterministic slicing strategy |
 
-### `opentraces discard`
+### `opentraces trace teleport`
 
 ```bash
-opentraces discard <trace-id>
-opentraces discard <trace-id> --yes
+opentraces trace teleport export tr_abc123
+opentraces trace teleport open ./workspace.tar.gz
 ```
 
-Permanently deletes the local trace.
+Moves a trace and its retained Git evidence between workspaces. Useful for handing a single trace to a collaborator with the full lineage intact.
+
+## Trail Commands
+
+The `trail` group is the VCS-anchored evidence surface. In 0.4 it has been collapsed to three visible subcommands: `blame`, `graph`, and `track`. The older verbs (`timeline`, `explain`, `sync`, `search`, `resolve`, `follow`, `attach`, `rebuild`, `diff`) now live as scopes of `trail track`, or have moved into `trace get` (for `ot://` resolution) and `trace teleport` (for cross-workspace evidence).
+
+### `opentraces trail blame`
+
+```bash
+opentraces trail blame abc1234                          # Commit-mode (bare SHA)
+opentraces trail blame c:abc1234 src/main.py            # Commit-mode, single file
+opentraces trail blame abc1234 --lines                  # Per-line view
+opentraces trail blame t:4dccb032                       # Trace-mode (canonical)
+opentraces trail blame s:92437382 --include-overlapping # Trace-mode (upstream session)
+opentraces trail blame abc1234 --json                   # Structured output
+```
+
+Two modes, one argument:
+
+- **Commit-mode** (`c:<sha>` or bare SHA): which traces contributed to this commit. Uses the attribution cache for per-line detail and merges `refs/notes/opentraces` so hook-linked traces surface even when the attribution cache has no per-line data for that commit.
+- **Trace-mode** (`t:<trace-id>`, `s:<session-id>`, or a bare hyphenated UUID): which commits carry this trace's output. Merges attribution-cache rows (fine-grained) with the trace's `git_links` (hook-linked).
 
 | Flag | Description |
 |------|-------------|
-| `--yes` | Skip the interactive confirmation prompt |
+| `--lines` | Per-line output (git-blame-style). Commit-mode only. |
+| `--entities` | Expand entity changes (functions, classes) under each trace. Commit-mode only. |
+| `--include-overlapping` | Trace-mode: include commits where files and timestamps overlap without direct tool-emit evidence. Off by default. |
+| `--project DIRECTORY` | Project directory (default CWD) |
+| `--json` | Emit structured JSON instead of text |
+| `--no-color` | Disable ANSI colors |
 
-### `opentraces web`
+### `opentraces trail graph`
 
 ```bash
-opentraces web
-opentraces web --port 6060 --no-open
+opentraces trail graph
+opentraces trail graph --limit 50
+opentraces trail graph --trace abc12
+opentraces trail graph --since HEAD~20 --until HEAD
 ```
+
+Renders commit + trace history. Commit-primary by default: the git log is the spine and each commit shows the traces that touched it. Pass `--trace <id>` to pivot to trace-primary mode. Requires a populated attribution cache.
 
 | Flag | Description |
 |------|-------------|
-| `--port INTEGER` | Port for the local web inbox |
-| `--no-open` | Do not open the browser automatically |
+| `--limit INTEGER` | Commits per page. Default `20` |
+| `--page INTEGER` | Page number (1-indexed) |
+| `--all` | Disable pagination |
+| `--trace TEXT` | Pivot to trace-primary mode for the given trace id |
+| `--since TEXT` / `--until TEXT` | Show commits within a ref range |
+| `--project DIRECTORY` | Project directory (default CWD) |
+| `--entities` | Include entity-change suffixes (requires entity cache) |
+| `--json` / `--no-color` | Output controls |
 
-### `opentraces tui`
+### `opentraces trail track`
 
 ```bash
-opentraces tui
-opentraces tui --fullscreen
-opentraces tui --limit 0
+opentraces trail track tr_abc123                     # Full trace lineage
+opentraces trail track tr_abc123 --step 4            # One step's evidence
+opentraces trail track --patch tracepatch-sha256:abc # One Trace Patch's survival
+opentraces trail track --anchor gitanchor-sha256:def # One Git Anchor's survival
+opentraces trail track --since 12h                   # Every patch in a time window
+opentraces trail track --all                         # Every Trace Patch in the trail
+opentraces trail track --patches-from patches.txt    # Ids from a file
 ```
+
+Walks and renders trace lineage through Git history. Subsumes the former `trail timeline`, `trail explain`, `trail sync`, and `trail search` commands. Batch modes emit one JSON line per patch, so stream them through `jq -s '.'` when collecting.
 
 | Flag | Description |
 |------|-------------|
-| `--fullscreen` | Open directly into fullscreen inspect mode |
-| `--limit INTEGER` | Maximum traces to load, `0` for all |
+| `--patch TEXT` | Track a single Trace Patch (no TRACE_ID needed) |
+| `--anchor TEXT` | Track a single Git Anchor (no TRACE_ID needed) |
+| `--step INTEGER` | With TRACE_ID: focus on a single trace step's evidence |
+| `--since TEXT` | Batch: track every Trace Patch whose `event_time` falls within a duration window (e.g. `12h`, `30m`, `2d`) or after an ISO timestamp |
+| `--patches-from FILE` | Batch: read patch ids from FILE (one id per line, or JSONL with `patch_id` / `trace_patch_id`) |
+| `--all` | Batch: track every Trace Patch in the project's trail |
+| `--limit INTEGER` | Cap the number of patches emitted in batch mode |
+| `--silent` | Run the walk without printing rendered output |
+| `--json` | Emit structured JSON instead of text |
+| `--project DIRECTORY` | Project directory (default CWD) |
 
-## Push And Import
+Survival states reported: `alive_on_path`, `alive_transformed`, `reverted`, `lost`, `unknown`, `alive_moved`, `partially_preserved`, `repaired`.
 
-### `opentraces push`
+For resolving an `ot://` resource (Trace Patch, Git Anchor, or file line origin) directly, use `opentraces trace get` with the resource ref.
+
+## Bucket Commands
+
+The local trace bucket is the private workspace state that backs the trace index, Trace Trails, and dataset workflows. The `bucket` group inspects it and (via `bucket remote`) syncs it with a HuggingFace private remote.
+
+### `opentraces bucket status`
 
 ```bash
-opentraces push
-opentraces push --private
-opentraces push --llm-review
-opentraces push --repo owner/team-traces
-opentraces push --no-assess
+opentraces bucket status
+opentraces bucket status --json
 ```
 
-Uploads staged traces to Hugging Face Hub as a new shard.
+Shows local bucket health, sync eligibility, and trail freshness.
+
+### `opentraces bucket manifest`
+
+```bash
+opentraces bucket manifest
+opentraces bucket manifest --json
+```
+
+Materializes and prints the local bucket manifest. Useful when comparing against a remote out-of-band.
+
+### `opentraces bucket replay`
+
+```bash
+opentraces bucket replay --repo /path/to/git-clone
+opentraces bucket replay --repo /path/to/git-clone --repo-id my-other-clone
+opentraces bucket replay --repo /path/to/git-clone --force --json
+```
+
+Replays bucket-exported Trace Trails into a Git repository (e.g. on a different machine after a bucket pull).
 
 | Flag | Description |
 |------|-------------|
-| `--private` | Force private visibility |
-| `--public` | Force public visibility |
-| `--publish` | Change an existing private dataset to public without uploading |
-| `--gated` | Enable gated access on the dataset |
-| `--repo TEXT` | Destination repo, defaulting to `username/opentraces` |
-| `--assess / --no-assess` | Run quality scoring and include dataset-card badges |
-| `--llm-review` | Require a clean Tier 2 verdict on every staged trace |
-| `--no-trufflehog` | Skip Tier 1.5 TruffleHog for this push only |
-| `--migrate-remote / --no-migrate-remote` | Auto-migrate older-schema remote shards |
-| `-y, --yes` | Skip interactive prompts |
+| `--repo DIRECTORY` | **Required.** Git repository to receive the Trace Trails ref |
+| `--repo-id TEXT` | Bucket TrailEvents repo id (required when the bucket has multiple exports) |
+| `--force` | Replace an existing differing Trace Trails ref |
 
-### `opentraces pull`
+### `opentraces bucket remote`
+
+Manages the configured private bucket remote.
 
 ```bash
-opentraces pull owner/dataset --parser hermes
-opentraces pull owner/dataset --parser hermes --limit 10 --dry-run
-opentraces pull owner/dataset --parser hermes --auto
+opentraces bucket remote status
+opentraces bucket remote diff
+opentraces bucket remote push
+opentraces bucket remote push --force
+opentraces bucket remote pull
+opentraces bucket remote pull --force
 ```
 
-Imports traces from a Hugging Face dataset.
+| Subcommand | What it does |
+|------------|--------------|
+| `status` | Compare the local bucket digest with the configured private remote |
+| `diff` | Compare local and remote bucket manifests in detail |
+| `push` | Mirror the local bucket into the configured private remote |
+| `pull` | Restore the local bucket from the configured private remote |
+
+Shared flags on every `bucket remote` subcommand:
 
 | Flag | Description |
 |------|-------------|
-| `--parser TEXT` | **Required.** Import format parser, currently `hermes` |
-| `--subset TEXT` | Dataset subset or config |
-| `--split TEXT` | Dataset split, default `train` |
-| `--limit INTEGER` | Max rows to import, `0` for all |
-| `--auto` | Auto-commit imported traces |
-| `--dry-run` | Parse and report without writing |
+| `--root DIRECTORY` | Fake remote root override (testing). Defaults to the configured bucket remote |
+| `--force` | (`push` / `pull` only) overwrite a remote-ahead, local-ahead, or diverged bucket |
+| `--json` | Emit structured JSON |
 
-### `opentraces export`
+Configure the remote up front with `opentraces setup bucket`. Without a configured remote, the bucket runs in local-only mode.
+
+## Dataset Commands
+
+The `dataset` group is the workflow surface that produces HF-shaped JSONL datasets from your retained traces. It replaces the older flat `push` / `pull` / `assess` verbs (push now lives under `dataset publish`, import is handled per-dataset workflow, and assessment runs inside the workflow itself).
+
+### `opentraces dataset list`
 
 ```bash
-opentraces export --format agent-trace
-opentraces export --format atif
-opentraces export --format atif --output /tmp/traces.jsonl
+opentraces dataset list
+opentraces dataset list --json
 ```
 
-Exports staged traces to another format. If no traces are staged the command exits 0 with a notice and does not create the output file.
+Lists local HF-shaped datasets and their bound workflows.
+
+### `opentraces dataset new`
+
+```bash
+opentraces dataset new my-dataset --workflow my-workflow
+opentraces dataset new my-dataset --rows-file rows.jsonl --schema schema.json
+opentraces dataset new my-dataset --workflow my-workflow --query-name "fix bugs" --query-scope project
+```
+
+Creates a local HF-shaped dataset with an OpenTraces sidecar. Two modes:
+
+- **Workflow mode** (default): synthesizes a workflow-driven dataset that is filled by `dataset run`. Use `--schema` to define the row contract.
+- **Ad-hoc mode** (`--rows-file` + `--schema`): seeds a manual dataset directly from a JSONL file. `dataset run` is a no-op for manual datasets; review/approve/publish still work.
 
 | Flag | Description |
 |------|-------------|
-| `--format [atif&#124;agent-trace]` | **Required.** Target format |
-| `--output PATH` | Output file path. Default `./opentraces-export.jsonl` |
+| `--description TEXT` | Dataset description |
+| `--workflow TEXT` | Workflow skill name or path to a Markdown workflow file/package |
+| `--workflow-digest TEXT` | Workflow digest for legacy skill-name workflows |
+| `--query-name TEXT` | Remembered trace query name for workflow runs |
+| `--query-scope [all-projects\|project\|cwd\|trace]` | Remembered trace query scope. Default `all-projects` |
+| `--query-lex TEXT` / `--query-semantic TEXT` | Remembered query strings |
+| `--query-source [index\|projection]` | Remembered local trace query source |
+| `--query-project TEXT` | Remembered trace query project slug |
+| `--query-candidate-kind TEXT` | Remembered trace query candidate kind |
+| `--query-arg TEXT` | Extra remembered trace query arg as `key=value` |
+| `--rows-file FILE` | Ad-hoc mode: JSONL file of rows to seed the dataset with. Requires `--schema` |
+| `--schema FILE` | JSON Schema file describing dataset rows |
 
-## Quality And Security
-
-### `opentraces assess`
+### `opentraces dataset run`
 
 ```bash
-opentraces assess
-opentraces assess --judge --judge-model sonnet
-opentraces assess --dataset owner/team-traces
-opentraces assess --explain
+opentraces dataset run my-dataset
+opentraces dataset run my-dataset --dry-run
+opentraces dataset run my-dataset --executor claude-code-headless --limit 20
+opentraces dataset run my-dataset --since-last-run --json
 ```
 
-Local mode assesses staged traces, falling back to all local traces if nothing is staged yet.
+Runs the dataset workflow.
 
 | Flag | Description |
 |------|-------------|
-| `--limit INTEGER` | Max traces to assess |
-| `--dataset TEXT` | Assess a remote Hugging Face dataset |
-| `--judge / --no-judge` | Enable the LLM judge |
-| `--judge-model [haiku&#124;sonnet&#124;opus]` | Judge model |
-| `--dry-run` | Print the assessment only |
-| `--explain` | Show the rubric glossary and exit |
+| `--dry-run` | Execute without appending rows or advancing cursors |
+| `--executor [current-agent\|claude-code-headless]` | Workflow executor |
+| `--scope [all-projects\|project\|cwd\|trace]` | Candidate query scope. Default `all-projects` |
+| `--project TEXT` | Project slug for `--scope project` |
+| `--trace TEXT` | Trace ID for `--scope trace` |
+| `--limit INTEGER` | Candidate limit |
+| `--privacy-tier [off\|low\|medium\|high]` | Privacy tier to apply while appending workflow rows |
+| `--trail-freshness [warn\|fail\|ignore]` | How to handle stale Trace Trail projections. Default `warn` |
+| `--since-last-run` | Use the dataset cursor |
+| `--reconcile` | Run a full reconciliation scan |
+| `--scheduled` | Mark this run as scheduler-initiated |
+| `--verbose` | Include run artefact paths |
+| `--json` | Emit structured JSON |
 
-### `opentraces llm-review`
+### `opentraces dataset review`
 
 ```bash
-opentraces llm-review
-opentraces llm-review --scope staged
-opentraces llm-review --trace 8a3f1c
-opentraces llm-review --dry-run
+opentraces dataset review my-dataset
+opentraces dataset review my-dataset --tui
+opentraces dataset review my-dataset --web
+opentraces dataset review my-dataset approve <row-id>
+opentraces dataset review my-dataset reject <row-id>
+opentraces dataset review my-dataset reset <row-id>
+opentraces dataset review my-dataset approve --all
 ```
 
-Runs Tier 2 semantic review using the provider configured by `opentraces setup llm-review`, unless you override it on the command line.
+Review, approve, reject, or reset dataset rows. The `--tui` and `--web` flags open the interactive inbox surfaces (these replace the standalone `opentraces tui` and `opentraces web` commands from 0.3).
 
 | Flag | Description |
 |------|-------------|
-| `--api-format [openai-compat&#124;ollama&#124;anthropic&#124;fake]` | Override the wire protocol |
-| `--model TEXT` | Override the model |
-| `--base-url TEXT` | Override the OpenAI-compatible base URL |
-| `--api-key-env TEXT` | Override the env var containing the API key |
-| `--scope [all&#124;inbox&#124;staged]` | Choose which traces to review |
-| `--trace TEXT` | Review specific trace IDs, repeatable |
-| `--limit INTEGER` | Cap the batch size |
-| `--dry-run` | Estimate token usage only |
-| `--force` | Re-review traces that already have a cached verdict |
-| `--context-file FILE` | Pass project context such as `README.md` or `AGENTS.md` |
+| `--tui` | Open TUI review |
+| `--web` | Open web review |
+| `--all` | With `approve`, `reject`, or `reset`, apply to every eligible row |
+| `--json` | Emit structured JSON |
+
+### `opentraces dataset publish`
+
+```bash
+opentraces dataset publish my-dataset
+opentraces dataset publish my-dataset --to my-org/my-dataset
+opentraces dataset publish my-dataset --check-only
+opentraces dataset publish my-dataset --min-retention 0.5 --exclude-state lost
+```
+
+Publishes reviewed dataset rows and contract files to the active remote. Replaces the 0.3 `opentraces push` flow.
+
+| Flag | Description |
+|------|-------------|
+| `--to TEXT` | Remote name or `owner/name` override |
+| `--check-only` | Run all gates and stage without uploading |
+| `--resume TEXT` | Resume a previous publication run id |
+| `--min-retention FLOAT` | Drop rows whose mean `retention_fraction` across `patches_with_survival` is below this threshold (0.0-1.0) |
+| `--exclude-state TEXT` | Drop rows that have any patch with this `survival_state`. Repeatable (e.g. `--exclude-state lost --exclude-state never_committed`) |
+| `--json` | Emit structured JSON |
+
+Under `--check-only` the drop counts are reported in the JSON `publish.filter` block without uploading.
+
+### `opentraces dataset remove`
+
+```bash
+opentraces dataset remove my-dataset --yes
+```
+
+Removes a local dataset after explicit confirmation.
+
+### `opentraces dataset schedule`
+
+Manages local dataset workflow schedules.
+
+```bash
+opentraces dataset schedule add my-dataset --cron "0 * * * *"
+opentraces dataset schedule list
+opentraces dataset schedule logs my-dataset
+opentraces dataset schedule pause my-dataset
+opentraces dataset schedule resume my-dataset
+opentraces dataset schedule show my-dataset
+opentraces dataset schedule remove my-dataset
+```
+
+### `opentraces dataset status`
+
+```bash
+opentraces dataset status my-dataset
+opentraces dataset status my-dataset --json
+```
+
+Shows row count and publication-state breakdown for a dataset.
+
+### `opentraces dataset remote`
+
+Manages dataset-scoped HuggingFace remotes. Replaces the old project-wide `opentraces remote` group: every dataset now carries its own remotes.
+
+```bash
+opentraces dataset remote add my-dataset owner/dataset
+opentraces dataset remote create my-dataset owner/team-traces --private
+opentraces dataset remote list my-dataset
+opentraces dataset remote list my-dataset --verbose
+opentraces dataset remote remove my-dataset owner/dataset
+opentraces dataset remote remove my-dataset owner/dataset --delete-remote --yes
+opentraces dataset remote visibility my-dataset owner/dataset --public
+```
+
+| Subcommand | Flags |
+|------------|-------|
+| `add NAME REPO` | `--json` |
+| `create NAME REPO` | `--private / --public` (default `--private`), `--json` |
+| `list NAME` | `-v, --verbose` (show full URLs), `--json` |
+| `remove NAME [REMOTE]` | `--delete-remote`, `--yes`, `--json` |
+| `visibility NAME [REMOTE]` | `--private`, `--public`, `--json` |
+
+## Workflow Commands
+
+The `workflow` group manages local dataset workflow skills, the per-dataset Markdown skill packages that `dataset run` invokes.
+
+### `opentraces workflow create`
+
+```bash
+opentraces workflow create my-workflow
+opentraces workflow create my-workflow --template default --description "Annotate bug fixes"
+```
+
+Scaffolds a new local dataset workflow skill.
+
+| Flag | Description |
+|------|-------------|
+| `--template TEXT` | Workflow template. Default `default` |
+| `--description TEXT` | Workflow description for `SKILL.md` |
+| `--json` | Emit structured JSON |
+
+### `opentraces workflow list`
+
+```bash
+opentraces workflow list
+opentraces workflow list --digest
+```
+
+Lists installed workflows with their path and bound datasets.
+
+### `opentraces workflow templates`
+
+```bash
+opentraces workflow templates
+opentraces workflow templates --json
+```
+
+Lists built-in workflow templates available to `workflow create`.
+
+### `opentraces workflow remove`
+
+```bash
+opentraces workflow remove my-workflow --yes
+```
+
+Removes an installed workflow skill package.
+
+## Doctor
 
 ### `opentraces doctor`
 
@@ -369,65 +650,7 @@ Checks configured integrations, versions, and security tiers. It exits non-zero 
 |------|-------------|
 | `--security` | Show only the security pipeline view |
 
-For the LLM trace review tier, `doctor` also surfaces the active setup: backend and model, endpoint URL, API format, whether the configured `api_key_env` variable is set, and the probe result (e.g. model count, unreachable reason, or `not found` when the configured model is missing from the endpoint's catalog). Use this to confirm that `opentraces setup llm-review` wrote the expected values before running `opentraces llm-review`.
-
-## Remote Management
-
-### `opentraces remote`
-
-```bash
-opentraces remote list
-opentraces remote list -v
-opentraces remote add owner/dataset
-opentraces remote create owner/team-traces --private
-opentraces remote visibility owner/dataset --public
-opentraces remote remove owner/dataset
-opentraces remote remove owner/dataset --delete-remote --yes
-opentraces remote delete owner/dataset --yes
-```
-
-Subcommands:
-
-- `add` connects an existing dataset
-- `create` creates a new dataset and connects it
-- `list` shows connected remotes
-- `remove` disconnects a remote locally
-- `delete` deletes the remote dataset and disconnects it
-- `visibility` flips a remote between private and public
-
-Positional `REPO` is optional on `remove` and `delete` when exactly one remote is connected.
-
-#### `opentraces remote list`
-
-| Flag | Description |
-|------|-------------|
-| `-v` | Show full dataset URLs instead of the short `owner/name` form |
-
-#### `opentraces remote create`
-
-| Flag | Description |
-|------|-------------|
-| `--private / --public` | Visibility of the new dataset (default `--private`) |
-| `--gated` | Enable gated access on the new dataset |
-
-#### `opentraces remote visibility`
-
-| Flag | Description |
-|------|-------------|
-| `--private / --public` | Target visibility for the remote |
-
-#### `opentraces remote remove`
-
-| Flag | Description |
-|------|-------------|
-| `--delete-remote` | Also delete the upstream Hugging Face dataset, not just the local connection |
-| `--yes` | Skip the interactive confirmation prompt |
-
-#### `opentraces remote delete`
-
-| Flag | Description |
-|------|-------------|
-| `--yes` | Skip the interactive confirmation prompt |
+For the LLM trace review tier, `doctor` surfaces the active setup: backend and model, endpoint URL, API format, whether the configured `api_key_env` variable is set, and the probe result (e.g. model count, unreachable reason, or `not found` when the configured model is missing from the endpoint's catalog).
 
 ## Configuration And Setup
 
@@ -463,23 +686,50 @@ Default scope is global.
 opentraces setup
 opentraces setup claude-code
 opentraces setup git
+opentraces setup watcher
+opentraces setup bucket
+opentraces setup auth
 opentraces setup trufflehog
 opentraces setup llm-review
-opentraces setup review-policy --auto
+opentraces setup skill
 opentraces setup upgrade
 ```
 
 Current setup subcommands:
 
-- `claude-code` installs the capture hooks
-- `entity-parser` downloads and verifies the `ot-entities` binary
+- `auth` runs the HuggingFace login flow used by dataset remotes
+- `bucket` configures the private bucket sync target (remote-by-default or local-only)
+- `claude-code` installs the Claude Code capture hooks
 - `git` installs the post-commit correlator hook
 - `llm-review` configures the Tier 2 reviewer
-- `review-policy` changes the repo's review policy
-- `skill` installs the opentraces skill globally
+- `skill` installs the opentraces skill globally and links it into each agent harness
 - `trufflehog` enables Tier 1.5 TruffleHog
 - `upgrade` upgrades the CLI and refreshes project files
-- `watcher` installs or removes the background attribution watcher
+- `watcher` installs and controls the background attribution watcher (subcommands: `install`, `uninstall`, `start`, `stop`, `restart`, `status`, `tick`)
+
+Run bare `opentraces setup` for an interactive wizard that walks every integration.
+
+### `opentraces setup bucket`
+
+```bash
+opentraces setup bucket
+opentraces setup bucket --local-only
+opentraces setup bucket --repo me/opentraces-bucket
+opentraces setup bucket --push-now
+opentraces setup bucket --pull-now
+```
+
+Configures the private bucket sync target. The bucket is private workspace state; dataset publication remotes are configured separately via `opentraces dataset remote ...`.
+
+| Flag | Description |
+|------|-------------|
+| `--remote / --local-only` | Configure private remote bucket sync, or opt out to local-only. Default `--remote` |
+| `--provider [huggingface\|fake]` | Remote bucket provider. Default `huggingface` |
+| `--repo TEXT` | HuggingFace bucket repo id. Defaults to `<authenticated-user>/opentraces-bucket` |
+| `--fake-root DIRECTORY` | Local directory used by the fake bucket remote harness |
+| `--sync-policy [daemon\|manual]` | How the private remote bucket should be kept current. Default `daemon` |
+| `--push-now` | Upload the existing local bucket after setup |
+| `--pull-now` | Restore the local bucket from the remote after setup |
 
 ### `opentraces setup trufflehog`
 
@@ -495,7 +745,7 @@ opentraces setup trufflehog --disable
 | `--disable` | Turn Tier 1.5 off |
 | `--project` | Scope the setting to the project marker instead of global config |
 
-Tier 1.5 findings are redacted in place and force human review before push.
+Tier 1.5 findings are redacted in place and force human review before publication.
 
 ### `opentraces setup llm-review`
 
@@ -508,7 +758,7 @@ opentraces setup llm-review --print
 
 | Flag | Description |
 |------|-------------|
-| `--api-format [openai-compat&#124;ollama&#124;anthropic&#124;fake]` | Reviewer transport |
+| `--api-format [openai-compat\|ollama\|anthropic\|fake]` | Reviewer transport |
 | `--base-url TEXT` | Base URL for OpenAI-compatible backends |
 | `--model TEXT` | Model name |
 | `--api-key-env TEXT` | Env var holding the API key |
@@ -520,23 +770,6 @@ opentraces setup llm-review --print
 | `--no-interactive` | Skip the preset picker |
 | `--project` | Scope the change to the project marker |
 
-### `opentraces setup review-policy`
-
-```bash
-opentraces setup review-policy --review
-opentraces setup review-policy --auto
-opentraces setup review-policy --print
-```
-
-`--auto` auto-approves safe traces into `staged`. Push remains explicit.
-
-| Flag | Description |
-|------|-------------|
-| `--review` | Set policy to `review` (manual approval required before push) |
-| `--auto` | Set policy to `auto` (safe traces are auto-staged; push remains explicit) |
-| `--print` | Print the current policy and exit without writing |
-| `--project` | Write to the project marker. Default for this command |
-
 ### `opentraces setup claude-code`
 
 ```bash
@@ -545,7 +778,7 @@ opentraces setup claude-code --dry-run
 opentraces setup claude-code --remove
 ```
 
-Installs (or removes) the Claude Code capture hooks into your Claude Code settings file.
+Installs (or removes) the Claude Code capture hooks (`PreToolUse`, `PostToolUse`, `Stop`, `PostCompact`) into your Claude Code settings file.
 
 | Flag | Description |
 |------|-------------|
@@ -553,19 +786,6 @@ Installs (or removes) the Claude Code capture hooks into your Claude Code settin
 | `--settings-file TEXT` | Path to the Claude Code settings file. Default `~/.claude/settings.json` |
 | `--dry-run` | Print the planned hook changes without writing |
 | `--remove` | Uninstall previously-installed hooks |
-
-### `opentraces setup entity-parser`
-
-```bash
-opentraces setup entity-parser
-opentraces setup entity-parser --force
-```
-
-Downloads and verifies the `ot-entities` binary used to expand function/class changes in `blame` and `graph`.
-
-| Flag | Description |
-|------|-------------|
-| `--force` | Re-download even if the binary is already installed |
 
 ### `opentraces setup git`
 
@@ -588,7 +808,7 @@ opentraces setup skill --harness claude-code
 opentraces setup skill --remove
 ```
 
-Installs the `opentraces` skill so Claude Code (and compatible harnesses) can drive the CLI.
+Installs the `opentraces` skill so Claude Code (and compatible harnesses) can drive the CLI. The canonical copy lives at `~/.agents/skills/opentraces/`; each supported harness gets a symlink, e.g. `~/.claude/skills/opentraces -> ~/.agents/skills/opentraces`.
 
 | Flag | Description |
 |------|-------------|
@@ -598,19 +818,26 @@ Installs the `opentraces` skill so Claude Code (and compatible harnesses) can dr
 ### `opentraces setup watcher`
 
 ```bash
-opentraces setup watcher
-opentraces setup watcher --interval 600
-opentraces setup watcher --no-install
-opentraces setup watcher --uninstall
+opentraces setup watcher install
+opentraces setup watcher start
+opentraces setup watcher stop
+opentraces setup watcher restart
+opentraces setup watcher status
+opentraces setup watcher tick
+opentraces setup watcher uninstall
 ```
 
-Installs (or removes) the background attribution watcher service. The watcher polls enlisted projects and runs `backfill` when new commits or Claude Code sessions appear.
+The watcher is a launchd agent (macOS) or systemd user timer (Linux) that wakes every poll interval, walks enlisted projects, and runs incremental backfill when new commits or Claude Code JSONL activity appears. It powers `opentraces trail blame` and the lazy Trace Trails maturation pipeline.
 
-| Flag | Description |
-|------|-------------|
-| `--interval INTEGER` | Poll interval in seconds. Default `300` |
-| `--no-install` | Update config only; don't install the system service |
-| `--uninstall` | Remove the installed service |
+| Subcommand | What it does |
+|------------|--------------|
+| `install` | Render and load the unit + shim |
+| `start` | Install (if needed) and start the watcher service |
+| `stop` | Stop the watcher service (unit remains installed) |
+| `restart` | Stop then start |
+| `status` | Show install + running state |
+| `tick` | Run one diagnostic tick now |
+| `uninstall` | Unload and remove the unit file |
 
 ### `opentraces setup upgrade`
 
@@ -627,192 +854,7 @@ Upgrades the opentraces CLI and refreshes project-side files (skill, hooks) wher
 
 ## Advanced Commands
 
-The first commands in this section (`trail`, `blame`, `graph`, `resume`, `stats`, `log`, `completions`) are part of the default `--help` listing. `backfill`, `git-backfill`, and `watcher` are not: they are real commands but are intentionally hidden from the default listing because they are usually driven by `watcher`, `setup git`, and `setup watcher` respectively.
-
-### `opentraces trail`
-
-```bash
-opentraces trail explain --trace tr1 --step 4 --json
-opentraces trail explain --commit abc1234 --json
-opentraces trail explain src/app.py:42 --json
-opentraces trail diff --trace tr1 --from-step 3 --to-step 4 --json
-opentraces trail follow --patch tracepatch-sha256:abc --json
-opentraces trail attach --trace tr_abc --commit HEAD
-opentraces trail rebuild --json
-opentraces trail resolve ot://git-anchor/gitanchor-sha256:def --json
-```
-
-Trace Trails are the VCS-anchored evidence chain from an agent step to a Trace
-Patch, Git Anchor, and Patch Trail. The canonical store is the append-only
-`TrailEvent` log under `refs/opentraces/local/events/v1`; snapshot refs under
-`refs/opentraces/local/traces/...` are advisory projections that can be rebuilt
-from the event log at any time.
-
-Subcommands: `explain`, `diff`, `follow`, `attach`, `rebuild`, `resolve`.
-
-Common flags (every subcommand):
-
-| Flag | Description |
-|------|-------------|
-| `--project DIRECTORY` | Project directory, default CWD. |
-| `--json` | Emit structured JSON instead of text. |
-
-Exit codes: `2` for missing arguments or generic runtime errors, `3` when the
-Trace Trail event log or `ot://` resource is invalid.
-
-#### `trail explain`
-
-Explain the evidence chain for a trace step, commit, or file line.
-
-```bash
-opentraces trail explain --trace tr1 --step 1
-opentraces trail explain --trace tr1 --step 1 --json
-opentraces trail explain --commit abc1234 --json
-opentraces trail explain src/app.py:42 --json
-```
-
-| Flag | Description |
-|------|-------------|
-| `TARGET` (positional) | A `path:line` to explain (alternative to `--trace`/`--commit`). |
-| `--trace TEXT` | Trace id to explain (with `--step`). |
-| `--step INTEGER` | Trace step index. |
-| `--commit TEXT` | Git commit to explain. |
-
-Reports Trace Snapshot refs, Trace Patch identity, Git Anchor (when present),
-evidence tier, firmness, source events, and any limitations. Steps without a
-captured patch render as `patch status: no_patch` / `relation: no_patch`.
-
-#### `trail diff`
-
-Show the Trace Patch between two captured step snapshots.
-
-```bash
-opentraces trail diff --trace tr1 --from-step 1 --to-step 2
-opentraces trail diff --trace tr1 --from-step 1 --to-step 2 --json
-```
-
-| Flag | Description |
-|------|-------------|
-| `--trace TEXT` | **Required.** Trace id to diff. |
-| `--from-step INTEGER` | **Required.** Starting step snapshot. |
-| `--to-step INTEGER` | **Required.** Ending step snapshot. |
-
-#### `trail follow`
-
-Follow a Trace Patch through later Git history. Reports `current_observations`
-(one per anchor) and `current_survival` (alive anchors override later lost
-ones). Each observation carries `observation_sequence`, `anchor_trail_index`,
-`observed_commit_time`, and `anchor_descendant_count`.
-
-```bash
-opentraces trail follow --patch tracepatch-sha256:abc --json
-opentraces trail follow --anchor gitanchor-sha256:def --json
-```
-
-| Flag | Description |
-|------|-------------|
-| `--patch TEXT` | Trace Patch id to follow (one of `--patch` or `--anchor` is required). |
-| `--anchor TEXT` | Git Anchor id to follow. |
-| `--history-limit INTEGER` | Max commits to observe per Git Anchor (default 500, min 2). |
-
-Survival states reported: `alive_on_path`, `alive_transformed`, `reverted`,
-`lost`, `unknown`, `alive_moved`, `partially_preserved`, `repaired`.
-
-#### `trail attach`
-
-Retroactively connect a trace's evidence to a Git commit when the post-commit
-hook missed (hook failure, daemon crash, out-of-order backfill). New events
-carry `capture_method=["manual_attach"]`. Append-only and idempotent; source
-events are byte-identical after attach.
-
-```bash
-opentraces trail attach --trace tr_abc --commit HEAD
-opentraces trail attach --trace tr_abc --commit abc1234 --json
-```
-
-| Flag | Description |
-|------|-------------|
-| `--trace TEXT` | **Required.** Trace id to attach. |
-| `--commit TEXT` | **Required.** Git commit to anchor against. |
-
-#### `trail rebuild`
-
-Re-derive Trace Trails advisory projections (snapshot refs under
-`refs/opentraces/local/traces/...`) from the canonical event log. Use after
-manual ref cleanup, branch surgery, or recovery from a corrupted projection
-cache. The operation is idempotent.
-
-```bash
-opentraces trail rebuild
-opentraces trail rebuild --json
-```
-
-#### `trail resolve`
-
-Resolve a stable `ot://` Trace Trails resource. Returns IDs and metadata
-including `containing_segment_id` without embedding full Trace Slice content.
-
-```bash
-opentraces trail resolve ot://trace/tr1/patches/tracepatch-sha256:abc/trail --json
-opentraces trail resolve ot://git-anchor/gitanchor-sha256:def --json
-opentraces trail resolve ot://file/src/app.py/line/42/origin --json
-```
-
-Trace Slices are bounded context around a Trace Patch, not training data by
-themselves. JSON responses include normalized slice fields
-(`containing_segment_id` plus ID-only Trace Slice metadata) that can be
-resolved through `ot://` references; deeper prompt/tool/observation/file
-content materialization is slated for the Trace Dataset projection.
-
-### `opentraces blame`
-
-```bash
-opentraces blame abc1234                          # Commit-mode (bare SHA)
-opentraces blame c:abc1234 src/main.py            # Commit-mode, single file
-opentraces blame abc1234 --lines                  # Per-line view
-opentraces blame t:4dccb032                       # Trace-mode (canonical)
-opentraces blame s:92437382 --include-overlapping # Trace-mode (upstream session)
-opentraces blame abc1234 --json                   # Structured output
-```
-
-Two modes, one argument:
-
-- **Commit-mode** (`c:<sha>` or bare SHA): which traces contributed to this commit. Uses the attribution cache for per-line detail and merges `refs/notes/opentraces` so hook-linked traces surface even when the attribution cache has no per-line data for that commit.
-- **Trace-mode** (`t:<trace-id>`, `s:<session-id>`, or a bare hyphenated UUID): which commits carry this trace's output. Merges attribution-cache rows (fine-grained) with the trace's `git_links` (hook-linked). Hook-linked rows carry only a tier badge, not per-line counts.
-
-Commit-mode requires a populated attribution cache — run `opentraces backfill` if empty. Trace-mode works from `git_links` alone, so it surfaces hook-linked commits even when per-line attribution hasn't been computed yet.
-
-| Flag | Description |
-|------|-------------|
-| `--lines` | Per-line output (git-blame-style). Commit-mode only. |
-| `--entities` | Expand entity changes (functions, classes) under each trace. Commit-mode only. |
-| `--include-overlapping` | Trace-mode: include commits where files and timestamps overlap without direct tool-emit evidence. Off by default. |
-| `--project DIRECTORY` | Project directory, default CWD |
-| `--json` | Emit structured JSON instead of text |
-| `--no-color` | Disable ANSI colors |
-
-### `opentraces graph`
-
-```bash
-opentraces graph
-opentraces graph --limit 50
-opentraces graph --trace abc12
-opentraces graph --since HEAD~20 --until HEAD
-```
-
-Renders commit + trace history. Commit-primary by default: the git log is the spine and each commit shows the traces that touched it. Pass `--trace <id>` to pivot to trace-primary mode. Requires a populated attribution cache.
-
-| Flag | Description |
-|------|-------------|
-| `--limit INTEGER` | Commits per page. Default `20`. |
-| `--page INTEGER` | Page number (1-indexed). |
-| `--all` | Disable pagination (large `--limit`). |
-| `--trace TEXT` | Pivot to trace-primary mode for the given trace id. |
-| `--since TEXT` | Show commits after this ref. |
-| `--until TEXT` | Show commits up to this ref. |
-| `--project DIRECTORY` | Project directory, default CWD. |
-| `--entities` | Include entity-change suffixes (requires entity cache). |
-| `--no-color` | Disable ANSI colors. |
+The `backfill` and `git-backfill` commands are real but only `git-backfill` is shown in the default `--help` listing. The watcher manages `backfill` automatically.
 
 ### `opentraces backfill`
 
@@ -826,14 +868,14 @@ Backfills per-commit attribution into the local cache. Walks new commits since t
 
 | Flag | Description |
 |------|-------------|
-| `--dry-run` | Compute coverage without writing cache files. |
-| `--rebuild` | Clear the cache and re-attribute from HEAD. |
-| `--since TEXT` | Start from this ref instead of the bookmark (currently forces `--rebuild`). |
-| `--project DIRECTORY` | Project directory, default CWD. |
-| `--max-commits INTEGER` | Cap on commits to walk when rebuilding. Default `500`. |
-| `--json` | Emit a JSON payload instead of the human summary. |
-| `-v, --verbose` | Forward verbose logging to the audit builder. |
-| `--no-entities` | Skip the entity-parser pass (attribution only). |
+| `--dry-run` | Compute coverage without writing cache files |
+| `--rebuild` | Clear the cache and re-attribute from HEAD |
+| `--since TEXT` | Start from this ref instead of the bookmark (currently forces `--rebuild`) |
+| `--project DIRECTORY` | Project directory (default CWD) |
+| `--max-commits INTEGER` | Cap on commits to walk when rebuilding. Default `500` |
+| `--json` | Emit a JSON payload instead of the human summary |
+| `-v, --verbose` | Forward verbose logging to the audit builder |
+| `--no-entities` | Skip the entity-parser pass (attribution only) |
 
 ### `opentraces git-backfill`
 
@@ -843,108 +885,14 @@ opentraces git-backfill --max-commits 2000 --window-hours 48
 opentraces git-backfill --json
 ```
 
-Retroactively correlates inbox traces to past commits. Useful after a first-time install of the post-commit hook (the hook only sees commits after install) or after a period where the hook failed silently. Walks first-parent history, re-runs the live correlator, writes `refs/notes/opentraces`, and persists `git_links` onto each trace's JSONL file. Safe to re-run: notes dedupe on append and `git_links` dedupe before rewrite.
+Retroactively correlates inbox traces to past commits. Useful after a first-time install of the post-commit hook (the hook only sees commits after install) or after a period where the hook failed silently. Walks first-parent history, re-runs the live correlator, writes `refs/notes/opentraces`, and persists `git_links` onto each trace's JSONL file. Safe to re-run.
 
 | Flag | Description |
 |------|-------------|
-| `--project DIRECTORY` | Project directory, default CWD |
-| `--max-commits INTEGER` | Cap on first-parent commits to walk. Default `500`. |
-| `--window-hours FLOAT` | Match a trace to a commit if `timestamp_end` is within this many hours of the commit's date (either side). Default `24.0`. |
+| `--project DIRECTORY` | Project directory (default CWD) |
+| `--max-commits INTEGER` | Cap on first-parent commits to walk. Default `500` |
+| `--window-hours FLOAT` | Match a trace to a commit if `timestamp_end` is within this many hours of the commit's date (either side). Default `24.0` |
 | `--json` | Emit a JSON payload instead of the human summary |
-
-### `opentraces watcher`
-
-```bash
-opentraces watcher start
-opentraces watcher start --interval 600 --no-install
-opentraces watcher status
-opentraces watcher status --json
-opentraces watcher tick
-opentraces watcher tick --project /path/to/repo --json
-opentraces watcher stop
-opentraces watcher restart
-opentraces watcher uninstall
-```
-
-Manages the background attribution watcher service (installed by `opentraces setup watcher`). The watcher polls enlisted projects and runs incremental `backfill` when new commits or Claude Code sessions appear.
-
-Subcommands: `start`, `stop`, `restart`, `status`, `tick` (one diagnostic pass), `uninstall`.
-
-#### `opentraces watcher start`
-
-| Flag | Description |
-|------|-------------|
-| `--interval INTEGER` | Poll interval in seconds. Default `300` |
-| `--no-install` | Start in foreground only; don't register the system service |
-
-#### `opentraces watcher status`
-
-| Flag | Description |
-|------|-------------|
-| `--json` | Emit structured JSON instead of the human summary |
-
-#### `opentraces watcher tick`
-
-| Flag | Description |
-|------|-------------|
-| `--project DIRECTORY` | Tick only the given project. Default: every enlisted project |
-| `--json` | Emit structured JSON instead of the human summary |
-
-`stop`, `restart`, and `uninstall` take no flags beyond `--help`.
-
-### `opentraces resume`
-
-```bash
-opentraces resume <trace-id>
-opentraces resume <trace-id> --dry-run
-opentraces resume <trace-id> --at-step s42
-```
-
-Resumes the upstream agent session behind a trace. Accepts a full `trace_id` or a `t:XX` / `XX` prefix (2+ chars). For claude-code the command execs `claude --resume <session_id>`; other agents print the native resume command instead.
-
-| Flag | Description |
-|------|-------------|
-| `--at-step TEXT` | Fork a new Claude Code session from a specific step id (e.g. `s42`). |
-| `--dry-run` | Print the resume command instead of exec'ing it. |
-
-### `opentraces stats`
-
-```bash
-opentraces stats
-```
-
-Rolls up every local trace into counts, token totals, cost estimates, and a model breakdown.
-
-### `opentraces log`
-
-```bash
-opentraces log
-opentraces log --verbose
-opentraces log --limit 0
-```
-
-Lists the recent traces that have been pushed, grouped by date. Only the `pushed` stage is walked, so in-progress Inbox or staged work is ignored.
-
-Default output is one row per day with the push count, the destination remote(s), and the local time range of pushes:
-
-```
-2026-04-16  6 pushed   → origin   10:36–17:44
-2026-04-15  1 pushed   → origin   11:42
-```
-
-`--verbose` / `-v` expands each day into per-trace rows with a short trace id, push time, model, and the first line of the task description, with total tokens and an estimated cost per day. The verbose view reads each trace file so it is slower on large inboxes:
-
-```
-2026-04-16  6 pushed   → origin   10:36–17:44   (430.7k tokens, ~$225.90)
-  785ddc93  10:36  opus-4-6            fix(cli): restore opentraces log…   [62.6k tokens]
-  2cfe7e14  10:36  opus-4-6            docs: audit commands reference      [203.0k tokens]
-  …
-```
-
-| Flag | Description |
-|------|-------------|
-| `--limit INTEGER` | Max days of history to show. `0` for no limit. Default `30`. |
-| `-v, --verbose` | Expand each day into per-trace rows with model, token totals, and task description |
 
 ### `opentraces completions`
 
@@ -958,15 +906,7 @@ opentraces completions uninstall zsh --quiet
 
 Prints or installs shell completion scripts. Both `install` and `uninstall` take an optional positional shell name (`bash`, `zsh`, or `fish`); if omitted, the current shell is detected automatically.
 
-#### `opentraces completions install`
-
 | Flag | Description |
 |------|-------------|
-| `--alias NAME` | Also bind completion to `NAME`. Repeatable (e.g. `--alias otd --alias ot`) |
-| `-q, --quiet` | Suppress the confirmation output |
-
-#### `opentraces completions uninstall`
-
-| Flag | Description |
-|------|-------------|
+| `--alias NAME` | (`install`) Also bind completion to `NAME`. Repeatable |
 | `-q, --quiet` | Suppress the confirmation output |

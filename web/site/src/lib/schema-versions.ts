@@ -341,8 +341,35 @@ const v030: SchemaVersion = {
   ]),
 };
 
+const v040: SchemaVersion = {
+  version: "0.4.0",
+  date: "2026-04-29",
+  summary: "Local executable datasets, dataset workflows, dataset remotes, and the trace index / Trace Map / Candidate Packet contract. Strictly additive on top of 0.3.0; TraceRecord is unchanged.",
+  highlights: [
+    "DatasetManifest, DatasetSchemaRef, WorkflowRef, ExecutorConfig: local HF-shaped dataset contract driving `opentraces dataset new/run/review/publish`",
+    "DatasetRemote, DatasetPublicationState, DatasetPublicationPolicy: per-dataset HF remote bindings, review/security policy, and publication status tracking",
+    "DatasetCandidateQuery, DatasetSchedule, DatasetDiscoverability: remembered candidate query, scheduling cadence, and HF discoverability metadata",
+    "DatasetRunRecord, DatasetRowIndexEntry: append-only run history and row provenance back to source traces",
+    "TraceUnit, TraceFacet, TraceSignal: addressable bounded search documents behind `opentraces trace query` and `opentraces trace index`",
+    "TraceMap, TraceMapNode, TraceMapEdge: workflow-neutral evidence graph behind `opentraces trace map`",
+    "CandidatePacket: bounded search-result envelope returned by `opentraces trace query`",
+    "All dataset models declare extra=\"forbid\" so unknown manifest keys fail validation",
+  ],
+  models: v030.models.map((m) => {
+    if (m.id === "trace-record") {
+      return {
+        ...m,
+        fields: m.fields.map((f) =>
+          f.name === "schema_version" ? { ...f, description: 'e.g. "0.4.0"' } : f,
+        ),
+      };
+    }
+    return m;
+  }),
+};
+
 /* All versions, newest first. Add new versions here. */
-export const versions: SchemaVersion[] = [v030, v020, v011, v010];
+export const versions: SchemaVersion[] = [v040, v030, v020, v011, v010];
 
 export const latestVersion = versions[0].version;
 

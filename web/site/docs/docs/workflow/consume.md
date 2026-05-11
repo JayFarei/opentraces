@@ -59,7 +59,7 @@ Each JSONL line is a `TraceRecord`. A representative subset looks like:
 
 ```json
 {
-  "schema_version": "0.3.0",
+  "schema_version": "0.4.0",
   "trace_id": "tr_01abc...",
   "agent": {
     "name": "claude-code",
@@ -82,26 +82,27 @@ See the [schema overview](/docs/schema/overview) for the full contract.
 
 Once you install the git correlator with `opentraces setup git`, local commands can resolve code history back to traces.
 
-### Group traces by commit
+### Search retained traces
 
 ```bash
-opentraces list --by-commit
-opentraces --json list --by-commit
+opentraces trace query --since 7d
+opentraces trace query --cwd --candidate-kind bug_fix
+opentraces --json trace query --files "src/**/*.py"
 ```
 
 ### Resolve a commit back to traces
 
 ```bash
-opentraces blame abc1234
-opentraces blame abc1234 src/auth.py
-opentraces blame abc1234 src/auth.py --lines
-opentraces --json blame abc1234
+opentraces trail blame abc1234
+opentraces trail blame abc1234 src/auth.py
+opentraces trail blame abc1234 src/auth.py --lines
+opentraces --json trail blame abc1234
 ```
 
-`blame` takes a commit SHA (bare or `c:<sha>`) and an optional path to scope output to one file. Use `--lines` for git-blame-style per-line output. This is useful for provenance, code archaeology, and dataset filtering by evidence quality.
+`trail blame` takes a commit SHA (bare or `c:<sha>`) and an optional path to scope output to one file. Use `--lines` for git-blame-style per-line output. This is useful for provenance, code archaeology, and dataset filtering by evidence quality.
 
 ## Choosing An Access Pattern
 
 - Use `hf-mount` when the consumer wants to browse files or let an agent inspect shards directly
 - Use `datasets` for notebooks, analysis jobs, and training pipelines
-- Use local `list --by-commit` and `blame` for repo-specific provenance work
+- Use local `trace query` and `trail blame` for repo-specific provenance work

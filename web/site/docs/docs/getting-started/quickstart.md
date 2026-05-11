@@ -1,6 +1,6 @@
 # Quick Start
 
-From local capture to a published Hugging Face shard.
+From local capture to a published Hugging Face dataset.
 
 ## 1. Install
 
@@ -16,14 +16,15 @@ opentraces setup
 
 `setup` is the machine-wide wizard. It walks each integration with one prompt, defaults in brackets:
 
-- **claude-code, git, skill** capture hooks [yes] — Stop/PostCompact hooks, post-commit correlator, and the Claude Code skill.
-- **watcher** [yes] — background incremental backfill after each commit, powers `opentraces blame`.
-- **entity-parser (sem)** [yes] — entity-level diffs for richer commit attribution.
-- **HuggingFace login** [yes] — device-code flow, needed before you can push. You can defer and run `opentraces auth login` later.
-- **trufflehog** (Tier 1.5) [no] — global secret-scanner toggle; findings redact in place and force review.
-- **llm-review** (Tier 2) [no] — global toggle for third-party LLM review; configure provider via `opentraces setup llm-review`.
+- **claude-code, git, skill** capture hooks [yes], Stop/PostCompact hooks, post-commit correlator, and the Claude Code skill.
+- **watcher** [yes], background incremental backfill after each commit. Powers `opentraces trail blame`.
+- **bucket** [yes], configure the private bucket sync target (the private workspace state that backs the trace index and Trace Trails).
+- **entity-parser (sem)** [yes], entity-level diffs for richer commit attribution.
+- **HuggingFace login** [yes], device-code flow, needed before you can publish a dataset or sync the bucket to a remote. You can defer and run `opentraces auth login` later.
+- **trufflehog** (Tier 1.5) [no], global secret-scanner toggle. Findings redact in place and force review.
+- **llm-review** (Tier 2) [no], global toggle for third-party LLM review. Configure provider via `opentraces setup llm-review`.
 
-Per-project review policy and remote are not set here, they live in `opentraces init`.
+Per-project review policy and dataset remotes are not set here; they live in `opentraces init` and `opentraces dataset remote ...` respectively.
 
 ## 3. Initialize the Project
 
@@ -34,75 +35,90 @@ opentraces init
 `init` wires the current repo into opentraces and prompts you for:
 
 - **Agents** to connect (e.g. `claude-code`).
-- **Review policy** — `review` every trace in the inbox, or `auto` (capture, sanitize, stage, push without review).
-- **HuggingFace login**, if you skipped it during setup.
-- **Remote dataset** — pick an existing `owner/repo` from your HuggingFace datasets, **create a new one** (init actually calls `create_repo` on the spot so you catch namespace errors now, not at first push), or skip for later. When creating, you also choose **visibility** (private by default).
-- **Import existing traces** — if this repo already has Claude Code sessions, `init` asks whether to import them now or start fresh.
+- **Import existing traces**, if this repo already has Claude Code sessions, `init` asks whether to import them now or start fresh.
 
-It also writes the committable marker at `.opentraces.json`, registers machine-local storage under `~/.opentraces/projects/<slug>/`, and installs the per-repo capture hook unless you pass `--no-hook`.
+It writes the committable marker at `.opentraces.json`, registers machine-local storage under `~/.opentraces/projects/<slug>/`, and installs the per-repo capture hook for the chosen agent.
 
-## 4. Inspect the Inbox
-
-### Web inbox
-
-```bash
-opentraces web
-```
-
-The browser inbox shows each trace with timeline, review, and push flows. It is the richest surface for manual review and redaction.
-
-![Web inbox - review view](/docs/assets/web-review.png)
-
-![Web inbox - graph view](/docs/assets/web-graph.png)
-
-### Terminal inbox
-
-```bash
-opentraces tui
-```
-
-The TUI is faster for shell-first review. It loads the same local inbox and exposes staging, rejection, discard, security details, and push.
-
-![Terminal inbox](/docs/assets/tui.png)
-
-CLI review is available too:
+## 4. Inspect Retained Traces
 
 ```bash
 opentraces status
-opentraces list --stage inbox
-opentraces show <trace-id>
-opentraces redact <trace-id>
+opentraces trace query --since 7d
+opentraces trace get <trace-id>
 ```
 
-## 5. Stage Traces For Upload
+`status` reports the project snapshot, stage counts, and recent traces. `trace query` is the full search surface across retained traces, with lexical, semantic, faceted, and survival-state filters. `trace get` resolves one trace, trace unit, map node, or `ot://` Trail resource.
+
+For commit-level attribution:
 
 ```bash
-opentraces add --all
+opentraces trail blame <sha>           # which traces contributed to a commit
+opentraces trail graph                  # commit + trace history
+opentraces trail track <trace-id>       # walk trace lineage through Git history
 ```
 
-`add` moves Inbox traces into the visible `staged` set. `blocked` and `rejected` traces are refused until you fix or explicitly reject them.
+## 5. Create a Dataset
 
-## 6. Push
+Datasets are the publication unit in 0.4. Each dataset has its own schema, workflow, remotes, and publication state. Create one:
 
 ```bash
-opentraces push
+opentraces workflow create my-workflow
+opentraces dataset new my-dataset --workflow my-workflow
 ```
 
-`push` uploads staged traces to the active remote as a new JSONL shard and refreshes the dataset card. By default it also runs quality scoring unless you pass `--no-assess`.
+For ad-hoc seeding from an existing JSONL file:
+
+```bash
+opentraces dataset new my-dataset --rows-file rows.jsonl --schema schema.json
+```
+
+## 6. Run the Workflow
+
+```bash
+opentraces dataset run my-dataset
+opentraces dataset run my-dataset --dry-run
+opentraces dataset run my-dataset --since-last-run
+```
+
+`dataset run` invokes the workflow against retained traces and appends rows into the dataset, advancing the cursor for subsequent runs.
+
+## 7. Review the Rows
+
+```bash
+opentraces dataset review my-dataset --tui     # terminal review
+opentraces dataset review my-dataset --web     # browser review
+opentraces dataset review my-dataset approve <row-id>
+opentraces dataset review my-dataset approve --all
+```
+
+![Web review](/docs/assets/web-review.png)
+
+![Web graph](/docs/assets/web-graph.png)
+
+![Terminal review](/docs/assets/tui.png)
+
+## 8. Publish
+
+```bash
+opentraces dataset remote create my-dataset owner/team-traces --private
+opentraces dataset publish my-dataset
+```
+
+`dataset publish` uploads reviewed rows and contract files to the bound remote as a new shard. Pass `--check-only` to run all gates without uploading.
 
 ## What Happens Next
 
-Your traces are available as a Hugging Face dataset:
+Your dataset is available on Hugging Face:
 
 ```python
 from datasets import load_dataset
 
-ds = load_dataset("your-name/opentraces")
+ds = load_dataset("owner/team-traces")
 ```
 
 ## Next Steps
 
-- [Inbox & Review](/docs/workflow/review) - Web, TUI, and CLI review flows
-- [Push](/docs/workflow/pushing) - Remotes, visibility, migrations, and gates
-- [Security Tiers](/docs/security/tiers) - Review policy and layered scanning
-- [CLI Reference](/docs/cli/commands) - Full 0.4 command surface
+- [Inbox & Review](/docs/workflow/review), dataset review (TUI and web) and CLI review flows
+- [Publish](/docs/workflow/pushing), remotes, visibility, migrations, and gates
+- [Security Tiers](/docs/security/tiers), review policy and layered scanning
+- [CLI Reference](/docs/cli/commands), full 0.4 command surface

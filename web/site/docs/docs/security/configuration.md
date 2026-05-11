@@ -71,10 +71,11 @@ For the security integrations themselves, prefer the dedicated setup commands ov
 ```bash
 opentraces setup trufflehog
 opentraces setup llm-review
-opentraces setup review-policy --review
 ```
 
-These commands validate the environment and keep the config shape correct.
+These commands validate the environment and keep the config shape correct. The
+review policy is a per-project value, set with `opentraces config set
+review_policy review --project` or `... auto --project`.
 
 ## Exclusions
 

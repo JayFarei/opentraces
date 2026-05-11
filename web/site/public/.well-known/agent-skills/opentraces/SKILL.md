@@ -12,391 +12,204 @@ description: >
 
 # opentraces
 
-Open protocol + CLI for repo-local agent trace capture, review, and upload.
+OpenTraces captures local agent traces, links them to Git evidence with Trace
+Trails, lets workflows turn one or more traces into local datasets, and then
+publishes reviewed dataset rows to HuggingFace remotes.
 
-After each captured agent session, opentraces parses the trace, runs security
-scanning and redaction, stores it locally, and exposes it through the web UI,
-TUI, and CLI. You review, stage, and push the traces you want to share.
+## Current Command Model
 
-## Current 0.3 Model
+- Global setup: `opentraces setup`, `opentraces setup auth`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces auth`
+- Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`, `opentraces remove`
+- Trace retrieval and search: `opentraces trace query`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
+- Trace Trails (visible surface): `opentraces trail blame`, `opentraces trail graph`, `opentraces trail track`
+- Bucket (private capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
+- Workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`
+- Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`.
 
-- Repo marker: `.opentraces.json`
-- Machine-local state: `~/.opentraces/projects/<slug>/...`
-- Public inbox commands: `list`, `show`, `add`, `reject`, `reset`, `redact`, `discard`
-- Upload vocabulary: `inbox`, `staged`, `pushed`, `rejected`, `blocked`
-- Live capture: Claude Code
-- Dataset import: `opentraces pull --parser hermes`
+Old flat inbox commands such as `opentraces list`, `add`, `reject`, `push`,
+`pull`, `web`, and `tui` are not part of the public command tree. Several
+Trace Trails substrate commands (`trail explain`, `sync`, `timeline`,
+`teleport`, `resolve`, `attach`, `rebuild`, `diff`, `resume`, `follow`,
+`snapshots`, `snapshot checkout`) remain callable for scripting and
+debugging but are hidden from `--help` after the CLI spine simplification.
 
-## Quick Reference
-
-### Setup
+## Setup
 
 ```bash
-opentraces auth login
-opentraces auth login --token
+opentraces setup
+opentraces setup auth
+opentraces setup bucket          # opt into remote-by-default private bucket sync
+opentraces setup skill           # install the opentraces skill into agent harnesses
+opentraces setup upgrade         # upgrade CLI + refresh project skill file
+opentraces auth whoami
 opentraces init
-opentraces init --review-policy review
-opentraces init --review-policy auto
-opentraces init --import-existing
-```
-
-### Review And Publish
-
-```bash
 opentraces status
-opentraces list
-opentraces list --stage inbox
-opentraces show <TRACE_ID>
-opentraces show <TRACE_ID> --verbose
-opentraces show <TRACE_ID> --markdown
-opentraces add <TRACE_ID>
-opentraces add --all
-opentraces reject <TRACE_ID>
-opentraces reset <TRACE_ID>
-opentraces redact <TRACE_ID>
-opentraces discard <TRACE_ID> --yes
-opentraces web
-opentraces tui
-opentraces push
-opentraces push --llm-review
-opentraces llm-review --scope staged
-opentraces assess
 opentraces doctor
 ```
 
-### Remotes, Import, And Export
+`setup` is machine-global: hooks, auth, watcher, TruffleHog, LLM review, and
+supporting binaries. `init` is project enrollment only; dataset remotes and
+review policy belong under `opentraces dataset ...` and `opentraces config
+set review_policy <auto|review> --project`. Private bucket configuration
+belongs under `opentraces setup bucket` and `opentraces bucket remote`.
+
+## Trace Retrieval
+
+Use trace commands when an agent needs compact evidence before loading full
+transcripts.
 
 ```bash
-opentraces remote list
-opentraces remote add owner/dataset
-opentraces remote create owner/dataset --private
-opentraces remote visibility owner/dataset --public
-opentraces pull owner/dataset --parser hermes
-opentraces export --format agent-trace
-opentraces blame abc1234
-opentraces blame abc1234 src/auth.py
-opentraces graph
-opentraces backfill
+opentraces trace query --lex "bug fix failing test" --json
+opentraces trace query --skill grill-me --json
+opentraces trace index rebuild --json
+opentraces trace map <trace_id> --candidate <unit_id> --json
+opentraces trace slice <trace_id> --template bursts --json
+opentraces trace get <trace_id> --json
+opentraces trace teleport export <trace_id> --output <dir>
 ```
 
-## Onboarding
+`trace query` returns bounded candidate packets over the local BM25 +
+semantic Trace Index. `trace index` rebuilds and inspects that projection.
+`trace map` returns a workflow-neutral evidence map or candidate slice.
+`trace slice` materialises deterministic Trace Slice packets for dataset
+workflows. `trace get` is the explicit full retrieval step. `trace
+teleport` moves a trace and its retained Git evidence between workspaces.
 
-### Step 1: Check Whether The Repo Is Already Initialized
+## Trace Trails
 
-Look for `.opentraces.json` in the repo root.
-
-If it exists, start with:
+Trace Trails are the Git-anchored evidence chain for what a trace changed and
+where that change lives now. The visible top-level surface is `trail blame`,
+`trail graph`, and `trail track`.
 
 ```bash
-opentraces status
-opentraces list --stage inbox
+# Visible surface
+opentraces trail blame <sha>
+opentraces trail blame t:<trace_id>
+opentraces trail graph
+opentraces trail graph --trace <trace_id>
+opentraces trail track <trace_id>
+opentraces trail track --patch <trace_patch_id>
+opentraces trail track --anchor <git_anchor_id>
+opentraces trail track --since 12h --json
+opentraces trail track --all --json --limit 50
 ```
 
-Do not look for `.opentraces/config.json`. That is old.
+`trail track` walks a trace's lineage through Git history and reports
+current `HEAD` survival across all anchors, with batch JSONL output via
+`--since`, `--all`, and `--patches-from`.
 
-### Step 2: Check Authentication
+## Bucket
+
+The bucket is the project-local private store of every captured trace, under
+`~/.opentraces/projects/<slug>/bucket/`. It is local-only by default. Opt into
+remote-by-default sync with `opentraces setup bucket`; sync is always
+explicit.
 
 ```bash
-opentraces auth whoami
+opentraces bucket status --json
+opentraces bucket manifest --json
+opentraces bucket remote status --json
+opentraces bucket remote push --json
+opentraces bucket remote pull --json
+opentraces bucket remote diff --json
+opentraces bucket replay --repo <repo-dir>
 ```
 
-If not authenticated:
+Buckets are distinct from datasets. A bucket holds raw captured traces; a
+dataset holds workflow-projected rows. `bucket replay` replays
+bucket-exported Trace Trails into a Git repository (useful when a teammate
+hands you a bucket and you need to materialise its evidence locally).
 
-- use `opentraces auth login` for the normal browser-based flow
-- use `opentraces auth login --token` in headless or CI environments
-- `HF_TOKEN` also works and takes precedence over stored credentials
+## Workflows
 
-### Step 3: Gather Preferences
-
-Before running `init`, clarify:
-
-1. Review policy: `review` or `auto`
-2. Remote dataset: connect now or later
-3. Existing traces: backfill with `--import-existing` or start fresh
-
-### Step 4: Initialize Explicitly
-
-Standard setup:
+Workflows are skill-format packages (or Markdown files) that know how to turn
+trace evidence into dataset rows. The main path is to scaffold one with
+`opentraces workflow create` and then bind it to a dataset:
 
 ```bash
-opentraces init --agent claude-code --review-policy review --import-existing
+opentraces workflow templates --json
+opentraces workflow create <name> --template skill-command-trajectory-eval-v1
+opentraces workflow list --json
+opentraces workflow remove <name> --yes
+opentraces dataset new <name> --workflow ./workflows/<workflow>/WORKFLOW.md
+opentraces dataset new <name> --workflow ./workflows/<workflow>/
 ```
 
-With an explicit remote:
+The bundled `skill-command-trajectory-eval-v1` template materialises a ready
+workflow that emits command-trajectory evaluation rows.
+
+## Datasets
+
+A dataset is built by running a workflow over one or more traces. It can stay
+local, or it can be bound to a HuggingFace dataset remote and published after
+review/security gates pass.
 
 ```bash
-opentraces init --agent claude-code --review-policy review --remote owner/dataset --private
+opentraces dataset list --json
+opentraces dataset new <name> --workflow <workflow.md-or-package-dir>
+opentraces dataset status <name> --json
+opentraces dataset run <name> --dry-run --limit 5 --verbose
+opentraces dataset run <name>
+opentraces dataset review <name>
+opentraces dataset review approve <name> <row_id>
+opentraces dataset review reject <name> <row_id>
+opentraces dataset review reset <name> <row_id>
+opentraces dataset remote create <name> <owner/name> --private
+opentraces dataset remote add <name> <owner/name>
+opentraces dataset remote list <name>
+opentraces dataset remote visibility <name> --public
+opentraces dataset publish <name> --check-only
+opentraces dataset publish <name>
+opentraces dataset publish <name> --min-retention 0.5 --exclude-state lost
+opentraces dataset schedule list
+opentraces dataset remove <name> --yes
 ```
 
-`init` writes `.opentraces.json`, registers the repo in the global config,
-installs the Claude Code hook unless `--no-hook` is used, and installs the
-bundled skill into the project.
+Manual review means rows remain local until approved. Automatic review policy
+may mark rows publishable, but remote egress is still explicit: publish is a
+separate user action.
 
-## Core Loop
+## Onboarding Path
 
-### 1. Capture
+Step 1: install opentraces (`pipx install opentraces`) and verify with
+`opentraces --version`. If already installed, run `opentraces setup upgrade`.
 
-After `init`, Claude Code sessions are captured automatically. The pipeline:
+Step 2: authenticate with `opentraces auth login` (or `opentraces auth login
+--token` on CI / headless).
 
-1. discovers the session transcript
-2. parses it into `TraceRecord`
-3. filters trivial traces
-4. enriches with git, attribution, dependencies, and metrics
-5. runs security scanning and redaction
-6. places the trace into a visible stage
+Step 3: in the project repo, run `opentraces init --agent claude-code
+--import-existing` to enroll the project and install the Claude Code capture
+hooks.
 
-### 2. Review
+Step 4: complete machine-global setup: `opentraces setup skill`,
+`opentraces setup git`, optionally `opentraces setup trufflehog` and
+`opentraces setup llm-review` for stronger security gates.
 
-Use any of these:
-
-```bash
-opentraces web
-opentraces tui
-opentraces list --stage inbox
-opentraces show <TRACE_ID>
-```
-
-The visible stages are:
-
-- `inbox`
-- `staged`
-- `pushed`
-- `rejected`
-- `blocked`
-
-### 3. Stage
-
-```bash
-opentraces add <TRACE_ID>
-opentraces add --all
-```
-
-`add` stages Inbox traces for the next push. It refuses `blocked` and
-`rejected` traces.
-
-### 4. Push
-
-```bash
-opentraces push
-```
-
-Each push uploads staged traces as a new Hugging Face shard and refreshes the
-dataset card.
-
-## Review Operations
-
-### Inspecting Traces
-
-```bash
-opentraces list --stage inbox
-opentraces list --by-commit
-opentraces show <TRACE_ID>
-opentraces show <TRACE_ID> --verbose
-opentraces show <TRACE_ID> --markdown
-```
-
-Human `show` output truncates long step content by default. Use `--verbose`
-for the full terminal view, or `--json` for structured output.
-
-### Editing State
-
-```bash
-opentraces add <TRACE_ID>
-opentraces reject <TRACE_ID>
-opentraces reset <TRACE_ID>
-opentraces redact <TRACE_ID>
-opentraces discard <TRACE_ID> --yes
-```
-
-Use:
-
-- `reject` to keep a trace local only
-- `reset` to move it back to Inbox
-- `redact` to rewrite sensitive text in place
-- `discard` to delete the local trace permanently
-
-## Push, Remotes, And Visibility
-
-### Push Options
-
-```bash
-opentraces push --private
-opentraces push --public
-opentraces push --publish
-opentraces push --gated
-opentraces push --repo owner/dataset
-opentraces push --no-assess
-opentraces push --no-trufflehog
-opentraces push --llm-review
-```
-
-Important behavior:
-
-- `push` uploads `staged` traces, not “committed” traces
-- assessment runs by default during push
-- `push --llm-review` requires a clean Tier 2 verdict on every staged trace
-- `push --no-trufflehog` skips Tier 1.5 for one push only
-
-### Remote Management
-
-```bash
-opentraces remote list
-opentraces remote add owner/dataset
-opentraces remote create owner/dataset --private
-opentraces remote visibility owner/dataset --public
-opentraces remote remove owner/dataset
-opentraces remote delete owner/dataset
-```
-
-Use `push --repo owner/dataset` as a one-shot override when you do not want to
-change the active remote permanently.
-
-## Security And Quality
-
-### Security Tiers
-
-Current user-facing security layers:
-
-1. Regex patterns, always on
-2. Shannon entropy, always on
-3. TruffleHog, optional
-4. LLM trace review, optional and on demand
-5. Human review
-
-`SECURITY_VERSION` is currently `0.3.0`.
-
-### TruffleHog
-
-```bash
-opentraces setup trufflehog
-opentraces setup trufflehog --enable
-opentraces setup trufflehog --disable
-```
-
-Current behavior:
-
-- findings are redacted in place
-- findings force review before upload
-- `verify_secrets` stays off by default
-
-### LLM Review
-
-Configure once:
-
-```bash
-opentraces setup llm-review
-```
-
-Run it:
-
-```bash
-opentraces llm-review
-opentraces llm-review --scope inbox
-opentraces llm-review --scope staged
-opentraces llm-review --trace 8a3f1c
-opentraces llm-review --dry-run
-```
-
-Gate a push on it:
-
-```bash
-opentraces push --llm-review
-```
-
-### Review Policy
-
-```bash
-opentraces setup review-policy --review
-opentraces setup review-policy --auto
-opentraces setup review-policy --print
-```
-
-`--auto` means safe traces are auto-approved into `staged`. It does not push
-automatically.
-
-### Assessment
-
-```bash
-opentraces assess
-opentraces assess --judge
-opentraces assess --dataset owner/dataset
-opentraces assess --explain
-```
-
-Local assess prefers staged traces first. `push` already runs assessment by
-default unless `--no-assess` is passed.
-
-## Git Correlation And Attribution
-
-Install the git hook:
-
-```bash
-opentraces setup git
-```
-
-Then use:
-
-```bash
-opentraces list --by-commit
-opentraces blame abc1234
-opentraces blame abc1234 src/auth.py
-opentraces blame abc1234 src/auth.py --lines
-opentraces graph
-opentraces graph --trace abc12
-opentraces backfill
-```
-
-`blame` takes a commit SHA (bare or `c:<sha>`) and an optional path. Add
-`--lines` for git-blame-style per-line output. `graph` is commit-primary
-by default; pivot to a single trace with `--trace <id>`. Both require a
-populated attribution cache — run `opentraces backfill` when empty.
-
-## Import And Export
-
-### Import
-
-```bash
-opentraces pull owner/dataset --parser hermes
-opentraces pull owner/dataset --parser hermes --auto
-opentraces pull owner/dataset --parser hermes --limit 10 --dry-run
-```
-
-Hermes is currently an import path, not a live-capture harness.
-
-### Export
-
-```bash
-opentraces export --format agent-trace
-opentraces export --format atif
-```
+Step 5: when ready to publish, scaffold a dataset with
+`opentraces dataset new <name>`, run it, review with
+`opentraces dataset review <name> --web`, bind a remote, then
+`opentraces dataset publish <name>`.
 
 ## JSON Mode
 
-Prefer `--json` whenever another agent needs structured output:
+Prefer `--json` for agent automation:
 
 ```bash
 opentraces --json status
-opentraces --json list --stage inbox
-opentraces --json show <TRACE_ID>
-opentraces --json config show
-opentraces --json blame abc1234
-opentraces --json backfill
+opentraces --json trace query --skill grill-me
+opentraces --json trace map <trace_id>
+opentraces --json trail track <trace_id>
+opentraces --json bucket status
+opentraces --json dataset status <name>
 ```
 
 ## Troubleshooting
 
 | Problem | Action |
-|---------|--------|
+|---|---|
 | Not initialized | Run `opentraces init` |
+| Auth missing | Run `opentraces setup auth` or `opentraces auth login` |
 | No traces visible | Check `opentraces setup claude-code`, then `opentraces status` |
-| Traces blocked | Run `opentraces list --stage blocked` and inspect with `show` |
-| Push failing | Check `auth whoami`, `remote list`, and `doctor` |
-| TruffleHog enabled but missing | Run `opentraces setup trufflehog` or `--disable` |
-| llm-review unreachable | Run `opentraces setup llm-review --test` |
-
-When removing opentraces from a repo, use:
-
-```bash
-opentraces remove
-opentraces remove --all
-```
+| Trace Trail event log invalid | Run `opentraces doctor`; `opentraces trail rebuild` re-derives advisory projections |
+| Bucket not syncing | Run `opentraces setup bucket` to configure a remote, then `opentraces bucket remote status` |
+| Publish blocked | Run `opentraces dataset status <name> --json` and `opentraces dataset publish <name> --check-only` |

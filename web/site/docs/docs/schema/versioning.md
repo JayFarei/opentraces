@@ -16,10 +16,10 @@ The opentraces schema follows semantic versioning. The version lives in `package
 ## Current Version
 
 ```text
-0.3.0
+0.4.0
 ```
 
-The `0.x` series means breaking changes may still land between minor versions until `1.0.0`.
+The `0.x` series means breaking changes may still land between minor versions until `1.0.0`. 0.4.0 is additive over 0.3.0; pre-0.4.0 traces deserialize unchanged.
 
 ### 0.3.0 — additive changes
 
@@ -35,7 +35,7 @@ All new fields are optional; pre-0.3.0 traces deserialize unchanged.
 - `AttributionConversation.ids` — provider-native conversation IDs (RFC #9).
 - `AttributionConversation.related` — baseline related-resource vocabulary (RFC #16).
 - `Task.repository_url` — canonical remote URL (RFC #22).
-- `TraceRecord.generation_index` — monotonic per-`session_id` generation counter for replacement snapshots (used by `opentraces pull` and supersedes detection).
+- `TraceRecord.generation_index`, monotonic per-`session_id` generation counter for replacement snapshots (used by dataset workflows that ingest external rows and by supersedes detection).
 - `Metrics.total_cache_read_tokens`, `Metrics.total_cache_creation_tokens` — session-level prompt-cache aggregates.
 - `AttributionRange.content_hash` format migrated to `murmur3:<32-hex>` (replaces the prior md5-truncated form) for cross-tool line-range matching. The top-level `TraceRecord.content_hash` is unchanged (still SHA-256 hex of the serialized record, used for cross-contributor dedup).
 

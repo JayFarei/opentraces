@@ -3,7 +3,7 @@ import SectionRule from "./SectionRule";
 const features = [
   {
     title: "git for traces",
-    desc: "init, status, review, push. The workflow you know, applied to agent sessions.",
+    desc: "init, status, dataset new, dataset publish. The workflow you know, applied to agent sessions.",
   },
   {
     title: "security pipeline",
@@ -11,11 +11,11 @@ const features = [
   },
   {
     title: "auto or review",
-    desc: "Per-project policy: auto-approve safe traces, or gate every session through the TUI or browser inbox.",
+    desc: "Per-dataset policy: auto-approve safe rows, or gate every row through the TUI or browser reviewer.",
   },
   {
-    title: "blame and graph",
-    desc: "Every shipped line back to the prompt behind it. ot blame and ot graph map commits to their agent sessions.",
+    title: "trail blame and graph",
+    desc: "Every shipped line back to the prompt behind it. trail blame and trail graph map commits to their agent sessions.",
   },
   {
     title: "schema depth",
@@ -27,11 +27,11 @@ const features = [
   },
   {
     title: "quality scoring",
-    desc: "Five persona rubrics score every trace. Upload gates enforce minimums. Re-score remotely with ot assess.",
+    desc: "Five persona rubrics score every trace. Publish gates enforce minimums via dataset publish.",
   },
   {
     title: "content-hash dedup",
-    desc: "Reset state, switch machines, re-push safely. murmur3 hashing blocks duplicates on the remote.",
+    desc: "Reset state, switch machines, re-publish safely. murmur3 hashing blocks duplicates on the remote.",
   },
   {
     title: "agent-native cli",

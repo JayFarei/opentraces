@@ -40,13 +40,16 @@ export default function ShareFrom() {
             </div>
           </div>
 
-          {/* Step 3: Push */}
+          {/* Step 3: Publish */}
           <div style={{ display: "flex", gap: 16, marginBottom: 24 }}>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 20, fontWeight: 300, color: "var(--text-dim)", width: 28, flexShrink: 0, textAlign: "right" }}>3</div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 4 }}>Push</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 4 }}>Publish</div>
+              <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+                <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces dataset new my-dataset
+              </div>
               <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)" }}>
-                <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces push
+                <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces dataset publish my-dataset
               </div>
             </div>
           </div>
@@ -58,8 +61,8 @@ export default function ShareFrom() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {[
-                { name: "Agent skill", cmd: "npx skills add jayfarei/opentraces" },
-                { name: "Session capture hook", cmd: "opentraces init" },
+                { name: "Claude Code skill", cmd: "opentraces setup skill" },
+                { name: "Git commit anchor", cmd: "opentraces setup git" },
               ].map((item) => (
                 <div key={item.name} style={{ border: "1px solid var(--border)", padding: "10px 12px", background: "var(--surface)" }}>
                   <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 4 }}>{item.name}</div>

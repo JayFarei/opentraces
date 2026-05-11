@@ -1,21 +1,10 @@
 # Export
 
-`opentraces export` serializes the locally staged traces into another interchange format. It reads from the current project's machine-local trace store and writes a single JSONL file.
-
-```bash
-opentraces export --format agent-trace
-opentraces export --format agent-trace --output ./my-export.jsonl
-opentraces export --format atif
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--format` | required | `atif` or `agent-trace`. |
-| `--output` | `./opentraces-export.jsonl` | Destination JSONL path. |
+Cross-format export in 0.4 is handled by the schema package directly. The legacy `opentraces export` top-level command has been retired; the underlying serializers (`agent-trace`, `atif`) live in `packages/opentraces-schema/` and are invoked by dataset workflows that need them.
 
 ## Agent Trace v0.1.0
 
-`--format agent-trace` emits Agent Trace v0.1.0 JSONL, following the Cursor/community [RFCs](https://github.com/cursor/agent-trace). The exporter pulls directly from the fields adopted in schema 0.3.0:
+Agent Trace serialization follows the Cursor/community [RFCs](https://github.com/cursor/agent-trace). The exporter pulls directly from the fields adopted in schema 0.3.0:
 
 - `Task.repository_url` (RFC #22)
 - `TraceRecord.lifecycle` and `git_links[]` (RFC #25, #27)
@@ -25,20 +14,23 @@ opentraces export --format atif
 
 All Agent Trace `content_hash` values use the `murmur3:<32-hex>` prefix inherited from the opentraces record.
 
-Output is one Agent Trace record per line:
+To produce Agent Trace JSONL from a dataset, define a workflow that calls the Agent Trace serializer over reviewed rows, or invoke the serializer directly from a script:
 
-```bash
-head -n 1 opentraces-export.jsonl | python3 -m json.tool | head -40
+```python
+from opentraces_schema import TraceRecord
+from opentraces.publish.agent_trace import serialize_record_to_agent_trace
+
+# ...load TraceRecord, then:
+agent_trace_payload = serialize_record_to_agent_trace(record)
 ```
 
 ## ATIF
 
-`--format atif` is present but still the lighter path. The schema package keeps the mapping tables in `packages/opentraces-schema/FIELD-MAPPINGS.md` as the source of truth for third-party converters.
+`packages/opentraces-schema/FIELD-MAPPINGS.md` is the source of truth for third-party converters between `TraceRecord` and ATIF. The serializer at `src/opentraces/publish/atif.py` performs the conversion.
 
 A public round-trip ATIF converter is tracked on the roadmap.
 
 ## What Is Not Ready Yet
 
-- A public `opentraces import` workflow (use `opentraces pull` for HuggingFace sources)
-- A full ATIF exporter
-- A round-trip converter between opentraces and ATIF
+- A full ATIF round-trip converter
+- A user-facing `opentraces export` verb (was removed in 0.4)

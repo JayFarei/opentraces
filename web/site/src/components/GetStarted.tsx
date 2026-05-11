@@ -21,16 +21,16 @@ function CopyBox({ cmd, desc }: { cmd: string; desc: string }) {
 
 const terminalSteps = [
   { cmd: "pipx install opentraces", desc: "install the CLI" },
-  { cmd: "opentraces setup && opentraces init", desc: "ensure the global install, then initialize an inbox in this project" },
-  { cmd: "opentraces web", desc: "review in the browser, stage what's safe to share" },
-  { cmd: "opentraces push", desc: "upload staged traces to your HuggingFace dataset" },
+  { cmd: "opentraces setup && opentraces init", desc: "ensure the global install, then connect this project's capture hooks" },
+  { cmd: "opentraces dataset new my-dataset", desc: "scaffold a local dataset; run, review, and stage rows" },
+  { cmd: "opentraces dataset publish my-dataset", desc: "publish approved rows to your HuggingFace dataset" },
 ];
 
 const agentSteps = [
-  { cmd: "set up opentraces for this project", desc: "installs, authenticates, connects a dataset, and installs the hook" },
-  { cmd: "open my opentraces inbox and review my traces", desc: "review in the browser or TUI, then stage or reject traces" },
-  { cmd: "ensure $CLIENT is redacted and stage the safe traces", desc: "agent checks redactions against your criteria before upload" },
-  { cmd: "push my staged traces to HuggingFace", desc: "uploads the staged traces to your private dataset" },
+  { cmd: "set up opentraces for this project", desc: "installs, authenticates, and connects the capture hook" },
+  { cmd: "scaffold a dataset and run it over my latest traces", desc: "agent calls dataset new + dataset run to populate rows from your traces" },
+  { cmd: "review the dataset rows and approve the safe ones", desc: "agent walks each row, checks redactions, approves what's safe to share" },
+  { cmd: "publish the approved rows to HuggingFace", desc: "uploads approved rows to your private dataset" },
 ];
 
 export default function GetStarted() {
