@@ -106,7 +106,7 @@ export function TraceSecurityModal({
   // LLM review row
   let lrKind: DotKind = "pending";
   let lrText = "not run";
-  let lrHint: string | null = "opt-in: press p then L on push";
+  let lrHint: string | null = "opt-in: opentraces setup llm-review";
   const lrStatus = lr.status;
   const lrShareable = lr.shareable;
   const lrMissed = lr.missed_sensitive_data;

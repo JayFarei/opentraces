@@ -9,15 +9,14 @@ Two-column layout:
     │ [4] Pushed   list N/M       │                            │
     └─────────────────────────────┴────────────────────────────┘
 
-Space moves inbox ↔ staged. `p` opens the push modal (LLM review or
-ignore). The trace stream renders a flattened conversation view ported
+Space moves inbox ↔ staged. `p` opens the dataset publication guidance modal.
+The trace stream renders a flattened conversation view ported
 from the ``traces-audit`` reference TUI.
 """
 
 from __future__ import annotations
 
 import logging
-import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -377,7 +376,7 @@ class SecurityInfoModal(ModalScreen[None]):
                        f"missed={lr_missed}[/dim]")
         else:
             lr_line = (f"{pending_dot()} [bold]LLM review[/bold]  not run  "
-                       "[dim](opt-in: press p then L on push)[/dim]")
+                       "[dim](opt-in: opentraces setup llm-review)[/dim]")
 
         body = (
             f"[bold]Security pipeline[/bold]\n"
@@ -395,19 +394,12 @@ class SecurityInfoModal(ModalScreen[None]):
         self.dismiss(None)
 
 
-class PushModal(ModalScreen[str | None]):
-    """Prompt the user for push mode: LLM review, skip review, or cancel.
-
-    The ``i`` binding was previously used for "Ignore and push"; renamed
-    to ``s`` ("Skip review") to avoid visual collision with the global
-    ``i`` info shortcut, which is what users see in their keybar behind
-    the modal.
-    """
+class PushModal(ModalScreen[None]):
+    """Explain that trace push moved to dataset publication."""
 
     BINDINGS = (
-        Binding("l", "choose('llm')", "LLM review then push"),
-        Binding("s", "choose('ignore')", "Skip review and push"),
-        Binding("escape", "choose('cancel')", "Cancel"),
+        Binding("escape", "dismiss", "Close"),
+        Binding("enter", "dismiss", "Close"),
     )
 
     def __init__(self, remote: str | None, staged_count: int = 0) -> None:
@@ -421,133 +413,23 @@ class PushModal(ModalScreen[str | None]):
         suffix = "" if n == 1 else "s"
         yield Vertical(
             Static(
-                f"[bold]Push [{BLUE_ACCENT}]{n}[/{BLUE_ACCENT}] staged trace{suffix}[/bold]",
+                "[bold]Dataset publication replaces trace push[/bold]",
                 id="push-title",
             ),
+            Static(f"[dim]staged traces[/dim]  [{BLUE_ACCENT}]{n}[/{BLUE_ACCENT}] trace{suffix}"),
             Static(f"[dim]remote[/dim]  [bright_blue]{remote_line}[/bright_blue]"),
             Static(""),
-            Static("[bold]L[/bold]  Local LLM review then push   [dim]opentraces push --llm-review[/dim]"),
-            Static("[bold]S[/bold]  Skip review and push         [dim]opentraces push[/dim]"),
+            Static("[bold]Next step[/bold]  create or update a dataset from the bucket."),
+            Static("[dim]opentraces dataset run <name>[/dim]"),
+            Static("[dim]opentraces dataset review <name>[/dim]"),
+            Static("[dim]opentraces dataset publish <name>[/dim]"),
             Static(""),
-            Static("[dim]Esc to cancel[/dim]"),
+            Static("[dim]Esc or Enter to close[/dim]"),
             id="push-modal-body",
         )
 
-    def action_choose(self, choice: str) -> None:
-        self.dismiss(None if choice == "cancel" else choice)
-
-
-class PushRunnerModal(ModalScreen[None]):
-    """Runs `opentraces push` in a worker and streams output."""
-
-    BINDINGS = (Binding("escape", "dismiss_if_done", "Close"),)
-
-    def __init__(self, mode: str, project_dir: Path) -> None:
-        super().__init__()
-        self.mode = mode
-        self.project_dir = project_dir
-        self._done = False
-
-    def compose(self) -> ComposeResult:
-        title = (
-            "Running opentraces llm-review --scope staged → push --llm-review"
-            if self.mode == "llm"
-            else "Running opentraces push"
-        )
-        yield Vertical(
-            Static(f"[bold]{title}[/bold]", id="push-runner-title"),
-            FocusableLog(id="push-runner-log", markup=False, wrap=True, highlight=False),
-            Static("[dim]Running... (this can take a minute on first push)[/dim]", id="push-runner-hint"),
-            id="push-runner-body",
-        )
-
-    def on_mount(self) -> None:
-        self.run_push()
-
-    @work(thread=True, exclusive=True)
-    def run_push(self) -> None:
-        log = self.query_one("#push-runner-log", RichLog)
-        # Resolve the ``opentraces`` console script next to the active
-        # interpreter — works in any venv layout (editable install, pipx,
-        # deployed wheel) without depending on PATH or shell aliases like
-        # ``ot`` or ``otd``. ``python -m opentraces.cli`` doesn't work
-        # because the cli module is a package without a ``__main__``.
-        script = Path(sys.executable).parent / "opentraces"
-        if not script.exists():
-            self.app.call_from_thread(
-                log.write,
-                f"[error] could not find 'opentraces' next to {sys.executable}",
-            )
-            self._done = True
-            return
-
-        # LLM-review flow is two steps: first produce verdicts scoped to
-        # the staged set, then push with the gate. Running the gate alone
-        # (the old behavior) aborted immediately on fresh staged traces
-        # because they had no verdict yet.
-        # Pass ``-y`` so any click.confirm() in push (notably the remote
-        # schema-migration gate at cli/publish.py:116) takes the default
-        # instead of blocking forever reading stdin. This matches what a
-        # user hitting enter at the CLI would do. Users who want the
-        # prompt behavior should run ``opentraces push`` in a terminal.
-        if self.mode == "llm":
-            rc_review = self._run_step(
-                log, [str(script), "llm-review", "--scope", "staged"],
-                header="→ opentraces llm-review --scope staged",
-            )
-            if rc_review != 0:
-                self.app.call_from_thread(
-                    log.write,
-                    "\n[aborting push — llm-review did not succeed]",
-                )
-                self._done = True
-                self._mark_done()
-                return
-            push_cmd = [str(script), "push", "--llm-review", "-y"]
-            push_header = "→ opentraces push --llm-review -y"
-        else:
-            push_cmd = [str(script), "push", "-y"]
-            push_header = "→ opentraces push -y"
-
-        self._run_step(log, push_cmd, header=push_header)
-        self._done = True
-        self._mark_done()
-
-    def _mark_done(self) -> None:
-        """Flip the hint from 'Running...' to 'Done'."""
-        try:
-            hint = self.query_one("#push-runner-hint", Static)
-            self.app.call_from_thread(
-                hint.update, "[dim]Done — Esc to close[/dim]"
-            )
-        except Exception:
-            pass
-
-    def _run_step(self, log: RichLog, cmd: list[str], *, header: str) -> int:
-        self.app.call_from_thread(log.write, f"\n{header}")
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(self.project_dir),
-                stdin=subprocess.DEVNULL,  # belt-and-braces: any missed prompt fails fast
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-        except FileNotFoundError as exc:
-            self.app.call_from_thread(log.write, f"[error] {exc}")
-            return 127
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            self.app.call_from_thread(log.write, line.rstrip())
-        rc = proc.wait()
-        self.app.call_from_thread(log.write, f"[exit {rc}]")
-        return rc
-
-    def action_dismiss_if_done(self) -> None:
-        if self._done:
-            self.dismiss(None)
+    def action_dismiss(self) -> None:
+        self.dismiss(None)
 
 
 class RefreshRunnerModal(ModalScreen[None]):
@@ -819,22 +701,6 @@ SecurityInfoModal {
     background: ansi_default;
     border: round ansi_bright_blue;
     padding: 2 3;
-}
-
-PushRunnerModal {
-    align: center middle;
-}
-#push-runner-body {
-    width: 90%;
-    height: 80%;
-    background: ansi_default;
-    border: round ansi_bright_blue;
-    padding: 1 2;
-}
-#push-runner-log {
-    height: 1fr;
-    background: ansi_default;
-    scrollbar-color: ansi_bright_black;
 }
 
 RefreshRunnerModal {
@@ -1826,14 +1692,11 @@ class OpenTracesApp(App):
                     severity="warning")
 
     def _rehydrate_after_external_write(self) -> None:
-        """Refresh from disk after a subprocess mutated state.json.
+        """Refresh from disk after another surface mutated state.json.
 
         ``self.state`` is initialised once at app startup and kept
-        entirely in-memory; the push subprocess (``opentraces push``)
-        writes directly into state.json, so the live TUI's snapshot
-        goes stale and just-pushed traces keep showing as staged until
-        the app is restarted. Rebuild ``StateManager`` from disk before
-        reloading the view.
+        entirely in-memory. Rebuild ``StateManager`` from disk before
+        reloading the view after a non-TUI action changes trace state.
         """
         self.state = StateManager(
             state_path=get_project_state_path(self.project_dir)
@@ -1895,24 +1758,11 @@ class OpenTracesApp(App):
 
     def action_push(self) -> None:
         if not self.by_stage["staged"]:
-            self.notify("No staged traces to push", severity="warning")
+            self.notify("No staged traces selected for dataset publication", severity="warning")
             return
-
-        def after_choice(choice: str | None) -> None:
-            if choice is None:
-                return
-            if not self.remote_name and choice:
-                self.notify("No remote set — the push command will prompt you to pick one.",
-                            severity="information")
-
-            def after_run(_: None) -> None:
-                self._rehydrate_after_external_write()
-
-            self.push_screen(PushRunnerModal(choice, self.project_dir), after_run)
 
         self.push_screen(
             PushModal(self.remote_name, staged_count=len(self.by_stage["staged"])),
-            after_choice,
         )
 
     # --- events --------------------------------------------------------

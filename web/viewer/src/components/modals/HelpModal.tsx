@@ -76,7 +76,7 @@ export function HelpModal({
                 Session generation. <span style={{ color: t.cyan }}>↑1</span> is the first captured trace
                 for that session; <span style={{ color: t.cyan }}>↑2+</span> means the same session kept
                 going and this newer trace replaces an older one. Refresh pulls the latest trace, and
-                you should review and push the latest generation.
+                you should review the latest generation before dataset publication.
               </div>
             </div>
           </div>

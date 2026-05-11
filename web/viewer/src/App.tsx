@@ -121,8 +121,8 @@ export function App() {
           </div>
           <div style={{ color: t.textSec }}>
             {closing === "stopping"
-              ? "The browser requested shutdown of the local opentraces web server."
-              : "You can close this tab now. Running `opentraces web` will start it again."}
+              ? "The browser requested shutdown of the local review server."
+              : "You can close this tab now. Start a new local review session from the CLI to reopen it."}
           </div>
         </div>
       </div>

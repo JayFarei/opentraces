@@ -182,7 +182,7 @@ function PushButton({ t, count, onClick }: { t: Theme; count: number; onClick: (
         padding: "3px 10px", cursor: enabled ? "pointer" : "default",
         letterSpacing: "0.04em",
       }}
-    >push → {count}</button>
+    >dataset → {count}</button>
   );
 }
 

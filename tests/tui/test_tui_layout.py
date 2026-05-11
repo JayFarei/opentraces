@@ -669,11 +669,11 @@ async def test_undo_after_stage_toggle_with_persisted_prior_status(
 async def test_push_result_moves_trace_from_staged_to_pushed(
     tmp_path, monkeypatch,
 ):
-    """After ``opentraces push`` writes UPLOADED into state.json, the
+    """After another surface writes UPLOADED into state.json, the
     TUI must pick up the change and move the trace into the Pushed
-    bucket. We simulate the subprocess write by mutating state.json
+    bucket. We simulate the external write by mutating state.json
     through a second StateManager instance, then call the same
-    rehydrate helper the push modal's after_run callback uses."""
+    rehydrate helper used after non-TUI state changes."""
     project = tmp_path / "proj"
     _init_project(project)
     staging = project / "traces"
@@ -690,8 +690,8 @@ async def test_push_result_moves_trace_from_staged_to_pushed(
         await pilot.pause()
         assert any(tr["trace_id"] == "trace_to_push_0001"
                    for tr in app.by_stage["staged"])
-        # Simulate ``opentraces push`` writing through its own
-        # StateManager instance to the same state.json on disk.
+        # Simulate another surface writing through its own StateManager
+        # instance to the same state.json on disk.
         external = StateManager(state_path=get_project_state_path(project))
         external.set_trace_status("trace_to_push_0001", TraceStatus.UPLOADED)
         # The TUI's in-memory state is still stale.

@@ -72,7 +72,7 @@ export function SecurityInfoModal({
               </div>
             ) : (
               <div>
-                <span style={{ color: t.textMuted }}>●</span> Opt-in — <span style={{ color: t.cyan }}>opentraces llm-review</span>
+                <span style={{ color: t.textMuted }}>●</span> Opt-in — <span style={{ color: t.cyan }}>opentraces setup llm-review</span>
               </div>
             )}
           </div>

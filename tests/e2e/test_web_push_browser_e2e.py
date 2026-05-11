@@ -1,16 +1,14 @@
-"""Browser-driven end-to-end test for the web push flow.
+"""Browser-driven end-to-end test for the web publication guidance flow.
 
-Pins the regression the user hit with the old "(upload module not
-available)" fail-open: the ✓ banner appeared while nothing actually
-went to HuggingFace, and the trace was silently marked ``UPLOADED`` on
-disk. This test drives the real web viewer with ``agent-browser``,
-clicks the push button, picks "Skip review and push", forces the CLI
-subprocess to fail, and asserts:
+The legacy trace-push UI used to shell out to removed root commands.
+This test drives the real web viewer with ``agent-browser``, opens the
+dataset-publication guidance modal, presses the old push hotkeys, and
+asserts:
 
-1. The viewer surfaces the failure (no ✓ / no "trace(s) pushed") and
-2. The local state still has the trace in ``COMMITTED`` (i.e. the
-   silent fail-open is gone — the UI does not optimistically flip
-   state when the subprocess did not transition it).
+1. The viewer shows the dataset run/review/publish path, not a push
+   runner, and
+2. The local state still has the trace in ``COMMITTED`` because the
+   modal is informational and must not mutate trace state.
 
 The test is opt-in. It requires the ``agent-browser`` CLI and is
 gated on ``OT_BROWSER_E2E=1`` so it does not run in hermetic CI
@@ -45,10 +43,6 @@ def _require_browser_e2e_env() -> None:
         pytest.skip("set OT_BROWSER_E2E=1 to enable browser-driven tests")
     if not shutil.which("agent-browser"):
         pytest.skip("agent-browser CLI not on PATH")
-    # The subprocess resolves the CLI via ``Path(sys.executable).parent``,
-    # so the script must exist next to the interpreter running the test.
-    if not (Path(sys.executable).parent / "opentraces").exists():
-        pytest.skip("'opentraces' console script not next to sys.executable")
 
 
 def _free_port() -> int:
@@ -214,14 +208,8 @@ def ab_browser():
     )
 
 
-def test_browser_push_failure_keeps_trace_committed(tmp_path, ab_browser):
-    """Drive the real viewer: a failing push must show ✕ and leave state alone.
-
-    This is the end-to-end regression pin for the silent fail-open the
-    user caught (`✓ Pushed 1 trace — (upload module not available)`).
-    Under the pre-fix code a click on "Skip review and push" flipped
-    the trace to ``UPLOADED`` locally without publishing anywhere.
-    """
+def test_browser_publication_guidance_keeps_trace_committed(tmp_path, ab_browser):
+    """Drive the real viewer: publication guidance must leave state alone."""
     home = tmp_path / "home"
     home.mkdir()
     project_dir = tmp_path / "project"
@@ -232,16 +220,21 @@ def test_browser_push_failure_keeps_trace_committed(tmp_path, ab_browser):
     env["HOME"] = str(home)
     env.pop("HF_TOKEN", None)
     env.pop("HUGGINGFACE_TOKEN", None)
-    # Belt-and-braces: the huggingface_hub library also reads its own
-    # cached-token file. Disabling that keeps the push subprocess on
-    # the "no token → CLI exits non-zero" path.
+    # Belt-and-braces: this scenario must not depend on any real HF auth.
     env["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
 
     port = _free_port()
     web_log_path = tmp_path / "web.log"
     web_log_fh = web_log_path.open("wb")
     web_proc = subprocess.Popen(
-        ["opentraces", "web", "--port", str(port), "--no-open"],
+        [
+            sys.executable,
+            "-c",
+            (
+                "from opentraces.cli import _launch_web_ui\n"
+                f"_launch_web_ui(port={port}, open_browser=False)\n"
+            ),
+        ],
         cwd=str(project_dir),
         env=env,
         stdout=web_log_fh,
@@ -267,41 +260,35 @@ def test_browser_push_failure_keeps_trace_committed(tmp_path, ab_browser):
                 f"stderr: {exc.stderr}\n"
                 f"--- web.log ---\n{web_log_path.read_text(errors='replace')}"
             )
-        # The SPA fetches /api/traces and /api/context after load — wait
-        # for the push button to reflect the seeded committed trace.
-        _ab("wait", "--text", "push \u2192 1", timeout=20.0)
+        # The SPA fetches /api/traces and /api/context after load. Wait
+        # for the dataset-publication button to reflect the seeded trace.
+        _ab("wait", "--text", "dataset \u2192 1", timeout=20.0)
 
-        # The push button is inside a React button with no stable id —
+        # The publication button is inside a React button with no stable id;
         # locate it by visible text.
-        _ab("find", "text", "push \u2192 1", "click")
+        _ab("find", "text", "dataset \u2192 1", "click")
 
-        # Modal title confirms the push modal is open.
-        _ab("wait", "--text", "Push 1 staged trace", timeout=10.0)
+        # Modal title confirms the dataset guidance modal is open.
+        _ab("wait", "--text", "Dataset publication replaces trace push", timeout=10.0)
+        _ab("wait", "--text", "opentraces dataset publish <name>", timeout=10.0)
 
-        # Trigger the skip-review path via keyboard hotkey.
+        # Old push hotkeys must be inert in this informational modal.
         _ab("press", "s")
+        _ab("press", "l")
 
-        # The subprocess runs — wait for either the ✓ (must NOT happen)
-        # or the ✕ we expect. The failure banner says "✕ ...".
-        _ab("wait", "--text", "\u2715", timeout=60.0)
-
-        # Negative assertion: the green ✓ success banner must NOT be
-        # rendered. We read the DOM via ``eval`` instead of snapshot
-        # so we do not depend on brittle ref ordering.
         doc_text = _ab_eval("document.body.innerText").strip()
-        assert "\u2713 Pushed" not in doc_text, (
-            f"green ✓ banner rendered on failure; silent fail-open regressed.\n"
+        assert "Running opentraces" not in doc_text, (
+            "legacy push runner rendered after old hotkey press.\n"
             f"doc_text (trimmed):\n{doc_text[:2000]}"
         )
+        assert "opentraces dataset run <name>" in doc_text
+        assert "opentraces dataset review <name>" in doc_text
+        assert "opentraces dataset publish <name>" in doc_text
 
-        # The on-disk state must still have the trace in COMMITTED —
-        # the whole point of the fix. ``UPLOADED`` here would mean we
-        # are back to the old silent fail-open.
         entry = StateManager(state_path=state_path).get_trace(TRACE_ID)
         assert entry is not None, "trace entry vanished from state"
         assert entry.status == TraceStatus.COMMITTED.value, (
-            f"trace was silently flipped to {entry.status} on push failure; "
-            "fail-open regression."
+            f"trace was silently flipped to {entry.status} by publication guidance"
         )
     finally:
         web_proc.terminate()

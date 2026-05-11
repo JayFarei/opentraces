@@ -2,7 +2,7 @@
 
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { TraceListItem } from "../../lib/api";
@@ -29,6 +29,7 @@ function ok(body: unknown): Response {
 
 describe("PushModal", () => {
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -61,14 +62,57 @@ describe("PushModal", () => {
     const onClose = vi.fn();
     const view = renderWithQueryClient(<PushModal t={DARK} onClose={onClose} remote="origin/main" />);
 
-    await waitFor(() => expect(view.getByText("Nothing staged.")).toBeInTheDocument());
+    await waitFor(() => expect(view.getByText("Dataset publication replaces trace push")).toBeInTheDocument());
 
     fireEvent.keyDown(window, { key: "l" });
     fireEvent.keyDown(window, { key: "s" });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(view.getByText("Nothing staged.")).toBeInTheDocument();
+    expect(view.getByTestId("staged-count")).toHaveTextContent("0 staged traces");
     expect(view.queryByText(/Running opentraces/)).not.toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  test("shows dataset publication guidance without invoking legacy push", async () => {
+    const traces: TraceListItem[] = [
+      {
+        trace_id: "trace-1",
+        task: "Ready trace",
+        agent: "claude-code",
+        model: "claude-opus",
+        steps: 3,
+        tool_calls: 1,
+        timestamp: new Date().toISOString(),
+        status: "parsed",
+        _stage: "staged",
+        security_flags: 0,
+        generation_index: 0,
+        project: "demo",
+      },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/traces")) return ok(traces);
+      if (url.endsWith("/api/push")) throw new Error("push should not be called");
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onClose = vi.fn();
+    const view = renderWithQueryClient(<PushModal t={DARK} onClose={onClose} remote="owner/dataset" />);
+
+    await waitFor(() => expect(view.getByTestId("staged-count")).toHaveTextContent("1 staged trace"));
+
+    expect(view.getByText("Dataset publication replaces trace push")).toBeInTheDocument();
+    expect(view.getByText("opentraces dataset run <name>")).toBeInTheDocument();
+    expect(view.getByText("opentraces dataset review <name>")).toBeInTheDocument();
+    expect(view.getByText("opentraces dataset publish <name>")).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "l" });
+    fireEvent.keyDown(window, { key: "s" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(view.queryByText(/opentraces push/)).not.toBeInTheDocument();
+    expect(view.queryByText(/opentraces llm-review/)).not.toBeInTheDocument();
   });
 });
