@@ -41,8 +41,20 @@ def parse_interval_seconds(every: str) -> int:
     return quantity * _INTERVAL_UNIT_SECONDS[match.group(2)]
 
 
-def add_schedule(name: str, *, every: str, executor: str) -> ScheduleState:
+def add_schedule(
+    name: str,
+    *,
+    every: str,
+    executor: str,
+    approve_new: bool = False,
+    publish: bool = False,
+    publish_check_only: bool = False,
+) -> ScheduleState:
     parse_interval_seconds(every)
+    if publish and publish_check_only:
+        raise ValueError("use either --publish or --publish-check-only, not both")
+    if approve_new and not (publish or publish_check_only):
+        raise ValueError("--approve-new requires --publish or --publish-check-only")
     dataset = load_dataset(name)
     state = _state(
         dataset.name,
@@ -50,10 +62,20 @@ def add_schedule(name: str, *, every: str, executor: str) -> ScheduleState:
         enabled=True,
         every=every,
         executor=executor,
+        approve_new=approve_new,
+        publish=publish,
+        publish_check_only=publish_check_only,
         last_run_status=None,
     )
     _write_state(dataset.path, state)
-    _write_trigger(dataset.path, name, executor)
+    _write_trigger(
+        dataset.path,
+        name,
+        executor,
+        approve_new=approve_new,
+        publish=publish,
+        publish_check_only=publish_check_only,
+    )
     _append_log(dataset.path, f"schedule added every={every} executor={executor}")
     dataset.manifest.schedule = DatasetSchedule(enabled=True, every=every, executor=executor)
     save_manifest(dataset.path, dataset.manifest)
@@ -95,6 +117,9 @@ def pause_schedule(name: str) -> ScheduleState:
         enabled=False,
         every=state.every,
         executor=state.executor,
+        approve_new=bool(state.trigger.get("approve_new")),
+        publish=state.trigger.get("publish") == "upload",
+        publish_check_only=state.trigger.get("publish") == "check_only",
         last_run_status=state.last_run_status,
     )
     _write_state(dataset.path, updated)
@@ -120,10 +145,20 @@ def resume_schedule(name: str) -> ScheduleState:
         enabled=True,
         every=state.every,
         executor=state.executor,
+        approve_new=bool(state.trigger.get("approve_new")),
+        publish=state.trigger.get("publish") == "upload",
+        publish_check_only=state.trigger.get("publish") == "check_only",
         last_run_status=state.last_run_status,
     )
     _write_state(dataset.path, updated)
-    _write_trigger(dataset.path, name, state.executor)
+    _write_trigger(
+        dataset.path,
+        name,
+        state.executor,
+        approve_new=bool(updated.trigger.get("approve_new")),
+        publish=updated.trigger.get("publish") == "upload",
+        publish_check_only=updated.trigger.get("publish") == "check_only",
+    )
     _append_log(dataset.path, "schedule resumed")
     dataset.manifest.schedule = DatasetSchedule(
         enabled=True,
@@ -163,8 +198,12 @@ def _state(
     enabled: bool,
     every: str,
     executor: str,
-    last_run_status: str | None,
+    approve_new: bool = False,
+    publish: bool = False,
+    publish_check_only: bool = False,
+    last_run_status: str | None = None,
 ) -> ScheduleState:
+    publish_mode = "upload" if publish else "check_only" if publish_check_only else "none"
     return ScheduleState(
         dataset=name,
         path=root,
@@ -174,6 +213,8 @@ def _state(
         trigger={
             "backend": "local-file",
             "path": str(root / ".opentraces" / "schedule.trigger"),
+            "approve_new": approve_new,
+            "publish": publish_mode,
         },
         last_run_status=last_run_status,
     )
@@ -194,10 +235,25 @@ def _write_state(root: Path, state: ScheduleState) -> None:
     )
 
 
-def _write_trigger(root: Path, name: str, executor: str) -> None:
+def _write_trigger(
+    root: Path,
+    name: str,
+    executor: str,
+    *,
+    approve_new: bool = False,
+    publish: bool = False,
+    publish_check_only: bool = False,
+) -> None:
     trigger_path = root / ".opentraces" / "schedule.trigger"
+    parts = ["opentraces", "dataset", "run", name, "--scheduled", "--executor", executor]
+    if approve_new:
+        parts.append("--approve-new")
+    if publish:
+        parts.append("--publish")
+    elif publish_check_only:
+        parts.append("--publish-check-only")
     trigger_path.write_text(
-        f"opentraces dataset run {name} --scheduled --executor {executor}\n",
+        " ".join(parts) + "\n",
         encoding="utf-8",
     )
 

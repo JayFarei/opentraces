@@ -297,11 +297,41 @@ def dataset_remote_visibility(
     default="claude-code-headless",
     show_default=True,
 )
+@click.option(
+    "--approve-new",
+    is_flag=True,
+    help="Mark rows appended by scheduled runs publishable before publication.",
+)
+@click.option(
+    "--publish",
+    is_flag=True,
+    help="After each scheduled run, publish publishable rows to the active remote.",
+)
+@click.option(
+    "--publish-check-only",
+    is_flag=True,
+    help="After each scheduled run, stage and validate publication without upload.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-def dataset_schedule_add(name: str, every: str, executor: str, as_json: bool) -> None:
+def dataset_schedule_add(
+    name: str,
+    every: str,
+    executor: str,
+    approve_new: bool,
+    publish: bool,
+    publish_check_only: bool,
+    as_json: bool,
+) -> None:
     """Add a local schedule for running a dataset workflow."""
     try:
-        schedule = add_schedule(name, every=every, executor=executor)
+        schedule = add_schedule(
+            name,
+            every=every,
+            executor=executor,
+            approve_new=approve_new,
+            publish=publish,
+            publish_check_only=publish_check_only,
+        )
     except (FileNotFoundError, ValueError) as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
@@ -802,6 +832,21 @@ def _create_manual_dataset(
 @click.option("--since-last-run", is_flag=True, help="Use the dataset cursor.")
 @click.option("--reconcile", is_flag=True, help="Run a full reconciliation scan.")
 @click.option("--scheduled", is_flag=True, help="Mark this run as scheduler initiated.")
+@click.option(
+    "--approve-new",
+    is_flag=True,
+    help="Mark rows appended by this run publishable after security gates.",
+)
+@click.option(
+    "--publish",
+    is_flag=True,
+    help="After the run, publish publishable rows to the active remote.",
+)
+@click.option(
+    "--publish-check-only",
+    is_flag=True,
+    help="After the run, stage and validate publication without upload.",
+)
 @click.option("--verbose", is_flag=True, help="Include run artefact paths.")
 @click.option("--resume", default=None, help="Reserved run resume id.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
@@ -818,6 +863,9 @@ def dataset_run(
     since_last_run: bool,
     reconcile: bool,
     scheduled: bool,
+    approve_new: bool,
+    publish: bool,
+    publish_check_only: bool,
     verbose: bool,
     resume: str | None,
     as_json: bool,
@@ -826,6 +874,15 @@ def dataset_run(
     if resume:
         click.echo("--resume is reserved for future interrupted-run recovery.", err=True)
         sys.exit(10)
+    if publish and publish_check_only:
+        click.echo("Use either --publish or --publish-check-only, not both.", err=True)
+        sys.exit(2)
+    if approve_new and not (publish or publish_check_only):
+        click.echo("--approve-new requires --publish or --publish-check-only.", err=True)
+        sys.exit(2)
+    if dry_run and (approve_new or publish or publish_check_only):
+        click.echo("--dry-run cannot be combined with publication automation.", err=True)
+        sys.exit(2)
     # Manual / ad-hoc datasets have no workflow to execute. Emit a
     # structured no-op response so agents can detect this cleanly
     # instead of getting a workflow_runner error.
@@ -880,6 +937,33 @@ def dataset_run(
         },
         "cursor_advanced": result.cursor_advanced,
     }
+    if approve_new and result.append_summary.row_ids:
+        review_state = set_publication_review_status(
+            name,
+            result.append_summary.row_ids,
+            "publishable",
+            reviewer="dataset-run-automation",
+        )
+        payload["review"] = {
+            "approved_new_count": sum(
+                1
+                for row_id in result.append_summary.row_ids
+                if review_state.rows[row_id].status == "publishable"
+            ),
+            "row_ids": result.append_summary.row_ids,
+        }
+    if publish or publish_check_only:
+        try:
+            token, _username = _hf_auth()
+            publication = publish_dataset(
+                name,
+                check_only=publish_check_only,
+                token=token,
+            )
+        except (DatasetRemotePermissionError, DatasetRemoteSchemaAheadError, ValueError) as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(3)
+        payload["publish"] = _publish_summary_payload(publication)
     if verbose:
         payload["artefacts"] = {"run_dir": str(result.run_dir)}
     if as_json:
@@ -1032,25 +1116,7 @@ def dataset_publish(
     except ValueError as exc:
         click.echo(str(exc), err=True)
         sys.exit(3)
-    publish_payload: dict[str, object] = {
-        "dataset": summary.dataset_name,
-        "remote": summary.remote_name,
-        "repo_id": summary.repo_id,
-        "run_id": summary.run_id,
-        "uploaded": summary.uploaded,
-        "check_only": summary.check_only,
-        "new_row_count": summary.new_row_count,
-        "duplicate_count": summary.duplicate_count,
-        "needs_review_count": summary.needs_review_count,
-        "blocked_count": summary.blocked_count,
-        "staged_files": summary.staged_files,
-        "remote_head_before": summary.remote_head_before,
-        "remote_head_after": summary.remote_head_after,
-        "attempts": summary.attempts,
-        "message": summary.message,
-    }
-    if summary.filter_summary is not None:
-        publish_payload["filter"] = summary.filter_summary
+    publish_payload = _publish_summary_payload(summary)
     payload = {"status": "ok", "publish": publish_payload}
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
@@ -1204,6 +1270,29 @@ def _remote_payload(summary) -> dict[str, object]:
         "visibility": summary.visibility,
         "active": summary.active,
     }
+
+
+def _publish_summary_payload(summary) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "dataset": summary.dataset_name,
+        "remote": summary.remote_name,
+        "repo_id": summary.repo_id,
+        "run_id": summary.run_id,
+        "uploaded": summary.uploaded,
+        "check_only": summary.check_only,
+        "new_row_count": summary.new_row_count,
+        "duplicate_count": summary.duplicate_count,
+        "needs_review_count": summary.needs_review_count,
+        "blocked_count": summary.blocked_count,
+        "staged_files": summary.staged_files,
+        "remote_head_before": summary.remote_head_before,
+        "remote_head_after": summary.remote_head_after,
+        "attempts": summary.attempts,
+        "message": summary.message,
+    }
+    if summary.filter_summary is not None:
+        payload["filter"] = summary.filter_summary
+    return payload
 
 
 def _emit_remote_payload(summary, *, as_json: bool, verb: str) -> None:
