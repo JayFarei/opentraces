@@ -184,7 +184,10 @@ def _configure_bucket_remote(
 @click.option(
     "--repo",
     default=None,
-    help="HuggingFace bucket repo id. Defaults to <authenticated-user>/opentraces-bucket.",
+    help=(
+        "Private HuggingFace bucket repo id (S3-backed storage). "
+        "Defaults to <authenticated-user>/opentraces-bucket."
+    ),
 )
 @click.option(
     "--fake-root",
@@ -214,7 +217,8 @@ def setup_bucket_cmd(
 ) -> None:
     """Configure the private bucket sync target.
 
-    The bucket is private workspace state. Dataset remotes are attached later
+    By default this configures a private HuggingFace bucket remote with a local
+    cache; use ``--local-only`` to opt out. Dataset remotes are attached later
     with ``opentraces dataset remote ...`` and are not created here.
     """
 
@@ -259,7 +263,7 @@ def setup_bucket_cmd(
         click.echo(_setup_watcher_json.dumps(payload, indent=2, sort_keys=True))
         return
     if bucket["storage"] == "remote":
-        human_echo(f"Private bucket remote: {bucket['remote']['url']}")
+        human_echo(f"Private HuggingFace bucket remote: {bucket['remote']['url']}")
         human_echo("Dataset remotes remain explicit: opentraces dataset remote create ...")
         if remote_sync is not None:
             human_echo(f"Bucket remote sync: {remote_sync.get('state')}")
@@ -596,7 +600,7 @@ def setup_git(remove: bool) -> None:
     Edit/Write tool calls produced its changes. This powers:
 
     \b
-      opentraces trail blame <commit>
+      opentraces trail blame commit <commit>
                                   resolve a commit back to contributing
                                   traces and the agent context behind them.
 

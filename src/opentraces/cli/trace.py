@@ -170,6 +170,16 @@ def trace_group() -> None:
 @click.option("--max-slice-nodes", type=int, default=40, show_default=True, help="Maximum nodes for --include-slice.")
 @click.option("--force-rebuild", is_flag=True, help="Rebuild the local Trace Index before querying.")
 @click.option(
+    "--remote-bucket",
+    is_flag=True,
+    help="Pull the configured private bucket remote before querying.",
+)
+@click.option(
+    "--force-remote-bucket",
+    is_flag=True,
+    help="Allow --remote-bucket to overwrite a local-ahead or diverged bucket.",
+)
+@click.option(
     "--source",
     "query_source",
     type=click.Choice(["index", "projection"]),
@@ -215,6 +225,8 @@ def trace_query(
     include_slice: str | None,
     max_slice_nodes: int,
     force_rebuild: bool,
+    remote_bucket: bool,
+    force_remote_bucket: bool,
     query_source: str,
     vec: str | None,
     hyde: str | None,
@@ -302,7 +314,19 @@ def trace_query(
             err=True,
         )
         sys.exit(3)
-    if force_rebuild:
+    remote_bucket_payload = None
+    if remote_bucket:
+        try:
+            from ._remote_bucket import pull_remote_bucket_for_trace
+
+            remote_bucket_payload = pull_remote_bucket_for_trace(
+                force=force_remote_bucket,
+                build_projection=query_source == "projection",
+            )
+        except Exception as exc:
+            click.echo(f"Unable to read remote bucket: {exc}", err=True)
+            sys.exit(3)
+    elif force_rebuild:
         summary = rebuild_index()
         if query_source == "projection":
             from ..core.search_projection import build_search_projection
@@ -362,6 +386,8 @@ def trace_query(
         "has_more": page.next_page_token is not None,
         "candidates": [packet.model_dump(mode="json") for packet in page.candidates],
     }
+    if remote_bucket_payload is not None:
+        payload["remote_bucket"] = remote_bucket_payload
     if page.warnings:
         payload["trail_freshness"] = page.warnings
         warning_entries = [
@@ -807,6 +833,16 @@ def trace_slice_cmd(
         "(commit subject + body)."
     ),
 )
+@click.option(
+    "--remote-bucket",
+    is_flag=True,
+    help="Pull the configured private bucket remote before resolving the trace.",
+)
+@click.option(
+    "--force-remote-bucket",
+    is_flag=True,
+    help="Allow --remote-bucket to overwrite a local-ahead or diverged bucket.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_get(
     ref: str,
@@ -816,6 +852,8 @@ def trace_get(
     as_bursts: bool,
     burst_gap: int | None,
     no_commit_lookup: bool,
+    remote_bucket: bool,
+    force_remote_bucket: bool,
     as_json: bool,
 ) -> None:
     """Resolve a trace, trace unit, map node, or ot:// Trail resource.
@@ -825,6 +863,22 @@ def trace_get(
     ``--bursts`` to return the change-burst summary for the trace
     without re-walking the full Trace Map.
     """
+    if remote_bucket and resume:
+        click.echo("--remote-bucket cannot be combined with --resume.", err=True)
+        sys.exit(2)
+
+    remote_bucket_payload = None
+    if remote_bucket:
+        try:
+            from ._remote_bucket import pull_remote_bucket_for_trace
+
+            remote_bucket_payload = pull_remote_bucket_for_trace(
+                force=force_remote_bucket,
+            )
+        except Exception as exc:
+            click.echo(f"Unable to read remote bucket: {exc}", err=True)
+            sys.exit(3)
+
     if resume:
         _resume_trace_impl(ref, at_step, dry_run, as_json)
         return
@@ -864,6 +918,8 @@ def trace_get(
         record = _read_trace_record_from_path(trace_path)
         payload = {"status": "ok", "trace": record.model_dump(mode="json")}
 
+    if remote_bucket_payload is not None:
+        payload["remote_bucket"] = remote_bucket_payload
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
@@ -1383,7 +1439,7 @@ def trace_show(trace_id: str, verbose: bool, markdown: bool) -> None:
         )
 
     # Reverse-view: which commits did this trace produce?
-    # Complements `opentraces trail blame <sha>` which goes commit → traces.
+    # Complements `opentraces trail blame commit <sha>` which goes commit → traces.
     if record.git_links:
         human_echo("")
         n = len(record.git_links)
