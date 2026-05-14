@@ -78,7 +78,11 @@ def rescan_trace_and_persist(
             error_code="INVALID_TRACE",
         )
 
-    processed = process_imported_trace(record, cfg, privacy_tier=privacy_tier)
+    # ``privacy_tier`` is accepted at the rescan_trace_and_persist boundary
+    # for transitional compatibility with the web UI's older request shape;
+    # the value is ignored — the pipeline now reads enabled tools from cfg.
+    _ = privacy_tier
+    processed = process_imported_trace(record, cfg)
     new_line = processed.record.to_jsonl_line()
     fd = tempfile.NamedTemporaryFile(
         mode="w",
@@ -455,7 +459,7 @@ def _trace_pre_blocked(rec: dict) -> str | None:
     sec = meta.get("security") or {}
     if sec.get("blocked") is True:
         return str(sec.get("blocked_reason") or "security pipeline blocked trace")
-    findings = sec.get("trufflehog_findings") or sec.get("tier_1_5_findings")
+    findings = ((sec.get("tools") or {}).get("trufflehog") or {}).get("findings")
     if findings:
         return f"trufflehog findings: {len(findings)}"
     return None

@@ -400,35 +400,37 @@ def _regex_pattern_count() -> int:
         return 0
 
 
-def _security_tiers(
+def _security_tools(
     cfg,
     trufflehog_version: str | None,
     review_llm: dict,
     review_policy: str | None,
 ) -> list[dict[str, Any]]:
-    """Build the ordered tier list shown in `opentraces doctor`.
+    """Ordered list of security/privacy tools shown in ``opentraces doctor``.
 
-    Each entry has:
-    - ``name``: user-facing label (no numeric IDs — those confuse users)
-    - ``state``: machine-readable label (always-on / enabled / disabled /
-      missing / unreachable / required / not-required)
-    - ``detail``: one-line status
-    - ``enable_cmd`` / ``disable_cmd``: what the user can type to flip it
-      (``None`` when not applicable, e.g. always-on tiers)
-    - ``blocks``: does this tier hard-block upload on finding
+    The registered tools come from ``security.tools._registry``. Two synthetic
+    entries are appended that aren't in the registry: the on-demand LLM trace
+    review workflow and the human-review policy gate.
     """
-    # TruffleHog
-    th_enabled = cfg.security.trufflehog.enabled
-    if not th_enabled:
-        th_state, th_detail = "disabled", None
-    elif trufflehog_version is None:
-        th_state = "missing"
-        th_detail = "binary not found; run 'opentraces setup trufflehog --enable'"
-    else:
-        th_state = "enabled"
-        th_detail = f"{trufflehog_version} — redacts findings and forces review"
+    from ..security.pipeline import list_tools
 
-    # LLM trace review
+    entries: list[dict[str, Any]] = []
+    for info in list_tools(cfg):
+        entry: dict[str, Any] = {
+            "name": info.display_name,
+            "state": info.state,
+            "detail": info.detail,
+            "enable_cmd": info.setup_cmd,
+            "disable_cmd": info.disable_cmd,
+            "blocks": False,
+        }
+        if info.name == "trufflehog":
+            entry["binary_version"] = trufflehog_version
+        entries.append(entry)
+
+    # On-demand LLM trace review — not in the tool registry (it's an
+    # expensive workflow, not part of the per-record sanitize step) but
+    # users still need to see its enable state in doctor output.
     rl_enabled = bool(review_llm.get("enabled"))
     rl_reachable = review_llm.get("reachable")
     if not rl_enabled:
@@ -440,44 +442,7 @@ def _security_tiers(
         rl_state = "on-demand"
         backend = review_llm.get("backend") or review_llm.get("api_format") or "?"
         rl_detail = f"{backend} / {review_llm.get('model') or '?'}"
-
-    # Human review — gated by project review policy, not a global toggle.
-    if review_policy == "auto":
-        hr_state = "not-required"
-        hr_detail = "project policy: auto (safe traces auto-approve)"
-    elif review_policy == "review":
-        hr_state = "required"
-        hr_detail = "project policy: review (every trace needs approval)"
-    else:
-        hr_state = "not-initialized"
-        hr_detail = "run 'opentraces init' to set a project policy"
-
-    return [
-        {
-            "name": "Regex patterns",
-            "state": "always-on",
-            "detail": f"{_regex_pattern_count()} built-in detectors",
-            "enable_cmd": None,
-            "disable_cmd": None,
-            "blocks": False,
-        },
-        {
-            "name": "Shannon entropy",
-            "state": "always-on",
-            "detail": "high-entropy strings flagged",
-            "enable_cmd": None,
-            "disable_cmd": None,
-            "blocks": False,
-        },
-        {
-            "name": "TruffleHog",
-            "state": th_state,
-            "detail": th_detail,
-            "enable_cmd": "opentraces setup trufflehog",
-            "disable_cmd": "opentraces setup trufflehog --disable",
-            "blocks": False,
-            "binary_version": trufflehog_version,
-        },
+    entries.append(
         {
             "name": "LLM trace review",
             "state": rl_state,
@@ -492,7 +457,20 @@ def _security_tiers(
             "api_key_env": review_llm.get("api_key_env"),
             "probe_status": review_llm.get("status"),
             "reachable": rl_reachable,
-        },
+        }
+    )
+
+    # Human review — gated by project review policy, not a tool.
+    if review_policy == "auto":
+        hr_state = "not-required"
+        hr_detail = "project policy: auto (safe traces auto-approve)"
+    elif review_policy == "review":
+        hr_state = "required"
+        hr_detail = "project policy: review (every trace needs approval)"
+    else:
+        hr_state = "not-initialized"
+        hr_detail = "run 'opentraces init' to set a project policy"
+    entries.append(
         {
             "name": "Human review",
             "state": hr_state,
@@ -501,8 +479,21 @@ def _security_tiers(
             "disable_cmd": None,
             "blocks": False,
             "review_policy": review_policy,
-        },
-    ]
+        }
+    )
+
+    return entries
+
+
+def _build_security_section(cfg, th_version, llm_review, review_policy) -> dict[str, Any]:
+    """Compute the doctor ``security`` block; tools list is rendered once."""
+    return {
+        "version": SECURITY_VERSION,
+        "tools": _security_tools(cfg, th_version, llm_review, review_policy),
+        "classifier_sensitivity": getattr(cfg, "classifier_sensitivity", "medium"),
+        "review_policy": review_policy,
+        "blocked_reasons": ["parse_error", "trufflehog_finding"],
+    }
 
 
 def _trufflehog_status(enabled: bool, version: str | None) -> str:
@@ -728,15 +719,9 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
             "count": len(opted_in),
             "paths": opted_in,
         },
-        "security": {
-            "version": SECURITY_VERSION,
-            "tiers": _security_tiers(cfg, th_version, llm_review, review_policy),
-            "classifier_sensitivity": getattr(cfg, "classifier_sensitivity", "medium"),
-            "review_policy": review_policy,
-            "blocked_reasons": ["parse_error", "trufflehog_finding"],
-        },
-        # Legacy flat keys — kept for backward compatibility with the
-        # existing doctor JSON consumers. Prefer ``security.tiers``.
+        "security": _build_security_section(cfg, th_version, llm_review, review_policy),
+        # Flat keys for `doctor --json` consumers; the structured view is
+        # under ``security.tools``.
         "trufflehog": {
             "enabled": th_enabled,
             "binary_version": th_version,
@@ -777,8 +762,9 @@ def _trail_capture_audit(cwd: Path) -> dict[str, Any]:
 
 def exit_code(report_data: dict[str, Any]) -> int:
     """Non-zero when a configured integration is broken."""
-    tiers = (report_data.get("security") or {}).get("tiers") or []
-    for t in tiers:
+    sec = report_data.get("security") or {}
+    entries = sec.get("tools") or []
+    for t in entries:
         state = t.get("state")
         if state in ("missing", "unreachable"):
             return 3

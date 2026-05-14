@@ -23,14 +23,14 @@ from opentraces.security.llm_provider import FakeProvider
 from opentraces.security.llm_review import review_trace
 from opentraces.security.pii_detector import LLMPIIDetector
 from opentraces.security.scanner import is_base64_blob, is_safe_field_path
-from opentraces.security.scanner_trufflehog import maybe_run_trufflehog
+from opentraces.security.tools.trufflehog_tool import TruffleHogDetector
 from opentraces.security.version import SECURITY_VERSION
 from opentraces.core.state import StateManager, TraceStatus
 from opentraces.publish.huggingface.upload import verify_hf_token
 
 
-def test_security_version_is_0_3_0() -> None:
-    assert SECURITY_VERSION == "0.3.0"
+def test_security_version_is_0_5_0() -> None:
+    assert SECURITY_VERSION == "0.5.0"
 
 
 def test_full_stack_integration(monkeypatch, tmp_path) -> None:
@@ -65,12 +65,10 @@ def test_full_stack_integration(monkeypatch, tmp_path) -> None:
     assert token == "hf_integration_test"
     assert "HF_TOKEN" in source
 
-    # ---- Part A: disabled config means no subprocess call.
+    # ---- Part A: disabled config means the TruffleHog tool is inert.
     cfg = Config()
     assert cfg.security.trufflehog.enabled is False
-    fake_trace = tmp_path / "trace.jsonl"
-    fake_trace.write_text("{}\n")
-    assert maybe_run_trufflehog(fake_trace, cfg.security.trufflehog) is None
+    assert TruffleHogDetector().enabled(cfg) is False
 
     # ---- Part F2: PII detector threads into the same EntityMap and
     # respects Part E filters when routed through detect_for_path.

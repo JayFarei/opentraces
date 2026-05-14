@@ -200,28 +200,38 @@ class TestDoctor:
         payload = _extract_json(result.output)
         assert "ENABLED-BUT-MISSING" in payload["doctor"]["trufflehog"]["status"]
 
-    def test_reports_tier_list(self, runner, isolated_config) -> None:
+    def test_reports_tool_list(self, runner, isolated_config) -> None:
+        """The security tool registry plus the synthetic LLM-review and
+        Human-review entries are surfaced under ``security.tools``."""
         result = runner.invoke(main, ["doctor"])
         assert result.exit_code == 0, result.output
         payload = _extract_json(result.output)
-        tiers = payload["doctor"]["security"]["tiers"]
-        names = [t["name"] for t in tiers]
+        tools = payload["doctor"]["security"]["tools"]
+        names = [t["name"] for t in tools]
         assert names == [
             "Regex patterns",
             "Shannon entropy",
             "TruffleHog",
+            "Privacy-filter (HF NER)",
+            "LLM PII",
+            "Path anonymiser",
+            "Content classifier",
             "LLM trace review",
             "Human review",
         ]
-        by_name = {t["name"]: t for t in tiers}
+        by_name = {t["name"]: t for t in tools}
         assert by_name["Regex patterns"]["state"] == "always-on"
         assert by_name["Shannon entropy"]["state"] == "always-on"
         assert by_name["TruffleHog"]["state"] == "disabled"
+        assert by_name["Privacy-filter (HF NER)"]["state"] == "disabled"
+        assert by_name["LLM PII"]["state"] == "disabled"
+        assert by_name["Path anonymiser"]["state"] == "enabled"
+        assert by_name["Content classifier"]["state"] == "enabled"
         assert by_name["LLM trace review"]["state"] == "disabled"
-        # Human review state is project-policy-driven.
         assert by_name["Human review"]["state"] in {
             "required", "not-required", "not-initialized",
         }
+
         # Each toggleable tier surfaces its own command.
         assert by_name["TruffleHog"]["enable_cmd"]
         assert by_name["TruffleHog"]["disable_cmd"]
@@ -252,7 +262,7 @@ class TestDoctor:
         assert result.exit_code == 3
         payload = _extract_json(result.output)
         th = next(
-            t for t in payload["doctor"]["security"]["tiers"]
+            t for t in payload["doctor"]["security"]["tools"]
             if t["name"] == "TruffleHog"
         )
         assert th["state"] == "missing"

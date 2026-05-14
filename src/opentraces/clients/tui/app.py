@@ -301,9 +301,8 @@ class SecurityInfoModal(ModalScreen[None]):
         regex_scanned = bool(sec_top.get("scanned"))
         redactions = int(sec_top.get("redactions_applied") or 0)
         flags_reviewed = int(sec_top.get("flags_reviewed") or 0)
-        th_findings = sec_meta.get("trufflehog_findings") \
-            or sec_meta.get("tier_1_5_findings")
-        th_status = (sec_meta.get("trufflehog") or {})
+        th_status = (sec_meta.get("tools") or {}).get("trufflehog") or {}
+        th_findings = th_status.get("findings")
         lr = meta_all.get("llm_review") or {}
         lr_status = lr.get("status")
         lr_shareable = lr.get("shareable")
@@ -333,8 +332,7 @@ class SecurityInfoModal(ModalScreen[None]):
 
         # Tier 1.5 (TruffleHog). Prefer the explicit status marker written
         # by the pipeline (records both clean runs and findings). Fall back
-        # to the legacy finding list or the state block_reason for traces
-        # captured before the marker was added.
+        # to the state block_reason when the tool never ran.
         br = (self.block_reason or "").strip()
         th_from_state = br.lower().startswith("trufflehog")
         th_marker_status = th_status.get("status")

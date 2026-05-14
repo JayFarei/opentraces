@@ -136,7 +136,7 @@ def test_doctor_report_includes_trail_event_log_payload(tmp_path: Path, monkeypa
     monkeypatch.setattr(doctor, "find_trufflehog", lambda: None)
     monkeypatch.setattr(doctor, "_review_llm_status", lambda _cfg: {})
     monkeypatch.setattr(doctor, "_project_review_policy", lambda _cwd: "auto")
-    monkeypatch.setattr(doctor, "_security_tiers", lambda *_args: [])
+    monkeypatch.setattr(doctor, "_security_tools", lambda *_args: [])
     monkeypatch.setattr(doctor, "_schema_version", lambda: "test-schema")
     monkeypatch.setattr(doctor, "_post_processors", lambda _cwd: [])
     monkeypatch.setattr(doctor, "_entity_parser_status", lambda: {})

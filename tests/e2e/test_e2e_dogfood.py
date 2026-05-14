@@ -21,7 +21,7 @@ from opentraces.core.pipeline import process_trace
 from opentraces.capture.claude_code.parse import ClaudeCodeParser
 from opentraces.quality.parse_gate import meets_quality_threshold
 from opentraces.quality import score_trace
-from opentraces.security.scanner import scan_trace_record
+from opentraces.security.pipeline import sanitize_record
 from opentraces.security.classifier import classify_trace_record
 from opentraces_schema import TraceRecord, SCHEMA_VERSION
 
@@ -192,12 +192,12 @@ class TestDogfoodSecurity:
     def test_scan_finds_no_raw_secrets(self, parsed_traces):
         """Security scan should not find raw secrets in parsed output."""
         for t in parsed_traces[:3]:
-            result = scan_trace_record(t)
+            _, report = sanitize_record(t, tools=["regex", "entropy"])
             # We expect some false positives (e.g., example patterns in code)
             # but no high-severity matches
             high_severity = [
-                m for m in result.matches
-                if m.severity == "critical"
+                f for f in report.findings
+                if f.severity == "critical"
             ]
             # This is informational, not blocking
             if high_severity:

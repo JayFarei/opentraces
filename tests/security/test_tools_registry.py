@@ -1,0 +1,143 @@
+"""Registry-level tests for the security/privacy tool registry.
+
+Verifies that each registered tool:
+
+* satisfies the structural Protocol it claims via ``kind``
+* exposes a stable ``name`` and ``display_name``
+* honours ``enabled(cfg)`` against the new per-tool config flags
+* survives ``describe(cfg)`` and yields a well-formed ToolInfo
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from opentraces.core.config import Config
+from opentraces.security.tools import (
+    Detector,
+    ToolInfo,
+)
+from opentraces.security.tools._registry import (
+    all_tools,
+    describe_all,
+    get,
+    iter_enabled,
+    iter_tools,
+)
+
+
+EXPECTED_TOOL_ORDER = (
+    "regex",
+    "entropy",
+    "trufflehog",
+    "privacy_filter",
+    "llm_pii",
+    "path_anonymizer",
+    "classifier",
+)
+
+
+class TestRegistryShape:
+    def test_canonical_order(self) -> None:
+        names = tuple(t.name for t in iter_tools())
+        assert names == EXPECTED_TOOL_ORDER
+
+    def test_all_tools_returns_sequence(self) -> None:
+        tools = all_tools()
+        assert len(tools) == len(EXPECTED_TOOL_ORDER)
+
+    def test_get_unknown_raises(self) -> None:
+        with pytest.raises(KeyError):
+            get("not_a_tool")
+
+    def test_get_returns_singleton(self) -> None:
+        a = get("regex")
+        b = get("regex")
+        assert a is b
+
+    def test_every_tool_has_shared_surface(self) -> None:
+        for tool in iter_tools():
+            assert hasattr(tool, "name")
+            assert hasattr(tool, "kind")
+            assert callable(getattr(tool, "enabled", None))
+            assert callable(getattr(tool, "apply", None))
+            assert callable(getattr(tool, "describe", None))
+
+    def test_kind_field_matches_registry_position(self) -> None:
+        for tool in iter_tools():
+            assert tool.kind in ("detector", "judge", "transformer"), (
+                f"{tool.name} has unknown kind {tool.kind!r}"
+            )
+
+    def test_per_field_detectors_implement_find(self) -> None:
+        """Detectors that participate in ``sanitize_text``/``sanitize_dict``
+        must expose ``find``. TruffleHog and llm_pii are detector-kind but
+        scan record-shape, so they are intentionally excluded — those paths
+        run only via ``sanitize_record``."""
+        per_field = {"regex", "entropy", "privacy_filter"}
+        for tool in iter_tools():
+            if tool.name in per_field:
+                assert isinstance(tool, Detector), (
+                    f"{tool.name} must satisfy Detector protocol"
+                )
+
+
+class TestEnableState:
+    def test_default_config_enables_always_on_only(self) -> None:
+        """A bare ``Config()`` has trufflehog off, llm_pii off — only the
+        always-on detectors and the default-on transformer + classifier run."""
+        cfg = Config()
+        enabled = {t.name for t in iter_enabled(cfg)}
+        assert "regex" in enabled
+        assert "entropy" in enabled
+        assert "trufflehog" not in enabled
+        assert "llm_pii" not in enabled
+
+    def test_trufflehog_enable_flag_toggles_iter_enabled(self) -> None:
+        cfg = Config()
+        cfg.security.trufflehog.enabled = True
+        assert "trufflehog" in {t.name for t in iter_enabled(cfg)}
+
+    def test_path_anonymizer_can_be_disabled(self) -> None:
+        cfg = Config()
+        cfg.security.path_anonymizer.enabled = False
+        assert "path_anonymizer" not in {t.name for t in iter_enabled(cfg)}
+
+    def test_classifier_can_be_disabled(self) -> None:
+        cfg = Config()
+        cfg.security.classifier.enabled = False
+        assert "classifier" not in {t.name for t in iter_enabled(cfg)}
+
+    def test_no_cfg_yields_only_always_on(self) -> None:
+        """iter_enabled(None) returns only tools whose enabled(None) is True
+        — by design that's regex + entropy (no config gate)."""
+        enabled = {t.name for t in iter_enabled(None)}
+        assert "regex" in enabled
+        assert "entropy" in enabled
+
+
+class TestDescribe:
+    def test_describe_all_returns_tool_info_list(self) -> None:
+        cfg = Config()
+        out = describe_all(cfg)
+        assert len(out) == len(EXPECTED_TOOL_ORDER)
+        for info in out:
+            assert isinstance(info, ToolInfo)
+            assert info.name in EXPECTED_TOOL_ORDER
+
+    def test_describe_default_states(self) -> None:
+        cfg = Config()
+        infos = {i.name: i for i in describe_all(cfg)}
+        assert infos["regex"].state == "always-on"
+        assert infos["entropy"].state == "always-on"
+        assert infos["trufflehog"].state == "disabled"
+        assert infos["privacy_filter"].state == "disabled"
+        assert infos["llm_pii"].state == "disabled"
+        assert infos["path_anonymizer"].state == "enabled"
+        assert infos["classifier"].state == "enabled"
+
+    def test_describe_includes_setup_commands_for_optin_tools(self) -> None:
+        infos = {i.name: i for i in describe_all(Config())}
+        assert infos["trufflehog"].setup_cmd == "opentraces setup trufflehog"
+        assert infos["trufflehog"].disable_cmd == "opentraces setup trufflehog --disable"
+        assert infos["llm_pii"].setup_cmd == "opentraces setup llm-pii"

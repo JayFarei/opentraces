@@ -106,7 +106,6 @@ _PORTABLE_FIELDS = (
     "default_visibility",
     "agents",
     "post_processors",
-    "privacy_tier",
     # Plan-043 phase 6: committable repo-identity + first-run decision.
     # `root_commit_sha` is populated by `ot init`; it's the SHA of the
     # first commit and survives `git mv`/relocation. `first_run_backfill_decision`
@@ -151,12 +150,64 @@ class LLMReviewConfig(BaseModel):
     prompt_version: str = "1"
 
 
-class SecurityConfig(BaseModel):
-    """Root security-module config tree (Plan 032)."""
+class LLMPIIConfig(BaseModel):
+    """Settings for the opt-in per-field LLM PII detector.
 
-    privacy_tier: Literal["off", "low", "medium", "high"] = "medium"
+    Same provider configuration model as :class:`LLMReviewConfig` — a separate
+    config block so users can plug different models (or providers) into the
+    inline PII detector versus the on-demand session reviewer.
+    """
+
+    enabled: bool = False
+    api_format: Literal["openai-compat", "ollama", "anthropic", "fake"] = "openai-compat"
+    base_url: str = "http://localhost:11434/v1"
+    model: str = "gemma3n:e4b"
+    api_key_env: str = Field("", description="Env var holding the API key")
+    timeout: float = 120.0
+
+
+class PathAnonymizerConfig(BaseModel):
+    """Default-on transformer that rewrites local usernames in paths."""
+
+    enabled: bool = True
+
+
+class ClassifierConfig(BaseModel):
+    """Default-on heuristic content classifier."""
+
+    enabled: bool = True
+    sensitivity: Literal["low", "medium", "high"] = "medium"
+
+
+class PrivacyFilterConfig(BaseModel):
+    """``openai/privacy-filter`` BERT-NER detector (opt-in).
+
+    Requires the ``transformers`` and ``torch`` packages, installed by
+    ``opentraces setup privacy-filter``. The model is downloaded from
+    HuggingFace on first use (~500MB).
+    """
+
+    enabled: bool = False
+    model_name: str = "openai/privacy-filter"
+    score_threshold: float = 0.7
+
+
+class SecurityConfig(BaseModel):
+    """Root security-module config.
+
+    No top-level ``privacy_tier`` field — the set of tools that run is the
+    sum of the per-tool ``enabled`` flags below. Tools opted in via
+    ``opentraces setup <tool>``.
+    """
+
     trufflehog: TruffleHogConfig = Field(default_factory=TruffleHogConfig)
     llm_review: LLMReviewConfig = Field(default_factory=LLMReviewConfig)
+    llm_pii: LLMPIIConfig = Field(default_factory=LLMPIIConfig)
+    privacy_filter: PrivacyFilterConfig = Field(default_factory=PrivacyFilterConfig)
+    path_anonymizer: PathAnonymizerConfig = Field(default_factory=PathAnonymizerConfig)
+    classifier: ClassifierConfig = Field(default_factory=ClassifierConfig)
+
+    model_config = {"extra": "ignore"}  # silently drop legacy ``privacy_tier`` from on-disk configs
 
 
 class BucketRemoteConfig(BaseModel):
@@ -220,7 +271,8 @@ class ProjectConfig(BaseModel):
     default_visibility: str = Field("private", pattern="^(public|private)$")
     agents: list[str] = Field(default_factory=lambda: [DEFAULT_AGENT])
     post_processors: list[PostProcessorConfig] = Field(default_factory=list)
-    privacy_tier: Literal["off", "low", "medium", "high"] | None = None
+
+    model_config = {"extra": "ignore"}  # silently drop legacy ``privacy_tier`` from on-disk markers
 
 
 class ProjectRegistration(BaseModel):

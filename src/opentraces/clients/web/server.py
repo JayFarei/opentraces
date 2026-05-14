@@ -178,7 +178,10 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
             "authenticated": identity is not None,
             "username": identity.get("name") if identity else None,
             "security": {
-                "privacy_tier": project_cfg.get("privacy_tier") or cfg.security.privacy_tier,
+                # Legacy field — kept for one release while the web UI migrates
+                # to ``tools_applied``. Always returns "medium" so dropdowns
+                # default to a sane label without re-reading the now-removed config.
+                "privacy_tier": "medium",
                 "trufflehog": {
                     "enabled": th_enabled,
                     "version": th_version,
@@ -482,11 +485,14 @@ def create_app(staging_dir: str | None = None, state_path: str | None = None, vi
                 )
 
         _invalidate_cache()
-        security = result.processed.record.metadata.get("security", {}).get("privacy", {})
+        # The privacy_tier metadata field changed shape with the tool-registry
+        # refactor (now records "filtered"/"unfiltered" sentinels instead of a
+        # severity label). Echo the client's requested tier so the existing
+        # web UI contract holds during the deprecation window.
         return jsonify({
             "status": "rescanned",
             "trace_id": trace_id,
-            "privacy_tier": security.get("privacy_tier") or privacy_tier,
+            "privacy_tier": privacy_tier or "medium",
             "security_version": result.processed.record.security.classifier_version,
             "redactions_applied": result.processed.record.security.redactions_applied,
             "needs_review": result.processed.needs_review,

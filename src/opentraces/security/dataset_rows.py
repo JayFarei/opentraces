@@ -1,16 +1,22 @@
-"""Dataset row privacy filtering."""
+"""Dataset row privacy filtering.
+
+Backwards-compatible wrapper over :func:`opentraces.security.sanitize_dict`.
+The tier label (``off``/``low``/``medium``/``high``) survives here as a
+coarse shareable/unfiltered shorthand for the dataset-publishing surface;
+the actual sanitization is the new tool-registry pipeline.
+"""
 
 from __future__ import annotations
 
-import copy
 import os
 from dataclasses import dataclass
 from typing import Any
 
 from .anonymizer import anonymize_paths
-from .privacy import DEFAULT_PRIVACY_TIER, PrivacyTier, normalize_privacy_tier, privacy_policy_for_tier
-from .secrets import redact_text, scan_text
+from .pipeline import sanitize_dict
+from .privacy import DEFAULT_PRIVACY_TIER, PrivacyTier, normalize_privacy_tier
 from .version import SECURITY_VERSION
+from .walker import walk_dict_strings
 
 
 @dataclass(frozen=True)
@@ -32,24 +38,29 @@ class SanitizedDatasetRow:
     security: DatasetRowSecurity
 
 
+_TIER_TOOLS: dict[PrivacyTier, tuple[str, ...]] = {
+    "low": ("regex",),
+    "medium": ("regex", "entropy"),
+    "high": ("regex", "entropy"),
+}
+
+
 def sanitize_dataset_row(
     row: dict[str, Any],
     *,
     privacy_tier: str | None = DEFAULT_PRIVACY_TIER,
 ) -> SanitizedDatasetRow:
-    """Return a privacy-filtered copy of a dataset row.
+    """Return a sanitised copy of a dataset row.
 
-    ``off`` is an explicit deferral mode: the row is copied unchanged and
-    sidecar metadata marks it unfiltered/non-publishable. Other tiers map to
-    the local scanner/anonymizer controls.
+    ``tier="off"`` returns the row unchanged with ``filtered=False`` — used as
+    an explicit deferral mode when the dataset author wants to ship raw rows
+    out of the local store. Other tiers map onto a small fixed tool set;
+    callers needing finer control should call :func:`sanitize_dict` directly.
     """
-
     tier = normalize_privacy_tier(privacy_tier)
-    policy = privacy_policy_for_tier(tier)
-    copied = copy.deepcopy(row)
-    if not policy.filters_enabled:
+    if tier == "off":
         return SanitizedDatasetRow(
-            row=copied,
+            row=dict(row),
             security=DatasetRowSecurity(
                 privacy_tier=tier,
                 security_version=None,
@@ -57,37 +68,27 @@ def sanitize_dataset_row(
             ),
         )
 
-    redactions = 0
-    findings = 0
+    tools = list(_TIER_TOOLS.get(tier, ("regex", "entropy")))
+    # sanitize_dict + walk_dict_strings rebuild containers only where a leaf
+    # changed and never mutate the input, so no upfront copy is needed.
+    sanitised, report = sanitize_dict(row, tools=tools)
+
     username = os.environ.get("USER") or os.environ.get("USERNAME") or None
 
-    def _filter(value: Any) -> Any:
-        nonlocal redactions, findings
-        if isinstance(value, str):
-            matches = scan_text(value, include_entropy=policy.include_entropy)
-            if matches:
-                findings += len(matches)
-                value = redact_text(value, matches)
-                redactions += len(matches)
-            if policy.anonymize_sources:
-                value = anonymize_paths(value, username=username)
-            return value
-        if isinstance(value, list):
-            return [_filter(item) for item in value]
-        if isinstance(value, dict):
-            return {key: _filter(item) for key, item in value.items()}
-        return value
+    def _anon(text: str, _path: str, _ft) -> str:
+        return anonymize_paths(text, username=username)
 
-    filtered = _filter(copied)
-    if not isinstance(filtered, dict):  # Defensive; callers validate rows as objects.
-        filtered = copied
+    sanitised, _ = walk_dict_strings(sanitised, _anon)
+    if not isinstance(sanitised, dict):  # defensive
+        sanitised = dict(row)
+
     return SanitizedDatasetRow(
-        row=filtered,
+        row=sanitised,
         security=DatasetRowSecurity(
             privacy_tier=tier,
             security_version=SECURITY_VERSION,
-            redactions_applied=redactions,
-            findings_count=findings,
+            redactions_applied=report.redactions_applied,
+            findings_count=len(report.findings),
             filtered=True,
         ),
     )

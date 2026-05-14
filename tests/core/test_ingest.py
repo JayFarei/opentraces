@@ -886,30 +886,39 @@ class TestAutoReviewPromotion:
     def test_classifier_flags_force_review_in_auto_policy(
         self, project_dir, monkeypatch
     ) -> None:
-        from types import SimpleNamespace
-
+        """A flagged classifier verdict promotes the trace to STAGED even
+        under ``review_policy=auto``. Stubs the classifier tool's ``judge``
+        method to return a synthetic flag — the rest of the pipeline runs
+        normally."""
         from opentraces.core.config import Config, get_project_state_path
         from opentraces.core.ingest import ingest_one_session
+        from opentraces.security.tools import Verdict
+        from opentraces.security.tools.classifier_tool import ClassifierJudge
 
         project_cfg = json.loads((project_dir / ".opentraces.json").read_text())
         project_cfg["review_policy"] = "auto"
         (project_dir / ".opentraces.json").write_text(json.dumps(project_cfg))
 
-        monkeypatch.setattr(
-            "opentraces.core.pipeline.two_pass_scan",
-            lambda record, **_kwargs: (
-                SimpleNamespace(matches=[]),
-                SimpleNamespace(matches=[]),
-            ),
-        )
-        monkeypatch.setattr(
-            "opentraces.core.pipeline.apply_redactions",
-            lambda record, **_kwargs: 0,
-        )
-        monkeypatch.setattr(
-            "opentraces.core.pipeline.classify_trace_record",
-            lambda record, sensitivity: SimpleNamespace(flags=["manual-review"]),
-        )
+        def _stub_judge(self, record, ctx):
+            return Verdict(
+                name="classifier",
+                summary="flagged for review",
+                decision="flagged",
+                payload={
+                    "flags": [
+                        {
+                            "pattern": "manual_review",
+                            "matched_text": "internal",
+                            "reason": "test stub",
+                            "severity": "medium",
+                        }
+                    ],
+                    "risk_score": 0.5,
+                    "sensitivity": "medium",
+                },
+            )
+
+        monkeypatch.setattr(ClassifierJudge, "judge", _stub_judge)
 
         session_id = "sess-auto-review"
         path = _write_jsonl(project_dir, session_id, turns=3)

@@ -2209,6 +2209,83 @@ def setup_entity_parser(force: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# `ot setup privacy-filter` — opt-in HuggingFace BERT-NER PII detector.
+# ---------------------------------------------------------------------------
+
+
+@setup_group.command("privacy-filter")
+@click.option("--enable/--disable", "enable", default=True)
+@click.option(
+    "--install-deps", is_flag=True,
+    help="Pip-install transformers + torch into the active environment.",
+)
+@click.option(
+    "--model", default="openai/privacy-filter", show_default=True,
+    help="HuggingFace model identifier.",
+)
+@click.option(
+    "--score-threshold", type=float, default=0.7, show_default=True,
+    help="Minimum confidence score for emitting a finding.",
+)
+def setup_privacy_filter_cmd(
+    enable: bool,
+    install_deps: bool,
+    model: str,
+    score_threshold: float,
+) -> None:
+    """Configure the ``openai/privacy-filter`` PII detector.
+
+    The detector is opt-in: the ``transformers`` and ``torch`` packages
+    aren't part of the default ``opentraces`` install. Pass ``--install-deps``
+    to pip-install them into the active environment; otherwise the user
+    is responsible for ensuring they're available before the next
+    ``opentraces`` invocation. Either way this command flips
+    ``cfg.security.privacy_filter.enabled`` to match ``--enable/--disable``.
+    """
+    cfg = load_config()
+    cfg.security.privacy_filter.enabled = enable
+    cfg.security.privacy_filter.model_name = model
+    cfg.security.privacy_filter.score_threshold = score_threshold
+    save_config(cfg)
+
+    if install_deps and enable:
+        import subprocess
+        import sys
+
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "transformers", "torch"],
+                check=True,
+            )
+            click.echo("Installed transformers + torch.")
+        except subprocess.CalledProcessError as exc:
+            click.echo(f"pip install failed: {exc}", err=True)
+            click.echo(
+                "privacy-filter is enabled in config but transformers/torch "
+                "are not installed. Install them manually before next run.",
+                err=True,
+            )
+        # Probe model availability (downloads on first use otherwise).
+        try:
+            from ..security.privacy_filter import PrivacyFilterModel
+
+            ok = PrivacyFilterModel(model_name=model).is_available()
+            if ok:
+                click.echo(f"Model {model!r} is reachable.")
+            else:
+                click.echo(
+                    f"Model {model!r} could not be loaded — first inference call "
+                    "will retry (and may download).",
+                    err=True,
+                )
+        except Exception as exc:  # noqa: BLE001
+            click.echo(f"Model probe skipped: {exc}", err=True)
+
+    state = "enabled" if enable else "disabled"
+    click.echo(f"privacy-filter: {state} ({model}, threshold={score_threshold:.2f})")
+
+
+# ---------------------------------------------------------------------------
 # `ot setup watcher` — install + lifecycle for the background watcher.
 #
 # The watcher is a system-level service (launchd agent on macOS, systemd

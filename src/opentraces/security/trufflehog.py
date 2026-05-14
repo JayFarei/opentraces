@@ -73,10 +73,23 @@ _MISSING_HINT = (
 )
 
 
+_VERSION_CACHE: tuple[str | None, str | None] | None = None  # (binary_path, version)
+
+
 def find_trufflehog() -> str | None:
-    """Return the installed trufflehog version string, or ``None`` if absent."""
+    """Return the installed trufflehog version string, or ``None`` if absent.
+
+    Cached per process — version-probing the binary on every call costs a
+    subprocess fork, and ``describe()`` walks the whole registry on every
+    doctor invocation. Cache key is ``shutil.which`` so the cache invalidates
+    if the binary moves on PATH.
+    """
+    global _VERSION_CACHE
     binary = shutil.which("trufflehog")
+    if _VERSION_CACHE is not None and _VERSION_CACHE[0] == binary:
+        return _VERSION_CACHE[1]
     if not binary:
+        _VERSION_CACHE = (None, None)
         return None
     try:
         result = subprocess.run(
@@ -87,9 +100,12 @@ def find_trufflehog() -> str | None:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.debug("trufflehog --version failed: %s", exc)
+        _VERSION_CACHE = (binary, None)
         return None
     output = (result.stdout or result.stderr or "").strip()
-    return output or None
+    version = output or None
+    _VERSION_CACHE = (binary, version)
+    return version
 
 
 def require_trufflehog() -> str:

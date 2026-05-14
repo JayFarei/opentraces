@@ -76,7 +76,7 @@ class TestTruffleHogInPipeline:
         assert result.trufflehog_blocked is False  # no findings
 
     def test_clean_scan_persists_status_marker(self, monkeypatch, tmp_path) -> None:
-        """Clean scans write metadata.security.trufflehog = {status: clean, ...}
+        """Clean scans write metadata.security.tools.trufflehog = {status: clean, ...}
         so the TUI can distinguish "scanned, no findings" from "not run"."""
         monkeypatch.setattr("shutil.which", lambda _: "/bin/trufflehog")
 
@@ -97,23 +97,22 @@ class TestTruffleHogInPipeline:
         result = process_imported_trace(record, cfg)
 
         sec_meta = (result.record.metadata or {}).get("security") or {}
-        marker = sec_meta.get("trufflehog") or {}
+        marker = (sec_meta.get("tools") or {}).get("trufflehog") or {}
         assert marker.get("status") == "clean"
         assert marker.get("findings_count") == 0
         assert "3.94" in (marker.get("version") or "")
         assert marker.get("scanned_at"), "scanned_at should be populated"
-        # The legacy findings key stays absent on clean scans.
-        assert "trufflehog_findings" not in sec_meta
+        assert not marker.get("findings"), "clean scan has an empty findings list"
 
     def test_disabled_does_not_write_marker(self, monkeypatch) -> None:
-        """When the tier is off, leave metadata.security.trufflehog unset so
-        the TUI still shows 'not run (opt-in)'."""
+        """When the tier is off, leave metadata.security.tools.trufflehog unset
+        so the TUI still shows 'not run (opt-in)'."""
         cfg = Config()  # trufflehog disabled by default
         record = _make_minimal_trace()
         result = process_imported_trace(record, cfg)
 
         sec_meta = (result.record.metadata or {}).get("security") or {}
-        assert "trufflehog" not in sec_meta
+        assert "trufflehog" not in (sec_meta.get("tools") or {})
 
     def test_skip_trufflehog_short_circuits_even_when_enabled(
         self, monkeypatch, tmp_path,
@@ -144,7 +143,7 @@ class TestTruffleHogInPipeline:
         """Tier 1.5 findings no longer gate the trace. The pipeline
         redacts the matched substring in place (same mitigation Tier 1
         uses for regex hits) and persists the per-finding detail on
-        ``record.metadata.security.trufflehog_findings`` so downstream
+        ``record.metadata.security.tools.trufflehog.findings`` so downstream
         surfaces can show which detectors fired and whether the hit
         was verified."""
         monkeypatch.setattr("shutil.which", lambda _: "/bin/trufflehog")
@@ -189,10 +188,9 @@ class TestTruffleHogInPipeline:
         # Findings persisted for the UI to surface later, regardless of
         # which tier actually performed the redaction.
         sec_meta = (result.record.metadata or {}).get("security") or {}
-        th_findings = sec_meta.get("trufflehog_findings") or []
+        marker = (sec_meta.get("tools") or {}).get("trufflehog") or {}
+        th_findings = marker.get("findings") or []
         assert any(f.get("detector") == "AWS" for f in th_findings), th_findings
         assert result.record.security.redactions_applied >= 1
-        # The explicit status marker reflects the findings count too.
-        marker = sec_meta.get("trufflehog") or {}
         assert marker.get("status") == "findings"
         assert marker.get("findings_count") == len(th_findings)

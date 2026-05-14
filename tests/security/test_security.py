@@ -23,12 +23,12 @@ from opentraces.security.classifier import (
     classify_content,
     classify_trace_record,
 )
+from opentraces.security.pipeline import sanitize_record
 from opentraces.security.redactor import RedactingFilter
 from opentraces.security.scanner import (
     FieldType,
     scan_content,
-    scan_trace_record,
-    two_pass_scan,
+    scan_serialized,
 )
 from opentraces.security.secrets import (
     redact_text,
@@ -517,7 +517,9 @@ class TestFieldTypeScan:
         assert any(m.pattern_name == "anthropic_api_key" for m in result.matches)
 
 
-class TestScanTraceRecord:
+class TestSanitizeRecordFields:
+    """sanitize_record redacts secrets across every record field surface."""
+
     def _make_record(self, **kwargs) -> TraceRecord:
         defaults = {
             "trace_id": "test-001",
@@ -526,6 +528,10 @@ class TestScanTraceRecord:
         }
         defaults.update(kwargs)
         return TraceRecord(**defaults)
+
+    def _redactions(self, record: TraceRecord) -> int:
+        _, report = sanitize_record(record, tools=["regex", "entropy"])
+        return report.redactions_applied
 
     def test_scans_step_content(self):
         record = self._make_record(
@@ -537,8 +543,7 @@ class TestScanTraceRecord:
                 )
             ]
         )
-        result = scan_trace_record(record)
-        assert result.redaction_count > 0
+        assert self._redactions(record) > 0
 
     def test_scans_tool_call_input(self):
         record = self._make_record(
@@ -556,8 +561,7 @@ class TestScanTraceRecord:
                 )
             ]
         )
-        result = scan_trace_record(record)
-        assert result.redaction_count > 0
+        assert self._redactions(record) > 0
 
     def test_scans_observations(self):
         record = self._make_record(
@@ -574,8 +578,7 @@ class TestScanTraceRecord:
                 )
             ]
         )
-        result = scan_trace_record(record)
-        assert result.redaction_count > 0
+        assert self._redactions(record) > 0
 
     def test_scans_reasoning_content(self):
         record = self._make_record(
@@ -587,36 +590,32 @@ class TestScanTraceRecord:
                 )
             ]
         )
-        result = scan_trace_record(record)
-        assert result.redaction_count > 0
+        assert self._redactions(record) > 0
 
     def test_scans_system_prompts(self):
         record = self._make_record(
             system_prompts={"abc123": "Config: ghp_ABCDEFGHIJKLMNOPQRSTuvwxyz"},
         )
-        result = scan_trace_record(record)
-        assert result.redaction_count > 0
+        assert self._redactions(record) > 0
 
     def test_scans_outcome_patch(self):
         record = self._make_record(
             outcome=Outcome(patch="+API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz"),
         )
-        result = scan_trace_record(record)
-        assert result.redaction_count > 0
+        assert self._redactions(record) > 0
 
     def test_empty_record_no_matches(self):
         record = self._make_record()
-        result = scan_trace_record(record)
-        assert result.redaction_count == 0
+        assert self._redactions(record) == 0
 
 
 # ===================================================================
-# scanner.py -- Two-pass scan
+# scanner.py -- Serialized-bytes scan
 # ===================================================================
 
 
-class TestTwoPassScan:
-    def test_pass1_catches_field_secret(self):
+class TestScanSerialized:
+    def test_field_secret_redacted_in_record(self):
         record = TraceRecord(
             trace_id="test-2pass",
             session_id="sess-2pass",
@@ -629,10 +628,10 @@ class TestTwoPassScan:
                 )
             ],
         )
-        pass1, pass2 = two_pass_scan(record)
-        assert pass1.redaction_count > 0
+        _, report = sanitize_record(record, tools=["regex", "entropy"])
+        assert report.redactions_applied > 0
 
-    def test_pass2_scans_serialized(self):
+    def test_scan_serialized_catches_secret(self):
         record = TraceRecord(
             trace_id="test-2pass",
             session_id="sess-2pass",
@@ -645,11 +644,10 @@ class TestTwoPassScan:
                 )
             ],
         )
-        _pass1, pass2 = two_pass_scan(record)
-        # Pass 2 scans the full JSON, should also find the key
-        assert pass2.redaction_count > 0
+        result = scan_serialized(record.to_jsonl_line().encode("utf-8"))
+        assert result.redaction_count > 0
 
-    def test_clean_record_no_flags(self):
+    def test_clean_record_no_redactions(self):
         record = TraceRecord(
             trace_id="clean",
             session_id="sess-clean",
@@ -658,8 +656,8 @@ class TestTwoPassScan:
                 Step(step_index=0, role="user", content="Hello world"),
             ],
         )
-        pass1, _pass2 = two_pass_scan(record)
-        assert pass1.redaction_count == 0
+        _, report = sanitize_record(record, tools=["regex", "entropy"])
+        assert report.redactions_applied == 0
 
 
 # ===================================================================
@@ -1045,13 +1043,11 @@ class TestSecurityPipelineDispatch:
         )
 
     def test_scan_and_redact(self):
-        """Pipeline should run two_pass_scan + apply_redactions."""
-        from opentraces.security.scanner import two_pass_scan, apply_redactions
+        """Pipeline should run the regex + entropy detectors over the record."""
         record = self._make_trace()
-        pass1, pass2 = two_pass_scan(record)
-        _redactions = apply_redactions(record)
+        _, report = sanitize_record(record, tools=["regex", "entropy"])
         assert record.security is not None
-        assert record.security.redactions_applied >= 0
+        assert report.redactions_applied >= 0
 
     def test_classifier(self):
         """Pipeline should run the classifier."""
@@ -1122,11 +1118,9 @@ Internal URL: https://jira.internal.corp/browse/SEC-123
 
     def test_redacts_secrets(self):
         """All secrets should be auto-redacted by the pipeline."""
-        from opentraces.security.scanner import two_pass_scan, apply_redactions
         record = self._make_hostile_trace()
-        pass1, pass2 = two_pass_scan(record)
-        redactions = apply_redactions(record)
-        assert redactions > 0, "Expected redactions for embedded secrets"
+        _, report = sanitize_record(record, tools=["regex", "entropy"])
+        assert report.redactions_applied > 0, "Expected redactions for embedded secrets"
         serialized = record.to_jsonl_line()
         assert "sk-ant-api03" not in serialized
         assert "AKIAIOSFODNN7EXAMPLE" not in serialized
@@ -1135,11 +1129,9 @@ Internal URL: https://jira.internal.corp/browse/SEC-123
 
     def test_flags_internal_urls(self):
         """Classifier should flag internal hostnames/URLs."""
-        from opentraces.security.scanner import two_pass_scan, apply_redactions
         from opentraces.security.classifier import classify_trace_record
         record = self._make_hostile_trace()
-        two_pass_scan(record)
-        apply_redactions(record)
+        sanitize_record(record, tools=["regex", "entropy"])
         result = classify_trace_record(record, "medium")
         # Should flag internal.corp hostname or jira URL
         assert len(result.flags) > 0, "Expected classifier flags for internal URLs"

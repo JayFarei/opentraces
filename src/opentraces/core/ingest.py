@@ -350,7 +350,6 @@ def _ingest_locked(
         record,
         project_dir,
         resolved_cfg,
-        privacy_tier=_resolve_privacy_tier(project_dir, resolved_cfg),
     )
     final_record = processed.record
     # process_trace may leave trace_id unchanged, but be defensive —
@@ -515,16 +514,6 @@ def _resolve_review_policy(project_dir: Path) -> str:
         return data.get("review_policy") or "review"
     except Exception:  # noqa: BLE001
         return "review"
-
-
-def _resolve_privacy_tier(project_dir: Path, cfg: Config) -> str:
-    """Read the project's privacy tier, falling back to global config."""
-
-    try:
-        data = load_project_config(project_dir)
-        return data.get("privacy_tier") or cfg.security.privacy_tier
-    except Exception:  # noqa: BLE001
-        return cfg.security.privacy_tier
 
 
 # --------------------------------------------------------------------------- #

@@ -169,4 +169,4 @@ def test_web_rescan_endpoint_redacts_staged_trace(tmp_path):
     assert "sk-proj-" not in json.dumps(rescanned)
     assert "[REDACTED]" in json.dumps(rescanned)
     assert rescanned["security"]["scanned"] is True
-    assert rescanned["metadata"]["security"]["privacy"]["syncable"] is True
+    assert rescanned["metadata"]["security"]["tools_applied"]

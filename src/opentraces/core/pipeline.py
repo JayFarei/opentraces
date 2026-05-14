@@ -1,13 +1,22 @@
 """Shared enrichment + security pipeline for trace processing.
 
-Encapsulates the 7-step pipeline used by both ``capture`` and ``parse``
-commands: git signals, attribution, dependencies, metrics, security
-scan/redact, classification, and path anonymization.
+Encapsulates the multi-step pipeline used by both ``capture`` and ``parse``
+commands:
+
+  1. Git signals (VCS detection, commit check from project dir)
+  2. Step-derived enrichment (attribution, deps, ecosystem, commits)
+  3. Filesystem dependencies (from project directory)
+  4. Metrics
+  5. Security/privacy tools — delegated to ``opentraces.security.sanitize_record``
+
+The security pass is intentionally thin: it resolves the enabled tool list
+from ``cfg``, hands the record to ``sanitize_record``, then lifts a handful
+of summary fields (``record.security``) out of the resulting
+:class:`PipelineReport`.
 """
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,16 +32,9 @@ from ..enrichment.dependencies import (
 )
 from ..enrichment.git_signals import check_committed, detect_commits_from_steps, detect_vcs
 from ..enrichment.metrics import compute_metrics
-from ..security import SECURITY_VERSION
-from ..security.anonymizer import anonymize_paths
-from ..security.classifier import classify_trace_record
-from ..security.privacy import (
-    DEFAULT_PRIVACY_TIER,
-    mark_record_privacy,
-    privacy_policy_for_tier,
-)
-from ..security.scanner import apply_redactions, two_pass_scan
-from ..security.scanner_trufflehog import maybe_run_trufflehog
+from ..security import SECURITY_VERSION, sanitize_record
+from ..security.privacy import mark_record_tools_applied
+from ..security.tools._registry import iter_enabled
 from ..security.trufflehog import TruffleHogReport
 
 
@@ -47,82 +49,8 @@ class ProcessedTrace:
 
     @property
     def trufflehog_blocked(self) -> bool:
-        """True iff Tier 1.5 ran and flagged any secret (Plan 032 Part A)."""
+        """True iff the TruffleHog tool ran and flagged any secret."""
         return self.trufflehog_report is not None and self.trufflehog_report.blocked
-
-
-def _run_trufflehog_on_record(
-    record: TraceRecord,
-    cfg: Config,
-    skip: bool,
-) -> TruffleHogReport | None:
-    """Tier 1.5 pass: scan the serialized record via TruffleHog.
-
-    Honors both the persistent ``security.trufflehog.enabled`` config
-    flag and a per-invocation ``skip`` override so callers like
-    ``push --no-trufflehog`` can suppress the tier without mutating
-    config.
-    """
-    if skip:
-        return None
-    if not cfg.security.trufflehog.enabled:
-        return None
-
-    # trufflehog needs a file path; serialize the record to a temp file.
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", encoding="utf-8", delete=False,
-    ) as fh:
-        fh.write(record.to_jsonl_line() + "\n")
-        tmp_path = Path(fh.name)
-    try:
-        return maybe_run_trufflehog(tmp_path, cfg.security.trufflehog)
-    finally:
-        try:
-            tmp_path.unlink()
-        except OSError:
-            pass
-
-
-def _persist_trufflehog_result(
-    record: TraceRecord,
-    report: TruffleHogReport | None,
-) -> int:
-    """Record the Tier 1.5 outcome on ``record.metadata.security``.
-
-    Always writes a status marker when ``report`` is not ``None`` — even
-    on clean scans — so the TUI can distinguish "scanned, no findings"
-    from "never scanned." Returns the redaction count applied when
-    findings were present (zero otherwise) so callers can fold it into
-    the running total.
-    """
-    if report is None:
-        return 0
-
-    sec_meta = record.metadata.setdefault("security", {})
-    th_redacted = 0
-    if report.findings:
-        from ..security.scanner import apply_trufflehog_redactions
-        th_redacted = apply_trufflehog_redactions(record, report.findings)
-        sec_meta["trufflehog_findings"] = [
-            {
-                "detector": f.detector_name,
-                "verified": bool(f.verified),
-                "line": f.line_number,
-                "source_file": f.source_file,
-            }
-            for f in report.findings
-        ]
-        sec_meta["trufflehog_redactions_applied"] = th_redacted
-
-    sec_meta["trufflehog"] = {
-        "status": "findings" if report.findings else "clean",
-        "version": report.trufflehog_version,
-        "scanned_at": report.scanned_at,
-        "findings_count": len(report.findings),
-    }
-    return th_redacted
 
 
 def _enrich_from_steps(
@@ -172,8 +100,25 @@ def _enrich_from_steps(
                 record.outcome.signal_confidence = step_outcome.signal_confidence
 
 
-def _privacy_tier_from_config(cfg: Config) -> str:
-    return getattr(cfg.security, "privacy_tier", DEFAULT_PRIVACY_TIER)
+def _resolved_tool_names(cfg: Config, skip_trufflehog: bool) -> list[str]:
+    """Resolve the tool list for one pipeline run.
+
+    Honors per-tool ``enabled(cfg)`` plus a per-invocation
+    ``skip_trufflehog`` override so callers like ``push --no-trufflehog``
+    can suppress that one tool without mutating config.
+    """
+    names = [t.name for t in iter_enabled(cfg)]
+    if skip_trufflehog and "trufflehog" in names:
+        names = [n for n in names if n != "trufflehog"]
+    return names
+
+
+def _classifier_flag_count(report) -> int:
+    for verdict in report.verdicts:
+        if verdict.name == "classifier":
+            flags = verdict.payload.get("flags") if verdict.payload else None
+            return len(flags) if isinstance(flags, list) else 0
+    return 0
 
 
 def _run_privacy_pipeline(
@@ -181,21 +126,18 @@ def _run_privacy_pipeline(
     cfg: Config,
     *,
     skip_trufflehog: bool,
-    privacy_tier: str | None,
     review_on_redaction: bool,
 ) -> ProcessedTrace:
-    """Apply the configured privacy/security policy to an enriched record."""
+    """Run the security tool pipeline against ``record`` in place."""
 
-    policy = privacy_policy_for_tier(
-        privacy_tier or _privacy_tier_from_config(cfg),
-        classifier_sensitivity=cfg.classifier_sensitivity,
-    )
-    if not policy.filters_enabled:
+    tool_names = _resolved_tool_names(cfg, skip_trufflehog)
+
+    if not tool_names:
         record.security.scanned = False
         record.security.redactions_applied = 0
         record.security.flags_reviewed = 0
         record.security.classifier_version = None
-        mark_record_privacy(record, policy.tier, redactions_applied=0)
+        mark_record_tools_applied(record, [])
         return ProcessedTrace(
             record=record,
             needs_review=False,
@@ -203,42 +145,29 @@ def _run_privacy_pipeline(
             trufflehog_report=None,
         )
 
-    pass1, pass2 = two_pass_scan(record, include_entropy=policy.include_entropy)
-    redaction_count = apply_redactions(record, include_entropy=policy.include_entropy)
+    record, report = sanitize_record(record, tools=tool_names, cfg=cfg)
+
     record.security.scanned = True
-    record.security.redactions_applied = redaction_count
-    needs_review = bool(pass1.matches or pass2.matches)
-    if review_on_redaction and redaction_count:
-        needs_review = True
-
-    trufflehog_report = _run_trufflehog_on_record(
-        record,
-        cfg,
-        skip_trufflehog or not policy.run_trufflehog,
-    )
-    th_redacted = _persist_trufflehog_result(record, trufflehog_report)
-    if th_redacted:
-        record.security.redactions_applied = (
-            (record.security.redactions_applied or 0) + th_redacted
-        )
-        redaction_count += th_redacted
-        needs_review = True
-
-    classifier_result = classify_trace_record(record, policy.classifier_sensitivity)
-    record.security.flags_reviewed = len(classifier_result.flags)
+    record.security.redactions_applied = report.redactions_applied
+    record.security.flags_reviewed = _classifier_flag_count(report)
     record.security.classifier_version = SECURITY_VERSION
-    if classifier_result.flags:
-        needs_review = True
 
-    if policy.anonymize_sources:
-        anonymize_record(record, cfg)
-    mark_record_privacy(record, policy.tier, redactions_applied=redaction_count)
+    th_result = report.tool_results.get("trufflehog")
+    th_report: TruffleHogReport | None = th_result.payload if th_result else None
+
+    mark_record_tools_applied(record, report.tools_applied)
+
+    needs_review = bool(report.findings) or _classifier_flag_count(report) > 0
+    if review_on_redaction and report.redactions_applied:
+        needs_review = True
+    if th_report and th_report.blocked:
+        needs_review = True
 
     return ProcessedTrace(
         record=record,
         needs_review=needs_review,
-        redaction_count=redaction_count,
-        trufflehog_report=trufflehog_report,
+        redaction_count=report.redactions_applied,
+        trufflehog_report=th_report,
     )
 
 
@@ -247,7 +176,6 @@ def process_trace(
     project_dir: Path,
     cfg: Config,
     skip_trufflehog: bool = False,
-    privacy_tier: str | None = None,
 ) -> ProcessedTrace:
     """Run the full enrichment + security pipeline on a parsed trace.
 
@@ -256,14 +184,8 @@ def process_trace(
         2. Step-derived enrichment (attribution, deps, ecosystem, commits)
         3. Filesystem dependencies (from project directory)
         4. Metrics (from step data)
-        5. Security scan + redact
-        6. Classifier
-        7. Path anonymization
-
-    Returns a ProcessedTrace with the enriched record, a needs_review flag,
-    and the count of redactions applied.
+        5. Security tools (delegated to ``security.sanitize_record``)
     """
-    # 1. Git signals (project-dir-based VCS detection)
     vcs = detect_vcs(project_dir)
     record.environment.vcs = vcs
     if vcs.type == "git" and record.timestamp_start:
@@ -272,23 +194,19 @@ def process_trace(
         if outcome.committed:
             record.outcome = outcome
 
-    # 2. Step-derived enrichment (shared with imported traces)
     _enrich_from_steps(record)
 
-    # 3. Filesystem dependencies (project-dir-based, not available for imports)
     fs_deps = extract_dependencies(str(project_dir))
     if fs_deps:
         merged = sorted(set(record.dependencies + fs_deps))
         record.dependencies = merged
 
-    # 4. Metrics
     record.metrics = compute_metrics(record.steps)
 
     return _run_privacy_pipeline(
         record,
         cfg,
         skip_trufflehog=skip_trufflehog,
-        privacy_tier=privacy_tier,
         review_on_redaction=True,
     )
 
@@ -297,17 +215,14 @@ def process_imported_trace(
     record: TraceRecord,
     cfg: Config,
     skip_trufflehog: bool = False,
-    privacy_tier: str | None = None,
 ) -> ProcessedTrace:
     """Enrichment + security pipeline for imported traces (no project dir).
 
-    Same security pipeline as process_trace. No VCS detection or filesystem
+    Same security pipeline as ``process_trace``. No VCS detection or filesystem
     dependency extraction (no local project directory for imported data).
     """
-    # 1. Step-derived enrichment
     _enrich_from_steps(record)
 
-    # 2. Metrics: only compute if parser didn't populate them (FIX-3)
     if record.metrics.total_steps == 0 and record.metrics.total_input_tokens == 0:
         record.metrics = compute_metrics(record.steps)
 
@@ -315,53 +230,5 @@ def process_imported_trace(
         record,
         cfg,
         skip_trufflehog=skip_trufflehog,
-        privacy_tier=privacy_tier,
         review_on_redaction=False,
     )
-
-
-def anonymize_record(record: TraceRecord, cfg: Config) -> None:
-    """Walk all text fields of a TraceRecord and anonymize paths in-place."""
-    username = os.environ.get("USER") or os.environ.get("USERNAME") or None
-    extra_usernames = cfg.custom_redact_strings or None
-
-    def _anon(text: str | None) -> str | None:
-        if not text:
-            return text
-        return anonymize_paths(text, username=username, extra_usernames=extra_usernames)
-
-    # -- metadata (e.g. hyphen-encoded project path from Claude Code) --
-    for k, v in list(record.metadata.items()):
-        if isinstance(v, str):
-            record.metadata[k] = _anon(v) or v
-
-    # -- system_prompts (often contain cwd / absolute paths) --
-    for k, v in list(record.system_prompts.items()):
-        if isinstance(v, str):
-            record.system_prompts[k] = _anon(v) or v
-
-    if record.task.description:
-        record.task.description = _anon(record.task.description)
-
-    for step in record.steps:
-        step.content = _anon(step.content)
-        if step.reasoning_content:
-            step.reasoning_content = _anon(step.reasoning_content)
-        for tc in step.tool_calls:
-            for k, v in list(tc.input.items()):
-                if isinstance(v, str):
-                    tc.input[k] = _anon(v)
-        for obs in step.observations:
-            obs.content = _anon(obs.content)
-            obs.output_summary = _anon(obs.output_summary)
-            obs.error = _anon(obs.error)
-        for snip in step.snippets:
-            snip.file_path = _anon(snip.file_path) or snip.file_path
-            snip.text = _anon(snip.text)
-
-    if record.outcome and record.outcome.patch:
-        record.outcome.patch = _anon(record.outcome.patch)
-
-    if record.attribution:
-        for attr_file in record.attribution.files:
-            attr_file.path = _anon(attr_file.path) or attr_file.path

@@ -911,11 +911,7 @@ def sync_trace_records_from_local_stores(
             try:
                 from .pipeline import process_imported_trace
 
-                record = process_imported_trace(
-                    record,
-                    cfg,
-                    privacy_tier=explicit_tier or DEFAULT_PRIVACY_TIER,
-                ).record
+                record = process_imported_trace(record, cfg).record
             except Exception:
                 skipped += 1
                 continue

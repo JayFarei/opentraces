@@ -477,21 +477,7 @@ def scan_text(
 
 
 def redact_text(text: str, matches: list[SecretMatch]) -> str:
-    """Replace matched secrets with [REDACTED] placeholders.
+    """Replace matched secrets with [REDACTED] placeholders."""
+    from .walker import redact_spans  # lazy: walker -> scanner -> secrets cycle
 
-    Args:
-        text: The original text.
-        matches: List of SecretMatch objects to redact.
-
-    Returns:
-        Text with secrets replaced by [REDACTED].
-    """
-    if not matches:
-        return text
-
-    # Sort by start position descending so we can replace from the end
-    sorted_matches = sorted(matches, key=lambda m: m.start, reverse=True)
-    result = text
-    for match in sorted_matches:
-        result = result[:match.start] + "[REDACTED]" + result[match.end:]
-    return result
+    return redact_spans(text, ((m.start, m.end) for m in matches))

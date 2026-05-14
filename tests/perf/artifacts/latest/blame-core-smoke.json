@@ -1,73 +1,73 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 53.341833,
+    "cold_ms": 55.392166,
     "extra": {},
     "max_rss_delta_mb": 0.0,
-    "mean_ms": 53.9479585,
-    "p50_ms": 53.68225,
-    "p95_ms": 54.624209,
-    "peak_rss_mb": 1612.125,
-    "python_heap_peak_mb": 0.5164899826049805,
+    "mean_ms": 57.181937250000004,
+    "p50_ms": 57.324458,
+    "p95_ms": 58.509291,
+    "peak_rss_mb": 1641.15625,
+    "python_heap_peak_mb": 0.5175361633300781,
     "samples": [
       {
-        "duration_ms": 53.341833,
+        "duration_ms": 55.392166,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-210/test_core_perf_blame_core_smok0/blame-core-smoke/run-02/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_core_perf_blame_core_smok0/blame-core-smoke/run-02/proj",
           "scenario": "blame-core-smoke",
-          "sha": "f6fc363dcbd1a8589104078a84713d489fc1cbc4",
+          "sha": "f3a65bbb04dec69b3964ec937280ac054d1d37f0",
           "trace_count": 24
         },
-        "peak_rss_mb": 1612.125,
-        "python_heap_peak_mb": 0.49890708923339844,
-        "rss_after_mb": 1612.078125,
-        "rss_before_mb": 1612.078125,
+        "peak_rss_mb": 1641.15625,
+        "python_heap_peak_mb": 0.4994497299194336,
+        "rss_after_mb": 1641.109375,
+        "rss_before_mb": 1641.109375,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 54.624209,
+        "duration_ms": 58.509291,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-210/test_core_perf_blame_core_smok0/blame-core-smoke/run-04/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_core_perf_blame_core_smok0/blame-core-smoke/run-04/proj",
           "scenario": "blame-core-smoke",
-          "sha": "4edfb924f8a25119fd3c60aa5d32df90c7c71004",
+          "sha": "091c873b652c390d50cf3fac1607bbe06b879f32",
           "trace_count": 24
         },
-        "peak_rss_mb": 1612.125,
-        "python_heap_peak_mb": 0.49915599822998047,
-        "rss_after_mb": 1612.078125,
-        "rss_before_mb": 1612.078125,
+        "peak_rss_mb": 1641.15625,
+        "python_heap_peak_mb": 0.5175361633300781,
+        "rss_after_mb": 1641.109375,
+        "rss_before_mb": 1641.109375,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 54.143542,
+        "duration_ms": 57.324458,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-210/test_core_perf_blame_core_smok0/blame-core-smoke/run-06/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_core_perf_blame_core_smok0/blame-core-smoke/run-06/proj",
           "scenario": "blame-core-smoke",
-          "sha": "86cf8cf56848aa11099a235e57be98dd672879de",
+          "sha": "7a4d378fc01d9c9ce24044a970eb57742f1a4ea7",
           "trace_count": 24
         },
-        "peak_rss_mb": 1612.125,
-        "python_heap_peak_mb": 0.49830055236816406,
-        "rss_after_mb": 1612.078125,
-        "rss_before_mb": 1612.078125,
+        "peak_rss_mb": 1641.15625,
+        "python_heap_peak_mb": 0.4994344711303711,
+        "rss_after_mb": 1641.109375,
+        "rss_before_mb": 1641.109375,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 53.68225,
+        "duration_ms": 57.501834,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-210/test_core_perf_blame_core_smok0/blame-core-smoke/run-08/proj",
+          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-275/test_core_perf_blame_core_smok0/blame-core-smoke/run-08/proj",
           "scenario": "blame-core-smoke",
-          "sha": "4fa9cae8ea4b37f96b2f67abb2d991490751da37",
+          "sha": "f930f263f172dc406d396e07efe159ff015f42b6",
           "trace_count": 24
         },
-        "peak_rss_mb": 1612.125,
-        "python_heap_peak_mb": 0.5164899826049805,
-        "rss_after_mb": 1612.078125,
-        "rss_before_mb": 1612.078125,
+        "peak_rss_mb": 1641.15625,
+        "python_heap_peak_mb": 0.49056053161621094,
+        "rss_after_mb": 1641.109375,
+        "rss_before_mb": 1641.109375,
         "rss_delta_mb": 0.0
       }
     ]

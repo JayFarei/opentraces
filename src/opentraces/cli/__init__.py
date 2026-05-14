@@ -1192,7 +1192,6 @@ def _capture_sessions_into_project(
 
     proj_config = load_project_config(project_dir)
     review_policy = normalize_review_policy(proj_config.get("review_policy"))
-    privacy_tier = proj_config.get("privacy_tier") or cfg.security.privacy_tier
 
     staging = get_project_traces_dir(project_dir)
     staging.mkdir(parents=True, exist_ok=True)
@@ -1222,7 +1221,7 @@ def _capture_sessions_into_project(
             if record is None:
                 continue
 
-            result = process_trace(record, project_dir, cfg, privacy_tier=privacy_tier)
+            result = process_trace(record, project_dir, cfg)
             staging_file = staging / f"{result.record.trace_id}.jsonl"
             staging_file.write_text(result.record.to_jsonl_line() + "\n")
 
@@ -2534,8 +2533,9 @@ def status(limit: int) -> None:
                 t1_ran = bool(record.security.scanned)
                 meta_all = getattr(record, "metadata", None) or {}
                 sec_meta = meta_all.get("security") or {}
-                th_findings = sec_meta.get("trufflehog_findings") or sec_meta.get("tier_1_5_findings")
-                th_ran = bool(th_findings) or (th_enabled and t1_ran)
+                th_meta = (sec_meta.get("tools") or {}).get("trufflehog") or {}
+                th_findings = th_meta.get("findings")
+                th_ran = bool(th_meta) or (th_enabled and t1_ran)
                 llm_payload = meta_all.get("llm_review") or {}
                 llm_ran = bool(llm_payload.get("review_key"))
 
@@ -2776,10 +2776,12 @@ _trail_group.add_command(_trace_resume_cmd, name="resume")
 from .dataset import dataset_group as _dataset_group  # noqa: E402
 from .workflow import workflow_group as _workflow_group  # noqa: E402
 from .bucket import bucket_group as _bucket_group  # noqa: E402
+from .security import security_group as _security_group  # noqa: E402
 
 main.add_command(_bucket_group, name="bucket")
 main.add_command(_dataset_group, name="dataset")
 main.add_command(_workflow_group, name="workflow")
+main.add_command(_security_group, name="security")
 
 
 @main.command("list")
