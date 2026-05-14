@@ -146,7 +146,7 @@ doc_refs = [
   "web/site/src/components/Hero.tsx",
 ]
 perf_scenarios = []
-user_smoke_tests = ["tests/e2e/test_web_push_browser_e2e.py::test_browser_push_failure_keeps_trace_committed"]
+user_smoke_tests = ["tests/e2e/test_web_push_browser_e2e.py::test_browser_publication_guidance_keeps_trace_committed"]
 live_tests = ["tests/publish/test_upload.py::TestLivePushIntegration::test_push_cli_uploads_to_private_hf_repo"]
 notes = "The old root push perf target has been removed with the staged-trace push flow. A fresh dataset publish perf target should be added once the local dataset publication contract is stable."
 

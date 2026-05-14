@@ -17,7 +17,7 @@ publishes reviewed dataset rows to HuggingFace remotes.
 - Global setup: `opentraces setup`, `opentraces setup auth`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces auth`
 - Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`, `opentraces remove`
 - Trace retrieval and search: `opentraces trace query`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
-- Trace Trails (visible surface): `opentraces trail blame`, `opentraces trail graph`, `opentraces trail track`
+- Trace Trails (visible surface): `opentraces trail blame commit <sha>`, `opentraces trail blame pr render|create|update`, `opentraces trail graph`, `opentraces trail track`
 - Bucket (private capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
 - Workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`
 - Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`.
@@ -34,7 +34,7 @@ debugging but are hidden from `--help` after the CLI spine simplification.
 ```bash
 opentraces setup
 opentraces setup auth
-opentraces setup bucket          # opt into remote-by-default private bucket sync
+opentraces setup bucket          # configure remote-by-default private bucket sync
 opentraces setup skill           # install the opentraces skill into agent harnesses
 opentraces setup upgrade         # upgrade CLI + refresh project skill file
 opentraces auth whoami
@@ -56,11 +56,13 @@ transcripts.
 
 ```bash
 opentraces trace query --lex "bug fix failing test" --json
+opentraces trace query --cwd --remote-bucket --json
 opentraces trace query --skill grill-me --json
 opentraces trace index rebuild --json
 opentraces trace map <trace_id> --candidate <unit_id> --json
 opentraces trace slice <trace_id> --template bursts --json
 opentraces trace get <trace_id> --json
+opentraces trace get <trace_id> --remote-bucket --json
 opentraces trace teleport export <trace_id> --output <dir>
 ```
 
@@ -98,13 +100,17 @@ session).
 ## Trace Trails
 
 Trace Trails are the Git-anchored evidence chain for what a trace changed and
-where that change lives now. The visible top-level surface is `trail blame`,
-`trail graph`, and `trail track`.
+where that change lives now. The visible top-level surface is `trail blame`
+(now a group with `commit` and `pr` subcommands), `trail graph`, and
+`trail track`.
 
 ```bash
 # Visible surface
-opentraces trail blame <sha>
-opentraces trail blame t:<trace_id>
+opentraces trail blame commit <sha>             # which traces authored this commit
+opentraces trail blame commit t:<trace_id>      # which commits carry this trace
+opentraces trail blame pr render --base main    # PR body for the current branch
+opentraces trail blame pr create --base main    # gh pr create with the body
+opentraces trail blame pr update --base main    # idempotent update of existing PR
 opentraces trail graph
 opentraces trail graph --trace <trace_id>
 opentraces trail track <trace_id>
@@ -125,6 +131,7 @@ opentraces trail teleport open <bundle> --project <blank-dir>
 opentraces trail resolve ot://trace/<id>/patches/<id>/trail --json
 opentraces trail attach --trace <id> --commit <sha>
 opentraces trail rebuild
+opentraces trail search --commit <sha> --remote-bucket --json
 ```
 
 `trail track` walks a trace's lineage through Git history and reports
@@ -138,10 +145,11 @@ inspect or resume it in a blank workspace.
 
 ## Bucket
 
-The bucket is the project-local private store of every captured trace, under
-`~/.opentraces/projects/<slug>/bucket/`. It is local-only by default. Opt into
-remote-by-default sync with `opentraces setup bucket`; sync is always
-explicit.
+The bucket is the private store of every captured trace. It keeps a local cache
+under `~/.opentraces/projects/<slug>/bucket/` and is remote-by-default through a
+private HuggingFace bucket remote (S3-backed storage) when configured with
+`opentraces setup bucket`; use `opentraces setup bucket --local-only` to opt out.
+Sync is always explicit or daemon-triggered by bucket-aware capture paths.
 
 ```bash
 opentraces bucket status --json
@@ -188,6 +196,8 @@ opentraces dataset new <name> --workflow <workflow.md-or-package-dir>
 opentraces dataset status <name> --json
 opentraces dataset run <name> --dry-run --limit 5 --verbose
 opentraces dataset run <name>
+opentraces dataset run <name> --approve-new --publish-check-only
+opentraces dataset run <name> --approve-new --publish
 opentraces dataset review <name>
 opentraces dataset review approve <name> <row_id>
 opentraces dataset review reject <name> <row_id>
@@ -200,6 +210,7 @@ opentraces dataset publish <name> --check-only
 opentraces dataset publish <name>
 opentraces dataset publish <name> --min-retention 0.5 --exclude-state lost
 opentraces dataset schedule list
+opentraces dataset schedule add <name> --every 1h --approve-new --publish-check-only
 opentraces dataset remove <name> --yes
 ```
 

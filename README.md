@@ -98,7 +98,8 @@ Useful follow-ups:
 - `opentraces trail blame <sha>` and `opentraces trail graph` show commit-to-trace attribution (run `opentraces setup git` first to install the post-commit correlator).
 - `opentraces trail track <trace-id>` walks a trace's lineage through Git history and reports current `HEAD` survival.
 - `opentraces bucket status` and `opentraces bucket manifest` inspect the local private trace bucket.
-- `opentraces bucket remote push/pull/status/diff` syncs the private bucket with a HuggingFace remote when one is configured via `opentraces setup bucket`.
+- `opentraces bucket remote push/pull/status/diff` syncs the private bucket with a private HuggingFace bucket remote (S3-backed storage) configured via `opentraces setup bucket`.
+- `opentraces trace get/query --remote-bucket` and `opentraces trail search --remote-bucket` pull that private bucket remote before reading local trace or Trail state.
 - `opentraces bucket replay` replays bucket-exported Trace Trails into a Git repository.
 - `opentraces workflow create/list/templates/remove` manages local dataset workflow skill packages.
 - `opentraces dataset list/new/run/review/publish/status` manages local datasets and row publication; `opentraces dataset remote create` binds a HuggingFace remote, and `opentraces dataset schedule` controls recurring runs.
@@ -151,7 +152,7 @@ Set up opentraces in this project.
    - `opentraces trail track <trace-id>`
 
 8. Private bucket sync (optional):
-   - `opentraces setup bucket` to configure a remote-by-default private bucket
+   - `opentraces setup bucket` to configure the remote-by-default private bucket
    - `opentraces bucket status` to inspect local bucket health
    - `opentraces bucket remote push/pull` to sync with the configured remote
 ~~~
