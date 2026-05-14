@@ -56,6 +56,17 @@ def _fake_rows() -> str:
     )
 
 
+def _single_fake_row() -> str:
+    return json.dumps(
+        {
+            "source_trace_id": "trace-auto-publish",
+            "source_unit_id": "tu:trace-auto-publish:trace",
+            "summary": "A workflow row can be approved and published by automation.",
+        },
+        sort_keys=True,
+    )
+
+
 def test_dataset_run_dry_run_real_run_and_current_agent_modes(monkeypatch):
     runner = CliRunner()
     _create_dataset(runner)
@@ -264,6 +275,90 @@ def test_successful_scheduled_zero_row_run_advances_cursor(monkeypatch):
     assert "last_successful_run_id" in (
         dataset_path("grill-me-intents") / ".opentraces" / "cursors.yaml"
     ).read_text()
+
+
+def test_dataset_run_can_approve_new_rows_and_drive_publish_automation(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runner = CliRunner()
+    monkeypatch.setenv("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", str(tmp_path / "remotes"))
+    monkeypatch.setenv("OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS", _single_fake_row())
+
+    created = runner.invoke(
+        dataset_group,
+        [
+            "new",
+            "auto-published-intents",
+            "--workflow",
+            "auto-publish-curator",
+            "--workflow-digest",
+            "sha256:workflow",
+            "--json",
+        ],
+    )
+    assert created.exit_code == 0, created.output
+
+    remote = runner.invoke(
+        dataset_group,
+        [
+            "remote",
+            "create",
+            "auto-published-intents",
+            "tester/auto-published-intents",
+            "--json",
+        ],
+    )
+    assert remote.exit_code == 0, remote.output
+    assert json.loads(remote.output)["remote"]["visibility"] == "private"
+
+    checked = runner.invoke(
+        dataset_group,
+        [
+            "run",
+            "auto-published-intents",
+            "--executor",
+            "claude-code-headless",
+            "--approve-new",
+            "--publish-check-only",
+            "--json",
+        ],
+    )
+    assert checked.exit_code == 0, checked.output
+    checked_payload = json.loads(checked.output)
+    assert checked_payload["run"]["appended_count"] == 1
+    assert checked_payload["review"]["approved_new_count"] == 1
+    assert checked_payload["publish"]["uploaded"] is False
+    assert checked_payload["publish"]["check_only"] is True
+    assert checked_payload["publish"]["new_row_count"] == 1
+    assert "README.md" in checked_payload["publish"]["staged_files"]
+    assert "dataset_infos.json" in checked_payload["publish"]["staged_files"]
+    assert any(
+        path.startswith("data/") for path in checked_payload["publish"]["staged_files"]
+    )
+
+    published = runner.invoke(
+        dataset_group,
+        [
+            "run",
+            "auto-published-intents",
+            "--executor",
+            "claude-code-headless",
+            "--publish",
+            "--json",
+        ],
+    )
+    assert published.exit_code == 0, published.output
+    published_payload = json.loads(published.output)
+    assert published_payload["run"]["appended_count"] == 0
+    assert published_payload["publish"]["uploaded"] is True
+    assert published_payload["publish"]["check_only"] is False
+    assert published_payload["publish"]["new_row_count"] == 1
+
+    remote_root = tmp_path / "remotes" / "tester" / "auto-published-intents"
+    remote_rows = "\n".join(path.read_text() for path in (remote_root / "data").glob("*.jsonl"))
+    assert "A workflow row can be approved and published by automation." in remote_rows
+    assert not (remote_root / ".opentraces").exists()
 
 
 def test_failed_scheduled_run_does_not_advance_cursor_and_writes_failed_summary(monkeypatch):

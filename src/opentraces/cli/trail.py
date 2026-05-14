@@ -2058,6 +2058,7 @@ def _render_search_results(
     ],
     option_groups=[
         ("Scope", ["trace_id", "commit", "path", "survival", "project_dir"]),
+        ("Remote bucket", ["remote_bucket", "force_remote_bucket", "bucket_repo_id"]),
         ("Output", ["as_json", "graph_mode", "table_mode", "no_color"]),
     ],
 )
@@ -2075,6 +2076,21 @@ def _render_search_results(
 @click.option("--no-color", "no_color", is_flag=True, help="Disable ANSI color.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 @click.option(
+    "--remote-bucket",
+    is_flag=True,
+    help="Pull the configured private bucket remote and replay TrailEvents before searching.",
+)
+@click.option(
+    "--force-remote-bucket",
+    is_flag=True,
+    help="Allow --remote-bucket to overwrite local-ahead/diverged bucket or differing TrailEvents.",
+)
+@click.option(
+    "--bucket-repo-id",
+    default=None,
+    help="Bucket TrailEvents repo id when the remote bucket has multiple repository exports.",
+)
+@click.option(
     "--project",
     "project_dir",
     type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
@@ -2090,6 +2106,9 @@ def search_cmd(
     table_mode: bool,
     no_color: bool,
     as_json: bool,
+    remote_bucket: bool,
+    force_remote_bucket: bool,
+    bucket_repo_id: str | None,
     project_dir: Path | None,
 ) -> None:
     """Search the Trail Query projection."""
@@ -2114,6 +2133,19 @@ def search_cmd(
         sys.exit(2)
 
     repo = Path(project_dir or Path.cwd()).resolve()
+    remote_bucket_payload = None
+    if remote_bucket:
+        try:
+            from ._remote_bucket import pull_remote_bucket_for_trail
+
+            remote_bucket_payload = pull_remote_bucket_for_trail(
+                repo,
+                force=force_remote_bucket,
+                repo_id=bucket_repo_id,
+            )
+        except Exception as exc:
+            click.echo(f"Unable to read remote bucket: {exc}", err=True)
+            sys.exit(3)
     try:
         projection = build_trail_query_projection(repo)
     except ValueError as exc:
@@ -2203,6 +2235,8 @@ def search_cmd(
         "limitations": limitations,
         "limitation_details": typed_limitations(limitations),
     }
+    if remote_bucket_payload is not None:
+        payload["remote_bucket"] = remote_bucket_payload
 
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))

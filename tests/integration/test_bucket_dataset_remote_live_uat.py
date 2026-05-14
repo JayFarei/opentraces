@@ -137,24 +137,53 @@ def test_live_hf_bucket_restore_feeds_private_dataset_publish(tmp_path: Path) ->
     os.environ["OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS"] = _headless_row(trace_id)
 
     with _temporary_opentraces_home(opentraces_home.parent):
-        pulled = _run_cli(["bucket", "remote", "pull", "--json"])
-        assert pulled["remote"]["state"] == "pulled"
-
-        rebuilt = _run_cli(["trace", "index", "rebuild", "--json"])
-        assert rebuilt["index"]["trace_count"] >= 1
-
-        restored = _run_cli(["trace", "get", trace_id, "--json"], cwd=repo)
-        assert restored["trace"]["trace_id"] == trace_id
-
-        query = _run_cli(
-            ["trace", "query", "--cwd", "--limit", "10", "--force-rebuild", "--json"],
+        restored = _run_cli(
+            [
+                "trace",
+                "get",
+                trace_id,
+                "--remote-bucket",
+                "--force-remote-bucket",
+                "--json",
+            ],
             cwd=repo,
         )
+        assert restored["trace"]["trace_id"] == trace_id
+        assert restored["remote_bucket"]["remote"]["state"] == "pulled"
+        assert restored["remote_bucket"]["index"]["trace_count"] >= 1
+
+        query = _run_cli(
+            [
+                "trace",
+                "query",
+                "--cwd",
+                "--limit",
+                "10",
+                "--remote-bucket",
+                "--force-remote-bucket",
+                "--json",
+            ],
+            cwd=repo,
+        )
+        assert query["remote_bucket"]["remote"]["state"] == "pulled"
+        assert query["remote_bucket"]["index"]["trace_count"] >= 1
         assert any(candidate["trace_id"] == trace_id for candidate in query["candidates"])
 
         trail = _run_cli(
-            ["trail", "search", "--commit", commit_sha, "--json", "--project", str(repo)]
+            [
+                "trail",
+                "search",
+                "--commit",
+                commit_sha,
+                "--remote-bucket",
+                "--force-remote-bucket",
+                "--json",
+                "--project",
+                str(repo),
+            ]
         )
+        assert trail["remote_bucket"]["remote"]["state"] == "pulled"
+        assert trail["remote_bucket"]["replay"]["state"] in {"current", "imported"}
         assert trail["result_count"] >= 1
 
         schema_path = _write_dataset_schema(tmp_path / "live-hf-restored-row.schema.json")
@@ -176,29 +205,6 @@ def test_live_hf_bucket_restore_feeds_private_dataset_publish(tmp_path: Path) ->
         )
         assert created["dataset"]["manifest"]["remotes"] == {}
 
-        run = _run_cli(
-            [
-                "dataset",
-                "run",
-                "live-hf-restored-dataset",
-                "--executor",
-                "claude-code-headless",
-                "--privacy-tier",
-                "medium",
-                "--trail-freshness",
-                "warn",
-                "--json",
-            ]
-        )
-        assert run["run"]["appended_count"] == 1
-
-        row = read_row_index("live-hf-restored-dataset")[0]
-        assert row.source_trace_id == trace_id
-        assert row.provenance["bucket"]["manifest_digest"].startswith("sha256:")
-        provenance = read_row_provenance("live-hf-restored-dataset")[row.row_id]
-        assert provenance["bucket"]["source_trace_record"]["trace_id"] == trace_id
-        assert provenance["privacy"]["privacy_tier"] == "medium"
-
         remote = _run_cli(
             [
                 "dataset",
@@ -211,15 +217,49 @@ def test_live_hf_bucket_restore_feeds_private_dataset_publish(tmp_path: Path) ->
         )
         assert remote["remote"]["visibility"] == "private"
 
-        approved = _run_cli(["dataset", "approve", "live-hf-restored-dataset", "--all", "--json"])
-        assert approved["counts"]["publishable"] == 1
+        run = _run_cli(
+            [
+                "dataset",
+                "run",
+                "live-hf-restored-dataset",
+                "--executor",
+                "claude-code-headless",
+                "--privacy-tier",
+                "medium",
+                "--trail-freshness",
+                "warn",
+                "--approve-new",
+                "--publish-check-only",
+                "--json",
+            ]
+        )
+        assert run["run"]["appended_count"] == 1
+        assert run["review"]["approved_new_count"] == 1
+        assert run["publish"]["uploaded"] is False
+        assert run["publish"]["check_only"] is True
+        assert run["publish"]["new_row_count"] == 1
 
-        checked = _run_cli(["dataset", "publish", "live-hf-restored-dataset", "--check-only", "--json"])
-        assert checked["publish"]["uploaded"] is False
-        assert checked["publish"]["new_row_count"] == 1
+        row = read_row_index("live-hf-restored-dataset")[0]
+        assert row.source_trace_id == trace_id
+        assert row.provenance["bucket"]["manifest_digest"].startswith("sha256:")
+        provenance = read_row_provenance("live-hf-restored-dataset")[row.row_id]
+        assert provenance["bucket"]["source_trace_record"]["trace_id"] == trace_id
+        assert provenance["privacy"]["privacy_tier"] == "medium"
 
-        published = _run_cli(["dataset", "publish", "live-hf-restored-dataset", "--json"])
+        published = _run_cli(
+            [
+                "dataset",
+                "run",
+                "live-hf-restored-dataset",
+                "--executor",
+                "claude-code-headless",
+                "--publish",
+                "--json",
+            ]
+        )
+        assert published["run"]["appended_count"] == 0
         assert published["publish"]["uploaded"] is True
+        assert published["publish"]["check_only"] is False
         assert published["publish"]["new_row_count"] == 1
 
         local_dataset_files = _relative_files(dataset_path("live-hf-restored-dataset"))

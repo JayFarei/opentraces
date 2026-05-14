@@ -58,3 +58,48 @@ def test_dataset_schedule_cli_manages_local_state_without_remote_publish():
     assert removed.exit_code == 0, removed.output
     assert json.loads(removed.output)["removed"]["dataset"] == "scheduled-intents"
     assert not trigger_file.exists()
+
+
+def test_dataset_schedule_cli_persists_publish_automation_trigger():
+    create_dataset(
+        "scheduled-auto-publish",
+        workflow_skill="scheduled-curator",
+        workflow_digest="sha256:workflow",
+    )
+    runner = CliRunner()
+
+    added = runner.invoke(
+        dataset_group,
+        [
+            "schedule",
+            "add",
+            "scheduled-auto-publish",
+            "--every",
+            "30m",
+            "--executor",
+            "claude-code-headless",
+            "--approve-new",
+            "--publish-check-only",
+            "--json",
+        ],
+    )
+    assert added.exit_code == 0, added.output
+    add_payload = json.loads(added.output)
+    assert add_payload["schedule"]["trigger"]["approve_new"] is True
+    assert add_payload["schedule"]["trigger"]["publish"] == "check_only"
+
+    trigger_file = dataset_path("scheduled-auto-publish") / ".opentraces" / "schedule.trigger"
+    trigger = trigger_file.read_text()
+    assert "dataset run scheduled-auto-publish --scheduled" in trigger
+    assert "--approve-new" in trigger
+    assert "--publish-check-only" in trigger
+
+    resumed = runner.invoke(
+        dataset_group,
+        ["schedule", "resume", "scheduled-auto-publish", "--json"],
+    )
+    assert resumed.exit_code == 0, resumed.output
+    resume_payload = json.loads(resumed.output)
+    assert resume_payload["schedule"]["trigger"]["approve_new"] is True
+    assert resume_payload["schedule"]["trigger"]["publish"] == "check_only"
+    assert "--approve-new" in trigger_file.read_text()

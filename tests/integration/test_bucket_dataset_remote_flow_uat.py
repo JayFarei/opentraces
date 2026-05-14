@@ -107,24 +107,53 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
     monkeypatch.setenv("OPENTRACES_FAKE_CLAUDE_CODE_HEADLESS_ROWS", _headless_row(trace_id))
 
     with _temporary_opentraces_home(opentraces_home.parent):
-        pulled = _run_cli(["bucket", "remote", "pull", "--json"])
-        assert pulled["remote"]["state"] == "pulled"
-
-        rebuilt = _run_cli(["trace", "index", "rebuild", "--json"])
-        assert rebuilt["index"]["trace_count"] >= 1
-
-        restored = _run_cli(["trace", "get", trace_id, "--json"], cwd=repo)
-        assert restored["trace"]["trace_id"] == trace_id
-
-        query = _run_cli(
-            ["trace", "query", "--cwd", "--limit", "10", "--force-rebuild", "--json"],
+        restored = _run_cli(
+            [
+                "trace",
+                "get",
+                trace_id,
+                "--remote-bucket",
+                "--force-remote-bucket",
+                "--json",
+            ],
             cwd=repo,
         )
+        assert restored["trace"]["trace_id"] == trace_id
+        assert restored["remote_bucket"]["remote"]["state"] == "pulled"
+        assert restored["remote_bucket"]["index"]["trace_count"] >= 1
+
+        query = _run_cli(
+            [
+                "trace",
+                "query",
+                "--cwd",
+                "--limit",
+                "10",
+                "--remote-bucket",
+                "--force-remote-bucket",
+                "--json",
+            ],
+            cwd=repo,
+        )
+        assert query["remote_bucket"]["remote"]["state"] == "pulled"
+        assert query["remote_bucket"]["index"]["trace_count"] >= 1
         assert any(candidate["trace_id"] == trace_id for candidate in query["candidates"])
 
         trail = _run_cli(
-            ["trail", "search", "--commit", commit_sha, "--json", "--project", str(repo)]
+            [
+                "trail",
+                "search",
+                "--commit",
+                commit_sha,
+                "--remote-bucket",
+                "--force-remote-bucket",
+                "--json",
+                "--project",
+                str(repo),
+            ]
         )
+        assert trail["remote_bucket"]["remote"]["state"] == "pulled"
+        assert trail["remote_bucket"]["replay"]["state"] in {"current", "imported"}
         assert trail["result_count"] >= 1
 
         replay_repo = tmp_path / "fresh-replay-repo"
@@ -153,21 +182,22 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
         )
         assert before_replay["result_count"] == 0
 
-        replay = _run_cli(["bucket", "replay", "--repo", str(replay_repo), "--json"])
-        assert replay["replay"]["state"] == "imported"
-        assert replay["replay"]["events_imported"] >= 1
-
         after_replay = _run_cli(
             [
                 "trail",
                 "search",
                 "--commit",
                 commit_sha,
+                "--remote-bucket",
+                "--force-remote-bucket",
                 "--json",
                 "--project",
                 str(replay_repo),
             ]
         )
+        assert after_replay["remote_bucket"]["remote"]["state"] == "pulled"
+        assert after_replay["remote_bucket"]["replay"]["state"] == "imported"
+        assert after_replay["remote_bucket"]["replay"]["events_imported"] >= 1
         assert after_replay["result_count"] >= 1
 
         schema_path = _write_dataset_schema(tmp_path / "restored-bucket-row.schema.json")

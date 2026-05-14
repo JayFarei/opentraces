@@ -268,21 +268,29 @@ def read_trace_record_object(path: Path) -> BucketTraceRecord | None:
     )
 
 
-def iter_trace_record_objects() -> list[BucketTraceRecord]:
-    """Return every valid TraceRecord envelope in the local bucket."""
+def iter_trace_record_objects(
+    project_slug: str | None = None,
+) -> list[BucketTraceRecord]:
+    """Return valid TraceRecord envelopes in the local bucket.
+
+    When ``project_slug`` is given, only that project's records are
+    globbed and parsed — on a shared bucket this avoids reading and
+    validating every other project's JSON.
+    """
 
     out: list[BucketTraceRecord] = []
     seen: set[tuple[str, str]] = set()
     root = trace_records_root()
+    glob_prefix = f"{_path_part(project_slug)}/*" if project_slug else "*/*"
     if root.exists():
-        for path in sorted(root.glob("*/*/current.json")):
+        for path in sorted(root.glob(f"{glob_prefix}/current.json")):
             obj = read_trace_record_object(path)
             if obj is not None:
                 seen.add((obj.project_slug, obj.trace_id))
                 out.append(obj)
     legacy_root = legacy_trace_records_root()
     if legacy_root.exists():
-        for path in sorted(legacy_root.glob("*/*.json")):
+        for path in sorted(legacy_root.glob(f"{glob_prefix}.json")):
             obj = read_trace_record_object(path)
             if obj is None or (obj.project_slug, obj.trace_id) in seen:
                 continue

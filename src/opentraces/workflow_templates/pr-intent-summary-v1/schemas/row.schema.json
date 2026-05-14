@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "pr-intent-summary-v1.row",
+  "description": "One row per commit on a branch, with trace lineage.",
+  "type": "object",
+  "required": ["commit_sha", "short_sha", "subject", "is_merge", "scope_digest", "lineage", "no_lineage_reason"],
+  "properties": {
+    "commit_sha": {"type": "string", "minLength": 7},
+    "short_sha": {"type": "string", "minLength": 7},
+    "subject": {"type": "string"},
+    "body": {"type": "string"},
+    "is_merge": {"type": "boolean"},
+    "scope_digest": {"type": "string"},
+    "lineage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["trace_id", "short_id", "intent", "did_what_bullets", "files_touched", "bucket_pointer"],
+        "properties": {
+          "trace_id": {"type": "string"},
+          "short_id": {"type": "string"},
+          "project_slug": {"type": "string"},
+          "credit": {
+            "type": "object",
+            "properties": {
+              "line_count": {"type": "integer"},
+              "line_ratio": {"type": "number"},
+              "overlap_case": {"type": "string"},
+              "entity_count": {"type": "integer"}
+            }
+          },
+          "intent": {
+            "type": "object",
+            "properties": {
+              "trigger": {"type": ["object", "null"]},
+              "most_substantive_spec": {"type": ["object", "null"]},
+              "spec_chain_count": {"type": "integer"},
+              "commit_subject": {"type": ["string", "null"]},
+              "commit_body": {"type": ["string", "null"]}
+            }
+          },
+          "did_what_bullets": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "files_touched": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "patches": {
+            "type": "array"
+          },
+          "git_anchors": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "bucket_pointer": {
+            "type": "object",
+            "required": ["uri"],
+            "properties": {
+              "uri": {"type": "string"},
+              "object_path": {"type": ["string", "null"]},
+              "remote_url": {"type": ["string", "null"]},
+              "record_hash": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "no_lineage_reason": {
+      "type": ["string", "null"],
+      "enum": [null, "merge_commit", "no_attribution", "no_burst", "no_traces_in_bucket"]
+    }
+  }
+}

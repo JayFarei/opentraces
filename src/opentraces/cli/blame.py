@@ -1,4 +1,4 @@
-"""``ot trail blame <sha>`` — per-commit attribution lookup.
+"""``ot trail blame commit <sha>`` — per-commit attribution lookup.
 
 Post-043 layout:
 
@@ -33,7 +33,7 @@ from typing import Any
 
 import click
 
-from ._help import OpentracesCommand
+from ._help import OpentracesCommand, OpentracesGroup
 from ..clients.text.colors import (
     Role,
     coverage_role,
@@ -1337,18 +1337,19 @@ def _resolve_blame_target(cwd: Path, arg: str) -> tuple[str, str] | tuple[None, 
 # --------------------------------------------------------------------------- #
 
 @click.command(
-    "blame",
+    "commit",
     cls=OpentracesCommand,
     context_settings={"ignore_unknown_options": False},
     examples=[
-        "opentraces trail blame abc1234",
-        "opentraces trail blame c:abc1234 src/main.py",
-        "opentraces trail blame t:4dccb032",
-        "opentraces trail blame src/app.py:42 --json",
-        "opentraces trail blame abc1234 --lines",
-        "opentraces trail blame abc1234 --json",
+        "opentraces trail blame commit abc1234",
+        "opentraces trail blame commit c:abc1234 src/main.py",
+        "opentraces trail blame commit t:4dccb032",
+        "opentraces trail blame commit src/app.py:42 --json",
+        "opentraces trail blame commit abc1234 --lines",
+        "opentraces trail blame commit abc1234 --json",
     ],
     see_also=[
+        ("opentraces trail blame pr", "blame a branch as a PR body."),
         ("opentraces trail graph", "render commit + trace history."),
         ("opentraces trace get", "view the full trace for an id."),
     ],
@@ -1495,3 +1496,29 @@ def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
                         trail_rows=trail_rows),
         nl=False,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Group: ``trail blame``
+# --------------------------------------------------------------------------- #
+#
+# Per-commit attribution and PR-shaped projections of trace lineage live here.
+# Subcommands:
+#   commit <sha>  — point-scope blame (the original ``trail blame <sha>``).
+#   pr render|create|update — branch-scope blame projected as a GitHub PR body.
+#
+# More destinations (Slack, dashboards, CI checks) attach as additional
+# subcommands of this group; they all consume the same blame-shaped data
+# from the workflow runtime, just rendered for a different place and time.
+
+
+@click.group("blame", cls=OpentracesGroup)
+def blame_group() -> None:
+    """Per-commit attribution and PR-shaped projections of trace lineage."""
+
+
+# Attach the original commit-scope command under ``trail blame commit``.
+blame_group.add_command(blame_cmd, name="commit")
+
+
+__all__ = ["blame_cmd", "blame_group"]

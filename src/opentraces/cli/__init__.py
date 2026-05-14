@@ -2690,13 +2690,22 @@ main.add_command(_git_backfill_cmd)
 from .graph import graph_cmd as _graph_cmd  # noqa: E402
 
 # Plan-043 phase 4 — `ot blame <sha>` per-commit attribution lookup.
-from .blame import blame_cmd as _blame_cmd  # noqa: E402
+from .blame import blame_group as _blame_group  # noqa: E402
 
 # Plan-054 — Trace Trails VCS-anchored lineage.
 from .trail import trail_group as _trail_group  # noqa: E402
 
 _trail_group.add_command(_graph_cmd, name="graph")
-_trail_group.add_command(_blame_cmd, name="blame")
+_trail_group.add_command(_blame_group, name="blame")
+
+# `trail blame pr` subgroup — PR body rendering driven by the
+# `pr-intent-summary-v1` workflow. First non-dataset workflow consumer.
+# Lives under `blame` because every consumer (PR, future Slack, dashboard,
+# CI) renders the same blame-shaped data for a different destination.
+from .trail_pr import attach as _attach_trail_pr  # noqa: E402
+
+_attach_trail_pr(_blame_group)
+
 main.add_command(_trail_group)
 
 # The watcher CLI surface lives under ``ot setup watcher`` (group with

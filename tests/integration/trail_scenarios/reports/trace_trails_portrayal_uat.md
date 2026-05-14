@@ -52,7 +52,7 @@ Reviewer commands represented in the packet:
 ```text
 opentraces trail explain --commit <commit_sha> --project <scratch_repo> --json
 opentraces trail explain --trace <trace_id> --step <step_index> --project <scratch_repo> --json
-opentraces trail blame <commit_sha> --project <scratch_repo> --json
+opentraces trail blame commit <commit_sha> --project <scratch_repo> --json
 opentraces trail graph --project <scratch_repo> --json
 opentraces trail search --commit <commit_sha> --project <scratch_repo> --json
 opentraces trail timeline <trace_id> --project <opened_workspace> --json
@@ -81,7 +81,7 @@ Reviewer commands represented in the packet:
 opentraces --json setup git
 opentraces setup watcher tick --project <scratch_repo> --json
 opentraces trail explain --trace <trace_id> --step <step_index> --project <scratch_repo> --json
-opentraces trail blame <commit_sha> --project <scratch_repo> --json
+opentraces trail blame commit <commit_sha> --project <scratch_repo> --json
 opentraces trail graph --project <scratch_repo> --json
 opentraces trail search --commit <commit_sha> --project <scratch_repo> --json
 ```
