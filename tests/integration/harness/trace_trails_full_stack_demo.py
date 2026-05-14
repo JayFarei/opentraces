@@ -630,7 +630,7 @@ def _run_demo_with_isolated_home(paths: DemoPaths, *, verbose: bool) -> dict[str
         ]
     )
     blame_commit = _run_cli(
-        ["trail", "blame", commit_sha, "--json", "--project", str(paths.repo)]
+        ["trail", "blame", "commit", commit_sha, "--json", "--project", str(paths.repo)]
     )
     graph_commit = _run_cli(
         ["trail", "graph", "--json", "--project", str(paths.repo)]
@@ -1011,7 +1011,7 @@ def _run_installed_runtime_demo_with_isolated_home(
         ]
     )
     blame_commit = _run_cli(
-        ["trail", "blame", commit_sha, "--json", "--project", str(paths.repo)]
+        ["trail", "blame", "commit", commit_sha, "--json", "--project", str(paths.repo)]
     )
     graph_commit = _run_cli(["trail", "graph", "--json", "--project", str(paths.repo)])
     search_commit = _run_cli(

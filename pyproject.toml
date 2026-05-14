@@ -25,7 +25,11 @@ dependencies = [
 web = ["flask>=3.0"]
 tui = ["textual>=0.50.0"]
 import = ["datasets>=2.16.0"]
-dev = ["pytest>=8.0", "pytest-cov", "ruff", "datasets>=2.16.0"]
+# LLM polish via the Anthropic API. Most users won't need this — the
+# `claude` and `codex` CLIs (with subscription auth) are preferred and
+# have no extra install. Opt in with `pip install opentraces[llm-api]`.
+llm-api = ["anthropic>=0.40.0"]
+dev = ["pytest>=8.0", "pytest-cov", "ruff", "datasets>=2.16.0", "anthropic>=0.40.0"]
 release = ["build", "twine"]
 
 [project.scripts]

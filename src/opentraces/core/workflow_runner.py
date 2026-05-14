@@ -1,10 +1,29 @@
-"""Run harness for local dataset workflow skills."""
+"""Run harness for local dataset workflow skills.
+
+Two execution surfaces live here:
+
+* ``run_dataset_workflow`` — the dataset-bound runner. Uses agent-skill
+  executors (``current-agent`` writes RUN.md instructions, ``claude-code-headless``
+  invokes the Claude CLI). Owned by ``ot dataset run``.
+* ``execute_workflow`` — the dataset-free primitive. Uses a deterministic
+  ``script`` executor that subprocess-runs ``scripts/build_rows.py`` from the
+  workflow package, with the run packet on stdin/env. Used by non-dataset
+  consumers like the branch-context PR consumer in ``core.branch_context``.
+
+The two share workflow-package loading and JSONL output reading, but they
+have different lifecycle semantics (dataset bookkeeping vs. write-and-return)
+and so live as siblings rather than one calling the other. A future refactor
+can collapse them once a third consumer arrives and the shared shape is
+clearly load-bearing.
+"""
 
 from __future__ import annotations
 
 import json
 import os
 import shutil
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +42,7 @@ from .datasets import (
     read_source_provenance,
     save_manifest,
 )
+from .workflows import WorkflowPackage, load_workflow
 
 
 class ExecutorUnavailableError(RuntimeError):
@@ -31,6 +51,10 @@ class ExecutorUnavailableError(RuntimeError):
 
 class DatasetRunLockError(RuntimeError):
     pass
+
+
+class WorkflowScriptError(RuntimeError):
+    """Raised when a workflow's script executor exits non-zero."""
 
 
 @dataclass(frozen=True)
@@ -396,3 +420,182 @@ def _new_run_id() -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+# ---------------------------------------------------------------------------
+# Dataset-free workflow execution primitive
+# ---------------------------------------------------------------------------
+
+
+_WORKFLOW_SCRIPT_RELPATH = Path("scripts") / "build_rows.py"
+
+
+@dataclass(frozen=True)
+class WorkflowExecutionResult:
+    """Outcome of one ``execute_workflow`` invocation."""
+
+    workflow_name: str
+    workflow_digest: str
+    executor: str
+    output_path: Path
+    row_count: int
+    started_at: str
+    finished_at: str
+    scope: dict[str, Any]
+
+
+def execute_workflow(
+    workflow_name: str,
+    *,
+    scope: dict[str, Any],
+    output_path: Path,
+    executor: str = "script",
+    extra_env: dict[str, str] | None = None,
+) -> WorkflowExecutionResult:
+    """Run a workflow's deterministic builder, write rows to ``output_path``.
+
+    This is the dataset-free primitive. Unlike ``run_dataset_workflow`` it
+    does not append to a dataset, advance cursors, or hold a dataset lock.
+    It loads the workflow package, writes a ``run_packet.json`` next to the
+    output, invokes the script executor, then returns the row count and
+    provenance.
+
+    Parameters
+    ----------
+    workflow_name:
+        A workflow installed under ``~/.opentraces/workflows/<name>``. Use
+        ``install_workflow`` (or ``opentraces workflow create --template``)
+        first.
+    scope:
+        Free-form scope dict embedded in ``run_packet.json``. Consumers
+        define the shape (e.g. branch_context callers pass ``{"kind":
+        "branch_context", "commits": [...]}``).
+    output_path:
+        Where the workflow's script will write JSONL rows. Parent dir is
+        created. Caller chooses the location (e.g. cached path under
+        ``.opentraces/branch_runs/<workflow>/<digest>.jsonl``).
+    executor:
+        Currently only ``"script"`` is supported. The script executor runs
+        ``<workflow.path>/scripts/build_rows.py`` as a subprocess with
+        ``OT_RUN_PACKET`` and ``OT_DATASET_OUTPUT`` env vars set.
+    """
+
+    if executor != "script":
+        raise ValueError(
+            f"unsupported executor: {executor} (execute_workflow only supports 'script')"
+        )
+
+    workflow = load_workflow(workflow_name)
+    output_path = output_path.expanduser()
+    run_dir = output_path.parent
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    started_at = _utc_now()
+    run_packet = _build_workflow_packet(
+        workflow=workflow,
+        scope=scope,
+        output_path=output_path,
+        executor=executor,
+        started_at=started_at,
+    )
+    _write_workflow_packet(run_dir, run_packet)
+    output_path.write_text("", encoding="utf-8")
+
+    _execute_script(workflow, run_dir, output_path, run_packet, extra_env=extra_env)
+
+    rows = _read_output_rows(output_path)
+    finished_at = _utc_now()
+    return WorkflowExecutionResult(
+        workflow_name=workflow.name,
+        workflow_digest=workflow.digest,
+        executor=executor,
+        output_path=output_path,
+        row_count=len(rows),
+        started_at=started_at,
+        finished_at=finished_at,
+        scope=scope,
+    )
+
+
+def _build_workflow_packet(
+    *,
+    workflow: WorkflowPackage,
+    scope: dict[str, Any],
+    output_path: Path,
+    executor: str,
+    started_at: str,
+) -> dict[str, Any]:
+    schema_path = workflow.path / "schemas" / "row.schema.json"
+    return {
+        "schema_version": "opentraces.workflow.run_packet.v1",
+        "workflow_name": workflow.name,
+        "workflow_digest": workflow.digest,
+        "workflow_path": str(workflow.path),
+        "schema_path": str(schema_path) if schema_path.exists() else None,
+        "executor": executor,
+        "scope": scope,
+        "output_path": str(output_path),
+        "started_at": started_at,
+    }
+
+
+def _write_workflow_packet(
+    run_dir: Path,
+    packet: dict[str, Any],
+) -> None:
+    (run_dir / "run_packet.json").write_text(
+        json.dumps(packet, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    # _build_workflow_packet already resolved + existence-checked the schema.
+    schema_path = packet.get("schema_path")
+    if schema_path:
+        (run_dir / "schema_snapshot.json").write_text(
+            Path(schema_path).read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+
+def _execute_script(
+    workflow: WorkflowPackage,
+    run_dir: Path,
+    output_path: Path,
+    run_packet: dict[str, Any],
+    extra_env: dict[str, str] | None = None,
+) -> None:
+    script = workflow.path / _WORKFLOW_SCRIPT_RELPATH
+    if not script.exists():
+        raise ExecutorUnavailableError(
+            f"workflow '{workflow.name}' has no {_WORKFLOW_SCRIPT_RELPATH} "
+            "(script executor requires a deterministic builder)"
+        )
+    env = os.environ.copy()
+    env["OT_RUN_PACKET"] = str(run_dir / "run_packet.json")
+    env["OT_DATASET_OUTPUT"] = str(output_path)
+    env["OT_WORKFLOW_PATH"] = str(workflow.path)
+    if extra_env:
+        env.update(extra_env)
+    log_path = run_dir / "log.txt"
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(script)],
+            env=env,
+            cwd=str(workflow.path),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise ExecutorUnavailableError(
+            f"unable to invoke workflow script {script}: {exc}"
+        ) from exc
+    log_payload = (
+        f"# stdout\n{completed.stdout or ''}\n\n"
+        f"# stderr\n{completed.stderr or ''}\n"
+    )
+    log_path.write_text(log_payload, encoding="utf-8")
+    if completed.returncode != 0:
+        raise WorkflowScriptError(
+            f"workflow '{workflow.name}' script exited "
+            f"{completed.returncode}: see {log_path}"
+        )

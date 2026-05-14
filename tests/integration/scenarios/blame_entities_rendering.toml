@@ -1,7 +1,7 @@
 name = "blame_entities_rendering"
 description = """
 Pre-populates attribution + entity caches, invokes
-`ot trail blame HEAD --entities --no-color`, and asserts entities are grouped by
+`ot trail blame commit HEAD --entities --no-color`, and asserts entities are grouped by
 trace id with correct change-type glyphs (+ ~ → -).
 """
 
@@ -72,7 +72,7 @@ trace_id = "traceabc22222222"
 
 [[steps]]
 type = "invoke_cli"
-args = ["trail", "blame", "HEAD", "--entities", "--no-color"]
+args = ["trail", "blame", "commit", "HEAD", "--entities", "--no-color"]
 
 [[assertions]]
 kind = "cli_returncode"
