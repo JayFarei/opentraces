@@ -60,6 +60,14 @@ _ALLOWLIST_DUMMY_TOKENS = re.compile(
     r"|Bearer\s+(?:\$|<|\{|\[|test|dummy|fake|example|xxx|your)"
 )
 
+_UUID_PATTERN = re.compile(
+    r"\b[0-9a-fA-F]{8}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12}\b"
+)
+
 
 # ---------------------------------------------------------------------------
 # Pattern definitions
@@ -391,6 +399,12 @@ def _is_allowlisted(pattern_name: str, matched_text: str, full_text: str, start:
         # Filter out numbers that are actually part of other patterns (timestamps, etc.)
         digits = re.sub(r"\D", "", matched_text)
         if len(digits) < 10:
+            return True
+        end = start + len(matched_text)
+        if any(
+            uuid.start() <= start and end <= uuid.end()
+            for uuid in _UUID_PATTERN.finditer(full_text)
+        ):
             return True
         return False
 

@@ -279,6 +279,10 @@ class TestPhoneNumber:
         matches = scan_text("Phone: 555.123.4567")
         assert any(m.pattern_name == "phone_number" for m in matches)
 
+    def test_uuid_suffix_is_not_redacted_as_phone_number(self):
+        matches = scan_text("Trace id 32d155bf-68de-4f4a-9a14-5a9337198712")
+        assert not any(m.pattern_name == "phone_number" for m in matches)
+
 
 # ===================================================================
 # secrets.py -- Shannon entropy
