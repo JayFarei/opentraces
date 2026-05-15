@@ -183,7 +183,7 @@ def _complete(runner, *tokens):
 
 
 def test_complete_commit_prefix_bare(runner, complete_project):
-    lines = _complete(runner, "trail", "blame", "25")
+    lines = _complete(runner, "trail", "blame", "commit", "25")
     names = [ln.split("\t")[0] for ln in lines]
     assert "2508ec10" in names
     assert "25ffffff" in names
@@ -191,7 +191,7 @@ def test_complete_commit_prefix_bare(runner, complete_project):
 
 
 def test_complete_commit_prefix_with_c_handle(runner, complete_project):
-    lines = _complete(runner, "trail", "blame", "c:25")
+    lines = _complete(runner, "trail", "blame", "commit", "c:25")
     names = [ln.split("\t")[0] for ln in lines]
     assert "c:2508ec10" in names
     assert "c:25ffffff" in names

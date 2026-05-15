@@ -174,14 +174,14 @@ def test_lineage_consumers_and_search_read_same_trail_projection(tmp_path: Path)
         edge["relation"] for edge in resolve["edges"]
     } >= {"contains_step", "created_trace_patch", "anchored_in_git", "landed_in_commit"}
 
-    blame = _run_json(tmp_path, ["trail", "blame", commit_sha])
+    blame = _run_json(tmp_path, ["trail", "blame", "commit", commit_sha])
     assert blame["projection_limitations"] == ["attribution_cache_missing_trail_events_used"]
     assert len(blame["trailEvidence"]) == 1
     _assert_same_anchor(expected, blame["trailEvidence"][0])
 
     line_blame = _run_json(
         tmp_path,
-        ["trail", "blame", f"{expected['file_path']}:{expected['affected_range']['start_line']}"],
+        ["trail", "blame", "commit", f"{expected['file_path']}:{expected['affected_range']['start_line']}"],
     )
     _assert_same_anchor(expected, line_blame["trailEvidence"][0])
 
@@ -206,7 +206,7 @@ def test_lineage_consumers_and_search_read_same_trail_projection(tmp_path: Path)
     assert graph_trace.exit_code == 0, graph_trace.output
     assert commit_sha[:7] in graph_trace.output
 
-    trace_blame = _run_json(tmp_path, ["trail", "blame", f"t:{expected['trace_id']}"])
+    trace_blame = _run_json(tmp_path, ["trail", "blame", "commit", f"t:{expected['trace_id']}"])
     assert trace_blame["commits"][0]["sha"] == commit_sha
     assert trace_blame["commits"][0]["source"] == "trail_events"
 
@@ -366,7 +366,7 @@ def test_trail_search_finds_reverted_patch_trails(tmp_path: Path) -> None:
     assert payload["results"][0]["trace_patch_id"] == expected["trace_patch_id"]
     assert payload["results"][0]["current_survival"]["survival_state"] == "reverted"
 
-    blame = _run_json(tmp_path, ["trail", "blame", commit_sha])
+    blame = _run_json(tmp_path, ["trail", "blame", "commit", commit_sha])
     assert blame["trailEvidence"][0]["current_survival"]["survival_state"] == "reverted"
 
     graph = _run_json(
@@ -423,7 +423,7 @@ def test_partial_commit_unknown_patch_not_promoted_to_blame_graph_or_search(
         writer="test-fixture",
     )
 
-    blame = _run_json(tmp_path, ["trail", "blame", commit_sha])
+    blame = _run_json(tmp_path, ["trail", "blame", "commit", commit_sha])
     assert [row["trace_patch_id"] for row in blame["trailEvidence"]] == [
         expected["trace_patch_id"]
     ]
@@ -489,7 +489,7 @@ def test_trail_query_normalizes_legacy_prefixed_patch_id_with_new_anchor(
     assert "git_anchor_unknown" not in search["results"][0]["limitations"]
     assert search["results"][0]["lineage_key"]["trace_patch"]["id"] == patch_id
 
-    blame = _run_json(tmp_path, ["trail", "blame", commit_sha])
+    blame = _run_json(tmp_path, ["trail", "blame", "commit", commit_sha])
     assert blame["trailEvidence"][0]["trace_patch_id"] == patch_id
     assert blame["trailEvidence"][0]["git_anchor_id"] == created[0]["git_anchor_id"]
 
@@ -508,7 +508,7 @@ def test_legacy_notes_only_project_still_renders_blame_without_trail_events(
         tmp_path,
     )
 
-    blame = _run_json(tmp_path, ["trail", "blame", commit_sha])
+    blame = _run_json(tmp_path, ["trail", "blame", "commit", commit_sha])
 
     assert blame["trailEvidence"] == []
     assert blame["hookLinked"][0]["trace_id"] == "legacytracephase7"
