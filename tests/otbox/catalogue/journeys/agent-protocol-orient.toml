@@ -1,0 +1,56 @@
+name = "agent-protocol-orient"
+description = """
+Agent introspection surface (plan 063 §1: `agent-protocol-orient`):
+hidden `_context` / `_capabilities` / `_introspect` / `_discover`
+return full project context, feature flags, schema, and known agent
+session directories. Against a smoke seed, every one MUST return rc=0
+with parseable JSON.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["agent-protocol-orient"]
+persona = "agent"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "context"
+argv = ["context"]
+
+[[steps]]
+type = "cli"
+id = "capabilities"
+argv = ["capabilities"]
+
+[[steps]]
+type = "cli"
+id = "introspect"
+argv = ["introspect"]
+
+[[steps]]
+type = "cli"
+id = "discover"
+argv = ["discover"]
+# rc=6 = no claude session dirs in the isolated box (documented contract).
+expect_returncode = 6
+
+[[assertions]]
+kind = "returncode"
+step = "context"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "capabilities"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "introspect"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "discover"
+equals = 6

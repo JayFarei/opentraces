@@ -1,0 +1,41 @@
+name = "trail-blame-and-graph"
+description = """
+VCS-anchored Trace Trails: backfill the attribution cache over the
+seeded commit history, then prove per-commit blame and the commit+trace
+graph render against real git commits. Requires the `world` seed (two
+commits + post-commit hook installed).
+"""
+lane = "core"
+tier = 0
+seed = "world"
+requires = ["cli", "git"]
+
+[[steps]]
+type = "cli"
+id = "backfill"
+argv = ["backfill"]
+
+[[steps]]
+type = "cli"
+id = "blame"
+argv = ["trail", "blame", "commit", "HEAD"]
+
+[[steps]]
+type = "cli"
+id = "graph"
+argv = ["trail", "graph"]
+
+[[assertions]]
+kind = "returncode"
+step = "backfill"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "blame"
+value = "src/app.py"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "graph"
+value = "seed: initial project"

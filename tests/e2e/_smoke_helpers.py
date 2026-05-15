@@ -83,6 +83,57 @@ def wait_for_http(url: str, *, timeout_s: float = 15.0) -> None:
     raise TimeoutError(f"HTTP endpoint never became ready at {url}: {last_error}")
 
 
+def trace_record(
+    *,
+    trace_id: str,
+    session_id: str,
+    task_description: str,
+    timestamp_start: str = "2026-04-18T10:00:00Z",
+    timestamp_end: str = "2026-04-18T10:01:00Z",
+) -> dict:
+    """Canonical minimal TraceRecord (schema 0.3.0) for seeded worlds.
+
+    Single source of truth for both the e2e smoke tests and the otbox
+    seed harness (tests/otbox/seed.py) — keep new seeders calling this
+    rather than hand-rolling trace dicts.
+    """
+    return {
+        "schema_version": "0.3.0",
+        "trace_id": trace_id,
+        "session_id": session_id,
+        "timestamp_start": timestamp_start,
+        "timestamp_end": timestamp_end,
+        "agent": {
+            "name": "claude-code",
+            "model": "anthropic/claude-opus-4-1",
+        },
+        "task": {"description": task_description},
+        "steps": [
+            {
+                "step_index": 1,
+                "role": "user",
+                "content": "hello",
+                "timestamp": timestamp_start,
+            },
+            {
+                "step_index": 2,
+                "role": "agent",
+                "content": "world",
+                "timestamp": timestamp_end,
+                "tool_calls": [],
+                "observations": [],
+                "snippets": [],
+            },
+        ],
+        "metrics": {"total_steps": 2},
+        "security": {
+            "scanned": True,
+            "flags_reviewed": 0,
+            "redactions_applied": 0,
+        },
+    }
+
+
 def seed_opted_in_project(
     tmp_path: Path,
     *,
@@ -143,41 +194,11 @@ def seed_opted_in_project(
     traces_dir = state_dir / "traces"
     traces_dir.mkdir(parents=True, exist_ok=True)
 
-    trace = {
-        "schema_version": "0.3.0",
-        "trace_id": trace_id,
-        "session_id": session_id,
-        "timestamp_start": "2026-04-18T10:00:00Z",
-        "timestamp_end": "2026-04-18T10:01:00Z",
-        "agent": {
-            "name": "claude-code",
-            "model": "anthropic/claude-opus-4-1",
-        },
-        "task": {"description": task_description},
-        "steps": [
-            {
-                "step_index": 1,
-                "role": "user",
-                "content": "hello",
-                "timestamp": "2026-04-18T10:00:00Z",
-            },
-            {
-                "step_index": 2,
-                "role": "agent",
-                "content": "world",
-                "timestamp": "2026-04-18T10:01:00Z",
-                "tool_calls": [],
-                "observations": [],
-                "snippets": [],
-            },
-        ],
-        "metrics": {"total_steps": 2},
-        "security": {
-            "scanned": True,
-            "flags_reviewed": 0,
-            "redactions_applied": 0,
-        },
-    }
+    trace = trace_record(
+        trace_id=trace_id,
+        session_id=session_id,
+        task_description=task_description,
+    )
     trace_path = traces_dir / f"{trace_id}.jsonl"
     trace_path.write_text(json.dumps(trace) + "\n")
 

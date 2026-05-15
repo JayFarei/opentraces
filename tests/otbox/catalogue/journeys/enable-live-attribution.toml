@@ -1,0 +1,85 @@
+name = "enable-live-attribution"
+description = """
+Live attribution watcher (plan 063 §1: `enable-live-attribution`):
+`setup watcher status` reports unit + service state; the install /
+start / stop / restart / uninstall lifecycle commands manage the
+launchd|systemd unit; `tick` runs one synchronous pass. The journey
+asserts the status surface against a fresh project (no watcher
+installed) and that every lifecycle command surfaces its help.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["enable-live-attribution"]
+persona = "human"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["setup", "watcher", "status", "--json"]
+
+[[steps]]
+type = "cli"
+id = "install-help"
+argv = ["setup", "watcher", "install", "--help"]
+
+[[steps]]
+type = "cli"
+id = "start-help"
+argv = ["setup", "watcher", "start", "--help"]
+
+[[steps]]
+type = "cli"
+id = "stop-help"
+argv = ["setup", "watcher", "stop", "--help"]
+
+[[steps]]
+type = "cli"
+id = "restart-help"
+argv = ["setup", "watcher", "restart", "--help"]
+
+[[steps]]
+type = "cli"
+id = "uninstall-help"
+argv = ["setup", "watcher", "uninstall", "--help"]
+
+[[steps]]
+type = "cli"
+id = "tick-help"
+argv = ["setup", "watcher", "tick", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "install-help"
+value = "watcher"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "start-help"
+value = "watcher"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "stop-help"
+value = "watcher"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "restart-help"
+value = "watcher"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "uninstall-help"
+value = "watcher"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "tick-help"
+value = "tick"

@@ -1,0 +1,28 @@
+name = "onboard-integrations"
+description = """
+Walk the setup wizard (plan 063 §1: `onboard-integrations`):
+bare `setup` walks every integration after init. Journey asserts the
+help surface for the bare group + `setup --help` lists every child
+integration.
+"""
+lane = "extended"
+tier = 0
+seed = "smoke"
+trajectories = ["onboard-integrations"]
+persona = "human"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "setup-help"
+argv = ["setup", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "setup-help"
+value = "Wire opentraces"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "setup-help"
+value = "watcher"

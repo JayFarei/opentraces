@@ -1,0 +1,49 @@
+name = "enable-shell-completions"
+description = """
+Shell completions lifecycle (plan 063 §1: `enable-shell-completions`):
+`completions` prints a shell script; `completions install` and
+`completions uninstall` manage the file. The journey asserts the print
+surface returns a non-empty completion script and the install + uninstall
+help surfaces document the supported shells.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["enable-shell-completions"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "completions-print"
+argv = ["completions", "bash"]
+
+[[steps]]
+type = "cli"
+id = "install-help"
+argv = ["completions", "install", "--help"]
+
+[[steps]]
+type = "cli"
+id = "uninstall-help"
+argv = ["completions", "uninstall", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "completions-print"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "completions-print"
+value = "opentraces"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "install-help"
+value = "completions"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "uninstall-help"
+value = "completions"

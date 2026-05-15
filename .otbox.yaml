@@ -1,0 +1,41 @@
+# otbox per-repo config (plan 061 R7). Edit to taste.
+#
+# All fields are optional. Commands fall back to their built-in
+# defaults when a field is missing.
+
+# Default driver for `otbox up` / `otbox warmup`. One of: local, docker, remote.
+driver: local
+
+# Default Tier 1 target (only used when driver == remote).
+# Override at the shell with OT_OTBOX_SSH_TARGET. Example:
+# target: gabrieles-laptop-1
+#
+# remote:
+#   target: user@hostname
+#   port: 22
+#   key: ~/.ssh/id_ed25519
+
+# Default seed scenario for `otbox up --seed`.
+seed: smoke
+
+# rsync excludes for `otbox sync` (added on top of the built-in defaults).
+sync:
+  exclude:
+    - .vercel/
+    - .next/
+
+# Environment variables the box may set on top of the isolated env.
+# Listed names get forwarded to remote `env VAR=val` blocks.
+env:
+  allow:
+    - CI
+    - NODE_OPTIONS
+
+# Remote prerequisites — otbox refuses to provision a remote target
+# that does not meet these (it never installs anything on someone
+# else's machine).
+prerequisites:
+  remote:
+    - python3.10+
+    - git
+    - rsync

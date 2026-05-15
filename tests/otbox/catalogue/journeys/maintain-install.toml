@@ -1,0 +1,22 @@
+name = "maintain-install"
+description = """
+Maintain the install (plan 063 §1: `maintain-install`):
+`setup upgrade` upgrades the CLI + refreshes the project skill file.
+Journey asserts the help surface.
+"""
+lane = "extended"
+tier = 0
+seed = "smoke"
+trajectories = ["maintain-install"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "upgrade-help"
+argv = ["setup", "upgrade", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "upgrade-help"
+value = "Upgrade"

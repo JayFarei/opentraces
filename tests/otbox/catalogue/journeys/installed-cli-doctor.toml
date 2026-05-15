@@ -1,0 +1,49 @@
+name = "installed-cli-doctor"
+description = """
+Against a `c-installed-source` checkpoint (opentraces fresh-installed
+into a per-box .testvenv), the freshly-installed CLI must answer
+`--version` and `doctor --json` cleanly. The whole point of c-installed-
+source is that the matrix can fork off it cheaply (snapshot cache hit)
+instead of paying the ~20s install cost again — this journey proves the
+forked box actually has a working CLI.
+
+Demonstrator for plan 062's snapshot-fork ergonomic: when this journey
+and `install-from-source-happy-path` both run in the same matrix
+invocation, the install runs ONCE (during c-installed-source build) and
+is reused for free here.
+"""
+lane = "core"
+tier = 0
+from_checkpoints = ["c-installed-source"]
+persona = "agent"
+requires = ["cli"]
+
+[[steps]]
+type = "shell"
+id = "version"
+argv = [".testvenv/bin/opentraces", "--version"]
+
+[[steps]]
+type = "shell"
+id = "doctor"
+argv = [".testvenv/bin/opentraces", "--json", "doctor"]
+
+[[steps]]
+type = "shell"
+id = "trace-help"
+argv = [".testvenv/bin/opentraces", "trace", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "version"
+value = "0.4"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.trace_index.state"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-help"
+value = "Search local retained traces"

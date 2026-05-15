@@ -1,0 +1,33 @@
+name = "dev-quality-maintenance"
+description = """
+Dev quality maintenance (plan 063 §1: `dev-quality-maintenance`):
+hidden `_audit-spec` and `_audit-run` are release-eng tools that fill
+the `field_intent.yaml` spec and run a field-intent audit over
+sampled traces. The journey asserts both surfaces are wired.
+"""
+lane = "extended"
+tier = 0
+seed = "smoke"
+trajectories = ["dev-quality-maintenance"]
+persona = "agent"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "audit-spec-help"
+argv = ["_audit-spec", "--help"]
+
+[[steps]]
+type = "cli"
+id = "audit-run-help"
+argv = ["_audit-run", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "audit-spec-help"
+value = "field_intent"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "audit-run-help"
+value = "audit"

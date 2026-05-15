@@ -1,0 +1,44 @@
+name = "connect-agent-runtime"
+description = """
+Connect agent runtime (plan 063 §1: `connect-agent-runtime`):
+`setup claude-code` installs the four Claude Code hooks; `setup git`
+installs the post-commit hook (already exercised by the world seed);
+`setup skill` links the opentraces skill into each agent harness.
+This journey asserts the help surface for each.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["connect-agent-runtime"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "claude-code-help"
+argv = ["setup", "claude-code", "--help"]
+
+[[steps]]
+type = "cli"
+id = "git-help"
+argv = ["setup", "git", "--help"]
+
+[[steps]]
+type = "cli"
+id = "skill-help"
+argv = ["setup", "skill", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "claude-code-help"
+value = "Claude Code"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "git-help"
+value = "post-commit"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "skill-help"
+value = "skill"

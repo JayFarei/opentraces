@@ -1,0 +1,24 @@
+name = "survival-walk"
+description = """
+Walk patch survival (plan 063 §1: `survival-walk`): `trail track`
+renders one trace or a batch of patches through git history,
+confirming which edits survived. Against a smoke seed without
+TrailEvents, the surface MUST return cleanly with the documented
+envelope.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["survival-walk"]
+persona = "both"
+requires = ["cli", "git"]
+
+[[steps]]
+type = "cli"
+id = "track-help"
+argv = ["trail", "track", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "track-help"
+value = "lineage"

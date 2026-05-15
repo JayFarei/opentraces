@@ -1,0 +1,92 @@
+name = "cli-publish-happy-path"
+description = """
+The thin vertical slice journey (spec step 5). Against a smoke-seeded
+box, drive a real end-to-end CLI publish: inspect status, rebuild the
+trace index, query traces, build an ad-hoc dataset, bind a (fake) HF
+remote, approve every row, and publish. Verdict PASS proves otbox can
+run a real opentraces user journey to completion.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+requires = ["git", "cli"]
+
+# --- inspect the seeded world ---------------------------------------------
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["--json", "status"]
+
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "trace-query"
+argv = ["trace", "query", "greet"]
+
+# --- build an ad-hoc dataset from the seeded traces -----------------------
+[[steps]]
+type = "write_file"
+id = "write-rows"
+path = "otbox_rows.jsonl"
+content = """
+{"source_trace_id": "otbox000000000000", "source_unit_id": "tu:otbox000000000000:trace", "summary": "refactor greet() helper"}
+{"source_trace_id": "otbox000000000001", "source_unit_id": "tu:otbox000000000001:trace", "summary": "extend greet() helper"}
+"""
+
+[[steps]]
+type = "write_file"
+id = "write-schema"
+path = "otbox_schema.json"
+content = """
+{"type": "object", "properties": {"source_trace_id": {"type": "string"}, "source_unit_id": {"type": "string"}, "summary": {"type": "string"}}, "required": ["source_trace_id", "summary"]}
+"""
+
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = ["dataset", "new", "otbox-smoke", "--rows-file", "otbox_rows.jsonl", "--schema", "otbox_schema.json"]
+
+# --- bind a fake HF remote and publish ------------------------------------
+[[steps]]
+type = "cli"
+id = "remote-create"
+argv = ["dataset", "remote", "create", "otbox-smoke", "otbox-smoke/dataset", "--private"]
+
+[[steps]]
+type = "cli"
+id = "review-approve"
+argv = ["dataset", "review", "approve", "otbox-smoke", "--all"]
+
+[[steps]]
+type = "cli"
+id = "publish"
+argv = ["dataset", "publish", "otbox-smoke"]
+
+# --- assertions -----------------------------------------------------------
+[[assertions]]
+kind = "returncode"
+step = "status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-query"
+value = "otbox000000000000"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "publish"
+value = "published: rows=2"
+
+[[assertions]]
+kind = "path_exists"
+path = "{fake_remote}/otbox-smoke/dataset/dataset_infos.json"
+
+[[assertions]]
+kind = "file_count_min"
+path = "{fake_remote}/otbox-smoke/dataset/data"
+min = 1

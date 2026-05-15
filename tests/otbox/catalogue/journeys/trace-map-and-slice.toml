@@ -1,0 +1,55 @@
+name = "trace-map-and-slice"
+description = """
+Trace-side retrieval surface: rebuild the index, query traces, render a
+deterministic Trace Map for one trace, materialize a bounded Trace
+Slice, and confirm the search projection reports healthy.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "query"
+argv = ["trace", "query", "greet"]
+
+[[steps]]
+type = "cli"
+id = "map"
+argv = ["trace", "map", "otbox000000000000"]
+
+[[steps]]
+type = "cli"
+id = "slice"
+argv = ["trace", "slice", "otbox000000000000", "--template", "bursts"]
+
+[[steps]]
+type = "cli"
+id = "index-status"
+argv = ["trace", "index", "status"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "query"
+value = "otbox000000000002"
+
+[[assertions]]
+kind = "returncode"
+step = "map"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "slice"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "index-status"
+value = "ok"

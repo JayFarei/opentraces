@@ -1,0 +1,22 @@
+name = "bucket-remote-pull"
+description = """
+Restore bucket on new machine (plan 063 §1: `restore-bucket-on-new-machine`).
+The pull surface is the inverse of push; this journey asserts the
+help surface documents the expected flags.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["restore-bucket-on-new-machine"]
+persona = "human"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "pull-help"
+argv = ["bucket", "remote", "pull", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "pull-help"
+value = "Restore"

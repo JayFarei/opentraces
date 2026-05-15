@@ -1,0 +1,22 @@
+name = "decommission-dataset"
+description = """
+Tear down a local dataset (plan 063 §1: `decommission-dataset`):
+`dataset remove` reclaims state after confirming. The journey asserts
+the help surface documents the explicit-confirmation contract.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["decommission-dataset"]
+persona = "human"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "remove-help"
+argv = ["dataset", "remove", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "remove-help"
+value = "Remove"

@@ -1,0 +1,39 @@
+name = "bucket-inspect"
+description = """
+Private bucket subsystem: report local bucket health and materialize
+the bucket manifest. Confirms every seeded trace lands in the
+project-local bucket and the manifest is generated on disk.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["bucket", "status"]
+
+[[steps]]
+type = "cli"
+id = "manifest"
+argv = ["bucket", "manifest"]
+
+[[assertions]]
+kind = "returncode"
+step = "status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "status"
+value = "remote eligible"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "manifest"
+value = "digest: sha256:"
+
+[[assertions]]
+kind = "path_exists"
+path = "{opentraces_dir}/bucket/manifest.json"

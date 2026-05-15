@@ -1,0 +1,54 @@
+name = "productionize-trace-workflow"
+description = """
+Workflow lifecycle (plan 063 §1: `productionize-trace-workflow` ★):
+`workflow templates` → `workflow create` → `workflow list` →
+`workflow remove`. Against a smoke seed with no workflows installed,
+`workflow list --json` MUST return rc=0 with an empty envelope; every
+lifecycle command surfaces its help.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["productionize-trace-workflow"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "templates"
+argv = ["workflow", "templates", "--json"]
+
+[[steps]]
+type = "cli"
+id = "list-json"
+argv = ["workflow", "list", "--json"]
+
+[[steps]]
+type = "cli"
+id = "create-help"
+argv = ["workflow", "create", "--help"]
+
+[[steps]]
+type = "cli"
+id = "remove-help"
+argv = ["workflow", "remove", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "templates"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "list-json"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "create-help"
+value = "workflow"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "remove-help"
+value = "workflow"

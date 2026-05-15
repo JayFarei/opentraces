@@ -1,0 +1,83 @@
+name = "tier1-cold-publish"
+description = """
+Cold Tier 1 lease publishes a dataset to the fake HF remote *on the
+leased box*. Same shape as the Tier 0 cli-publish-happy-path but every
+step runs over SSH against the remote, every assertion is
+driver-mediated, and the fake-remote files we verify live on the remote
+box. Establishes the lifecycle on a real remote without warmup tricks.
+"""
+lane = "core"
+tier = 1
+seed = "smoke"
+requires = ["cli", "git", "tier1"]
+
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["--json", "status"]
+
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "trace-query"
+argv = ["trace", "query", "greet"]
+
+[[steps]]
+type = "write_file"
+id = "write-rows"
+path = "otbox_rows.jsonl"
+content = """
+{"source_trace_id": "otbox000000000000", "source_unit_id": "tu:otbox000000000000:trace", "summary": "refactor greet() helper"}
+{"source_trace_id": "otbox000000000001", "source_unit_id": "tu:otbox000000000001:trace", "summary": "extend greet() helper"}
+"""
+
+[[steps]]
+type = "write_file"
+id = "write-schema"
+path = "otbox_schema.json"
+content = """
+{"type": "object", "properties": {"source_trace_id": {"type": "string"}, "source_unit_id": {"type": "string"}, "summary": {"type": "string"}}, "required": ["source_trace_id", "summary"]}
+"""
+
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = ["dataset", "new", "tier1-smoke", "--rows-file", "otbox_rows.jsonl", "--schema", "otbox_schema.json"]
+
+[[steps]]
+type = "cli"
+id = "remote-create"
+argv = ["dataset", "remote", "create", "tier1-smoke", "tier1-smoke/dataset", "--private"]
+
+[[steps]]
+type = "cli"
+id = "review-approve"
+argv = ["dataset", "review", "approve", "tier1-smoke", "--all"]
+
+[[steps]]
+type = "cli"
+id = "publish"
+argv = ["dataset", "publish", "tier1-smoke"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-query"
+value = "otbox000000000000"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "publish"
+value = "published: rows=2"
+
+[[assertions]]
+kind = "path_exists"
+path = "{fake_remote}/tier1-smoke/dataset/dataset_infos.json"
+
+[[assertions]]
+kind = "file_count_min"
+path = "{fake_remote}/tier1-smoke/dataset/data"
+min = 1

@@ -1,0 +1,23 @@
+name = "survey-local-datasets"
+description = """
+Survey local datasets (plan 063 §1: `survey-local-datasets`):
+`dataset list` lists every local HF-shaped dataset. Against a fresh
+smoke seed with no datasets, `dataset list --json` MUST return rc=0
+with an empty envelope.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["survey-local-datasets"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "list-json"
+argv = ["dataset", "list", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "list-json"
+equals = 0

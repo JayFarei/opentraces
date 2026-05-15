@@ -1,0 +1,103 @@
+name = "install-from-source-happy-path"
+description = """
+Install opentraces from the synced source tree into a fresh per-box
+venv, then assert the freshly-installed CLI is runnable: `opentraces
+--version` parses + `opentraces --json doctor` answers cleanly. Proves
+the install-from-source path (pyproject.toml + hatchling backend +
+entry points + opentraces-schema editable dep) actually works against
+whatever code is on the current branch.
+
+Allowed one small network call: `pip install hatchling` (the build
+backend opentraces uses). Once that's present, opentraces-schema and
+opentraces install --no-deps from local source — no PyPI lookup of our
+own packages, no HF auth. The *install path* (build backend wiring,
+entry points, source layout) is what's under test.
+"""
+lane = "core"
+tier = 0
+from_checkpoints = ["c-prereqs-present"]
+persona = "agent"
+requires = ["cli"]
+
+# --- Build a per-journey venv ---------------------------------------------
+[[steps]]
+type = "shell"
+id = "make-venv"
+argv = ["python3", "-m", "venv", ".testvenv"]
+
+# --- Point the test venv at the host venv's site-packages so opentraces' --
+# runtime deps (click, flask, huggingface_hub, …) are visible. This is the
+# offline-equivalent of pip-installing every dep from PyPI: same end state,
+# zero network. The install path of opentraces itself is still under test.
+[[steps]]
+type = "shell"
+id = "wire-deps"
+argv = [
+    "sh", "-c",
+    "echo {repo_root}/.venv/lib/python3.14/site-packages > .testvenv/lib/python3.14/site-packages/host-venv.pth",
+]
+
+# --- Install hatchling + editables (the build backend opentraces uses) ----
+# One small network call. With editables present, --no-build-isolation
+# can build the opentraces sdists from synced source.
+[[steps]]
+type = "shell"
+id = "install-hatchling"
+argv = [".testvenv/bin/pip", "install", "--quiet", "hatchling", "editables"]
+
+# --- Install opentraces-schema editable from synced source -----------------
+[[steps]]
+type = "shell"
+id = "install-schema"
+argv = [
+    ".testvenv/bin/pip", "install", "--quiet", "--no-deps", "--no-build-isolation",
+    "-e", "{repo_root}/packages/opentraces-schema",
+]
+
+# --- Install opentraces editable from synced source ------------------------
+[[steps]]
+type = "shell"
+id = "install-cli"
+argv = [
+    ".testvenv/bin/pip", "install", "--quiet", "--no-deps", "--no-build-isolation",
+    "-e", "{repo_root}",
+]
+
+# --- The freshly-installed CLI must answer --version ----------------------
+[[steps]]
+type = "shell"
+id = "version"
+argv = [".testvenv/bin/opentraces", "--version"]
+
+# --- ...and `doctor` must produce a structured JSON payload ---------------
+[[steps]]
+type = "shell"
+id = "doctor"
+argv = [".testvenv/bin/opentraces", "--json", "doctor"]
+
+# --- ...and the package must be importable as a module --------------------
+[[steps]]
+type = "shell"
+id = "import"
+argv = [".testvenv/bin/python", "-c", "import opentraces; print(opentraces.__version__)"]
+
+# --- assertions -----------------------------------------------------------
+[[assertions]]
+kind = "stdout_contains"
+step = "version"
+value = "opentraces"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "version"
+value = "0.4"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "import"
+value = "0.4"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.trace_index.state"

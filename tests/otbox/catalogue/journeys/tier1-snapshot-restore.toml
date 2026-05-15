@@ -1,0 +1,33 @@
+name = "tier1-snapshot-restore"
+description = """
+Catalogue placeholder for the snapshot/restore round-trip across the
+SSH boundary. The deep verification (Tier 0 ↔ Tier 1 archive
+interchange, paths_rewritten, post-restore sync) lives in
+``tests/otbox/test_tailscale_slice.py`` because snapshot/restore are
+CLI-level lifecycle operations, not in-box steps a journey can run.
+
+This TOML keeps the surface owned: it asserts the box has a project
+and that the seeded fake-remote root exists — the things a restored
+box must have for any further journey to be runnable.
+"""
+lane = "core"
+tier = 1
+seed = "smoke"
+requires = ["cli", "tier1"]
+
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["--json", "status"]
+
+[[assertions]]
+kind = "path_exists"
+path = "{project}"
+
+[[assertions]]
+kind = "path_exists"
+path = "{state_dir}/traces"
+
+[[assertions]]
+kind = "path_exists"
+path = "{fake_remote}"

@@ -1,0 +1,44 @@
+name = "enable-security-tiers"
+description = """
+Security pipeline opt-in (plan 063 §1: `enable-security-tier-1x` +
+`enable-security-tier-2`): `setup trufflehog` enables Tier 1.5
+secret scanning; `setup privacy-filter` enables Tier 1.8 PII NER;
+`setup llm-review` enables Tier 2 LLM publication gating. Journey
+asserts the help surfaces.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["enable-security-tier-1x", "enable-security-tier-2"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "trufflehog-help"
+argv = ["setup", "trufflehog", "--help"]
+
+[[steps]]
+type = "cli"
+id = "privacy-filter-help"
+argv = ["setup", "privacy-filter", "--help"]
+
+[[steps]]
+type = "cli"
+id = "llm-review-help"
+argv = ["setup", "llm-review", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "trufflehog-help"
+value = "TruffleHog"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "privacy-filter-help"
+value = "privacy-filter"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "llm-review-help"
+value = "LLM"

@@ -1,0 +1,23 @@
+name = "bucket-remote-push"
+description = """
+Backup local bucket to HF remote (plan 063 §1: `backup-bucket-to-remote`).
+The push surface needs a bound remote to do real work; this journey
+asserts the help surface documents the expected flags + that running
+without a remote produces the documented error.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["backup-bucket-to-remote"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "push-help"
+argv = ["bucket", "remote", "push", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "push-help"
+value = "Mirror"

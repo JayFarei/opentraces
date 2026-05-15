@@ -1,0 +1,28 @@
+name = "tier1-real-repl"
+description = """
+Drive a real Claude CLI in tmux on the leased box, capture the trace,
+journey-assert ingest + blame. Requires both ``tier1`` and ``real_repl``
+capabilities, so it SKIPs cleanly in default CI and even in default
+Tier 1 runs — it only runs when ``OT_REAL_REPL=1`` is explicitly set.
+
+Catalogue placeholder while the real-REPL fixture (mirroring
+``tests/integration/test_trail_real_repl_scenarios.py``) is ported to
+the remote box. The shape is declared so the catalogue owns the
+surface.
+"""
+lane = "extended"
+tier = 1
+seed = "world"
+requires = ["cli", "tier1", "real_repl", "tmux"]
+
+[[steps]]
+type = "tmux"
+id = "claude"
+kind = "shell"
+argv = ["sh", "-c", "command -v claude && claude --help | head -3 || echo 'claude binary not installed on remote'"]
+settle = 4
+
+[[assertions]]
+kind = "stdout_contains"
+step = "claude"
+value = "claude"

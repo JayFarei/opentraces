@@ -1,0 +1,52 @@
+name = "tier1-warm-reuse"
+description = """
+Warm-box reuse on Tier 1: three back-to-back CLI steps against the same
+remote box (the journey runner shares one box across steps, which is
+already the iteration loop). Asserts the box id is consistent across
+steps via OTBOX_BOX_ID, and that each step is cheap on a warm lease.
+"""
+lane = "core"
+tier = 1
+seed = "smoke"
+requires = ["cli", "tier1"]
+
+[[steps]]
+type = "shell"
+id = "echo-box-1"
+argv = ["sh", "-c", "echo box_id=$OTBOX_BOX_ID"]
+
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["--json", "status"]
+
+[[steps]]
+type = "cli"
+id = "trace-query"
+argv = ["trace", "query", "greet"]
+
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["--json", "doctor"]
+
+[[steps]]
+type = "shell"
+id = "echo-box-2"
+argv = ["sh", "-c", "echo box_id=$OTBOX_BOX_ID"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "echo-box-1"
+value = "box_id=otb_"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "echo-box-2"
+value = "box_id=otb_"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.trail_capture_audit.state"
+equals = "ok"

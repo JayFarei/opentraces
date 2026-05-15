@@ -1,0 +1,33 @@
+name = "configure-settings"
+description = """
+Configure opentraces settings (plan 063 §1: `configure-settings`):
+`config set` writes a key, `config show` masks secrets and prints
+the active config. Against a smoke seed, both surfaces MUST exercise
+cleanly.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["configure-settings"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "set-help"
+argv = ["config", "set", "--help"]
+
+[[steps]]
+type = "cli"
+id = "show"
+argv = ["config", "show"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "set-help"
+value = "configuration"
+
+[[assertions]]
+kind = "returncode"
+step = "show"
+equals = 0

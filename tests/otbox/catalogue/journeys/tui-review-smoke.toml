@@ -1,0 +1,31 @@
+name = "tui-review-smoke"
+description = """
+TUI startup journey. Drives the lazytraces Textual TUI in a tmux
+session inside the box, lets it render, and captures the pane. Proves
+the TUI product surface boots against a seeded world and renders its
+review chrome.
+
+Requires tmux. The tmux step pins the box's isolated HOME explicitly so
+a running tmux server cannot leak the developer's real data into the
+captured pane.
+"""
+lane = "extended"
+tier = 0
+seed = "smoke"
+requires = ["cli", "tmux"]
+
+[[steps]]
+type = "tmux"
+id = "tui"
+kind = "shell"
+argv = [
+    "{repo_root}/.venv/bin/python",
+    "-c",
+    "from opentraces.clients.tui import main; main()",
+]
+settle = 6
+
+[[assertions]]
+kind = "stdout_contains"
+step = "tui"
+value = "Inbox"

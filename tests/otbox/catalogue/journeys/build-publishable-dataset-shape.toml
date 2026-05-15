@@ -1,0 +1,35 @@
+name = "build-publishable-dataset-shape"
+description = """
+Round out coverage for the `build-publishable-dataset` ★ trajectory:
+`cli-publish-happy-path` and `tier1-cold-publish` cover the
+end-to-end flow but skip `dataset run` and `dataset status`. This
+journey asserts the help + JSON-status shape of those two surfaces
+against a fresh smoke seed so each consumer-API endpoint of the
+publishable-dataset trajectory is independently owned.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["build-publishable-dataset"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "run-help"
+argv = ["dataset", "run", "--help"]
+
+[[steps]]
+type = "cli"
+id = "status-help"
+argv = ["dataset", "status", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "run-help"
+value = "workflow"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "status-help"
+value = "row count"

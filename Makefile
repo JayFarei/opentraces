@@ -1,6 +1,7 @@
 .PHONY: version-check dirty-check clean build-viewer build-schema build-cli build \
        test lint publish-schema publish-cli publish-test-schema publish-test-cli \
-       tag release brew-update
+       tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
+       otbox-matrix otbox-inventory
 
 SCHEMA_DIR := packages/opentraces-schema
 VERSION := $(shell python3 -c "import re; m=re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('src/opentraces/__init__.py').read()); print(m.group(1))")
@@ -42,6 +43,37 @@ test:
 
 lint:
 	python3 -m ruff check src/ packages/ tests/
+
+# ---------- otbox test environment ----------
+# otbox is the snapshottable full test environment (kb/plans/060).
+# `otbox-slice` proves the thin vertical slice; `otbox-journeys` sweeps
+# every Tier 0 catalogue journey. Both run offline against the `local`
+# driver. See tests/otbox/README.md.
+#
+# Prefer the repo venv so these work without an activated shell (the
+# autonomous-delivery-contract verifier may not have one).
+OTBOX_PY := $(shell test -x .venv/bin/python && echo .venv/bin/python || echo python3)
+
+otbox-slice:
+	$(OTBOX_PY) -m pytest tests/otbox/test_otbox_slice.py::test_vertical_slice -v
+
+otbox-journeys:
+	$(OTBOX_PY) -m pytest tests/otbox/test_otbox_slice.py -v
+
+# Tier 1 (plan 061). Opt-in: OT_OTBOX_TIER1=1. With OT_OTBOX_SSH_TARGET
+# set, runs against the operator's tailnet target; without it, spins up
+# a local sshd fixture (no system Remote Login change needed).
+otbox-tier1:
+	OT_OTBOX_TIER1=1 $(OTBOX_PY) -m pytest tests/otbox/test_tailscale_slice.py -v
+
+# Plan 062. Matrix runs every (journey, base-checkpoint) pair, sharing
+# checkpoints across journeys via snapshot fork. `otbox-inventory`
+# rebuilds the Click registry × journey-ownership map.
+otbox-matrix:
+	./otbox matrix
+
+otbox-inventory:
+	./otbox matrix --inventory --strict
 
 # ---------- Publish ----------
 

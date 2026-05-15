@@ -1,0 +1,34 @@
+name = "bucket-remote-digests"
+description = """
+Bucket remote inspection (plan 063 §1: `compare-bucket-digests`):
+`bucket remote status` and `bucket remote diff` compare the local and
+remote bucket digests so a developer knows whether a push or pull is
+safe. Against a smoke seed with no remote bound, the commands MUST
+exit cleanly with a documented "no remote configured" envelope.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["compare-bucket-digests"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "status-help"
+argv = ["bucket", "remote", "status", "--help"]
+
+[[steps]]
+type = "cli"
+id = "diff-help"
+argv = ["bucket", "remote", "diff", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "status-help"
+value = "Compare"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "diff-help"
+value = "Compare local and remote"

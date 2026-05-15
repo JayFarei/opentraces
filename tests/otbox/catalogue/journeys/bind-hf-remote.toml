@@ -1,0 +1,45 @@
+name = "bind-hf-remote"
+description = """
+Bind HF dataset remote (plan 063 §1: `bind-hf-remote`). `dataset remote
+create` provisions a new remote + binds (already owned by
+cli-publish-happy-path); `dataset remote add` binds an existing remote;
+`dataset remote list` shows bindings; `dataset remote remove` unbinds.
+This journey asserts the add / list / remove surfaces against a smoke
+seed with no datasets bound.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["bind-hf-remote"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "add-help"
+argv = ["dataset", "remote", "add", "--help"]
+
+[[steps]]
+type = "cli"
+id = "list-help"
+argv = ["dataset", "remote", "list", "--help"]
+
+[[steps]]
+type = "cli"
+id = "remove-help"
+argv = ["dataset", "remote", "remove", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "add-help"
+value = "Connect"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "list-help"
+value = "List"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "remove-help"
+value = "Disconnect"

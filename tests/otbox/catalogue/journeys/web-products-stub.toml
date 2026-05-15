@@ -1,0 +1,34 @@
+name = "web-products-stub"
+description = """
+Catalogue placeholder for the two web products otbox does not yet drive
+end-to-end: the Next.js marketing site (web/site) and the Cloudflare
+metrics-worker (web/metrics-worker). Per the spec, these are in
+catalogue scope but lower priority — this journey keeps the surface
+*owned* (a shallow real check that each project exists and is wired)
+rather than silently dropped. Promote to full build/serve journeys when
+a node toolchain lands in the box image.
+"""
+lane = "diagnostic"
+tier = 0
+seed = "smoke"
+requires = ["cli"]
+
+[[steps]]
+type = "shell"
+id = "marketing-site-present"
+argv = ["test", "-f", "{repo_root}/web/site/package.json"]
+
+[[steps]]
+type = "shell"
+id = "metrics-worker-present"
+argv = ["test", "-f", "{repo_root}/web/metrics-worker/wrangler.jsonc"]
+
+[[assertions]]
+kind = "returncode"
+step = "marketing-site-present"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "metrics-worker-present"
+equals = 0

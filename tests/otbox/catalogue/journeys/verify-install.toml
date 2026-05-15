@@ -1,0 +1,34 @@
+name = "verify-install"
+description = """
+Install verification (plan 063 §1: `verify-install`): `doctor` is the
+pipeline-health entry point. The existing doctor-health journey runs
+this on the smoke seed; this companion asserts the doctor surface
+explicitly on the world seed too — proves the trail-capture audit
+appears once the post-commit hook is installed.
+"""
+lane = "core"
+tier = 0
+seed = "world"
+trajectories = ["verify-install"]
+persona = "agent"
+requires = ["cli", "git"]
+
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.trail_capture_audit.state"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.trace_index.state"

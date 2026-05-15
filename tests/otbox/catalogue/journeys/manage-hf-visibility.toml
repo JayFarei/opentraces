@@ -1,0 +1,23 @@
+name = "manage-hf-visibility"
+description = """
+Flip HF dataset visibility (plan 063 §1: `manage-hf-visibility`).
+`dataset remote visibility` toggles private↔public after internal
+review. This journey asserts the help surface documents the expected
+flags.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["manage-hf-visibility"]
+persona = "human"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "visibility-help"
+argv = ["dataset", "remote", "visibility", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "visibility-help"
+value = "visibility"

@@ -45,3 +45,6 @@ otd
 snapshot_report.html
 .DS_Store
 .sem
+
+# otbox local state — boxes, snapshots, artifacts. Never checked in.
+.otbox/

@@ -1,0 +1,52 @@
+name = "build-dataset-lineage-explain"
+description = """
+Strategic ★ trajectory (plan 063 §9): the hidden `trail explain` command
+is a first-class consumer API — datasets and downstream apps call it to
+fetch the structured evidence chain for a trace step.
+
+Against a smoke seed with traces but no TrailEvent log, `trail explain`
+MUST return a documented JSON envelope with the canonical
+``event_log_ref``, the requested ``trace_id`` and ``step_index``, and
+``limitations: [\"no_trace_patch_event\"]`` to flag the missing capture.
+Downstream consumers branch on that limitations vocabulary; this
+journey is the contract test for it.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["build-dataset-from-lineage"]
+persona = "agent"
+requires = ["cli", "git"]
+
+[[steps]]
+type = "cli"
+id = "explain-step0"
+argv = ["trail", "explain", "--trace", "otbox000000000000", "--step", "0", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "explain-step0"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-step0"
+path = "trace_id"
+equals = "otbox000000000000"
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-step0"
+path = "step_index"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-step0"
+path = "event_log_ref"
+equals = "refs/opentraces/local/events/v1"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "explain-step0"
+value = "no_trace_patch_event"

@@ -1,0 +1,24 @@
+name = "onboard-repo"
+description = """
+Onboard repo (plan 063 §1: `onboard-repo`): `init` enrolls a project,
+`status` confirms it. The smoke + world seeds both exercise `init` to
+build the box, but the matrix scrapes only journey TOML `cli` steps —
+this journey asserts the `init --help` surface so the onboarding entry
+point is independently owned by a journey.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["onboard-repo"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "init-help"
+argv = ["init", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "init-help"
+value = "Initialize"

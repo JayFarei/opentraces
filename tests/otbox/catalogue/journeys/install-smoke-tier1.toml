@@ -1,0 +1,35 @@
+name = "install-smoke-tier1"
+description = """
+Tier 1 cross-OS install smoke. On a leased remote box (e.g. real
+macOS), prove the published CLI installs and answers `--version` and
+`doctor`. Tier 1 is opt-in (OT_OTBOX_TIER1=1) and never runs in default
+CI — without the opt-in this journey SKIPs, it does not FAIL.
+
+This is a catalogue placeholder for the M5 cross-OS lane: it declares
+the journey shape so the surface is owned, while the remote lease
+broker behind the `remote` driver is wired up.
+"""
+lane = "extended"
+tier = 1
+seed = "smoke"
+requires = ["cli", "tier1"]
+
+[[steps]]
+type = "cli"
+id = "version"
+argv = ["--version"]
+
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "version"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "doctor"
+equals = 0

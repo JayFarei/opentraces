@@ -44,6 +44,7 @@ pytest tests/ -v
   - `site/` - Next.js marketing site
   - `coming-soon/` - Static coming-soon page (Vercel)
 - `tests/` - Test suite
+  - `tests/otbox/` - otbox: snapshottable full test environment (dev/CI tool, not a shipped surface). Repo-root `otbox` shim (mirrors `otd`). Seeds a full opentraces world, snapshots it, runs declarative TOML journeys across CLI/TUI/web. Tier 1 lease over SSH/Tailscale (plan 061). Journey × checkpoint matrix with content-addressed snapshot cache + Click-registry coverage map (plan 062 — `tests/otbox/checkpoints/`, `tests/otbox/matrix.py`, `tests/otbox/inventory.py`). `make otbox-slice` / `make otbox-journeys` / `make otbox-tier1` / `make otbox-matrix` / `make otbox-inventory`; see `tests/otbox/README.md` and `kb/plans/060` / `061` / `062`.
 - `kb/` - Research and discussion logs (gitignored in OSS)
 
 ## Key Decisions

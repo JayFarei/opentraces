@@ -1,0 +1,45 @@
+name = "pr-lineage-publish"
+description = """
+PR-shaped trace lineage (plan 063 §1: `pr-lineage-publish`):
+`trail blame pr render` → `create` → `update`. Render produces a PR
+body from the current branch's lineage; create wraps `gh pr create`;
+update wraps `gh pr edit`. Against a world-seeded project with two
+commits, `render` MUST emit a non-empty body to stdout; `create` and
+`update` document their flags.
+"""
+lane = "core"
+tier = 0
+seed = "world"
+trajectories = ["pr-lineage-publish"]
+persona = "human"
+requires = ["cli", "git"]
+
+[[steps]]
+type = "cli"
+id = "render-help"
+argv = ["trail", "blame", "pr", "render", "--help"]
+
+[[steps]]
+type = "cli"
+id = "create-help"
+argv = ["trail", "blame", "pr", "create", "--help"]
+
+[[steps]]
+type = "cli"
+id = "update-help"
+argv = ["trail", "blame", "pr", "update", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "render-help"
+value = "PR body"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "create-help"
+value = "PR"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "update-help"
+value = "PR"

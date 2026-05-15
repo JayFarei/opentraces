@@ -1,0 +1,24 @@
+name = "bucket-replay"
+description = """
+Replay bucket trails into a target repo (plan 063 §1:
+`restore-trail-lineage-to-repo`). After pulling a bucket on a new
+machine, `bucket replay` reconstructs the trail lineage in a target
+git repository. This journey asserts the help surface documents the
+expected flags + that the surface is wired.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["restore-trail-lineage-to-repo"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "replay-help"
+argv = ["bucket", "replay", "--help"]
+
+[[assertions]]
+kind = "stdout_contains"
+step = "replay-help"
+value = "Replay"

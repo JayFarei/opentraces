@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# otbox — repo-root shim for the otbox test-environment harness.
+#
+# Mirrors the `otd` shim: runs the in-tree harness against working-copy
+# code with the repo virtualenv. otbox is a dev/CI tool, not a shipped
+# product surface — it is intentionally absent from `opentraces --help`.
+#
+# See kb/plans/060-otbox-test-environment.md and tests/otbox/README.md.
+
+set -e
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$here"
+
+if [ -x "$here/.venv/bin/python" ]; then
+    PY="$here/.venv/bin/python"
+else
+    PY="python3"
+fi
+
+exec "$PY" -m tests.otbox "$@"

@@ -1,0 +1,38 @@
+name = "tier1-cross-os-install"
+description = """
+Cross-OS install smoke. From a fresh remote venv (no editable install
+yet), install the synced opentraces source, then run ``--version`` and
+``doctor --json`` to confirm the CLI works end-to-end against a clean
+remote machine — the way a real new user would experience it. Catches
+packaging regressions the developer's laptop will not.
+"""
+lane = "extended"
+tier = 1
+seed = "smoke"
+requires = ["cli", "tier1"]
+
+[[steps]]
+type = "cli"
+id = "version"
+argv = ["--version"]
+
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "version"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "version"
+value = "version 0.4"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor"
+path = "doctor.trace_index.state"
+equals = "ok"

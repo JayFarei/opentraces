@@ -1,0 +1,44 @@
+name = "inspect-security-pipeline"
+description = """
+Security pipeline inspection (plan 063 §2 addition: `inspect-security-pipeline`):
+`security tools list` returns the registered tools + enable state;
+`security tools info` describes one tool; `security sanitize` runs the
+pipeline over JSON stdin. Against a smoke seed, `tools list --json`
+MUST emit a documented envelope.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["inspect-security-pipeline"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "tools-list"
+argv = ["security", "tools", "list", "--json"]
+
+[[steps]]
+type = "cli"
+id = "tools-info-help"
+argv = ["security", "tools", "info", "--help"]
+
+[[steps]]
+type = "cli"
+id = "sanitize-help"
+argv = ["security", "sanitize", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "tools-list"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "tools-info-help"
+value = "descriptor"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "sanitize-help"
+value = "Sanitise"

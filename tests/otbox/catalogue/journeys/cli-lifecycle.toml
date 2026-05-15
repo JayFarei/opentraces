@@ -1,0 +1,46 @@
+name = "cli-lifecycle"
+description = """
+Core project lifecycle: inspect a seeded project's status and config,
+resolve a trace, then remove the project cleanly. Proves the
+init -> inspect -> remove arc a normal user relies on.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["--json", "status"]
+
+[[steps]]
+type = "cli"
+id = "config-show"
+argv = ["config", "show"]
+
+[[steps]]
+type = "cli"
+id = "trace-get"
+argv = ["trace", "get", "otbox000000000000"]
+
+[[steps]]
+type = "cli"
+id = "remove"
+argv = ["--json", "remove"]
+
+[[assertions]]
+kind = "returncode"
+step = "status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-get"
+value = "otbox000000000000"
+
+[[assertions]]
+kind = "stdout_json"
+step = "remove"
+path = "next_command"
+equals = "opentraces init"
