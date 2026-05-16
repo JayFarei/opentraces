@@ -29,5 +29,6 @@ register(
         # provisioning is fast and reliable, so skip the cache.
         cache=False,
         description="A bare provisioned box with isolated HOME and an empty project tree. Nothing else.",
+        provides={},
     )
 )

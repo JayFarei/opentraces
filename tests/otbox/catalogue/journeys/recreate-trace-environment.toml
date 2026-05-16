@@ -1,53 +1,84 @@
 name = "recreate-trace-environment"
 description = """
 Strategic ★ trajectory (plan 063 §9): `trace teleport export → open` in
-a consumer-flow shape. Downstream consumers (perturbation analysis, RL
-training, evaluation rigs, OSS-repo rewind features) call this exact
-pair to reconstitute the environment that produced a trace.
+a consumer-flow shape, asserted on a REAL captured agent session
+(plan 064 M64-4).
 
-This journey exercises the **consumer-API contract**: against a smoke
-seed with traces but no TrailEvent log (no captured session yet),
-`trace teleport export` MUST refuse cleanly with the documented exit
-code + error message — never silently produce a corrupt workspace
-bundle. That contract is what every downstream consumer relies on.
+Downstream consumers (perturbation analysis, RL training, evaluation
+rigs, OSS-repo rewind features) call this exact pair to reconstitute
+the environment that produced a trace. The empty-state-contract
+sibling at `recreate-trace-environment-empty-state-contract.toml`
+asserts the same surface refuses cleanly when no TrailEvents exist;
+this journey asserts the happy path against
+`c-captured-real-session`.
 
-The happy-path companion (a `c-traces-with-trails` checkpoint that
-seeds real TrailEvents so export → open completes) is a non-blocking
-follow-up — the contract assertion below is the load-bearing test.
+The export must succeed, write a non-empty trace-workspace bundle, and
+the open command must accept it back into a fresh project dir.
 """
 lane = "core"
 tier = 0
-seed = "smoke"
 trajectories = ["recreate-trace-environment"]
 persona = "agent"
 requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
 
-# --- export refuses cleanly when no TrailEvents exist ---------------------
+# 1. Export the captured trace as a portable trace workspace bundle.
 [[steps]]
 type = "cli"
-id = "export-no-events"
-argv = ["trace", "teleport", "export", "otbox000000000000", "--output", "./tr0-workspace", "--json"]
-expect_returncode = 3
+id = "export"
+argv = [
+    "trace", "teleport", "export", "{trace_id}",
+    "--output", "{box_root}/exported-workspace",
+    "--json",
+]
 
-# --- open's --help proves the open surface is wired + documented ----------
-# (The happy-path "open a real exported workspace" check is the follow-up.)
-[[steps]]
-type = "cli"
-id = "open-help"
-argv = ["trace", "teleport", "open", "--help"]
-
-# --- assertions ------------------------------------------------------------
 [[assertions]]
 kind = "returncode"
-step = "export-no-events"
-equals = 3
+step = "export"
+equals = 0
 
 [[assertions]]
-kind = "stderr_contains"
-step = "export-no-events"
-value = "no TrailEvents found for trace otbox000000000000"
+kind = "stdout_json"
+step = "export"
+path = "trace_id"
+equals = "{trace_id}"
+
+# The bundle must contain real TrailEvents (event_count >= 1), proving
+# the export is not silently producing an empty workspace.
+[[assertions]]
+kind = "stdout_json"
+step = "export"
+path = "status"
+equals = "ok"
 
 [[assertions]]
-kind = "stdout_contains"
-step = "open-help"
-value = "Open a portable trace workspace"
+kind = "path_exists"
+path = "{box_root}/exported-workspace"
+
+# 2. Open the exported bundle into a fresh project directory. The
+#    consumer-side use case: pick up a teammate's exported bundle,
+#    rehydrate it locally, run perturbations against the replica.
+[[steps]]
+type = "cli"
+id = "open"
+argv = [
+    "trace", "teleport", "open",
+    "{box_root}/exported-workspace",
+    "--project", "{box_root}/opened-workspace",
+    "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "open"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "open"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "path_exists"
+path = "{box_root}/opened-workspace"

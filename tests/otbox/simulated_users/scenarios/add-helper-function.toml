@@ -1,0 +1,34 @@
+# Real-claude scenario (plan 071, M71-5).
+#
+# This scenario only runs when a logged-in `claude` binary is on PATH
+# (plan 073 Mac Mini work). Default CI does NOT execute it — the
+# runner SKIPs cleanly when binary_name isn't resolvable via
+# shutil.which(). Operators kick it manually with:
+#
+#   make capture-refresh SCENARIO=add-helper-function
+#
+# Once captured, plan 072 will teach checkpoints to restore from
+# tests/otbox/captures/add-helper-function/snapshot.tar.gz instead of
+# running the synthetic harness.
+
+name = "add-helper-function"
+description = "Drive real Claude Code through a 2-turn session that asks for a farewell helper added to src/app.py, then a 'yes' confirmation to apply + commit."
+agent = "claude"
+binary_name = "claude"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Add a farewell helper function to src/app.py that returns 'goodbye, <name>'. Then commit the change."
+expect_regex = "(?i)(I'll add|let me add|adding|I will add)"
+timeout_s = 60
+
+[[turns]]
+prompt = "yes"
+expect_regex = "(?i)(committed|done|complete)"
+timeout_s = 90
+
+[capture]
+artifact_dir = "add-helper-function"
+expected_paths = ["src/app.py"]

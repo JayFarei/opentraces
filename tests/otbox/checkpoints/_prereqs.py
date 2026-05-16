@@ -67,5 +67,6 @@ register(
         # prereqs are present" — restoring is cheaper than re-probing.
         cache=True,
         description="c-empty + verified python3.10+, git, rsync. Refuses if any is missing.",
+        provides={},
     )
 )

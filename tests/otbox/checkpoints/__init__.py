@@ -27,8 +27,8 @@ from __future__ import annotations
 import hashlib
 import inspect
 import time
-from dataclasses import dataclass
-from typing import Callable
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 from ..drivers.base import Driver
 from ..env import Box, ensure_state_root, new_box_id
@@ -44,7 +44,28 @@ Builder = Callable[[Driver, Box], None]
 
 @dataclass
 class Checkpoint:
-    """A resumable starting state for journeys."""
+    """A resumable starting state for journeys.
+
+    ``provides`` (plan 069 R3) declares what world-state dimensions this
+    checkpoint produces, so a journey's declarative ``[preconditions]``
+    block can be resolved against the catalog without naming a specific
+    checkpoint. Supported keys (plan 069 R1 vocabulary):
+
+      * ``captured_traces: int`` — how many distinct captured trace
+        records the checkpoint leaves in the project state.
+      * ``survival_states: list[str]`` — which survival-state strings
+        the captured Trace Patches may resolve to after maturation.
+      * ``skills: list[str]`` — which skill identifiers were invoked
+        across the captured sessions.
+      * ``branch_commits: int`` — how many commits the checkpoint
+        produced across all branches (base + any feature branches).
+      * ``has_security_findings: bool`` — whether the captured sessions
+        carry security-pipeline findings (secret tools fingerprinted
+        the trace).
+
+    Default is ``None`` (no declared dimensions); checkpoints without
+    captured state simply leave it unset.
+    """
 
     name: str
     builder: Builder | None = None
@@ -53,6 +74,7 @@ class Checkpoint:
     cache: bool = True
     description: str = ""
     requires: tuple[str, ...] = ()
+    provides: dict[str, Any] | None = None
 
 
 @dataclass
@@ -80,6 +102,7 @@ def available_checkpoints() -> list[dict]:
             "cache": cp.cache,
             "description": cp.description.strip(),
             "requires": list(cp.requires),
+            "provides": dict(cp.provides) if cp.provides else {},
         }
         for cp in sorted(REGISTRY.values(), key=lambda c: c.name)
     ]
@@ -185,3 +208,9 @@ def resolve_checkpoint(driver: Driver, name: str) -> CheckpointResult:
 from . import _empty  # noqa: E402,F401  (registers c-empty)
 from . import _prereqs  # noqa: E402,F401  (registers c-prereqs-present)
 from . import _installed_source  # noqa: E402,F401  (registers c-installed-source)
+from . import _captured_session  # noqa: E402,F401  (registers c-captured-real-session)
+# Plan 068 substrate — credible-state variants composing on the captures above.
+from . import _captured_with_revert  # noqa: E402,F401  (registers c-captured-with-revert)
+from . import _captured_with_secrets  # noqa: E402,F401  (registers c-captured-with-secrets)
+from . import _captured_multi_skill  # noqa: E402,F401  (registers c-captured-multi-skill)
+from . import _captured_with_pr_branch  # noqa: E402,F401  (registers c-captured-with-pr-branch)

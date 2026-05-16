@@ -1,0 +1,11 @@
+{
+  "name": "multi-skill-session",
+  "session_id_prefix": "sess-otbox-multi-skill-",
+  "index_env_var": "OTBOX_FAKE_SESSION_INDEX",
+  "skills": ["skill-alpha", "skill-beta"],
+  "edit_path_template": "src/feature_{index}.py",
+  "expected_step_count_min": 2,
+  "expected_edit_count_per_iteration": 1,
+  "commit_subject_template": "Session {index}: {skill}",
+  "summary": "Deterministic, index-parameterised Claude Code session. Each run with OTBOX_FAKE_SESSION_INDEX=N invokes a slash-command skill (skill-alpha for even N, skill-beta for odd N), Reads + Edits a fresh src/feature_<N>.py, and mints a distinct session_id (sess-otbox-multi-skill-<N>). Drives plan 068 M68-3's c-captured-multi-skill checkpoint: 3 captured sessions across 3 commits exercising 2 distinct skills, so dataset-sync-with-history journeys (plan 070) have a real multi-trace, multi-skill substrate."
+}

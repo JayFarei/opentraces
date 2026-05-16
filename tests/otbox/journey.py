@@ -137,9 +137,143 @@ def available_journeys() -> list[dict]:
                 "from_checkpoints": list(doc.get("from_checkpoints", [])),
                 "persona": doc.get("persona"),
                 "requires": list(doc.get("requires", [])),
+                # Plan 069 R1/R4: declarative preconditions + coverage
+                # tier label. Both are optional; defaults preserve
+                # today's behaviour.
+                "preconditions": dict(doc.get("preconditions") or {}),
+                "tier_label": str(doc.get("tier_label", "bronze")),
             }
         )
     return out
+
+
+# --------------------------------------------------------------------------
+# precondition resolver (plan 069 R2)
+# --------------------------------------------------------------------------
+_TIER_LABELS = ("bronze", "silver", "gold")
+_TIER_RANK = {label: rank for rank, label in enumerate(_TIER_LABELS)}
+
+
+def normalize_tier_label(label: str | None) -> str:
+    """Coerce ``label`` to a known tier, defaulting to ``bronze``."""
+    if not label:
+        return "bronze"
+    normalized = str(label).strip().lower()
+    return normalized if normalized in _TIER_RANK else "bronze"
+
+
+def max_tier(a: str, b: str) -> str:
+    """Return the higher-ranked of two tier labels."""
+    return a if _TIER_RANK[normalize_tier_label(a)] >= _TIER_RANK[normalize_tier_label(b)] else b
+
+
+def _checkpoint_satisfies(
+    provides: dict | None,
+    preconditions: dict,
+) -> tuple[bool, str]:
+    """Return ``(ok, reason)`` for whether ``provides`` meets every key
+    in ``preconditions``. Empty preconditions are trivially satisfied.
+
+    Match rules (plan 069 R1):
+      * ``min_captured_traces: int`` — provides[``captured_traces``] >= N
+      * ``requires_survival_states: list[str]`` — every requested state
+        must appear in provides[``survival_states``]
+      * ``requires_skills: list[str]`` — every requested skill must
+        appear in provides[``skills``]
+      * ``requires_branch_commits_min: int`` —
+        provides[``branch_commits``] >= N
+      * ``requires_security_findings: bool`` —
+        provides[``has_security_findings``] == True (when requested)
+    """
+    if not preconditions:
+        return True, ""
+    p = provides or {}
+
+    min_traces = preconditions.get("min_captured_traces")
+    if min_traces is not None:
+        try:
+            need = int(min_traces)
+        except (TypeError, ValueError):
+            return False, f"min_captured_traces is not an int: {min_traces!r}"
+        have = int(p.get("captured_traces") or 0)
+        if have < need:
+            return False, f"captured_traces {have} < {need}"
+
+    req_states = preconditions.get("requires_survival_states") or []
+    if req_states:
+        have_states = set(p.get("survival_states") or [])
+        missing = [s for s in req_states if s not in have_states]
+        if missing:
+            return False, f"missing survival_states: {missing}"
+
+    req_skills = preconditions.get("requires_skills") or []
+    if req_skills:
+        have_skills = set(p.get("skills") or [])
+        missing = [s for s in req_skills if s not in have_skills]
+        if missing:
+            return False, f"missing skills: {missing}"
+
+    min_branch = preconditions.get("requires_branch_commits_min")
+    if min_branch is not None:
+        try:
+            need = int(min_branch)
+        except (TypeError, ValueError):
+            return False, f"requires_branch_commits_min is not an int: {min_branch!r}"
+        have = int(p.get("branch_commits") or 0)
+        if have < need:
+            return False, f"branch_commits {have} < {need}"
+
+    if preconditions.get("requires_security_findings"):
+        if not bool(p.get("has_security_findings")):
+            return False, "has_security_findings is not True"
+
+    return True, ""
+
+
+def resolve_precondition_match(preconditions: dict) -> str | None:
+    """Return the name of the first checkpoint (sorted by name) whose
+    ``provides`` dict satisfies every key in ``preconditions``.
+
+    Returns ``None`` when no registered checkpoint matches. Empty /
+    missing preconditions match nothing here (callers should fall back
+    to ``from_checkpoints`` in that case).
+    """
+    if not preconditions:
+        return None
+    # Local import — the checkpoint registry imports this module
+    # transitively, so deferring keeps import-time cycles harmless.
+    from .checkpoints import REGISTRY
+
+    for name in sorted(REGISTRY):
+        cp = REGISTRY[name]
+        ok, _reason = _checkpoint_satisfies(cp.provides, preconditions)
+        if ok:
+            return name
+    return None
+
+
+def validate_precondition_pin(
+    pinned_name: str,
+    preconditions: dict,
+) -> tuple[bool, str]:
+    """Return ``(ok, reason)`` for whether ``pinned_name`` (a checkpoint
+    the journey named via ``from_checkpoints``) satisfies the journey's
+    declared preconditions. ``ok=True`` with empty reason means the
+    pin is valid (or preconditions are empty)."""
+    if not preconditions:
+        return True, ""
+    from .checkpoints import REGISTRY
+
+    cp = REGISTRY.get(pinned_name)
+    if cp is None:
+        return False, f"pinned checkpoint {pinned_name!r} is not registered"
+    ok, reason = _checkpoint_satisfies(cp.provides, preconditions)
+    if ok:
+        return True, ""
+    return False, (
+        f"pinned checkpoint {pinned_name!r} does not satisfy declared "
+        f"preconditions: {reason}"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -151,9 +285,47 @@ def _state_dir(driver: Driver, box: Box) -> str:
     return dirs[0] if len(dirs) == 1 else ""
 
 
+def _captured_session(box: Box) -> dict[str, str]:
+    """Expose the audit produced by the c-captured-real-session
+    checkpoint (plan 064) as journey templating variables.
+
+    The checkpoint records the minted trace_id + commit_sha + step
+    index in ``box.notes["c_captured_session_audit"]`` so happy-path
+    journeys forked from c-captured-real-session can address the
+    captured trace via ``{trace_id}`` / ``{commit_sha}`` / ``{step_index}``
+    in their TOML — no per-journey wiring required.
+
+    Returns empty strings (not ``None``) for the keys when the audit
+    is absent, so journeys NOT forking from this checkpoint still
+    render their TOML cleanly (the placeholder template just expands
+    to the empty string instead of raising).
+    """
+    audit = box.notes.get("c_captured_session_audit") or {}
+    result = {
+        "trace_id": str(audit.get("trace_id") or ""),
+        "session_id": str(audit.get("session_id") or ""),
+        "commit_sha": str(audit.get("commit_sha") or ""),
+        "step_index": str(audit.get("edit_step_index") or ""),
+        "transcript_path": str(audit.get("transcript_path") or ""),
+    }
+    # Plan 070 R1: expose the pr-branch audit fields to journey
+    # templating so PR-blame happy-path journeys can address the
+    # captured branch via ``{branch_name}`` / ``{base_commit_sha}`` /
+    # ``{head_commit_sha}`` / ``{branch_commit_count}`` without each
+    # journey re-resolving them from box.notes. Empty strings when the
+    # audit is absent so journeys NOT forking from
+    # c-captured-with-pr-branch still render their TOML cleanly.
+    pr_audit = box.notes.get("c_captured_with_pr_branch_audit") or {}
+    result["branch_name"] = str(pr_audit.get("branch_name") or "")
+    result["base_commit_sha"] = str(pr_audit.get("base_commit_sha") or "")
+    result["head_commit_sha"] = str(pr_audit.get("head_commit_sha") or "")
+    result["branch_commit_count"] = str(pr_audit.get("branch_commit_count") or 0)
+    return result
+
+
 def _context(driver: Driver, box: Box, port: int) -> dict[str, str]:
     paths = driver.paths(box)
-    return {
+    ctx = {
         "project": paths["project"],
         "home": paths["home"],
         "fake_remote": paths["fake_remote"],
@@ -164,6 +336,8 @@ def _context(driver: Driver, box: Box, port: int) -> dict[str, str]:
         "repo_root": str(REPO_ROOT),
         "port": str(port),
     }
+    ctx.update(_captured_session(box))
+    return ctx
 
 
 def _expand(value: Any, ctx: dict[str, str]) -> Any:
@@ -469,6 +643,8 @@ def run_journey(driver: Driver, box: Box, name: str) -> JourneyResult:
     requires = set(doc.get("requires", []))
     raw_steps = doc.get("steps", [])
     raw_assertions = doc.get("assertions", [])
+    preconditions = dict(doc.get("preconditions") or {})
+    from_checkpoints = list(doc.get("from_checkpoints") or [])
 
     result = JourneyResult(
         name=j_name,
@@ -487,6 +663,19 @@ def run_journey(driver: Driver, box: Box, name: str) -> JourneyResult:
         result.verdict = "SKIP"
         result.reason = f"missing capabilities: {sorted(missing)}"
         return result
+
+    # Plan 069 R8: when preconditions AND from_checkpoints are both
+    # declared, the explicit pin wins but must satisfy the declared
+    # preconditions; otherwise SKIP with a clear conflict reason.
+    if preconditions and from_checkpoints:
+        for pinned in from_checkpoints:
+            ok, reason = validate_precondition_pin(pinned, preconditions)
+            if not ok:
+                result.verdict = "SKIP"
+                result.reason = (
+                    f"precondition conflict: {reason}"
+                )
+                return result
 
     if seed and box.seed and seed != box.seed:
         result.reason = f"note: journey expects seed {seed!r}, box was seeded {box.seed!r}"

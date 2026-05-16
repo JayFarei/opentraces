@@ -1,7 +1,7 @@
 .PHONY: version-check dirty-check clean build-viewer build-schema build-cli build \
        test lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
-       otbox-matrix otbox-inventory
+       otbox-matrix otbox-inventory otbox-agent-session capture-refresh
 
 SCHEMA_DIR := packages/opentraces-schema
 VERSION := $(shell python3 -c "import re; m=re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('src/opentraces/__init__.py').read()); print(m.group(1))")
@@ -28,13 +28,13 @@ clean:
 build-viewer:
 	cd web/viewer && npm install && npm run build
 
-build-schema: clean
+build-schema:
 	cd $(SCHEMA_DIR) && python3 -m build
 
 build-cli: build-viewer
 	python3 -m build
 
-build: build-schema build-cli
+build: clean build-schema build-cli
 
 # ---------- Test ----------
 
@@ -75,12 +75,27 @@ otbox-matrix:
 otbox-inventory:
 	./otbox matrix --inventory --strict
 
+# Plan 064 vertical slice — prove the consumer-API surfaces return real
+# evidence on a REAL captured agent session (not the empty-state
+# envelope). Spec § Verify: this is the single make target the
+# autonomous-delivery contract uses to gate the slice.
+otbox-agent-session:
+	$(OTBOX_PY) -m pytest tests/otbox/test_fake_harness.py tests/otbox/test_agent_session_slice.py tests/otbox/test_real_agent_optin.py -v
+
+# Plan 071 — capture-refresh against a simulated-user scenario. The
+# default-CI safe value is `echo-meta` (uses the in-tree echo binary).
+# Real scenarios (add-helper-function etc.) require the named agent
+# binary on PATH; otherwise the command SKIPs cleanly.
+SCENARIO ?= echo-meta
+capture-refresh:
+	$(OTBOX_PY) -m tests.otbox capture-refresh --scenario $(SCENARIO) --json
+
 # ---------- Publish ----------
 
-publish-schema: build-schema
+publish-schema:
 	python3 -m twine upload $(SCHEMA_DIR)/dist/*
 
-publish-cli: build-cli
+publish-cli:
 	python3 -m twine upload dist/*
 
 publish-test-schema: build-schema

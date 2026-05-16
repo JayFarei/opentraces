@@ -38,6 +38,26 @@ Bundled checkpoints today:
 | `c-prereqs-present` | composed_from c-empty | + verified python3.10+, git, rsync |
 | `c-installed-source` | composed_from c-prereqs-present | + opentraces installed editable in `box.project/.testvenv` |
 
+### Captured-session checkpoints, artifact-preferred, synthetic-fallback
+
+The captured-session checkpoint family (`c-captured-real-session`,
+`c-captured-with-revert`, `c-captured-multi-skill`,
+`c-captured-with-pr-branch`) has two source-of-truth tiers (plan 072):
+
+1. **Artifact-preferred.** If `tests/otbox/captures/<name>/snapshot.tar.gz`
+   + `metadata.json` are committed, the checkpoint restores that
+   pre-captured snapshot in-place (higher-fidelity, real-agent driven
+   via plan 071's `make capture-refresh SCENARIO=<name>` on the Mac
+   Mini runner, plan 073).
+2. **Synthetic-fallback.** Otherwise the existing fake-claude harness
+   chain runs (deterministic, offline, default-CI safe).
+
+Audit shape is identical regardless of source — journey TOMLs
+templating `{trace_id}` / `{commit_sha}` / `{step_index}` work
+unchanged across both. Audits carry a `capture_metadata.source`
+field (`"artifact"` or `"synthetic"`) so consumers can distinguish
+provenance and plan 074's drift detector can flag stale captures.
+
 Snapshots cache content-addressed at `.otbox/snapshots/_checkpoint-<name>-<hash>.tar.gz`
 (gitignored). Editing a checkpoint builder invalidates the cache for
 that checkpoint and all descendants.

@@ -675,6 +675,224 @@ def cmd_matrix(args: argparse.Namespace) -> int:
     return 0 if report.fail_count == 0 and report.error_count == 0 else 1
 
 
+def cmd_capture_refresh(args: argparse.Namespace) -> int:
+    """Drive a simulated-user scenario against a real (or echo) agent and
+    snapshot the resulting box state into ``tests/otbox/captures/<name>/``.
+
+    Plan 071 R4 + R5. The CLI is the operator-facing surface; the heavy
+    lifting lives in ``tests.otbox.simulated_users.runner`` (Agent A) and
+    ``tests.otbox.simulated_users.scenario`` (Agent B). When the named
+    binary is not on PATH, the command SKIPs cleanly (exit 0) so the
+    default-CI surface never depends on a real ``claude`` install.
+    """
+    import datetime as _dt
+    import shutil
+
+    # Lazy imports — these modules ship in parallel siblings (plan 071
+    # Agents A + B). Importing at the top of cli.py would couple the
+    # whole CLI to their import-time health.
+    from .checkpoints import resolve_checkpoint
+    from .drivers import get_driver
+    from .env import REPO_ROOT
+    from .simulated_users.runner import run_simulated_session
+    from .simulated_users.scenario import load_scenario, scenario_digest
+    from .snapshot import create_snapshot
+
+    captures_root = REPO_ROOT / "tests" / "otbox" / "captures"
+
+    try:
+        scenario = load_scenario(args.scenario)
+    except Exception as exc:  # noqa: BLE001 - surface load failures cleanly
+        raise OtboxError(f"capture-refresh: failed to load scenario "
+                         f"{args.scenario!r}: {exc}") from None
+
+    artifact_dir = captures_root / scenario.capture.artifact_dir_name
+    artifact_path = artifact_dir / "snapshot.tar.gz"
+    metadata_path = artifact_dir / "metadata.json"
+
+    # Binary resolution: echo scenarios use the in-tree meta-test binary;
+    # everything else looks the binary up on PATH.
+    if scenario.agent == "echo":
+        echo_binary = (
+            REPO_ROOT / "tests" / "otbox" / "simulated_users" / "_echo_binary.py"
+        )
+        binary_path: str | None = str(echo_binary) if echo_binary.exists() else None
+    else:
+        binary_path = shutil.which(scenario.binary_name)
+
+    base_checkpoint = args.base_checkpoint
+
+    # --dry-run reports the plan without running anything (and never
+    # produces an artifact). The envelope shape mirrors the real-run one.
+    if args.dry_run:
+        payload = {
+            "action": "capture-refresh",
+            "status": "dry-run",
+            "scenario": scenario.name,
+            "agent": scenario.agent,
+            "binary_name": scenario.binary_name,
+            "binary_path": binary_path,
+            "binary_found": binary_path is not None,
+            "turn_count": len(scenario.turns),
+            "base_checkpoint": base_checkpoint,
+            "artifact_path": str(artifact_path),
+            "metadata_path": str(metadata_path),
+            "expected_paths": list(scenario.capture.expected_paths),
+        }
+        human = (
+            f"capture-refresh (dry-run): scenario={scenario.name!r} "
+            f"agent={scenario.agent} binary={scenario.binary_name} "
+            f"({'found' if binary_path else 'NOT found'} on PATH)\n"
+            f"  turns: {len(scenario.turns)}  "
+            f"base_checkpoint: {base_checkpoint}\n"
+            f"  artifact: {artifact_path}\n"
+            f"  metadata: {metadata_path}"
+        )
+        _emit(payload, json_mode=args.json, human=human)
+        return 0
+
+    # Binary missing → SKIP cleanly. The whole point of this path is that
+    # plain `git clone && make capture-refresh` on a substrate without a
+    # real agent on PATH never fails the CI surface.
+    if binary_path is None:
+        payload = {
+            "action": "capture-refresh",
+            "status": "skipped",
+            "reason": f"binary not found: {scenario.binary_name}",
+            "scenario": scenario.name,
+            "agent": scenario.agent,
+            "binary_name": scenario.binary_name,
+        }
+        _emit(
+            payload,
+            json_mode=args.json,
+            human=(
+                f"capture-refresh: SKIP — binary {scenario.binary_name!r} "
+                f"not on PATH (scenario {scenario.name!r})"
+            ),
+        )
+        return 0
+
+    # Resolve the base checkpoint (forks a fresh box from its cached snapshot).
+    driver = get_driver("local")
+    cp_result = resolve_checkpoint(driver, base_checkpoint)
+    box = cp_result.box
+
+    # Copy the scenario's initial-state template into box.project before
+    # the runner spins the agent up. We do the copy here (not via the
+    # runner's initial_state_dir hook) so the runner stays focused on
+    # PTY orchestration.
+    template_dir = scenario.initial_state.template_dir
+    if template_dir.exists():
+        for entry in template_dir.iterdir():
+            dest = box.project / entry.name
+            if entry.is_dir():
+                shutil.copytree(entry, dest, dirs_exist_ok=True)
+            else:
+                shutil.copy2(entry, dest)
+
+    output_dir = box.logs / "capture-refresh" / scenario.name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    result = run_simulated_session(
+        driver,
+        box,
+        binary_path,
+        scenario.turns,
+        initial_state_dir=None,
+        output_dir=output_dir,
+    )
+
+    # FAIL → leave the box up for inspection, exit non-zero. The runner's
+    # pane_log_path is the operator's debugging entry point.
+    if result.verdict != "PASS":
+        payload = {
+            "action": "capture-refresh",
+            "status": "failed",
+            "scenario": scenario.name,
+            "verdict": result.verdict,
+            "error": result.error_message,
+            "binary_path": result.binary_path,
+            "binary_version": result.binary_version,
+            "turn_count": result.turn_count,
+            "pane_log_path": str(result.pane_log_path)
+            if result.pane_log_path else None,
+            "box_id": box.box_id,
+            "box_root": str(box.root),
+        }
+        _emit(
+            payload,
+            json_mode=args.json,
+            human=(
+                f"capture-refresh: FAIL — verdict={result.verdict} "
+                f"({result.error_message or 'no error message'})\n"
+                f"  pane log: {result.pane_log_path}\n"
+                f"  box left up at: {box.root}"
+            ),
+        )
+        return 3
+
+    # PASS → snapshot the box, copy the archive into the artifact dir.
+    snap_name = f"_capture-refresh-{scenario.name}-{box.box_id}"
+    snap_info = create_snapshot(box, snap_name, overwrite=True)
+
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(snap_info.archive, artifact_path)
+
+    # Write provenance metadata next to the artifact.
+    try:
+        from opentraces import __version__ as cli_version
+    except Exception:  # noqa: BLE001 - never fail capture-refresh on version probe
+        cli_version = "unknown"
+    try:
+        from opentraces_schema import SCHEMA_VERSION as schema_version
+    except Exception:  # noqa: BLE001
+        schema_version = "unknown"
+
+    metadata = {
+        "captured_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "scenario_name": scenario.name,
+        "scenario_digest": scenario_digest(scenario),
+        "agent": scenario.agent,
+        "binary_name": scenario.binary_name,
+        "binary_path": result.binary_path,
+        "binary_version": result.binary_version,
+        "turn_count": result.turn_count,
+        "base_checkpoint": base_checkpoint,
+        "opentraces_schema_version": schema_version,
+        "opentraces_cli_version": cli_version,
+    }
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n"
+    )
+
+    # Tear down the box — its state lives in the artifact now.
+    try:
+        driver.teardown(box)
+    except Exception:  # noqa: BLE001 - teardown failures are non-fatal
+        pass
+
+    payload = {
+        "action": "capture-refresh",
+        "status": "ok",
+        "scenario": scenario.name,
+        "artifact_path": str(artifact_path),
+        "metadata_path": str(metadata_path),
+        "binary_path": result.binary_path,
+        "binary_version": result.binary_version,
+        "turn_count": result.turn_count,
+        "base_checkpoint": base_checkpoint,
+    }
+    human = (
+        f"capture-refresh: OK — scenario={scenario.name!r} "
+        f"binary_version={result.binary_version!r} turns={result.turn_count}\n"
+        f"  artifact: {artifact_path}\n"
+        f"  metadata: {metadata_path}"
+    )
+    _emit(payload, json_mode=args.json, human=human)
+    return 0
+
+
 def cmd_snapshot_rm(args: argparse.Namespace) -> int:
     if not snapshot_exists(args.name):
         raise OtboxError(f"no snapshot named {args.name!r}")
@@ -801,6 +1019,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_snaprm = add("snapshot-rm", help="delete a snapshot")
     p_snaprm.add_argument("name")
     p_snaprm.set_defaults(func=cmd_snapshot_rm)
+
+    p_capref = add(
+        "capture-refresh",
+        help="drive a simulated-user scenario and snapshot the result (plan 071)",
+    )
+    p_capref.add_argument("--scenario", required=True,
+                          help="scenario name under tests/otbox/simulated_users/scenarios/")
+    p_capref.add_argument("--dry-run", action="store_true",
+                          help="report what would happen without running anything")
+    p_capref.add_argument("--base-checkpoint", default="c-installed-source",
+                          help="base checkpoint to fork from (default: c-installed-source)")
+    p_capref.set_defaults(func=cmd_capture_refresh)
 
     p_image = add("image", help="build the Linux runtime image for the docker driver")
     image_sub = p_image.add_subparsers(dest="_image_cmd", required=True)

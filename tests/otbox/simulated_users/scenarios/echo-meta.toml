@@ -1,0 +1,35 @@
+# Meta-test scenario (plan 071, R3).
+#
+# Drives the synthetic _echo_binary.py through a 3-turn interactive
+# session to exercise the simulated-user runner without needing a
+# real agent on PATH. This is the scenario the default-CI pytest
+# (tests/otbox/test_simulated_user_runner.py) runs.
+
+name = "echo-meta"
+description = "Drive the synthetic echo binary through a 3-turn interactive session to meta-test the runner without needing a real agent binary."
+agent = "echo"
+# Resolved by the runner relative to tests/otbox/simulated_users/ for
+# the echo case (Agent A's runner module knows how to locate this).
+binary_name = "_echo_binary.py"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Add a farewell helper to src/app.py"
+expect_regex = "(?i)(I'll add|let me|adding)"
+timeout_s = 10
+
+[[turns]]
+prompt = "yes"
+expect_regex = "(?i)(done|committed)"
+timeout_s = 10
+
+[[turns]]
+prompt = "exit"
+expect_regex = "(?i)(goodbye|bye|exiting)"
+timeout_s = 10
+
+[capture]
+artifact_dir = "echo-meta"
+expected_paths = ["src/app.py"]

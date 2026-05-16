@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Deterministic fake Claude Code binary for otbox journeys (plan 064 R1).
+
+A real ``claude`` binary, in a real session, does three things otbox
+cares about:
+
+  1. Mutates the project's working tree as the agent runs tools.
+  2. Writes a JSONL transcript at the canonical Claude Code path
+     (``$HOME/.claude/projects/<encoded>/<session>.jsonl``).
+  3. Fires the installed Claude Code hooks (``PreToolUse`` /
+     ``PostToolUse`` / ``Stop``) at each tool boundary, which write
+     ``opentraces_hook`` lines back into that same transcript.
+
+This harness reproduces all three deterministically from a committed
+session module under ``tests/otbox/fixtures/sessions/<name>/session.py``.
+The hook lines carry live ``tree_id`` / ``worktree_root`` / ``git_head``
+values pulled from the actual box repo, so the resulting transcript is
+indistinguishable from a real Claude session as far as the opentraces
+parser + Trace Trails emitter are concerned.
+
+Environment:
+
+  OTBOX_FAKE_SESSION       (required) name of the session module
+                           directory under the corpus root.
+  OTBOX_FAKE_SESSIONS_DIR  override for the corpus root. Default:
+                           ``<harness-dir>/../fixtures/sessions``.
+  OTBOX_PROJECT_DIR        working tree to apply edits against.
+                           Default: ``$PWD``.
+  OTBOX_TRANSCRIPT_PATH    where to write the transcript JSONL. If
+                           unset, the contract from plan 064 R1
+                           (transcript on stdout) is honoured.
+
+Exit codes:
+  0  ok
+  2  missing OTBOX_FAKE_SESSION
+  3  unknown / malformed corpus
+  4  apply step failed (file mutation or hook invocation)
+
+Driver-mediated: identical behaviour on Tier 0 + Tier 1.
+
+The harness is the seam between an "agent-like" actor and the captured
+session JSONL. Setting ``OT_REAL_REPL=1`` and dropping a real ``claude``
+binary on $PATH replaces this harness with the real thing — same env,
+same artefacts, same journey TOMLs.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import io
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def _die(rc: int, msg: str) -> None:
+    sys.stderr.write(f"fake-claude: {msg}\n")
+    sys.exit(rc)
+
+
+def _resolve_sessions_dir() -> Path:
+    override = os.environ.get("OTBOX_FAKE_SESSIONS_DIR")
+    if override:
+        return Path(override)
+    here = Path(__file__).resolve().parent
+    return (here.parent / "fixtures" / "sessions").resolve()
+
+
+def _load_session_module(corpus_dir: Path, session_name: str):
+    """Load <corpus_dir>/session.py as a fresh module."""
+    spec = importlib.util.spec_from_file_location(
+        f"otbox_session_{session_name.replace('-', '_')}",
+        corpus_dir / "session.py",
+    )
+    if spec is None or spec.loader is None:
+        _die(3, f"could not load session.py under {corpus_dir}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def main() -> None:
+    session_name = os.environ.get("OTBOX_FAKE_SESSION")
+    if not session_name:
+        _die(2, "OTBOX_FAKE_SESSION must be set")
+
+    sessions_dir = _resolve_sessions_dir()
+    if not sessions_dir.is_dir():
+        _die(3, f"corpus root not found: {sessions_dir}")
+    corpus_dir = sessions_dir / session_name
+    if not (corpus_dir / "session.py").is_file():
+        _die(3, f"no session.py under {corpus_dir}")
+
+    project_dir = Path(os.environ.get("OTBOX_PROJECT_DIR") or os.getcwd()).resolve()
+    if not project_dir.is_dir():
+        _die(3, f"OTBOX_PROJECT_DIR does not exist: {project_dir}")
+
+    transcript_path_str = os.environ.get("OTBOX_TRANSCRIPT_PATH")
+    transcript_path = Path(transcript_path_str) if transcript_path_str else None
+
+    # If transcript writes to stdout, route to a buffer first so the
+    # session module can still ``open(transcript, "a")`` against a real
+    # file path (the canonical Claude shape) and stream it later.
+    buffer: io.StringIO | None = None
+    if transcript_path is None:
+        buffer = io.StringIO()
+        transcript_path = Path(corpus_dir / ".otbox-stdout-transcript.jsonl")
+        # Wipe any leftover from a prior interrupted run.
+        if transcript_path.exists():
+            transcript_path.unlink()
+    else:
+        transcript_path.parent.mkdir(parents=True, exist_ok=True)
+        if transcript_path.exists():
+            transcript_path.unlink()
+
+    session_mod = _load_session_module(corpus_dir, session_name)
+    if not hasattr(session_mod, "run"):
+        _die(3, f"session.py at {corpus_dir} is missing run(project, transcript)")
+
+    try:
+        session_mod.run(project_dir, transcript_path)
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _die(4, f"session module failed: {type(exc).__name__}: {exc}")
+
+    if buffer is not None:
+        # Stream the transcript to stdout, then clean up the temp file.
+        try:
+            sys.stdout.write(transcript_path.read_text())
+            sys.stdout.flush()
+        finally:
+            try:
+                transcript_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+if __name__ == "__main__":
+    main()

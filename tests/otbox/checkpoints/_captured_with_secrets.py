@@ -1,0 +1,273 @@
+"""`c-captured-with-secrets` — plan 068 M68-2.
+
+A sibling of ``c-captured-real-session`` that exercises the opentraces
+security pipeline end-to-end through a real captured agent session.
+The corpus (``session-with-secrets``) has the agent create a
+``src/config.py`` whose content carries synthetic but
+detector-shaped credentials (fake OpenAI API key, fake GitHub PAT,
+hex blob). After the standard capture chain runs the checkpoint
+inspects the trace JSONL on disk and records:
+
+  * how many security tools fingerprinted the trace
+    (``metadata.security.tools_applied``),
+  * whether the secret literal made it through to the saved trace
+    bytes (``secret_present_in_disk``),
+  * the tool name list.
+
+This is intentionally an audit, not a gate: the checkpoint records
+whatever the live pipeline did and the pytest layer asserts the
+desired behaviour. That keeps the corpus stable while the registry
+and per-tool enabled defaults evolve.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from ..drivers.base import Driver
+from ..env import Box, resolve_cli_argv
+from . import Checkpoint, CheckpointError, register
+from ._captured_helpers import (
+    check as _check_helper,
+    encode_claude_path,
+    git as _git_helper,
+)
+
+_CAPTURE_NAME = "c-captured-with-secrets"
+
+
+def _check(result, label: str) -> None:
+    _check_helper(result, checkpoint=_CAPTURE_NAME, label=label)
+
+
+def _git(driver: Driver, box: Box, *args: str):
+    return _git_helper(driver, box, *args, checkpoint=_CAPTURE_NAME)
+
+_SESSION_NAME = "session-with-secrets"
+_SESSION_ID = "sess-otbox-session-with-secrets"
+
+# A canary fragment of the OPENAI_API_KEY literal. We only check for a
+# substring so a partial mid-key redaction still reads as "the secret
+# survived" — the boundary we care about is "is the bearer literal
+# usable as-is".
+_SECRET_CANARY = "sk-test-abc123def456"
+
+# tests/otbox/fake_harnesses/claude
+_HARNESS_SRC = Path(__file__).resolve().parents[1] / "fake_harnesses" / "claude"
+# tests/otbox/fixtures/sessions/
+_SESSIONS_SRC = Path(__file__).resolve().parents[1] / "fixtures" / "sessions"
+
+
+def _captured_with_secrets_delta(driver: Driver, box: Box) -> None:
+    paths = driver.paths(box)
+    project = paths["project"]
+    home = paths["home"]
+
+    # 1. Real git project with a seed commit (same shape as
+    #    c-captured-real-session).
+    driver.mkdir(box, project)
+    driver.put_text(
+        box, f"{project}/README.md",
+        "# otbox captured-with-secrets checkpoint\n\n"
+        "Driver-mediated fixture for plan 068 M68-2 — exercises the security pipeline.\n",
+    )
+    driver.mkdir(box, f"{project}/src")
+    driver.put_text(
+        box, f"{project}/src/app.py",
+        'def greet(name: str) -> str:\n    return f"hello, {name}"\n',
+    )
+    _git(driver, box, "init", "-q")
+    _git(driver, box, "add", "-A")
+    _git(driver, box, "commit", "-q", "-m", "seed: initial project")
+
+    # 2. opentraces init.
+    cli = resolve_cli_argv()
+    _check(
+        driver.exec(box, [*cli, "init", "--start-fresh", "--agent", "claude-code"]),
+        "opentraces init",
+    )
+
+    # 3. opentraces setup git.
+    _check(
+        driver.exec(box, [*cli, "setup", "git"]),
+        "opentraces setup git",
+    )
+
+    # 4. Place the fake harness + corpus on the box.
+    bin_dir = f"{home}/bin"
+    sessions_dir = f"{home}/share/otbox/sessions"
+    driver.mkdir(box, bin_dir)
+    driver.mkdir(box, sessions_dir)
+    harness_dst = f"{bin_dir}/claude"
+    driver.put_text(box, harness_dst, _HARNESS_SRC.read_text())
+    _check(
+        driver.exec(box, ["chmod", "+x", harness_dst]),
+        "chmod +x harness",
+    )
+
+    session_dst = f"{sessions_dir}/{_SESSION_NAME}"
+    driver.mkdir(box, session_dst)
+    corpus_src = _SESSIONS_SRC / _SESSION_NAME
+    for child in corpus_src.iterdir():
+        target = f"{session_dst}/{child.name}"
+        if child.is_file():
+            driver.put_text(box, target, child.read_text())
+
+    # 5. Run the harness.
+    encoded_project = encode_claude_path(project)
+    transcript_path = (
+        f"{home}/.claude/projects/{encoded_project}/{_SESSION_ID}.jsonl"
+    )
+    testvenv_python = f"{project}/.testvenv/bin/python"
+    _check(
+        driver.exec(box, [testvenv_python, harness_dst], env_extra={
+            "OTBOX_FAKE_SESSION": _SESSION_NAME,
+            "OTBOX_FAKE_SESSIONS_DIR": sessions_dir,
+            "OTBOX_PROJECT_DIR": project,
+            "OTBOX_TRANSCRIPT_PATH": transcript_path,
+        }),
+        "fake harness invocation",
+    )
+
+    # 6. _ingest-session — this is the step that drives the security
+    #    pipeline (``security.sanitize_record`` runs inline during
+    #    ingest). The saved JSONL under
+    #    ``<state_dir>/traces/<trace_id>.jsonl`` is what we audit
+    #    below.
+    _check(
+        driver.exec(box, [
+            *cli, "_ingest-session", transcript_path,
+            "--project", project,
+        ]),
+        "_ingest-session",
+    )
+
+    # 7. Commit + post-commit hook.
+    _git(driver, box, "add", "-A")
+    _git(driver, box, "commit", "-q", "-m", "Add config.py with API keys")
+    commit_sha = _git(driver, box, "rev-parse", "HEAD").stdout.strip()
+
+    # 8. Watcher tick (informational; we don't gate on it here — the
+    #    security pipeline already ran at ingest time).
+    driver.exec(box, [
+        *cli, "setup", "watcher", "tick", "--project", project, "--json",
+    ])
+
+    # Resolve the project's state.json to find the trace_id and the
+    # canonical traces dir.
+    state_dirs = driver.glob(box, f"{paths['opentraces_dir']}/projects/*")
+    if len(state_dirs) != 1:
+        raise CheckpointError(
+            f"expected exactly one opted-in project after init, "
+            f"got {len(state_dirs)} under {paths['opentraces_dir']}/projects"
+        )
+    state_dir = state_dirs[0]
+    state_path = f"{state_dir}/state.json"
+    state_raw = driver.exec(box, ["cat", state_path])
+    if not state_raw.ok:
+        raise CheckpointError(
+            f"could not read project state at {state_path}: "
+            f"{state_raw.stderr.strip() or '<no stderr>'}"
+        )
+    try:
+        state = json.loads(state_raw.stdout)
+    except json.JSONDecodeError as exc:
+        raise CheckpointError(
+            f"malformed state.json at {state_path}: {exc}"
+        ) from None
+
+    trace_id: str | None = None
+    for trace in (state.get("traces") or {}).values():
+        if trace.get("session_id") == _SESSION_ID:
+            trace_id = trace.get("trace_id")
+            break
+    if not trace_id:
+        traces = list((state.get("traces") or {}).values())
+        if traces:
+            trace_id = traces[0].get("trace_id")
+    if not trace_id:
+        raise CheckpointError(
+            "c-captured-with-secrets ingested no traces; "
+            f"state at {state_path} contained "
+            f"{len(state.get('traces') or {})} entries"
+        )
+
+    # Audit the on-disk trace JSONL. Each trace lives at
+    # <state_dir>/traces/<trace_id>.jsonl.
+    trace_jsonl = f"{state_dir}/traces/{trace_id}.jsonl"
+    trace_raw = driver.exec(box, ["cat", trace_jsonl])
+    tools_applied: list[str] = []
+    findings_count = 0
+    if trace_raw.ok:
+        # The file is a single TraceRecord serialized as JSONL — usually
+        # one line, but defensively walk every line.
+        for line in trace_raw.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            sec = ((obj.get("metadata") or {}).get("security") or {})
+            applied = sec.get("tools_applied") or []
+            if isinstance(applied, list):
+                for name in applied:
+                    if isinstance(name, str) and name not in tools_applied:
+                        tools_applied.append(name)
+            tools_map = sec.get("tools") or {}
+            if isinstance(tools_map, dict):
+                for entry in tools_map.values():
+                    if isinstance(entry, dict):
+                        try:
+                            findings_count += int(entry.get("findings_count") or 0)
+                        except (TypeError, ValueError):
+                            pass
+        secret_present_in_disk = _SECRET_CANARY in trace_raw.stdout
+        trace_jsonl_readable = True
+    else:
+        secret_present_in_disk = False
+        trace_jsonl_readable = False
+
+    box.notes["c_captured_with_secrets_audit"] = {
+        "session_id": _SESSION_ID,
+        "session_corpus": _SESSION_NAME,
+        "trace_id": trace_id,
+        "commit_sha": commit_sha,
+        "transcript_path": transcript_path,
+        "state_dir": state_dir,
+        "trace_jsonl_path": trace_jsonl,
+        "trace_jsonl_readable": trace_jsonl_readable,
+        "tools_applied": tools_applied,
+        "security_findings_count": findings_count,
+        "secret_present_in_disk": secret_present_in_disk,
+        "secret_canary": _SECRET_CANARY,
+    }
+
+
+register(
+    Checkpoint(
+        name="c-captured-with-secrets",
+        composed_from="c-installed-source",
+        delta=_captured_with_secrets_delta,
+        cache=True,
+        description=(
+            "c-installed-source + a real captured Claude Code session "
+            "whose Edit creates src/config.py with synthetic OpenAI / "
+            "GitHub / hex secrets. Audits the resulting on-disk trace "
+            "JSONL for security-pipeline fingerprints and records "
+            "whether the secret literal survived ingestion — the seed "
+            "for plan 068's security-pipeline UAT journeys."
+        ),
+        # Plan 069 R3: the captured Edit creates src/config.py, so the
+        # patch matures to ``alive_on_path``; the secret-shaped content
+        # is what makes this checkpoint distinct.
+        provides={
+            "captured_traces": 1,
+            "survival_states": ["alive_on_path"],
+            "branch_commits": 1,
+            "has_security_findings": True,
+        },
+    )
+)

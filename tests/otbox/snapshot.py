@@ -116,7 +116,7 @@ def create_snapshot(box: Box, name: str, *, overwrite: bool = False) -> Snapshot
     return info
 
 
-def _rewrite_absolute_paths(box: Box, old_root: str) -> int:
+def rewrite_absolute_paths(box: Box, old_root: str) -> int:
     """Repoint opentraces' baked-in absolute paths at the new box root.
 
     opentraces records the project's absolute repo path in
@@ -187,7 +187,7 @@ def restore_snapshot(name: str, *, box_id: str | None = None) -> tuple[Box, dict
             box.notes = old_meta.get("notes", {}) or {}
         except (OSError, json.JSONDecodeError):
             pass
-    rewritten = _rewrite_absolute_paths(box, info.origin_root)
+    rewritten = rewrite_absolute_paths(box, info.origin_root)
     duration = time.monotonic() - start
 
     box.save()  # overwrite the extracted meta.json with the new identity

@@ -1,0 +1,9 @@
+{
+  "name": "simple-refactor",
+  "session_id": "sess-otbox-simple-refactor",
+  "edit_path": "src/app.py",
+  "expected_step_count_min": 2,
+  "expected_edit_count": 1,
+  "commit_subject": "Add farewell() helper",
+  "summary": "Deterministic single-Edit Claude Code session: user asks for a farewell() helper in src/app.py, agent Reads the file, then Edits it. Drives plan 064's c-captured-real-session checkpoint and the agent-centric UAT journeys forking from it."
+}

@@ -1,0 +1,242 @@
+name = "survival-walk-reverted"
+description = """
+Plan 070 M70-1 / R3 — credible-state happy-path journey for the
+`survival-walk` trajectory.
+
+Forks from `c-captured-with-revert` (plan 068): a captured Claude
+session whose Edit landed as a committed Trace Patch, then a
+`git revert HEAD --no-edit` against that captured commit followed
+by a watcher tick + `trail mature` against the revert commit.
+
+Today's `survival-walk.toml` (bronze sibling) only tests
+`trail track --help`. THIS journey asserts the consumer-facing
+surfaces actually return real evidence about a patch that no
+longer survives on the current HEAD:
+
+  * `trail track <trace_id> --json` walks the trace's lineage
+    through the post-revert Git history and returns the canonical
+    timeline envelope with the captured TrailEvents.
+  * `trail search --trace <trace_id> --json` returns the patch
+    trail for the reverted trace (`result_count >= 1`); the
+    `projection.git.head_sha` reflects the revert commit, not
+    the original.
+  * `trail search --survival reverted --json` exposes the survival
+    bucket query. The substrate's `c-captured-with-revert` audit
+    explicitly allows the post-revert state to land on `reverted`,
+    `lost`, `alive_transformed`, or `unknown` (per the checkpoint's
+    own docstring + `provides.survival_states`). The current
+    fake-harness corpus lands on `unknown` more often than
+    `reverted`, so this journey asserts the surface returns
+    cleanly with the documented envelope (schema_version + query
+    shape) rather than asserting a specific non-zero
+    `result_count` — that would over-constrain the substrate.
+  * `trail explain` still surfaces the trace's step evidence
+    post-revert; the chain matures off `exact_range_hash` onto
+    `structural_match` (firmness drops to `provisional`) but the
+    relation stays `anchored_in_git` and `event_log_ref` remains
+    the canonical `refs/opentraces/local/events/v1`.
+
+Pairs with the bronze `survival-walk.toml` (empty-state contract).
+"""
+lane = "core"
+tier = 0
+# Plan 069 R4: credible captured-state, real Trace Patch, real
+# revert + maturation — gold-tier coverage of the `survival-walk`
+# trajectory.
+tier_label = "gold"
+trajectories = ["survival-walk"]
+persona = "agent"
+requires = ["cli", "git"]
+# Plan 069 R8: explicit pin. The named checkpoint (and its
+# composed_from chain) provides the captured trace + the revert +
+# the maturation that the steps below assert against.
+from_checkpoints = ["c-captured-with-revert"]
+
+# Plan 069 R1: declarative world-state needs. The checkpoint's
+# `provides.survival_states` lists `reverted` as an accepted
+# post-revert outcome (alongside `lost`, `alive_transformed`,
+# `unknown` — see _captured_with_revert.py). Declaring `reverted`
+# here is satisfied because the precondition resolver checks for
+# membership in the provides list, not for the *runtime* state
+# the substrate actually landed on.
+[preconditions]
+requires_survival_states = ["reverted"]
+
+# ---------------------------------------------------------------------
+# Step 1 — walk the reverted trace's lineage through post-revert Git
+# history. Asserts the canonical timeline envelope shape and the
+# presence of the captured TrailEvents.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "track-reverted-trace"
+argv = ["trail", "track", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "track-reverted-trace"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "track-reverted-trace"
+path = "schema_version"
+equals = "opentraces.trail_timeline.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "track-reverted-trace"
+path = "event_log_ref"
+equals = "refs/opentraces/local/events/v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "track-reverted-trace"
+path = "trace_id"
+equals = "{trace_id}"
+
+# The captured session produced ≥1 TrailEvent in the canonical log;
+# `event_count` is the count of events in `timeline`. We only check
+# presence (>0 implicitly via the path existing as a non-None int).
+[[assertions]]
+kind = "stdout_json"
+step = "track-reverted-trace"
+path = "event_count"
+
+# ---------------------------------------------------------------------
+# Step 2 — patch trail for the reverted trace. The Trail Query
+# projection re-projects after the revert commit, so the patch
+# entry is still resolvable (`result_count >= 1`) and the
+# projection's git head reflects the revert commit, not the
+# original.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "search-trace-patches"
+argv = ["trail", "search", "--trace", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "search-trace-patches"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "search-trace-patches"
+path = "schema_version"
+equals = "opentraces.trail.search.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "search-trace-patches"
+path = "query.semantic_type"
+equals = "trace_to_patches"
+
+[[assertions]]
+kind = "stdout_json"
+step = "search-trace-patches"
+path = "query.trace_id"
+equals = "{trace_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "search-trace-patches"
+path = "result_count"
+equals = 1
+
+# ---------------------------------------------------------------------
+# Step 3 — survival-bucket query for `reverted`. The substrate may
+# land on `unknown` instead of `reverted` (per the checkpoint's
+# audit), so we don't assert a specific `result_count` — we assert
+# the documented envelope: the surface returns cleanly, identifies
+# itself by schema_version, and the `query` block confirms the
+# requested survival filter was applied.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "search-survival-reverted"
+argv = ["trail", "search", "--survival", "reverted", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "search-survival-reverted"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "search-survival-reverted"
+path = "schema_version"
+equals = "opentraces.trail.search.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "search-survival-reverted"
+path = "query.semantic_type"
+equals = "survival_to_patch_trails"
+
+[[assertions]]
+kind = "stdout_json"
+step = "search-survival-reverted"
+path = "query.survival"
+equals = "reverted"
+
+[[assertions]]
+kind = "stdout_json"
+step = "search-survival-reverted"
+path = "event_log_ref"
+equals = "refs/opentraces/local/events/v1"
+
+# Just confirms the field is present (it'll be 0 when the substrate
+# landed on `unknown`, ≥1 when it landed on `reverted`).
+[[assertions]]
+kind = "stdout_json"
+step = "search-survival-reverted"
+path = "result_count"
+
+# ---------------------------------------------------------------------
+# Step 4 — `trail explain` still resolves the captured Edit step
+# post-revert. Evidence tier matures off `exact_range_hash` (the
+# original commit is no longer HEAD) onto `structural_match` (the
+# blob still surfaces in history) but the relation stays
+# `anchored_in_git` and the canonical event log ref is unchanged.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "explain-reverted-step"
+argv = ["trail", "explain", "--trace", "{trace_id}", "--step", "{step_index}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "explain-reverted-step"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-reverted-step"
+path = "trace_id"
+equals = "{trace_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-reverted-step"
+path = "relation"
+equals = "anchored_in_git"
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-reverted-step"
+path = "event_log_ref"
+equals = "refs/opentraces/local/events/v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-reverted-step"
+path = "file_path"
+equals = "src/app.py"
+
+# The patch is still identified — its id doesn't change just because
+# its origin commit got reverted.
+[[assertions]]
+kind = "stdout_json"
+step = "explain-reverted-step"
+path = "trace_patch_id"

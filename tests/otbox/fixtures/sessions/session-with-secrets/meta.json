@@ -1,0 +1,9 @@
+{
+  "name": "session-with-secrets",
+  "session_id": "sess-otbox-session-with-secrets",
+  "edit_path": "src/config.py",
+  "expected_step_count_min": 2,
+  "expected_edit_count": 1,
+  "commit_subject": "Add config.py with API keys",
+  "summary": "Deterministic single-Edit Claude Code session whose Edit creates src/config.py containing synthetic OpenAI / GitHub / hex secrets shaped to trigger the opentraces security pipeline (regex + entropy detectors). Drives the c-captured-with-secrets checkpoint that audits whether the captured trace on disk retains the secret literals or gets them redacted."
+}

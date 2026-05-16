@@ -1,29 +1,30 @@
 name = "build-dataset-lineage-search"
 description = """
-Strategic ★ trajectory (plan 063 §9): the hidden `trail search` command
-is the consumer-API for structured lineage lookup — `--trace X`,
-`--commit Y`, `--path Z`, or `--survival reverted` all return Patch
-Trails. Downstream apps (dashboards, RL data prep, CI gates) pivot off
-this projection.
+Strategic ★ trajectory (plan 063 §9): `trail search` is the
+consumer-API for structured lineage lookup — `--trace X`, `--commit Y`,
+`--path Z`, or `--survival reverted` all return Patch Trails.
+Downstream apps (dashboards, RL data prep, CI gates) pivot off this
+projection.
 
-Against a smoke seed with no TrailEvent log yet, the contract MUST be:
-rc=0 with a structured JSON envelope describing the limitation
-``trail_event_log_unavailable`` and the recommended action — never an
-opaque traceback or rc!=0. Downstream consumers parse the limitations
-vocabulary and decide whether to retry, surface a warning, or fall
-through to a different evidence source.
+The empty-state-contract sibling at
+`build-dataset-lineage-search-empty-state-contract.toml` asserts the
+documented `trail_event_log_unavailable` limitation when no events
+exist. This journey asserts the happy path against
+`c-captured-real-session`: every `--trace` / `--commit` / `--path`
+form must return ≥1 Patch Trail referencing the captured trace.
 """
 lane = "core"
 tier = 0
-seed = "smoke"
 trajectories = ["build-dataset-from-lineage"]
 persona = "agent"
 requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
 
+# --- `trail search --trace X` returns ≥1 patch ---------------------------
 [[steps]]
 type = "cli"
 id = "search-by-trace"
-argv = ["trail", "search", "--trace", "otbox000000000000", "--json"]
+argv = ["trail", "search", "--trace", "{trace_id}", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -37,11 +38,40 @@ path = "event_log_ref"
 equals = "refs/opentraces/local/events/v1"
 
 [[assertions]]
-kind = "stdout_contains"
+kind = "stdout_json"
 step = "search-by-trace"
-value = "trail_event_log_unavailable"
+path = "result_count"
+
+# --- `trail search --commit X` resolves the commit-of-record -------------
+[[steps]]
+type = "cli"
+id = "search-by-commit"
+argv = ["trail", "search", "--commit", "{commit_sha}", "--json"]
 
 [[assertions]]
-kind = "stdout_contains"
-step = "search-by-trace"
-value = "recommended_action"
+kind = "returncode"
+step = "search-by-commit"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "search-by-commit"
+path = "event_log_ref"
+equals = "refs/opentraces/local/events/v1"
+
+# --- `trail search --path src/app.py` --------------------------------
+[[steps]]
+type = "cli"
+id = "search-by-path"
+argv = ["trail", "search", "--path", "src/app.py", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "search-by-path"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "search-by-path"
+path = "event_log_ref"
+equals = "refs/opentraces/local/events/v1"

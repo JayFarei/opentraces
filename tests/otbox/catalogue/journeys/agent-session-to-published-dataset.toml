@@ -1,0 +1,136 @@
+name = "agent-session-to-published-dataset"
+description = """
+Plan 064 R5: the end-to-end agent → dataset journey.
+
+Today the `cli-publish-happy-path` journey publishes an ad-hoc dataset
+seeded with synthetic trace IDs that don't exist on disk. The
+substantive thing the journey can't prove is that opentraces takes a
+**real captured session** all the way through to a published shard.
+
+This journey closes that gap. It runs from `c-captured-real-session`
+(plan 064 R3), which has already driven a real Claude session through
+the harness, ingested via `_ingest-session`, fired the post-commit
+hook, and matured a Git Anchor. From there:
+
+  1. `trace query` resolves the captured trace via the BM25 + semantic
+     Trace Index. (Real consumer-API entry point.)
+  2. `dataset new --rows-file` seeds a row referencing the captured
+     `source_trace_id` so the dataset's published shard carries the
+     real captured trace's lineage.
+  3. `dataset review approve --all` + `dataset remote create` +
+     `dataset publish` land the row in the fake HF remote.
+
+The fake HF remote shard's `dataset_infos.json` and at least one data
+file under the data/ subtree must exist after the publish step.
+
+The sibling `cli-publish-happy-path` journey still exercises the ad-hoc
+publish flow with synthetic IDs; both surfaces matter (each is a valid
+consumer path) so neither replaces the other.
+"""
+lane = "core"
+tier = 0
+trajectories = ["build-publishable-dataset"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
+
+# --- 1. `trace query` resolves the captured trace by free-text -----------
+[[steps]]
+type = "cli"
+id = "trace-query"
+argv = ["trace", "query", "farewell"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-query"
+equals = 0
+
+# The captured trace's UUID must surface in the query stdout — proves
+# the Trace Index was populated and is queryable.
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-query"
+value = "{trace_id}"
+
+# --- 2. Seed a row file referencing the captured trace_id ----------------
+[[steps]]
+type = "write_file"
+id = "write-rows"
+path = "captured_rows.jsonl"
+content = """
+{"source_trace_id": "{trace_id}", "source_unit_id": "tu:{trace_id}:trace", "summary": "captured: add farewell() helper to src/app.py"}
+"""
+
+[[steps]]
+type = "write_file"
+id = "write-schema"
+path = "captured_schema.json"
+content = """
+{"type": "object", "properties": {"source_trace_id": {"type": "string"}, "source_unit_id": {"type": "string"}, "summary": {"type": "string"}}, "required": ["source_trace_id", "summary"]}
+"""
+
+# --- 3. Create the dataset (manual / ad-hoc mode) -------------------------
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = [
+    "dataset", "new", "captured-session",
+    "--rows-file", "captured_rows.jsonl",
+    "--schema", "captured_schema.json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-new"
+equals = 0
+
+# --- 4. Bind a (fake) HF remote -------------------------------------------
+[[steps]]
+type = "cli"
+id = "remote-create"
+argv = [
+    "dataset", "remote", "create",
+    "captured-session", "captured/dataset", "--private",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "remote-create"
+equals = 0
+
+# --- 5. Approve every row -------------------------------------------------
+[[steps]]
+type = "cli"
+id = "review-approve"
+argv = ["dataset", "review", "approve", "captured-session", "--all"]
+
+[[assertions]]
+kind = "returncode"
+step = "review-approve"
+equals = 0
+
+# --- 6. Publish to the fake HF remote -------------------------------------
+[[steps]]
+type = "cli"
+id = "publish"
+argv = ["dataset", "publish", "captured-session"]
+
+[[assertions]]
+kind = "returncode"
+step = "publish"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "publish"
+value = "published: rows=1"
+
+# --- 7. Verify the shard landed on the fake HF remote ---------------------
+[[assertions]]
+kind = "path_exists"
+path = "{fake_remote}/captured/dataset/dataset_infos.json"
+
+[[assertions]]
+kind = "file_count_min"
+path = "{fake_remote}/captured/dataset/data"
+min = 1

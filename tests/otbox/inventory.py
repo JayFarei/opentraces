@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Iterable
 
 from .jtbd import DriftReport, check_drift, load_jtbd_map
+from .journey import max_tier as _max_tier
+from .journey import normalize_tier_label as _normalize_tier_label
 
 CATALOGUE_DIR = Path(__file__).resolve().parent / "catalogue" / "journeys"
 INVENTORY_PATH = Path(__file__).resolve().parent / "catalogue" / "journey-inventory.md"
@@ -37,6 +39,9 @@ class CommandEntry:
     is_group: bool = False  # pure-help group entry (063 §8.8 exempts these)
     trajectory: str = ""    # from 063, "" when missing
     owning_journeys: list[str] = field(default_factory=list)
+    # Plan 069 R6: max tier across all owning journeys ("" when unowned
+    # or no tier_label declared — render as the default tier).
+    max_tier: str = ""
 
     @property
     def owned(self) -> bool:
@@ -105,12 +110,21 @@ def _extract_command_path(argv: list[str]) -> str | None:
     return " ".join(parts) if parts else None
 
 
-def map_journey_ownership(entries: Iterable[CommandEntry]) -> list[tuple[str, str]]:
+def map_journey_ownership(
+    entries: Iterable[CommandEntry],
+    *,
+    journey_tiers_out: dict[str, str] | None = None,
+) -> list[tuple[str, str]]:
     """Annotate ``entries`` in-place with the journeys that exercise them.
 
     Returns the ``(journey_name, trajectory_slug)`` pairs declared by
     each journey TOML's ``trajectories = [...]`` field, so the drift
     check can verify each name resolves in 063.
+
+    Plan 069 R6: when ``journey_tiers_out`` is provided, the resolved
+    ``tier_label`` for each journey is recorded there (default
+    ``bronze`` when absent), and each entry's ``max_tier`` is computed
+    from the highest tier of any owning journey.
     """
     by_path = {e.path: e for e in entries}
     journey_trajectories: list[tuple[str, str]] = []
@@ -122,6 +136,9 @@ def map_journey_ownership(entries: Iterable[CommandEntry]) -> list[tuple[str, st
         except Exception:  # noqa: BLE001 - skip malformed scenarios
             continue
         journey_name = doc.get("name", toml_path.stem)
+        tier_label = _normalize_tier_label(doc.get("tier_label"))
+        if journey_tiers_out is not None:
+            journey_tiers_out[journey_name] = tier_label
         for traj in doc.get("trajectories", []) or []:
             journey_trajectories.append((journey_name, str(traj)))
         for step in doc.get("steps", []):
@@ -137,8 +154,14 @@ def map_journey_ownership(entries: Iterable[CommandEntry]) -> list[tuple[str, st
             for i in range(len(parts), 0, -1):
                 candidate = " ".join(parts[:i])
                 if candidate in by_path:
-                    if journey_name not in by_path[candidate].owning_journeys:
-                        by_path[candidate].owning_journeys.append(journey_name)
+                    entry = by_path[candidate]
+                    if journey_name not in entry.owning_journeys:
+                        entry.owning_journeys.append(journey_name)
+                    # Plan 069 R6: roll up max tier across owners.
+                    entry.max_tier = (
+                        tier_label if not entry.max_tier
+                        else _max_tier(entry.max_tier, tier_label)
+                    )
                     break
     return journey_trajectories
 
@@ -146,7 +169,49 @@ def map_journey_ownership(entries: Iterable[CommandEntry]) -> list[tuple[str, st
 # --------------------------------------------------------------------------
 # Markdown emitter
 # --------------------------------------------------------------------------
-def render_markdown(entries: list[CommandEntry]) -> str:
+def _tier_display(entry: CommandEntry) -> str:
+    """Render the tier cell for ``entry``: owned -> max tier label;
+    unowned/group -> em-dash."""
+    if not entry.owning_journeys:
+        return "—"
+    return entry.max_tier or "bronze"
+
+
+def _per_trajectory_tier_rollup(
+    entries: list[CommandEntry],
+    journey_trajectories: list[tuple[str, str]],
+    journey_tiers: dict[str, str],
+) -> list[tuple[str, str, int]]:
+    """Compute ``(trajectory_slug, max_tier_label, journey_count)`` for
+    every trajectory declared by any journey, sorted by slug.
+
+    Plan 069 R6: this is the data behind the per-trajectory tier
+    coverage section in the markdown output.
+    """
+    from .journey import _TIER_RANK
+    by_traj_journeys: dict[str, set[str]] = {}
+    for journey_name, traj in journey_trajectories:
+        if not traj:
+            continue
+        by_traj_journeys.setdefault(traj, set()).add(journey_name)
+    rollup: list[tuple[str, str, int]] = []
+    for traj in sorted(by_traj_journeys):
+        max_rank = -1
+        for jn in by_traj_journeys[traj]:
+            rank = _TIER_RANK.get(journey_tiers.get(jn, "bronze"), 0)
+            if rank > max_rank:
+                max_rank = rank
+        label = next(k for k, v in _TIER_RANK.items() if v == max_rank)
+        rollup.append((traj, label, len(by_traj_journeys[traj])))
+    return rollup
+
+
+def render_markdown(
+    entries: list[CommandEntry],
+    *,
+    journey_trajectories: list[tuple[str, str]] | None = None,
+    journey_tiers: dict[str, str] | None = None,
+) -> str:
     visible = [e for e in entries if not e.hidden]
     hidden = [e for e in entries if e.hidden]
     owned = sum(1 for e in visible if e.owned)
@@ -155,7 +220,7 @@ def render_markdown(entries: list[CommandEntry]) -> str:
     lines = [
         "# opentraces Click command inventory",
         "",
-        "Generated by `otbox matrix --inventory` (plan 062 M62-1 + plan 063 SSoT).",
+        "Generated by `otbox matrix --inventory` (plan 062 M62-1 + plan 063 SSoT + plan 069 tiered coverage).",
         "Each row's trajectory comes from `kb/plans/063-jtbd-command-map.md` —",
         "the single source of truth. Drift fails CI under `--strict`.",
         "",
@@ -164,20 +229,48 @@ def render_markdown(entries: list[CommandEntry]) -> str:
         "",
         "## Public commands",
         "",
-        "| Command | Trajectory (063) | Owned by | Description |",
-        "|---|---|---|---|",
+        "| Command | Trajectory (063) | Tier | Owned by | Description |",
+        "|---|---|---|---|---|",
     ]
     for e in visible:
         owners = ", ".join(e.owning_journeys) if e.owning_journeys else "**unowned**"
         traj = e.trajectory or ("_group_" if e.is_group else "**missing**")
-        lines.append(f"| `{e.path}` | {traj} | {owners} | {e.description} |")
+        lines.append(
+            f"| `{e.path}` | {traj} | {_tier_display(e)} | {owners} | {e.description} |"
+        )
     lines += ["", "## Hidden commands", "",
-              "| Command | Trajectory (063) | Owned by | Description |",
-              "|---|---|---|---|"]
+              "| Command | Trajectory (063) | Tier | Owned by | Description |",
+              "|---|---|---|---|---|"]
     for e in hidden:
         owners = ", ".join(e.owning_journeys) if e.owning_journeys else "—"
         traj = e.trajectory or ("_group_" if e.is_group else "—")
-        lines.append(f"| `_{e.path}` | {traj} | {owners} | {e.description} |")
+        lines.append(
+            f"| `_{e.path}` | {traj} | {_tier_display(e)} | {owners} | {e.description} |"
+        )
+
+    # Plan 069 R6: per-trajectory tier coverage rollup section.
+    if journey_trajectories is not None and journey_tiers is not None:
+        rollup = _per_trajectory_tier_rollup(
+            entries, journey_trajectories, journey_tiers
+        )
+        bronze = sum(1 for _, t, _ in rollup if t == "bronze")
+        silver = sum(1 for _, t, _ in rollup if t == "silver")
+        gold = sum(1 for _, t, _ in rollup if t == "gold")
+        lines += [
+            "",
+            "## Per-trajectory tier coverage",
+            "",
+            (
+                f"- Trajectories covered: **{len(rollup)}** "
+                f"({gold} gold, {silver} silver, {bronze} bronze)"
+            ),
+            "",
+            "| Trajectory | Max tier | Owning journeys |",
+            "|---|---|---|",
+        ]
+        for traj, tier, count in rollup:
+            lines.append(f"| {traj} | {tier} | {count} |")
+
     return "\n".join(lines) + "\n"
 
 
@@ -197,7 +290,10 @@ def build_inventory(
     OK; this function never raises.
     """
     entries = walk_click_registry()
-    journey_trajectories = map_journey_ownership(entries)
+    journey_tiers: dict[str, str] = {}
+    journey_trajectories = map_journey_ownership(
+        entries, journey_tiers_out=journey_tiers
+    )
 
     # Layer the 063 SSoT onto the live registry: every parsed command
     # contributes its trajectory.
@@ -207,7 +303,11 @@ def build_inventory(
         if cmd:
             e.trajectory = cmd.trajectory
 
-    md = render_markdown(entries)
+    md = render_markdown(
+        entries,
+        journey_trajectories=journey_trajectories,
+        journey_tiers=journey_tiers,
+    )
     target = out_path or INVENTORY_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(md)
@@ -225,6 +325,7 @@ def build_inventory(
         ownership,
         all_click_paths=all_click_paths,
         jtbd=jtbd,
+        journey_tiers=journey_tiers,
     )
 
     summary = {

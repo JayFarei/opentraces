@@ -1,0 +1,112 @@
+name = "agent-session-trail-explain-happy"
+description = """
+Plan 064 vertical-slice journey: prove `trail explain` returns a
+real evidence chain on a real captured agent session.
+
+Today's `build-dataset-lineage-explain` journey asserts the empty-state
+contract (the documented JSON envelope with `limitations: ["no_trace_patch_event"]`
+when no TrailEvents exist). This journey asserts the **happy path** —
+the same `trail explain --trace <id> --step <n> --json` call against a
+project that just captured a Claude session via the fake harness, and
+expects real `evidence_tier` + real `source_events` + real anchored
+relation.
+
+The slice forks from `c-captured-real-session` (plan 064 R3): a
+checkpoint that ran the fake harness against a real git repo, ingested
+the session via `_ingest-session`, fired the post-commit hook, matured
+the Trace Patch via `trail mature`, and rebuilt the Trace Index.
+
+Asserting against the SAME `trail explain` surface (not a different
+command) is the whole point: a consumer that branches on the
+documented `limitations` vocabulary needs both the empty-state and
+real-data shapes verified in CI.
+"""
+lane = "core"
+tier = 0
+# Plan 069 R4: credible captured-state journey against a real Trace
+# Patch — gold-tier coverage of the `build-dataset-from-lineage`
+# trajectory's happy path.
+tier_label = "gold"
+trajectories = ["build-dataset-from-lineage"]
+persona = "agent"
+requires = ["cli", "git"]
+# Plan 069 R8: explicit pin (the runner validates that the named
+# checkpoint satisfies the preconditions below; today
+# c-captured-real-session provides {captured_traces: 1, ...} so the
+# pin and the preconditions agree).
+from_checkpoints = ["c-captured-real-session"]
+
+# Plan 069 R1: declarative world-state needs. Any checkpoint that
+# provides ≥1 captured trace satisfies this journey; the explicit
+# from_checkpoints pin above is the canonical choice today.
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# Inspect the captured trace's Edit step through the consumer-facing
+# `trail explain` API. The trace_id + step_index come from the
+# checkpoint's audit notes (`c_captured_session_audit`) via the journey
+# templating engine.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "explain-edit-step"
+argv = ["trail", "explain", "--trace", "{trace_id}", "--step", "{step_index}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "explain-edit-step"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-edit-step"
+path = "trace_id"
+equals = "{trace_id}"
+
+# Real captures produce ``anchored_in_git`` (the patch matured into a
+# Git Anchor against the commit that introduced its content). The empty-
+# state envelope never sets `relation`; this is the load-bearing
+# differentiator.
+[[assertions]]
+kind = "stdout_json"
+step = "explain-edit-step"
+path = "relation"
+equals = "anchored_in_git"
+
+# The evidence chain. Captures with hook metadata yield ≥5 source
+# events (PreToolUse, PostToolUse, step window open/close, trace patch,
+# maturation, snapshot). Empty-state captures yield 0.
+[[assertions]]
+kind = "stdout_json"
+step = "explain-edit-step"
+path = "evidence_tier"
+
+# `file_path` should be the file the captured Edit mutated. The empty-
+# state envelope never sets this; on the happy path it's `src/app.py`
+# (the simple-refactor corpus's pinned target).
+[[assertions]]
+kind = "stdout_json"
+step = "explain-edit-step"
+path = "file_path"
+equals = "src/app.py"
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-edit-step"
+path = "trace_patch_id"
+
+# Same call also exposes a Git Anchor id — the patch isn't just
+# captured, it's matured into refs/opentraces against the commit.
+[[assertions]]
+kind = "stdout_json"
+step = "explain-edit-step"
+path = "git_anchor_id"
+
+# The captured TrailEvents live in the canonical ref. This field is
+# the contract carrier for every consumer.
+[[assertions]]
+kind = "stdout_json"
+step = "explain-edit-step"
+path = "event_log_ref"
+equals = "refs/opentraces/local/events/v1"

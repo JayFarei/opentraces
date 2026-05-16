@@ -1,0 +1,53 @@
+name = "recreate-trace-environment-empty-state-contract"
+description = """
+Strategic ★ trajectory (plan 063 §9): `trace teleport export → open` in
+a consumer-flow shape. Downstream consumers (perturbation analysis, RL
+training, evaluation rigs, OSS-repo rewind features) call this exact
+pair to reconstitute the environment that produced a trace.
+
+This journey exercises the **consumer-API contract**: against a smoke
+seed with traces but no TrailEvent log (no captured session yet),
+`trace teleport export` MUST refuse cleanly with the documented exit
+code + error message — never silently produce a corrupt workspace
+bundle. That contract is what every downstream consumer relies on.
+
+The happy-path companion (a `c-traces-with-trails` checkpoint that
+seeds real TrailEvents so export → open completes) is a non-blocking
+follow-up — the contract assertion below is the load-bearing test.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["recreate-trace-environment"]
+persona = "agent"
+requires = ["cli", "git"]
+
+# --- export refuses cleanly when no TrailEvents exist ---------------------
+[[steps]]
+type = "cli"
+id = "export-no-events"
+argv = ["trace", "teleport", "export", "otbox000000000000", "--output", "./tr0-workspace", "--json"]
+expect_returncode = 3
+
+# --- open's --help proves the open surface is wired + documented ----------
+# (The happy-path "open a real exported workspace" check is the follow-up.)
+[[steps]]
+type = "cli"
+id = "open-help"
+argv = ["trace", "teleport", "open", "--help"]
+
+# --- assertions ------------------------------------------------------------
+[[assertions]]
+kind = "returncode"
+step = "export-no-events"
+equals = 3
+
+[[assertions]]
+kind = "stderr_contains"
+step = "export-no-events"
+value = "no TrailEvents found for trace otbox000000000000"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "open-help"
+value = "Open a portable trace workspace"

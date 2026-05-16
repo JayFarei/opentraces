@@ -85,5 +85,6 @@ register(
         delta=_installed_source_delta,
         cache=True,
         description="c-prereqs-present + opentraces installed editable in box.project/.testvenv from synced source.",
+        provides={},
     )
 )

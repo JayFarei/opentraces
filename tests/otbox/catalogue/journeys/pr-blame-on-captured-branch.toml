@@ -1,0 +1,175 @@
+name = "pr-blame-on-captured-branch"
+description = """
+Plan 070 M70-2 / R1: prove `trail blame pr render` produces a real
+PR body for a real captured branch.
+
+Today's `pr-lineage-publish.toml` exercises only `--help` for all
+three subcommands (`render`, `create`, `update`). This journey is the
+credible-state happy-path sibling: forks
+`c-captured-with-pr-branch` (plan 068 M68-4), which puts a feature
+branch (`feat/pr-branch-test`) with two captured-session commits on
+top of the parent's main commit, then runs
+`trail blame pr render --base <base_commit_sha> --no-llm` and asserts
+the rendered markdown body references both commits of the
+`base_commit_sha..HEAD` range with their commit subjects and short
+SHAs.
+
+Why `--no-llm`: the box has no `ANTHROPIC_API_KEY`; the renderer's
+LLM polish path would emit a degraded body. `--no-llm` selects the
+deterministic-only render path the journey can byte-stable-assert on.
+
+Why no `--json`: `trail blame pr render` emits markdown to stdout, no
+JSON envelope (the cached row-level JSONL under
+`<project>/.opentraces/branch_runs/pr-intent-summary/` is the
+machine-readable surface; this journey targets the rendered output).
+"""
+lane = "core"
+tier = 0
+# Plan 069 R4 / Plan 070 R1: credible captured-branch journey against
+# a real 2-commit feature branch — gold-tier coverage of the
+# `pr-lineage-publish` trajectory's happy path. Paired with the
+# existing `pr-lineage-publish.toml` (`--help`-only, bronze) sibling.
+tier_label = "gold"
+trajectories = ["pr-lineage-publish"]
+persona = "human"
+requires = ["cli", "git"]
+# Plan 069 R8: explicit pin. The runner validates that the named
+# checkpoint satisfies the preconditions below;
+# `c-captured-with-pr-branch` provides
+# `{captured_traces: 3, branch_commits: 3, ...}` so the pin and the
+# preconditions agree.
+from_checkpoints = ["c-captured-with-pr-branch"]
+
+# Plan 069 R1 / Plan 070 R1: declarative world-state needs. PR-blame
+# needs a real range with multiple commits — `branch_commits >= 3`
+# (base + 2 branch commits) is the minimum that proves the range
+# walker iterates beyond a single commit. `captured_traces >= 2`
+# guarantees at least the two branch commits have lineage rows.
+[preconditions]
+min_captured_traces = 2
+requires_branch_commits_min = 3
+
+# ---------------------------------------------------------------------
+# Render the PR body for the captured branch range and capture rows
+# count via the --output file-mode stderr message. `--base` is the
+# parent-checkpoint's commit (the branch's true merge base); `--no-llm`
+# selects the deterministic-only render path that has no external
+# dependencies. `--head` defaults to HEAD, which in this box is the
+# checkpoint's branch tip.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "render-body"
+argv = [
+    "trail", "blame", "pr", "render",
+    "--base", "{base_commit_sha}",
+    "--no-llm",
+]
+
+# Re-run with --output to a project-local file so the stderr summary
+# (which encodes `rows=N`, `cache_hit=...`, `digest=...`) becomes
+# assert-able. Cache_hit on this second call MUST be true — same scope
+# digest, second call.
+[[steps]]
+type = "cli"
+id = "render-to-file"
+argv = [
+    "trail", "blame", "pr", "render",
+    "--base", "{base_commit_sha}",
+    "--no-llm",
+    "--output", "{project}/pr_body.md",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "render-body"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "render-to-file"
+equals = 0
+
+# Render produces a real intent section (deterministic header is
+# always present even when no extracted intent exists).
+[[assertions]]
+kind = "stdout_contains"
+step = "render-body"
+value = "## Intent"
+
+# The What Changed section enumerates every commit's subject in
+# `base_commit_sha..HEAD`. With 2 branch commits the body MUST list
+# both subjects ("PR branch commit 1" / "PR branch commit 2") — proof
+# the range walker iterated both commits, not just HEAD.
+[[assertions]]
+kind = "stdout_contains"
+step = "render-body"
+value = "PR branch commit 1"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "render-body"
+value = "PR branch commit 2"
+
+# Per-commit detail blocks reference each commit's short SHA. The
+# first 7 chars of every branch commit SHA appear in the body's
+# `<details>` summary lines; we assert on the lower-bound shape
+# (the 7-char prefix of the documented branch_commit_count = 2
+# commits — see the audit) by checking the literal "Commits & Trails"
+# header that fronts those details blocks.
+[[assertions]]
+kind = "stdout_contains"
+step = "render-body"
+value = "## Commits & Trails"
+
+# Walk-the-trail block references the trail surface, proving the
+# renderer wired the per-commit lineage into the body (not a
+# no-lineage fallback shell).
+[[assertions]]
+kind = "stdout_contains"
+step = "render-body"
+value = "opentraces trail timeline"
+
+# Reviewer Toolbox block always renders at the body's foot;
+# deterministic check the renderer ran to completion.
+[[assertions]]
+kind = "stdout_contains"
+step = "render-body"
+value = "## Reviewer Toolbox"
+
+# Trace Provenance footer carries the workflow name + version. The
+# `pr-intent-summary` workflow is the only one wired into
+# `trail blame pr render`; asserting its name proves the right
+# workflow ran.
+[[assertions]]
+kind = "stdout_contains"
+step = "render-body"
+value = "pr-intent-summary"
+
+# The --output path materializes the same body to disk.
+[[assertions]]
+kind = "path_exists"
+path = "{project}/pr_body.md"
+
+# --output emits a `rows=N` / `cache_hit=...` / `digest=...` summary
+# to stderr. Two branch commits → rows=2; same scope_digest on the
+# second call → cache_hit=True. Both load-bearing happy-path signals.
+[[assertions]]
+kind = "stderr_contains"
+step = "render-to-file"
+value = "rows=2"
+
+[[assertions]]
+kind = "stderr_contains"
+step = "render-to-file"
+value = "cache_hit=True"
+
+# The deterministic-cached row jsonl lives under
+# <project>/.opentraces/branch_runs/<workflow>/<digest>.deterministic.jsonl
+# Asserting any file exists under the workflow folder proves the
+# branch-context cache wrote the projection.
+[[assertions]]
+kind = "file_count_min"
+path = "{project}/.opentraces/branch_runs/pr-intent-summary"
+glob = "*.jsonl"
+min = 1

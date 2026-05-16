@@ -1,52 +1,64 @@
 name = "build-dataset-lineage-explain"
 description = """
-Strategic ★ trajectory (plan 063 §9): the hidden `trail explain` command
-is a first-class consumer API — datasets and downstream apps call it to
-fetch the structured evidence chain for a trace step.
+Strategic ★ trajectory (plan 063 §9): `trail explain` is a first-class
+consumer API — datasets and downstream apps call it to fetch the
+structured evidence chain for a trace step.
 
-Against a smoke seed with traces but no TrailEvent log, `trail explain`
-MUST return a documented JSON envelope with the canonical
-``event_log_ref``, the requested ``trace_id`` and ``step_index``, and
-``limitations: [\"no_trace_patch_event\"]`` to flag the missing capture.
-Downstream consumers branch on that limitations vocabulary; this
-journey is the contract test for it.
+The empty-state-contract sibling at
+`build-dataset-lineage-explain-empty-state-contract.toml` asserts the
+documented `no_trace_patch_event` limitation. This journey asserts the
+happy path against `c-captured-real-session` via the same surface, so
+the consumer-API contract is verified on both sides of the
+limitations vocabulary.
+
+The dedicated slice journey
+`agent-session-trail-explain-happy.toml` covers an overlapping subset
+at finer granularity; both run from the same checkpoint and stay
+green together.
 """
 lane = "core"
 tier = 0
-seed = "smoke"
 trajectories = ["build-dataset-from-lineage"]
 persona = "agent"
 requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
 
 [[steps]]
 type = "cli"
-id = "explain-step0"
-argv = ["trail", "explain", "--trace", "otbox000000000000", "--step", "0", "--json"]
+id = "explain-step"
+argv = ["trail", "explain", "--trace", "{trace_id}", "--step", "{step_index}", "--json"]
 
 [[assertions]]
 kind = "returncode"
-step = "explain-step0"
+step = "explain-step"
 equals = 0
 
 [[assertions]]
 kind = "stdout_json"
-step = "explain-step0"
+step = "explain-step"
 path = "trace_id"
-equals = "otbox000000000000"
+equals = "{trace_id}"
 
 [[assertions]]
 kind = "stdout_json"
-step = "explain-step0"
+step = "explain-step"
 path = "step_index"
-equals = 0
 
 [[assertions]]
 kind = "stdout_json"
-step = "explain-step0"
+step = "explain-step"
 path = "event_log_ref"
 equals = "refs/opentraces/local/events/v1"
 
+# Happy-path differentiator: a real anchored relation rather than the
+# empty-state `no_trace_patch_event` limitation.
 [[assertions]]
-kind = "stdout_contains"
-step = "explain-step0"
-value = "no_trace_patch_event"
+kind = "stdout_json"
+step = "explain-step"
+path = "relation"
+equals = "anchored_in_git"
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-step"
+path = "trace_patch_id"

@@ -1,0 +1,56 @@
+name = "build-dataset-lineage-snapshot-empty-state-contract"
+description = """
+Strategic ★ trajectory (plan 063 §9): `trail snapshots` and `trail
+snapshot checkout` are the consumer-API for the rewind primitive —
+downstream apps (perturbation harnesses, OSS-repo rewind, RL replay)
+list rewind candidates for a trace, then materialize a specific one.
+
+Against a smoke seed without captured snapshots, the contract MUST be:
+rc=0 with ``snapshot_count: 0`` and the documented schema_version. The
+journey asserts the surface returns the consumer-API envelope cleanly,
+so downstream code can branch on ``snapshot_count`` without crashing.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["build-dataset-from-lineage"]
+persona = "agent"
+requires = ["cli", "git"]
+
+[[steps]]
+type = "cli"
+id = "list-snapshots"
+argv = ["trail", "snapshots", "--trace", "otbox000000000000", "--json"]
+
+[[steps]]
+type = "cli"
+id = "checkout-help"
+argv = ["trail", "snapshot", "checkout", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "list-snapshots"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "list-snapshots"
+path = "schema_version"
+equals = "opentraces.trail_snapshots.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "list-snapshots"
+path = "snapshot_count"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "list-snapshots"
+path = "trace_id"
+equals = "otbox000000000000"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "checkout-help"
+value = "Materialize or preview a Trace Snapshot rewind"

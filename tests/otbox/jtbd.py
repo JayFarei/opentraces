@@ -24,6 +24,47 @@ from typing import Iterable
 REPO_ROOT = Path(__file__).resolve().parents[2]
 JTBD_PATH = REPO_ROOT / "kb" / "plans" / "063-jtbd-command-map.md"
 
+# Plan 069 R5: trajectory slugs that MUST be covered by at least one
+# ``tier_label = "gold"`` journey. Starts empty so the slice ships
+# without forcing any existing trajectory to upgrade — plan 070
+# populates this set incrementally as agent-facing journeys backfill
+# their credible-state coverage.
+#
+# Plan 070 M70-1 / R3: ``survival-walk`` now has a credible-state
+# journey (``survival-walk-reverted.toml``) that asserts
+# ``trail track`` / ``trail search --survival reverted`` / ``trail
+# explain`` against the ``c-captured-with-revert`` checkpoint.
+# Plan 070 M70-4 / R2: ``automate-dataset-runs`` now has a credible-
+# state journey (``dataset-sync-skill-history.toml``) that asserts
+# ``workflow create`` / ``dataset new --workflow`` /
+# ``dataset schedule add | list | show | pause | resume | remove``
+# against the ``c-captured-multi-skill`` checkpoint.
+# Plan 070 M70-2 / R1: ``pr-lineage-publish`` now has a credible-state
+# journey (``pr-blame-on-captured-branch.toml``) that asserts
+# ``trail blame pr render`` produces a real PR body for a real 2-commit
+# captured branch against the ``c-captured-with-pr-branch`` checkpoint;
+# the existing ``pr-lineage-publish.toml`` stays as the bronze
+# ``--help`` sibling.
+# Plan 070 M70-3 / R4: ``inspect-security-pipeline`` now has a credible-
+# state journey (``security-sanitize-captured-content.toml``) that
+# asserts the security pipeline ran on a real captured Claude session
+# (the always-on regex + entropy detectors fingerprinted the trace)
+# AND that the user-facing ``trace query`` projection does not leak
+# the secret literal — against the ``c-captured-with-secrets``
+# checkpoint. The existing ``inspect-security-pipeline.toml`` stays
+# as the bronze ``--help`` sibling on the smoke seed.
+AGENT_FACING_TRAJECTORIES_MIN_GOLD: frozenset[str] = frozenset({
+    "survival-walk",
+    "automate-dataset-runs",
+    "pr-lineage-publish",
+    "inspect-security-pipeline",
+})
+
+# Plan 069 R4: known tier labels, lowest -> highest. The canonical
+# table lives in journey.py — import it from there so a future tier
+# vocabulary extension stays single-source.
+from .journey import _TIER_RANK, normalize_tier_label as _normalize_tier  # noqa: E402
+
 
 # Trajectory cell forms we accept from §2..§7:
 #   onboard-repo (1/5)
@@ -214,6 +255,10 @@ class DriftReport:
     phantom_in_063: list[str] = field(default_factory=list)          # 063 cmd ∉ Click
     unknown_trajectories: list[tuple[str, str]] = field(default_factory=list)  # (journey, trajectory)
     unowned_commands: list[str] = field(default_factory=list)        # visible+non-deprecated+no journey
+    # Plan 069 R5: (trajectory_slug, current_max_tier, required_tier)
+    # for each agent-facing trajectory whose top-tier owning journey
+    # is below the per-trajectory required minimum.
+    coverage_below_required_tier: list[tuple[str, str, str]] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -222,6 +267,7 @@ class DriftReport:
             or self.phantom_in_063
             or self.unknown_trajectories
             or self.unowned_commands
+            or self.coverage_below_required_tier
         )
 
     def to_dict(self) -> dict:
@@ -233,6 +279,14 @@ class DriftReport:
                 {"journey": j, "trajectory": t} for j, t in self.unknown_trajectories
             ],
             "unowned_commands": list(self.unowned_commands),
+            "coverage_below_required_tier": [
+                {
+                    "trajectory": traj,
+                    "current_max_tier": cur,
+                    "required_tier": req,
+                }
+                for traj, cur, req in self.coverage_below_required_tier
+            ],
         }
 
     def human_summary(self) -> str:
@@ -263,6 +317,16 @@ class DriftReport:
                 + ", ".join(self.unowned_commands[:8])
                 + ("…" if len(self.unowned_commands) > 8 else "")
             )
+        if self.coverage_below_required_tier:
+            bits.append(
+                f"{len(self.coverage_below_required_tier)} trajectory/-ies below "
+                "required tier: "
+                + ", ".join(
+                    f"{t} ({cur} < {req})"
+                    for t, cur, req in self.coverage_below_required_tier[:5]
+                )
+                + ("…" if len(self.coverage_below_required_tier) > 5 else "")
+            )
         return "jtbd: drift detected — " + "; ".join(bits)
 
 
@@ -273,6 +337,7 @@ def check_drift(
     *,
     all_click_paths: Iterable[str] | None = None,
     jtbd: JtbdMap | None = None,
+    journey_tiers: dict[str, str] | None = None,
 ) -> DriftReport:
     """Run all SSoT gates and return a structured drift report.
 
@@ -290,6 +355,13 @@ def check_drift(
         Every Click path (visible + hidden + groups). When provided,
         the bidirectional check flags 063 rows that don't exist in
         Click. Default ``None`` skips that direction (legacy callers).
+    journey_tiers
+        Optional ``{journey_name: tier_label}`` mapping. Plan 069 R5:
+        when provided, the gate computes each trajectory's current
+        max tier (across all journeys that name it) and flags any
+        trajectory in ``AGENT_FACING_TRAJECTORIES_MIN_GOLD`` that is
+        below the required tier. With the default (empty) vocabulary
+        no trajectories are checked, so existing callers stay green.
     """
     report = DriftReport()
     jtbd = jtbd or load_jtbd_map()
@@ -309,7 +381,8 @@ def check_drift(
             report.phantom_in_063.append(path)
 
     # Gate 2 — journey naming unknown trajectory.
-    for journey_name, traj in journey_trajectories:
+    journey_traj_pairs = list(journey_trajectories)
+    for journey_name, traj in journey_traj_pairs:
         if traj and traj not in known_trajs:
             report.unknown_trajectories.append((journey_name, traj))
 
@@ -326,5 +399,31 @@ def check_drift(
         if not ownership.get(path):
             report.unowned_commands.append(path)
     report.unowned_commands.sort()
+
+    # Gate 4 (plan 069 R5) — tiered trajectory coverage. For each
+    # trajectory in AGENT_FACING_TRAJECTORIES_MIN_GOLD, compute the
+    # max tier across all journeys that name it and flag if below
+    # the required minimum. Empty vocabulary => no-op.
+    if AGENT_FACING_TRAJECTORIES_MIN_GOLD and journey_tiers is not None:
+        # Per-trajectory list of tier ranks for journeys owning it.
+        traj_max_tier: dict[str, int] = {}
+        for journey_name, traj in journey_traj_pairs:
+            if not traj:
+                continue
+            rank = _TIER_RANK[_normalize_tier(journey_tiers.get(journey_name))]
+            cur = traj_max_tier.get(traj, -1)
+            if rank > cur:
+                traj_max_tier[traj] = rank
+        required_rank = _TIER_RANK["gold"]
+        for traj in sorted(AGENT_FACING_TRAJECTORIES_MIN_GOLD):
+            cur_rank = traj_max_tier.get(traj, -1)
+            if cur_rank < required_rank:
+                cur_label = (
+                    "none" if cur_rank < 0
+                    else next(k for k, v in _TIER_RANK.items() if v == cur_rank)
+                )
+                report.coverage_below_required_tier.append(
+                    (traj, cur_label, "gold")
+                )
 
     return report

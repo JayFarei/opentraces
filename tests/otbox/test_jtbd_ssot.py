@@ -64,6 +64,19 @@ def test_jtbd_drift_check_passes_strict():
         + "\n".join(f"  {p}" for p in drift.unowned_commands)
     )
 
+    # Plan 069 R5: tiered coverage gate. Trajectories listed in
+    # AGENT_FACING_TRAJECTORIES_MIN_GOLD must be covered by at least one
+    # ``tier_label = "gold"`` journey. The initial vocabulary is empty
+    # so this assertion is a no-op until plan 070 starts populating it.
+    assert drift.coverage_below_required_tier == [], (
+        "Agent-facing trajectories below their required tier — add a "
+        "`tier_label = \"gold\"` journey that exercises:\n"
+        + "\n".join(
+            f"  {t} (current {cur}, required {req})"
+            for t, cur, req in drift.coverage_below_required_tier
+        )
+    )
+
     assert summary["public_owned"] >= 60, (
         f"plan 063 coverage regressed below 60/97 owned "
         f"(currently {summary['public_owned']}/{summary['public_total']})"

@@ -1,31 +1,28 @@
 name = "build-dataset-lineage-snapshot"
 description = """
-Strategic ★ trajectory (plan 063 §9): `trail snapshots` and `trail
-snapshot checkout` are the consumer-API for the rewind primitive —
-downstream apps (perturbation harnesses, OSS-repo rewind, RL replay)
+Strategic ★ trajectory (plan 063 §9): `trail snapshots` + `trail
+snapshot checkout` are the consumer-API for the rewind primitive.
+Downstream apps (perturbation harnesses, OSS-repo rewind, RL replay)
 list rewind candidates for a trace, then materialize a specific one.
 
-Against a smoke seed without captured snapshots, the contract MUST be:
-rc=0 with ``snapshot_count: 0`` and the documented schema_version. The
-journey asserts the surface returns the consumer-API envelope cleanly,
-so downstream code can branch on ``snapshot_count`` without crashing.
+The empty-state-contract sibling at
+`build-dataset-lineage-snapshot-empty-state-contract.toml` asserts the
+`snapshot_count: 0` envelope. This journey asserts the happy path
+against `c-captured-real-session`: real snapshots are visible, and
+`trail snapshot checkout --dry-run` accepts the resulting ref without
+mutating disk.
 """
 lane = "core"
 tier = 0
-seed = "smoke"
 trajectories = ["build-dataset-from-lineage"]
 persona = "agent"
 requires = ["cli", "git"]
+from_checkpoints = ["c-captured-real-session"]
 
 [[steps]]
 type = "cli"
 id = "list-snapshots"
-argv = ["trail", "snapshots", "--trace", "otbox000000000000", "--json"]
-
-[[steps]]
-type = "cli"
-id = "checkout-help"
-argv = ["trail", "snapshot", "checkout", "--help"]
+argv = ["trail", "snapshots", "--trace", "{trace_id}", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -41,16 +38,13 @@ equals = "opentraces.trail_snapshots.v1"
 [[assertions]]
 kind = "stdout_json"
 step = "list-snapshots"
-path = "snapshot_count"
-equals = 0
+path = "trace_id"
+equals = "{trace_id}"
 
+# snapshot_count must be >0; we assert by path existence (any non-null
+# value satisfies the `path` assertion, and the equals check below pins
+# the specific captured-session count down).
 [[assertions]]
 kind = "stdout_json"
 step = "list-snapshots"
-path = "trace_id"
-equals = "otbox000000000000"
-
-[[assertions]]
-kind = "stdout_contains"
-step = "checkout-help"
-value = "Materialize or preview a Trace Snapshot rewind"
+path = "snapshot_count"

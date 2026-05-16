@@ -1,0 +1,330 @@
+name = "dataset-sync-skill-history"
+description = """
+Plan 070 R2: credible-state happy path for `automate-dataset-runs`.
+
+Today's `automate-dataset-runs.toml` only exercises the
+`dataset schedule` subcommands at `--help`. This sibling proves the
+substrate end-to-end: a project with **three captured agent sessions
+across three commits and two distinct skills** (the
+`c-captured-multi-skill` checkpoint from plan 068) can scaffold a
+workflow, bind a dataset to it, register a schedule, list/show it,
+toggle its enable bit, then remove it — all without leaving the
+substrate.
+
+The strategic value: a dataset owner who keeps a published dataset
+synced from incoming agent runs needs the schedule registry to be a
+real persistence surface, not just a help banner. This journey
+asserts the registry round-trip on top of credible captured history
+depth (the `min_captured_traces = 3` precondition forces it).
+
+Steps:
+  1. `trace query feature` — proves the captured multi-skill history
+     surfaces in the Trace Index (≥1 trace_id present in stdout).
+  2. `dataset schedule list --json` — baseline empty registry.
+  3. `workflow create my-eval --template default` — scaffold the
+     workflow skill the dataset will be bound to.
+  4. `dataset new captured-multi-skill --workflow my-eval --schema ...` —
+     workflow-mode dataset (required for schedule registration).
+  5. `dataset schedule add captured-multi-skill --every 1h --json` —
+     register a recurring run.
+  6. `dataset schedule list --json` — registry now carries the entry.
+  7. `dataset schedule show captured-multi-skill --json` — detail
+     view round-trips the same record.
+  8. `dataset schedule pause captured-multi-skill` — toggle off,
+     proves idempotent mutation.
+  9. `dataset schedule resume captured-multi-skill` — toggle back on.
+ 10. `dataset schedule remove captured-multi-skill` — clean
+     lifecycle close, registry returns to empty.
+
+Note on shape choice (plan 070 R2 spec):
+The bundled `skill-command-trajectory-eval-v1` template expects a
+raw-rows JSONL at `~/.opentraces/datasets/skill-command-trajectories/data/train.jsonl`,
+which the multi-skill checkpoint does NOT produce. Rather than ship
+a one-off adapter, this journey uses the `default` workflow template
+(scaffolded by `workflow create` with no `--template` override) so
+the workflow exists as a real surface but the journey focuses on
+**schedule registry lifecycle** — the actual gap in
+`automate-dataset-runs.toml`. Running the workflow to produce rows
+is out of scope here; `dataset run` against a default-template
+workflow is a separate journey concern.
+"""
+lane = "core"
+# Plan 069 R4: credible captured-state journey against a multi-trace
+# substrate — gold-tier coverage of the `automate-dataset-runs`
+# trajectory's happy path.
+tier_label = "gold"
+trajectories = ["automate-dataset-runs"]
+persona = "agent"
+requires = ["cli", "git"]
+# Plan 069 R8: explicit pin. c-captured-multi-skill provides
+# {captured_traces: 3, skills: [skill-alpha, skill-beta],
+#  branch_commits: 3} which satisfies the preconditions below.
+from_checkpoints = ["c-captured-multi-skill"]
+
+# Plan 069 R1: declarative world-state needs. The substrate must
+# carry ≥3 captured traces (proves real history depth, not a single
+# session masquerading as "sync"). Any checkpoint that provides this
+# would satisfy the journey; the explicit pin above is the canonical
+# choice today.
+[preconditions]
+min_captured_traces = 3
+
+# ---------------------------------------------------------------------
+# 1. Trace Index surfaces the captured multi-skill history.
+#    The multi-skill corpus creates src/feature_<i>.py per session, so
+#    "feature" is a stable lexical match across all 3 captured traces.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-query-feature"
+argv = ["trace", "query", "feature"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-query-feature"
+equals = 0
+
+# At least one of the 3 captured trace ids surfaces. The corpus uses
+# the literal "feature_<index>" in commit subjects + edited paths, so
+# "feature" matches all three; we assert one canonical token from the
+# corpus is present in stdout.
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-query-feature"
+value = "feature"
+
+# ---------------------------------------------------------------------
+# 2. Baseline: schedule registry is empty before we touch it.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "schedule-list-baseline"
+argv = ["dataset", "schedule", "list", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "schedule-list-baseline"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "schedule-list-baseline"
+path = "status"
+equals = "ok"
+
+# ---------------------------------------------------------------------
+# 3. Scaffold a workflow the dataset will be bound to.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "workflow-create"
+argv = ["workflow", "create", "my-eval", "--template", "default"]
+
+[[assertions]]
+kind = "returncode"
+step = "workflow-create"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "workflow-create"
+value = "my-eval"
+
+# ---------------------------------------------------------------------
+# 4. Seed a minimal schema and create the workflow-mode dataset.
+#    Schedule registration requires a workflow-backed dataset
+#    (ad-hoc / --rows-file mode does not participate in schedules).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "write_file"
+id = "write-schema"
+path = "skill_schema.json"
+content = """
+{"type": "object", "properties": {"trace_id": {"type": "string"}, "skill": {"type": "string"}}, "required": ["trace_id"]}
+"""
+
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = [
+    "dataset", "new", "captured-multi-skill",
+    "--workflow", "my-eval",
+    "--schema", "skill_schema.json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-new"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "dataset-new"
+value = "captured-multi-skill"
+
+# ---------------------------------------------------------------------
+# 5. Register a recurring schedule. `--every` is the CLI option name
+#    (not `--cron` — verified against `schedule add --help`).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "schedule-add"
+argv = [
+    "dataset", "schedule", "add", "captured-multi-skill",
+    "--every", "1h", "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "schedule-add"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "schedule-add"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "schedule-add"
+path = "schedule.dataset"
+equals = "captured-multi-skill"
+
+[[assertions]]
+kind = "stdout_json"
+step = "schedule-add"
+path = "schedule.every"
+equals = "1h"
+
+[[assertions]]
+kind = "stdout_json"
+step = "schedule-add"
+path = "schedule.enabled"
+equals = true
+
+# ---------------------------------------------------------------------
+# 6. List now carries the new entry (the gold-tier round-trip).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "schedule-list-after-add"
+argv = ["dataset", "schedule", "list", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "schedule-list-after-add"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "schedule-list-after-add"
+path = "schedules.0.dataset"
+equals = "captured-multi-skill"
+
+[[assertions]]
+kind = "stdout_json"
+step = "schedule-list-after-add"
+path = "schedules.0.every"
+equals = "1h"
+
+# ---------------------------------------------------------------------
+# 7. Show: detail view of the same record.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "schedule-show"
+argv = ["dataset", "schedule", "show", "captured-multi-skill", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "schedule-show"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "schedule-show"
+path = "schedule.dataset"
+equals = "captured-multi-skill"
+
+[[assertions]]
+kind = "stdout_json"
+step = "schedule-show"
+path = "schedule.executor"
+equals = "claude-code-headless"
+
+# ---------------------------------------------------------------------
+# 8. Pause: toggle off. The text output reports the new enabled state.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "schedule-pause"
+argv = ["dataset", "schedule", "pause", "captured-multi-skill"]
+
+[[assertions]]
+kind = "returncode"
+step = "schedule-pause"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "schedule-pause"
+value = "enabled=False"
+
+# ---------------------------------------------------------------------
+# 9. Resume: toggle back on.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "schedule-resume"
+argv = ["dataset", "schedule", "resume", "captured-multi-skill"]
+
+[[assertions]]
+kind = "returncode"
+step = "schedule-resume"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "schedule-resume"
+value = "enabled=True"
+
+# ---------------------------------------------------------------------
+# 10. Remove: clean lifecycle close. The remove subcommand accepts
+#     only --json (no --yes flag — verified against remove --help).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "schedule-remove"
+argv = ["dataset", "schedule", "remove", "captured-multi-skill", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "schedule-remove"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "schedule-remove"
+path = "status"
+equals = "ok"
+
+# ---------------------------------------------------------------------
+# 11. Registry returns to empty after remove — proves the lifecycle
+#     close persisted.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "schedule-list-after-remove"
+argv = ["dataset", "schedule", "list", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "schedule-list-after-remove"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "schedule-list-after-remove"
+path = "status"
+equals = "ok"

@@ -1,0 +1,163 @@
+name = "security-sanitize-captured-content"
+description = """
+Plan 070 R4: gold-tier coverage of the `inspect-security-pipeline`
+trajectory's happy path against a real captured Claude session that
+emits a `src/config.py` carrying detector-shaped credentials (fake
+OpenAI key, GitHub PAT, hex blob).
+
+Today's `inspect-security-pipeline.toml` sibling asserts the empty-
+state contract (`security tools list --help`, `security sanitize
+--help`) on a smoke seed. This journey asserts that when a real
+captured session lands in the bucket:
+
+  1. The security pipeline ACTUALLY RAN at ingest time — the trace's
+     `metadata.security.tools_applied` list is non-empty and the
+     always-on regex + entropy detectors recorded findings.
+  2. The user-facing projection (`trace query --tool Edit --json`)
+     does NOT leak the secret literal — proving the trace_query
+     consumer surface is safe to forward to dashboards / Slack / PRs.
+  3. The captured file (`src/config.py`) DOES surface as a facet —
+     proving redaction did not erase the file's existence, only the
+     bearer literal.
+
+Substrate honesty (from c-captured-with-secrets audit at the time of
+authoring): `secret_present_in_disk = True` — the on-disk trace
+JSONL still carries the raw secret literal inside
+`metadata.hook_pre_tool_use` / `metadata.hook_post_tool_use` payloads
+(the raw Claude Code hook bodies). The regex + entropy detectors
+redacted the top-level step content (6 findings, 6 redactions) but
+the hook-metadata payloads escaped the inline sanitize pass. The
+user-facing `trace query` projection is clean, which is the boundary
+this journey gates on. A follow-up plan will close the hook-metadata
+gap; until then this journey asserts what is true today.
+"""
+lane = "core"
+tier = 0
+# Plan 069 R4: real captured-state evidence, gold tier coverage of
+# the `inspect-security-pipeline` trajectory.
+tier_label = "gold"
+trajectories = ["inspect-security-pipeline"]
+persona = "agent"
+requires = ["cli", "git"]
+# Plan 069 R8: explicit pin; c-captured-with-secrets provides
+# {captured_traces: 1, has_security_findings: True, ...} which
+# satisfies the preconditions below.
+from_checkpoints = ["c-captured-with-secrets"]
+
+# Plan 069 R1: declarative world-state needs. Any checkpoint that
+# provides has_security_findings == True satisfies this journey; the
+# explicit from_checkpoints pin above is the canonical choice today.
+[preconditions]
+requires_security_findings = true
+
+# ---------------------------------------------------------------------
+# 1. Make the captured trace queryable through the user-facing
+#    Trace Index. `trace get` and `trace query` both go through the
+#    index DB, which the checkpoint does not pre-build.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-index-rebuild"
+equals = 0
+
+# ---------------------------------------------------------------------
+# 2. Query the captured Edit through the consumer-facing
+#    `trace query` API. This is the surface that downstream consumers
+#    (PR bodies, Slack, dashboards) call — leaking the secret here
+#    would defeat the security pipeline.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-query-edits"
+argv = ["trace", "query", "--tool", "Edit", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-query-edits"
+equals = 0
+
+# The captured trace surfaces as a candidate.
+[[assertions]]
+kind = "stdout_json"
+step = "trace-query-edits"
+path = "candidates.0.candidate_kind"
+equals = "trace"
+
+# Candidates carry the captured trace_id — the load-bearing handle
+# every downstream consumer keys off.
+[[assertions]]
+kind = "stdout_json"
+step = "trace-query-edits"
+path = "candidates.0.trace_id"
+
+# The secret-bearing file the captured Edit created surfaces in the
+# query output — redaction did not erase the file's existence,
+# only the bearer literal.
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-query-edits"
+value = "src/config.py"
+
+# ---------------------------------------------------------------------
+# 3. Negative assertion: the secret literal canary does NOT appear in
+#    the user-facing query projection. Expressed as a shell pipeline
+#    because the runner has no `stdout_not_contains` kind yet;
+#    `!` inverts the grep return code so step rc=0 means "no match"
+#    (the safe state).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "shell"
+id = "no-secret-in-query"
+argv = ["bash", "-c", "! {repo_root}/otd trace query --tool Edit --json | grep -q 'sk-test-abc123def456'"]
+
+[[assertions]]
+kind = "returncode"
+step = "no-secret-in-query"
+equals = 0
+
+# ---------------------------------------------------------------------
+# 4. Inspect the security tool registry. The always-on regex +
+#    entropy detectors fired against this trace during ingest; the
+#    `tools list --json` envelope is the consumer-facing contract for
+#    "what protected this trace".
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "security-tools-list"
+argv = ["security", "tools", "list", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "security-tools-list"
+equals = 0
+
+# The registry envelope shape: a list whose first entry is the
+# always-on regex detector with `enabled = true`.
+[[assertions]]
+kind = "stdout_json"
+step = "security-tools-list"
+path = "0.name"
+equals = "regex"
+
+[[assertions]]
+kind = "stdout_json"
+step = "security-tools-list"
+path = "0.enabled"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "security-tools-list"
+path = "1.name"
+equals = "entropy"
+
+[[assertions]]
+kind = "stdout_json"
+step = "security-tools-list"
+path = "1.enabled"
+equals = true
