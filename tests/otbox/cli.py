@@ -252,59 +252,11 @@ prerequisites:
     - rsync
 """
 
-_OTBOX_SKILL_TEMPLATE = """\
----
-name: otbox
-description: Snapshottable full test environment for opentraces. Provisions \
-isolated boxes (local fs, docker, or SSH-leased remote), seeds a \
-fully-populated opentraces world, runs declarative journey TOMLs, \
-collects PR-ready artifacts, tears down with zero host residue.
----
-
-# otbox — agent quick reference
-
-otbox runs from the repo-root shim ``./otbox`` (mirrors ``otd``).
-Every command accepts ``--json`` for stable machine-readable output.
-
-## Lifecycle (Tier 0 local, the default)
-
-```bash
-./otbox up --seed smoke                  # provision + seed in one
-./otbox journey cli-publish-happy-path   # run a catalogue journey
-./otbox artifacts                        # bundle evidence for a PR
-./otbox down                             # tear down, zero residue
-```
-
-## Lifecycle (Tier 1 remote over SSH/Tailscale)
-
-```bash
-export OT_OTBOX_TIER1=1
-export OT_OTBOX_SSH_TARGET=user@host    # or a Tailscale name
-./otbox warmup                          # provision a Tier 1 box
-./otbox sync                            # rsync the dirty working tree
-./otbox seed smoke
-./otbox snapshot t1-base
-./otbox down
-./otbox up --from t1-base --driver remote
-./otbox journey cli-publish-happy-path
-```
-
-## Catalogue
-
-Add coverage by adding a TOML file under
-``tests/otbox/catalogue/journeys/``. The runner is generic. See plan
-``kb/plans/060-otbox-test-environment.md`` for the schema and
-``kb/plans/061-otbox-tailscale-local-tier1.md`` for Tier 1 specifics.
-
-## Inspection
-
-```bash
-./otbox list           # boxes, snapshots, drivers, seeds, journeys
-./otbox status         # the current box
-./otbox ssh            # drop into the box's project dir
-./otbox logs --box ID  # per-step transcripts
-```
-"""
+# The agent-facing skill ships at install time via `./otbox init`. The
+# canonical source-of-truth lives at ``tests/otbox/templates/SKILL.md``
+# so the file is diff-able + reviewable as normal markdown rather than
+# an opaque string literal here.
+_OTBOX_SKILL_TEMPLATE_PATH = Path(__file__).resolve().parent / "templates" / "SKILL.md"
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -319,8 +271,9 @@ def cmd_init(args: argparse.Namespace) -> int:
     written: list[str] = []
     skipped: list[str] = []
 
+    skill_body = _OTBOX_SKILL_TEMPLATE_PATH.read_text(encoding="utf-8")
     for path, body in ((otbox_yaml, _OTBOX_YAML_TEMPLATE),
-                       (skill_md, _OTBOX_SKILL_TEMPLATE)):
+                       (skill_md, skill_body)):
         if path.exists() and not args.force:
             skipped.append(str(path))
             continue
