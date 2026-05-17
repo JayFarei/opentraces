@@ -211,18 +211,38 @@ def _prep_agent_home(box_home: Path, agent: str | None) -> str | None:
 
     Without this, a real agent binary (e.g. ``claude``) launched into a
     virgin HOME shows first-run UX — theme picker, login prompt, terms
-    acceptance — and never reaches a state where the PTY runner's
-    ``expect_regex`` can match the prompt response. The fix is to copy
-    the host operator's already-onboarded state into the box, the same
-    state ``capture-refresh`` requires anyway (the operator has to be
-    logged in for the real agent to do anything useful).
+    acceptance, MCP-server trust prompts — and never reaches a state
+    where the runner can drive it. The fix is to copy the host operator's
+    already-onboarded state into the box, the same state
+    ``capture-refresh`` requires anyway (the operator has to be logged
+    in for the real agent to do anything useful).
 
-    For ``claude``, ``editorMode`` is force-overridden to ``"emacs"``
-    in the box copy. The PTY runner sends prompts via ``tmux send-keys``
-    in literal-text mode, which works with emacs-style line editing
-    but breaks under vim mode (keystrokes get interpreted as normal-mode
-    commands instead of buffer text). The host operator's vim preference
-    stays untouched on disk; only the box copy is normalised.
+    What gets seeded for ``claude``:
+
+      * ``$HOME/.claude/.credentials.json`` — copied verbatim from the
+        host so the API session is authenticated.
+      * ``$HOME/.claude.json`` — copied from the host, then sanitised:
+        ``editorMode`` is forced to ``"emacs"`` (PTY callers send keys
+        in literal-text mode which breaks under vim), the ``projects``
+        dict is wiped (Claude rebuilds per-project entries on demand
+        and the host's 300KB+ of project history is irrelevant and
+        privacy-leaky in a box copy), and any MCP-server prompts the
+        host already approved are pre-acknowledged for the box's
+        project path.
+
+    The MCP-prompt suppression is the critical bit: when ``claude``
+    launches inside the box's project dir it walks the cwd ancestry
+    looking for ``.mcp.json`` files and surfaces a trust prompt for
+    each user-scope server it finds. The host operator's
+    ``~/.mcp.json`` is one such file and the box's runner cannot
+    dismiss that prompt. Seeding ``hasTrustDialogAccepted: true``
+    for the box's project path plus ``enabledMcpjsonServers: []``
+    short-circuits the prompt; for safety the runner *also* passes
+    ``--strict-mcp-config`` on the spawn line (defence in depth).
+
+    The host operator's vim preference, full project history, and
+    MCP enable list stay untouched on disk — only the box copy is
+    normalised.
 
     Returns ``None`` on success or no-op (echo, unknown agent, etc.),
     or an error string the caller turns into a SKIP verdict if the
@@ -245,11 +265,241 @@ def _prep_agent_home(box_home: Path, agent: str | None) -> str | None:
     except Exception as exc:  # noqa: BLE001 - corrupt host config shouldn't crash the runner
         return f"agent prep: failed to parse host {host_settings}: {exc}"
     settings["editorMode"] = "emacs"
+    # Drop the host's per-project history — Claude rebuilds per-project
+    # entries on first contact, and the host's 186+ project entries
+    # (300KB+) leak ambient state into every box. Replace with an empty
+    # dict so the box starts with a clean project ledger.
+    settings["projects"] = {}
     (box_home / ".claude.json").write_text(
         _json.dumps(settings, indent=2), encoding="utf-8"
     )
     shutil.copy2(host_creds, box_home / ".claude" / ".credentials.json")
     return None
+
+
+def _prep_claude_project_trust(box_home: Path, project_dir: Path) -> None:
+    """Pre-acknowledge MCP + trust prompts for the box's project path.
+
+    ``claude`` walks the cwd ancestry looking for ``.mcp.json`` files
+    when it boots and surfaces a per-server trust prompt for any
+    user-scope server it finds. The host operator's ``~/.mcp.json``
+    almost always declares servers, so the prompt fires by default
+    even though the box's HOME is otherwise isolated. The PTY runner
+    cannot dismiss that prompt (it requires keyboard interaction
+    during boot when the alternate-screen buffer is empty to a
+    ``tmux capture-pane`` reader).
+
+    The defence is to seed an entry in ``$HOME/.claude.json`` under
+    ``projects[<box.project absolute path>]`` that pre-acks the trust
+    dialog and declares an empty enabled-MCP-server list for that
+    path. ``claude --strict-mcp-config`` on the spawn line is the
+    second layer of defence — even if the trust seeding drifts, the
+    flag forces Claude to ignore everything outside the explicit
+    config flag.
+
+    Callable safely on any HOME — no-op if ``.claude.json`` is missing.
+    """
+    settings_path = box_home / ".claude.json"
+    if not settings_path.is_file():
+        return
+    try:
+        import json as _json
+        settings = _json.loads(settings_path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - corrupt config shouldn't crash the runner
+        return
+    projects = settings.setdefault("projects", {})
+    key = str(project_dir.resolve())
+    # Pre-ack the trust dialog and declare zero enabled MCP servers for
+    # this exact project path. Claude treats both the literal path and
+    # any /private-prefixed Darwin variant as distinct keys, so seed
+    # both forms — the cost is two small dict entries.
+    for variant in {key, f"/private{key}" if not key.startswith("/private") else key.removeprefix("/private")}:
+        entry = projects.setdefault(variant, {})
+        entry["hasTrustDialogAccepted"] = True
+        entry["enabledMcpjsonServers"] = []
+        entry["disabledMcpjsonServers"] = []
+        entry["mcpServers"] = {}
+        entry["hasCompletedProjectOnboarding"] = True
+    settings_path.write_text(_json.dumps(settings, indent=2), encoding="utf-8")
+
+
+def _install_opentraces_hooks_in_box(box: Box) -> str | None:
+    """Install opentraces Claude Code hooks into the box's HOME.
+
+    The capture-refresh contract is to produce a real trace artifact,
+    which requires opentraces' PreToolUse/PostToolUse/Stop/PostCompact
+    hooks to be wired into Claude's ``$HOME/.claude/settings.json``
+    BEFORE the agent boots. The box ships with an editable opentraces
+    install at ``box.project/.testvenv/bin/opentraces`` (the
+    ``c-installed-source`` checkpoint provisions it), so we invoke
+    ``opentraces setup claude-code`` against the isolated HOME via the
+    box's CLI.
+
+    Also runs ``opentraces init`` in the project (so the project has
+    a registered ``project-<slug>`` state dir under
+    ``$HOME/.opentraces/projects/``) and ``opentraces setup git``
+    (post-commit correlator hook that powers ``trail blame``).
+
+    Returns ``None`` on success or a non-fatal error string. The
+    caller decides whether to fail the run on a non-None return.
+    """
+    from ..env import isolated_env
+
+    testvenv_cli = Path(box.project) / ".testvenv" / "bin" / "opentraces"
+    if not testvenv_cli.is_file():
+        return (
+            f"box CLI not found at {testvenv_cli} — checkpoint "
+            f"`c-installed-source` did not run?"
+        )
+    env = isolated_env(box)
+    # 1. Install Claude Code hooks into the box's $HOME/.claude/settings.json
+    setup_hooks = subprocess.run(
+        [str(testvenv_cli), "setup", "claude-code"],
+        cwd=str(box.project),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if setup_hooks.returncode != 0:
+        return (
+            f"opentraces setup claude-code failed (rc={setup_hooks.returncode}): "
+            f"{(setup_hooks.stderr or setup_hooks.stdout).strip()[:200]}"
+        )
+    # 2. Register the project so traces have somewhere to land.
+    init = subprocess.run(
+        [str(testvenv_cli), "init", "--start-fresh", "--agent", "claude-code"],
+        cwd=str(box.project),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if init.returncode != 0:
+        return (
+            f"opentraces init failed (rc={init.returncode}): "
+            f"{(init.stderr or init.stdout).strip()[:200]}"
+        )
+    # 3. Install the post-commit hook so trail-blame anchors mature.
+    setup_git = subprocess.run(
+        [str(testvenv_cli), "setup", "git"],
+        cwd=str(box.project),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if setup_git.returncode != 0:
+        return (
+            f"opentraces setup git failed (rc={setup_git.returncode}): "
+            f"{(setup_git.stderr or setup_git.stdout).strip()[:200]}"
+        )
+    return None
+
+
+def _run_claude_print_turns(
+    binary: str,
+    project: Path,
+    env: dict[str, str],
+    turns: list[Turn],
+    pane_log_path: Path,
+) -> tuple[str, int, str, str]:
+    """Drive ``claude --print`` turns in subprocess mode (no tmux).
+
+    Returns ``(verdict, completed_turns, error_message, final_output)``.
+
+    Why not tmux for real claude:
+      * ``claude``'s interactive TUI uses tmux's alternate-screen
+        buffer during boot, which ``tmux capture-pane -p`` reads as
+        empty for the first 30-60s. The PTY runner's poll loop sees
+        no content, sends keystrokes blindly, and the agent never
+        actually receives the prompt.
+      * ``claude``'s interactive mode triggers MCP-trust prompts on
+        any ``.mcp.json`` found in cwd ancestry — the runner cannot
+        dismiss those.
+      * ``claude --print`` (documented in ``claude --help``) is the
+        non-interactive contract that skips the workspace-trust
+        dialog AND fires the same PreToolUse/PostToolUse/Stop hooks
+        as interactive mode (verified empirically — see capture
+        pipeline test fixtures).
+      * ``claude --continue`` resumes the most recent conversation
+        in the cwd, so multi-turn scenarios compose as
+        ``--print <turn0>`` then ``--print --continue <turnN>``.
+    """
+    completed = 0
+    last_stdout = ""
+    last_stderr = ""
+    with pane_log_path.open("a", encoding="utf-8") as log:
+        log.write("=== claude --print mode (no tmux) ===\n")
+        for turn_idx, turn in enumerate(turns):
+            cmd = [
+                binary,
+                "--print",
+                "--strict-mcp-config",
+                "--permission-mode", "bypassPermissions",
+            ]
+            if turn_idx > 0:
+                cmd.append("--continue")
+            cmd.append(turn.prompt)
+            log.write(
+                f"=== turn {turn_idx} cmd={cmd!r} expect={turn.expect_regex!r} "
+                f"timeout={turn.timeout_s}s ===\n"
+            )
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    cwd=str(project),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=max(1.0, turn.timeout_s),
+                    stdin=subprocess.DEVNULL,
+                )
+            except subprocess.TimeoutExpired as exc:
+                last_stdout = (exc.stdout.decode("utf-8", "replace")
+                               if isinstance(exc.stdout, (bytes, bytearray))
+                               else (exc.stdout or ""))
+                last_stderr = (exc.stderr.decode("utf-8", "replace")
+                               if isinstance(exc.stderr, (bytes, bytearray))
+                               else (exc.stderr or ""))
+                log.write(f"--- TIMEOUT after {turn.timeout_s}s ---\n")
+                log.write(f"--- partial stdout ---\n{last_stdout}\n")
+                log.write(f"--- partial stderr ---\n{last_stderr}\n")
+                return (
+                    "FAIL",
+                    completed,
+                    f"turn {turn_idx}: timed out after {turn.timeout_s}s",
+                    last_stdout,
+                )
+            last_stdout = proc.stdout or ""
+            last_stderr = proc.stderr or ""
+            log.write(f"--- stdout (rc={proc.returncode}) ---\n{last_stdout}\n")
+            if last_stderr:
+                log.write(f"--- stderr ---\n{last_stderr}\n")
+            if proc.returncode != 0:
+                return (
+                    "FAIL",
+                    completed,
+                    (
+                        f"turn {turn_idx}: claude --print exited rc={proc.returncode}: "
+                        f"{last_stderr.strip()[:200]}"
+                    ),
+                    last_stdout,
+                )
+            pattern = re.compile(turn.expect_regex, re.IGNORECASE)
+            if not pattern.search(last_stdout):
+                return (
+                    "FAIL",
+                    completed,
+                    (
+                        f"turn {turn_idx}: expect_regex "
+                        f"{turn.expect_regex!r} did not match claude --print "
+                        f"stdout (prompt={turn.prompt!r})"
+                    ),
+                    last_stdout,
+                )
+            completed += 1
+    return "PASS", completed, "", last_stdout
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +630,48 @@ def run_simulated_session(
             turn_count=0,
             pane_log_path=str(pane_log_path),
             error_message=prep_error,
+        )
+
+    # --- claude: --print headless mode (no tmux, no MCP prompts) -----------
+    # ``claude``'s interactive TUI uses tmux's alternate-screen buffer and
+    # blocks on MCP-server trust prompts; neither is dismissable from the
+    # tmux capture-pane poll loop. ``claude --print`` is the documented
+    # non-interactive surface, fires the same opentraces hooks as
+    # interactive mode, and composes for multi-turn via --continue. So
+    # for claude we skip tmux entirely. Other agents (echo, codex,
+    # hermes) keep the original PTY/tmux path below.
+    if agent == "claude":
+        # Pre-ack MCP trust for the box's project so even if the runner
+        # ever needs to drop back to interactive mode the prompt is
+        # already silenced. Also short-circuits the cwd-ancestry .mcp.json
+        # walk that picks up the host operator's ~/.mcp.json.
+        _prep_claude_project_trust(Path(box.home), Path(box.project))
+        hook_install_error = _install_opentraces_hooks_in_box(box)
+        if hook_install_error is not None:
+            return ScenarioResult(
+                verdict="FAIL",
+                binary_path=binary_abs,
+                binary_version=binary_version,
+                turn_count=0,
+                pane_log_path=str(pane_log_path),
+                error_message=hook_install_error,
+            )
+        env = isolated_env(box, env_extra)
+        verdict, completed_turns, error_message, final_out = _run_claude_print_turns(
+            binary=binary_abs,
+            project=Path(box.project),
+            env=env,
+            turns=turns,
+            pane_log_path=pane_log_path,
+        )
+        return ScenarioResult(
+            verdict=verdict,
+            binary_path=binary_abs,
+            binary_version=binary_version,
+            turn_count=completed_turns,
+            pane_log_path=str(pane_log_path),
+            error_message=error_message,
+            pane_excerpt=final_out[-2000:] if final_out else "",
         )
 
     # --- spawn tmux session ------------------------------------------------

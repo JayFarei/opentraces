@@ -20,14 +20,14 @@ binary_name = "claude"
 template = "single-file-python-project"
 
 [[turns]]
-prompt = "Add a farewell helper function to src/app.py that returns 'goodbye, <name>'. Then commit the change."
-expect_regex = "(?i)(I'll add|let me add|adding|I will add)"
-timeout_s = 60
+prompt = "Add a farewell helper function to src/app.py that returns 'goodbye, <name>'. Then commit the change with git."
+expect_regex = "(?i)(committed|added|farewell|done)"
+timeout_s = 240
 
 [[turns]]
-prompt = "yes"
-expect_regex = "(?i)(committed|done|complete)"
-timeout_s = 90
+prompt = "What is the name of the function you added?"
+expect_regex = "(?i)farewell"
+timeout_s = 120
 
 [capture]
 artifact_dir = "add-helper-function"
