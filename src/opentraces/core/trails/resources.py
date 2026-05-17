@@ -554,4 +554,247 @@ def resolve_resource(repo: Path, resource: str) -> dict[str, Any]:
         return _resolve_git_anchor(repo, resource, segments)
     if parsed.netloc == "file":
         return _resolve_file_line_origin(repo, resource, segments)
+    if parsed.netloc == "context-node":
+        return _resolve_context_node(repo, resource, segments)
+    if parsed.netloc == "context-layer":
+        return _resolve_context_layer(repo, resource, segments)
+    if parsed.netloc == "context-tree":
+        return _resolve_context_tree(repo, resource, segments)
     raise ValueError(f"unsupported ot:// resource type: {parsed.netloc}")
+
+
+# --------------------------------------------------------------------------- #
+# Context Tree resource resolvers (plan 077 §"ot:// extensions")
+# --------------------------------------------------------------------------- #
+
+
+def _context_unknown(
+    resource: str, resource_type: str, extra: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Empty-state envelope for unknown context resources.
+
+    Per the ``ctx-resolve-empty-state`` journey: never raise on a
+    well-formed URI whose id doesn't resolve, return the standard
+    ``limitations: ["context_layer_unavailable"]`` shape so CLI
+    callers can render it without a traceback.
+    """
+    from ..context_tree.contract import CONTEXT_RESOLVE_SCHEMA_VERSION
+
+    payload = {
+        "schema_version": CONTEXT_RESOLVE_SCHEMA_VERSION,
+        "resource": resource,
+        "resource_type": resource_type,
+        "limitations": ["context_layer_unavailable"],
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _serialize_layer(layer: Any) -> dict[str, Any]:
+    """Render a ContextLayer to the resolver envelope shape."""
+    return {
+        "layer_id": layer.layer_id,
+        "layer_type": layer.layer_type,
+        "completeness": layer.completeness,
+        "capture_method": layer.capture_method,
+        "content": layer.content,
+    }
+
+
+def _serialize_node_with_layers(node: Any, layers_by_id: dict[str, Any]) -> dict[str, Any]:
+    """Render a ContextNode with all four layer contents inlined."""
+    layer_attrs = (
+        ("system_layer", node.system_layer_id),
+        ("messages_layer", node.messages_layer_id),
+        ("tool_registry_layer", node.tool_registry_layer_id),
+        ("runtime_state_layer", node.runtime_state_layer_id),
+    )
+    inlined: dict[str, Any] = {}
+    for key, layer_id in layer_attrs:
+        layer = layers_by_id.get(layer_id)
+        inlined[key] = _serialize_layer(layer) if layer is not None else None
+    return {
+        "node_id": node.node_id,
+        "parent_node_id": node.parent_node_id,
+        "branch_type": node.branch_type,
+        "trace_id": node.trace_id,
+        "step_index": node.step_index,
+        "transcript_uuid": node.transcript_uuid,
+        "transcript_parent_uuid": node.transcript_parent_uuid,
+        "transcript_offset": node.transcript_offset,
+        "subagent_session_id": node.subagent_session_id,
+        "trail_anchor_hint": node.trail_anchor_hint,
+        "capture_completeness": node.capture_completeness,
+        "layers": inlined,
+    }
+
+
+def _context_hash_id(segments: list[str], resource_label: str) -> str:
+    """Extract a ``sha256:<hex>`` id from the algorithm/hex segments.
+
+    ContextNode and ContextLayer ids are stored prefixed
+    (``sha256:<hex>``) in the query projection; ``normalize_id`` strips
+    the algorithm prefix, so we re-attach it here to preserve the
+    lookup key shape.
+    """
+    if len(segments) != 2 or segments[0] != "sha256":
+        raise ValueError(
+            f"{resource_label} must be ot://{resource_label}/sha256/<id>"
+        )
+    hex_id = normalize_id(segments[1])
+    return f"sha256:{hex_id}"
+
+
+def _resolve_context_node(
+    repo: Path, resource: str, segments: list[str]
+) -> dict[str, Any]:
+    """``ot://context-node/sha256/<id>`` → ContextNode with inlined layers."""
+    from ..context_tree.contract import CONTEXT_RESOLVE_SCHEMA_VERSION
+    from ..context_tree.query import build_context_tree_projection
+
+    node_id = _context_hash_id(segments, "context-node")
+    projection = build_context_tree_projection(repo)
+    node = projection.nodes_by_id.get(node_id)
+    if node is None:
+        return _context_unknown(resource, "context_node", {"node_id": node_id})
+    payload = _serialize_node_with_layers(node, projection.layers_by_id)
+    payload["schema_version"] = CONTEXT_RESOLVE_SCHEMA_VERSION
+    payload["resource"] = resource
+    payload["resource_type"] = "context_node"
+    return payload
+
+
+def _resolve_context_layer(
+    repo: Path, resource: str, segments: list[str]
+) -> dict[str, Any]:
+    """``ot://context-layer/sha256/<id>`` → single layer content."""
+    from ..context_tree.contract import CONTEXT_RESOLVE_SCHEMA_VERSION
+    from ..context_tree.query import build_context_tree_projection
+
+    layer_id = _context_hash_id(segments, "context-layer")
+    projection = build_context_tree_projection(repo)
+    layer = projection.layers_by_id.get(layer_id)
+    if layer is None:
+        return _context_unknown(resource, "context_layer", {"layer_id": layer_id})
+    return {
+        "schema_version": CONTEXT_RESOLVE_SCHEMA_VERSION,
+        "resource": resource,
+        "resource_type": "context_layer",
+        **_serialize_layer(layer),
+    }
+
+
+def _resolve_context_tree(
+    repo: Path, resource: str, segments: list[str]
+) -> dict[str, Any]:
+    """Dispatch the three ``ot://context-tree/<trace_id>[/...]`` URIs.
+
+    - ``ot://context-tree/<trace_id>`` -> {nodes, layers, active_leaf, compactions, orphans}
+    - ``ot://context-tree/<trace_id>/active-path`` -> walked path as list of ContextNodes
+    - ``ot://context-tree/<trace_id>/compaction/<index>`` -> compaction boundary with loss_diff
+    """
+    from ..context_tree.contract import CONTEXT_RESOLVE_SCHEMA_VERSION
+    from ..context_tree.query import build_context_tree_projection
+
+    if not segments:
+        raise ValueError(
+            "context tree resource must be ot://context-tree/<trace_id>[/active-path|/compaction/<index>]"
+        )
+    trace_id = segments[0]
+    rest = segments[1:]
+    projection = build_context_tree_projection(repo)
+    if trace_id not in projection.nodes_by_trace:
+        return _context_unknown(
+            resource, "context_tree", {"trace_id": trace_id}
+        )
+
+    if not rest:
+        # Whole-trace summary
+        node_ids = projection.nodes_by_trace.get(trace_id, [])
+        nodes = [
+            _serialize_node_with_layers(projection.nodes_by_id[nid], projection.layers_by_id)
+            for nid in node_ids
+            if nid in projection.nodes_by_id
+        ]
+        referenced_layer_ids: set[str] = set()
+        for nid in node_ids:
+            node = projection.nodes_by_id.get(nid)
+            if node is None:
+                continue
+            referenced_layer_ids.update({
+                node.system_layer_id,
+                node.messages_layer_id,
+                node.tool_registry_layer_id,
+                node.runtime_state_layer_id,
+            })
+        layers = [
+            _serialize_layer(projection.layers_by_id[lid])
+            for lid in sorted(referenced_layer_ids)
+            if lid in projection.layers_by_id
+        ]
+        active_leaf_uuid = projection.active_leaves_by_trace.get(trace_id)
+        active_leaf_node = (
+            projection.node_for_transcript_uuid(trace_id, active_leaf_uuid)
+            if active_leaf_uuid
+            else None
+        )
+        return {
+            "schema_version": CONTEXT_RESOLVE_SCHEMA_VERSION,
+            "resource": resource,
+            "resource_type": "context_tree",
+            "trace_id": trace_id,
+            "nodes": nodes,
+            "layers": layers,
+            "active_leaf": (
+                active_leaf_node.node_id if active_leaf_node else None
+            ),
+            "compactions": [
+                {"pre_node_id": pre, "post_node_id": post}
+                for pre, post in projection.compactions_by_trace.get(trace_id, [])
+            ],
+            "orphans": list(
+                projection.orphan_branch_roots_by_trace.get(trace_id, [])
+            ),
+        }
+
+    if rest == ["active-path"]:
+        path_nodes = projection.active_path(trace_id)
+        return {
+            "schema_version": CONTEXT_RESOLVE_SCHEMA_VERSION,
+            "resource": resource,
+            "resource_type": "context_tree_active_path",
+            "trace_id": trace_id,
+            "active_path": [
+                _serialize_node_with_layers(node, projection.layers_by_id)
+                for node in path_nodes
+            ],
+        }
+
+    if len(rest) == 2 and rest[0] == "compaction":
+        try:
+            index = int(rest[1])
+        except ValueError as exc:
+            raise ValueError(
+                "compaction index must be an integer"
+            ) from exc
+        loss = projection.compaction_loss(trace_id, index)
+        if "error" in loss:
+            return _context_unknown(
+                resource,
+                "context_tree_compaction",
+                {"trace_id": trace_id, "index": index},
+            )
+        return {
+            "schema_version": CONTEXT_RESOLVE_SCHEMA_VERSION,
+            "resource": resource,
+            "resource_type": "context_tree_compaction",
+            "trace_id": trace_id,
+            "index": index,
+            "loss_diff": loss,
+        }
+
+    raise ValueError(
+        f"unsupported context-tree subpath: {'/'.join(rest)!r}; "
+        "expected '', 'active-path', or 'compaction/<index>'"
+    )

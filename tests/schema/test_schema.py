@@ -289,6 +289,136 @@ class TestSecurityMetadata:
         assert sec.classifier_version == "0.1.0"
 
 
+class TestContextTreeCrossReferences:
+    """Plan 077: ``Step.context_node_id`` and ``TraceRecord.context_tree_summary``.
+
+    These are strictly additive cross-reference fields linking
+    ``TraceRecord`` to the Context Tree substrate. The contract is:
+
+    1. Existing JSONL written by 0.4.0 (without these fields) MUST still
+       validate as 0.5.0 with the defaults applied.
+    2. The new fields, when populated, round-trip cleanly.
+    3. Field types match the documented contract
+       (``str | None`` and ``dict[str, Any]``).
+    """
+
+    def test_step_context_node_id_defaults_to_none(self):
+        """Existing 0.4.0 Step payloads without ``context_node_id`` must validate."""
+        step = Step(step_index=1, role="agent")
+        assert step.context_node_id is None
+
+    def test_step_context_node_id_round_trips(self):
+        node_id = "sha256:" + "a" * 64
+        step = Step(
+            step_index=2,
+            role="agent",
+            context_node_id=node_id,
+        )
+        assert step.context_node_id == node_id
+        restored = Step.model_validate_json(step.model_dump_json())
+        assert restored.context_node_id == node_id
+
+    def test_step_context_node_id_accepts_none_explicit(self):
+        step = Step(step_index=3, role="user", context_node_id=None)
+        assert step.context_node_id is None
+
+    def test_trace_record_context_tree_summary_defaults_to_empty_dict(self):
+        record = TraceRecord(
+            trace_id="t-ctx-1",
+            session_id="s-ctx-1",
+            agent=Agent(name="claude-code"),
+        )
+        assert record.context_tree_summary == {}
+        assert isinstance(record.context_tree_summary, dict)
+
+    def test_trace_record_context_tree_summary_round_trips(self):
+        summary = {
+            "node_count": 4,
+            "layer_count": 4,
+            "active_path_leaf_id": "sha256:" + "b" * 64,
+            "capture_limitations": ["builtin_tool_schemas_inferred"],
+        }
+        record = TraceRecord(
+            trace_id="t-ctx-2",
+            session_id="s-ctx-2",
+            agent=Agent(name="claude-code"),
+            context_tree_summary=summary,
+        )
+        json_str = record.model_dump_json()
+        restored = TraceRecord.model_validate_json(json_str)
+        assert restored.context_tree_summary == summary
+
+    def test_existing_0_4_0_record_parses_without_new_fields(self):
+        """Simulate a JSONL line written by 0.4.0: no ``context_node_id`` on Step,
+        no ``context_tree_summary`` on TraceRecord, no other changes.
+
+        This is the load-bearing additive-evolution assertion. If this
+        ever fails, the migration policy in VERSION-POLICY.md is being
+        violated.
+        """
+        legacy_payload = {
+            "schema_version": "0.4.0",
+            "trace_id": "legacy-trace",
+            "session_id": "legacy-sess",
+            "agent": {"name": "claude-code", "version": "1.0.83"},
+            "steps": [
+                {
+                    "step_index": 1,
+                    "role": "user",
+                    "content": "do a thing",
+                },
+                {
+                    "step_index": 2,
+                    "role": "agent",
+                    "content": "doing the thing",
+                    "model": "anthropic/claude-sonnet-4-20250514",
+                },
+            ],
+            "metadata": {},
+        }
+        record = TraceRecord.model_validate(legacy_payload)
+        assert record.context_tree_summary == {}
+        assert all(step.context_node_id is None for step in record.steps)
+        # And the legacy payload survives a full round-trip
+        restored = TraceRecord.model_validate_json(record.model_dump_json())
+        assert restored.trace_id == "legacy-trace"
+        assert len(restored.steps) == 2
+        assert restored.context_tree_summary == {}
+
+    def test_existing_disk_jsonl_still_parses_with_new_schema(self):
+        """A real 0.3.0 trace.jsonl from tests/integration/fixtures/ must
+        parse cleanly under the 0.5.0 model. This is the on-disk
+        backward-compat check that catches accidental restructuring of
+        any existing field while we add the two new ones.
+        """
+        import json
+        from pathlib import Path
+
+        sample = (
+            Path(__file__).resolve().parent.parent
+            / "integration" / "fixtures" / "entry6" / "trace.jsonl"
+        )
+        if not sample.exists():
+            import pytest as _pytest
+            _pytest.skip(f"no on-disk legacy trace.jsonl at {sample}")
+
+        count = 0
+        with sample.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                payload = json.loads(line)
+                # Should validate without raising
+                record = TraceRecord.model_validate(payload)
+                # And defaults should apply to the new fields
+                assert record.context_tree_summary == {}
+                for step in record.steps:
+                    assert step.context_node_id is None
+                count += 1
+        assert count >= 1, "legacy trace.jsonl produced no records"
+
+
 class TestGenerationIndex:
     def test_generation_index_field(self):
         """Round-trip a TraceRecord with generation_index survives JSON serialization."""

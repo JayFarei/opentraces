@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from opentraces.capture.claude_code.parse import ClaudeCodeParser
-from opentraces_schema import TraceRecord
+from opentraces_schema import SCHEMA_VERSION, TraceRecord
 
 
 def _write_session(tmp_path: Path, lines: list[dict], name: str = "test-session.jsonl") -> Path:
@@ -138,7 +138,9 @@ class TestClaudeCodeParser:
         record = parser.parse_session(session_file)
 
         assert record is not None
-        assert record.schema_version == "0.3.0"
+        # Track the current schema version rather than pinning a stale literal;
+        # the parser stamps SCHEMA_VERSION at parse time.
+        assert record.schema_version == SCHEMA_VERSION
         assert record.metadata["trace_trails"] == {
             "schema_version": "opentraces.trace_trails.v1",
             "snapshot_resume_contract": "opentraces.snapshot_resume.v1",

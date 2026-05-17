@@ -119,6 +119,16 @@ class Step(BaseModel):
     snippets: list[Snippet] = Field(default_factory=list)
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     timestamp: str | None = None
+    context_node_id: str | None = Field(
+        None,
+        description=(
+            "Context Tree node id (``sha256:<hex>``) corresponding to this step, "
+            "when captured. Cross-references the Context Tree substrate "
+            "(plan 077) so consumers can join a Step to the model's view at "
+            "that moment in one hop. Null when Context Tree capture was not "
+            "run for the session."
+        ),
+    )
 
 
 class Outcome(BaseModel):
@@ -358,6 +368,18 @@ class TraceRecord(BaseModel):
             "Evidence-graded links to commits/revisions this trace contributed to. "
             "A trace can link to many commits (rebase, squash, long session); "
             "a commit can link to many traces (cherry-pick, composition)."
+        ),
+    )
+    context_tree_summary: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Context Tree projection summary at trace time (plan 077). "
+            "Typical keys: ``node_count``, ``layer_count``, "
+            "``active_path_leaf_id``, ``capture_limitations``. Empty when "
+            "Context Tree capture was not run for the session. "
+            "The shape mirrors ``ContextTreeProjection.summary()`` so the "
+            "field can be populated directly from the projection without a "
+            "translation layer."
         ),
     )
     metadata: dict[str, Any] = Field(default_factory=dict)

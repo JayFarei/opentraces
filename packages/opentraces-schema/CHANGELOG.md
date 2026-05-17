@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
+## [0.5.0] - 2026-05-18
+
+Adds two Context Tree cross-reference fields (plan 077). Strictly additive
+on top of `0.4.0`: both fields default to the empty value, existing JSONL
+parses unchanged, and pre-0.5.0 readers continue to round-trip the records
+they wrote.
+
+See [RATIONALE-0.5.0.md](RATIONALE-0.5.0.md) for design notes.
+
+### Added
+
+**Context Tree cross-reference fields (plan 077)**
+
+- `Step.context_node_id: str | None` — when populated, the `sha256:<hex>`
+  id of the Context Tree node corresponding to this step. Lets consumers
+  join a `Step` to the model's view at that moment in one hop.
+- `TraceRecord.context_tree_summary: dict[str, Any]` — Context Tree
+  projection summary stamped at trace time. Shape mirrors
+  `ContextTreeProjection.summary()`: typical keys are `node_count`,
+  `layer_count`, `active_path_leaf_id`, `capture_limitations`. Empty `{}`
+  when Context Tree capture was not run.
+
 ## [0.4.0] - 2026-04-29
 
 Adds the local dataset/workflow contract for Plan 057 (Milestone 2), with the

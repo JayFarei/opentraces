@@ -2787,10 +2787,14 @@ from .workflow import workflow_group as _workflow_group  # noqa: E402
 from .bucket import bucket_group as _bucket_group  # noqa: E402
 from .security import security_group as _security_group  # noqa: E402
 
+# Plan-077 — Context Tree substrate: ``opentraces ctx`` navigation surface.
+from .ctx import ctx_group as _ctx_group  # noqa: E402
+
 main.add_command(_bucket_group, name="bucket")
 main.add_command(_dataset_group, name="dataset")
 main.add_command(_workflow_group, name="workflow")
 main.add_command(_security_group, name="security")
+main.add_command(_ctx_group, name="ctx")
 
 
 @main.command("list")
