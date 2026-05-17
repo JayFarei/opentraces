@@ -754,6 +754,7 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
         scenario.turns,
         initial_state_dir=None,
         output_dir=output_dir,
+        agent=scenario.agent,
     )
 
     # FAIL → leave the box up for inspection, exit non-zero. The runner's

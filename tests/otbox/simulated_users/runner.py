@@ -206,6 +206,52 @@ def _copy_initial_state(initial_state_dir: Path, project: Path) -> None:
             shutil.copy2(entry, target)
 
 
+def _prep_agent_home(box_home: Path, agent: str | None) -> str | None:
+    """Seed the box's isolated HOME with already-onboarded agent state.
+
+    Without this, a real agent binary (e.g. ``claude``) launched into a
+    virgin HOME shows first-run UX — theme picker, login prompt, terms
+    acceptance — and never reaches a state where the PTY runner's
+    ``expect_regex`` can match the prompt response. The fix is to copy
+    the host operator's already-onboarded state into the box, the same
+    state ``capture-refresh`` requires anyway (the operator has to be
+    logged in for the real agent to do anything useful).
+
+    For ``claude``, ``editorMode`` is force-overridden to ``"emacs"``
+    in the box copy. The PTY runner sends prompts via ``tmux send-keys``
+    in literal-text mode, which works with emacs-style line editing
+    but breaks under vim mode (keystrokes get interpreted as normal-mode
+    commands instead of buffer text). The host operator's vim preference
+    stays untouched on disk; only the box copy is normalised.
+
+    Returns ``None`` on success or no-op (echo, unknown agent, etc.),
+    or an error string the caller turns into a SKIP verdict if the
+    operator's host state isn't usable.
+    """
+    if agent != "claude":
+        return None
+    host_home = Path(os.path.expanduser("~"))
+    host_settings = host_home / ".claude.json"
+    host_creds = host_home / ".claude" / ".credentials.json"
+    if not host_settings.is_file():
+        return f"agent prep: host {host_settings} not found — run claude once to onboard"
+    if not host_creds.is_file():
+        return f"agent prep: host {host_creds} not found — run `claude login` first"
+    box_home.mkdir(parents=True, exist_ok=True)
+    (box_home / ".claude").mkdir(parents=True, exist_ok=True)
+    try:
+        import json as _json
+        settings = _json.loads(host_settings.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - corrupt host config shouldn't crash the runner
+        return f"agent prep: failed to parse host {host_settings}: {exc}"
+    settings["editorMode"] = "emacs"
+    (box_home / ".claude.json").write_text(
+        _json.dumps(settings, indent=2), encoding="utf-8"
+    )
+    shutil.copy2(host_creds, box_home / ".claude" / ".credentials.json")
+    return None
+
+
 # ---------------------------------------------------------------------------
 # public entry point
 # ---------------------------------------------------------------------------
@@ -218,6 +264,7 @@ def run_simulated_session(
     initial_state_dir: Path | None = None,
     output_dir: Path,
     env_extra: dict[str, str] | None = None,
+    agent: str | None = None,
 ) -> ScenarioResult:
     """Drive an interactive session with ``binary`` inside ``box`` via tmux.
 
@@ -251,6 +298,13 @@ def run_simulated_session(
         Additional environment overrides passed through ``isolated_env``
         to the binary. Useful for scenario-level pins (e.g. forcing a
         particular model id for a real claude run).
+    agent:
+        The scenario's declared agent name (``"claude"`` / ``"codex"``
+        / ``"hermes"`` / ``"echo"``). Drives per-agent HOME prep before
+        the spawn — without this, a real ``claude`` binary launched
+        into a virgin HOME shows first-run UX (theme picker, login)
+        the PTY runner cannot dismiss. When the host operator has no
+        onboarded state to copy, the runner SKIPs cleanly.
 
     Returns
     -------
@@ -315,6 +369,18 @@ def run_simulated_session(
             )
 
     binary_version = _detect_binary_version(binary_abs)
+
+    # --- seed isolated HOME with agent onboarding state --------------------
+    prep_error = _prep_agent_home(Path(box.home), agent)
+    if prep_error is not None:
+        return ScenarioResult(
+            verdict="SKIP",
+            binary_path=binary_abs,
+            binary_version=binary_version,
+            turn_count=0,
+            pane_log_path=str(pane_log_path),
+            error_message=prep_error,
+        )
 
     # --- spawn tmux session ------------------------------------------------
     session = _session_name(box, binary_abs, len(turns))

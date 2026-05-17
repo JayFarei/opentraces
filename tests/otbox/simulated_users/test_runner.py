@@ -29,6 +29,7 @@ from tests.otbox.drivers import get_driver
 from tests.otbox.simulated_users.runner import (
     ScenarioResult,
     Turn,
+    _prep_agent_home,
     run_simulated_session,
 )
 
@@ -206,3 +207,53 @@ def test_runner_writes_pane_log(driver, installed_box, tmp_path):
         body[:500]
     )
     assert "yes" in body, body[:500]
+
+
+# ---------------------------------------------------------------------------
+# 5. _prep_agent_home — claude HOME seeding (theme + auth + editor mode)
+# ---------------------------------------------------------------------------
+def test_prep_agent_home_noop_for_non_claude(tmp_path):
+    """Non-claude agents (echo, codex, hermes, None) must be no-ops so
+    the existing echo-meta fast path stays untouched."""
+    box_home = tmp_path / "box_home"
+    for agent in (None, "echo", "codex", "hermes"):
+        assert _prep_agent_home(box_home, agent) is None
+    # No files should have been created.
+    assert not (box_home / ".claude.json").exists()
+    assert not (box_home / ".claude" / ".credentials.json").exists()
+
+
+def test_prep_agent_home_skips_when_host_unconfigured(tmp_path, monkeypatch):
+    """If the host has no claude config the helper returns an error
+    string so the runner can SKIP cleanly — never raise."""
+    fake_host = tmp_path / "fake_host"
+    fake_host.mkdir()
+    monkeypatch.setenv("HOME", str(fake_host))
+    box_home = tmp_path / "box_home"
+    err = _prep_agent_home(box_home, "claude")
+    assert err is not None and "not found" in err, err
+
+
+def test_prep_agent_home_seeds_claude_box(tmp_path, monkeypatch):
+    """Helper copies host claude config into the box and forces
+    editorMode=emacs so the PTY runner's literal-text send-keys works."""
+    import json
+    fake_host = tmp_path / "fake_host"
+    fake_host.mkdir()
+    (fake_host / ".claude").mkdir()
+    (fake_host / ".claude" / ".credentials.json").write_text("{\"oauthAccount\":\"x\"}")
+    (fake_host / ".claude.json").write_text(json.dumps({
+        "hasCompletedOnboarding": True,
+        "editorMode": "vim",
+        "anonymousId": "test-id",
+    }))
+    monkeypatch.setenv("HOME", str(fake_host))
+    box_home = tmp_path / "box_home"
+    err = _prep_agent_home(box_home, "claude")
+    assert err is None, err
+    settings = json.loads((box_home / ".claude.json").read_text())
+    assert settings["editorMode"] == "emacs", "vim must be normalised to emacs"
+    assert settings["hasCompletedOnboarding"] is True
+    assert settings["anonymousId"] == "test-id"
+    creds = (box_home / ".claude" / ".credentials.json").read_text()
+    assert "oauthAccount" in creds
