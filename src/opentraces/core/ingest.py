@@ -380,6 +380,25 @@ def _ingest_locked(
             exc_info=True,
         )
 
+    # Context Tree substrate (plan 077): capture what the LLM saw at each
+    # active-path record. Independent try block so a Context Tree failure
+    # never blocks Trail event emission or normal ingest.
+    try:
+        from ..capture.claude_code.context_tree_capture import (
+            emit_context_tree_events_from_record,
+        )
+
+        emit_context_tree_events_from_record(
+            project_dir=project_dir,
+            final_record=final_record,
+            transcript_path=jsonl_path,
+        )
+    except Exception:
+        logger.warning(
+            "context tree event emission failed for %s", trace_id,
+            exc_info=True,
+        )
+
     # Write the staging JSONL (idempotent overwrite).
     staging_dir = get_project_traces_dir(project_dir)
     staging_dir.mkdir(parents=True, exist_ok=True)
