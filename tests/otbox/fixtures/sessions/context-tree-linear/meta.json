@@ -1,0 +1,16 @@
+{
+  "name": "context-tree-linear",
+  "session_id": "sess-otbox-context-tree-linear",
+  "edit_path": "src/greeting.py",
+  "summary": "Deterministic single-user-prompt Claude Code session with three tool calls (Read, Edit, Bash) and one closing assistant turn. Baseline fixture for plan 077: every JSONL record carries parentUuid, the active path is exactly one chain, and the Context Tree parser should observe zero orphan branches, zero compactions, and zero subagent sessions. Drives the Phase 2 capture-fidelity and Phase 3 ctx-tree / ctx-show / ctx-step / ctx-reads / ctx-writes verbs against the simplest possible substrate shape.",
+  "expected_step_count_min": 3,
+  "expected_edit_count": 1,
+  "expected_tool_call_names": ["Read", "Edit", "Bash"],
+  "expected_compaction_count": 0,
+  "expected_orphan_branch_count": 0,
+  "expected_subagent_session_count": 0,
+  "expected_user_turn_count": 1,
+  "expected_assistant_turn_count": 4,
+  "parent_uuid_chain_linear": true,
+  "timestamp_variability": "Wall-clock timestamps are generated at run() time (datetime.now(UTC)); JSONL bytes are otherwise deterministic. Hash equality between two runs requires stripping the `timestamp` field per record."
+}

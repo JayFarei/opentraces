@@ -437,18 +437,32 @@ def cmd_journey(args: argparse.Namespace) -> int:
     if args.artifacts:
         bundle = str(collect_artifacts(box, [result], run_label=result.name))
 
+    transcript_path = None
+    if getattr(args, "save_transcript", None) and result.verdict == "PASS":
+        from pathlib import Path as _Path
+
+        from .journey import save_transcript as _save_transcript
+
+        transcript_path = str(
+            _save_transcript(result, _Path(args.save_transcript), fixture_name=result.name)
+        )
+
     payload = {"action": "journey", **result.to_dict()}
     if bundle:
         payload["artifacts"] = bundle
+    if transcript_path:
+        payload["transcript"] = transcript_path
     human_lines = [f"journey: {result.name} -> {result.verdict}"]
     if result.reason:
         human_lines.append(f"  reason: {result.reason}")
     for s in result.steps:
-        human_lines.append(f"  step[{s.index}] {s.step_id} ({s.type}): {'OK' if s.ok else 'FAIL — ' + s.message}")
+        human_lines.append(f"  step[{s.index}] {s.step_id} ({s.type}): {'OK' if s.ok else 'FAIL - ' + s.message}")
     for a in result.assertions:
-        human_lines.append(f"  assert[{a.index}] {a.kind}: {'OK' if a.ok else 'FAIL — ' + a.message}")
+        human_lines.append(f"  assert[{a.index}] {a.kind}: {'OK' if a.ok else 'FAIL - ' + a.message}")
     if bundle:
         human_lines.append(f"  artifacts: {bundle}")
+    if transcript_path:
+        human_lines.append(f"  transcript: {transcript_path}")
     _emit(payload, json_mode=args.json, human="\n".join(human_lines))
     return 0 if result.verdict in ("PASS", "SKIP") else 1
 
@@ -940,6 +954,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_journey.add_argument("name")
     p_journey.add_argument("--box", metavar="BOX_ID")
     p_journey.add_argument("--artifacts", action="store_true", help="bundle artifacts after the run")
+    p_journey.add_argument(
+        "--save-transcript",
+        metavar="PATH",
+        help="write a markdown transcript to PATH when the journey passes (the demo-acceptance conviction artifact)",
+    )
     p_journey.set_defaults(func=cmd_journey)
 
     p_art = add("artifacts", help="bundle journey-run evidence for a PR")

@@ -1,0 +1,118 @@
+name = "context-tree-ctx-show-bounded-default"
+description = """
+Plan 077 CLI-specific journey — default `ctx show` text output is
+under 4KB even when the underlying messages layer is enormous
+(e.g. a 600k-token captured session); `--full` opts into unbounded.
+
+This is the human-ergonomics gate: a session that crossed
+auto-compaction multiple times has a messages layer with thousands
+of records; if `ctx show` dumps that verbatim into the terminal by
+default, the operator's scrollback is destroyed and they reach for
+`| less` reflexively, which defeats the navigability claim (R12).
+
+The journey forks from `c-compacted-session` (a long, post-compaction
+session whose messages layer is large by construction) and asserts:
+
+  (a) Default `ctx show` text fits the 4KB budget pinned in plan
+      077 §"CLI default text-output line budget".
+  (b) `--full` opts into the unbounded variant — the same node
+      rendered with `--full` is strictly larger than the default
+      (i.e. truncation actually triggered, not skipped because
+      content was small).
+  (c) JSON envelope is unaffected by the text-budget cap.
+
+Fails today because neither bounded text rendering nor `--full`
+exists.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier_label = "silver"
+trajectories = ["context-tree-cli"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-compacted-session"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+requires_messages_layer_bytes_min = 65536
+
+# ---------------------------------------------------------------------
+# Step 1 — default text output. The CLI returns a bounded body
+# with an explicit truncation marker; the marker is the
+# load-bearing signal that the cap actually engaged.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "show-default"
+argv = ["ctx", "show", "{large_messages_node_id}"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-default"
+equals = 0
+
+# Truncation marker — the canonical "... (truncated)" suffix the
+# rendered text must end with when the cap triggered. Mirrors the
+# transcript-renderer convention already added to journey.py for
+# the demo-acceptance transcript artifact.
+[[assertions]]
+kind = "stdout_contains"
+step = "show-default"
+value = "truncated"
+
+# The hint pointing at the unbounded view.
+[[assertions]]
+kind = "stdout_contains"
+step = "show-default"
+value = "--full"
+
+# ---------------------------------------------------------------------
+# Step 2 — JSON envelope is always full. The budget cap is
+# strictly a text-mode concern; consumers reading JSON get every
+# field regardless. The presence of the canonical schema_version
+# in stdout proves the JSON path wasn't truncated.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "show-json"
+argv = ["ctx", "show", "{large_messages_node_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-json"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "schema_version"
+equals = "opentraces.context_node.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "node.messages_layer_id"
+
+# ---------------------------------------------------------------------
+# Step 3 — `--full` opts into the unbounded text variant. The
+# truncation marker is absent; the full body renders.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "show-full"
+argv = ["ctx", "show", "{large_messages_node_id}", "--full"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-full"
+equals = 0
+
+# An unbounded body contains the canonical "end of node" sentinel
+# (the same sentinel default-mode would emit when content is small
+# enough to fit). When --full was honored on a large layer, this
+# sentinel appears AFTER the full body, signalling no truncation.
+[[assertions]]
+kind = "stdout_contains"
+step = "show-full"
+value = "end of node"

@@ -1,0 +1,412 @@
+name = "context-tree-demo-acceptance"
+description = """
+Plan 077 keystone journey — the v1 acceptance test, mechanized.
+
+Plan 077 §"The demo" pins eight copy-pasteable commands that prove
+the Context Tree substrate is navigable end-to-end on a real
+captured session. This journey runs those eight commands in
+sequence, asserts the documented contract at each step, and
+(on full PASS) writes the rendered markdown artifact to
+`tests/otbox/captures/context-tree-demo/transcript.md` — the
+conviction event the plan calls out:
+
+  "A human reads the committed transcript and verifies the
+   substrate works without running anything."
+
+The transcript renderer is already in place (Agent A landed
+`render_transcript` + `save_transcript` in `tests/otbox/journey.py`
+during Phase 1). This TOML is the contract the renderer renders.
+
+Silver tier per plan 077 §"Two tiers" → "Silver demo-acceptance":
+step 6 (`claude --resume`) is replaced by structural verification
+of the pruned JSONL (parse-as-Claude-Code-session + uuid set
+equality), not a live agent invocation. Deterministic in CI.
+Gold variant (PTY runner) deferred to v1.1.
+
+Forks from `c-context-tree-substrate` (the multi-turn fixture
+specifically — its 3-Edits-in-3-commits shape is what makes the
+`--from-step 5 --to-step 9` reads/writes range meaningful).
+
+Fails today because the entire `opentraces ctx` CLI (Phase 3)
+doesn't exist; the journey is the contract Phase 3 must satisfy
+to ship.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier_label = "gold"
+trajectories = ["context-tree-demo"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-substrate"]
+
+# Plan 077 §"Demo acceptance journey" — the transcript artifact is
+# the v1 acceptance proof. The runner gains a small
+# --save-transcript mode (already landed) that writes the rendered
+# markdown when all assertions pass.
+[artifacts]
+transcript = "tests/otbox/captures/context-tree-demo/transcript.md"
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+# The demo's --from-step 5 --to-step 9 range needs the multi-turn
+# fixture, which produces ≥3 Edit commits across that range.
+requires_edit_commits_min = 3
+
+# =====================================================================
+# 1. show the tree (`opentraces ctx tree $TRACE`)
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "demo-1-tree"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "demo-1-tree"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-1-tree"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-1-tree"
+path = "trace_id"
+equals = "{trace_id}"
+
+# Multi-turn fixture pins the node count; the runner expands
+# {expected_node_count} from the checkpoint audit.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "demo-1-tree"
+path = "nodes"
+equals_var = "expected_node_count"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-1-tree"
+path = "active_leaf_id"
+
+# =====================================================================
+# 2. drill into step 7 (`opentraces ctx step $TRACE 7`)
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "demo-2-step"
+argv = ["ctx", "step", "{trace_id}", "7", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "demo-2-step"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-2-step"
+path = "schema_version"
+equals = "opentraces.context_node.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-2-step"
+path = "node.step_index"
+equals = 7
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-2-step"
+path = "node.node_id"
+
+# All four layer ids present (the cross-substrate join contract).
+[[assertions]]
+kind = "stdout_json"
+step = "demo-2-step"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-2-step"
+path = "node.messages_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-2-step"
+path = "node.tool_registry_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-2-step"
+path = "node.runtime_state_layer_id"
+
+# =====================================================================
+# 3. what did the agent SEE between steps 5 and 9?
+#    (`opentraces ctx reads $TRACE --from-step 5 --to-step 9 --json`)
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "demo-3-reads"
+argv = ["ctx", "reads", "{trace_id}", "--from-step", "5", "--to-step", "9", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "demo-3-reads"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-3-reads"
+path = "schema_version"
+equals = "opentraces.context_reads.v1"
+
+# At least one read row in the 5..9 window (multi-turn fixture has
+# Read tool calls embedded). Each row carries the canonical
+# {step_index, node_id, tool_use_id, tool_name, tool_input_hash,
+#  result_uuid, result_bytes, source} shape.
+[[assertions]]
+kind = "stdout_json"
+step = "demo-3-reads"
+path = "reads.0.step_index"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-3-reads"
+path = "reads.0.tool_name"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-3-reads"
+path = "reads.0.result_uuid"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-3-reads"
+path = "reads.0.result_bytes"
+
+# =====================================================================
+# 4. what did the agent WRITE in the same range?
+#    (`opentraces ctx writes $TRACE --from-step 5 --to-step 9 --with-trail-anchor`)
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "demo-4-writes"
+argv = [
+    "ctx", "writes", "{trace_id}",
+    "--from-step", "5", "--to-step", "9",
+    "--with-trail-anchor", "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "demo-4-writes"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-4-writes"
+path = "schema_version"
+equals = "opentraces.context_writes.v1"
+
+# At least one write row, with the trail_anchor_hint joined in
+# (the --with-trail-anchor flag is the load-bearing differentiator
+# from the bare `ctx writes` call).
+[[assertions]]
+kind = "stdout_json"
+step = "demo-4-writes"
+path = "writes.0.tool_name"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-4-writes"
+path = "writes.0.target_path"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-4-writes"
+path = "writes.0.trail_anchor_hint.commit_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-4-writes"
+path = "writes.0.mutation_kind"
+
+# =====================================================================
+# 5a. prune to step 7 dry-run
+#     (`opentraces ctx prune $NODE --to-session rewind-step7`)
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "demo-5a-prune-dryrun"
+argv = [
+    "ctx", "prune", "{step_7_node_id}",
+    "--to-session", "rewind-step7",
+    "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "demo-5a-prune-dryrun"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-5a-prune-dryrun"
+path = "schema_version"
+equals = "opentraces.context_resume.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-5a-prune-dryrun"
+path = "dry_run"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-5a-prune-dryrun"
+path = "record_count"
+
+# =====================================================================
+# 5b. prune to step 7 with --write
+#     (`opentraces ctx prune $NODE --to-session rewind-step7 --write --json`)
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "demo-5b-prune-write"
+argv = [
+    "ctx", "prune", "{step_7_node_id}",
+    "--to-session", "rewind-step7",
+    "--write", "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "demo-5b-prune-write"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-5b-prune-write"
+path = "schema_version"
+equals = "opentraces.context_resume.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-5b-prune-write"
+path = "new_session_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-5b-prune-write"
+path = "jsonl_path"
+
+# =====================================================================
+# 6. (SILVER variant per plan 077) — structural verification of
+#    the pruned JSONL in lieu of `claude --resume`. The CLI
+#    exposes a `ctx verify-session` verb that parses the new
+#    JSONL as a valid Claude Code session and asserts the uuid
+#    set equals the pruned-to active path slice. Gold (PTY
+#    runner) deferred to v1.1.
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "demo-6-verify-pruned"
+argv = [
+    "ctx", "verify-session", "{pruned_session_id}",
+    "--against-node", "{step_7_node_id}",
+    "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "demo-6-verify-pruned"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-6-verify-pruned"
+path = "schema_version"
+equals = "opentraces.context_resume.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-6-verify-pruned"
+path = "parse_ok"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-6-verify-pruned"
+path = "uuid_set_matches"
+equals = true
+
+# =====================================================================
+# 7. (SILVER variant) — capture the "new trace" surrogate. In
+#    the silver flow this is a no-op proof that `trace query
+#    --limit 1` round-trips the pruned session id; in gold it
+#    would be the post-`--resume` real new trace.
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "demo-7-trace-query"
+argv = ["trace", "query", "--limit", "1", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "demo-7-trace-query"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-7-trace-query"
+path = "candidates.0.trace_id"
+
+# =====================================================================
+# 8. confirm the pre-fork node is byte-identical
+#    (`opentraces ctx diff <step-7-node-A> <step-7-node-A> --layer messages`)
+#    In the silver flow both sides resolve to the SAME node id
+#    (since step 6 was structural verification, not a real new
+#    capture). This asserts the diff verb returns the canonical
+#    "no changes" envelope when comparing a node to itself — the
+#    load-bearing identity property.
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "demo-8-diff"
+argv = [
+    "ctx", "diff", "{step_7_node_id}", "{step_7_node_id}",
+    "--layer", "messages", "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "demo-8-diff"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "demo-8-diff"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# Identity property: empty added/removed/changed when comparing a
+# node to itself.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "demo-8-diff"
+path = "added"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "demo-8-diff"
+path = "removed"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "demo-8-diff"
+path = "changed"
+equals = 0

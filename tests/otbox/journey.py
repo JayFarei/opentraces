@@ -585,6 +585,78 @@ def _eval_assertion(index: int, raw: dict, steps: list[StepResult], ctx: dict,
                 return make(actual == spec["equals"], f"{spec.get('path','<root>')}={actual!r} expected {spec['equals']!r}")
             return make(actual is not None, f"{spec.get('path','<root>')}={actual!r}")
 
+        if kind == "stdout_json_array_equals":
+            # Element-wise equality on a JSON array. Order-sensitive.
+            step = _step_by_ref(steps, spec.get("step"))
+            payload = _extract_json(step.result.stdout)
+            path = spec["path"]
+            try:
+                actual = _dig(payload, path)
+            except (KeyError, IndexError, ValueError):
+                return make(False, f"path not found: {path!r}")
+            expected = spec["equals"]
+            if not isinstance(actual, list):
+                return make(False, f"{path!r} is {type(actual).__name__}, expected list")
+            if not isinstance(expected, list):
+                return make(False, f"spec.equals must be a list, got {type(expected).__name__}")
+            if len(actual) != len(expected):
+                return make(
+                    False,
+                    f"{path!r} length {len(actual)} != expected {len(expected)}",
+                )
+            for i, (a, e) in enumerate(zip(actual, expected)):
+                if a != e:
+                    return make(False, f"{path}[{i}]={a!r} expected {e!r}")
+            return make(True, f"{path!r} array equals expected ({len(actual)} elements)")
+
+        if kind == "stdout_json_set_contains":
+            # Subset check on a JSON array. Order-insensitive.
+            step = _step_by_ref(steps, spec.get("step"))
+            payload = _extract_json(step.result.stdout)
+            path = spec["path"]
+            try:
+                actual = _dig(payload, path)
+            except (KeyError, IndexError, ValueError):
+                return make(False, f"path not found: {path!r}")
+            expected = spec["equals"]
+            if not isinstance(actual, list):
+                return make(False, f"{path!r} is {type(actual).__name__}, expected list")
+            if not isinstance(expected, list):
+                return make(False, f"spec.equals must be a list, got {type(expected).__name__}")
+            try:
+                actual_set = set(actual)
+                expected_set = set(expected)
+            except TypeError as exc:
+                return make(False, f"{path!r} contains unhashable elements: {exc}")
+            missing = expected_set - actual_set
+            if missing:
+                return make(False, f"{path!r} missing elements: {sorted(missing)!r}")
+            return make(
+                True,
+                f"{path!r} contains all {len(expected_set)} expected elements",
+            )
+
+        if kind == "stdout_json_length_equals":
+            # Length check on a JSON list or dict.
+            step = _step_by_ref(steps, spec.get("step"))
+            payload = _extract_json(step.result.stdout)
+            path = spec["path"]
+            try:
+                actual = _dig(payload, path)
+            except (KeyError, IndexError, ValueError):
+                return make(False, f"path not found: {path!r}")
+            if not isinstance(actual, (list, dict)):
+                return make(
+                    False,
+                    f"{path!r} is {type(actual).__name__}, expected list or dict",
+                )
+            want = int(spec["equals"])
+            have = len(actual)
+            return make(
+                have == want,
+                f"len({path!r})={have} expected {want}",
+            )
+
         if kind == "path_exists":
             path = str(spec["path"])
             if driver is not None and box is not None:
@@ -631,6 +703,163 @@ def _extract_json(text: str) -> Any:
     if start != -1:
         return json.loads(stripped[start:])
     raise JourneyError("no JSON object found in stdout")
+
+
+# --------------------------------------------------------------------------
+# transcript renderer (plan 077 §"Demo acceptance journey")
+# --------------------------------------------------------------------------
+_TRANSCRIPT_STDOUT_LIMIT = 4096  # 4KB per the plan
+_TRANSCRIPT_TRUNCATION_SUFFIX = "\n... (truncated)"
+
+
+def _truncate_stdout(text: str, limit: int = _TRANSCRIPT_STDOUT_LIMIT) -> str:
+    """Truncate captured stdout to ``limit`` bytes with a visible suffix."""
+    if text is None:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + _TRANSCRIPT_TRUNCATION_SUFFIX
+
+
+def _assertions_by_step(result: "JourneyResult") -> dict[str, list["AssertionResult"]]:
+    """Group assertions by the step they reference.
+
+    Assertions inherit the same defaulting rule as ``_step_by_ref``:
+    when ``spec["step"]`` is omitted the assertion targets the last
+    command step in the journey. We mirror that here so transcript
+    grouping matches assertion-evaluation behaviour.
+    """
+    cli_steps = [s for s in result.steps if s.result is not None]
+    last_step_id = cli_steps[-1].step_id if cli_steps else None
+    groups: dict[str, list[AssertionResult]] = {}
+    for a in result.assertions:
+        ref = a.spec.get("step") if isinstance(a.spec, dict) else None
+        target = ref or last_step_id or ""
+        groups.setdefault(target, []).append(a)
+    return groups
+
+
+def render_transcript(
+    result: "JourneyResult",
+    *,
+    fixture_name: str = "<unspecified>",
+    substrate_versions: dict[str, str] | None = None,
+    now_iso: str | None = None,
+) -> str:
+    """Render a JourneyResult as a markdown transcript artifact.
+
+    Shape per plan 077 §"Demo acceptance journey":
+
+        # Context Tree demo acceptance, run <iso>
+        Fixture: <fixture_name>
+        Substrate: opentraces <ver>, schema <ver>
+        All <N> commands ran successfully. All <M> assertions passed.
+        ---
+        ## 1. <command argv>
+        <captured stdout, truncated to 4KB>
+        PASS: <comma-separated list of passing assertions>
+        ## Summary
+        | step | id | command | assertions | result |
+    """
+    from datetime import datetime, timezone
+
+    if now_iso is None:
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+    versions = substrate_versions or {}
+    ot_version = versions.get("opentraces", "unknown")
+    schema_version = versions.get("schema", "unknown")
+
+    cli_steps = [s for s in result.steps if s.result is not None]
+    n_commands = len(cli_steps)
+    m_assertions = len(result.assertions)
+    groups = _assertions_by_step(result)
+
+    lines: list[str] = []
+    lines.append(f"# Context Tree demo acceptance, run {now_iso}")
+    lines.append("")
+    lines.append(f"Fixture: {fixture_name}")
+    lines.append(f"Substrate: opentraces {ot_version}, schema {schema_version}")
+    lines.append(
+        f"All {n_commands} commands ran successfully. "
+        f"All {m_assertions} assertions passed."
+    )
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    for human_index, step in enumerate(cli_steps, start=1):
+        argv = " ".join(step.result.argv) if step.result and step.result.argv else step.step_id
+        lines.append(f"## {human_index}. {argv}")
+        lines.append("")
+        body = _truncate_stdout(step.result.stdout if step.result else "")
+        # Fence the captured stdout so markdown renders it verbatim.
+        lines.append("```")
+        lines.append(body.rstrip("\n"))
+        lines.append("```")
+        lines.append("")
+        step_asserts = groups.get(step.step_id, [])
+        passing = [
+            a.spec.get("kind", a.kind) if isinstance(a.spec, dict) else a.kind
+            for a in step_asserts
+            if a.ok
+        ]
+        if step_asserts:
+            label = "PASS" if all(a.ok for a in step_asserts) else "MIXED"
+            kinds = ", ".join(a.kind for a in step_asserts) or "(none)"
+            lines.append(f"{label}: {kinds}")
+        else:
+            lines.append("PASS: (no assertions targeted this step)")
+        lines.append("")
+
+    # Summary table
+    lines.append("## Summary")
+    lines.append("")
+    lines.append("| step | id | command | assertions | result |")
+    lines.append("|------|----|---------|------------|--------|")
+    for human_index, step in enumerate(cli_steps, start=1):
+        argv = " ".join(step.result.argv) if step.result and step.result.argv else step.step_id
+        # Escape pipes in the command cell so the markdown table stays valid.
+        argv_cell = argv.replace("|", "\\|")
+        n_asserts = len(groups.get(step.step_id, []))
+        verdict = "PASS" if step.ok and all(a.ok for a in groups.get(step.step_id, [])) else "FAIL"
+        lines.append(
+            f"| {human_index} | {step.step_id} | {argv_cell} | {n_asserts} | {verdict} |"
+        )
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def save_transcript(
+    result: "JourneyResult",
+    path: Path,
+    *,
+    fixture_name: str = "<unspecified>",
+    substrate_versions: dict[str, str] | None = None,
+) -> Path:
+    """Render and write the transcript when the journey fully passed.
+
+    Only writes when ``result.verdict == "PASS"`` and every assertion
+    passed; otherwise raises ``JourneyError`` (callers can decide to
+    catch + ignore vs propagate). Returns the written path.
+    """
+    if result.verdict != "PASS":
+        raise JourneyError(
+            f"refusing to render transcript: journey verdict is {result.verdict!r}"
+        )
+    if not all(a.ok for a in result.assertions):
+        raise JourneyError(
+            "refusing to render transcript: one or more assertions failed"
+        )
+    text = render_transcript(
+        result,
+        fixture_name=fixture_name,
+        substrate_versions=substrate_versions,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
 
 
 def run_journey(driver: Driver, box: Box, name: str) -> JourneyResult:

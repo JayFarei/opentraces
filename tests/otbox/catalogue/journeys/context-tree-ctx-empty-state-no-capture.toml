@@ -1,0 +1,132 @@
+name = "context-tree-ctx-empty-state-no-capture"
+description = """
+Plan 077 CLI-specific journey — `ctx tree <trace-id>` on a trace
+captured BEFORE Phase 2 (i.e. no Context Tree events exist for it)
+returns the canonical empty-state envelope with
+`limitations: ["context_tree_not_captured"]`, rc=0.
+
+This is the substrate's backward-compatibility contract. Every
+existing captured trace under `~/.opentraces/projects/*/traces/`
+predates the Context Tree substrate; the `ctx` verbs must surface
+those traces as "exists, no context tree" rather than "not found"
+or a traceback. Without this, every consumer breaks on any pre-
+Phase-2 captured project.
+
+We use `c-captured-real-session` (the plan-064 baseline; predates
+Context Tree, never built one) as the proof — and explicitly NOT
+`c-context-tree-substrate` (which DOES build one). The trace
+exists; the substrate doesn't.
+
+Asserts:
+  (a) rc=0 (the trace exists; the substrate doesn't, but that's
+      not a failure).
+  (b) Canonical empty-state envelope with the documented limitation
+      token.
+  (c) `trace_id` and `nodes` fields are present but `nodes` is empty
+      (length 0, not null).
+
+Fails today because `ctx tree` doesn't exist.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier_label = "silver"
+trajectories = ["context-tree-cli"]
+persona = "agent"
+requires = ["cli", "git"]
+# Deliberately pinned to the pre-Phase-2 baseline checkpoint so the
+# captured trace exists but has zero Context Tree events.
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# Step 1 — call ctx tree on a captured trace that predates the
+# Context Tree substrate. Must return the empty-state envelope,
+# rc=0.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "tree-on-pre-substrate-trace"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-on-pre-substrate-trace"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-on-pre-substrate-trace"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-on-pre-substrate-trace"
+path = "trace_id"
+equals = "{trace_id}"
+
+# Contract (b) — the documented backward-compat limitation token.
+# Consumers branch on this exact string to surface "no context
+# tree yet" UX instead of "broken".
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "tree-on-pre-substrate-trace"
+path = "limitations"
+equals = ["context_tree_not_captured"]
+
+# Contract (c) — `nodes` is empty, not absent or null. An absent
+# field would force consumers to defensively check for the key;
+# an empty list is the unambiguous "no nodes" signal.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "tree-on-pre-substrate-trace"
+path = "nodes"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "tree-on-pre-substrate-trace"
+path = "orphan_branch_roots"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "tree-on-pre-substrate-trace"
+path = "subagent_session_ids"
+equals = 0
+
+# active_leaf_id is null (no nodes → no leaf), but the field is
+# present so consumers don't need to check for absence.
+[[assertions]]
+kind = "stdout_json"
+step = "tree-on-pre-substrate-trace"
+path = "active_leaf_id"
+
+# ---------------------------------------------------------------------
+# Step 2 — same backward-compat property for `ctx step`. Asking
+# for a step on a trace with no Context Tree must return the same
+# canonical limitation, not a different error path.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "step-on-pre-substrate-trace"
+argv = ["ctx", "step", "{trace_id}", "{step_index}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "step-on-pre-substrate-trace"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-on-pre-substrate-trace"
+path = "schema_version"
+equals = "opentraces.context_node.v1"
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "step-on-pre-substrate-trace"
+path = "limitations"
+equals = ["context_tree_not_captured"]

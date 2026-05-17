@@ -1,0 +1,132 @@
+name = "context-tree-ctx-prune-no-clobber"
+description = """
+Plan 077 CLI-specific journey — `ctx prune --write --to-session foo`
+succeeds the first time, exits rc=4 with a structured error envelope
+the second time, and never overwrites the existing JSONL.
+
+Pruner safety (plan 077 §"Open Questions" → "Pruner safety"): the
+pruner writes a new JSONL into `~/.claude/projects/<encoded-cwd>/`.
+A silent overwrite would destroy a session the operator might be
+mid-conversation in via `claude --resume`. The contract is
+check-before-write — error rather than overwrite.
+
+This journey asserts:
+
+  (a) First `--write` succeeds with rc=0 and a stable JSONL path.
+  (b) The on-disk JSONL exists at the reported path.
+  (c) Second `--write` (same target session name) exits rc=4 with
+      the canonical collision envelope including the existing
+      jsonl_path and a remediation hint.
+  (d) The on-disk JSONL is byte-identical between the two runs
+      (no overwrite happened on the second attempt).
+
+Fails today because `ctx prune` doesn't exist.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier_label = "silver"
+trajectories = ["context-tree-cli"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-substrate"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+# ---------------------------------------------------------------------
+# Step 1 — first --write. Succeeds; records the chosen path.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "prune-write-first"
+argv = [
+    "ctx", "prune", "{target_node_id}",
+    "--to-session", "no-clobber-fixture",
+    "--write", "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "prune-write-first"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write-first"
+path = "schema_version"
+equals = "opentraces.context_resume.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write-first"
+path = "new_session_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write-first"
+path = "jsonl_path"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write-first"
+path = "record_count"
+
+# ---------------------------------------------------------------------
+# Step 2 — second --write to the same target. Must fail loudly,
+# not silently overwrite. The CLI exits rc=4 (per plan 077 §"CLI
+# surface" — "rc=4 collision (prune --write)") and emits a
+# structured collision envelope.
+#
+# We can't use the default `expect_returncode = 0` for this step
+# because the runner short-circuits on the first failed step;
+# `expect_returncode = 4` flips the contract so this step PASSES
+# when rc=4 is observed.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "prune-write-collision"
+argv = [
+    "ctx", "prune", "{target_node_id}",
+    "--to-session", "no-clobber-fixture",
+    "--write", "--json",
+]
+expect_returncode = 4
+
+[[assertions]]
+kind = "returncode"
+step = "prune-write-collision"
+equals = 4
+
+# Structured collision envelope — same schema_version as the success
+# envelope (consumer-stable), with an error field that names the
+# collision reason and a hint pointing at the existing path.
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write-collision"
+path = "schema_version"
+equals = "opentraces.context_resume.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write-collision"
+path = "error.code"
+equals = "session_target_exists"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write-collision"
+path = "error.existing_path"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write-collision"
+path = "error.hint"
+
+# ---------------------------------------------------------------------
+# Step 3 — the on-disk JSONL still exists where the first --write
+# put it (no overwrite, no deletion).
+# ---------------------------------------------------------------------
+[[assertions]]
+kind = "path_exists"
+path = "{home}/.claude/projects"

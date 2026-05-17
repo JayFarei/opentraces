@@ -1,0 +1,18 @@
+{
+  "name": "context-tree-rewound",
+  "session_id": "sess-otbox-context-tree-rewound",
+  "edit_path": "src/normalize.py",
+  "summary": "Deterministic Claude Code session that simulates an Esc Esc rewind. The transcript carries an orphan branch (a doomed Edit) whose parentUuid points back into the active chain at a non-tail position, plus a divergent continuation taking that same parentUuid down a different leaf. Plan 077 fixture for branch_type: rewind_branch detection: the orphan's leaf must not be reachable from the active leaf, but both share an ancestor inside the active chain.",
+  "expected_step_count_min": 2,
+  "expected_edit_count_applied_to_disk": 1,
+  "expected_edit_count_in_transcript": 2,
+  "expected_orphan_branch_count": 1,
+  "expected_orphan_branch_root_parent_uuid": "user-otbox-ctx-rewound-2",
+  "expected_orphan_branch_leaf_uuid": "user-otbox-ctx-rewound-orphan-result",
+  "active_path_leaf_uuid": "asst-otbox-ctx-rewound-4",
+  "rewind_anchor_uuid": "user-otbox-ctx-rewound-2",
+  "expected_compaction_count": 0,
+  "expected_subagent_session_count": 0,
+  "hook_trail_present_for_orphan_edit": false,
+  "timestamp_variability": "Wall-clock timestamps generated at run() time; otherwise deterministic."
+}

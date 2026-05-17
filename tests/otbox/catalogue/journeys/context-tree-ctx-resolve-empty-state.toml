@@ -1,0 +1,118 @@
+name = "context-tree-ctx-resolve-empty-state"
+description = """
+Plan 077 CLI-specific journey — `ctx resolve ot://context-node/sha256/<unknown>`
+returns the canonical empty-state envelope with
+`limitations: ["context_layer_unavailable"]`, not a Python traceback.
+
+The `ot://` resolver dispatch is the consumer-stable entry point for
+every Context Tree consumer (replay, RL, viewer, dashboards). A
+traceback on an unknown id would force every consumer to wrap
+`ctx resolve` in defensive try/except; the canonical empty-state
+envelope (mirrors the Trail substrate's `limitations` vocabulary)
+lets consumers branch on a single documented field.
+
+This journey passes a deliberately-fabricated sha256 (all zeros,
+guaranteed-unknown) and asserts:
+
+  (a) rc=0 — the empty-state envelope is a successful return, not
+      an error.
+  (b) schema_version is the canonical `opentraces.context_resolve.v1`.
+  (c) `limitations` array contains the documented
+      `context_layer_unavailable` token.
+  (d) `data` is null (not an empty object — null signals "no
+      content addressable here" cleanly).
+  (e) No traceback substring in stdout or stderr.
+
+Fails today because `ctx resolve` doesn't exist (rc≠0).
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier_label = "silver"
+trajectories = ["context-tree-cli"]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-context-tree-substrate"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+# ---------------------------------------------------------------------
+# Step 1 — resolve an all-zeros sha256. The empty-state envelope
+# is the load-bearing contract.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "resolve-unknown"
+argv = [
+    "ctx", "resolve",
+    "ot://context-node/sha256/0000000000000000000000000000000000000000000000000000000000000000",
+    "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "resolve-unknown"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "resolve-unknown"
+path = "schema_version"
+equals = "opentraces.context_resolve.v1"
+
+# Contract (c) — the canonical limitation token. Consumers branch
+# on this exact string.
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "resolve-unknown"
+path = "limitations"
+equals = ["context_layer_unavailable"]
+
+# The resource_uri echoed back unchanged so consumers can correlate
+# the response with their request.
+[[assertions]]
+kind = "stdout_json"
+step = "resolve-unknown"
+path = "resource_uri"
+equals = "ot://context-node/sha256/0000000000000000000000000000000000000000000000000000000000000000"
+
+# Contract (e) — no traceback in stdout. A `Traceback (most recent
+# call last):` line means the empty-state path didn't fire and the
+# consumer contract is broken.
+[[assertions]]
+kind = "stderr_contains"
+step = "resolve-unknown"
+value = ""
+
+# ---------------------------------------------------------------------
+# Step 2 — same property for an unknown context-layer URI. The
+# resolver dispatches on URI prefix and must surface the same
+# limitation token regardless of which `ot://context-*` branch
+# was hit.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "resolve-unknown-layer"
+argv = [
+    "ctx", "resolve",
+    "ot://context-layer/sha256/0000000000000000000000000000000000000000000000000000000000000000",
+    "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "resolve-unknown-layer"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "resolve-unknown-layer"
+path = "schema_version"
+equals = "opentraces.context_resolve.v1"
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "resolve-unknown-layer"
+path = "limitations"
+equals = ["context_layer_unavailable"]

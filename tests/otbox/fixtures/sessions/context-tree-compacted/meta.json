@@ -1,0 +1,20 @@
+{
+  "name": "context-tree-compacted",
+  "session_id": "sess-otbox-context-tree-compacted",
+  "edit_path": "src/stats.py",
+  "summary": "Deterministic Claude Code session that crosses a single /compact boundary. Five pre-compaction user turns (Read -> Edit -> close per turn, one helper per turn) accumulate enough history to make compaction interesting; the transcript records the compact_boundary system line (subtype=compact_boundary, compact_metadata.trigger=manual, pre_tokens=12000) and the synthetic isCompactSummary user line Claude Code emits right after; two more post-compaction turns continue past it. Plan 077 fixture for context_compaction_observed event capture, lossy diff computation, and is_summary handling on the messages layer.",
+  "expected_user_turn_count": 7,
+  "expected_pre_compaction_turn_count": 5,
+  "expected_post_compaction_turn_count": 2,
+  "expected_compaction_count": 1,
+  "expected_compact_boundary_subtype": "compact_boundary",
+  "expected_compact_boundary_trigger": "manual",
+  "expected_compact_summary_line_present": true,
+  "expected_compact_summary_uuid": "user-otbox-ctx-compacted-summary",
+  "expected_orphan_branch_count": 0,
+  "expected_subagent_session_count": 0,
+  "expected_edit_count": 7,
+  "expected_min_message_count": 36,
+  "timestamp_variability": "Wall-clock timestamps generated at run() time; otherwise deterministic.",
+  "parser_note": "compact_boundary is read by src/opentraces/capture/claude_code/parse.py around line 561 (subtype='compact_boundary' sets metadata.is_compacted and appends to metadata.compaction_events). isCompactSummary lines are skipped by the mainline step parser (line ~813) but should be preserved as a separate post-compaction messages-layer substitute by the Context Tree parser (plan 077 Phase 2)."
+}

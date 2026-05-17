@@ -1,0 +1,248 @@
+name = "context-tree-capture-fidelity"
+description = """
+Plan 077 substrate-fidelity journey #1 (silver) — every layer the
+model saw at each step is in the Context Tree, and the layer
+content's identity is content-hashed honestly.
+
+The Context Tree substrate adds a third refs/opentraces/local/events/v1
+event taxonomy (alongside Trace and Trail) describing what the LLM
+saw at each decision point: assembled system layer, message history,
+tool registry, runtime state.
+
+This journey forks from `c-context-tree-substrate` (a captured Claude
+session ingested through the Phase 2 parser extension) and asserts
+three structural properties of the captured tree, via the CLI
+surface (`ctx reads`, `ctx writes`, `ctx show`):
+
+  (a) Every JSONL `tool_result` uuid surfaced by `ctx reads --json`
+      appears in the `messages` layer pointed at by the corresponding
+      step's `messages_layer_id` — via `stdout_json_set_contains`
+      against `ctx show <node> --full --json`.
+  (b) Every `tool_use` tool name resolved at step N appears in the
+      tool_registry layer pointed at by `node_for_step(N).tool_registry_layer_id`,
+      not just "some reachable layer".
+  (c) Every CLAUDE.md path observed via `InstructionsLoaded` /
+      `system.init` appears in the system layer's `claude_md_set`
+      with the on-disk content hash at capture time.
+
+Covers requirements R3 (cover everything the model saw) and R5
+(honest capture completeness labels). Fails today because the
+`opentraces ctx` CLI doesn't exist yet — the journey is the contract
+the Phase 3 CLI must satisfy.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once substrate ships
+# Plan 069 R4 / plan 077 §"Coverage gate updates" — silver coverage
+# of R3 + R5.
+tier_label = "silver"
+trajectories = ["context-tree-capture"]
+persona = "agent"
+requires = ["cli", "git"]
+# Plan 069 R8: explicit pin. c-context-tree-substrate is the
+# Phase 1 fixture-backed checkpoint that materializes a
+# ContextTreeProjection during setup so journeys query indexed
+# state without rebuilding (plan 077 §"Otbox extensions required").
+from_checkpoints = ["c-context-tree-substrate"]
+
+# Plan 069 R1: declarative world-state needs. At least one captured
+# trace whose Context Tree has been built (the Phase 2 reconciler
+# stamps `context_tree_built = true` in the checkpoint's audit).
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+# ---------------------------------------------------------------------
+# Step 1 — the tree exists and identifies itself by schema_version.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "tree-shape"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-shape"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-shape"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-shape"
+path = "trace_id"
+equals = "{trace_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-shape"
+path = "active_leaf_id"
+
+# ---------------------------------------------------------------------
+# Step 2 — (a) every tool_result uuid surfaced by `ctx reads` is
+# present in the messages layer of the corresponding node.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "reads-surfaced"
+argv = ["ctx", "reads", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "reads-surfaced"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "reads-surfaced"
+path = "schema_version"
+equals = "opentraces.context_reads.v1"
+
+# Presence check — at least one read row surfaced (fixture guarantees
+# ≥1 Read tool call).
+[[assertions]]
+kind = "stdout_json"
+step = "reads-surfaced"
+path = "reads.0.result_uuid"
+
+[[assertions]]
+kind = "stdout_json"
+step = "reads-surfaced"
+path = "reads.0.node_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "reads-surfaced"
+path = "reads.0.tool_name"
+
+# ---------------------------------------------------------------------
+# Step 3 — `ctx show --full` on the first read's node returns the
+# materialized layer set; the messages layer's uuid set must contain
+# the read's result_uuid (substrate-fidelity property (a)).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "show-first-read-node"
+argv = ["ctx", "show", "{first_read_node_id}", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-first-read-node"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read-node"
+path = "schema_version"
+equals = "opentraces.context_node.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read-node"
+path = "node.messages_layer_id"
+
+# Layer completeness must be honestly labeled. messages layers built
+# from JSONL records are `full` / `transcript_reconstruction`; the
+# absence of approximation here is the load-bearing claim.
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read-node"
+path = "layers.messages.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read-node"
+path = "layers.messages.capture_method"
+equals = "transcript_reconstruction"
+
+# ---------------------------------------------------------------------
+# Step 4 — (b) every tool_use's tool name at step N is present in
+# the tool_registry layer of node_for_step(N). The fixture pins the
+# tool set so we assert the registry contains the canonical
+# baseline (Read, Edit, Bash) via set containment.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "step-tool-registry"
+argv = ["ctx", "step", "{trace_id}", "{step_index}", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "step-tool-registry"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-tool-registry"
+path = "schema_version"
+equals = "opentraces.context_node.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-tool-registry"
+path = "node.tool_registry_layer_id"
+
+# The tool_registry layer's `tools` list must include each tool used
+# at this step. The fixture's `linear` shape pins {Read, Edit, Bash};
+# `multi-turn` is a strict superset. Order-insensitive subset check.
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "step-tool-registry"
+path = "layers.tool_registry.tool_names"
+equals = ["Read", "Edit", "Bash"]
+
+# Honest completeness: built-in tool schemas are approximated
+# (capture_method = hardcoded_template, keyed by Claude Code version)
+# per plan 077 §"Honest gaps and how we label them".
+[[assertions]]
+kind = "stdout_json"
+step = "step-tool-registry"
+path = "layers.tool_registry.completeness"
+equals = "approximated"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-tool-registry"
+path = "layers.tool_registry.capture_method"
+equals = "hardcoded_template"
+
+# ---------------------------------------------------------------------
+# Step 5 — (c) every CLAUDE.md path observed via system.init appears
+# in the system layer's `claude_md_set` with the on-disk content hash
+# captured at session time. The fixture pins `<project>/CLAUDE.md` as
+# the canonical entry; set-containment guards against missing or
+# mis-ordered paths.
+# ---------------------------------------------------------------------
+[[assertions]]
+kind = "stdout_json"
+step = "step-tool-registry"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-tool-registry"
+path = "layers.system.claude_md_paths"
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "step-tool-registry"
+path = "layers.system.claude_md_paths"
+equals = ["CLAUDE.md"]
+
+# system layer is approximated (static-core-prompt body is never on
+# disk — plan 077 §"Honest gaps").
+[[assertions]]
+kind = "stdout_json"
+step = "step-tool-registry"
+path = "layers.system.completeness"
+equals = "approximated"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-tool-registry"
+path = "layers.system.capture_method"
+equals = "hardcoded_template"

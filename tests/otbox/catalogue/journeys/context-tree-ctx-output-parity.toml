@@ -1,0 +1,162 @@
+name = "context-tree-ctx-output-parity"
+description = """
+Plan 077 CLI-specific journey — `ctx show` text and `ctx show --json`
+agree field-by-field. Catches the failure mode where the pretty-text
+renderer silently drops or paraphrases a layer's `completeness` /
+`capture_method` label that's still present in the JSON envelope —
+a downstream consumer that reads the JSON sees full provenance,
+but a human reading the text never knows a layer is approximated.
+
+This journey runs `ctx show --json` and `ctx show` (default text)
+against the same node and asserts the text mode contains every
+load-bearing JSON field (layer_id, completeness, capture_method)
+as a substring. Order-insensitive, no LLM oracle.
+
+Fails today because neither mode exists yet.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier_label = "silver"
+trajectories = ["context-tree-cli"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-substrate"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+# ---------------------------------------------------------------------
+# Step 1 — JSON envelope. Source of truth for the parity check.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "show-json"
+argv = ["ctx", "show", "{first_node_id}", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-json"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "schema_version"
+equals = "opentraces.context_node.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "node.node_id"
+equals = "{first_node_id}"
+
+# The four layer ids are present.
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "node.messages_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "node.tool_registry_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "node.runtime_state_layer_id"
+
+# Each layer's completeness + capture_method labels are present in
+# the JSON. The text mode must render every one of these.
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "layers.system.completeness"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "layers.messages.completeness"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "layers.tool_registry.completeness"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-json"
+path = "layers.runtime_state.completeness"
+
+# ---------------------------------------------------------------------
+# Step 2 — pretty-text default. Same node, no --json. Every
+# load-bearing field above must appear as a substring; no
+# paraphrasing, no silent drops.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "show-text"
+argv = ["ctx", "show", "{first_node_id}", "--full"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-text"
+equals = 0
+
+# Node id is rendered verbatim (the operator pastes it into the
+# next command).
+[[assertions]]
+kind = "stdout_contains"
+step = "show-text"
+value = "{first_node_id}"
+
+# Each layer type header must appear, so the operator sees the
+# substrate's four-layer model in text mode too.
+[[assertions]]
+kind = "stdout_contains"
+step = "show-text"
+value = "system"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "show-text"
+value = "messages"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "show-text"
+value = "tool_registry"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "show-text"
+value = "runtime_state"
+
+# The honest-gap labels must appear in text mode. Even one missing
+# `approximated` would let a human-reviewer claim replay parity
+# the substrate doesn't actually guarantee.
+[[assertions]]
+kind = "stdout_contains"
+step = "show-text"
+value = "approximated"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "show-text"
+value = "full"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "show-text"
+value = "completeness"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "show-text"
+value = "capture_method"

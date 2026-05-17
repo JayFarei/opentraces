@@ -1,0 +1,20 @@
+{
+  "name": "context-tree-subagent",
+  "session_id": "sess-otbox-context-tree-subagent",
+  "subagent_session_id": "sess-otbox-context-tree-subagent-child",
+  "subagent_jsonl_stem": "subagent-001-helper-survey",
+  "task_description": "Survey src/lib.py and report how many top-level helpers it defines.",
+  "summary": "Deterministic Claude Code session that spawns a sub-agent via Task tool_use. The child JSONL is written under <transcript-stem>/subagents/<stem>.jsonl with a sibling .meta.json carrying `description` for the parser's parent-Task pairing logic. Parent appends the child's summary as the Task tool_result and closes. Plan 077 fixture for cross-session ContextNode linkage and the subagent_fork branch_type.",
+  "expected_parent_step_count_min": 2,
+  "expected_subagent_step_count_min": 2,
+  "expected_subagent_session_count": 1,
+  "expected_compaction_count": 0,
+  "expected_orphan_branch_count": 0,
+  "expected_parent_tool_call_names": ["Task"],
+  "expected_subagent_tool_call_names": ["Read", "Bash"],
+  "timestamp_variability": "Wall-clock timestamps generated at run() time; otherwise deterministic.",
+  "files": {
+    "parent_session": "session.py",
+    "child_session": "subagent_session.py"
+  }
+}

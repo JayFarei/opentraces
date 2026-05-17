@@ -1,0 +1,16 @@
+{
+  "name": "context-tree-multi-turn",
+  "session_id": "sess-otbox-context-tree-multi-turn",
+  "edit_paths": ["src/mod_a.py", "src/mod_b.py", "src/mod_c.py"],
+  "summary": "Deterministic Claude Code session with three user turns, mixed tool use across turns, and three Edits across three distinct files (one Edit per turn). Plan 077 fixture for Context Tree layer dedup (repeated CLAUDE.md / tool registry layers across turns must hash identically), per-turn messages-layer growth, and temporal anchor precision (each Edit step's trail_anchor_hint must resolve to that Edit's commit, not its neighbor). The chain is strictly linear; no branching.",
+  "expected_step_count_min": 9,
+  "expected_edit_count": 3,
+  "expected_user_turn_count": 3,
+  "expected_assistant_turn_count": 8,
+  "expected_tool_call_names": ["Read", "Edit", "Read", "Edit", "Read", "Edit", "Bash"],
+  "expected_compaction_count": 0,
+  "expected_orphan_branch_count": 0,
+  "expected_subagent_session_count": 0,
+  "parent_uuid_chain_linear": true,
+  "timestamp_variability": "Wall-clock timestamps are generated at run() time (datetime.now(UTC)); JSONL bytes are otherwise deterministic. Hash equality between two runs requires stripping the `timestamp` field per record."
+}

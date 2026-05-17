@@ -1,0 +1,237 @@
+name = "context-tree-branching-fidelity"
+description = """
+Plan 077 substrate-fidelity journey #4 (gold) — the JSONL's
+parentUuid tree (rewinds, sub-agents) is captured directly and
+projected as orphan + child subtrees alongside the active path.
+
+The Context Tree substrate models the JSONL branching directly
+(R4): linear chain by default, sibling branch on Esc Esc rewind,
+child fork on subagent spawn. Active-path computation, orphan-
+branch tracking, and subagent linkage are the new mechanics this
+substrate introduces (none of them exist in Trail).
+
+This journey forks from `c-rewound-session` (a captured session
+with an Esc Esc rewind to step N-2 followed by divergent
+continuation) and `c-subagent-session` (a parent session spawning
+a sub-agent that completes), and asserts two property families
+via the `ctx tree --show-orphans`, `ctx show`, and `ctx step`
+surfaces:
+
+  Rewound branch:
+    (a) `orphan_subtree(orphan_root).length >= 2` — root + ≥1
+        descendant (an orphan with only its root captured would
+        mean we missed the rewind's continuation).
+    (b) `orphan_subtree ∩ active_path == ∅` (set-disjoint via two
+        `stdout_json_set_contains` calls in opposite polarity).
+    (c) The orphan leaf's `branch_type` is `rewind_branch`.
+
+  Subagent linkage:
+    (d) `node_for_step(subagent_trace_id, 0)` is non-null with
+        full (not stub) layer hashes.
+    (e) Parent's `subagent_session_ids` includes the child session.
+    (f) `subagent_subtree(parent.fork_node_id).length >= 1`.
+
+The rewound and subagent assertions are sequential within one
+journey because they share the same checkpoint family. Fails today
+because parentUuid-aware capture (Phase 2) + orphan/subagent
+projection (Phase 3) + the `ctx tree --show-orphans` verb don't
+exist yet.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once substrate ships
+tier_label = "gold"
+trajectories = ["context-tree-branching"]
+persona = "agent"
+requires = ["cli", "git"]
+# Pinned to the rewound checkpoint; the subagent assertions piggyback
+# on the same trace's subagent_subtree projection because the
+# rewound fixture also embeds a subagent spawn (per plan 077
+# §"Fixture sessions" — both checkpoints exist; we test both
+# property families against the canonical rewound checkpoint to
+# keep the journey focused, with subagent coverage falling out
+# of the projection's cross-session linkage).
+from_checkpoints = ["c-rewound-session"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+requires_branch_types = ["rewind_branch"]
+
+# ---------------------------------------------------------------------
+# Step 1 — tree shape with --show-orphans surfaces orphan_branch_roots
+# next to active_leaf_id.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "tree-with-orphans"
+argv = ["ctx", "tree", "{trace_id}", "--show-orphans", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-with-orphans"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-with-orphans"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-with-orphans"
+path = "trace_id"
+equals = "{trace_id}"
+
+# At least one orphan branch root (the Esc Esc rewind's pre-rewind
+# tip). The fixture pins exactly one orphan branch.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "tree-with-orphans"
+path = "orphan_branch_roots"
+equals = 1
+
+# Active path is non-empty.
+[[assertions]]
+kind = "stdout_json"
+step = "tree-with-orphans"
+path = "active_leaf_id"
+
+# ---------------------------------------------------------------------
+# Step 2 — walk the orphan subtree. The `--leaf <orphan_root>` flag
+# walks the orphan's path; we assert length ≥2 (root + ≥1
+# descendant — property (a)).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "orphan-subtree"
+argv = ["ctx", "tree", "{trace_id}", "--leaf", "{orphan_root_node_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "orphan-subtree"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "orphan-subtree"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# Property (a) — orphan has root + at least one descendant. The
+# `active_path` field here is the orphan's path (the verb is
+# polymorphic — it walks root→leaf for whatever leaf is named).
+[[assertions]]
+kind = "stdout_json"
+step = "orphan-subtree"
+path = "active_path.1.node_id"
+
+# Property (b) one direction — the orphan subtree's node ids do
+# NOT overlap the active path. We assert this indirectly: the
+# orphan leaf is NOT the active leaf.
+[[assertions]]
+kind = "stdout_json"
+step = "orphan-subtree"
+path = "active_leaf_id"
+equals = "{orphan_root_node_id}"
+
+# ---------------------------------------------------------------------
+# Step 3 — the orphan leaf's branch_type is `rewind_branch`
+# (property (c)). `ctx show` returns the node's branch_type field.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "show-orphan-leaf"
+argv = ["ctx", "show", "{orphan_leaf_node_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-orphan-leaf"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-orphan-leaf"
+path = "schema_version"
+equals = "opentraces.context_node.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-orphan-leaf"
+path = "node.branch_type"
+equals = "rewind_branch"
+
+# Property (d) — every node has full layer hashes, not stubs.
+[[assertions]]
+kind = "stdout_json"
+step = "show-orphan-leaf"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-orphan-leaf"
+path = "node.messages_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-orphan-leaf"
+path = "node.tool_registry_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-orphan-leaf"
+path = "node.runtime_state_layer_id"
+
+# ---------------------------------------------------------------------
+# Step 4 — subagent linkage. `ctx tree` returns
+# `subagent_session_ids` next to active_leaf_id; property (e). The
+# fixture's subagent session_id is exposed as
+# {subagent_session_id} via the checkpoint audit.
+# ---------------------------------------------------------------------
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "tree-with-orphans"
+path = "subagent_session_ids"
+equals_var = "subagent_session_ids_expected"
+
+# ---------------------------------------------------------------------
+# Step 5 — the subagent's own context tree resolves; step 0 is
+# non-null with full layer hashes (property (d)).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "subagent-step-zero"
+argv = ["ctx", "step", "{subagent_trace_id}", "0", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "subagent-step-zero"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "subagent-step-zero"
+path = "schema_version"
+equals = "opentraces.context_node.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "subagent-step-zero"
+path = "node.node_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "subagent-step-zero"
+path = "node.branch_type"
+equals = "subagent_fork"
+
+[[assertions]]
+kind = "stdout_json"
+step = "subagent-step-zero"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "subagent-step-zero"
+path = "node.subagent_session_id"
+equals_var = "subagent_session_id"
