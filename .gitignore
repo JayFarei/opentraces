@@ -48,3 +48,9 @@ snapshot_report.html
 
 # otbox local state — boxes, snapshots, artifacts. Never checked in.
 .otbox/
+
+# otbox capture artifacts. Snapshots exceed the 1MB committed-blob
+# threshold noted in tests/otbox/README.md, pending Git LFS migration.
+# Regenerate on demand via `make capture-refresh SCENARIO=<name>`.
+tests/otbox/captures/*/snapshot.tar.gz
+tests/otbox/captures/*/metadata.json
