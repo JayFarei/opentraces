@@ -1000,20 +1000,36 @@ def emit_context_tree_events_from_record(
             parent_graph=graph,
         )
 
-        # TODO: append events to refs/opentraces/local/events/v1 via
-        # core.trails.event_log.append_event_batch once Agent D/E land
-        # their content. For now we count what would be emitted.
+        # Emit events into the canonical Trail event log
+        # (refs/opentraces/local/events/v1). One context_layer_captured
+        # per unique layer, one context_node_observed per node, one
+        # context_compaction_observed per compaction boundary, finalised
+        # with a context_tree_reconciled summary event so the query
+        # projection can find the active_path_leaf_id without re-walking.
         summary["node_count"] = len(nodes)
         summary["layer_count"] = len({layer.layer_id for layer in layers})
 
         if not nodes:
             summary["capture_limitations"].append("context_tree_not_captured")
-        if not compactions and any(
-            r.subtype == "compact_boundary" for r in records
-        ):
-            summary["capture_limitations"].append(
-                "context_layer_unavailable"  # detector not yet wired
+
+        try:
+            _append_context_tree_events(
+                project_dir=project_dir,
+                trace_id=final_record.trace_id,
+                layers=layers,
+                nodes=nodes,
+                compactions=compactions,
+                graph=graph,
+                summary=summary,
             )
+        except Exception as append_exc:  # noqa: BLE001
+            logger.warning(
+                "context_tree event append failed for trace %s: %s",
+                final_record.trace_id,
+                append_exc,
+                exc_info=True,
+            )
+            summary["capture_limitations"].append("context_tree_not_captured")
 
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -1205,6 +1221,111 @@ def _transcript_path_for(record: TraceRecord) -> Path | None:
         path = Path(src)
         if path.exists():
             return path
+    return None
+
+
+def _append_context_tree_events(
+    *,
+    project_dir: Path,
+    trace_id: str,
+    layers: list[ContextLayer],
+    nodes: list[ContextNode],
+    compactions: list[CompactionBoundary],
+    graph: ParentGraph,
+    summary: dict[str, Any],
+) -> None:
+    """Append Context Tree events to refs/opentraces/local/events/v1.
+
+    Emits one ``context_layer_captured`` per unique layer (dedup by
+    layer_id), one ``context_node_observed`` per ContextNode, one
+    ``context_compaction_observed`` per CompactionBoundary, and a
+    final ``context_tree_reconciled`` sentinel with summary stats.
+
+    All events live on the same canonical Git ref the Trail substrate
+    uses; ``read_events(repo)`` returns them interleaved with Trail
+    events, sorted by sequence. Context Tree's query projection
+    filters by ``event_type`` to materialize just its slice.
+    """
+    from ...core.trails.event_log import append_event_batch
+    from ...core.trails.models import TrailEventDraft
+
+    drafts: list[TrailEventDraft] = []
+
+    # Unique layers first (dedup)
+    seen_layer_ids: set[str] = set()
+    for layer in layers:
+        if layer.layer_id in seen_layer_ids:
+            continue
+        seen_layer_ids.add(layer.layer_id)
+        drafts.append(TrailEventDraft(
+            event_type=CONTEXT_LAYER_CAPTURED,
+            payload=layer.model_dump(mode="json"),
+            trace_id=trace_id,
+            capture_method=["context_tree_capture"],
+        ))
+
+    # Then nodes
+    for node in nodes:
+        drafts.append(TrailEventDraft(
+            event_type=CONTEXT_NODE_OBSERVED,
+            payload=node.model_dump(mode="json"),
+            trace_id=trace_id,
+            step_index=node.step_index,
+            capture_method=["context_tree_capture"],
+        ))
+
+    # Then compaction boundaries
+    for comp in compactions:
+        drafts.append(TrailEventDraft(
+            event_type="context_compaction_observed",
+            payload={
+                "pre_node_id": _resolve_node_id_for_uuid(nodes, comp.pre_record_uuid),
+                "post_node_id": _resolve_node_id_for_uuid(nodes, comp.post_record_uuid),
+                "compacted_span_first_uuid": comp.compacted_span_first_uuid,
+                "compacted_span_last_uuid": comp.compacted_span_last_uuid,
+                "summary_text_hash": comp.summary_text_hash,
+                "lossy_diff_removed_uuids": list(comp.lossy_diff_removed_uuids),
+                "trace_id": trace_id,
+            },
+            trace_id=trace_id,
+            capture_method=["context_tree_capture"],
+        ))
+
+    # Final sentinel for the projection's active_path_leaf_id lookup
+    drafts.append(TrailEventDraft(
+        event_type=CONTEXT_TREE_RECONCILED,
+        payload={
+            "trace_id": trace_id,
+            "node_count": summary.get("node_count", len(nodes)),
+            "layer_count": summary.get("layer_count", len(seen_layer_ids)),
+            "active_path_leaf_id": graph.active_leaf_uuid,
+            "orphan_branch_roots": [
+                n.node_id for n in nodes if n.branch_type == "rewind_branch"
+                and n.parent_node_id and n.parent_node_id not in {x.node_id for x in nodes if x.branch_type == "rewind_branch"}
+            ],
+            "subagent_session_ids": [
+                n.subagent_session_id for n in nodes
+                if n.subagent_session_id
+            ],
+            "capture_limitations": list(summary.get("capture_limitations", [])),
+        },
+        trace_id=trace_id,
+        capture_method=["context_tree_capture"],
+    ))
+
+    if drafts:
+        append_event_batch(project_dir, drafts, writer="context-tree-capture")
+
+
+def _resolve_node_id_for_uuid(
+    nodes: list[ContextNode], transcript_uuid: str
+) -> str | None:
+    """Find a node by transcript_uuid (used by compaction event payload)."""
+    if not transcript_uuid:
+        return None
+    for n in nodes:
+        if n.transcript_uuid == transcript_uuid:
+            return n.node_id
     return None
 
 
