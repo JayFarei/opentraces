@@ -26,30 +26,12 @@ from pathlib import Path
 
 import pytest
 
-CAPTURES_ROOT = Path(__file__).resolve().parent / "captures"
+from tests.otbox.checkpoints._captured_helpers import iter_artifacts
+
 SCENARIOS_ROOT = (
     Path(__file__).resolve().parent / "simulated_users" / "scenarios"
 )
 STALE_AFTER_DAYS = 90
-
-
-def _iter_artifacts() -> list[tuple[str, Path]]:
-    """Yield ``(artifact_dir_name, metadata_path)`` for every committed
-    capture artifact.
-
-    Returns an empty list when ``captures/`` is missing or contains no
-    artifact subdirs with a ``metadata.json`` (the OSS default).
-    """
-    if not CAPTURES_ROOT.exists():
-        return []
-    out: list[tuple[str, Path]] = []
-    for entry in sorted(CAPTURES_ROOT.iterdir()):
-        if not entry.is_dir():
-            continue
-        meta = entry / "metadata.json"
-        if meta.is_file():
-            out.append((entry.name, meta))
-    return out
 
 
 def test_no_artifacts_is_acceptable():
@@ -62,28 +44,41 @@ def test_no_artifacts_is_acceptable():
     assert True
 
 
-@pytest.mark.parametrize(
-    "artifact_dir_name,metadata_path",
-    _iter_artifacts()
-    or [
-        pytest.param(
-            "__none__",
-            None,
-            marks=pytest.mark.skip(
-                reason="no committed capture artifacts (OSS default)"
-            ),
-        )
-    ],
-)
+_ARTIFACTS = iter_artifacts() or [
+    pytest.param(
+        "__none__", None, None,
+        marks=pytest.mark.skip(
+            reason="no committed capture artifacts (OSS default)"
+        ),
+    )
+]
+
+
+@pytest.mark.parametrize("artifact_dir_name,archive_path,metadata_path", _ARTIFACTS)
 def test_capture_artifact_is_fresh(
-    artifact_dir_name: str, metadata_path: Path
+    artifact_dir_name: str, archive_path: Path, metadata_path: Path
 ):
     """For each committed artifact, surface drift signals as warnings."""
-    metadata = json.loads(metadata_path.read_text())
+    # 0. Orphaned half-committed artifact — surface as drift, then bail
+    #    out of the per-field checks (no metadata to walk).
+    if not metadata_path.exists():
+        warnings.warn(
+            f"capture {artifact_dir_name!r}: snapshot.tar.gz committed "
+            f"without sibling metadata.json; consider `make capture-refresh "
+            f"SCENARIO={artifact_dir_name}` or remove the orphan",
+            stacklevel=1,
+        )
+        return
+    if not archive_path.exists():
+        warnings.warn(
+            f"capture {artifact_dir_name!r}: metadata.json committed "
+            f"without sibling snapshot.tar.gz; consider `make capture-refresh "
+            f"SCENARIO={artifact_dir_name}` or remove the orphan",
+            stacklevel=1,
+        )
+        return
 
-    # The scenario name is the canonical key for finding the source TOML
-    # — the artifact directory name (artifact_dir_name) can diverge from
-    # it. Fall back to the artifact dir name when metadata is incomplete.
+    metadata = json.loads(metadata_path.read_text())
     scenario_name = metadata.get("scenario_name") or artifact_dir_name
 
     # --- 1. Schema version drift -----------------------------------------

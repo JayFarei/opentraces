@@ -66,6 +66,28 @@ def artifact_exists(capture_name: str) -> bool:
     return archive.exists() and metadata.exists()
 
 
+def iter_artifacts() -> list[tuple[str, Path, Path]]:
+    """Walk every committed capture artifact under the captures root.
+
+    Yields ``(name, archive_path, metadata_path)`` triples. A directory
+    counts as an artifact when it has *either* sidecar — half-committed
+    states are returned so downstream auditors (e.g. the freshness
+    pytest) can surface them as drift signals rather than silently
+    skip.
+    """
+    root = _captures_root()
+    if not root.exists():
+        return []
+    out: list[tuple[str, Path, Path]] = []
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        archive, metadata = _artifact_paths(entry.name)
+        if archive.exists() or metadata.exists():
+            out.append((entry.name, archive, metadata))
+    return out
+
+
 def _clear_box_contents(box: Box) -> None:
     """Remove the post-provision skeleton so the artifact can land cleanly.
 
