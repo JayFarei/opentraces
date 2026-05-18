@@ -1,0 +1,18 @@
+{
+  "name": "context-tree-via-proxy",
+  "session_id": "sess-otbox-context-tree-via-proxy",
+  "edit_paths": ["src/mod_a.py", "src/mod_b.py", "src/mod_c.py"],
+  "summary": "Mirror of context-tree-multi-turn that ALSO issues real HTTP POSTs against an in-front HTTP proxy. Two-source comparison fixture for the http-proxy-capture prototype (plan 078 evidence). Three user turns, three Edits across three distinct files. Per turn, the session writes the same Claude Code JSONL records (so the existing JSONL pipeline parses cleanly) AND issues a /v1/messages POST through the proxy_url provided by the caller so the proxy capture log gets the wire-bytes side.",
+  "expected_step_count_min": 9,
+  "expected_edit_count": 3,
+  "expected_user_turn_count": 3,
+  "expected_assistant_turn_count": 8,
+  "expected_proxy_request_count": 3,
+  "expected_tool_call_names": ["Read", "Edit", "Read", "Edit", "Read", "Edit", "Bash"],
+  "expected_compaction_count": 0,
+  "expected_orphan_branch_count": 0,
+  "expected_subagent_session_count": 0,
+  "parent_uuid_chain_linear": true,
+  "fixture_signature": "run(project, transcript, *, proxy_url=None)",
+  "notes": "When proxy_url is None the fixture behaves identically to context-tree-multi-turn (JSONL only). When proxy_url is set, one HTTP POST per user turn is issued through the proxy so the prototype's compare.py can join the two pipelines by step_index. The proxy backend's exact response is irrelevant for the comparison: only the request bytes feed the proxy-side Context Tree layers."
+}
