@@ -1,0 +1,70 @@
+{
+  "content": [
+    {
+      "signature": "EpcCCmUIDRgCKkBpvRMNrcrtQ7lnr7Vw9fFlEsn2bcAFa5hSeLPzsp+3ei7BmC3B7ud6D9jxDPSBL2MdIo3LNL1rwxU8V0eWWJI/MhtjbGF1ZGUtb3B1cy00LTctZmFzdC0xLWFiLXA4ABIMLB/Reupc9Syn29WXGgyt634cTCR30mzDTykiMMTk1V8cFeTXnS0j8jTaeRywjnsUWICqSN0Rhzwgu/USteeeXWCJOWXC2yFvB1i3sSpgP1D8P/DbVYWmfU1Slnec93kojXfSxkkWP9KJ2OoE/yrkgl9olxuUwIyRiWIdObM7Sas4xmx5f0qVBSbUdYZu14JnBeSkfFtMA/3iDoxbeKXwpm6aHlyFGZVmCwVdea7eGAE=",
+      "thinking": "<REDACTED>",
+      "type": "thinking"
+    },
+    {
+      "caller": {
+        "type": "direct"
+      },
+      "id": "toolu_01XuT6BThj1BMqSWaJB19Xq8",
+      "input": {
+        "file_path": "/private/tmp/otel-experiment-project/sample.py"
+      },
+      "name": "Read",
+      "type": "tool_use"
+    },
+    {
+      "caller": {
+        "type": "direct"
+      },
+      "id": "toolu_01A843DjMfqye3xmdMbo9YKa",
+      "input": {
+        "command": "ls -la",
+        "description": "List files in current directory"
+      },
+      "name": "Bash",
+      "type": "tool_use"
+    }
+  ],
+  "diagnostics": null,
+  "id": "msg_013gLeNAVJ7vrwSTEtwxoKqY",
+  "model": "claude-opus-4-7",
+  "role": "assistant",
+  "stop_details": null,
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "type": "message",
+  "usage": {
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 28288,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "cache_creation_input_tokens": 28288,
+    "cache_read_input_tokens": 18098,
+    "inference_geo": "",
+    "input_tokens": 6,
+    "iterations": [
+      {
+        "cache_creation": {
+          "ephemeral_1h_input_tokens": 28288,
+          "ephemeral_5m_input_tokens": 0
+        },
+        "cache_creation_input_tokens": 28288,
+        "cache_read_input_tokens": 18098,
+        "input_tokens": 6,
+        "output_tokens": 205,
+        "type": "message"
+      }
+    ],
+    "output_tokens": 205,
+    "server_tool_use": {
+      "web_fetch_requests": 0,
+      "web_search_requests": 0
+    },
+    "service_tier": "standard",
+    "speed": "standard"
+  }
+}
