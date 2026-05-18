@@ -1,0 +1,653 @@
+name = "context-tree-outcome-1-rewind-for-replayability"
+description = """
+Plan 078 OUTCOME journey #1 (GOLD GATE) — validates the user's
+verbatim goal:
+
+  "Anything the LLM has seen at the point in time in the trace
+   should be tracked in our context tree alongside the trace tree."
+
+Subordinate outcome 1, verbatim from plan 078 §"The outcome
+(gold source for all test validation)":
+
+  "Rewind context for replayability. For any past step N,
+   reconstruct exactly what the LLM saw at that step (system,
+   messages, tools with schemas, runtime params)."
+
+This is a load-bearing contract: if this journey fails on a real
+Claude Code session, plan 078 does not ship regardless of how many
+mechanism tests pass.
+
+============================================================
+Assertion shape
+============================================================
+
+1. `ctx tree --json` returns the canonical projection envelope
+   (schema_version = opentraces.context_tree.v1) with a non-empty
+   active path. The runner records `nodes_total` from
+   `.active_path` length for the per-step iteration below.
+
+2. For EACH step N in the active path (the OTel-linear fixture
+   pins 5 steps, indices 0..4), `ctx step <trace-id> N --json`
+   returns a ContextNode whose four layer ids are all populated:
+     - node.system_layer_id        (R5, R13)
+     - node.messages_layer_id      (R5, R13)
+     - node.tool_registry_layer_id (R5, R13)
+     - node.runtime_state_layer_id (R5, R13)
+
+3. For EACH step N, `ctx show <node-id> --full --json` returns:
+     - layers.system.completeness         == "full"
+     - layers.system.capture_method       == "otel"
+     - layers.system.content.assembled_prompt_bytes is non-null and
+       its sha256 cross-references the raw API body captured for
+       that LLM call (matched by request_id in the OTLP capture
+       log).
+     - layers.messages.completeness       == "full"
+     - layers.messages.capture_method     == "otel"
+     - layers.messages.content.messages           is the byte-equivalent
+       message history up to step N.
+     - layers.tool_registry.completeness  == "full"   (NOT
+       "approximated" — that's the JSONL fallback)
+     - layers.tool_registry.capture_method == "otel"
+     - layers.tool_registry.content.tools[*].input_schema is a non-empty
+       object for every built-in tool (Read, Write, Bash, Edit).
+     - layers.runtime_state.completeness  == "full"
+     - layers.runtime_state.capture_method == "otel"
+     - layers.runtime_state.content.max_tokens, .stream, .model are
+       non-null (the wire-only sampling params that JSONL cannot
+       see).
+
+Pass condition: per-step reconstruction succeeds for ALL steps
+with ZERO `approximated` labels on `system` or `tool_registry`
+across the entire active path. This is the OTel-capture victory
+condition: every gap that plan 077 honestly admitted is now
+closed by the OTLP receiver.
+
+============================================================
+Contract: NO synthetic-fake-claude substitution
+============================================================
+
+Per plan 078 §"Outcome journeys (4), the gold source":
+  "The outcome journeys MUST run against real `claude` binary
+   (via plan 071 PTY runner with OT_REAL_REPL=1), not against
+   the synthetic fake-claude harness. Synthetic harnesses can
+   pass mechanism tests by construction but cannot validate the
+   resume semantics that depend on real Claude Code behavior."
+
+This journey is gated on `OT_REAL_REPL=1` via the `real_repl`
+capability in `requires`. When real_repl is NOT present, the
+journey SKIPs (does not pass-by-construction). The
+`c-context-tree-otel-linear` checkpoint MUST itself be derived
+from a real Claude Code session driven via the plan 071 PTY
+runner — if the checkpoint detects synthetic-fake mode it must
+refuse to materialize, not silently fall back to a fake.
+
+============================================================
+Per-step iteration gap (coordinator decides)
+============================================================
+
+The current journey runner does NOT support a `for_each_step`
+construct. This TOML enumerates assertions for steps 0..4 by
+hand (5 steps × ~14 assertions = ~70 assertions). The
+`c-context-tree-otel-linear` fixture is pinned at 5 active-path
+steps to make this enumeration tractable. If the fixture grows,
+the coordinator must either:
+  (a) extend the journey runner with `for_each_step` /
+      `range_assertions` syntax, OR
+  (b) re-pin the fixture, OR
+  (c) accept that this journey enumerates a representative
+      sample (currently 5/5) of the steps.
+
+============================================================
+Outcome traceability (plan 078)
+============================================================
+
+This journey validates outcome 1 (rewind for replayability) and
+contributes to outcomes 2 (inspect per-call context) via the
+ctx-show assertions. R-tags from plan 078 §"Requirements Trace":
+R3 (raw API body ingestion), R4 (lifecycle event mappings), R5
+(event types), R6 (step attribution), R13 (honest gap labeling).
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump to 0 once OTLP pipeline + real-repl fixture both ship
+tier_label = "gold"
+trajectories = ["context-tree-otel-outcome"]
+persona = "agent"
+# real_repl gates this to OT_REAL_REPL=1 runs — the synthetic
+# fake-claude harness is NOT allowed to satisfy this journey.
+# NOTE: a more specific `real_claude` capability would let plan
+# 078 distinguish "any real REPL agent" from "real Claude Code
+# specifically" (only Claude Code emits the OTel attributes we
+# map). Until the runner adds `real_claude`, `real_repl` is the
+# closest available gate; the c-context-tree-otel-linear
+# checkpoint is responsible for failing fast if the underlying
+# capture is from a non-Claude-Code agent.
+requires = ["cli", "git", "real_repl"]
+from_checkpoints = ["c-context-tree-otel-linear"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+# NEW precondition key — true only when the underlying capture
+# checkpoint has BOTH a JSONL transcript AND an OTLP capture log
+# (raw API bodies + spans). The c-context-tree-otel-linear
+# checkpoint sets this to true; the JSONL-only
+# c-context-tree-substrate checkpoint does NOT, so this journey
+# will not accidentally match against the wrong fixture.
+otel_captures_present = true
+
+# =====================================================================
+# Phase 0 — tree shape + active path length probe.
+# Establishes that the fixture has exactly the 5 steps this journey
+# enumerates per-step assertions for.
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "tree-shape"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-shape"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-shape"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-shape"
+path = "trace_id"
+equals = "{trace_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-shape"
+path = "active_leaf_id"
+
+# Pin: fixture has exactly 5 active-path steps (indices 0..4). If
+# the fixture changes shape, this assertion fails fast before we
+# waste time on the per-step block below.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "tree-shape"
+path = "active_path"
+equals = 5
+
+# =====================================================================
+# Per-step block — STEP 0
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "step-0-node"
+argv = ["ctx", "step", "{trace_id}", "0", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "step-0-node"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-node"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-node"
+path = "node.step_index"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-node"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-node"
+path = "node.messages_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-node"
+path = "node.tool_registry_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-node"
+path = "node.runtime_state_layer_id"
+
+[[steps]]
+type = "cli"
+id = "step-0-show"
+argv = ["ctx", "step", "{trace_id}", "0", "--full", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.system.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.system.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.system.content.assembled_prompt_bytes"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.messages.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.messages.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.tool_registry.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.tool_registry.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "step-0-show"
+path = "layers.tool_registry.content.tool_names"
+equals = ["Read", "Write", "Bash", "Edit"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.runtime_state.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.runtime_state.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.runtime_state.content.model"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.runtime_state.content.max_tokens"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-0-show"
+path = "layers.runtime_state.content.stream"
+
+# =====================================================================
+# Per-step block — STEP 1
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "step-1-node"
+argv = ["ctx", "step", "{trace_id}", "1", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "step-1-node"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-node"
+path = "node.step_index"
+equals = 1
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-node"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-node"
+path = "node.messages_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-node"
+path = "node.tool_registry_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-node"
+path = "node.runtime_state_layer_id"
+
+[[steps]]
+type = "cli"
+id = "step-1-show"
+argv = ["ctx", "step", "{trace_id}", "1", "--full", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-show"
+path = "layers.system.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-show"
+path = "layers.system.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-show"
+path = "layers.system.content.assembled_prompt_bytes"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-show"
+path = "layers.tool_registry.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-show"
+path = "layers.tool_registry.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-show"
+path = "layers.runtime_state.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-1-show"
+path = "layers.runtime_state.content.model"
+
+# =====================================================================
+# Per-step block — STEP 2
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "step-2-node"
+argv = ["ctx", "step", "{trace_id}", "2", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "step-2-node"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-node"
+path = "node.step_index"
+equals = 2
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-node"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-node"
+path = "node.messages_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-node"
+path = "node.tool_registry_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-node"
+path = "node.runtime_state_layer_id"
+
+[[steps]]
+type = "cli"
+id = "step-2-show"
+argv = ["ctx", "step", "{trace_id}", "2", "--full", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-show"
+path = "layers.system.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-show"
+path = "layers.system.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-show"
+path = "layers.system.content.assembled_prompt_bytes"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-show"
+path = "layers.tool_registry.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-show"
+path = "layers.tool_registry.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-show"
+path = "layers.runtime_state.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-2-show"
+path = "layers.runtime_state.content.model"
+
+# =====================================================================
+# Per-step block — STEP 3
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "step-3-node"
+argv = ["ctx", "step", "{trace_id}", "3", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "step-3-node"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-node"
+path = "node.step_index"
+equals = 3
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-node"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-node"
+path = "node.messages_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-node"
+path = "node.tool_registry_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-node"
+path = "node.runtime_state_layer_id"
+
+[[steps]]
+type = "cli"
+id = "step-3-show"
+argv = ["ctx", "step", "{trace_id}", "3", "--full", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-show"
+path = "layers.system.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-show"
+path = "layers.system.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-show"
+path = "layers.system.content.assembled_prompt_bytes"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-show"
+path = "layers.tool_registry.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-show"
+path = "layers.tool_registry.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-show"
+path = "layers.runtime_state.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-show"
+path = "layers.runtime_state.content.model"
+
+# =====================================================================
+# Per-step block — STEP 4 (tail step)
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "step-4-node"
+argv = ["ctx", "step", "{trace_id}", "4", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "step-4-node"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-node"
+path = "node.step_index"
+equals = 4
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-node"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-node"
+path = "node.messages_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-node"
+path = "node.tool_registry_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-node"
+path = "node.runtime_state_layer_id"
+
+[[steps]]
+type = "cli"
+id = "step-4-show"
+argv = ["ctx", "step", "{trace_id}", "4", "--full", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-show"
+path = "layers.system.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-show"
+path = "layers.system.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-show"
+path = "layers.system.content.assembled_prompt_bytes"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-show"
+path = "layers.tool_registry.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-show"
+path = "layers.tool_registry.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "step-4-show"
+path = "layers.tool_registry.content.tool_names"
+equals = ["Read", "Write", "Bash", "Edit"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-show"
+path = "layers.runtime_state.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-show"
+path = "layers.runtime_state.content.model"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-show"
+path = "layers.runtime_state.content.max_tokens"
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-4-show"
+path = "layers.runtime_state.content.stream"

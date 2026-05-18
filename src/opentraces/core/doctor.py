@@ -7,6 +7,8 @@ shape is testable without going through Click, and any future surfaces
 """
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -739,7 +741,124 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
         "trail_event_log": _trail_event_log_status(cwd),
         "post_commit_hook": _post_commit_hook_status(cwd),
         "trail_capture_audit": _trail_capture_audit(cwd),
+        "context_tree": _context_tree_status(cwd),
     }
+
+
+def _context_tree_status(cwd: Path | None = None) -> dict[str, Any]:
+    """Plan 077 + plan 078 R11 doctor surface for Context Tree state.
+
+    Reads ``~/.opentraces/otlp-receiver.status.json`` which the receiver
+    daemon refreshes periodically (R11). The CLI's ``capture-otlp status``
+    verb is the live counterpart. Also scans the project's canonical
+    event log for the most recent ``context_tree_reconciled`` event so
+    consumers can see whether the substrate has ingested any sessions.
+    """
+    from .paths import (
+        otlp_receiver_pid_path,
+        otlp_receiver_status_path,
+        raw_bodies_dir,
+    )
+    pid_path = otlp_receiver_pid_path()
+    status_path = otlp_receiver_status_path()
+    raw_dir = raw_bodies_dir()
+
+    otel_receiver: dict[str, Any] = {
+        "enabled": False,
+        "port": None,
+        "uptime_seconds": None,
+        "last_capture_at": None,
+        "last_capture_at_present": False,
+        "captures_total": None,
+        "raw_body_dir": str(raw_dir),
+        "raw_body_dir_size_bytes": _dir_size_bytes(raw_dir),
+    }
+
+    pid_alive = False
+    if pid_path.exists():
+        try:
+            pid = int(pid_path.read_text(encoding="utf-8").strip())
+            try:
+                os.kill(pid, 0)
+                pid_alive = True
+                otel_receiver["pid"] = pid
+            except (OSError, ProcessLookupError):
+                pid_alive = False
+        except (ValueError, OSError):
+            pid_alive = False
+
+    # Status file persists across stop/start so historical config and
+    # capture totals remain visible to dashboards even when the daemon
+    # is currently down. ``enabled`` reflects live PID state; everything
+    # else reflects the last-known good snapshot.
+    if status_path.exists():
+        try:
+            data = json.loads(status_path.read_text(encoding="utf-8"))
+            otel_receiver["port"] = data.get("port")
+            otel_receiver["uptime_seconds"] = (
+                data.get("uptime_seconds") if pid_alive else None
+            )
+            otel_receiver["last_capture_at"] = data.get("last_capture_at")
+            otel_receiver["captures_total"] = data.get("captures_total")
+        except (json.JSONDecodeError, OSError):
+            pass
+    otel_receiver["enabled"] = bool(pid_alive)
+    # ``last_capture_at_present`` is the convenience boolean for journeys
+    # that don't want to walk null-vs-missing — true once tracking is
+    # operational (live daemon OR persisted history shows captures).
+    otel_receiver["last_capture_at_present"] = bool(
+        otel_receiver["last_capture_at"] is not None or pid_alive
+    )
+
+    # Plan 077 R8 surface: scan the canonical event log ONCE for the
+    # most recent context_tree_reconciled event + aggregated capture
+    # limitations. Both the JSONL pipeline and the OTLP flush emit
+    # these, so these fields reflect "any source has reconciled at
+    # least one session" across the substrate.
+    last_reconciled_at, capture_limitations_by_trace = (
+        _scan_context_tree_reconciled(cwd) if cwd else (None, {})
+    )
+
+    return {
+        "otel_receiver": otel_receiver,
+        "last_reconciled_at": last_reconciled_at,
+        "capture_limitations_by_trace": capture_limitations_by_trace,
+    }
+
+
+def _scan_context_tree_reconciled(cwd: Path) -> tuple[str | None, dict[str, list[str]]]:
+    """Single-pass scan: latest event_time + per-trace capture_limitations."""
+    try:
+        from .trails.event_log import read_events
+    except ImportError:
+        return None, {}
+    try:
+        events = read_events(cwd, verify=False)
+    except Exception:
+        return None, {}
+    latest: str | None = None
+    by_trace: dict[str, list[str]] = {}
+    for ev in events:
+        if ev.event_type != "context_tree_reconciled":
+            continue
+        if latest is None or ev.event_time > latest:
+            latest = ev.event_time
+        trace_id = ev.payload.get("trace_id")
+        if trace_id:
+            entries = by_trace.setdefault(trace_id, [])
+            for lim in ev.payload.get("capture_limitations") or []:
+                if lim not in entries:
+                    entries.append(lim)
+    return latest, by_trace
+
+
+def _dir_size_bytes(path: Path) -> int:
+    if not path.exists():
+        return 0
+    try:
+        return sum(p.stat().st_size for p in path.glob("*") if p.is_file())
+    except OSError:
+        return 0
 
 
 def _trail_capture_audit(cwd: Path) -> dict[str, Any]:

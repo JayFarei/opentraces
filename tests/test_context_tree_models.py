@@ -428,6 +428,9 @@ class TestVocabularies:
             # Added by the http-proxy-capture prototype branch; if/when
             # the prototype lands on main this value stays.
             "proxy",
+            # Added by plan 078: OTLP receiver capture source for
+            # Claude Code's native OTel emission.
+            "otel",
         }
 
     def test_event_types_complete(self):

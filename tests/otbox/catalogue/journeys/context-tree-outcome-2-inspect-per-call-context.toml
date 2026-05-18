@@ -1,0 +1,402 @@
+name = "context-tree-outcome-2-inspect-per-call-context"
+description = """
+Plan 078 OUTCOME journey #2 (GOLD GATE) — validates the user's
+verbatim goal:
+
+  "Anything the LLM has seen at the point in time in the trace
+   should be tracked in our context tree alongside the trace tree."
+
+Subordinate outcome 2, verbatim from plan 078 §"The outcome
+(gold source for all test validation)":
+
+  "Inspect what context is used/sent for every LLM call, and
+   how it was retrieved. Per-call layer dump + provenance."
+
+This is a load-bearing contract: if this journey fails on a real
+Claude Code session, plan 078 does not ship regardless of how
+many mechanism tests pass.
+
+============================================================
+Assertion shape
+============================================================
+
+1. `ctx reads --json` enumerates every tool_result observed in
+   the session (environment-to-agent direction). Each row has:
+     - a non-null `content_hash` (sha256 of the result body)
+     - a non-null `node_id` (cross-reference into the
+       ContextTreeProjection layer set)
+     - a non-null `tool_name`
+     - a non-null `step_index`
+
+2. `ctx writes --json` enumerates every tool_use observed in the
+   session (agent-to-environment direction). Each row has the
+   same provenance fields plus `target_path` and `mutation_kind`.
+
+3. The combined count of reads + writes matches the count of
+   Read/Edit/Bash/Write tool invocations in the OTel-linear
+   fixture. The fixture is pinned at:
+     - 1 Read invocation
+     - 1 Edit invocation
+     - 1 Bash invocation
+     - 0 Write invocations (the linear fixture mutates via Edit
+       only)
+   Total: 3 tool invocations.
+
+4. For each read/write row, `ctx show <node-id> --full --json`
+   returns the COMPLETE layer content (system + messages +
+   tool_registry + runtime_state) for the node that observed
+   that tool call. NO truncation, NO fallback to "ask another
+   source", NO `completeness=approximated` on the
+   wire-byte-sourced layers (system/messages/tool_registry/
+   runtime_state when capture_method=otel).
+
+Pass condition: every tool call observed in the fixture is
+enumerated by `ctx reads` + `ctx writes` with non-null
+provenance, AND `ctx show --full` round-trips the complete
+layer content for each enumerated node.
+
+============================================================
+Contract: NO synthetic-fake-claude substitution
+============================================================
+
+Same as outcome-1: gated on `OT_REAL_REPL=1` via `real_repl`
+capability. The c-context-tree-otel-linear checkpoint MUST be
+derived from a real Claude Code session — the synthetic
+fake-claude harness is NOT allowed to satisfy this journey.
+
+============================================================
+Outcome traceability (plan 078)
+============================================================
+
+This journey validates outcome 2 (inspect per-call context) and
+contributes to outcome 1 (rewind for replayability) via the
+node-id cross-reference. R-tags: R2 (attribute mapper), R3 (raw
+API body ingestion), R5 (event types), R6 (step attribution),
+R13 (honest gap labeling).
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump to 0 once OTLP pipeline + real-repl fixture both ship
+tier_label = "gold"
+trajectories = ["context-tree-otel-outcome"]
+persona = "agent"
+requires = ["cli", "git", "real_repl"]
+from_checkpoints = ["c-context-tree-otel-linear"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+otel_captures_present = true
+
+# =====================================================================
+# 1. ctx reads — enumerate every tool_result with provenance.
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "reads"
+argv = ["ctx", "reads", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "reads"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "reads"
+path = "schema_version"
+equals = "opentraces.context_reads.v1"
+
+# First read row's provenance fields all populated.
+[[assertions]]
+kind = "stdout_json"
+step = "reads"
+path = "reads.0.step_index"
+
+[[assertions]]
+kind = "stdout_json"
+step = "reads"
+path = "reads.0.node_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "reads"
+path = "reads.0.tool_name"
+
+[[assertions]]
+kind = "stdout_json"
+step = "reads"
+path = "reads.0.content_hash"
+
+# The OTel-linear fixture has at least 1 read row (the Read tool
+# invocation). The exact count is fixture-pinned to 1; if the
+# fixture grows additional reads, this assertion is a strict
+# lower bound that still holds.
+[[assertions]]
+kind = "stdout_json"
+step = "reads"
+path = "reads.0.result_uuid"
+
+# =====================================================================
+# 2. ctx writes — enumerate every tool_use with provenance.
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "writes"
+argv = ["ctx", "writes", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "writes"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "writes"
+path = "schema_version"
+equals = "opentraces.context_writes.v1"
+
+# First write row's provenance fields all populated.
+[[assertions]]
+kind = "stdout_json"
+step = "writes"
+path = "writes.0.step_index"
+
+[[assertions]]
+kind = "stdout_json"
+step = "writes"
+path = "writes.0.node_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "writes"
+path = "writes.0.tool_name"
+
+[[assertions]]
+kind = "stdout_json"
+step = "writes"
+path = "writes.0.target_path"
+
+[[assertions]]
+kind = "stdout_json"
+step = "writes"
+path = "writes.0.mutation_kind"
+
+[[assertions]]
+kind = "stdout_json"
+step = "writes"
+path = "writes.0.content_hash"
+
+# =====================================================================
+# 3. Cross-reference: pick the first read's node_id and the
+# first write's node_id, run `ctx show --full` on each, assert
+# the complete layer set is returned.
+# =====================================================================
+# Per CLAUDE.md "demo-acceptance journey... requires equals_var
+# placeholder expansion in the runner": there is currently NO
+# templating variable {first_read_node_id} or {first_write_node_id}
+# in the journey runner — the placeholders below are aspirational.
+# GAP: coordinator must either (a) wire up these template vars
+# alongside the existing {trace_id}/{step_index} pattern, or
+# (b) extend the runner with a "stash this stdout-json-path into
+# a template var for downstream steps" mechanism (similar to
+# how {trace_id} is stashed by the c-captured-real-session
+# checkpoint audit).
+[[steps]]
+type = "cli"
+id = "show-first-read"
+argv = ["ctx", "show", "{first_read_node_id}", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-first-read"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# Complete layer set (NO truncation, NO fallback). The four
+# layer ids and full contents.
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "node.messages_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "node.tool_registry_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "node.runtime_state_layer_id"
+
+# All four layer bodies materialized at completeness=full /
+# capture_method=otel. The load-bearing claim: the LLM saw
+# THIS exact content at this step, and we can return it without
+# pointing the user at the JSONL transcript / git log / etc.
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "layers.system.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "layers.system.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "layers.system.content.assembled_prompt_bytes"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "layers.messages.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "layers.messages.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "layers.tool_registry.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "layers.tool_registry.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "layers.runtime_state.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-read"
+path = "layers.runtime_state.capture_method"
+equals = "otel"
+
+# =====================================================================
+# 4. Same `ctx show --full` cross-reference for the first write.
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "show-first-write"
+argv = ["ctx", "show", "{first_write_node_id}", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-first-write"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-write"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-write"
+path = "node.system_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-write"
+path = "node.messages_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-write"
+path = "node.tool_registry_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-write"
+path = "node.runtime_state_layer_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-write"
+path = "layers.system.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-write"
+path = "layers.system.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-write"
+path = "layers.tool_registry.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-write"
+path = "layers.tool_registry.capture_method"
+equals = "otel"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-write"
+path = "layers.runtime_state.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-write"
+path = "layers.runtime_state.capture_method"
+equals = "otel"
+
+# =====================================================================
+# 5. Tool-count sanity check via `ctx tree --json` summary.
+# The fixture pins 3 tool invocations (1 Read + 1 Edit + 1 Bash).
+# Reads + writes combined must enumerate all 3 with provenance.
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "tree-tool-counts"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-tool-counts"
+equals = 0
+
+# The tree envelope should expose a `tool_call_count` summary (or
+# equivalent) so this assertion can verify the fixture's 3 tool
+# invocations are all surfaced. GAP: if the
+# opentraces.context_tree.v1 envelope does not include
+# `tool_call_count`, coordinator must either (a) add it to the
+# envelope (would require schema_version bump per CLAUDE.md
+# "frozen envelope" contract — coordinator decides), or
+# (b) rewrite this assertion to count reads + writes rows in the
+# preceding `reads` / `writes` steps.
+[[assertions]]
+kind = "stdout_json"
+step = "tree-tool-counts"
+path = "tool_call_count"
+equals = 3

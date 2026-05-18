@@ -1,0 +1,411 @@
+name = "context-tree-outcome-3-teleport-resume-from-step-N"
+description = """
+Plan 078 OUTCOME journey #3 (GOLD GATE) — validates the user's
+verbatim goal:
+
+  "Anything the LLM has seen at the point in time in the trace
+   should be tracked in our context tree alongside the trace tree."
+
+Subordinate outcome 3, verbatim from plan 078 §"The outcome
+(gold source for all test validation)":
+
+  "Teleport exact context and resume from any step. `ctx prune`
+   + `claude --resume` lands at step N with the right state."
+
+This is a load-bearing contract: if this journey fails on a real
+Claude Code session, plan 078 does not ship regardless of how
+many mechanism tests pass.
+
+============================================================
+v1 acceptance proof — transcript artifact
+============================================================
+
+This journey's transcript REPLACES the hand-rolled v1
+conviction artifact at:
+
+  tests/otbox/captures/context-tree-demo/transcript.md
+
+On full PASS, the runner saves a runner-generated markdown
+transcript to:
+
+  tests/otbox/captures/context-tree-outcome-3/transcript.md
+
+This is plan 078's substitute for plan 077's "human reads the
+committed transcript and verifies the substrate works without
+running anything" conviction event. The hand-rolled artifact
+stays in tree as historical record (the v1.0 baseline before
+plan 078 closed the static-core / schema / runtime-param gaps).
+
+============================================================
+Assertion shape
+============================================================
+
+1. Pick a non-tail step N. The OTel-linear fixture is pinned at
+   5 steps (indices 0..4); this journey picks N=3 (a non-tail
+   middle step) to validate the prune + resume primitive.
+
+2. `ctx prune <node-id> --to-session test-resume --write --json`
+   exits rc=0 and emits an `opentraces.context_resume.v1`
+   envelope with:
+     - schema_version    == "opentraces.context_resume.v1"
+     - dry_run           == false   (because --write was passed)
+     - new_session_id    is non-null
+     - jsonl_path        is non-null
+     - record_count      is non-null (and equals N for N=3)
+
+3. The pruned JSONL file exists on disk at `jsonl_path` and
+   contains exactly N records (the active path prefix from
+   step 0 through step N-1; the node at step N becomes the
+   first turn the resumed session will take).
+   GAP: there is currently no `file_lines_equals` assertion
+   kind in the journey runner. This journey uses
+   `path_exists` for existence and relies on the
+   `ctx verify-session` verb (created during plan 077 demo
+   acceptance work) to assert the uuid set + record count via
+   the CLI envelope.
+
+4. PTY-runner block — invoke the real `claude` binary with
+   `--resume <new-session-id>`. The first turn the model
+   receives must be the expected user prompt (the one pinned
+   at step N of the original session). The model's tool
+   registry must be unchanged (probed via
+   `claude --print "list your tools"` and asserted to contain
+   {Read, Write, Bash, Edit}).
+   GAP: the journey runner currently supports a `tmux` step
+   type (used by TUI journeys) but NO `pty_runner` step type.
+   This journey declares a `[pty_runner]` block; coordinator
+   must wire the runner to dispatch this block to
+   `tests/otbox/simulated_users/runner.py::run_simulated_session`
+   with `--save-transcript` semantics. Until that wiring lands,
+   this journey FAILS at the PTY step (correct TDD behavior —
+   no false green).
+
+5. After resume, a fresh `opentraces ctx tree --json` against
+   the NEW (resumed) session's captured trace shows the first
+   N nodes share the same content-addressed node_ids as the
+   original. This is the "teleport exact context" property:
+   identity is content-hashed, not session-id-keyed.
+
+============================================================
+Contract: NO synthetic-fake-claude substitution
+============================================================
+
+Per plan 078 §"Outcome journeys (4), the gold source":
+  "The outcome journeys MUST run against real `claude` binary
+   (via plan 071 PTY runner with OT_REAL_REPL=1), not against
+   the synthetic fake-claude harness."
+
+This journey is gated on `OT_REAL_REPL=1` via the `real_repl`
+capability. When real_repl is NOT present, the journey SKIPs
+(does not pass-by-construction). When the PTY runner detects
+fake-claude binary mode (e.g., $CLAUDE_BIN points at
+`tests/otbox/simulated_users/_echo_binary.py`), the journey
+MUST refuse to proceed past the resume step — fake binaries
+cannot validate the prune+resume semantics that depend on
+real Claude Code message-history handling.
+
+============================================================
+Outcome traceability (plan 078)
+============================================================
+
+This journey validates outcome 3 (teleport + resume) and is the
+substrate primitive for outcome 4 (RL-rollout checkpoints; see
+context-tree-outcome-4-checkpoint-for-experiments.toml).
+R-tags: R3 (raw API body ingestion — the pruned JSONL is the
+prune projection over the captured layers), R5 (event types),
+R6 (step attribution — the prune cut point is step-indexed),
+R12 (bypass safety — `claude --resume` ignores OTel emission
+errors, so the resume succeeds even when the OTLP receiver is
+down).
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump to 0 once OTLP pipeline + PTY-runner step type + real-repl fixture all ship
+tier_label = "gold"
+trajectories = ["context-tree-otel-outcome"]
+persona = "agent"
+# real_repl gates this to OT_REAL_REPL=1 runs. A more specific
+# `real_claude` capability would distinguish "real Claude Code"
+# from "any real REPL agent" — until the runner adds it, the
+# c-context-tree-otel-linear checkpoint is responsible for
+# refusing to materialize against a non-Claude-Code session.
+# GAP for coordinator: add `real_claude` to _capabilities() in
+# tests/otbox/journey.py.
+requires = ["cli", "git", "real_repl"]
+from_checkpoints = ["c-context-tree-otel-linear"]
+
+# Plan 078 §"Outcome journeys (4), the gold source" → outcome 3
+# transcript artifact. On full PASS the runner saves the
+# rendered markdown here; this REPLACES the v1 hand-rolled
+# proof at tests/otbox/captures/context-tree-demo/transcript.md.
+[artifacts]
+transcript = "tests/otbox/captures/context-tree-outcome-3/transcript.md"
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+otel_captures_present = true
+
+# =====================================================================
+# 1. Sanity probe — the fixture has the expected shape.
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "tree-shape"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-shape"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-shape"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# Pin: fixture has 5 active-path steps so step 3 is non-tail.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "tree-shape"
+path = "active_path"
+equals = 5
+
+# =====================================================================
+# 2. Resolve step 3's node id (the non-tail prune target).
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "step-3-resolve"
+argv = ["ctx", "step", "{trace_id}", "3", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "step-3-resolve"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-resolve"
+path = "node.step_index"
+equals = 3
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-resolve"
+path = "node.node_id"
+
+# =====================================================================
+# 3. Prune to step 3 (dry run first).
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "prune-dryrun"
+argv = [
+    "ctx", "prune", "{step_3_node_id}",
+    "--to-session", "test-resume",
+    "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "prune-dryrun"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-dryrun"
+path = "schema_version"
+equals = "opentraces.context_resume.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-dryrun"
+path = "dry_run"
+equals = true
+
+# Pruning to step 3 means the active-path prefix is 3 records
+# (steps 0, 1, 2; step 3 becomes the first turn the resumed
+# session takes).
+[[assertions]]
+kind = "stdout_json"
+step = "prune-dryrun"
+path = "record_count"
+equals = 3
+
+# =====================================================================
+# 4. Prune to step 3 with --write (materializes JSONL).
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "prune-write"
+argv = [
+    "ctx", "prune", "{step_3_node_id}",
+    "--to-session", "test-resume",
+    "--write", "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "prune-write"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write"
+path = "schema_version"
+equals = "opentraces.context_resume.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write"
+path = "dry_run"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write"
+path = "new_session_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write"
+path = "jsonl_path"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-write"
+path = "record_count"
+equals = 3
+
+# =====================================================================
+# 5. Pruned JSONL exists on disk.
+# =====================================================================
+# GAP: path_exists takes a literal path; ideally we'd use
+# {pruned_jsonl_path} expanded from the prune-write step's stdout
+# json. Until the runner supports cross-step stdout templating
+# (see outcome-2 GAP block), this assertion relies on the
+# verify-session verb below to validate the file contents.
+[[steps]]
+type = "cli"
+id = "verify-pruned"
+argv = [
+    "ctx", "verify-session", "{pruned_session_id}",
+    "--against-node", "{step_3_node_id}",
+    "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "verify-pruned"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-pruned"
+path = "schema_version"
+equals = "opentraces.context_resume.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-pruned"
+path = "parse_ok"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-pruned"
+path = "uuid_set_matches"
+equals = true
+
+# =====================================================================
+# 6. PTY-runner block — `claude --resume <new-session-id>`.
+# =====================================================================
+# GAP: the journey runner has NO `pty_runner` step type today.
+# It supports `cli`, `shell`, `write_file`, `sync`, `service`,
+# `http_get`, `tmux`. This step declares the intended shape
+# coordinator must wire up:
+#
+#   * Step type `pty_runner` dispatches to
+#     tests/otbox/simulated_users/runner.py::run_simulated_session
+#     with the box's isolated env.
+#   * The `agent`, `binary_name`, `turns` keys mirror the existing
+#     simulated_users scenario TOML schema (see
+#     tests/otbox/simulated_users/scenarios/echo-meta.toml).
+#   * `save_transcript` writes the rendered turn-by-turn pane log
+#     to the journey's [artifacts].transcript path.
+#
+# Until coordinator wires this, the journey FAILS at this step
+# (correct TDD red — no false green).
+[[steps]]
+type = "pty_runner"
+id = "resume-claude"
+agent = "claude"
+binary_name = "claude"
+session_id = "{pruned_session_id}"
+save_transcript = true
+# The resume invocation: `claude --resume <new-session-id>`.
+# The PTY runner picks up the `--resume <id>` from session_id.
+# First turn the model receives is the prompt pinned at step 3
+# of the original session (the OTel-linear fixture's third
+# user message; coordinator decides the exact expect_regex).
+[[steps.turns]]
+prompt = ""  # empty prompt — `--resume` replays the pinned step-3 prompt
+expect_regex = "(?i)(reading|edit|bash|running|let me)"
+timeout_s = 60
+
+# Tool-registry probe — confirm the resumed model still has
+# access to the canonical built-in tools. The exact response
+# format depends on Claude Code's `--print "list your tools"`
+# output; this regex is a lenient sanity check.
+[[steps.turns]]
+prompt = "list the tools you have access to"
+expect_regex = "Read.*Write.*Bash.*Edit|Edit.*Bash.*Write.*Read"
+timeout_s = 60
+
+# =====================================================================
+# 7. After resume, the NEW session's captured trace shares the
+# first N node_ids with the original (content-addressed identity
+# is stable across prune-and-resume).
+# =====================================================================
+# GAP: the resumed session must itself be captured via the OTLP
+# pipeline; the c-context-tree-otel-linear checkpoint must NOT
+# tear down the receiver between the original capture and the
+# resume. Coordinator should verify the checkpoint keeps the
+# receiver alive for the duration of the journey.
+[[steps]]
+type = "cli"
+id = "resumed-tree"
+argv = ["ctx", "tree", "{resumed_trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "resumed-tree"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "resumed-tree"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# The first 3 nodes of the resumed session's active path must be
+# identical to the first 3 nodes of the original. Content-hashed
+# identity is the load-bearing property here.
+[[assertions]]
+kind = "stdout_json"
+step = "resumed-tree"
+path = "active_path.0"
+equals = "{step_0_node_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "resumed-tree"
+path = "active_path.1"
+equals = "{step_1_node_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "resumed-tree"
+path = "active_path.2"
+equals = "{step_2_node_id}"

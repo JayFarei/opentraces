@@ -1,0 +1,173 @@
+name = "context-tree-otel-receiver-up"
+description = """
+Plan 078 mechanism journey (silver) — the OTLP receiver lifecycle
+verbs work: `opentraces capture-otlp start` brings the daemon up,
+`status` reports it as enabled, and the bound port answers an HTTP
+health probe.
+
+This is the smallest possible proof of the third Context Tree
+capture source (plan 078). It does not assert any capture content,
+only that the receiver process is running and reachable. Per
+plan 078 §"Mechanism journeys" row 1 + §"Architecture / Capture
+flow" — the receiver is a stdlib ThreadingHTTPServer bound to
+127.0.0.1:4318 (default) accepting POSTs on
+`/v1/traces`, `/v1/logs`, `/v1/metrics`.
+
+Covers requirements R1 (OTLP HTTP receiver) and R8 (lifecycle CLI
+surface). Failing here means no other plan 078 journey can pass.
+
+Asserts:
+  (a) `opentraces capture-otlp start --json` exits 0 and reports
+      a port + bind address.
+  (b) `opentraces capture-otlp status --json` reports
+      `enabled=true` plus a numeric `uptime_seconds`.
+  (c) `opentraces capture-otlp stop --json` exits 0 and leaves the
+      receiver in a disabled state (post-stop status check).
+
+Fails today because:
+  - `opentraces capture-otlp` group does not exist yet (agent OD).
+  - `c-context-tree-otel-linear` checkpoint does not exist yet
+    (coordinator Phase 3 will create it).
+
+NEW preconditions key needed (coordinator widen in Phase 4):
+  - `otlp_receiver_running` (bool) — checkpoint audit declares the
+    receiver subsystem is installed and the daemon is reachable on
+    the configured port.
+
+NEW template variables needed (coordinator widen in Phase 4):
+  - `{otel_receiver_port}` — checkpoint audit exposes the bound
+    port so journeys do not hardcode 4318.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once OTLP receiver ships and is wired into default CI
+tier_label = "silver"
+trajectories = ["context-tree-otel-lifecycle"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-otel-linear"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+otlp_receiver_running = true
+
+# ---------------------------------------------------------------------
+# Step 1 — start the receiver. R1 + R8.
+# Idempotent: a second `start` should not error if the daemon is
+# already up (the checkpoint provides a running receiver). The
+# verb is expected to return the current bound state regardless.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "receiver-start"
+argv = ["capture-otlp", "start", "--port", "{port}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "receiver-start"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "receiver-start"
+path = "schema_version"
+equals = "opentraces.capture_otlp.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "receiver-start"
+path = "enabled"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "receiver-start"
+path = "port"
+
+[[assertions]]
+kind = "stdout_json"
+step = "receiver-start"
+path = "bind"
+equals = "127.0.0.1"
+
+# ---------------------------------------------------------------------
+# Step 2 — status check after start. R8 + R11.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "receiver-status"
+argv = ["capture-otlp", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "receiver-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "receiver-status"
+path = "schema_version"
+equals = "opentraces.capture_otlp.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "receiver-status"
+path = "enabled"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "receiver-status"
+path = "uptime_seconds"
+
+[[assertions]]
+kind = "stdout_json"
+step = "receiver-status"
+path = "port"
+
+# ---------------------------------------------------------------------
+# Step 3 — stop the receiver and verify disabled state. R8 + R12.
+# Bypass safety (R12): when the receiver is down, OTel emission is
+# fire-and-forget at the SDK; agent traffic is never blocked. The
+# stop verb must leave the daemon cleanly stopped.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "receiver-stop"
+argv = ["capture-otlp", "stop", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "receiver-stop"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "receiver-stop"
+path = "schema_version"
+equals = "opentraces.capture_otlp.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "receiver-stop"
+path = "enabled"
+equals = false
+
+# ---------------------------------------------------------------------
+# Step 4 — status after stop confirms the daemon is disabled.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "receiver-status-stopped"
+argv = ["capture-otlp", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "receiver-status-stopped"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "receiver-status-stopped"
+path = "enabled"
+equals = false

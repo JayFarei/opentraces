@@ -227,6 +227,37 @@ def _checkpoint_satisfies(
         if not bool(p.get("has_security_findings")):
             return False, "has_security_findings is not True"
 
+    # Plan 077 + 078 declarative keys.
+    if preconditions.get("context_tree_built"):
+        if not bool(p.get("context_tree_built")):
+            return False, "context_tree_built is not True"
+
+    if preconditions.get("otel_captures_present"):
+        if not bool(p.get("otel_captures_present")):
+            return False, "otel_captures_present is not True"
+
+    if preconditions.get("otel_settings_patched"):
+        if not bool(p.get("otel_settings_patched")):
+            return False, "otel_settings_patched is not True"
+
+    if preconditions.get("otlp_receiver_running"):
+        if not bool(p.get("otlp_receiver_running")):
+            return False, "otlp_receiver_running is not True"
+
+    if preconditions.get("otel_bypass_active"):
+        if not bool(p.get("otel_bypass_active")):
+            return False, "otel_bypass_active is not True"
+
+    min_mcp = preconditions.get("mcp_servers_connected")
+    if min_mcp is not None:
+        try:
+            need = int(min_mcp)
+        except (TypeError, ValueError):
+            return False, f"mcp_servers_connected is not an int: {min_mcp!r}"
+        have = int(p.get("mcp_servers_connected") or 0)
+        if have < need:
+            return False, f"mcp_servers_connected {have} < {need}"
+
     return True, ""
 
 
@@ -320,7 +351,99 @@ def _captured_session(box: Box) -> dict[str, str]:
     result["base_commit_sha"] = str(pr_audit.get("base_commit_sha") or "")
     result["head_commit_sha"] = str(pr_audit.get("head_commit_sha") or "")
     result["branch_commit_count"] = str(pr_audit.get("branch_commit_count") or 0)
+
+    # Plan 078: expose OTel checkpoint audit fields. Overrides plan-064
+    # values when the journey forks from an OTel checkpoint because the
+    # OTel audits also pin a session/trace id under the same key names.
+    otel_linear_audit = box.notes.get("c_context_tree_otel_linear_audit") or {}
+    if otel_linear_audit:
+        result["session_id"] = str(otel_linear_audit.get("session_id") or result.get("session_id", ""))
+        result["trace_id"] = str(otel_linear_audit.get("trace_id") or result.get("trace_id", ""))
+        result["request_id_with_body"] = str(otel_linear_audit.get("request_id_with_body") or "")
+        result["prompts_total"] = str(otel_linear_audit.get("prompts_total") or "")
+        result["prompts_with_body"] = str(otel_linear_audit.get("prompts_with_body") or "")
+        # Plan 078 bypass-mode template vars: the linear checkpoint stages
+        # two traces — the second simulates "pre-bypass" and "post-restart".
+        result["trace_id_bypassed"] = "otel-linear-trace-0001"
+        result["trace_id_post_restart"] = "otel-linear-trace-0002"
+        # Always re-derive box-relative paths from the CURRENT box so
+        # snapshot/restore across box ids doesn't surface stale absolutes.
+        session_id = result["session_id"]
+        if session_id:
+            result["snapshot_path"] = str(
+                box.home / ".opentraces" / "staging" / "otel" / f"{session_id}.json"
+            )
+        else:
+            result["snapshot_path"] = ""
+        result["project_dir"] = str(box.project)
+        result["source_jsonl"] = str(box.home / "_otel-linear-source.jsonl")
+        # Derive first_otel_node_id from the actual project event log.
+        # Plan 078 + OG's TOML contract: journeys address the first OTel
+        # node via this template var. We resolve at expansion time so the
+        # checkpoint's snapshot/restore cycle doesn't bake stale ids in.
+        result.update(_resolve_otel_node_template_vars(box, result["trace_id"]))
+    otel_mcp_audit = box.notes.get("c_context_tree_otel_with_mcp_audit") or {}
+    if otel_mcp_audit:
+        # When the with-mcp checkpoint is the journey's base, override the
+        # trace/session ids so templating addresses the with-mcp trace
+        # (which has the mcp_server_connection events), not the parent's.
+        if otel_mcp_audit.get("trace_id"):
+            result["trace_id"] = str(otel_mcp_audit["trace_id"])
+        if otel_mcp_audit.get("session_id"):
+            result["session_id"] = str(otel_mcp_audit["session_id"])
+        result["mcp_server_name"] = str(otel_mcp_audit.get("mcp_server_name") or "")
+        result["mcp_servers_connected"] = str(otel_mcp_audit.get("mcp_servers_connected") or 0)
+        # Plugin/MCP/hook lifecycle journeys address the first item via
+        # template vars; pull the canonical names from the snapshot.
+        result["first_plugin_name"] = "test-plugin"
+        result["first_hook_event"] = "PreToolUse"
+        # Re-resolve OTel node id under the with-mcp trace.
+        result.update(_resolve_otel_node_template_vars(box, result["trace_id"]))
     return result
+
+
+def _resolve_otel_node_template_vars(box: Box, trace_id: str) -> dict[str, str]:
+    """Look up first OTel + first JSONL node ids from the project's event log.
+
+    Resolved at template expansion time so snapshot/restore cycles don't
+    bake stale sha256 ids into the templating context. Returns empty
+    strings when no events are found (journey assertions referencing the
+    vars then fail loudly, which is the desired TDD signal).
+    """
+    extras: dict[str, str] = {
+        "first_otel_node_id": "",
+        "first_jsonl_node_id": "",
+        "first_jsonl_messages_content_hash": "",
+        "otel_receiver_port": "",
+    }
+    project = box.project
+    if not (project / ".git").exists() or not trace_id:
+        return extras
+    try:
+        from opentraces.core.trails.event_log import read_events
+        events = read_events(project, verify=False)
+    except Exception:
+        return extras
+    # Collect node_ids first, then derive messages_layer_id from the
+    # node's payload for the equivalence assertion's template var.
+    jsonl_node_payload: dict | None = None
+    for ev in events:
+        if ev.event_type == "context_node_observed" and ev.trace_id == trace_id:
+            cm = ev.capture_method or []
+            payload = ev.payload or {}
+            nid = payload.get("node_id")
+            if payload.get("step_index") not in (0, "0"):
+                continue
+            if "otel" in cm and not extras["first_otel_node_id"]:
+                extras["first_otel_node_id"] = nid or ""
+            if "transcript_reconstruction" in cm and not extras["first_jsonl_node_id"]:
+                extras["first_jsonl_node_id"] = nid or ""
+                jsonl_node_payload = payload
+    if jsonl_node_payload is not None:
+        extras["first_jsonl_messages_content_hash"] = str(
+            jsonl_node_payload.get("messages_layer_id") or ""
+        )
+    return extras
 
 
 def _context(driver: Driver, box: Box, port: int) -> dict[str, str]:
@@ -519,6 +642,68 @@ def _run_step(
         return StepResult(
             index, step_id, step_type, step, synthetic, ok,
             "" if ok else "tmux pane capture empty or failed",
+        )
+
+    if step_type == "pty_runner":
+        # Plan 078 outcome-3 + outcome-4 dispatch: drive a real agent
+        # binary through scripted prompts in tmux. Requires OT_REAL_REPL=1
+        # (real_repl capability). When the capability is absent the step
+        # returns ok=False with a SKIP-shaped message so the journey's
+        # capability-gate flips the whole journey to SKIP, not FAIL.
+        import os as _os
+        if _os.environ.get("OT_REAL_REPL") != "1":
+            return StepResult(
+                index, step_id, step_type, step, None, False,
+                "SKIP: pty_runner requires OT_REAL_REPL=1 (real Claude Code)",
+            )
+        from pathlib import Path as _Path
+        from .simulated_users.runner import Turn, run_simulated_session
+        binary = step.get("binary") or step.get("binary_name")
+        if not binary:
+            return StepResult(
+                index, step_id, step_type, step, None, False,
+                "pty_runner step needs 'binary' (or 'binary_name')",
+            )
+        turns_raw = step.get("turns") or []
+        turns = [
+            Turn(
+                prompt=str(t["prompt"]),
+                expect_regex=str(t.get("expect_regex", ".*")),
+                timeout_s=float(t.get("timeout_s", 60.0)),
+            )
+            for t in turns_raw
+        ]
+        save_transcript = step.get("save_transcript")
+        output_dir = _Path(save_transcript).parent if save_transcript else (
+            _Path(driver.paths(box)["home"]) / ".opentraces" / "pty-transcripts" / step_id
+        )
+        output_dir.mkdir(parents=True, exist_ok=True)
+        scenario_result = run_simulated_session(
+            driver, box, binary, turns,
+            initial_state_dir=None, output_dir=output_dir,
+            env_extra=step.get("env"), agent=step.get("agent"),
+        )
+        if save_transcript:
+            _Path(save_transcript).parent.mkdir(parents=True, exist_ok=True)
+            _Path(save_transcript).write_text(
+                f"# pty_runner transcript ({scenario_result.verdict})\n\n"
+                f"binary: {binary}\n"
+                f"binary_version: {scenario_result.binary_version}\n"
+                f"turns_completed: {scenario_result.turn_count}\n\n"
+                f"## Pane log\n\n```\n{(output_dir / 'pane.log').read_text(encoding='utf-8', errors='replace') if (output_dir / 'pane.log').exists() else '(no pane log)'}\n```\n",
+                encoding="utf-8",
+            )
+        synthetic = ExecResult(
+            argv=["pty_runner", binary],
+            returncode=0 if scenario_result.verdict == "PASS" else 1,
+            stdout=f"verdict={scenario_result.verdict} turns={scenario_result.turn_count}",
+            stderr=scenario_result.error_message or "",
+            duration_s=0.0, cwd=str(box.project), timed_out=False,
+        )
+        ok = scenario_result.verdict == "PASS"
+        return StepResult(
+            index, step_id, step_type, step, synthetic, ok,
+            "" if ok else f"pty_runner verdict={scenario_result.verdict}: {scenario_result.error_message}",
         )
 
     return StepResult(

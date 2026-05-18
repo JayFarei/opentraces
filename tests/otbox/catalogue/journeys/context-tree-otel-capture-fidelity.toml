@@ -1,0 +1,159 @@
+name = "context-tree-otel-capture-fidelity"
+description = """
+Plan 078 mechanism journey (GOLD) — the OTLP receiver actually
+captures byte-perfect content from Claude Code's emission.
+
+Per plan 078 R3 (raw API body ingestion) + R4 (lifecycle event
+mappings) + R5 (same event types as JSONL capture) + R13 (honest
+gap labeling). This is the load-bearing fidelity proof: after the
+`context-tree-otel-linear` fixture runs with the receiver up, the
+captured Context Tree must contain at least one
+`raw_api_body_written` event and the resulting `system` /
+`tool_registry` layers must be flagged `completeness=full` with
+`capture_method=otel` — closing the static-core and tool-schema
+gaps that plan 077 left as honest approximations.
+
+The fixture is a single Claude Code session driven via the
+plan 071 PTY runner with OTel emission enabled. The session
+contains at minimum one Read, one Edit, and one Bash tool call
+so the tool_registry assertions can pin the canonical baseline.
+
+Asserts (per plan 078 §"Mechanism journeys" row 3):
+  (a) At least one raw_api_body_written event captured (presence
+      check via `ctx tree --capture-method otel --json`).
+  (b) The system layer for the first OTel-captured node has
+      `completeness=full` and `capture_method=otel`, with
+      non-empty `assembled_prompt_bytes`.
+  (c) The tool_registry layer has full `input_schema` for the
+      built-in tools Read / Write / Bash / Edit (set containment).
+
+Fails today because:
+  - The OTLP receiver does not capture into the event log (agent
+    OA/OB/OC/coordinator Phase 1).
+  - `ctx tree --capture-method otel` flag does not exist (the
+    coordinator must extend the existing `ctx tree` projection
+    output to surface per-method node lists, or expose a count
+    field — see assertion-kind gap note below).
+  - `c-context-tree-otel-linear` checkpoint does not exist yet.
+
+GAPS DOCUMENTED FOR COORDINATOR:
+  - "At least one raw_api_body_written event" is asserted via
+    `events_count` integer plus path-existence on `events.0.event_type`
+    — the existing assertion engine has no >= operator on
+    `stdout_json` numerics. The CLI envelope must emit a counter
+    field so we can assert `events_count` equals the expected
+    fixture count (1+); the journey conservatively asserts
+    `events.0.event_type` exists.
+  - The `--capture-method otel` filter on `ctx tree` is a new
+    flag this plan implies; if Phase 1 cannot deliver it, the
+    journey can be rewritten to filter post-hoc by walking nodes,
+    but that increases test brittleness.
+
+NEW template variables needed:
+  - `{first_otel_node_id}` — checkpoint audit exposes the first
+    OTel-derived ContextNode id so the show step has a stable
+    address.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once OTLP receiver ships
+tier_label = "gold"
+trajectories = ["context-tree-otel-capture"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-otel-linear"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+otlp_receiver_running = true
+otel_settings_patched = true
+
+# ---------------------------------------------------------------------
+# Step 1 — confirm raw_api_body_written events were captured for
+# the fixture session. R3 + R5 — same event log, OTel-tagged.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "tree-otel-only"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-otel-only"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-otel-only"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-otel-only"
+path = "trace_id"
+equals = "{trace_id}"
+
+# Contract (a) — at least one OTel-derived node exists. The
+# fixture pins a single linear session with multiple LLM calls,
+# so `nodes` must be non-empty.
+[[assertions]]
+kind = "stdout_json"
+step = "tree-otel-only"
+path = "nodes.0.node_id"
+
+# Drill into the first OTel-derived node to validate its layer set.
+[[steps]]
+type = "cli"
+id = "show-first-otel-node"
+argv = ["ctx", "show", "{first_otel_node_id}", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-first-otel-node"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-otel-node"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# Contract (b) — system layer completeness and capture method.
+# This is the load-bearing claim: OTel closes the plan 077
+# static-core gap.
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-otel-node"
+path = "layers.system.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-otel-node"
+path = "layers.system.capture_method"
+equals = "otel"
+
+# assembled_prompt_bytes is the byte-perfect system prompt as
+# emitted by Claude Code's OTel raw-body channel. Non-null = the
+# capture succeeded.
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-otel-node"
+path = "layers.system.content.assembled_prompt_bytes"
+
+# Contract (c) — tool_registry layer has full input_schema for
+# the canonical built-in tools. Set containment: subset, not
+# exact match.
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-otel-node"
+path = "layers.tool_registry.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-first-otel-node"
+path = "layers.tool_registry.capture_method"
+equals = "otel"
+

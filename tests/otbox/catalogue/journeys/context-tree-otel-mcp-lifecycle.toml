@@ -1,0 +1,121 @@
+name = "context-tree-otel-mcp-lifecycle"
+description = """
+Plan 078 mechanism journey (GOLD) — MCP server registration is
+captured into runtime_state.
+
+Per plan 078 R4 (three lifecycle event mappings) — Claude Code
+emits `claude_code.mcp_server_connection` log events that the
+wire-side proxy alternative cannot see. The OTLP receiver
+captures them and the mapper enriches the
+`runtime_state.mcp_servers` dict with the server name, connection
+status, and tool names list per the §"Attribute mapping" table.
+
+This is one of three lifecycle journeys (plugin / mcp / hook)
+that together justify "OTel beats proxy" — the proxy can only
+see HTTP traffic; OTel sees the SDK-internal lifecycle. MCP is
+the gold-tier one because MCP capture unlocks cross-agent skill
+attribution downstream.
+
+Fixture: `context-tree-otel-with-mcp` — same shape as the linear
+fixture plus one MCP server registration (uses an existing fake
+MCP fixture from `tests/otbox/fake_harnesses/`).
+
+Asserts (per plan 078 §"Mechanism journeys" row 5):
+  (a) At least one `mcp_server_connection` event captured.
+  (b) `runtime_state.mcp_servers` is a dict with at least one
+      entry; the entry has a `name` (str), `status="connected"`,
+      and a non-empty `tool_names` list.
+  (c) The first MCP server's tool_names contain the canonical
+      fixture-pinned tools (set containment).
+
+Fails today because:
+  - The OTLP receiver and mapper do not exist.
+  - The `c-context-tree-otel-with-mcp` checkpoint does not exist
+    yet (coordinator Phase 3).
+
+NEW preconditions key needed:
+  - `mcp_servers_connected` (int) — checkpoint declares the
+    minimum number of MCP servers that should be connected during
+    the fixture session.
+
+NEW template variables needed:
+  - `{first_otel_node_id}` — first OTel-derived ContextNode id.
+  - `{first_mcp_server_name}` — checkpoint audit exposes the
+    canonical MCP server name so the dict lookup has a stable key.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once OTLP receiver ships
+tier_label = "gold"
+trajectories = ["context-tree-otel-lifecycle"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-otel-with-mcp"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+otlp_receiver_running = true
+otel_settings_patched = true
+mcp_servers_connected = 1
+
+# ---------------------------------------------------------------------
+# Step 1 — show the first OTel-derived node. runtime_state must
+# carry the mcp_servers dict populated from
+# claude_code.mcp_server_connection events.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "show-runtime-with-mcp"
+argv = ["ctx", "show", "{first_otel_node_id}", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-runtime-with-mcp"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-with-mcp"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# Contract (a) — at least one MCP server entry in the dict.
+# `length_equals = 1` only holds for the single-MCP fixture; the
+# load-bearing claim is the dict is populated (non-zero length).
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "show-runtime-with-mcp"
+path = "layers.runtime_state.content.mcp_servers"
+equals = 1
+
+# Contract (b) — the canonical MCP server name is in the dict.
+# The checkpoint audit pins `{first_mcp_server_name}` to whatever
+# the fake MCP fixture exposes.
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-with-mcp"
+path = "layers.runtime_state.capture_method"
+equals = "otel"
+
+# ---------------------------------------------------------------------
+# Step 2 — confirm the mcp_server_connection raw events are
+# observable via the OTel-only tree view. R5 — same event log.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "tree-mcp-events"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-mcp-events"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-mcp-events"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# Contract (a) — at least one mcp_server_connection event surfaced
+# under the lifecycle_events array.

@@ -1,0 +1,176 @@
+name = "context-tree-otel-doctor"
+description = """
+Plan 078 mechanism journey (silver) — `opentraces doctor` reports
+the OTLP receiver health under `context_tree.otel_receiver`.
+
+Per plan 078 R11 (doctor surface) — `opentraces doctor --json`
+must include a `context_tree.otel_receiver` object with these
+6 fields per the requirement:
+  - enabled (bool)
+  - port (int)
+  - uptime_seconds (number)
+  - last_capture_at (timestamp string or null)
+  - captures_total (int)
+  - raw_body_dir_size_bytes (int)
+
+Plus the existing plan 077 fields under `context_tree`:
+  - last_reconciled_at
+  - capture_limitations_by_trace
+
+The doctor surface is the operational visibility contract; if
+this regresses, operators have no way to tell whether the
+receiver is healthy without shelling into `capture-otlp status`.
+
+Asserts (per plan 078 §"Mechanism journeys" row 10):
+  (a) Doctor JSON contains a `context_tree.otel_receiver` object
+      with all 6 fields populated (presence on each).
+  (b) `enabled=true` after `capture-otlp start`.
+  (c) `enabled=false` after `capture-otlp stop`.
+
+Fails today because:
+  - The `context_tree.otel_receiver` section of doctor does not
+    exist (Phase 4 coordinator integration).
+  - The `c-context-tree-otel-linear` checkpoint does not exist
+    yet.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once OTLP receiver ships
+tier_label = "silver"
+trajectories = ["context-tree-otel-lifecycle"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-otel-linear"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+otlp_receiver_running = true
+otel_settings_patched = true
+
+# ---------------------------------------------------------------------
+# Step 1 — ensure receiver is up.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ensure-receiver-up"
+argv = ["capture-otlp", "start", "--port", "{port}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ensure-receiver-up"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ensure-receiver-up"
+path = "enabled"
+equals = true
+
+# ---------------------------------------------------------------------
+# Step 2 — doctor must report the receiver as enabled, with all
+# 6 R11 fields present and typed.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "doctor-receiver-up"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-receiver-up"
+equals = 0
+
+# Contract (b) — enabled=true post-start.
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-receiver-up"
+path = "doctor.context_tree.otel_receiver.enabled"
+equals = true
+
+# Contract (a) — all 6 fields present.
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-receiver-up"
+path = "doctor.context_tree.otel_receiver.port"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-receiver-up"
+path = "doctor.context_tree.otel_receiver.uptime_seconds"
+
+# last_capture_at may be null if nothing's been captured since
+# start; presence (key exists) is the load-bearing claim. The CLI
+# envelope exposes a `last_capture_at_present` boolean so the
+# journey doesn't have to walk null vs missing.
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-receiver-up"
+path = "doctor.context_tree.otel_receiver.last_capture_at_present"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-receiver-up"
+path = "doctor.context_tree.otel_receiver.captures_total"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-receiver-up"
+path = "doctor.context_tree.otel_receiver.raw_body_dir_size_bytes"
+
+# Plan 077 surfaces still present (no regression).
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-receiver-up"
+path = "doctor.context_tree.last_reconciled_at"
+
+# Trail capture audit not regressed.
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-receiver-up"
+path = "doctor.trail_capture_audit.state"
+equals = "ok"
+
+# ---------------------------------------------------------------------
+# Step 3 — stop the receiver. Doctor must reflect the disabled
+# state.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "stop-receiver-for-doctor"
+argv = ["capture-otlp", "stop", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "stop-receiver-for-doctor"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "doctor-receiver-down"
+argv = ["--json", "doctor"]
+
+[[assertions]]
+kind = "returncode"
+step = "doctor-receiver-down"
+equals = 0
+
+# Contract (c) — enabled=false post-stop.
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-receiver-down"
+path = "doctor.context_tree.otel_receiver.enabled"
+equals = false
+
+# Even with the receiver down, the 6 fields must still be present
+# (just with values reflecting the disabled state). Presence
+# checks on the load-bearing fields.
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-receiver-down"
+path = "doctor.context_tree.otel_receiver.port"
+
+[[assertions]]
+kind = "stdout_json"
+step = "doctor-receiver-down"
+path = "doctor.context_tree.otel_receiver.captures_total"

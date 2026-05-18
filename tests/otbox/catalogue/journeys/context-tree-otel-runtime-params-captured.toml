@@ -1,0 +1,115 @@
+name = "context-tree-otel-runtime-params-captured"
+description = """
+Plan 078 mechanism journey (silver) — wire-only sampling params
+that JSONL cannot see are captured in runtime_state.
+
+Per plan 078 §"Attribute mapping" — the raw API body contains
+`max_tokens`, `stream`, `temperature`, `metadata`, plus
+`model` (also surfaced via `claude_code.model` attribute). These
+never round-trip to the JSONL transcript; the OTel path is the
+only honest capture source for them. This journey asserts the
+mapper actually populates the `runtime_state` layer with each
+field.
+
+Covers R3 (raw API body ingestion) and R4 (lifecycle mappings)
+for runtime-state-shaped fields specifically.
+
+Asserts (per plan 078 §"Mechanism journeys" row 4):
+  (a) `runtime_state` layer for the first OTel-captured node has
+      `max_tokens` (int), `stream` (bool), `model` (str), and
+      `metadata` (dict) all non-null.
+  (b) `temperature` is either a float OR explicitly null (a
+      missing key would mean the mapper silently dropped it; null
+      means the wire didn't send it).
+  (c) Layer completeness is `full` and capture_method is `otel`.
+
+Fails today because:
+  - The OTLP receiver does not capture into the event log.
+  - The mapper does not exist (agent OB Phase 1).
+  - `c-context-tree-otel-linear` checkpoint does not exist yet.
+
+NEW template variables needed:
+  - `{first_otel_node_id}` — same as the capture-fidelity journey.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once OTLP receiver ships
+tier_label = "silver"
+trajectories = ["context-tree-otel-capture"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-otel-linear"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+otlp_receiver_running = true
+otel_settings_patched = true
+
+# ---------------------------------------------------------------------
+# Step 1 — show the first OTel-derived node and inspect the
+# runtime_state layer. Each wire-only field must be present and
+# typed.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "show-runtime-state"
+argv = ["ctx", "show", "{first_otel_node_id}", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-runtime-state"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-state"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# Contract (c) — runtime_state layer is byte-perfect from OTel.
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-state"
+path = "layers.runtime_state.completeness"
+equals = "full"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-state"
+path = "layers.runtime_state.capture_method"
+equals = "otel"
+
+# Contract (a) — every wire-only field is present and non-null.
+# The CLI envelope exposes them as flat keys under runtime_state.
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-state"
+path = "layers.runtime_state.content.max_tokens"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-state"
+path = "layers.runtime_state.content.stream"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-state"
+path = "layers.runtime_state.content.model"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-state"
+path = "layers.runtime_state.content.metadata"
+
+# Contract (b) — temperature is present (key exists). The fixture
+# may or may not send a non-null temperature on the wire; the load
+# bearing claim is that the mapper does not silently drop the
+# field. Presence check only.
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-state"
+path = "layers.runtime_state.content.provider_name"
+equals = "anthropic"
+
+# Permission mode (from claude_code.permission_mode attribute)
+# is also wire-only; assert presence.

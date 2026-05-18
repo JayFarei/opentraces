@@ -1,0 +1,130 @@
+name = "context-tree-otel-plugin-lifecycle"
+description = """
+Plan 078 mechanism journey (silver) — Claude Code plugin loads
+are captured into the tool_registry layer.
+
+Per plan 078 R4 (three lifecycle event mappings) — Claude Code
+emits `claude_code.plugin_loaded` log events when plugins
+register. The mapper enriches the tool_registry layer's
+plugin-contribution metadata with the loaded plugin and its
+counts (skills, agents, MCP contributions) per the
+§"Attribute mapping" table.
+
+Sibling to the MCP lifecycle journey. Plugin metadata is the
+substrate enabler for "which skill defined this tool" reasoning
+downstream.
+
+Fixture: `context-tree-otel-with-mcp` — the with-mcp fixture
+also exercises a plugin load (the same fake MCP fixture is
+delivered via a plugin, so a single fixture covers both).
+
+Asserts (per plan 078 §"Mechanism journeys" row 6):
+  (a) At least one `plugin_loaded` event captured.
+  (b) tool_registry layer's `plugins` list has at least one
+      entry with a name + skills/agents/mcp_servers counts.
+  (c) Each plugin entry has a non-null plugin owner attribution.
+
+Fails today because:
+  - The OTLP receiver and mapper do not exist.
+  - The `c-context-tree-otel-with-mcp` checkpoint does not exist
+    yet.
+
+NEW template variables needed:
+  - `{first_otel_node_id}` — same as MCP lifecycle journey.
+  - `{first_plugin_name}` — checkpoint audit exposes the canonical
+    plugin name.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once OTLP receiver ships
+tier_label = "silver"
+trajectories = ["context-tree-otel-lifecycle"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-otel-with-mcp"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+otlp_receiver_running = true
+otel_settings_patched = true
+
+# ---------------------------------------------------------------------
+# Step 1 — show the first OTel-derived node. tool_registry must
+# carry the plugins enrichment populated from
+# claude_code.plugin_loaded events.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "show-tool-registry-plugins"
+argv = ["ctx", "show", "{first_otel_node_id}", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-tool-registry-plugins"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-tool-registry-plugins"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-tool-registry-plugins"
+path = "layers.tool_registry.capture_method"
+equals = "otel"
+
+# Contract (b) — plugins list has at least one entry. The
+# load-bearing claim is that the mapper populated the list at all;
+# the canonical plugin name is asserted via set containment.
+[[assertions]]
+kind = "stdout_json"
+step = "show-tool-registry-plugins"
+path = "layers.tool_registry.content.plugins.0.name"
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "show-tool-registry-plugins"
+path = "layers.tool_registry.content.plugin_names"
+equals = ["{first_plugin_name}"]
+
+# Each plugin entry must declare its contribution counts. Presence
+# checks on the keyed names; the canonical fields per the §"Attribute
+# mapping" table.
+[[assertions]]
+kind = "stdout_json"
+step = "show-tool-registry-plugins"
+path = "layers.tool_registry.content.plugins.0.skills_count"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-tool-registry-plugins"
+path = "layers.tool_registry.content.plugins.0.agents_count"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-tool-registry-plugins"
+path = "layers.tool_registry.content.plugins.0.mcp_servers_count"
+
+# Contract (c) — plugin owner attribution (which install surface
+# delivered the plugin: marketplace / local / claude.ai).
+[[assertions]]
+kind = "stdout_json"
+step = "show-tool-registry-plugins"
+path = "layers.tool_registry.content.plugins.0.owner"
+
+# ---------------------------------------------------------------------
+# Step 2 — confirm plugin_loaded events surface via the
+# OTel-only lifecycle event view. R5.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "tree-plugin-events"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-plugin-events"
+equals = 0
+

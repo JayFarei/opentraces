@@ -1,0 +1,377 @@
+name = "context-tree-outcome-4-checkpoint-for-experiments"
+description = """
+Plan 078 OUTCOME journey #4 (GOLD GATE) — validates the user's
+verbatim goal:
+
+  "Anything the LLM has seen at the point in time in the trace
+   should be tracked in our context tree alongside the trace tree."
+
+Subordinate outcome 4, verbatim from plan 078 §"The outcome
+(gold source for all test validation)":
+
+  "Build checkpoints of environments for skills experiments /
+   RL rollouts. Same prune primitive plus deterministic
+   restoration."
+
+This is a load-bearing contract: if this journey fails on a real
+Claude Code session, plan 078 does not ship regardless of how
+many mechanism tests pass.
+
+============================================================
+What this proves vs. outcome 3
+============================================================
+
+Outcome 3 (`context-tree-outcome-3-teleport-resume-from-step-N`)
+proves the prune-and-resume primitive: rewind to step N, run
+the same next turn, get the same divergence point.
+
+Outcome 4 proves the RL-rollout primitive: rewind to step N,
+SUBSTITUTE a different next prompt, run resume, get a NEW
+trajectory that:
+  (a) shares the first N node_ids with the original
+      (content-addressed identity stable across prune-and-resume
+       cycles)
+  (b) diverges only AFTER step N (the substituted prompt is the
+      new step-N user turn)
+
+This is the substrate primitive for skills evaluation,
+counterfactual rollouts, and RL training data generation.
+Without it, "context tree" is a viewer; with it, it is a
+research substrate.
+
+============================================================
+Assertion shape
+============================================================
+
+1. Same setup as outcome 3 — pick a non-tail step (N=3 of 5),
+   resolve its node id, prune to step N with --write.
+
+2. NEW STEP — `ctx prune --substitute-next-prompt <text>`.
+   GAP: the existing `ctx prune` verb does NOT support
+   `--substitute-next-prompt`. The closest workaround today
+   would be: prune to N, manually edit the pruned JSONL to
+   substitute the next user turn, then resume. That is fragile
+   and not a contract. Coordinator decides:
+     (a) add `--substitute-next-prompt <text>` to `ctx prune`
+         (preferred, atomic with the prune envelope), OR
+     (b) split into `ctx prune` + `ctx substitute-prompt` verbs,
+         OR
+     (c) accept that the test inlines a shell-level JSONL edit
+         step between prune and resume (less honest about the
+         substrate's RL story).
+   This TOML assumes (a) — `--substitute-next-prompt` is the
+   path of least friction for an RL framework consumer.
+
+3. PTY-runner resume — same shape as outcome 3 but the first
+   turn the model receives is the substituted prompt (NOT the
+   original step-3 prompt). expect_regex tracks the substituted
+   prompt's expected response shape.
+
+4. Identity assertions —
+     (a) The first N node_ids in the resumed session match the
+         original byte-for-byte (steps 0..N-1 are unchanged).
+     (b) The Nth node (step N) of the resumed session is
+         DIFFERENT from the original (because the substituted
+         prompt has a different content hash).
+
+5. Transcript artifact at
+   tests/otbox/captures/context-tree-outcome-4/transcript.md
+   for the RL-rollout demo. This is the conviction proof for
+   the RL story: "the substrate composes; you can fork
+   counterfactual rollouts from any captured step."
+
+============================================================
+Contract: NO synthetic-fake-claude substitution
+============================================================
+
+Same as outcomes 1, 2, 3 — gated on `OT_REAL_REPL=1` via the
+`real_repl` capability. Synthetic harnesses can construct any
+node id they want; only a real Claude Code session can validate
+that the model's actual behavior on a substituted prompt
+produces a content-addressed divergence point that consumers
+can build experiments on top of.
+
+============================================================
+Outcome traceability (plan 078)
+============================================================
+
+This journey validates outcome 4 (RL-rollout checkpoints). It
+also re-validates outcome 3 (prune + resume) as a subset — if
+outcome 4 passes, the prune primitive works. R-tags: same as
+outcome 3 (R3, R5, R6, R12) plus the new
+`--substitute-next-prompt` flag on `ctx prune` which is a v1
+addition to the substrate's resume contract (R5).
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump to 0 once OTLP pipeline + PTY-runner + --substitute-next-prompt flag + real-repl fixture all ship
+tier_label = "gold"
+trajectories = ["context-tree-otel-outcome"]
+persona = "agent"
+requires = ["cli", "git", "real_repl"]
+from_checkpoints = ["c-context-tree-otel-linear"]
+
+[artifacts]
+transcript = "tests/otbox/captures/context-tree-outcome-4/transcript.md"
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+otel_captures_present = true
+
+# =====================================================================
+# 1. Sanity probe — fixture shape (same as outcome 3).
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "tree-shape"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-shape"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "tree-shape"
+path = "active_path"
+equals = 5
+
+# =====================================================================
+# 2. Resolve step 3's node id (the prune-and-substitute target).
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "step-3-resolve"
+argv = ["ctx", "step", "{trace_id}", "3", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "step-3-resolve"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-resolve"
+path = "node.step_index"
+equals = 3
+
+[[assertions]]
+kind = "stdout_json"
+step = "step-3-resolve"
+path = "node.node_id"
+
+# =====================================================================
+# 3. Prune + substitute-next-prompt + write in one verb.
+# =====================================================================
+# GAP: `--substitute-next-prompt` is a NEW flag on `ctx prune`
+# that does not exist today. See description block above for
+# coordinator decision tree (add the flag, split into two verbs,
+# or inline a shell JSONL edit).
+[[steps]]
+type = "cli"
+id = "prune-substitute"
+argv = [
+    "ctx", "prune", "{step_3_node_id}",
+    "--to-session", "rl-rollout-alt",
+    "--substitute-next-prompt", "instead, write tests for the new function",
+    "--write", "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "prune-substitute"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-substitute"
+path = "schema_version"
+equals = "opentraces.context_resume.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-substitute"
+path = "dry_run"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-substitute"
+path = "new_session_id"
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-substitute"
+path = "jsonl_path"
+
+# Pruning to step 3 + substituting the step-3 prompt = 4 records
+# in the pruned JSONL: 3 active-path-prefix records (steps 0..2)
+# plus 1 substituted user-turn record (the new step 3). This is
+# 1 more than the unmodified prune (outcome-3 has record_count
+# = 3). The +1 is the substituted prompt envelope.
+# GAP: depends on the exact semantics of
+# --substitute-next-prompt. Coordinator confirms whether the
+# substituted prompt is counted in record_count.
+[[assertions]]
+kind = "stdout_json"
+step = "prune-substitute"
+path = "record_count"
+equals = 4
+
+# The envelope must surface the substituted prompt so consumers
+# can audit RL-rollout setups deterministically.
+[[assertions]]
+kind = "stdout_json"
+step = "prune-substitute"
+path = "substituted_prompt"
+equals = "instead, write tests for the new function"
+
+# =====================================================================
+# 4. Verify the pruned + substituted JSONL parses cleanly.
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "verify-pruned-sub"
+argv = [
+    "ctx", "verify-session", "{pruned_session_id}",
+    "--against-node", "{step_3_node_id}",
+    "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "verify-pruned-sub"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify-pruned-sub"
+path = "parse_ok"
+equals = true
+
+# uuid_set_matches is intentionally allowed to be FALSE here —
+# the substituted prompt has a new uuid, so the pruned session's
+# uuid set is a SUPERSET of the active-path prefix but not equal
+# to the original node's uuid set. Coordinator decides whether
+# `verify-session` should expose a `prefix_uuid_set_matches`
+# field for this case.
+
+# =====================================================================
+# 5. PTY-runner resume — the model takes the SUBSTITUTED prompt
+# as its first turn. expect_regex tracks the expected response
+# shape for the substituted prompt.
+# =====================================================================
+# GAP: same `pty_runner` step type GAP as outcome 3. Coordinator
+# must wire the runner to dispatch `pty_runner` step type to
+# tests/otbox/simulated_users/runner.py::run_simulated_session.
+[[steps]]
+type = "pty_runner"
+id = "resume-claude-substituted"
+agent = "claude"
+binary_name = "claude"
+session_id = "{pruned_session_id}"
+save_transcript = true
+# Substituted prompt's expected response: "write tests for the
+# new function" should trigger Write or Edit (creating a new
+# test file) or Read (looking at the function first). Lenient
+# regex matches any of these.
+[[steps.turns]]
+prompt = ""  # empty — `--resume` replays the substituted step-3 prompt
+expect_regex = "(?i)(test|writing|let me look|reading|edit)"
+timeout_s = 120
+
+# =====================================================================
+# 6. NEW SESSION'S CAPTURED TREE — identity assertions.
+# =====================================================================
+[[steps]]
+type = "cli"
+id = "resumed-tree"
+argv = ["ctx", "tree", "{resumed_trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "resumed-tree"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "resumed-tree"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# Identity assertions (a) — first 3 node_ids of the resumed
+# session match the original byte-for-byte. Steps 0, 1, 2 are
+# unchanged because the substrate is content-addressed.
+[[assertions]]
+kind = "stdout_json"
+step = "resumed-tree"
+path = "active_path.0"
+equals = "{step_0_node_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "resumed-tree"
+path = "active_path.1"
+equals = "{step_1_node_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "resumed-tree"
+path = "active_path.2"
+equals = "{step_2_node_id}"
+
+# Identity assertion (b) — the Nth node (step 3) of the resumed
+# session is DIFFERENT from the original. The substituted prompt
+# has a different content hash, so the resumed session's step-3
+# node_id is NOT equal to the original's step-3 node_id.
+# GAP: there is no `stdout_json_not_equals` kind today.
+# Workaround: use the bare `stdout_json` (presence-only)
+# assertion and let a downstream test verify the inequality
+# off-line, OR coordinator adds a `not_equals` variant.
+# For now, this journey asserts the resumed step-3 node id is
+# PRESENT (envelope-shape sanity), and a coordinator-owned
+# follow-up assertion verifies the content-hash divergence.
+[[assertions]]
+kind = "stdout_json"
+step = "resumed-tree"
+path = "active_path.3"
+
+# =====================================================================
+# 7. Divergence proof — `ctx diff` between original step-3 node
+# and resumed step-3 node MUST show the messages layer differs.
+# =====================================================================
+# This is the "RL rollouts diverge from step N" load-bearing
+# claim. The original step-3 node's messages layer ends with the
+# original prompt; the resumed step-3 node's messages layer ends
+# with the substituted prompt; the diff must surface this
+# difference under `changed.messages` (or equivalent envelope
+# shape).
+[[steps]]
+type = "cli"
+id = "divergence-diff"
+argv = [
+    "ctx", "diff", "{step_3_node_id}", "{resumed_step_3_node_id}",
+    "--layer", "messages", "--json",
+]
+
+[[assertions]]
+kind = "returncode"
+step = "divergence-diff"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "divergence-diff"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# The messages layer differs — `changed` must have at least 1
+# entry. We use the `stdout_json` presence assertion as a smoke
+# check; coordinator may want a stricter "changed > 0" assertion
+# (GAP: no `stdout_json_length_min` kind today; only
+# `stdout_json_length_equals`).
+[[assertions]]
+kind = "stdout_json"
+step = "divergence-diff"
+path = "changed.0"

@@ -214,3 +214,6 @@ from . import _captured_with_revert  # noqa: E402,F401  (registers c-captured-wi
 from . import _captured_with_secrets  # noqa: E402,F401  (registers c-captured-with-secrets)
 from . import _captured_multi_skill  # noqa: E402,F401  (registers c-captured-multi-skill)
 from . import _captured_with_pr_branch  # noqa: E402,F401  (registers c-captured-with-pr-branch)
+# Plan 078 OTLP receiver capture-source checkpoints.
+from . import _context_tree_otel_linear  # noqa: E402,F401  (registers c-context-tree-otel-linear)
+from . import _context_tree_otel_with_mcp  # noqa: E402,F401  (registers c-context-tree-otel-with-mcp)

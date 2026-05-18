@@ -87,7 +87,7 @@ class ContextLayer(BaseModel):
     content: dict[str, Any]
     completeness: Literal["full", "approximated", "stub"]
     capture_method: Literal[
-        "live_capture", "transcript_reconstruction", "hardcoded_template", "proxy"
+        "live_capture", "transcript_reconstruction", "hardcoded_template", "proxy", "otel"
     ]
     CONTEXT_TREE_VERSION: str = CONTEXT_TREE_VERSION
 

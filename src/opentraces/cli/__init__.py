@@ -2796,6 +2796,14 @@ main.add_command(_workflow_group, name="workflow")
 main.add_command(_security_group, name="security")
 main.add_command(_ctx_group, name="ctx")
 
+# Plan 078: OTLP receiver capture source (third sibling of JSONL + proxy).
+from .capture_otlp import (  # noqa: E402
+    capture_otlp_group as _capture_otlp_group,
+    setup_capture_otlp_cmd as _setup_capture_otlp_cmd,
+)
+main.add_command(_capture_otlp_group, name="capture-otlp")
+_setup_group.add_command(_setup_capture_otlp_cmd, name="capture-otlp")
+
 
 @main.command("list")
 @click.option(

@@ -1,0 +1,183 @@
+name = "context-tree-otel-settings-patcher"
+description = """
+Plan 078 mechanism journey (silver) — the `~/.claude/settings.json`
+patcher is idempotent and reversible.
+
+Per plan 078 R10 — `opentraces setup capture-otlp` must patch
+`~/.claude/settings.json` with the 7 env vars needed for full OTel
+emission (the 6 listed plus `OTEL_LOG_RAW_API_BODIES=file:...`),
+write a backup, and behave as a no-op on rerun. Uninstall must
+restore the backup byte-identical.
+
+The 7 env keys the patcher MUST set (from plan 078 R10):
+  - CLAUDE_CODE_ENABLE_TELEMETRY=1
+  - OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+  - OTEL_EXPORTER_OTLP_PROTOCOL=http/json
+  - OTEL_LOG_USER_PROMPTS=1
+  - OTEL_LOG_TOOL_DETAILS=1
+  - OTEL_LOG_TOOL_CONTENT=1
+  - OTEL_LOG_RAW_API_BODIES=file:~/.opentraces/raw-bodies/
+
+Covers R10 (settings patcher). The patcher is the user-facing
+install surface; if it clobbers a user's hand-edited
+`~/.claude/settings.json` the plan does not ship.
+
+Asserts:
+  (a) Initial `opentraces setup capture-otlp --json` exits 0,
+      reports all 7 keys as `patched`, and the backup path exists.
+  (b) Rerun is a true no-op: status reports all 7 keys as
+      `already_set` and no second backup is written.
+  (c) `opentraces setup capture-otlp --uninstall --json` exits 0,
+      restores the backup, and reports the keys as `removed`.
+
+Fails today because:
+  - `opentraces setup capture-otlp` does not exist (agent OD).
+  - `c-context-tree-otel-linear` checkpoint does not exist yet.
+
+NEW preconditions key needed:
+  - `otel_settings_patched` (bool) — checkpoint declares the
+    `~/.claude/settings.json` patcher has been run during setup so
+    the journey starts from the patched state.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once OTLP receiver ships
+tier_label = "silver"
+trajectories = ["context-tree-otel-lifecycle"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-otel-linear"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+otel_settings_patched = true
+
+# ---------------------------------------------------------------------
+# Step 1 — status before any new run. The checkpoint declares the
+# patcher already ran; this confirms the post-setup state.
+# All 7 keys must show as `already_set`.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "setup-status-initial"
+argv = ["setup", "capture-otlp", "--status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-status-initial"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-status-initial"
+path = "schema_version"
+equals = "opentraces.capture_otlp_setup.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-status-initial"
+path = "settings_path"
+
+# Backup must exist after the initial setup run. R10 says the
+# backup file is `~/.claude/settings.json.opentraces-backup`.
+[[assertions]]
+kind = "stdout_json"
+step = "setup-status-initial"
+path = "backup_exists"
+equals = true
+
+# All 7 env keys must be present in the patched settings. The
+# `env_keys` field is the canonical list of keys the patcher
+# claims to have set.
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "setup-status-initial"
+path = "env_keys"
+equals = [
+    "CLAUDE_CODE_ENABLE_TELEMETRY",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_LOG_USER_PROMPTS",
+    "OTEL_LOG_TOOL_DETAILS",
+    "OTEL_LOG_TOOL_CONTENT",
+    "OTEL_LOG_RAW_API_BODIES",
+]
+
+# ---------------------------------------------------------------------
+# Step 2 — rerun the patcher. Idempotent: every key must report
+# `already_set`, no new keys patched, no second backup.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "setup-rerun"
+argv = ["setup", "capture-otlp", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-rerun"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-rerun"
+path = "schema_version"
+equals = "opentraces.capture_otlp_setup.v1"
+
+# Rerun reports zero keys newly patched.
+[[assertions]]
+kind = "stdout_json"
+step = "setup-rerun"
+path = "patched"
+equals = 0
+
+# All 7 keys reported as `already_set`.
+[[assertions]]
+kind = "stdout_json"
+step = "setup-rerun"
+path = "already_set"
+equals = 7
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-rerun"
+path = "backup_written"
+equals = false
+
+# ---------------------------------------------------------------------
+# Step 3 — uninstall restores backup. The 7 keys must be removed
+# from `~/.claude/settings.json`; the backup file restored
+# byte-identical.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "setup-uninstall"
+argv = ["setup", "capture-otlp", "--uninstall", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-uninstall"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-uninstall"
+path = "schema_version"
+equals = "opentraces.capture_otlp_setup.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-uninstall"
+path = "uninstalled"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-uninstall"
+path = "removed"
+equals = 7
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-uninstall"
+path = "backup_restored"
+equals = true

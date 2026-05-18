@@ -70,10 +70,16 @@ COMPLETENESS_VALUES: Final[frozenset[str]] = frozenset({
     "stub",
 })
 
+CAPTURE_METHOD_LIVE: Final[str] = "live_capture"
+CAPTURE_METHOD_TRANSCRIPT: Final[str] = "transcript_reconstruction"
+CAPTURE_METHOD_TEMPLATE: Final[str] = "hardcoded_template"
+CAPTURE_METHOD_PROXY: Final[str] = "proxy"
+CAPTURE_METHOD_OTEL: Final[str] = "otel"
+
 CAPTURE_METHOD_VALUES: Final[frozenset[str]] = frozenset({
-    "live_capture",
-    "transcript_reconstruction",
-    "hardcoded_template",
+    CAPTURE_METHOD_LIVE,
+    CAPTURE_METHOD_TRANSCRIPT,
+    CAPTURE_METHOD_TEMPLATE,
     # Added by prototype branch ``prototype/http-proxy-capture``: layers
     # observed by an in-line HTTP proxy in front of the agent see the
     # actual bytes the model was sent (system prompt assembly, tool
@@ -81,7 +87,14 @@ CAPTURE_METHOD_VALUES: Final[frozenset[str]] = frozenset({
     # transcript-side reconstruction. See ``capture/http_proxy/`` for
     # the prototype source and ``tests/otbox/captures/http-proxy-prototype/comparison.md``
     # for the JSONL-vs-proxy delta that justifies the addition.
-    "proxy",
+    CAPTURE_METHOD_PROXY,
+    # Plan 078: layers derived from Claude Code's native OTel
+    # emission via the local OTLP receiver (``capture/otlp/``). Pairs
+    # the byte-perfect ``OTEL_LOG_RAW_API_BODIES`` request/response
+    # bodies with three lifecycle log streams (``plugin_loaded``,
+    # ``mcp_server_connection``, ``hook_registered``) the wire alone
+    # cannot see. See ``tests/otbox/captures/claude-code-otel-experiment/emission-coverage.md``.
+    CAPTURE_METHOD_OTEL,
 })
 
 # --------------------------------------------------------------------------- #

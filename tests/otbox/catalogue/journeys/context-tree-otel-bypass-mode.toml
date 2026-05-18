@@ -1,0 +1,139 @@
+name = "context-tree-otel-bypass-mode"
+description = """
+Plan 078 mechanism journey (silver) — when the OTLP receiver
+is down, agent traffic continues and JSONL capture still works.
+
+Per plan 078 R12 (bypass safety) — Claude Code's OTel emission
+is fire-and-forget at the SDK; if the OTLP receiver is unreachable
+the SDK silently drops telemetry. Agent traffic to Anthropic
+must NEVER be blocked by an opentraces receiver outage. The JSONL
+capture path (plan 077) must continue to feed the substrate, just
+without the OTel-derived layers. After receiver restart, the next
+session must be captured normally.
+
+This is the substrate's reliability contract. A regression here
+means installing opentraces creates a new failure mode for Claude
+Code itself, which is unacceptable.
+
+Asserts (per plan 078 §"Mechanism journeys" row 9):
+  (a) After stopping the receiver mid-fixture, the resulting
+      Context Tree is still complete (built entirely from JSONL).
+  (b) The tree has zero `capture_method=otel` nodes (the OTel
+      side never landed because the receiver was down).
+  (c) After restart, a new session captures normally with both
+      JSONL and OTel layers — proving the bypass is a transient
+      degradation, not a permanent break.
+
+Fails today because:
+  - The OTLP receiver does not exist.
+  - The `c-context-tree-otel-linear` checkpoint does not exist
+    yet (and a "bypass-mode" variant of the audit is needed).
+
+NEW preconditions key needed:
+  - `otel_bypass_active` (bool) — checkpoint declares the
+    receiver was deliberately stopped mid-fixture so the
+    bypass-degraded state is reproducible.
+
+GAP DOCUMENTED FOR COORDINATOR:
+  - The bypass scenario fundamentally requires sequencing
+    (capture session A with receiver down, then start receiver,
+    capture session B). The checkpoint needs to provide TWO
+    distinct trace_ids and expose them as `{trace_id_bypassed}`
+    and `{trace_id_post_restart}` template variables. If the
+    audit only exposes one trace_id, the journey can only assert
+    half the contract (the bypassed half).
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once OTLP receiver ships
+tier_label = "silver"
+trajectories = ["context-tree-otel-lifecycle"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-otel-linear"]
+
+[preconditions]
+min_captured_traces = 2
+context_tree_built = true
+otel_settings_patched = true
+otel_bypass_active = true
+
+# ---------------------------------------------------------------------
+# Step 1 — stop the receiver to enter bypass mode (no-op if the
+# checkpoint already left it stopped, but the step makes the
+# contract explicit).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "stop-receiver-for-bypass"
+argv = ["capture-otlp", "stop", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "stop-receiver-for-bypass"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "stop-receiver-for-bypass"
+path = "enabled"
+equals = false
+
+# ---------------------------------------------------------------------
+# Step 2 — the bypassed trace was captured while the receiver
+# was down. Tree must be complete (built from JSONL) and contain
+# zero OTel-derived nodes.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "tree-bypassed"
+argv = ["ctx", "tree", "{trace_id_bypassed}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-bypassed"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "tree-bypassed"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# Contract (a) — the tree is non-empty (JSONL built it). The
+# fixture pins multi-step sessions; nodes count > 0 is sufficient.
+[[assertions]]
+kind = "stdout_json"
+step = "tree-bypassed"
+path = "nodes.0.node_id"
+
+# Restart the receiver (the post-bypass capture path).
+[[steps]]
+type = "cli"
+id = "restart-receiver"
+argv = ["capture-otlp", "restart", "--port", "{port}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "restart-receiver"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "restart-receiver"
+path = "enabled"
+equals = true
+
+# ---------------------------------------------------------------------
+# Step 4 — the post-restart trace must have BOTH capture methods.
+# Contract (c).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "tree-post-restart"
+argv = ["ctx", "tree", "{trace_id_post_restart}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-post-restart"
+equals = 0
+

@@ -1,0 +1,127 @@
+name = "context-tree-otel-hook-lifecycle"
+description = """
+Plan 078 mechanism journey (silver) — Claude Code hook
+registrations are captured into runtime_state.
+
+Per plan 078 R4 (three lifecycle event mappings) — Claude Code
+emits `claude_code.hook_registered` log events when hooks
+register (whether via `~/.claude/settings.json`, a loaded plugin,
+or programmatic registration). The mapper enriches
+`runtime_state.hooks` with each registered hook's matcher and
+plugin owner per the §"Attribute mapping" table.
+
+Third of the three lifecycle journeys. Hook capture is the
+substrate enabler for "what side-effects fire on tool calls"
+downstream attribution.
+
+Fixture: `context-tree-otel-with-mcp` — the with-mcp fixture
+loads at least one hook as part of the plugin bundle, so the
+single fixture exercises all three lifecycle event types.
+
+Asserts (per plan 078 §"Mechanism journeys" row 7):
+  (a) At least one `hook_registered` event captured.
+  (b) `runtime_state.hooks` is a list with at least one entry;
+      each entry has a `matcher` field and a `plugin_owner`
+      field (which may be null for user-installed hooks).
+  (c) The hook matcher field is a non-empty string.
+
+Fails today because:
+  - The OTLP receiver and mapper do not exist.
+  - The `c-context-tree-otel-with-mcp` checkpoint does not exist
+    yet.
+
+NEW template variables needed:
+  - `{first_otel_node_id}` — same as MCP/plugin lifecycle journeys.
+"""
+lane = "core"
+tier = 1  # PHASE-4: bump back to 0 once OTLP receiver ships
+tier_label = "silver"
+trajectories = ["context-tree-otel-lifecycle"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-context-tree-otel-with-mcp"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+otlp_receiver_running = true
+otel_settings_patched = true
+
+# ---------------------------------------------------------------------
+# Step 1 — show the first OTel-derived node. runtime_state must
+# carry the hooks list populated from claude_code.hook_registered
+# events.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "show-runtime-hooks"
+argv = ["ctx", "show", "{first_otel_node_id}", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "show-runtime-hooks"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-hooks"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-hooks"
+path = "layers.runtime_state.capture_method"
+equals = "otel"
+
+# Contract (b) — hooks list has at least one entry. The fixture
+# pins at least one hook via the plugin bundle; the absolute count
+# is fixture-dependent so we only check the first entry exists.
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-hooks"
+path = "layers.runtime_state.content.hooks.0.hook_event"
+
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-hooks"
+path = "layers.runtime_state.content.hooks.0.hook_matcher"
+
+# Contract (b) — plugin_owner field exists on each hook. May be
+# null for user-installed hooks; presence is the load-bearing
+# claim. Use the field-present pattern via path lookup.
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-hooks"
+path = "layers.runtime_state.content.hooks.0.plugin.name"
+
+# The hook's command / handler field tells the substrate what
+# actually fires. Presence check.
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-hooks"
+path = "layers.runtime_state.content.hooks.0.hook_type"
+
+# Contract (a) — at least one hook event type registered. The
+# CLI surfaces a deduplicated list of registered hook event types
+# (e.g. "PostToolUse", "Stop", "PreToolUse"). Non-empty list is
+# the load-bearing claim.
+[[assertions]]
+kind = "stdout_json"
+step = "show-runtime-hooks"
+path = "layers.runtime_state.content.hooks.0.hook_event"
+
+# ---------------------------------------------------------------------
+# Step 2 — confirm hook_registered events surface via the
+# OTel-only lifecycle event view. R5.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "tree-hook-events"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tree-hook-events"
+equals = 0
+
