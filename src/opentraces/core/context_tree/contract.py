@@ -74,6 +74,14 @@ CAPTURE_METHOD_VALUES: Final[frozenset[str]] = frozenset({
     "live_capture",
     "transcript_reconstruction",
     "hardcoded_template",
+    # Added by prototype branch ``prototype/http-proxy-capture``: layers
+    # observed by an in-line HTTP proxy in front of the agent see the
+    # actual bytes the model was sent (system prompt assembly, tool
+    # registry with parameter schemas, messages) without any
+    # transcript-side reconstruction. See ``capture/http_proxy/`` for
+    # the prototype source and ``tests/otbox/captures/http-proxy-prototype/comparison.md``
+    # for the JSONL-vs-proxy delta that justifies the addition.
+    "proxy",
 })
 
 # --------------------------------------------------------------------------- #

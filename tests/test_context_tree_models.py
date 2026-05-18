@@ -136,7 +136,10 @@ class TestContextLayer:
                 layer_type="system",
                 content={},
                 completeness="full",
-                capture_method="proxy",  # not in v1 vocabulary
+                # Sentinel chosen as a value guaranteed not in any current or
+                # planned vocabulary. (``proxy`` is a real value now, added
+                # by the http-proxy-capture prototype branch.)
+                capture_method="not_a_real_capture_method",
             )
 
     def test_user_supplied_layer_id_must_match_content(self):
@@ -422,6 +425,9 @@ class TestVocabularies:
             "live_capture",
             "transcript_reconstruction",
             "hardcoded_template",
+            # Added by the http-proxy-capture prototype branch; if/when
+            # the prototype lands on main this value stays.
+            "proxy",
         }
 
     def test_event_types_complete(self):
