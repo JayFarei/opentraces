@@ -388,11 +388,29 @@ def _ingest_locked(
             emit_context_tree_events_from_record,
         )
 
-        emit_context_tree_events_from_record(
+        ct_summary = emit_context_tree_events_from_record(
             project_dir=project_dir,
             final_record=final_record,
             transcript_path=jsonl_path,
         )
+        # R10 cross-substrate join: populate Step.context_node_id from the
+        # active-path step_index -> node_id map the orchestrator returned.
+        # Mutating final_record.steps in place before the staging JSONL is
+        # written downstream makes the link visible to every consumer
+        # without a re-parse pass.
+        step_map = ct_summary.get("step_node_id_map") or {}
+        if step_map:
+            for step in final_record.steps:
+                node_id = step_map.get(step.step_index)
+                if node_id is not None:
+                    step.context_node_id = node_id
+        # Surface the projection summary onto the trace record so doctor
+        # and the bucket manifest can report it without reading the event
+        # log again. Strip the (internal) step_node_id_map first.
+        public_summary = {
+            k: v for k, v in ct_summary.items() if k != "step_node_id_map"
+        }
+        final_record.context_tree_summary = public_summary
     except Exception:
         logger.warning(
             "context tree event emission failed for %s", trace_id,

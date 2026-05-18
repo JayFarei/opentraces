@@ -946,6 +946,11 @@ def emit_context_tree_events_from_record(
         "layer_count": 0,
         "active_path_leaf_id": None,
         "capture_limitations": [],
+        # Step.context_node_id wiring (R10 cross-substrate join).
+        # Populated by _materialize_nodes_for_active_path; ingest reads
+        # this and writes node_ids onto final_record.steps[i].context_node_id
+        # before the staging JSONL is persisted.
+        "step_node_id_map": {},
     }
 
     if transcript_path is None:
@@ -1008,6 +1013,15 @@ def emit_context_tree_events_from_record(
         # projection can find the active_path_leaf_id without re-walking.
         summary["node_count"] = len(nodes)
         summary["layer_count"] = len({layer.layer_id for layer in layers})
+
+        # R10 cross-substrate join: surface the active-path step_index ->
+        # node_id map so ingest can populate Step.context_node_id on the
+        # final_record's steps before the staging JSONL is written.
+        summary["step_node_id_map"] = {
+            n.step_index: n.node_id
+            for n in nodes
+            if n.step_index is not None and n.branch_type in ("root", "linear", "compaction_fork")
+        }
 
         if not nodes:
             summary["capture_limitations"].append("context_tree_not_captured")
