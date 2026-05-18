@@ -135,7 +135,7 @@ equals = 0
 kind = "stdout_json"
 step = "setup-rerun"
 path = "already_set"
-equals = 7
+equals = 12
 
 [[assertions]]
 kind = "stdout_json"
@@ -174,7 +174,7 @@ equals = true
 kind = "stdout_json"
 step = "setup-uninstall"
 path = "removed"
-equals = 7
+equals = 12
 
 [[assertions]]
 kind = "stdout_json"

@@ -45,12 +45,22 @@ DEFAULT_BACKUP_SUFFIX = ".opentraces-backup"
 DEFAULT_RAW_BODIES_DIR = Path.home() / ".opentraces" / "raw-bodies"
 DEFAULT_OTLP_ENDPOINT = "http://127.0.0.1:4318"
 
-# The 7 env keys; OTEL_LOG_RAW_API_BODIES and OTEL_EXPORTER_OTLP_ENDPOINT
-# are computed from the install args.
+# Env keys patched into ~/.claude/settings.json. The three EXPORTER
+# selectors are required for the OTel SDK to actually pick OTLP (without
+# them, only raw-body files get written; no envelopes reach the receiver).
+# The two EXPORT_INTERVAL hints drop the default ~10s flush down to
+# ~2s so short interactive sessions actually surface envelopes before
+# the user runs `capture-otlp status`. OTEL_LOG_RAW_API_BODIES and
+# OTEL_EXPORTER_OTLP_ENDPOINT are computed from the install args.
 OTEL_ENV_KEYS: tuple[str, ...] = (
     "CLAUDE_CODE_ENABLE_TELEMETRY",
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_LOGS_EXPORTER",
+    "OTEL_METRICS_EXPORTER",
+    "OTEL_TRACES_EXPORTER",
+    "OTEL_LOGS_EXPORT_INTERVAL",
+    "OTEL_METRIC_EXPORT_INTERVAL",
     "OTEL_LOG_USER_PROMPTS",
     "OTEL_LOG_TOOL_DETAILS",
     "OTEL_LOG_TOOL_CONTENT",
@@ -74,6 +84,11 @@ def _expected_env(otlp_endpoint: str, raw_bodies_dir: Path) -> dict[str, str]:
         "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
         "OTEL_EXPORTER_OTLP_ENDPOINT": otlp_endpoint,
         "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+        "OTEL_LOGS_EXPORTER": "otlp",
+        "OTEL_METRICS_EXPORTER": "otlp",
+        "OTEL_TRACES_EXPORTER": "otlp",
+        "OTEL_LOGS_EXPORT_INTERVAL": "2000",
+        "OTEL_METRIC_EXPORT_INTERVAL": "2000",
         "OTEL_LOG_USER_PROMPTS": "1",
         "OTEL_LOG_TOOL_DETAILS": "1",
         "OTEL_LOG_TOOL_CONTENT": "1",
