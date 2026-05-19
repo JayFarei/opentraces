@@ -7,7 +7,9 @@ separate from dataset remotes, which are publication destinations.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,7 @@ except Exception:  # pragma: no cover
 
 from . import paths
 from .bucket_store import (
+    BUCKET_MANIFEST_SCHEMA,
     bucket_manifest,
     classify_bucket_remote_state,
     fake_remote_diff,
@@ -33,6 +36,9 @@ from .config import load_config
 
 
 REMOTE_SCHEMA = "opentraces.bucket.remote.v1"
+
+
+logger = logging.getLogger(__name__)
 
 
 class BucketRemoteError(RuntimeError):
@@ -72,32 +78,63 @@ def remote_diff(*, fake_root: Path | None = None) -> dict[str, Any]:
     }
 
 
-def remote_push(*, fake_root: Path | None = None, force: bool = False) -> dict[str, Any]:
+def remote_push(
+    *,
+    fake_root: Path | None = None,
+    force: bool = False,
+    unsafe_push: bool = False,
+) -> dict[str, Any]:
     if fake_root is not None:
-        return _fake_payload(fake_remote_push(fake_root, force=force))
+        return _fake_payload(
+            _substrate_aware_fake_push(
+                fake_root=fake_root, force=force, unsafe_push=unsafe_push
+            )
+        )
     cfg = load_config()
     remote = cfg.bucket.remote
     if cfg.bucket.storage != "remote" or not remote.enabled:
         if fake_remote_root() is not None:
-            return _fake_payload(fake_remote_push(force=force))
+            return _fake_payload(
+                _substrate_aware_fake_push(force=force, unsafe_push=unsafe_push)
+            )
         raise BucketRemoteError("private bucket remote is not configured")
     if remote.provider == "fake":
-        return _fake_payload(fake_remote_push(force=force))
-    return _hf_push(remote.url, cfg.hf_token, force=force)
+        return _fake_payload(
+            _substrate_aware_fake_push(force=force, unsafe_push=unsafe_push)
+        )
+    return _hf_push(remote.url, cfg.hf_token, force=force, unsafe_push=unsafe_push)
 
 
-def remote_pull(*, fake_root: Path | None = None, force: bool = False) -> dict[str, Any]:
+def remote_pull(
+    *,
+    fake_root: Path | None = None,
+    force: bool = False,
+    eager: bool = False,
+) -> dict[str, Any]:
+    """Pull the configured private bucket remote.
+
+    Plan 080 §6 pull patterns:
+
+    - Selective (default, ``eager=False``): fetch ``manifest.json`` plus
+      per-trace envelope files (``trace.json``, ``trail.jsonl.gz``,
+      ``context.jsonl.gz``, ``sources.jsonl.gz``) and the event mirror
+      index. Layer / raw blobs stay LAZY and are fetched on demand by
+      ``ctx show`` / ``ctx diff``.
+    - Eager (``eager=True``): fetch every referenced blob upfront. Use
+      for offline analysis or full mirror snapshots.
+    """
+
     if fake_root is not None:
-        return _fake_payload(fake_remote_pull(fake_root, force=force))
+        return _fake_payload(_substrate_aware_fake_pull(fake_root=fake_root, force=force))
     cfg = load_config()
     remote = cfg.bucket.remote
     if cfg.bucket.storage != "remote" or not remote.enabled:
         if fake_remote_root() is not None:
-            return _fake_payload(fake_remote_pull(force=force))
+            return _fake_payload(_substrate_aware_fake_pull(force=force))
         raise BucketRemoteError("private bucket remote is not configured")
     if remote.provider == "fake":
-        return _fake_payload(fake_remote_pull(force=force))
-    return _hf_pull(remote.url, cfg.hf_token, force=force)
+        return _fake_payload(_substrate_aware_fake_pull(force=force))
+    return _hf_pull(remote.url, cfg.hf_token, force=force, eager=eager)
 
 
 def reconcile_once(*, reason: str = "manual") -> dict[str, Any]:
@@ -157,6 +194,15 @@ def _hf_status(url: str | None, token: str | None) -> dict[str, Any]:
             remote_digest=None,
             error=str(exc),
         )
+    # Plan 080 §20 Resolution E: hard schema_version check on every manifest
+    # read path. No v1-reader path (dev branch, no shims).
+    remote_schema = remote_manifest.get("schema_version")
+    if remote_schema and remote_schema != BUCKET_MANIFEST_SCHEMA:
+        raise BucketRemoteError(
+            f"Remote bucket manifest schema {remote_schema} incompatible with "
+            f"local {BUCKET_MANIFEST_SCHEMA}; run 'opentraces setup bucket "
+            "--migrate' on the writer machine"
+        )
     remote_digest = remote_manifest.get("digest")
     relation = classify_bucket_remote_state(
         provider="huggingface",
@@ -174,7 +220,13 @@ def _hf_status(url: str | None, token: str | None) -> dict[str, Any]:
     )
 
 
-def _hf_push(url: str | None, token: str | None, *, force: bool = False) -> dict[str, Any]:
+def _hf_push(
+    url: str | None,
+    token: str | None,
+    *,
+    force: bool = False,
+    unsafe_push: bool = False,
+) -> dict[str, Any]:
     repo_id = _hf_repo_id(url)
     api = _hf_api(token)
     manifest = bucket_manifest(write=True, include_objects=False)
@@ -198,17 +250,46 @@ def _hf_push(url: str | None, token: str | None, *, force: bool = False) -> dict
         private=True,
     )
     files_uploaded = 0
-    for path in sorted(paths.bucket_dir().rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(paths.bucket_dir()).as_posix()
-        api.upload_file(
-            path_or_fileobj=str(path),
-            path_in_repo=rel,
-            repo_id=repo_id,
-            repo_type="dataset",
+    context_tree_files_uploaded = 0
+    blocked_projects, skipped_substrates = _context_tree_skip_set(
+        unsafe_push=unsafe_push
+    )
+    # Plan 080 §6 push order: (a) blobs, (b) event batches + index,
+    # (c) per-trace envelopes (trail/context/sources), (d) trace.json
+    # spine LAST per trace, (e) manifest.json absolute last. A partial
+    # push leaves the remote consistent: manifest only enumerates
+    # traces whose envelopes have landed; envelopes only reference
+    # blobs that have landed.
+    bucket_root = paths.bucket_dir()
+    passes = _ordered_bucket_upload_passes(
+        skip_blocked_project_slugs=blocked_projects
+    )
+    pass_counts: dict[str, int] = {}
+    for pass_name, pass_paths in passes:
+        pass_counts[pass_name] = len(pass_paths)
+        logger.info(
+            "bucket push pass %s: %d files", pass_name, len(pass_paths)
         )
-        files_uploaded += 1
+        # Stderr emission so otbox journeys can observe pass order
+        # without enabling logging. Format is stable contract.
+        print(
+            f"push pass {pass_name}: {len(pass_paths)} files",
+            file=sys.stderr,
+            flush=True,
+        )
+        for path in pass_paths:
+            rel = path.relative_to(bucket_root).as_posix()
+            api.upload_file(
+                path_or_fileobj=str(path),
+                path_in_repo=rel,
+                repo_id=repo_id,
+                repo_type="dataset",
+            )
+            files_uploaded += 1
+            if rel.startswith("contexts/v1/") or rel.startswith(
+                "blobs/v1/"
+            ) and "/context/" in rel:
+                context_tree_files_uploaded += 1
     write_bucket_sync_state(
         provider="huggingface",
         target=repo_id,
@@ -216,6 +297,7 @@ def _hf_push(url: str | None, token: str | None, *, force: bool = False) -> dict
         remote_digest=manifest.get("digest"),
         direction="push",
     )
+    verification = _safe_verify_context_tree()
     return {
         "schema_version": REMOTE_SCHEMA,
         "provider": "huggingface",
@@ -223,10 +305,20 @@ def _hf_push(url: str | None, token: str | None, *, force: bool = False) -> dict
         "repo_id": repo_id,
         "digest": manifest.get("digest"),
         "files_uploaded": files_uploaded,
+        "skipped_substrates": skipped_substrates,
+        "context_tree_files_uploaded": context_tree_files_uploaded,
+        "pass_counts": pass_counts,
+        "verification": verification,
     }
 
 
-def _hf_pull(url: str | None, token: str | None, *, force: bool = False) -> dict[str, Any]:
+def _hf_pull(
+    url: str | None,
+    token: str | None,
+    *,
+    force: bool = False,
+    eager: bool = False,
+) -> dict[str, Any]:
     repo_id = _hf_repo_id(url)
     api = _hf_api(token)
     try:
@@ -241,13 +333,34 @@ def _hf_pull(url: str | None, token: str | None, *, force: bool = False) -> dict
             "local bucket has changes that are not in the remote bucket; "
             "push first or pass --force to overwrite"
         )
+    # Plan 080 §6 pull patterns. Selective default: fetch the manifest,
+    # per-trace envelopes (trace.json + trail/context/sources jsonl.gz),
+    # and the event log mirror; leave blobs lazy for ``ctx show`` to
+    # fetch on demand. Eager OR force: fetch everything upfront (force
+    # preserves the existing wipe-and-replace mirror contract).
+    pull_targets: list[str]
+    files_skipped_lazy = 0
+    full_fetch = eager or force
+    if full_fetch:
+        pull_targets = [
+            name
+            for name in files
+            if name and name != ".gitattributes" and not name.endswith("/")
+        ]
+    else:
+        pull_targets = []
+        for name in files:
+            if not name or name == ".gitattributes" or name.endswith("/"):
+                continue
+            if _is_lazy_blob_path(name):
+                files_skipped_lazy += 1
+                continue
+            pull_targets.append(name)
     with tempfile.TemporaryDirectory(prefix="opentraces-bucket-pull-") as tmp_name:
         tmp_root = Path(tmp_name) / "bucket"
         tmp_root.mkdir(parents=True)
         copied = 0
-        for name in files:
-            if name == ".gitattributes" or name.endswith("/"):
-                continue
+        for name in pull_targets:
             downloaded = Path(
                 api.hf_hub_download(
                     repo_id=repo_id,
@@ -260,10 +373,18 @@ def _hf_pull(url: str | None, token: str | None, *, force: bool = False) -> dict
             shutil.copy2(downloaded, target)
             copied += 1
         local = paths.bucket_dir()
-        if local.exists():
-            shutil.rmtree(local)
-        local.mkdir(parents=True, exist_ok=True)
-        _copy_tree(tmp_root, local)
+        # ``--force`` and ``--eager`` both mean "treat the remote as the
+        # source of truth" — wipe-and-replace mirror semantics. Without
+        # either flag, selective pull merges pulled envelopes over the
+        # local cache, preserving cached blobs and any local-only files.
+        if full_fetch:
+            if local.exists():
+                shutil.rmtree(local)
+            local.mkdir(parents=True, exist_ok=True)
+            _copy_tree(tmp_root, local)
+        else:
+            local.mkdir(parents=True, exist_ok=True)
+            _copy_tree(tmp_root, local)
     manifest = bucket_manifest(write=True, include_objects=False)
     write_bucket_sync_state(
         provider="huggingface",
@@ -272,6 +393,7 @@ def _hf_pull(url: str | None, token: str | None, *, force: bool = False) -> dict
         remote_digest=manifest.get("digest"),
         direction="pull",
     )
+    verification = _safe_verify_context_tree()
     return {
         "schema_version": REMOTE_SCHEMA,
         "provider": "huggingface",
@@ -279,6 +401,9 @@ def _hf_pull(url: str | None, token: str | None, *, force: bool = False) -> dict
         "repo_id": repo_id,
         "digest": manifest.get("digest"),
         "files_downloaded": copied,
+        "files_skipped_lazy": files_skipped_lazy,
+        "eager": eager,
+        "verification": verification,
     }
 
 
@@ -368,3 +493,323 @@ def _copy_tree(source: Path, destination: Path) -> int:
         shutil.copy2(path, target)
         copied += 1
     return copied
+
+
+# ---------------------------------------------------------------------------
+# Plan 079 — substrate-aware push policy + post-transfer verify
+# ---------------------------------------------------------------------------
+
+
+def _context_tree_skip_set(*, unsafe_push: bool) -> tuple[set[str], list[str]]:
+    """Return ``(blocked_project_slugs, skipped_substrates)`` for one push.
+
+    A project's Context Tree paths are blocked when any per-trace head
+    for that project reports ``remote_sync_eligible is False``. The
+    ``--unsafe-push`` flag clears the block (plan 079 R8).
+    """
+
+    if unsafe_push:
+        return set(), []
+    try:
+        from .bucket_store import iter_context_tree_traces
+    except ImportError:
+        return set(), []
+    try:
+        rows = iter_context_tree_traces()
+    except Exception:
+        return set(), []
+    blocked: set[str] = set()
+    for row in rows:
+        if row.get("remote_sync_eligible") is False:
+            slug = row.get("project_slug")
+            if slug:
+                blocked.add(slug)
+    skipped = ["context_tree"] if blocked else []
+    return blocked, skipped
+
+
+def _ordered_bucket_upload_paths(
+    *, skip_blocked_project_slugs: set[str]
+) -> list[Path]:
+    """Walk the bucket and order paths for upload.
+
+    Ordering rule (plan 079 R9): for every project, all
+    ``contexts/v1/<project>/layers/blobs/**`` paths must precede the
+    ``contexts/v1/<project>/<trace>/head.json`` paths for the same
+    project. Non-context-tree paths and shared-blob paths follow last.
+    """
+
+    bucket_root = paths.bucket_dir()
+    if not bucket_root.exists():
+        return []
+    project_blobs: dict[str, list[Path]] = {}
+    project_heads: dict[str, list[Path]] = {}
+    other: list[Path] = []
+    for path in sorted(bucket_root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(bucket_root).as_posix()
+        if rel.startswith("contexts/v1/"):
+            parts = rel.split("/")
+            if len(parts) >= 3:
+                project_slug = parts[2]
+                if project_slug in skip_blocked_project_slugs:
+                    continue
+                if project_slug == "_shared":
+                    other.append(path)
+                    continue
+                if "/layers/blobs/" in rel:
+                    project_blobs.setdefault(project_slug, []).append(path)
+                else:
+                    project_heads.setdefault(project_slug, []).append(path)
+                continue
+        other.append(path)
+    ordered: list[Path] = []
+    for project_slug in sorted(set(project_blobs) | set(project_heads)):
+        ordered.extend(project_blobs.get(project_slug, []))
+        ordered.extend(project_heads.get(project_slug, []))
+    ordered.extend(other)
+    return ordered
+
+
+# Pass names used by ``_ordered_bucket_upload_passes``. Stable contract
+# for otbox journey assertions ("push pass <name>: <n> files").
+_PUSH_PASS_BLOBS = "blobs"
+_PUSH_PASS_EVENTS = "events"
+_PUSH_PASS_ENVELOPES = "envelopes"
+_PUSH_PASS_SPINE = "spine"
+_PUSH_PASS_MANIFEST = "manifest"
+
+
+def _ordered_bucket_upload_passes(
+    *, skip_blocked_project_slugs: set[str]
+) -> list[tuple[str, list[Path]]]:
+    """Group bucket files into the 5 ordered push passes (plan 080 §6).
+
+    Order (load-bearing for partial-failure recovery):
+
+    a. ``blobs``     — ``bucket/blobs/v1/<project>/context/**`` and
+                       ``bucket/blobs/v1/<project>/raw/**`` (the
+                       content-addressed layer + raw bodies).
+    b. ``events``    — ``bucket/events/v1/batches/**`` plus
+                       ``bucket/events/v1/index.json``.
+    c. ``envelopes`` — ``bucket/traces/v1/<project>/<trace>/{trail,
+                       context,sources}.jsonl.gz`` (per-trace projections
+                       that reference blobs).
+    d. ``spine``     — ``bucket/traces/v1/<project>/<trace>/trace.json``
+                       per trace, written LAST per trace (the spine; its
+                       presence is the consumer's per-trace ready signal).
+    e. ``manifest``  — ``bucket/manifest.json`` (ABSOLUTE LAST; whole-bucket
+                       ready-to-read signal).
+
+    Legacy plan-079 paths (``contexts/v1/...``) and any other unrecognised
+    paths land in the appropriate pass on a best-effort basis: layer blob
+    paths go in ``blobs``, head/projection files go in ``envelopes``, and
+    truly unclassified files go in ``envelopes`` (before manifest) so they
+    can never out-order the ready signal.
+    """
+
+    bucket_root = paths.bucket_dir()
+    if not bucket_root.exists():
+        return [
+            (_PUSH_PASS_BLOBS, []),
+            (_PUSH_PASS_EVENTS, []),
+            (_PUSH_PASS_ENVELOPES, []),
+            (_PUSH_PASS_SPINE, []),
+            (_PUSH_PASS_MANIFEST, []),
+        ]
+    blobs: list[Path] = []
+    events: list[Path] = []
+    envelopes: list[Path] = []
+    spine: list[Path] = []
+    manifest: list[Path] = []
+    for path in sorted(bucket_root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(bucket_root).as_posix()
+        pass_name = _classify_bucket_path_pass(
+            rel, skip_blocked_project_slugs=skip_blocked_project_slugs
+        )
+        if pass_name is None:
+            continue
+        if pass_name == _PUSH_PASS_BLOBS:
+            blobs.append(path)
+        elif pass_name == _PUSH_PASS_EVENTS:
+            events.append(path)
+        elif pass_name == _PUSH_PASS_ENVELOPES:
+            envelopes.append(path)
+        elif pass_name == _PUSH_PASS_SPINE:
+            spine.append(path)
+        elif pass_name == _PUSH_PASS_MANIFEST:
+            manifest.append(path)
+    return [
+        (_PUSH_PASS_BLOBS, blobs),
+        (_PUSH_PASS_EVENTS, events),
+        (_PUSH_PASS_ENVELOPES, envelopes),
+        (_PUSH_PASS_SPINE, spine),
+        (_PUSH_PASS_MANIFEST, manifest),
+    ]
+
+
+def _classify_bucket_path_pass(
+    rel: str, *, skip_blocked_project_slugs: set[str]
+) -> str | None:
+    """Classify a relative bucket path into a push pass (plan 080).
+
+    Returns ``None`` to skip the path entirely (e.g. blocked project
+    context blobs under the legacy ``contexts/v1/<project>/`` layout).
+    """
+
+    # Plan 080 layout — primary classification.
+    if rel == "manifest.json":
+        return _PUSH_PASS_MANIFEST
+    if rel.startswith("blobs/v1/"):
+        # ``blobs/v1/<project>/(context|raw)/...``. Blocked projects get
+        # their context blobs dropped, raw blobs are not gated.
+        parts = rel.split("/")
+        if len(parts) >= 4:
+            project_slug = parts[2]
+            kind = parts[3]
+            if (
+                kind == "context"
+                and project_slug in skip_blocked_project_slugs
+            ):
+                return None
+        return _PUSH_PASS_BLOBS
+    if rel.startswith("events/v1/"):
+        return _PUSH_PASS_EVENTS
+    if rel.startswith("traces/v1/"):
+        # ``traces/v1/<project>/<trace>/<file>``. trace.json is the spine;
+        # all other per-trace files are envelopes.
+        if rel.endswith("/trace.json"):
+            return _PUSH_PASS_SPINE
+        return _PUSH_PASS_ENVELOPES
+
+    # Legacy / plan-079 layout — keep pushable so we never strand files.
+    if rel.startswith("contexts/v1/"):
+        parts = rel.split("/")
+        if len(parts) >= 3:
+            project_slug = parts[2]
+            if (
+                project_slug != "_shared"
+                and project_slug in skip_blocked_project_slugs
+            ):
+                return None
+        if "/layers/blobs/" in rel:
+            return _PUSH_PASS_BLOBS
+        return _PUSH_PASS_ENVELOPES
+    if rel.startswith("events/trail/v1/"):
+        return _PUSH_PASS_EVENTS
+    if rel.startswith("objects/raw/v1/"):
+        return _PUSH_PASS_BLOBS
+    if rel.startswith("objects/traces/v1/") or rel.startswith("trace-records/"):
+        return _PUSH_PASS_ENVELOPES
+
+    # Fallback: classify into envelopes pass so it lands before manifest
+    # but after blobs+events. Better to push something we didn't expect
+    # than to silently drop it.
+    return _PUSH_PASS_ENVELOPES
+
+
+def _is_lazy_blob_path(rel: str) -> bool:
+    """Return True if ``rel`` is a layer/raw blob that selective pull skips.
+
+    Plan 080 §6: layer blobs and raw-body blobs are fetched on demand by
+    ``ctx show`` / ``ctx diff``. Selective pull leaves them on the remote.
+    """
+
+    if rel.startswith("blobs/v1/"):
+        parts = rel.split("/")
+        if len(parts) >= 4 and parts[3] in {"context", "raw"}:
+            return True
+    # Legacy plan-079 / pre-080 layouts.
+    if "/layers/blobs/" in rel:
+        return True
+    if rel.startswith("objects/raw/v1/"):
+        return True
+    return False
+
+
+def _safe_verify_context_tree() -> dict[str, Any]:
+    """Best-effort post-transfer Context Tree integrity check."""
+
+    try:
+        from .bucket_store import verify_context_tree_layer_refs
+    except ImportError:
+        return {
+            "state": "unavailable",
+            "trace_count": 0,
+            "dangling_layer_refs_count": 0,
+        }
+    try:
+        return verify_context_tree_layer_refs()
+    except Exception as exc:  # pragma: no cover — defensive surfacing
+        return {
+            "state": "error",
+            "error": str(exc),
+            "trace_count": 0,
+            "dangling_layer_refs_count": 0,
+        }
+
+
+def _substrate_aware_fake_push(
+    fake_root: Path | None = None,
+    *,
+    force: bool = False,
+    unsafe_push: bool = False,
+) -> dict[str, Any]:
+    """Wrap ``fake_remote_push`` with substrate-aware filtering + verify.
+
+    ``fake_remote_push`` copies the full local bucket. Pre-filter Context
+    Tree paths for ineligible projects by temporarily moving them aside,
+    then restore them after the copy. Manifest is rebuilt inside
+    ``fake_remote_push``, so its digest reflects the filtered bucket.
+    """
+
+    blocked, skipped_substrates = _context_tree_skip_set(unsafe_push=unsafe_push)
+    bucket_root = paths.bucket_dir()
+    context_tree_files_uploaded = 0
+    moved_paths: list[tuple[Path, Path]] = []
+    staging_dir: Path | None = None
+    if blocked and bucket_root.exists():
+        staging_dir = Path(tempfile.mkdtemp(prefix="opentraces-bucket-skip-"))
+        for slug in sorted(blocked):
+            src = bucket_root / "contexts" / "v1" / slug
+            if not src.exists():
+                continue
+            dst = staging_dir / slug
+            shutil.move(str(src), str(dst))
+            moved_paths.append((src, dst))
+    try:
+        if unsafe_push and bucket_root.exists():
+            ctx_root = bucket_root / "contexts" / "v1"
+            if ctx_root.exists():
+                for path in ctx_root.rglob("*"):
+                    if path.is_file():
+                        context_tree_files_uploaded += 1
+        result = fake_remote_push(remote_root=fake_root, force=force)
+    finally:
+        for src, dst in moved_paths:
+            src.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(dst), str(src))
+        if staging_dir is not None and staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+    verification = _safe_verify_context_tree()
+    return {
+        **result,
+        "skipped_substrates": skipped_substrates,
+        "context_tree_files_uploaded": context_tree_files_uploaded,
+        "verification": verification,
+    }
+
+
+def _substrate_aware_fake_pull(
+    fake_root: Path | None = None,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Wrap ``fake_remote_pull`` so it always runs verify post-transfer."""
+
+    result = fake_remote_pull(remote_root=fake_root, force=force)
+    verification = _safe_verify_context_tree()
+    return {**result, "verification": verification}

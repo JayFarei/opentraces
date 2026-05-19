@@ -100,7 +100,7 @@ resource** in agent trace datasets. Most academic schemas (ADP, ATIF, OTel)
 have no outcome fields at all. opentraces is unique in providing:
 
 - `outcome.committed` -- whether the agent's work was actually committed to git
-- `outcome.patch` -- the actual diff produced
+- `patches[]` -- list of patches produced (one per Edit/Write tool call); per-patch diffs live in the trace's trail.jsonl.gz
 - `outcome.success` -- explicit success/failure signal
 - `outcome.signal_confidence` -- how the signal was derived (annotated > derived > inferred)
 

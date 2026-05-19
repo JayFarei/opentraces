@@ -23,6 +23,7 @@ from pathlib import Path
 from opentraces_schema.models import TraceRecord
 
 from .config import Config
+from .trace_derived import derive_outcome_and_git_links_from_patches
 from ..enrichment.attribution import build_attribution
 from ..enrichment.dependencies import (
     extract_dependencies,
@@ -73,14 +74,21 @@ def _enrich_from_steps(
         )
         record.dependencies = sorted(set(step_deps + import_deps))
     if not record.attribution:
-        patch = record.outcome.patch if record.outcome else None
+        # Plan 080 Resolution C: ``Outcome.patch`` was removed in schema 0.6.0;
+        # full diff content now lives in ``trail.jsonl.gz`` (per-trace, sibling
+        # of trace.json in the bucket). Phase C wires up that assembly; for now
+        # ``build_attribution`` runs without an inline unified diff hint and
+        # falls back to its in-memory cumulative reconstruction.
+        # TODO(plan 080 Phase C): pass an assembled diff loaded from trail.jsonl.gz
+        # when available so attribution ranges can hash-match against post-commit
+        # blobs.
         meta = record.metadata or {}
         hook_git = meta.get("hook_git_final") or {}
         end_state_changed = hook_git.get("changed_paths") or None
         hook_tool_use = meta.get("hook_post_tool_use") or None
         record.attribution = build_attribution(
             record.steps,
-            patch,
+            None,
             trace_id=record.trace_id,
             end_state_changed_files=end_state_changed,
             hook_post_tool_use=hook_tool_use,
@@ -203,6 +211,17 @@ def process_trace(
 
     record.metrics = compute_metrics(record.steps)
 
+    # Plan 080 Resolution C: once patches[] has been populated (by the ingest
+    # backfill from trail events, or by the post-commit hook on a re-process),
+    # outcome.committed/commit_sha and git_links MUST track patches[].anchor.
+    # We only invoke the derivation when at least one patch is anchored: at
+    # ingest time anchors are None (post-commit has not fired yet) and the
+    # legacy step-derived Bash-commit signal must survive. The post-commit
+    # hook calls this same helper after setting anchors, so the fields
+    # converge on the spine of truth once Git evidence arrives.
+    if any(p.anchor is not None and p.anchor.found for p in record.patches):
+        derive_outcome_and_git_links_from_patches(record)
+
     return _run_privacy_pipeline(
         record,
         cfg,
@@ -225,6 +244,12 @@ def process_imported_trace(
 
     if record.metrics.total_steps == 0 and record.metrics.total_input_tokens == 0:
         record.metrics = compute_metrics(record.steps)
+
+    # Plan 080 Resolution C: keep derived fields aligned with patches[].anchor
+    # once any patch is anchored. Same conditional as ``process_trace``; see
+    # that helper for the rationale.
+    if any(p.anchor is not None and p.anchor.found for p in record.patches):
+        derive_outcome_and_git_links_from_patches(record)
 
     return _run_privacy_pipeline(
         record,

@@ -843,6 +843,15 @@ def trace_slice_cmd(
     is_flag=True,
     help="Allow --remote-bucket to overwrite a local-ahead or diverged bucket.",
 )
+@click.option(
+    "--remote",
+    "remote",
+    default=None,
+    help=(
+        "Read the trace.json from a remote HF dataset bucket "
+        "(plan 080 §7 — symmetric local/remote read). Format: 'user/repo'."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_get(
     ref: str,
@@ -854,6 +863,7 @@ def trace_get(
     no_commit_lookup: bool,
     remote_bucket: bool,
     force_remote_bucket: bool,
+    remote: str | None,
     as_json: bool,
 ) -> None:
     """Resolve a trace, trace unit, map node, or ot:// Trail resource.
@@ -865,6 +875,9 @@ def trace_get(
     """
     if remote_bucket and resume:
         click.echo("--remote-bucket cannot be combined with --resume.", err=True)
+        sys.exit(2)
+    if remote and resume:
+        click.echo("--remote cannot be combined with --resume.", err=True)
         sys.exit(2)
 
     remote_bucket_payload = None
@@ -885,6 +898,35 @@ def trace_get(
 
     if as_bursts:
         _trace_get_bursts_impl(ref, burst_gap, as_json, commit_lookup=not no_commit_lookup)
+        return
+
+    # --remote: route the trace.json read through the D1 backend
+    # abstraction. The backend factory returns a LocalBucketBackend when
+    # remote=None and a RemoteHubBackend(repo_id=remote) otherwise. The
+    # CLI verb's logic doesn't change — only the data source.
+    if remote:
+        from ..core.bucket_remote import BucketRemoteError
+        from ..core.bucket_store import BucketLayoutError
+
+        trace_id = _trace_id_from_ref(ref)
+        try:
+            record = _read_trace_record_via_backend(trace_id, remote)
+        except _BackendUnavailable as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(3)
+        except (BucketRemoteError, BucketLayoutError) as exc:
+            click.echo(f"Remote read failed: {exc}", err=True)
+            sys.exit(3)
+        except FileNotFoundError:
+            click.echo(f"Trace not found on remote {remote}: {ref}", err=True)
+            sys.exit(6)
+        payload = {"status": "ok", "trace": record.model_dump(mode="json")}
+        if remote_bucket_payload is not None:
+            payload["remote_bucket"] = remote_bucket_payload
+        if as_json:
+            click.echo(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        click.echo(payload["trace"]["trace_id"])
         return
 
     from ..core.trace_index import get_map_node, get_trace_path, get_unit
@@ -1013,6 +1055,32 @@ def _read_trace_record_from_path(trace_path: Path):
         "",
     )
     return TraceRecord.model_validate_json(first_line)
+
+
+class _BackendUnavailable(RuntimeError):
+    """Raised when the D1 backend abstraction isn't available yet."""
+
+
+def _read_trace_record_via_backend(trace_id: str, remote: str):
+    """Load a TraceRecord through the D1 backend abstraction.
+
+    Plan 080 §7 — every read verb gains ``--remote <hf-repo>`` and routes
+    its single data fetch through ``get_backend(remote)``. The verb
+    logic is unchanged; only the data source swaps.
+    """
+
+    from opentraces_schema import TraceRecord
+
+    try:
+        from ..core.bucket_backend import get_backend
+    except ImportError as exc:
+        raise _BackendUnavailable(
+            f"--remote requires the bucket backend module (in flight as Track D1): {exc}"
+        ) from exc
+
+    backend = get_backend(remote)
+    payload = backend.get_trace_json(trace_id)
+    return TraceRecord.model_validate(payload)
 
 
 def _trace_id_from_ref(ref: str) -> str:

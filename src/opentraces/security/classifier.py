@@ -256,7 +256,7 @@ def classify_trace_record(
     # Outcome
     if record.outcome.description:
         result.merge(classify_content(record.outcome.description, sensitivity))
-    if record.outcome.patch:
-        result.merge(classify_content(record.outcome.patch, sensitivity))
+    # Plan 080: outcome.patch removed; per-patch security runs at
+    # trail-event-emit time over the trace's trail.jsonl.gz hunks.
 
     return result

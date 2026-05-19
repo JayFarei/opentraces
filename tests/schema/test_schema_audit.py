@@ -294,15 +294,20 @@ class TestAuditSchemaCompleteness:
         assert repo_field.classification == "not_yet_implemented"
 
     def test_session_dependent_fields(self):
-        """Fields like outcome.committed should be session_dependent when missing."""
+        """Fields like outcome.committed should be session_dependent when missing.
+
+        Plan 080: `outcome.patch` was removed in schema 0.6.0; clients
+        assemble patch content from `patches[]` + `trail.jsonl.gz`. The
+        equivalent session-dependent field is now `patches`.
+        """
         report = audit_schema_completeness([_make_minimal_trace()])
         committed = next((f for f in report.fields if f.path == "outcome.committed"), None)
         assert committed is not None
         # committed is False by default, which is "populated" for a bool
-        # but outcome.patch should be session_dependent
-        patch = next((f for f in report.fields if f.path == "outcome.patch"), None)
-        assert patch is not None
-        assert patch.classification == "session_dependent"
+        # but patches[] should be session_dependent
+        patches = next((f for f in report.fields if f.path == "patches"), None)
+        assert patches is not None
+        assert patches.classification == "session_dependent"
 
     def test_with_raw_signal_map(self):
         """Raw signal map should influence classification."""

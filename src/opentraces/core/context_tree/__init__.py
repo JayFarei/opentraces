@@ -49,6 +49,7 @@ from .models import (
     sha256_hex,
     sha256_id,
 )
+from .refs import ContextLayerRef
 
 __all__ = [
     # contract / schema versions
@@ -80,6 +81,8 @@ __all__ = [
     # models
     "ContextLayer",
     "ContextNode",
+    # lazy facade (plan 080 Resolution D)
+    "ContextLayerRef",
     # helpers
     "HASH_PREFIX",
     "canonical_json",

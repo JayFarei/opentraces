@@ -139,18 +139,24 @@ class Outcome(BaseModel):
     - inferred: heuristic-based (e.g. success from test output, completed flag)
     - annotated: human or CI annotation
 
-    Devtime fields (committed, commit_sha, patch) are populated by code-editing agents.
+    Devtime fields (committed, commit_sha) are populated from
+    ``TraceRecord.patches[].anchor`` by the post-commit hook (plan 080
+    Resolution C: kept on Outcome for reader compatibility, derived from
+    the patches[] spine at construction time). The unified-diff field
+    (`patch`) was removed in 0.6.0; clients now assemble from
+    ``TraceRecord.patches[]`` + ``trail.jsonl.gz``.
+
     Runtime fields (terminal_state, reward, reward_source) are populated by
-    task-execution agents. Both sets are nullable; consumers should check
-    TraceRecord.execution_context to know which fields are meaningful.
+    task-execution agents. Devtime+runtime sets are nullable; consumers
+    should check TraceRecord.execution_context to know which fields are
+    meaningful.
     """
 
     success: bool | None = None
     signal_source: str = "deterministic"
     signal_confidence: Literal["derived", "inferred", "annotated"] = "derived"
     description: str | None = None
-    # devtime fields
-    patch: str | None = Field(None, description="Unified diff produced by the session")
+    # devtime fields - derived from TraceRecord.patches[].anchor at build time (plan 080)
     committed: bool = False
     commit_sha: str | None = None
     # runtime fields (v0.2.0)
@@ -261,6 +267,124 @@ class Attribution(BaseModel):
     )
 
 
+class GitAnchor(BaseModel):
+    """Typed link from a Patch to its appearance in Git (plan 080 §3).
+
+    Stage-4 anchor identity carrying BOTH the search timestamp AND the
+    matched commit data (when found). Replaces a separate
+    ``last_anchor_search_at`` field by consolidating state into one object.
+
+    State decoded by reading two fields:
+
+    - ``anchor is None``: never searched (no maturation run).
+    - ``anchor.found is False``: searched at ``last_searched_at``, no match.
+    - ``anchor.found is True``: matched; commit fields are populated.
+
+    Multiple matching commits (rebase, squash, cherry-pick, amend chain) are
+    handled by ``Patch.superseded_by``: the current anchor holds the LATEST
+    commit_sha; prior shas accumulate newest-first on the chain. See plan 080
+    Resolution L.
+    """
+
+    last_searched_at: str = Field(
+        description="ISO8601 timestamp; always set after first search."
+    )
+    found: bool = Field(description="Whether a matching commit was found.")
+    # Below: only meaningful when found == True
+    commit_sha: str | None = None
+    path: str | None = Field(
+        None,
+        description="Path in the commit (may differ from creation file_path after rename).",
+    )
+    blob_sha: str | None = None
+    git_patch_id: str | None = Field(
+        None,
+        description="Git's native patch-id (stable across rebase).",
+    )
+    evidence_tier: Literal[
+        "exact_blob_hash",
+        "exact_range_hash",
+        "git_clean_range_hash",
+        "patch_id",
+        "structural_symbol",
+        "formatter_divergent",
+        "overlapping_hunk",
+        "time_file_overlap",
+        "orphan",
+        "unknown",
+    ] | None = Field(
+        None,
+        description="From Trails sync.py EVIDENCE_LABELS (10-value vocab).",
+    )
+    evidence_firmness: Literal[
+        "firm_observed",
+        "provisional",
+        "human_asserted",
+        "rule_inferred",
+        "model_inferred",
+        "statistically_inferred",
+        "unknown",
+    ] | None = Field(
+        None,
+        description="From Trails sync.py FIRMNESS_MAP (7-value vocab).",
+    )
+
+
+class Patch(BaseModel):
+    """A change this trace produced (plan 080 §3).
+
+    Curated projection of the ``trace_patch_created`` event payload; full
+    detail in ``trail.jsonl.gz``. ``patches[]`` is the authoritative
+    cross-substrate reference on TraceRecord; ``Outcome.committed``,
+    ``Outcome.commit_sha``, and ``TraceRecord.git_links`` are derived
+    projections of it at construction time (Resolution C).
+    """
+
+    patch_id: str = Field(description="Content-addressed; equals trace_patch_id.")
+    file_path: str = Field(description="Path at creation time.")
+    step_index: int | None = Field(
+        None,
+        description="Joins to Step.step_index (within this trace).",
+    )
+    tool_call_id: str | None = Field(
+        None,
+        description="Joins to ToolCall.tool_call_id (within the step).",
+    )
+    capture_method: list[str] = Field(
+        default_factory=list,
+        description=(
+            "['hook_pretooluse', 'hook_posttooluse'] for hook-attributed patches, "
+            "or ['watcher_backstop'] when fs-detected. Replaces a kind enum."
+        ),
+    )
+    snapshot_before_id: str | None = Field(
+        None,
+        description="Mantra Stage 2 ref (workspace-replay use).",
+    )
+    snapshot_after_id: str | None = None
+    anchor: GitAnchor | None = Field(
+        None,
+        description=(
+            "Set by the post-commit hook when this patch is matched into Git. "
+            "None until first maturation search. See GitAnchor docstring for "
+            "the 3-state machine."
+        ),
+    )
+    superseded_by: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Commit_sha chain (newest-first) of prior anchors superseded by "
+            "git commit --amend / rebase / squash. The current "
+            "Patch.anchor.commit_sha is the latest; this list preserves "
+            "history. Plan 080 Resolution L."
+        ),
+    )
+    limitations: list[str] = Field(
+        default_factory=list,
+        description="Capture quality flags from capture_limitations.py.",
+    )
+
+
 class GitLink(BaseModel):
     """Link between a trace and a commit/revision, with an evidence tier.
 
@@ -269,6 +393,13 @@ class GitLink(BaseModel):
     - tool_emitted_with_divergence: files match but committed bytes don't hash-match.
     - overlapping: file-set + time-window overlap, no hash match.
     - orphan: no viable commit link.
+
+    Plan 080 Resolution C: this model is kept on TraceRecord.git_links for
+    reader compatibility, but is now DERIVED from ``patches[].anchor`` +
+    ``patches[].superseded_by`` at TraceRecord construction time. The
+    post-commit hook is the sole writer; it computes Patch.anchor first and
+    projects to git_links via the evidence_tier → tier mapping in plan 080
+    Resolution C.
     """
 
     vcs_type: Literal["git", "jj"] = "git"
@@ -362,12 +493,27 @@ class TraceRecord(BaseModel):
             "group by session_id and take max(generation_index)."
         ),
     )
+    patches: list[Patch] = Field(
+        default_factory=list,
+        description=(
+            "The trace's authoritative output set (plan 080 §3). One Patch per "
+            "Edit/Write tool call (one hunk on one file). Cross-substrate "
+            "references: each ``Patch.patch_id`` resolves in the trace's "
+            "``trail.jsonl.gz`` for full diff content; ``Patch.anchor`` is "
+            "set by the post-commit hook when matched into Git. "
+            "``git_links`` and ``outcome.commit_sha`` are derived from this "
+            "field at TraceRecord construction time (Resolution C)."
+        ),
+    )
     git_links: list[GitLink] = Field(
         default_factory=list,
         description=(
             "Evidence-graded links to commits/revisions this trace contributed to. "
             "A trace can link to many commits (rebase, squash, long session); "
-            "a commit can link to many traces (cherry-pick, composition)."
+            "a commit can link to many traces (cherry-pick, composition). "
+            "Plan 080 Resolution C: DERIVED at TraceRecord construction time "
+            "from ``patches[].anchor`` + ``patches[].superseded_by``. Kept for "
+            "reader compatibility (trace_index, inverse_blame, viewer)."
         ),
     )
     context_tree_summary: dict[str, Any] = Field(

@@ -192,11 +192,8 @@ def walk_string_fields(record: TraceRecord, transform: TransformFn) -> int:
             record.outcome.description = new
             changed += 1
 
-    if record.outcome.patch:
-        new, did_change = _apply(transform, record.outcome.patch, "outcome.patch", FieldType.GENERAL)
-        if did_change:
-            record.outcome.patch = new
-            changed += 1
+    # Plan 080: outcome.patch removed; per-patch redaction lives at
+    # patch-creation time in the trail event log (trail.jsonl.gz hunks).
 
     if record.environment.vcs.diff:
         new, did_change = _apply(transform, record.environment.vcs.diff, "environment.vcs.diff", FieldType.GENERAL)

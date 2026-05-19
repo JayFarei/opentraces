@@ -98,7 +98,11 @@ def test_restored_private_bucket_feeds_dataset_publish_without_leaking_bucket(
     assert remote_manifest["trail_events"]["event_count"] >= 1
     assert any(bucket_remote_root.glob(f"objects/traces/v1/*/{trace_id}/*.json"))
     assert any(bucket_remote_root.glob(f"objects/raw/v1/sources/*/{trace_id}.json"))
-    assert any(bucket_remote_root.glob("events/trail/v1/repositories/*/head.json"))
+    # Plan 080 §20 Resolution B: events mirror moved to
+    # bucket/events/v1/batches/<seq>-<batch-id>.jsonl.gz + index.json.
+    assert (bucket_remote_root / "events" / "v1" / "index.json").exists() or any(
+        bucket_remote_root.glob("events/v1/batches/*.jsonl.gz")
+    )
 
     shutil.rmtree(opentraces_home / "bucket")
     shutil.rmtree(opentraces_home / "index", ignore_errors=True)

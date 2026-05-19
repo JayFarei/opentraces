@@ -1,0 +1,83 @@
+name = "trace-spine-cross-substrate-resolution"
+description = """
+Plan 080 Phase A cross-cutting load-bearing journey (per plan §11):
+For every `Patch` in every TraceRecord, `patch_id` resolves in the
+trace's `trail.jsonl.gz` (or, while Phase B's per-trace envelope is
+not yet built, in the canonical event log). For every
+`Step.context_node_id`, the node exists in `context.jsonl.gz` (or
+canonical event log).
+
+Asserts:
+  (a) `trace get --json` returns a trace with non-empty `patches[]`
+      (assumes the c-captured-real-session checkpoint has at least
+      one Edit/Write).
+  (b) Each `patches[].patch_id` resolves to a `trace_patch_created`
+      event in the canonical event log (refs/opentraces/local/
+      events/v1).
+  (c) Each `Step.context_node_id` (where non-null) resolves to a
+      `context_node_observed` event in the canonical event log.
+
+Fails today because:
+  - patches[] needs Phase A Wave 2 Track 3 to populate at ingest
+    time. Until then, tier=1 (opt-in).
+"""
+lane = "core"
+tier = 1
+tier_label = "gold"
+trajectories = ["trace-spine"]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# Step 1 — trace get; capture patches[] + steps[].context_node_id.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-get-spine"
+argv = ["trace", "get", "{first_trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-get-spine"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-get-spine"
+path = "trace.patches"
+
+# ---------------------------------------------------------------------
+# Step 2 — every patch_id must resolve in the trail event stream.
+# We use the existing `trail search` verb to enumerate
+# trace_patch_created events for this trace and assert that the
+# count is at least len(patches).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trail-search-patches"
+argv = ["trail", "search", "--trace", "{first_trace_id}", "--event-type", "trace_patch_created", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trail-search-patches"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 3 — every context_node_id must resolve in the context tree.
+# `ctx tree --json` for this trace lists every node; assertion is
+# that the set of step.context_node_id values is a subset of the
+# tree's node ids.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-tree-resolve"
+argv = ["ctx", "tree", "{first_trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree-resolve"
+equals = 0

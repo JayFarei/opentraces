@@ -167,6 +167,8 @@ def build_row(raw: dict[str, Any], *, raw_row_index: int) -> dict[str, Any]:
         "outcome_success_label": outcome_success_label(outcome.get("success")),
         "outcome_committed": bool(outcome.get("committed")),
         "outcome_commit_sha": compact_text(outcome.get("commit_sha"), limit=120),
+        # Plan 080: outcome.patch removed; patches[] is the authoritative reference.
+        "outcome_patch_count": len(raw.get("patches") or []),
         "label_confidence": compact_text(attribution.get("confidence"), limit=80) or "medium",
         "source_has_injected_body_args": has_body_args,
         "source_skill_body_name": body_skill,

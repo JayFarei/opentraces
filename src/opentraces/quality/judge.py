@@ -303,8 +303,9 @@ def summarize_for_judge(
         summary["outcome"]["commit_sha"] = outcome.commit_sha
     if outcome.description:
         summary["outcome"]["description"] = _truncate(outcome.description, 200)
-    if outcome.patch:
-        summary["outcome"]["patch_preview"] = _truncate(outcome.patch, 500)
+    # Plan 080: Outcome.patch removed; patches are the authoritative reference
+    # on TraceRecord. Per-patch diffs live in the trace's trail.jsonl.gz.
+    summary["outcome"]["patch_count"] = len(record.patches)
 
     # Metrics
     metrics = record.metrics

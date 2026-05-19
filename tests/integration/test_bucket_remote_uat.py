@@ -49,7 +49,11 @@ def test_installed_runtime_syncs_bucket_to_fake_remote_and_restores(tmp_path: Pa
     trace_id = summary["trace_id"]
     assert any(remote_root.glob(f"objects/traces/v1/*/{trace_id}/*.json"))
     assert any(remote_root.glob(f"objects/raw/v1/sources/*/{trace_id}.json"))
-    assert any(remote_root.glob("events/trail/v1/repositories/*/head.json"))
+    # Plan 080 §20 Resolution B: events mirror moved to
+    # bucket/events/v1/batches/<seq>-<batch-id>.jsonl.gz + index.json.
+    assert (remote_root / "events" / "v1" / "index.json").exists() or any(
+        remote_root.glob("events/v1/batches/*.jsonl.gz")
+    )
 
     opentraces_home = Path(summary["opentraces_home"])
     local_bucket = opentraces_home / "bucket"

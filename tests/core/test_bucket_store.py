@@ -288,7 +288,15 @@ def test_raw_source_artifact_is_bucket_local_and_manifested(tmp_path):
 
 
 def test_trail_event_log_exports_into_portable_bucket_segment(tmp_path):
-    from opentraces.core.bucket_store import bucket_manifest, sync_trail_events_from_repo
+    """Plan 080 §20 Resolution B: events mirror moved from
+    ``bucket/events/trail/v1/<repo>/segments/`` to
+    ``bucket/events/v1/batches/<seq>-<batch-id>.jsonl.gz`` (gzipped,
+    deterministic mtime). The legacy schema version is gone; the new
+    index file at ``bucket/events/v1/index.json`` declares
+    ``opentraces.bucket.events.v2``.
+    """
+    import gzip
+    from opentraces.core.bucket_store import sync_events_mirror
     from opentraces.core.trails import TrailEventDraft, append_event_batch
 
     _init_repo(tmp_path)
@@ -306,17 +314,19 @@ def test_trail_event_log_exports_into_portable_bucket_segment(tmp_path):
         writer="test-fixture",
     )
 
-    head = sync_trail_events_from_repo(tmp_path, repo_id="demo-repo")
-    assert head["schema_version"] == "opentraces.bucket.trail_events_export.v1"
-    assert head["event_count"] == 1
-    assert head["segments"][0]["path"].startswith("events/trail/v1/")
-    segment = Path(head["segments"][0]["path"])
-    from opentraces.core import paths
+    result = sync_events_mirror(tmp_path, repo_id="demo-repo")
+    assert result["batches_written"] >= 1
 
-    rows = (paths.bucket_dir() / segment).read_text(encoding="utf-8").splitlines()
+    from opentraces.core import paths
+    index_path = paths.bucket_dir() / "events" / "v1" / "index.json"
+    assert index_path.exists()
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    assert index["schema_version"] == "opentraces.bucket.events.v2"
+    assert index["batch_count"] >= 1
+
+    batches_dir = paths.bucket_dir() / "events" / "v1" / "batches"
+    batch_files = sorted(batches_dir.glob("*.jsonl.gz"))
+    assert len(batch_files) >= 1
+    rows = gzip.decompress(batch_files[0].read_bytes()).decode("utf-8").splitlines()
     assert len(rows) == 1
     assert json.loads(rows[0])["trace_id"] == "trace-trail-export"
-
-    manifest = bucket_manifest(include_objects=True)
-    assert manifest["trail_events"]["repository_count"] == 1
-    assert manifest["trail_events"]["event_count"] == 1

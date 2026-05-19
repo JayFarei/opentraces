@@ -380,6 +380,41 @@ def _ingest_locked(
             exc_info=True,
         )
 
+    # Plan 080 §3: backfill ``TraceRecord.patches[]`` from the canonical trail
+    # event log. ``trace_patch_created`` events are the spine of truth for
+    # patches; this projection lifts a curated Patch row per event onto the
+    # record so consumers (datasets, viewer, blame) get the cross-substrate
+    # join keys (``patch_id``, ``step_index``, ``tool_call_id``,
+    # ``capture_method``) without reading the event log themselves. Full diff
+    # content stays in trail.jsonl.gz. Defensive: failure here must not block
+    # ingest. The post-commit hook (Track 2) sets ``Patch.anchor`` later; the
+    # derive helper then projects to ``outcome`` + ``git_links``.
+    if not final_record.patches:
+        try:
+            final_record.patches = _backfill_patches_from_trail_events(
+                project_dir, final_record.trace_id, final_record.generation_index,
+            )
+        except Exception:
+            logger.warning(
+                "patches backfill from trail events failed for %s", trace_id,
+                exc_info=True,
+            )
+
+    # Plan 080 Resolution C: with patches[] populated, refresh derived fields.
+    # At ingest time no patch has an anchor yet (post-commit has not fired),
+    # so the helper would clobber the legacy step-derived Bash-commit signal;
+    # only invoke when at least one patch is anchored.
+    if any(p.anchor is not None and p.anchor.found for p in final_record.patches):
+        try:
+            from .trace_derived import derive_outcome_and_git_links_from_patches
+
+            derive_outcome_and_git_links_from_patches(final_record)
+        except Exception:
+            logger.warning(
+                "derive_outcome_and_git_links_from_patches failed for %s", trace_id,
+                exc_info=True,
+            )
+
     # Context Tree substrate (plan 077): capture what the LLM saw at each
     # active-path record. Independent try block so a Context Tree failure
     # never blocks Trail event emission or normal ingest.
@@ -449,6 +484,16 @@ def _ingest_locked(
         sync_trail_events_from_repo(project_dir, repo_id=project_slug)
     except Exception:
         logger.warning("trail event bucket export failed for %s", trace_id, exc_info=True)
+    # Plan 079: first-class Context Tree bucket projection. Stage 2 is
+    # additive; the trail-piggyback above is intentionally not removed.
+    try:
+        from .bucket_store import project_context_tree_to_bucket
+
+        project_context_tree_to_bucket(project_dir, project_slug=project_slug)
+    except Exception:
+        logger.warning(
+            "context tree bucket projection failed for %s", trace_id, exc_info=True
+        )
 
     # Decide the status this generation enters.
     #
@@ -603,3 +648,106 @@ def scan_project(
                 logger.exception("scan_project progress callback failed")
 
     return report
+
+
+# --------------------------------------------------------------------------- #
+# Plan 080 §3 — patches[] backfill from canonical trail event log
+# --------------------------------------------------------------------------- #
+
+
+def _backfill_patches_from_trail_events(
+    project_dir: Path,
+    trace_id: str,
+    generation_index: int,
+) -> list:
+    """Project ``trace_patch_created`` events onto a ``list[Patch]``.
+
+    Reads the canonical TrailEvent log (plan 080's spine of truth) and lifts
+    one ``Patch`` per matching event. Only the curated cross-substrate join
+    keys are projected — full diff content stays in ``trail.jsonl.gz``. The
+    post-commit hook (Track 2) sets ``Patch.anchor`` after Git correlation;
+    at ingest time anchors are always ``None``.
+
+    Returns an empty list when the project is not a Git worktree, when the
+    event log has not been initialized yet, or when no patches belong to
+    this trace generation.
+
+    Patch ordering: by ``step_index`` ascending, then by event_sequence so
+    multiple patches at the same step preserve their emission order.
+    """
+    from opentraces_schema import Patch
+
+    from .trails.event_log import read_events
+
+    try:
+        events = read_events(project_dir, verify=False)
+    except Exception:  # noqa: BLE001 — backfill is non-fatal at ingest time.
+        logger.warning(
+            "read_events failed during patches backfill for %s", trace_id,
+            exc_info=True,
+        )
+        return []
+
+    matched = [
+        event
+        for event in events
+        if event.event_type == "trace_patch_created"
+        and event.trace_id == trace_id
+        and (event.generation_index or 0) == generation_index
+    ]
+    if not matched:
+        return []
+
+    # Stable ordering: step_index first (None last), then by event_sequence.
+    matched.sort(key=lambda e: (
+        e.step_index if e.step_index is not None else 1 << 31,
+        e.event_sequence,
+    ))
+
+    patches: list = []
+    seen_patch_ids: set[str] = set()
+    for event in matched:
+        payload = event.payload or {}
+        patch_id = payload.get("trace_patch_id")
+        file_path = payload.get("file_path")
+        if not isinstance(patch_id, str) or not isinstance(file_path, str):
+            continue
+        # Dedupe by patch_id: the reconciler may re-emit a ``trace_patch_created``
+        # event with extended ``capture_method`` (watcher_backstop corroboration).
+        # Latest event wins — we keep the second occurrence which has the
+        # superset capture_method.
+        if patch_id in seen_patch_ids:
+            # Replace the prior Patch with one carrying the merged capture_method.
+            for i, existing in enumerate(patches):
+                if existing.patch_id == patch_id:
+                    patches[i] = _patch_from_event(event)
+                    break
+            continue
+        seen_patch_ids.add(patch_id)
+        patches.append(_patch_from_event(event))
+
+    return patches
+
+
+def _patch_from_event(event) -> "Patch":  # noqa: F821 — schema type imported in caller
+    """Build a ``Patch`` row from a ``trace_patch_created`` event."""
+    from opentraces_schema import Patch
+
+    payload = event.payload or {}
+    tool_call_id = payload.get("tool_call_id")
+    snapshot_before_id = payload.get("snapshot_before_id")
+    snapshot_after_id = payload.get("snapshot_after_id")
+    limitations_raw = payload.get("limitations") or []
+    limitations = [str(item) for item in limitations_raw if isinstance(item, str)]
+    return Patch(
+        patch_id=str(payload["trace_patch_id"]),
+        file_path=str(payload["file_path"]),
+        step_index=event.step_index,
+        tool_call_id=str(tool_call_id) if isinstance(tool_call_id, (str, int)) else None,
+        capture_method=list(event.capture_method or []),
+        snapshot_before_id=str(snapshot_before_id) if isinstance(snapshot_before_id, str) else None,
+        snapshot_after_id=str(snapshot_after_id) if isinstance(snapshot_after_id, str) else None,
+        anchor=None,
+        superseded_by=[],
+        limitations=limitations,
+    )

@@ -194,7 +194,10 @@ class TestCheckCommitted:
         outcome = check_committed(Path("/tmp"), "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z")
         assert outcome.committed is True
         assert outcome.commit_sha == "deadbeef1234"
-        assert outcome.patch == "+added line"
+        # Plan 080: Outcome.patch removed; patch content now lives in
+        # trail.jsonl.gz keyed by Patch.patch_id, assembled by clients
+        # on demand.
+        assert not hasattr(outcome, "patch")
 
 
 class TestExtractGitSignals:

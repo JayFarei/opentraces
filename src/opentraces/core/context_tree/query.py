@@ -25,6 +25,7 @@ from .contract import (
     CONTEXT_TREE_RECONCILED,
 )
 from .models import ContextLayer, ContextNode
+from .refs import ContextLayerRef
 
 
 # --------------------------------------------------------------------------- #
@@ -42,7 +43,13 @@ class ContextTreeProjection:
     """
 
     nodes_by_id: dict[str, ContextNode] = field(default_factory=dict)
-    layers_by_id: dict[str, ContextLayer] = field(default_factory=dict)
+    # Plan 080 Resolution D: in eager mode (default) this maps to
+    # fully-realized ``ContextLayer`` instances. In lazy mode
+    # (``build_context_tree_projection(..., lazy=True)``) it maps to
+    # ``ContextLayerRef`` thin handles that gunzip on first ``.content``
+    # access. The type is widened to the union so both modes share the
+    # same projection shape.
+    layers_by_id: dict[str, ContextLayer | ContextLayerRef] = field(default_factory=dict)
     nodes_by_trace: dict[str, list[str]] = field(default_factory=dict)
     active_leaves_by_trace: dict[str, str | None] = field(default_factory=dict)
     children_of: dict[str, list[str]] = field(default_factory=dict)
@@ -208,6 +215,10 @@ class ContextTreeProjection:
                 "after_layer_id": b_id,
             }
             if a_layer is not None and b_layer is not None:
+                # ContextLayer.content and ContextLayerRef.content (lazy
+                # cached_property) both return a dict; the ref path
+                # forces a gunzip + parse on first read. ``layer_diff``
+                # consumers explicitly opt into materialization.
                 a_keys = set(a_layer.content.keys())
                 b_keys = set(b_layer.content.keys())
                 entry["added_keys"] = sorted(b_keys - a_keys)
@@ -291,14 +302,40 @@ class ContextTreeProjection:
 # --------------------------------------------------------------------------- #
 
 
-def build_context_tree_projection(repo: Path) -> ContextTreeProjection:
+def build_context_tree_projection(
+    repo: Path,
+    *,
+    lazy: bool = False,
+    bucket_root: Path | None = None,
+    project_slug: str | None = None,
+) -> ContextTreeProjection:
     """Read the canonical event log and project Context Tree events.
 
     Single-pass over ``read_events(repo)``; no git operations beyond
     what ``read_events`` already does (process-level cached).
+
+    Args:
+        repo: git repo root containing the canonical event log ref.
+        lazy: when ``True``, ``layers_by_id`` maps ``layer_id`` to
+            ``ContextLayerRef`` thin handles instead of fully validated
+            ``ContextLayer`` objects. Use for ``ctx list`` / ``bucket
+            status`` paths where layer content is never read; trips the
+            ``bench-ctx-list-10k-traces`` zero-blob-open gate (plan 080
+            §17 R-080-2). Default ``False`` preserves the existing eager
+            behavior all current callers rely on.
+        bucket_root: required when ``lazy=True``; the bucket directory
+            under which ``blobs/v1/<project>/context/...`` lives.
+        project_slug: required when ``lazy=True``; the project namespace
+            under ``blobs/v1/``.
     """
+    if lazy and (bucket_root is None or project_slug is None):
+        raise ValueError(
+            "build_context_tree_projection(lazy=True) requires "
+            "bucket_root and project_slug"
+        )
+
     nodes_by_id: dict[str, ContextNode] = {}
-    layers_by_id: dict[str, ContextLayer] = {}
+    layers_by_id: dict[str, ContextLayer | ContextLayerRef] = {}
     nodes_by_trace: dict[str, list[str]] = {}
     active_leaves_by_trace: dict[str, str | None] = {}
     children_of: dict[str, list[str]] = {}
@@ -311,6 +348,21 @@ def build_context_tree_projection(repo: Path) -> ContextTreeProjection:
     for event in read_events(repo):
         et = event.event_type
         if et == CONTEXT_LAYER_CAPTURED:
+            if lazy:
+                # Plan 080 §17 R-080-2: do NOT validate (which would
+                # recompute the content hash) and do NOT instantiate
+                # ContextLayer (which holds inline content). The ref
+                # carries metadata only; .content is gunzipped lazily.
+                try:
+                    ref = ContextLayerRef.from_event_payload(
+                        event.payload,
+                        bucket_root,
+                        project_slug=project_slug,
+                    )
+                except (KeyError, ValueError):
+                    continue
+                layers_by_id.setdefault(ref.layer_id, ref)
+                continue
             try:
                 layer = ContextLayer.model_validate(event.payload)
             except Exception:

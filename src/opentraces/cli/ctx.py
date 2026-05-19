@@ -107,6 +107,358 @@ def _truncate_for_text(text: str, budget: int = DEFAULT_SHOW_BUDGET_BYTES) -> st
 
 
 # --------------------------------------------------------------------------- #
+# ctx list / ctx info (plan 080 — replaces removed bucket context-tree subgroup)
+# --------------------------------------------------------------------------- #
+
+
+# Manifest v2 schema_version (plan 080 §4) used for the ctx list/info envelopes
+# so downstream consumers can lock against a stable shape.
+_CTX_LIST_SCHEMA_VERSION = "opentraces.ctx.list.v2"
+_CTX_INFO_SCHEMA_VERSION = "opentraces.ctx.info.v2"
+
+
+def _read_bucket_manifest_no_blobs() -> dict[str, Any]:
+    """Read the bucket manifest without triggering any blob loads.
+
+    Per plan 080 §7 + the bench-ctx-list-10k-traces perf gate, ``ctx
+    list`` must NOT open any layer blob file. This helper only reads
+    ``manifest.json`` directly — never resolves layer refs or per-trace
+    JSONL.
+    """
+    from ..core.bucket_store import bucket_manifest_path
+
+    path = bucket_manifest_path()
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+class _BackendUnavailable(RuntimeError):
+    """Raised when D1's bucket_backend module isn't available yet."""
+
+
+def _read_bucket_manifest_via_backend(remote: str) -> dict[str, Any]:
+    """Read ``manifest.json`` through the D1 backend abstraction.
+
+    Plan 080 §7 — ``ctx list`` and ``ctx info`` gain ``--remote
+    <hf-repo>`` and route their manifest read through the backend so
+    local and remote shapes are bytewise-equal.
+    """
+    try:
+        backend = _cached_backend(remote)
+    except ImportError as exc:
+        raise _BackendUnavailable(
+            f"--remote requires the bucket backend module (in flight as Track D1): {exc}"
+        ) from exc
+    payload = backend.get_manifest()
+    return payload if isinstance(payload, dict) else {}
+
+
+# Backend instances are cached per-`remote` per process: a single ``ctx
+# show --remote`` resolves multiple layer blobs, and each fresh
+# ``get_backend`` call would otherwise produce a new RemoteHubBackend
+# with an empty cache, re-downloading ``manifest.json`` for every blob.
+_BACKEND_CACHE: dict[str, Any] = {}
+
+
+def _cached_backend(remote: str) -> Any:
+    cached = _BACKEND_CACHE.get(remote)
+    if cached is not None:
+        return cached
+    from ..core.bucket_backend import get_backend
+
+    backend = get_backend(remote)
+    _BACKEND_CACHE[remote] = backend
+    return backend
+
+
+def _lazy_fetch_layer_blob(
+    *,
+    remote: str,
+    node: Any,
+    layer_id: str,
+    layer_type: str,
+) -> Any:
+    """Lazy-fetch a single layer blob from the remote backend.
+
+    Plan 080 §7 — ``ctx show --remote`` reaches here when the local
+    projection didn't materialise a blob. The fetched blob is decoded
+    into a ``ContextLayer`` and ALSO written to the local bucket cache
+    at ``bucket/blobs/v1/<project>/context/<hh>/<hash>.json.gz`` so the
+    next call (potentially ``--offline``) can be served from cache.
+    """
+    try:
+        backend = _cached_backend(remote)
+    except ImportError as exc:
+        raise _BackendUnavailable(
+            f"--remote requires the bucket backend module (in flight as Track D1): {exc}"
+        ) from exc
+    # The backend's get_layer_blob takes (layer_id, project_slug) per
+    # the D1 contract. Resolve project_slug from the manifest using the
+    # node's trace_id (the canonical join key).
+    project_slug = getattr(node, "project_slug", None)
+    if not project_slug:
+        trace_id = getattr(node, "trace_id", None)
+        if trace_id:
+            try:
+                manifest = backend.get_manifest()
+            except Exception:
+                manifest = {}
+            for entry in manifest.get("traces") or []:
+                if isinstance(entry, dict) and entry.get("trace_id") == trace_id:
+                    project_slug = entry.get("project_slug")
+                    break
+    if not project_slug:
+        return None
+    try:
+        payload = backend.get_layer_blob(layer_id, project_slug)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    # Persist the fetched blob into the local bucket cache so the next
+    # ``ctx show --offline`` call hits the cache (plan 080 §6).
+    try:
+        from ..core.bucket_store import (
+            _atomic_write_gzip,
+            _canonical_json,
+            blobs_v1_context_path,
+        )
+
+        local_blob = blobs_v1_context_path(project_slug, layer_id)
+        if not local_blob.exists():
+            data = _canonical_json(payload, pretty=False).encode("utf-8")
+            _atomic_write_gzip(local_blob, data)
+    except Exception:
+        # Caching is best-effort; the in-memory ContextLayer is still
+        # what the CLI verb renders, so failure here doesn't break the
+        # current call.
+        pass
+
+    # Re-hydrate into a ContextLayer instance so _summarize_layer works.
+    try:
+        from ..core.context_tree.models import ContextLayer
+
+        return ContextLayer.model_validate(payload)
+    except Exception:
+        return None
+
+
+@ctx_group.command(
+    "list",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces ctx list",
+        "opentraces ctx list --json",
+        "opentraces ctx list --remote user/dataset",
+    ],
+    see_also=[
+        ("opentraces ctx info", "show one trace's summary without blob loads."),
+        ("opentraces bucket status", "broader bucket-level health."),
+    ],
+    option_groups=[
+        ("Scope", ["remote"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.option(
+    "--remote",
+    "remote",
+    default=None,
+    help=(
+        "Read the manifest from a remote HF dataset bucket "
+        "(plan 080 §7). Format: 'user/repo'."
+    ),
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def ctx_list_cmd(remote: str | None, as_json: bool) -> None:
+    """List traces in the local bucket without loading any layer blobs.
+
+    Per plan 080 §7, ``ctx list`` reads ``bucket/manifest.json`` only.
+    It must NOT trigger blob fetches (gated by the
+    ``bench-ctx-list-10k-traces`` performance test). Output is the
+    manifest's ``traces[]`` array projected to a stable envelope.
+
+    Pass ``--remote <hf-repo>`` to read the manifest from a remote
+    HF dataset bucket instead. Output shape is bytewise-equal between
+    local and remote reads (symmetric-access gate).
+    """
+    if remote:
+        from ..core.bucket_remote import BucketRemoteError
+        from ..core.bucket_store import BucketLayoutError
+
+        try:
+            manifest = _read_bucket_manifest_via_backend(remote)
+        except _BackendUnavailable as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(3)
+        except (BucketRemoteError, BucketLayoutError) as exc:
+            click.echo(f"Remote read failed: {exc}", err=True)
+            sys.exit(3)
+    else:
+        manifest = _read_bucket_manifest_no_blobs()
+    traces_in: list[dict[str, Any]] = list(manifest.get("traces") or [])
+    rows: list[dict[str, Any]] = []
+    for entry in traces_in:
+        if not isinstance(entry, dict):
+            continue
+        summary = entry.get("summary") or {}
+        rows.append(
+            {
+                "project_slug": entry.get("project_slug"),
+                "trace_id": entry.get("trace_id"),
+                "title": entry.get("title"),
+                "summary": {
+                    "step_count": summary.get("step_count", 0),
+                    "patch_count": summary.get("patch_count", 0),
+                    "anchored_count": summary.get("anchored_count", 0),
+                    "node_count": summary.get("node_count", 0),
+                    "capture_methods": list(summary.get("capture_methods") or []),
+                },
+                "lifecycle": entry.get("lifecycle"),
+            }
+        )
+
+    payload = {
+        "schema_version": _CTX_LIST_SCHEMA_VERSION,
+        "traces": rows,
+    }
+    if as_json:
+        _emit(payload)
+        return
+    if not rows:
+        click.echo("No traces in local bucket.")
+        return
+    click.echo(f"Traces: {len(rows)}")
+    for row in rows:
+        s = row["summary"]
+        title = row.get("title") or "-"
+        click.echo(
+            f"  {row.get('trace_id', '?'):42}  "
+            f"steps={s['step_count']:>3}  "
+            f"patches={s['patch_count']:>3}  "
+            f"anchored={s['anchored_count']:>3}  "
+            f"nodes={s['node_count']:>4}  "
+            f"{row.get('lifecycle') or '-':12}  {title}"
+        )
+
+
+@ctx_group.command(
+    "info",
+    cls=OpentracesCommand,
+    examples=[
+        "opentraces ctx info <trace-id>",
+        "opentraces ctx info <trace-id> --json",
+        "opentraces ctx info <trace-id> --remote user/dataset",
+    ],
+    see_also=[
+        ("opentraces ctx list", "list every trace in the bucket."),
+        ("opentraces ctx tree", "walk the parentUuid-rooted Context Tree."),
+    ],
+    option_groups=[
+        ("Scope", ["trace_id", "remote"]),
+        ("Output", ["as_json"]),
+    ],
+)
+@click.argument("trace_id")
+@click.option(
+    "--remote",
+    "remote",
+    default=None,
+    help=(
+        "Read the manifest from a remote HF dataset bucket "
+        "(plan 080 §7). Format: 'user/repo'."
+    ),
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def ctx_info_cmd(trace_id: str, remote: str | None, as_json: bool) -> None:
+    """Show one trace's summary from the local bucket without blob loads.
+
+    Per plan 080 §7, ``ctx info <trace>`` reads ``bucket/manifest.json``
+    first (cheap projection); falls back to the per-trace
+    ``bucket/traces/v1/<project>/<trace>/trace.json`` when present.
+    No blob loads.
+
+    Pass ``--remote <hf-repo>`` to fetch the manifest from a remote HF
+    dataset bucket instead. Output shape is bytewise-equal between
+    local and remote reads (symmetric-access gate).
+    """
+    if remote:
+        from ..core.bucket_remote import BucketRemoteError
+        from ..core.bucket_store import BucketLayoutError
+
+        try:
+            manifest = _read_bucket_manifest_via_backend(remote)
+        except _BackendUnavailable as exc:
+            click.echo(str(exc), err=True)
+            sys.exit(3)
+        except (BucketRemoteError, BucketLayoutError) as exc:
+            click.echo(f"Remote read failed: {exc}", err=True)
+            sys.exit(3)
+    else:
+        manifest = _read_bucket_manifest_no_blobs()
+    matched: dict[str, Any] | None = None
+    for entry in manifest.get("traces") or []:
+        if isinstance(entry, dict) and entry.get("trace_id") == trace_id:
+            matched = entry
+            break
+
+    if matched is None:
+        if as_json:
+            _emit(
+                _empty_state(
+                    _CTX_INFO_SCHEMA_VERSION,
+                    "trace_not_found_in_bucket",
+                    trace_id=trace_id,
+                )
+            )
+            sys.exit(3)
+        _missing_resource(f"trace {trace_id!r} not found in bucket")
+
+    summary = matched.get("summary") or {}
+    info = {
+        "project_slug": matched.get("project_slug"),
+        "trace_id": matched.get("trace_id"),
+        "title": matched.get("title"),
+        "lifecycle": matched.get("lifecycle"),
+        "trace_path": matched.get("trace_path"),
+        "files": matched.get("files") or {},
+        "summary": {
+            "step_count": summary.get("step_count", 0),
+            "patch_count": summary.get("patch_count", 0),
+            "anchored_count": summary.get("anchored_count", 0),
+            "node_count": summary.get("node_count", 0),
+            "capture_methods": list(summary.get("capture_methods") or []),
+        },
+        "remote_sync_eligible": matched.get("remote_sync_eligible"),
+        "digest": matched.get("digest"),
+    }
+    payload = {
+        "schema_version": _CTX_INFO_SCHEMA_VERSION,
+        "info": info,
+    }
+    if as_json:
+        _emit(payload)
+        return
+    s = info["summary"]
+    click.echo(f"trace_id:        {info['trace_id']}")
+    click.echo(f"project_slug:    {info['project_slug']}")
+    click.echo(f"title:           {info.get('title') or '-'}")
+    click.echo(f"lifecycle:       {info.get('lifecycle') or '-'}")
+    click.echo(f"step_count:      {s['step_count']}")
+    click.echo(f"patch_count:     {s['patch_count']}")
+    click.echo(f"anchored_count:  {s['anchored_count']}")
+    click.echo(f"node_count:      {s['node_count']}")
+    click.echo(f"capture_methods: {', '.join(s['capture_methods']) or '-'}")
+    if info.get("trace_path"):
+        click.echo(f"trace_path:      {info['trace_path']}")
+
+
+# --------------------------------------------------------------------------- #
 # ctx tree
 # --------------------------------------------------------------------------- #
 
@@ -239,13 +591,15 @@ def ctx_tree_cmd(
     examples=[
         "opentraces ctx show <node-id>",
         "opentraces ctx show <node-id> --full --json",
+        "opentraces ctx show <node-id> --remote user/dataset",
+        "opentraces ctx show <node-id> --offline",
     ],
     see_also=[
         ("opentraces ctx step", "alias: show ContextNode for a step index."),
         ("opentraces ctx diff", "diff two ContextNodes layer-by-layer."),
     ],
     option_groups=[
-        ("Scope", ["node_id", "project_dir"]),
+        ("Scope", ["node_id", "project_dir", "remote", "offline"]),
         ("Output", ["layers", "full", "as_json"]),
     ],
 )
@@ -257,6 +611,24 @@ def ctx_tree_cmd(
     help="Comma-separated layer types to include (default: all).",
 )
 @click.option("--full", "as_full", is_flag=True, help="Inline full layer content (default: summary).")
+@click.option(
+    "--remote",
+    "remote",
+    default=None,
+    help=(
+        "Lazy-fetch missing layer blobs from a remote HF dataset bucket "
+        "(plan 080 §7). Format: 'user/repo'."
+    ),
+)
+@click.option(
+    "--offline",
+    "offline",
+    is_flag=True,
+    help=(
+        "Fail with rc=4 if a referenced layer blob isn't already local "
+        "(plan 080 §7 offline semantics)."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 @click.option(
     "--project",
@@ -269,10 +641,20 @@ def ctx_show_cmd(
     node_id: str,
     layers_filter: str | None,
     as_full: bool,
+    remote: str | None,
+    offline: bool,
     as_json: bool,
     project_dir: Path | None,
 ) -> None:
-    """Show a ContextNode and its layer references."""
+    """Show a ContextNode and its layer references.
+
+    Pass ``--remote <hf-repo>`` to lazy-fetch any missing layer blob
+    from a remote HF dataset bucket. Pass ``--offline`` to fail
+    fast (rc=4) when a referenced blob isn't already in the local
+    bucket cache; useful for "prefetch first, then run offline"
+    workflows. ``--remote`` + ``--offline`` together means "use the
+    local cache only; do NOT contact the remote".
+    """
     from ..core.context_tree.query import build_context_tree_projection
 
     repo = _project_repo(project_dir)
@@ -299,14 +681,69 @@ def ctx_show_cmd(
         ("runtime_state", node.runtime_state_layer_id),
     )
     layers_out: dict[str, Any] = {}
+    layer_provenance: dict[str, str] = {}
     for layer_type, layer_id in layer_pairs:
         if keep_types is not None and layer_type not in keep_types:
             continue
         layer = projection.layers_by_id.get(layer_id)
+        # Plan 080 §7 — provenance: "local" if the projection already
+        # has it, "cache" if we resolved it from the local bucket cache,
+        # "remote" if we lazy-fetched from the remote backend.
+        fetched_from = "local" if layer is not None else None
+        # Plan 080 §7 lazy-fetch path. With ``--remote`` we fetch
+        # missing blobs from the remote. ``--offline`` is the HARD
+        # opt-out: never contact the network, fail rc=4 with a clean
+        # error envelope pointing at ``bucket prefetch``.
+        if layer is None and layer_id:
+            if offline:
+                error_payload = {
+                    "schema_version": CONTEXT_TREE_SCHEMA_VERSION,
+                    "status": "error",
+                    "node_id": node_id,
+                    "error": {
+                        "kind": "blob_missing_offline",
+                        "missing_layer_id": layer_id,
+                        "missing_layer_type": layer_type,
+                        "hint": (
+                            f"layer blob not in local cache; run "
+                            f"'opentraces bucket prefetch {node.trace_id}' "
+                            f"to warm the cache, or drop --offline to "
+                            f"fetch from the remote."
+                        ),
+                    },
+                }
+                if as_json:
+                    _emit(error_payload)
+                else:
+                    click.echo(
+                        f"Offline: layer blob {layer_id} ({layer_type}) "
+                        f"not in local bucket cache. Run "
+                        f"'opentraces bucket prefetch {node.trace_id}' "
+                        f"to warm the cache, or drop --offline.",
+                        err=True,
+                    )
+                sys.exit(4)
+            if remote:
+                try:
+                    layer = _lazy_fetch_layer_blob(
+                        remote=remote,
+                        node=node,
+                        layer_id=layer_id,
+                        layer_type=layer_type,
+                    )
+                except _BackendUnavailable as exc:
+                    click.echo(str(exc), err=True)
+                    sys.exit(3)
+                if layer is not None:
+                    fetched_from = "remote"
         entry = _summarize_layer(layer)
+        if fetched_from is not None:
+            entry["fetched_from"] = fetched_from
         if as_full and layer is not None:
             entry["content"] = layer.content
         layers_out[layer_type] = entry
+        if fetched_from is not None:
+            layer_provenance[layer_type] = fetched_from
 
     payload = {
         "schema_version": CONTEXT_TREE_SCHEMA_VERSION,

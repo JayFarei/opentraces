@@ -1,0 +1,168 @@
+name = "ctx-show-offline-fails"
+description = """
+Plan 080 Phase D mechanism journey (GOLD) — `ctx show <node> --remote
+--offline` fails fast (rc=4) when the blob is missing locally and no
+network access is permitted.
+
+Per Plan 080 §6 (Lazy blob resolution on `ctx show` -> Opt-outs ->
+`ctx show --offline` fails fast on missing blob, no network), §7
+(`ctx show --offline` is the explicit opt-out from lazy fetch), and
+§10 performance gate `bench-ctx-show-remote-miss: --offline fails
+<100ms` (sub-100ms; no wire access).
+
+The load-bearing claim is that `--offline` is a HARD opt-out:
+  - MUST NOT issue any network call (zero `_download` invocations).
+  - MUST exit with a clear non-zero code (rc=4 by convention; the
+    CLI-wide "remote required but unavailable" code).
+  - MUST print a hint pointing at `opentraces bucket prefetch
+    <trace>` or removing `--offline`.
+
+Setup (provided by the checkpoint c-bucket-spine-v2-pushed-fake-remote-blob-dropped):
+  1. Capture a session that produces N layer blobs.
+  2. Push to a fake HF remote.
+  3. Drop the local blob namespace (the lazy fetch would normally
+     refill it, but `--offline` MUST NOT trigger that refill).
+
+Asserts:
+  (a) `ctx show <node> --remote <repo> --offline --json` exits with
+      rc != 0 (typically rc=4).
+  (b) The stderr (or `--json` error envelope) carries a hint pointing
+      at `opentraces bucket prefetch <trace>` OR explains that
+      `--offline` blocks the lazy fetch.
+  (c) The local blob namespace is UNCHANGED after the failed
+      `ctx show --offline` call (no partial write, no network access).
+  (d) Removing `--offline` and re-running succeeds (proves the
+      offline branch was the gate, not a real blob-missing error).
+
+Fails today because:
+  - The `--remote` + `--offline` flags on `ctx show` are Track D2
+    wiring.
+  - The "offline required prefetch" error envelope is the new
+    Phase D CLI surface; not yet wired.
+  - The blob-drop-then-restore checkpoint
+    `c-bucket-spine-v2-pushed-fake-remote-blob-dropped` is a Phase D
+    otbox fixture follow-up.
+
+Cross-track dependencies:
+  - D1: `LocalBucketBackend.get_layer_blob` raises BucketRemoteError
+    when the blob is missing locally (the offline branch reads ONLY
+    from the local cache).
+  - D2: `ctx show --remote ... --offline` CLI wiring + rc=4 +
+    "prefetch" hint envelope.
+  - Phase D otbox: `c-bucket-spine-v2-pushed-fake-remote-blob-dropped`
+    checkpoint factory.
+"""
+lane = "core"
+tier = 1  # PHASE-D: opt-in pending checkpoint c-bucket-spine-v2-pushed-fake-remote-blob-dropped.
+tier_label = "gold"
+trajectories = ["bucket-spine-and-self-sufficient"]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-bucket-spine-v2-pushed-fake-remote-blob-dropped"]
+
+[preconditions]
+min_captured_traces = 1
+bucket_spine_v2_layout = true
+context_tree_built = true
+pushed_to_fake_remote = true
+local_blobs_dropped = true
+
+# ---------------------------------------------------------------------
+# Step 1 — `ctx show --remote --offline` fails fast on missing blob.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-show-remote-offline-fails"
+argv = ["ctx", "show", "{first_context_node_id}", "--remote", "{fake_hf_repo_id}", "--offline", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-show-remote-offline-fails"
+equals = 4
+
+# The JSON error envelope carries a clear status and a prefetch hint.
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-offline-fails"
+path = "status"
+equals = "error"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-offline-fails"
+path = "error.kind"
+equals = "blob_missing_offline"
+
+# The hint must mention the prefetch verb so users can resolve.
+[[assertions]]
+kind = "stdout_json_contains"
+step = "ctx-show-remote-offline-fails"
+path = "error.hint"
+contains = "bucket prefetch"
+
+# ---------------------------------------------------------------------
+# Step 2 — confirm the local blob namespace is UNCHANGED (no partial
+# write from the failed offline call).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "bucket-verify-no-partial-write"
+argv = ["bucket", "verify", "--sample", "10", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-verify-no-partial-write"
+equals = 0
+
+# Verify is non-mutating; orphan count remains zero (the failed offline
+# call wrote no orphan blob).
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-verify-no-partial-write"
+path = "verify.orphan_blob_count"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 3 — removing `--offline` and re-running succeeds (proves the
+# offline branch was the gate, not a real missing-blob error).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-show-remote-without-offline"
+argv = ["ctx", "show", "{first_context_node_id}", "--remote", "{fake_hf_repo_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-show-remote-without-offline"
+equals = 0
+
+# Provenance: this one DID fetch from the remote (proves the wire-side
+# data is intact; the prior failure was the offline gate).
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-without-offline"
+path = "layers.system.fetched_from"
+equals = "remote"
+
+# ---------------------------------------------------------------------
+# Step 4 — after the successful (non-offline) fetch, a second
+# `--offline` call now succeeds because the blob is in the local
+# cache (proves the gate is "blob missing locally", not "always
+# fail offline").
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-show-remote-offline-cache-hit"
+argv = ["ctx", "show", "{first_context_node_id}", "--remote", "{fake_hf_repo_id}", "--offline", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-show-remote-offline-cache-hit"
+equals = 0
+
+# Provenance on the offline-cache-hit path: layers came from cache.
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-show-remote-offline-cache-hit"
+path = "layers.system.fetched_from"
+equals = "cache"

@@ -603,10 +603,12 @@ class TestSanitizeRecordFields:
         assert self._redactions(record) > 0
 
     def test_scans_outcome_patch(self):
-        record = self._make_record(
-            outcome=Outcome(patch="+API_KEY=sk-ant-api03-abcdefghijklmnopqrstuvwxyz"),
-        )
-        assert self._redactions(record) > 0
+        # Plan 080: Outcome.patch removed (unified diff lives in
+        # trail.jsonl.gz now). Per-patch security scan runs at
+        # trail-event-emit time in the redaction pipeline; the in-record
+        # outcome scan is no longer applicable.
+        record = self._make_record()
+        assert self._redactions(record) == 0
 
     def test_empty_record_no_matches(self):
         record = self._make_record()

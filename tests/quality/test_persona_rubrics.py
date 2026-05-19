@@ -18,6 +18,7 @@ from opentraces_schema.models import (
     Metrics,
     Observation,
     Outcome,
+    Patch,
     Snippet,
     Step,
     Task,
@@ -150,9 +151,9 @@ def _make_rich_trace() -> TraceRecord:
             committed=True,
             success=True,
             signal_confidence="derived",
-            patch="--- a/auth.py\n+++ b/auth.py\n@@ -1 +1 @@\n-pass\n+validate()",
             commit_sha="def456",
         ),
+        patches=[Patch(patch_id="p-auth-1", file_path="auth.py", step_index=0)],
         dependencies=["flask", "pyjwt"],
         metrics=Metrics(
             total_steps=5,

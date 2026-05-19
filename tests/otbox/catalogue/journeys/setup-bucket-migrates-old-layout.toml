@@ -1,0 +1,198 @@
+name = "setup-bucket-migrates-old-layout"
+description = """
+Plan 080 mechanism journey (GOLD) — `setup bucket --migrate --json`
+converts a Plan 079 layout
+(`bucket/contexts/v1/<project>/<trace>/{head,nodes,reconciliation}.json`
++ `bucket/contexts/v1/<project>/layers/blobs/<hh>/<hash>.json`) into
+the Plan 080 layout
+(`bucket/traces/v1/<project>/<trace>/{trace.json,trail.jsonl.gz,context.jsonl.gz,sources.jsonl.gz}`
++ `bucket/blobs/v1/<project>/{context,raw}/<hh>/<hash>.json.gz`
++ `bucket/events/v1/batches/<seq>-<batch-id>.jsonl.gz`
++ `bucket/manifest.json` (v2 shape)).
+
+Per Plan 080 §15 open question (a) — the migration uses the safe
+"write-new-and-swap" pattern: `setup bucket --migrate` writes to
+`bucket.v2/`, verifies, then atomically swaps. The old `bucket/`
+directory becomes `bucket.v1.backup/` post-swap.
+
+The migration is destructive in the sense that it RE-PROJECTS from
+the canonical event log (not a 1:1 file-format conversion) — so the
+v1 layout's privacy-gated artifacts are filtered through the Plan 080
+privacy default. Migration is idempotent: running it twice on an
+already-migrated bucket is a no-op.
+
+Asserts:
+  (a) Fixture starts with `bucket/contexts/v1/` (Plan 079 layout)
+      present and `bucket/traces/v1/` ABSENT.
+  (b) `setup bucket --migrate --json` exits 0.
+  (c) Migration envelope reports:
+      - migration.from_schema == "opentraces.bucket.manifest.v1"
+      - migration.to_schema == "opentraces.bucket.manifest.v2"
+      - migration.traces_migrated >= 1
+      - migration.layout_swap == "atomic"
+  (d) Post-migration: `bucket/traces/v1/<project>/<trace>/trace.json`
+      exists.
+  (e) Post-migration: `bucket/blobs/v1/<project>/context/` exists.
+  (f) Post-migration: `bucket/events/v1/batches/` exists.
+  (g) Post-migration: `bucket/contexts/v1/` is GONE (moved to
+      `bucket.v1.backup/contexts/v1/`).
+  (h) Post-migration: `bucket manifest --json` returns v2 shape.
+  (i) Re-running `setup bucket --migrate --json` is a no-op
+      (migration.idempotent_noop: true).
+
+Fails today because:
+  - `setup bucket --migrate` is Phase B Track B3 (CLI).
+  - The layout migration writer is Phase B Track B1.
+
+Cross-track dependencies:
+  - B1: layout migration function in bucket_store.py (or new
+    bucket_migrate.py module).
+  - B3: `setup bucket --migrate` CLI flag wiring.
+"""
+lane = "core"
+tier = 1  # PHASE-B: opt-in pending checkpoint c-bucket-spine-v1-legacy-fixture
+tier_label = "gold"
+trajectories = ["bucket-spine-and-self-sufficient"]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-bucket-spine-v1-legacy-fixture"]
+
+[preconditions]
+min_captured_traces = 1
+bucket_v1_layout_present = true
+bucket_spine_v2_layout = false
+
+# ---------------------------------------------------------------------
+# Step 1 — baseline: confirm v1 layout is present.
+# `bucket status --json` against a v1 layout reports the v1 schema.
+# (Plan 080 §20 Resolution E — manifest reader raises BucketLayoutError
+# on v1; but the status verb catches it and reports the legacy schema
+# with an upgrade hint.)
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "migrate-baseline-status-v1"
+argv = ["bucket", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "migrate-baseline-status-v1"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-baseline-status-v1"
+path = "bucket.layout_state"
+equals = "v1_legacy"
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-baseline-status-v1"
+path = "bucket.migration_hint"
+
+# ---------------------------------------------------------------------
+# Step 2 — `setup bucket --migrate --json` runs the migration.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "migrate-execute"
+argv = ["setup", "bucket", "--migrate", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "migrate-execute"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-execute"
+path = "migration.from_schema"
+equals = "opentraces.bucket.manifest.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-execute"
+path = "migration.to_schema"
+equals = "opentraces.bucket.manifest.v2"
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-execute"
+path = "migration.traces_migrated"
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-execute"
+path = "migration.layout_swap"
+equals = "atomic"
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-execute"
+path = "migration.backup_path"
+
+# ---------------------------------------------------------------------
+# Step 3 — post-migration status reports v2 schema.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "migrate-post-status-v2"
+argv = ["bucket", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "migrate-post-status-v2"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-post-status-v2"
+path = "bucket.layout_state"
+equals = "v2_current"
+
+# manifest is the v2 shape.
+[[steps]]
+type = "cli"
+id = "migrate-post-manifest-v2"
+argv = ["bucket", "manifest", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "migrate-post-manifest-v2"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-post-manifest-v2"
+path = "manifest.schema_version"
+equals = "opentraces.bucket.manifest.v2"
+
+# New layout paths exist (surface check is in test_bucket_self_sufficient.py).
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-post-manifest-v2"
+path = "manifest.traces.0.trace_path"
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-post-manifest-v2"
+path = "manifest.events_v1.batch_count"
+
+# ---------------------------------------------------------------------
+# Step 4 — re-running migration is idempotent (no-op).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "migrate-idempotent"
+argv = ["setup", "bucket", "--migrate", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "migrate-idempotent"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "migrate-idempotent"
+path = "migration.idempotent_noop"
+equals = true

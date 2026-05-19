@@ -105,11 +105,58 @@ def _bucket_status() -> dict[str, Any]:
             )
             if manifest.get("root")
             else None,
+            "context_tree": _bucket_context_tree_section(),
         }
     except Exception as exc:
         return {
             "state": "error",
             "error": str(exc),
+            "context_tree": _bucket_context_tree_section(),
+        }
+
+
+def _bucket_context_tree_section() -> dict[str, Any]:
+    """Plan 079 R16: doctor surface for the bucket Context Tree projection.
+
+    Required keys: ``last_projection_at``, ``events_since_last_projection``,
+    ``oldest_unprojected_event_time``, ``trace_count``, ``layer_blob_count``,
+    ``dangling_layer_refs``, ``remote_sync_eligible``. Reuses the
+    aggregator that backs ``opentraces bucket context-tree status`` so the
+    two surfaces never drift.
+    """
+    try:
+        from .bucket_store import (
+            compute_context_tree_status,
+            iter_context_tree_traces,
+        )
+
+        ct = compute_context_tree_status()
+        rows = iter_context_tree_traces()
+        remote_sync_eligible = bool(rows) and all(
+            row.get("remote_sync_eligible") is True for row in rows
+        )
+        return {
+            "last_projection_at": ct.get("last_projection_at"),
+            "events_since_last_projection": int(
+                ct.get("events_since_last_projection", 0) or 0
+            ),
+            "oldest_unprojected_event_time": ct.get("oldest_unprojected_event_time"),
+            "trace_count": int(ct.get("trace_count", 0) or 0),
+            "layer_blob_count": int(ct.get("unique_layer_blob_count", 0) or 0),
+            "dangling_layer_refs": int(ct.get("dangling_layer_refs_count", 0) or 0),
+            "remote_sync_eligible": remote_sync_eligible,
+        }
+    except Exception as exc:
+        return {
+            "state": "error",
+            "error": str(exc),
+            "last_projection_at": None,
+            "events_since_last_projection": 0,
+            "oldest_unprojected_event_time": None,
+            "trace_count": 0,
+            "layer_blob_count": 0,
+            "dangling_layer_refs": 0,
+            "remote_sync_eligible": False,
         }
 
 

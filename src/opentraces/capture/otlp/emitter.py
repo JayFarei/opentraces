@@ -293,16 +293,27 @@ def flush_session_to_project(
     session_id: str,
     buffer: OTLPCaptureBuffer | None = None,
     snapshot: dict[str, Any] | None = None,
+    raw_bodies_dir: Path | None = None,
+    raw_body_retention: str | None = None,
 ) -> dict[str, Any]:
     """Append context_* events for one OTel session into project_dir's event log.
 
     Either ``buffer`` (in-process) or ``snapshot`` (cross-process,
     rehydrated from disk via :func:`load_snapshot_from_disk`) must be
     supplied. Returns a small report dict the CLI / doctor surface uses:
-    ``{ok, session_id, trace_id, layers_count, nodes_count, drafts_appended}``.
+    ``{ok, session_id, trace_id, layers_count, nodes_count, drafts_appended,
+    raw_bodies_deleted}``.
 
     Uses the substrate's own ``append_event_batch`` with
     ``capture_method=[CAPTURE_METHOD_OTEL]`` and ``writer="otlp-receiver"``.
+
+    Plan 080 §5 raw-body lifecycle: on the success path (events
+    appended, ``ok=True``), the source raw-body JSON pairs under
+    ``raw_bodies_dir/<request_id>.{request,response}.json`` are deleted
+    when ``raw_body_retention`` is ``"delete"`` (default). For
+    ``keep_*`` policies the files are left in place; the watcher's
+    periodic sweep enforces the TTL. Deletion is best-effort: a
+    missing file or OS error never fails the flush.
     """
     from ...core.context_tree import (
         CONTEXT_LAYER_CAPTURED,
@@ -368,6 +379,21 @@ def flush_session_to_project(
     ))
 
     appended = append_event_batch(project_dir, drafts, writer="otlp-receiver")
+
+    # Plan 080 §5: delete raw-body source files on success when
+    # retention policy is "delete" (default). Keep policies defer to
+    # the watcher's periodic sweep.
+    resolved_dir = Path(raw_bodies_dir) if raw_bodies_dir is not None else _default_raw_bodies_dir()
+    resolved_policy = _resolve_retention_policy(raw_body_retention)
+    raw_bodies_deleted = 0
+    raw_bodies_kept = 0
+    if resolved_dir is not None:
+        request_ids = sorted(snapshot.get("raw_bodies_by_request", {}).keys())
+        if resolved_policy == "delete":
+            raw_bodies_deleted = _delete_raw_body_pairs(resolved_dir, request_ids)
+        else:
+            raw_bodies_kept = len(request_ids)
+
     return {
         "ok": True,
         "session_id": session_id,
@@ -375,7 +401,67 @@ def flush_session_to_project(
         "layers_count": len(seen_layer_ids),
         "nodes_count": len(nodes),
         "drafts_appended": len(appended),
+        "raw_bodies_deleted": raw_bodies_deleted,
+        "raw_bodies_kept": raw_bodies_kept,
+        "raw_body_retention": resolved_policy,
     }
+
+
+def _default_raw_bodies_dir() -> Path | None:
+    """Best-effort lookup of the default raw bodies dir.
+
+    Returns None if `core.paths` is unavailable (treat as "no dir to
+    clean up"). Used when the caller does not explicitly pass
+    ``raw_bodies_dir`` so the default-delete behavior still applies.
+    """
+    try:
+        from ...core.paths import raw_bodies_dir as _rb_dir
+    except Exception:
+        return None
+    try:
+        return _rb_dir()
+    except Exception:
+        return None
+
+
+def _resolve_retention_policy(explicit: str | None) -> str:
+    """Return the retention policy string. Falls back to config or "delete"."""
+    if explicit:
+        return explicit
+    try:
+        from ...core.config import (
+            get_capture_otlp_raw_body_retention,
+            load_config,
+        )
+    except Exception:
+        return "delete"
+    try:
+        return get_capture_otlp_raw_body_retention(load_config())
+    except Exception:
+        return "delete"
+
+
+def _delete_raw_body_pairs(raw_bodies_dir: Path, request_ids: list[str]) -> int:
+    """Delete ``<request_id>.{request,response}.json`` pairs. Best-effort.
+
+    Returns the count of files actually removed (0..2N). Missing files
+    or OS errors are logged at DEBUG and swallowed so the flush success
+    path is never broken by a stale watcher / cleanup race.
+    """
+    if not raw_bodies_dir.exists():
+        return 0
+    deleted = 0
+    for rid in request_ids:
+        for suffix in (".request.json", ".response.json"):
+            p = raw_bodies_dir / f"{rid}{suffix}"
+            try:
+                p.unlink()
+                deleted += 1
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                logger.debug("could not delete raw body %s: %s", p, exc)
+    return deleted
 
 
 # --------------------------------------------------------------------------- #

@@ -160,6 +160,7 @@ def _configure_bucket_remote(
         "opentraces setup bucket",
         "opentraces setup bucket --local-only",
         "opentraces setup bucket --repo me/opentraces-bucket",
+        "opentraces setup bucket --migrate",
     ],
     see_also=[
         ("opentraces bucket status", "inspect local bucket sync readiness"),
@@ -204,6 +205,15 @@ def _configure_bucket_remote(
 )
 @click.option("--push-now", is_flag=True, help="Upload the existing local bucket after setup.")
 @click.option("--pull-now", is_flag=True, help="Restore the local bucket from the remote after setup.")
+@click.option(
+    "--migrate",
+    "migrate",
+    is_flag=True,
+    help=(
+        "Migrate an existing pre-plan-080 bucket layout to the v2 layout "
+        "(write-new-and-swap, atomic). Skips other setup steps when set."
+    ),
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def setup_bucket_cmd(
     remote_enabled: bool,
@@ -213,6 +223,7 @@ def setup_bucket_cmd(
     sync_policy: str,
     push_now: bool,
     pull_now: bool,
+    migrate: bool,
     as_json: bool,
 ) -> None:
     """Configure the private bucket sync target.
@@ -220,7 +231,17 @@ def setup_bucket_cmd(
     By default this configures a private HuggingFace bucket remote with a local
     cache; use ``--local-only`` to opt out. Dataset remotes are attached later
     with ``opentraces dataset remote ...`` and are not created here.
+
+    Pass ``--migrate`` to upgrade an existing pre-plan-080 bucket layout
+    (Plan 079 ``bucket/contexts/v1/...`` or earlier
+    ``bucket/events/trail/v1/...``) to the plan-080 v2 layout. The migration
+    uses write-new-and-swap (writes to ``bucket.v2/``, verifies, then
+    atomically swaps) per plan 080 §15(a).
     """
+
+    if migrate:
+        _handle_bucket_migrate(as_json=as_json)
+        return
 
     cfg = load_config()
     remote_sync: dict[str, object] | None = None
@@ -269,6 +290,154 @@ def setup_bucket_cmd(
             human_echo(f"Bucket remote sync: {remote_sync.get('state')}")
     else:
         human_echo("Private bucket: local-only")
+
+
+def _detect_bucket_layout() -> str:
+    """Detect the on-disk bucket layout version.
+
+    Returns one of:
+      * ``"v2"``        — plan-080 layout already in place
+                          (``bucket/traces/v1/`` or
+                          ``bucket/events/v1/batches/``).
+      * ``"v1_plan79"`` — plan-079 layout (``bucket/contexts/v1/...``).
+      * ``"v1_pre79"``  — earlier layout
+                          (``bucket/events/trail/v1/...`` or
+                          ``bucket/objects/traces/v1/``).
+      * ``"empty"``     — no bucket present yet (nothing to migrate).
+    """
+    from ..core import paths as _paths
+
+    root = _paths.bucket_dir()
+    if not root.exists():
+        return "empty"
+    if (root / "traces" / "v1").exists() or (root / "events" / "v1" / "batches").exists():
+        return "v2"
+    if (root / "contexts" / "v1").exists():
+        return "v1_plan79"
+    if (root / "events" / "trail" / "v1").exists() or (root / "objects" / "traces" / "v1").exists():
+        return "v1_pre79"
+    return "empty"
+
+
+def _handle_bucket_migrate(*, as_json: bool) -> None:
+    """Migrate an existing bucket to the plan-080 v2 layout.
+
+    Strategy (plan 080 §15(a) lean): write-new-and-swap.
+
+    1. Detect the current on-disk layout.
+    2. If already v2 or empty: report and exit ok.
+    3. Otherwise, call the bucket_store migrator (B1 stub if not yet
+       implemented) which writes the new layout to ``bucket.v2/``,
+       verifies consistency, then atomically swaps it in.
+    4. Emit a structured envelope with from/to layouts and counts.
+    """
+    from ..core import paths as _paths
+
+    from_layout = _detect_bucket_layout()
+    to_layout = "v2"
+
+    bucket_root = _paths.bucket_dir()
+    bucket_v2 = bucket_root.parent / (bucket_root.name + ".v2")
+
+    payload: dict[str, object] = {
+        "from_layout": from_layout,
+        "to_layout": to_layout,
+        "bucket_root": str(bucket_root),
+        "bucket_v2_path": str(bucket_v2),
+        "traces_migrated": 0,
+        "blobs_migrated": 0,
+        "status": "noop",
+    }
+
+    if from_layout in ("empty", "v2"):
+        payload["status"] = "ok" if from_layout == "v2" else "noop"
+        if as_json:
+            click.echo(
+                _setup_watcher_json.dumps(
+                    {"status": "ok", "migrate": payload}, indent=2, sort_keys=True
+                )
+            )
+            return
+        if from_layout == "v2":
+            human_echo("Bucket already on plan-080 v2 layout; nothing to migrate.")
+        else:
+            human_echo("No bucket present yet; nothing to migrate.")
+        return
+
+    # B1 owns the actual migration body in core/bucket_store.
+    try:
+        from ..core.bucket_store import migrate_bucket_to_v2  # type: ignore[attr-defined]
+    except ImportError as exc:
+        msg = (
+            "Phase B Track B1 stub: migrate_bucket_to_v2 not yet implemented "
+            f"({exc})"
+        )
+        payload["status"] = "stub_missing"
+        payload["error"] = msg
+        if as_json:
+            click.echo(
+                _setup_watcher_json.dumps(
+                    {"status": "error", "migrate": payload}, indent=2, sort_keys=True
+                )
+            )
+        else:
+            click.echo(msg, err=True)
+        sys.exit(3)
+
+    try:
+        result = migrate_bucket_to_v2(
+            bucket_root=bucket_root,
+            bucket_v2_path=bucket_v2,
+            from_layout=from_layout,
+        )
+    except NotImplementedError as exc:
+        msg = f"Phase B Track B1 stub: migrate_bucket_to_v2 not yet implemented ({exc})"
+        payload["status"] = "stub_missing"
+        payload["error"] = msg
+        if as_json:
+            click.echo(
+                _setup_watcher_json.dumps(
+                    {"status": "error", "migrate": payload}, indent=2, sort_keys=True
+                )
+            )
+        else:
+            click.echo(msg, err=True)
+        sys.exit(3)
+    except (OSError, ValueError) as exc:
+        payload["status"] = "error"
+        payload["error"] = str(exc)
+        if as_json:
+            click.echo(
+                _setup_watcher_json.dumps(
+                    {"status": "error", "migrate": payload}, indent=2, sort_keys=True
+                )
+            )
+        else:
+            click.echo(f"bucket migrate failed: {exc}", err=True)
+        sys.exit(3)
+
+    payload.update(
+        {
+            "traces_migrated": int(result.get("traces_migrated", 0) or 0),
+            "blobs_migrated": int(result.get("blobs_migrated", 0) or 0),
+            "status": str(result.get("status", "ok")),
+        }
+    )
+    # Pass through any extra fields the migrator surfaced (e.g. verification report).
+    for key, value in result.items():
+        if key not in payload:
+            payload[key] = value
+    if as_json:
+        click.echo(
+            _setup_watcher_json.dumps(
+                {"status": "ok", "migrate": payload}, indent=2, sort_keys=True
+            )
+        )
+        return
+    human_echo(f"Bucket migrate: {from_layout} -> {to_layout}")
+    human_echo(f"  traces_migrated: {payload['traces_migrated']}")
+    human_echo(f"  blobs_migrated:  {payload['blobs_migrated']}")
+    human_echo(f"  status:          {payload['status']}")
 
 
 def _run_setup_wizard() -> None:

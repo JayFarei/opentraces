@@ -1,28 +1,28 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 284.354917,
+    "cold_ms": 451.566416,
     "extra": {},
-    "max_rss_delta_mb": 0.0,
-    "mean_ms": 284.354917,
-    "p50_ms": 284.354917,
-    "p95_ms": 284.354917,
-    "peak_rss_mb": 1878.4375,
-    "python_heap_peak_mb": 13.48106861114502,
+    "max_rss_delta_mb": 0.59375,
+    "mean_ms": 451.566416,
+    "p50_ms": 451.566416,
+    "p95_ms": 451.566416,
+    "peak_rss_mb": 1804.984375,
+    "python_heap_peak_mb": 12.870125770568848,
     "samples": [
       {
-        "duration_ms": 284.354917,
+        "duration_ms": 451.566416,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/var/folders/hd/n9sylf1j76q0p07wh4j5fgw40000gn/T/pytest-of-jayfarei/pytest-240/test_tui_perf_tui_startup_smok0/tui-startup-smoke/run-00/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-287/test_tui_perf_tui_startup_smok0/tui-startup-smoke/run-00/proj",
           "scenario": "tui-startup-smoke",
           "trace_count": 24
         },
-        "peak_rss_mb": 1878.4375,
-        "python_heap_peak_mb": 13.48106861114502,
-        "rss_after_mb": 1878.390625,
-        "rss_before_mb": 1878.390625,
-        "rss_delta_mb": 0.0
+        "peak_rss_mb": 1804.984375,
+        "python_heap_peak_mb": 12.870125770568848,
+        "rss_after_mb": 1804.9375,
+        "rss_before_mb": 1804.34375,
+        "rss_delta_mb": 0.59375
       }
     ]
   },

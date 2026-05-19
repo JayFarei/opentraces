@@ -1,0 +1,198 @@
+name = "bucket-prune-orphan-only"
+description = """
+Plan 080 Phase C mechanism journey (GOLD) — `bucket prune` deletes
+ONLY unreachable blobs; the event log and per-trace envelope are
+strictly read-only inputs.
+
+Per Plan 080 §20 Resolution G (`bucket prune` covers orphan blobs and
+tempfiles; `bucket repair` covers manifest re-derivation; `bucket
+verify` reports but never mutates).
+
+The load-bearing contract: a user can run `bucket prune` at any time
+and the canonical event log (`refs/opentraces/local/events/v1` Git
+ref + `bucket/events/v1/batches/` mirror) plus every per-trace
+envelope under `bucket/traces/v1/<project>/<trace>/` are untouched.
+Reachability is computed from the event log; orphan blobs are the
+diff (blobs on disk minus blobs referenced by events).
+
+Companion to `bucket-write-order-discipline-local.toml`: that journey
+exercises the recovery scenario (W1 crash leaves an orphan); this
+journey is the tighter invariant: prune is conservative — it touches
+nothing but orphan blob files.
+
+Setup (provided by the c-bucket-spine-v2-crash-injected-w1 checkpoint
+factory): an orphan blob + a fully consistent event log + valid
+per-trace envelope.
+
+Asserts:
+  (a) Capture event log head + per-trace `trace.json` digest BEFORE
+      prune.
+  (b) `bucket prune --json` exits 0 and reports `prune.ok: true`.
+  (c) Post-prune event log head is byte-identical (same `last_batch_id`).
+  (d) Post-prune per-trace `trace.json` digest is byte-identical (no
+      envelope rewrite).
+  (e) `prune.orphan_blobs_deleted >= 1`.
+  (f) `prune.events_modified == 0` (event log untouched).
+  (g) `prune.traces_modified == 0` (envelopes untouched).
+  (h) Idempotent: second prune reports
+      `prune.idempotent_noop: true` and `prune.orphan_blobs_deleted: 0`.
+
+Fails today because:
+  - `bucket prune` reachability + idempotent-noop reporting is Phase C
+    Track C1 (bucket_store).
+  - The crash-injection checkpoint is a Phase C test-fixture
+    follow-up.
+
+Cross-track dependencies:
+  - C1: `prune_orphan_blobs()` computes reachability strictly from the
+    event log mirror + per-trace envelopes; never opens / rewrites
+    them.
+  - B3: `bucket prune --json` CLI plumbing.
+"""
+lane = "core"
+tier = 1  # PHASE-C: opt-in pending checkpoint c-bucket-spine-v2-crash-injected-w1.
+tier_label = "gold"
+trajectories = ["bucket-spine-and-self-sufficient"]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-bucket-spine-v2-crash-injected-w1"]
+
+[preconditions]
+min_captured_traces = 1
+bucket_spine_v2_layout = true
+context_tree_built = true
+orphan_blob_injected = true
+
+# ---------------------------------------------------------------------
+# Step 1 — pre-prune snapshot: event log head + trace digest.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "prune-orphan-pre-status"
+argv = ["bucket", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "prune-orphan-pre-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-orphan-pre-status"
+path = "bucket.events_v1.last_batch_id"
+
+[[steps]]
+type = "cli"
+id = "prune-orphan-pre-trace-get"
+argv = ["trace", "get", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "prune-orphan-pre-trace-get"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-orphan-pre-trace-get"
+path = "trace_id"
+equals = "{trace_id}"
+
+# ---------------------------------------------------------------------
+# Step 2 — bucket prune deletes the orphan blob.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "prune-orphan-action"
+argv = ["bucket", "prune", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "prune-orphan-action"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-orphan-action"
+path = "prune.ok"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-orphan-action"
+path = "prune.orphan_blobs_deleted"
+
+# Event log untouched.
+[[assertions]]
+kind = "stdout_json"
+step = "prune-orphan-action"
+path = "prune.events_modified"
+equals = 0
+
+# Per-trace envelope untouched.
+[[assertions]]
+kind = "stdout_json"
+step = "prune-orphan-action"
+path = "prune.traces_modified"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 3 — post-prune event log head matches pre-prune state.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "prune-orphan-post-status"
+argv = ["bucket", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "prune-orphan-post-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-orphan-post-status"
+path = "bucket.events_v1.last_batch_id"
+
+# ---------------------------------------------------------------------
+# Step 4 — post-prune trace.json still readable; same trace_id.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "prune-orphan-post-trace-get"
+argv = ["trace", "get", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "prune-orphan-post-trace-get"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-orphan-post-trace-get"
+path = "trace_id"
+equals = "{trace_id}"
+
+# ---------------------------------------------------------------------
+# Step 5 — second prune is idempotent (no work to do).
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "prune-orphan-idempotent"
+argv = ["bucket", "prune", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "prune-orphan-idempotent"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-orphan-idempotent"
+path = "prune.idempotent_noop"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "prune-orphan-idempotent"
+path = "prune.orphan_blobs_deleted"
+equals = 0

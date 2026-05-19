@@ -50,10 +50,10 @@ def _rl1_grounded_outcome_signal(record: TraceRecord, raw_data: dict | None) -> 
             passed=True, score=1.0,
             evidence="outcome.committed=True (git commit ground truth)",
         )
-    if record.outcome.commit_sha or record.outcome.patch:
+    if record.outcome.commit_sha or record.patches:
         return CheckResult(
             passed=False, score=0.3,
-            evidence="outcome.committed=False but commit_sha/patch present (inconsistent)",
+            evidence="outcome.committed=False but commit_sha/patches present (inconsistent)",
         )
     # Explicit failure signal (success=False) is grounded, same as runtime failures
     if record.outcome.success is False:
@@ -122,26 +122,27 @@ def _rl2_signal_confidence_set(record: TraceRecord, raw_data: dict | None) -> Ch
 
 
 def _rl3_patch_when_committed(record: TraceRecord, raw_data: dict | None) -> CheckResult:
-    """RL3: patch present when committed=True (weight 0.9).
+    """RL3: patches present when committed=True (weight 0.9).
 
-    Ground truth diff for reward attribution.
+    Ground truth diff for reward attribution. Plan 080: patches are now the
+    authoritative spine reference; per-patch diffs live in trail.jsonl.gz.
     """
     if not record.outcome.committed:
         return CheckResult(
             passed=True, score=1.0,
-            evidence="committed=False, patch not required",
+            evidence="committed=False, patches not required",
             note="N/A for uncommitted sessions",
         )
 
-    if record.outcome.patch and record.outcome.patch.strip():
+    if record.patches:
         return CheckResult(
             passed=True, score=1.0,
-            evidence=f"Patch present ({len(record.outcome.patch)} chars)",
+            evidence=f"Patches present ({len(record.patches)} patch refs)",
         )
 
     return CheckResult(
         passed=False, score=0.0,
-        evidence="committed=True but no patch present",
+        evidence="committed=True but no patches present",
     )
 
 

@@ -1,0 +1,87 @@
+name = "trace-spine-trace-get-shape"
+description = """
+Plan 080 Phase A mechanism journey — `trace get --json` returns a
+TraceRecord with the new spine shape:
+
+  (a) `patches: []` array exists (default empty, populated at ingest
+      time from `trace_patch_created` events).
+  (b) `outcome.patch` field is GONE (the unified-diff string was
+      removed in schema 0.6.0; clients assemble from `patches[]` +
+      `trail.jsonl.gz` per plan 080 Resolution C).
+  (c) `outcome.committed` is kept (derived from
+      `patches[].anchor.found`).
+  (d) `outcome.commit_sha` is kept (derived from latest anchored
+      patch).
+  (e) `git_links: []` is kept (derived from `patches[].anchor` +
+      `patches[].superseded_by` via the evidence_tier → tier mapping
+      table in plan 080 Resolution C).
+  (f) `schema_version` reads `0.6.0`.
+
+Fails today because:
+  - Phase A schema delta is brand new; no checkpoint covers the new
+    shape yet.
+  - tier=1 (opt-in) until Phase A checkpoint
+    `c-trace-spine-v060-empty` lands.
+"""
+lane = "core"
+tier = 1
+tier_label = "silver"
+trajectories = ["trace-spine"]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# ---------------------------------------------------------------------
+# Step 1 — list traces to find one to inspect.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "list-traces"
+argv = ["trace", "query", "--json", "--limit", "1"]
+
+[[assertions]]
+kind = "returncode"
+step = "list-traces"
+equals = 0
+
+# ---------------------------------------------------------------------
+# Step 2 — `trace get` against the first trace returns the spine
+# shape.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-get-spine"
+argv = ["trace", "get", "{first_trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-get-spine"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-get-spine"
+path = "trace.schema_version"
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-get-spine"
+path = "trace.patches"
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-get-spine"
+path = "trace.git_links"
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-get-spine"
+path = "trace.outcome.committed"
+
+# Outcome.patch removed; the path should NOT resolve.
+# (Negative assertion form depends on otbox runner support; if
+# `stdout_json_path_absent` doesn't exist, this can be enforced at
+# pytest level until the runner gains the assertion kind.)

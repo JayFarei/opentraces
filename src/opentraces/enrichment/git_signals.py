@@ -124,17 +124,13 @@ def check_committed(
     commits = log_output.strip().split("\n")
     commit_sha = commits[-1]  # Use the latest commit
 
-    # Get the patch for this commit
-    _, patch = _run_git(["diff", f"{commit_sha}~1..{commit_sha}"], project_path)
-    if not patch:
-        # Might be the first commit
-        _, patch = _run_git(["show", "--format=", "--patch", commit_sha], project_path)
-
+    # Plan 080: Outcome.patch (unified-diff text) was removed in schema 0.6.0.
+    # Per-patch diff content lives in trail.jsonl.gz and is assembled via
+    # TraceRecord.patches[] + trail walk by clients on demand.
     return Outcome(
         success=True,  # A session that produced a commit is a reasonable success proxy
         committed=True,
         commit_sha=commit_sha,
-        patch=patch or None,
         signal_source="deterministic",
         signal_confidence="derived",
     )
@@ -200,17 +196,12 @@ def detect_commits_from_steps(steps: list[Step]) -> Outcome:
     last_sha = commit_shas[-1]
     description = commit_messages[-1] if commit_messages else None
 
-    # Build a patch from git diff if we have multiple commits,
-    # or from the commit message context
-    patch = None
-    # We can't get the actual diff without the project directory,
-    # but the commit SHA is the definitive signal.
-
+    # Plan 080: Outcome.patch removed. Per-patch diff content lives in
+    # trail.jsonl.gz; clients assemble on demand.
     return Outcome(
         success=True,  # Session produced a commit, reasonable success proxy
         committed=True,
         commit_sha=last_sha,
-        patch=patch,
         description=description,
         signal_source="deterministic",
         signal_confidence="derived",

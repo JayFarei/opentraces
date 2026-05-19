@@ -18,8 +18,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from opentraces_schema import GitLink, TraceRecord
+from opentraces_schema import GitAnchor, GitLink, TraceRecord
 
+from ...core.trace_derived import (
+    derive_outcome_and_git_links_from_patches,
+    gitlink_tier_to_evidence_tier,
+)
 from ...enrichment._shared import run_git
 from ...enrichment.git import jj_support, notes_store
 from ...enrichment.git.correlator import correlate
@@ -73,6 +77,88 @@ def _parse_iso(ts: str | None) -> datetime | None:
         return datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _apply_anchor_to_patches(
+    trace: TraceRecord,
+    tier: str,
+    revision: str,
+    *,
+    now_iso: str,
+) -> bool:
+    """Update ``Patch.anchor`` on every eligible patch in ``trace``.
+
+    Eligibility (per plan 080 §9 Writer 3): patches where ``anchor is None``
+    or ``anchor.found is False``. Already-anchored patches are re-evaluated
+    so ``git commit --amend`` chains correctly (Resolution L).
+
+    Returns True iff any patch was marked ``anchor.found = True`` (caller
+    uses this to promote ``trace.lifecycle = "final"``). Pure mutation, no I/O.
+    """
+    found_any = False
+    matched_tier = tier in ("tool_emitted", "tool_emitted_with_divergence")
+    evidence_tier = gitlink_tier_to_evidence_tier(tier)
+    # Conservative firmness mapping: tool_emitted is the strongest signal
+    # the correlator emits, so we mark firm_observed; divergent / overlapping
+    # land at provisional.
+    if tier == "tool_emitted":
+        firmness: str | None = "firm_observed"
+    elif tier == "tool_emitted_with_divergence":
+        firmness = "provisional"
+    elif tier == "overlapping":
+        firmness = "provisional"
+    else:
+        firmness = None
+
+    for patch in trace.patches:
+        prev = patch.anchor
+        # Re-search only patches that are unanchored OR previously not found.
+        # An already-found patch at the SAME revision is a no-op; an already-
+        # found patch at a DIFFERENT revision is a supersede event (amend).
+        if prev is not None and prev.found:
+            if not matched_tier:
+                # Correlator didn't find the trace in this commit; preserve
+                # the existing anchor unchanged.
+                continue
+            if prev.commit_sha == revision:
+                # Idempotent re-run against the same commit; refresh
+                # last_searched_at to record the search but keep evidence.
+                patch.anchor = prev.model_copy(update={"last_searched_at": now_iso})
+                found_any = True
+                continue
+            # Different commit — amend chain. Push the OLD commit_sha onto
+            # the FRONT of superseded_by (newest-first) and overwrite anchor.
+            if prev.commit_sha:
+                patch.superseded_by = [prev.commit_sha, *patch.superseded_by]
+            patch.anchor = GitAnchor(
+                last_searched_at=now_iso,
+                found=True,
+                commit_sha=revision,
+                evidence_tier=evidence_tier,
+                evidence_firmness=firmness,
+            )
+            found_any = True
+            continue
+
+        # Eligible: anchor is None or anchor.found is False.
+        if matched_tier:
+            patch.anchor = GitAnchor(
+                last_searched_at=now_iso,
+                found=True,
+                commit_sha=revision,
+                evidence_tier=evidence_tier,
+                evidence_firmness=firmness,
+            )
+            found_any = True
+        else:
+            # Searched, didn't match — record the search timestamp so the
+            # next run knows not to redo work without new evidence.
+            patch.anchor = GitAnchor(
+                last_searched_at=now_iso,
+                found=False,
+            )
+
+    return found_any
 
 
 def filter_recent(
@@ -133,6 +219,7 @@ def run(
     candidates = filter_recent(traces, timedelta(hours=window_hours))
     results: list[tuple[str, list[GitLink]]] = []
     lines_to_append: list[str] = []
+    now_iso = datetime.now(timezone.utc).isoformat()
     for trace in candidates:
         links = correlate(
             trace, revision, diff, repo_url=repo_url, branch=branch,
@@ -140,19 +227,33 @@ def run(
         )
         if not links or links[0].tier == "orphan":
             continue
-        # Attach the link for evidence regardless of tier. Deduplicate
-        # against existing git_links by (revision, tier).
-        existing = {(link.revision, link.tier) for link in trace.git_links}
-        for link in links:
-            if (link.revision, link.tier) not in existing:
-                trace.git_links.append(link)
-
-        # Tool-emitted and divergence pin the revision + promote
-        # lifecycle. Overlapping is only evidence of coincidence and
-        # stays provisional.
         tier = links[0].tier
+
+        # Plan 080 §9 Writer 3: the spine is ``trace.patches[]``; we update
+        # each Patch.anchor and re-derive ``trace.git_links`` from patches.
+        # For traces with no patches[] yet (e.g. legacy pre-080 records),
+        # the helper is a no-op and we fall back to writing GitLink directly
+        # for reader compatibility.
+        if trace.patches:
+            anchored_any = _apply_anchor_to_patches(
+                trace, tier, revision, now_iso=now_iso,
+            )
+            derive_outcome_and_git_links_from_patches(trace)
+            if anchored_any:
+                trace.lifecycle = "final"
+        else:
+            # Legacy fallback: pre-080 trace with no patches[] spine. Keep
+            # writing git_links directly so we don't lose evidence on the
+            # migration window.
+            existing = {(link.revision, link.tier) for link in trace.git_links}
+            for link in links:
+                if (link.revision, link.tier) not in existing:
+                    trace.git_links.append(link)
+            if tier in ("tool_emitted", "tool_emitted_with_divergence"):
+                trace.lifecycle = "final"
+
+        # Attribution stamping (independent of the patches spine).
         if tier in ("tool_emitted", "tool_emitted_with_divergence"):
-            trace.lifecycle = "final"
             if trace.attribution is not None:
                 trace.attribution.revision = {
                     "vcs_type": links[0].vcs_type,
@@ -500,6 +601,7 @@ def backfill(
 
         matched: list = []
         lines_to_append: list[str] = []
+        now_iso = datetime.now(timezone.utc).isoformat()
         for trace in candidates:
             links = correlate(
                 trace, revision, diff,
@@ -508,13 +610,27 @@ def backfill(
             )
             if not links or links[0].tier == "orphan":
                 continue
-            existing = {(link.revision, link.tier) for link in trace.git_links}
-            for link in links:
-                if (link.revision, link.tier) not in existing:
-                    trace.git_links.append(link)
             tier = links[0].tier
+
+            # Plan 080 §9 Writer 3 (backfill path): update Patch.anchor on
+            # eligible patches and re-derive git_links from patches.
+            if trace.patches:
+                anchored_any = _apply_anchor_to_patches(
+                    trace, tier, revision, now_iso=now_iso,
+                )
+                derive_outcome_and_git_links_from_patches(trace)
+                if anchored_any:
+                    trace.lifecycle = "final"
+            else:
+                # Legacy fallback for pre-080 traces with no patches[] spine.
+                existing = {(link.revision, link.tier) for link in trace.git_links}
+                for link in links:
+                    if (link.revision, link.tier) not in existing:
+                        trace.git_links.append(link)
+                if tier in ("tool_emitted", "tool_emitted_with_divergence"):
+                    trace.lifecycle = "final"
+
             if tier in ("tool_emitted", "tool_emitted_with_divergence"):
-                trace.lifecycle = "final"
                 if trace.attribution is not None:
                     trace.attribution.revision = {
                         "vcs_type": vcs_type,

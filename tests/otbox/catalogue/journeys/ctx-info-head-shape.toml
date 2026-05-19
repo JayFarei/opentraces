@@ -1,0 +1,161 @@
+name = "ctx-info-head-shape"
+description = """
+Plan 080 mechanism journey (GOLD) — the per-trace `ctx info <trace>
+--json` envelope shape (replacing Plan 079's
+`bucket context-tree show <trace> --json`).
+
+Renamed in-place from Plan 079's `context-tree-bucket-head-json-shape.toml`
+per Plan 080 §20 Resolution A. The per-trace head moves from
+`bucket/contexts/v1/<project>/<trace>/head.json` (Plan 079) to
+`bucket/traces/v1/<project>/<trace>/trace.json` (Plan 080 spine).
+The `ctx info <trace>` verb surfaces the slice of that record relevant
+to the Context Tree substrate.
+
+Per Plan 080 §7 (CLI consumption — ctx group):
+  - `ctx info <trace> --json` reads `bucket/traces/v1/<project>/<trace>/trace.json`
+    plus the per-trace `context.jsonl.gz` summary.
+  - The privacy-default gate is preserved: v1 ships without a
+    per-layer security walker, so context-tree-bearing traces report
+    `remote_sync.eligible == false` until opt-in.
+
+Asserts:
+  (a) `ctx info <trace> --json` returns a typed envelope with:
+      head.schema_version, head.project_slug, head.trace_id,
+      head.node_count, head.layer_count, head.layer_refs[],
+      head.capture_methods[], head.last_projection_at,
+      head.event_log_head, head.events_processed_through_sequence,
+      head.digest, head.blob_scope.
+  (b) head.remote_sync.eligible == false (Plan 079 privacy default
+      preserved through Plan 080).
+  (c) head.remote_sync.scope == "private_bucket_only".
+  (d) head.remote_sync.publishable == false.
+  (e) head.remote_sync.blocked_reasons contains
+      "context_tree_unfiltered_layers".
+  (f) head.blob_scope == "project" (Plan 080 default; the
+      `bucket/blobs/v1/<project>/context/` namespace).
+
+Fails today because:
+  - `ctx info` verb is new in Phase B Track B3 (CLI).
+  - The per-trace projector writing under `bucket/traces/v1/` is
+    Phase B Track B1 (bucket_store).
+
+Cross-track dependencies:
+  - B1 (bucket_store.py): per-trace envelope + the head summary
+    embedded inside trace.json or sidecar projection.
+  - B3 (cli/ctx.py): `ctx info` verb wiring.
+"""
+lane = "core"
+tier = 1  # PHASE-B: opt-in pending checkpoint c-bucket-spine-v2-one-trace-provisional
+tier_label = "gold"
+trajectories = ["bucket-spine-and-self-sufficient"]
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-bucket-spine-v2-one-trace-provisional"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+bucket_spine_v2_layout = true
+
+# ---------------------------------------------------------------------
+# Step 1 — ctx info for the canonical checkpoint trace.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-info-head-shape"
+argv = ["ctx", "info", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-info-head-shape"
+equals = 0
+
+# Required envelope keys.
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.schema_version"
+equals = "opentraces.bucket.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.project_slug"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.trace_id"
+equals = "{trace_id}"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.node_count"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.layer_count"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.layer_refs.0"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.capture_methods.0"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.last_projection_at"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.event_log_head"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.events_processed_through_sequence"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.digest"
+
+# Privacy default is gate-closed.
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.remote_sync.eligible"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.remote_sync.scope"
+equals = "private_bucket_only"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.remote_sync.publishable"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.remote_sync.blocked_reasons.0"
+equals = "context_tree_unfiltered_layers"
+
+# Per-project blob namespace.
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-info-head-shape"
+path = "head.blob_scope"
+equals = "project"

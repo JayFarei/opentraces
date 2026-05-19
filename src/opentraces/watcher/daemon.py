@@ -254,6 +254,20 @@ def _run_trace_trails_runtime(
                 project_cwd,
                 exc_info=True,
             )
+        # Plan 079: first-class Context Tree bucket projection. Stage 2
+        # is additive; the trail-piggyback above remains.
+        try:
+            from ..core.bucket_store import project_context_tree_to_bucket
+            from ..core.config import get_project_dir
+
+            project_slug = get_project_dir(project_cwd).name
+            project_context_tree_to_bucket(project_cwd, project_slug=project_slug)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "bucket Context Tree projection failed for %s",
+                project_cwd,
+                exc_info=True,
+            )
     except Exception:  # noqa: BLE001
         logger.exception("Trace Trails runtime failed for %s", project_cwd)
 

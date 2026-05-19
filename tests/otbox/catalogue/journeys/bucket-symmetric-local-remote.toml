@@ -1,0 +1,246 @@
+name = "bucket-symmetric-local-remote"
+description = """
+Plan 080 Phase D LOAD-BEARING cross-cutting journey (GOLD) — every read
+verb returns bytewise-equal output with and without `--remote`.
+
+Per Plan 080 §6 (Sync story), §7 (CLI consumption — per-verb walkthrough),
+§11 (otbox test matrix — cross-cutting journeys), §13 (Bucket
+self-sufficiency proof), §17 R-080-5 (cross-machine identity).
+
+The load-bearing claim is that `LocalBucketBackend.<verb>` and
+`RemoteHubBackend.<verb>` return identical Python objects for the same
+on-bucket state. The CLI surfaces that contract via the `--remote
+<hf-repo>` flag on every read verb (`trace get`, `trace query`,
+`ctx tree`, `ctx list`, `ctx info`, `trail blame commit`, ...).
+
+This journey:
+  1. Captures a session that lands a per-trace envelope + blobs locally.
+  2. Pushes to a fake HF remote (file:// scheme; the Phase D test
+     story uses the existing `provider=fake` plumbing as a stand-in
+     for HF Hub — same backend abstraction, different download
+     primitive).
+  3. Runs each Phase D read verb both locally and `--remote` and
+     asserts bytewise equality of the JSON envelope (modulo `--remote`
+     metadata fields that the CLI explicitly stamps for diagnostics).
+
+Asserts:
+  - `trace get <trace> --json` local vs `--remote` returns the same
+    `trace_id`, `patches[].patch_id` array, and `digest`.
+  - `ctx list --json` enumerates the same `context_trees[*].trace_id`
+    set on both sides (sorted comparison).
+  - `ctx info <trace> --json` returns the same `head.trace_id` and
+    `head.node_count`.
+  - `ctx tree <trace> --json` returns the same `schema_version` and
+    `nodes[].node_id` set.
+  - `trail blame commit <sha> --json` returns the same
+    `commit_sha` + patch set on both sides.
+
+Fails today because:
+  - The CLI `--remote` flag on read verbs is Track D2 wiring.
+  - The fake-HF push path's compatibility with the Phase D backend
+    is Track D1 wiring (the `provider=fake` URL is interpreted as a
+    HF Hub repo_id when `--remote` is invoked).
+
+Cross-track dependencies:
+  - D1: `LocalBucketBackend` + `RemoteHubBackend` symmetric I/O
+    (the test-side proof is in `tests/test_bucket_remote_symmetric.py`).
+  - D2: `--remote` flag on `trace`/`trail`/`ctx` read verbs.
+  - Phase D otbox: the `c-bucket-spine-v2-pushed-fake-remote`
+    checkpoint must restore a bucket that has been pushed to a fake
+    HF remote root so the journey can address it.
+"""
+lane = "core"
+tier = 1  # PHASE-D: opt-in pending checkpoint c-bucket-spine-v2-pushed-fake-remote.
+tier_label = "gold"
+trajectories = ["bucket-spine-and-self-sufficient"]
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-bucket-spine-v2-pushed-fake-remote"]
+
+[preconditions]
+min_captured_traces = 1
+bucket_spine_v2_layout = true
+context_tree_built = true
+pushed_to_fake_remote = true
+
+# ---------------------------------------------------------------------
+# Step 1 — local `trace get` returns the spine.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-get-local"
+argv = ["trace", "get", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-get-local"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-get-local"
+path = "trace_id"
+equals = "{trace_id}"
+
+# ---------------------------------------------------------------------
+# Step 2 — remote `trace get --remote <repo>` returns the same spine.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trace-get-remote"
+argv = ["trace", "get", "{trace_id}", "--remote", "{fake_hf_repo_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-get-remote"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-get-remote"
+path = "trace_id"
+equals = "{trace_id}"
+
+# Local vs remote spine identity: the patches[] array MUST be identical.
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "trace-get-remote"
+path = "patches"
+equals_var = "trace-get-local:patches"
+
+# Local vs remote digest identity.
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "trace-get-remote"
+path = "digest"
+equals_var = "trace-get-local:digest"
+
+# ---------------------------------------------------------------------
+# Step 3 — `ctx list` local vs remote.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-list-local"
+argv = ["ctx", "list", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-list-local"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "ctx-list-remote"
+argv = ["ctx", "list", "--remote", "{fake_hf_repo_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-list-remote"
+equals = 0
+
+# Local vs remote `ctx list` enumerates the same trace_id set.
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "ctx-list-remote"
+path = "context_trees"
+equals_var = "ctx-list-local:context_trees"
+
+# ---------------------------------------------------------------------
+# Step 4 — `ctx info <trace>` local vs remote.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-info-local"
+argv = ["ctx", "info", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-info-local"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "ctx-info-remote"
+argv = ["ctx", "info", "{trace_id}", "--remote", "{fake_hf_repo_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-info-remote"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "ctx-info-remote"
+path = "head"
+equals_var = "ctx-info-local:head"
+
+# ---------------------------------------------------------------------
+# Step 5 — `ctx tree <trace>` local vs remote.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-tree-local"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree-local"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-tree-local"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[steps]]
+type = "cli"
+id = "ctx-tree-remote"
+argv = ["ctx", "tree", "{trace_id}", "--remote", "{fake_hf_repo_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree-remote"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-tree-remote"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+# Local vs remote node enumeration is identical.
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "ctx-tree-remote"
+path = "nodes"
+equals_var = "ctx-tree-local:nodes"
+
+# ---------------------------------------------------------------------
+# Step 6 — `trail blame commit <sha>` local vs remote.
+# ---------------------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "trail-blame-commit-local"
+argv = ["trail", "blame", "commit", "{commit_sha}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trail-blame-commit-local"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "trail-blame-commit-remote"
+argv = ["trail", "blame", "commit", "{commit_sha}", "--remote", "{fake_hf_repo_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trail-blame-commit-remote"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_equals_var"
+step = "trail-blame-commit-remote"
+path = "patches"
+equals_var = "trail-blame-commit-local:patches"

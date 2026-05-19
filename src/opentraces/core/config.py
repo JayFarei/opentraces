@@ -210,6 +210,38 @@ class SecurityConfig(BaseModel):
     model_config = {"extra": "ignore"}  # silently drop legacy ``privacy_tier`` from on-disk configs
 
 
+class CaptureOTLPConfig(BaseModel):
+    """OTLP receiver capture-source settings (plan 078 + plan 080 §5).
+
+    ``raw_body_retention`` controls what happens to the raw Anthropic
+    Messages API JSON files Claude Code drops under
+    ``OTEL_LOG_RAW_API_BODIES=file:<dir>`` after the emitter has
+    successfully built ContextLayers + appended events. Default
+    ``"delete"`` keeps zero raw-body disk footprint per plan 080 §5
+    (the storage diet). ``"keep_N_days"`` retains bodies for N days
+    (N parsed from the literal, e.g. ``"keep_7_days"``);
+    ``"keep_forever"`` retains them indefinitely (debugging / replay).
+    """
+
+    raw_body_retention: str = Field(
+        "delete",
+        description=(
+            "One of 'delete' (default), 'keep_N_days' (e.g. "
+            "'keep_7_days'), or 'keep_forever'. See plan 080 §5."
+        ),
+    )
+
+    model_config = {"extra": "ignore"}
+
+
+class CaptureConfig(BaseModel):
+    """Capture-side settings: per-capture-source configuration."""
+
+    otlp: CaptureOTLPConfig = Field(default_factory=CaptureOTLPConfig)
+
+    model_config = {"extra": "ignore"}
+
+
 class BucketRemoteConfig(BaseModel):
     """Private remote bucket sync target.
 
@@ -224,12 +256,26 @@ class BucketRemoteConfig(BaseModel):
     sync_policy: Literal["daemon", "manual"] = "daemon"
 
 
+class BucketContextsConfig(BaseModel):
+    """Context Tree bucket projection policy (plan 079).
+
+    The Context Tree substrate ships a content-addressed layer blob
+    namespace. Per the adversarial review's Condition 1, dedup across
+    projects is intentionally absent by default to avoid a cross-tenant
+    correlation channel; opt-in via ``layer_blob_scope="global"``
+    writes blobs to a shared ``_shared/`` namespace instead.
+    """
+
+    layer_blob_scope: Literal["project", "global"] = "project"
+
+
 class BucketConfig(BaseModel):
     """Global private bucket storage policy."""
 
     storage: Literal["local", "remote"] = "local"
     local_cache: bool = True
     remote: BucketRemoteConfig = Field(default_factory=BucketRemoteConfig)
+    contexts: BucketContextsConfig = Field(default_factory=BucketContextsConfig)
 
 
 class PostProcessorConfig(BaseModel):
@@ -304,6 +350,7 @@ class Config(BaseModel):
     dataset_visibility: str = Field("private", pattern="^(public|private)$")
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     bucket: BucketConfig = Field(default_factory=BucketConfig)
+    capture: CaptureConfig = Field(default_factory=CaptureConfig)
 
     model_config = {"extra": "ignore"}  # silently drop dead keys (e.g. legacy pricing_file)
 
@@ -965,3 +1012,54 @@ def set_first_run_backfill_decision(project_dir: Path, decision: str | None) -> 
     else:
         policy.pop("first_run_backfill_decision", None)
     _write_marker(project_dir, project_id, policy)
+
+
+# ---------------------------------------------------------------------------
+# Plan-080 Phase C: OTLP raw-body retention accessor
+# ---------------------------------------------------------------------------
+
+
+def get_capture_otlp_raw_body_retention(cfg: Config) -> str:
+    """Return the raw-body retention policy literal.
+
+    One of ``"delete"`` (default; remove the JSON file after the
+    emitter has built a layer + appended events), ``"keep_N_days"``
+    (e.g. ``"keep_7_days"`` — sweep on age), or ``"keep_forever"``
+    (no-op sweep; bodies retained indefinitely).
+
+    Per plan 080 §5: the default eliminates raw-body disk footprint
+    while preserving the opt-in TTL for replay / debugging use cases.
+    """
+    raw = (cfg.capture.otlp.raw_body_retention or "delete").strip()
+    if not raw:
+        return "delete"
+    return raw
+
+
+def parse_raw_body_retention_days(retention: str) -> int | None:
+    """Parse ``keep_N_days`` -> N. Returns None for ``delete`` / ``keep_forever``.
+
+    Raises ``ValueError`` if the literal is malformed (e.g. ``keep_abc_days``
+    or ``keep_0_days``). Whitespace around the value is tolerated by the
+    accessor; this helper expects a normalized literal.
+    """
+    if retention in ("delete", "keep_forever"):
+        return None
+    if retention.startswith("keep_") and retention.endswith("_days"):
+        middle = retention[len("keep_"): -len("_days")]
+        try:
+            n = int(middle)
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid raw_body_retention {retention!r}: "
+                "expected 'keep_N_days' with integer N"
+            ) from exc
+        if n < 1:
+            raise ValueError(
+                f"invalid raw_body_retention {retention!r}: N must be >= 1"
+            )
+        return n
+    raise ValueError(
+        f"unknown raw_body_retention {retention!r}: "
+        "expected 'delete' | 'keep_N_days' | 'keep_forever'"
+    )
