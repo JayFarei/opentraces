@@ -1,58 +1,58 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 286.877083,
+    "cold_ms": 198.68025,
     "extra": {},
     "max_rss_delta_mb": null,
-    "mean_ms": 345.25990233333334,
-    "p50_ms": 344.785666,
-    "p95_ms": 404.116958,
-    "peak_rss_mb": 54.015625,
+    "mean_ms": 204.40618066666667,
+    "p50_ms": 206.823625,
+    "p95_ms": 207.714667,
+    "peak_rss_mb": 40.9375,
     "python_heap_peak_mb": null,
     "samples": [
       {
-        "duration_ms": 286.877083,
+        "duration_ms": 198.68025,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-287/test_cli_perf_status_smoke_0/status-smoke/run-01/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-408/test_cli_perf_status_smoke_0/status-smoke/run-01/proj",
           "returncode": 0,
           "scenario": "status-smoke",
           "stdout_tail": "          \"ran\": false\n        },\n        \"human\": false,\n        \"pushed\": false\n      }\n    }\n  ]\n}",
           "trace_count": 24
         },
-        "peak_rss_mb": 48.328125,
+        "peak_rss_mb": 36.75,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
         "rss_delta_mb": null
       },
       {
-        "duration_ms": 344.785666,
+        "duration_ms": 207.714667,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-287/test_cli_perf_status_smoke_0/status-smoke/run-02/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-408/test_cli_perf_status_smoke_0/status-smoke/run-02/proj",
           "returncode": 0,
           "scenario": "status-smoke",
           "stdout_tail": "          \"ran\": false\n        },\n        \"human\": false,\n        \"pushed\": false\n      }\n    }\n  ]\n}",
           "trace_count": 24
         },
-        "peak_rss_mb": 54.015625,
+        "peak_rss_mb": 40.84375,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
         "rss_delta_mb": null
       },
       {
-        "duration_ms": 404.116958,
+        "duration_ms": 206.823625,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-287/test_cli_perf_status_smoke_0/status-smoke/run-03/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-408/test_cli_perf_status_smoke_0/status-smoke/run-03/proj",
           "returncode": 0,
           "scenario": "status-smoke",
           "stdout_tail": "          \"ran\": false\n        },\n        \"human\": false,\n        \"pushed\": false\n      }\n    }\n  ]\n}",
           "trace_count": 24
         },
-        "peak_rss_mb": 52.28125,
+        "peak_rss_mb": 40.9375,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,

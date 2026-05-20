@@ -180,14 +180,14 @@ class TestPublicCommandTree:
 
 
 # ---------------------------------------------------------------------------
-# Machine mode (OPENTRACES_NO_TUI, piped stdout)
+# Bare invocation: legacy TUI autolaunch is decommissioned.
 # ---------------------------------------------------------------------------
 
 class TestMachineMode:
-    """OPENTRACES_NO_TUI env var and non-TTY bare invocation."""
+    """Bare invocation always prints help and never launches the legacy TUI."""
 
     def test_no_tui_env_var_prints_help(self, monkeypatch):
-        """OPENTRACES_NO_TUI=1 should print help, not launch TUI."""
+        """Legacy env var remains harmless while bare invocation prints help."""
         monkeypatch.setenv("OPENTRACES_NO_TUI", "1")
         monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: True)
         launched = []
@@ -210,7 +210,7 @@ class TestMachineMode:
         assert len(launched) == 0, "TUI should not launch on non-TTY stdout"
 
     def test_no_tui_env_var_empty_string_still_suppresses(self, monkeypatch):
-        """Any non-empty value for OPENTRACES_NO_TUI suppresses TUI."""
+        """Any non-empty legacy env var value still leaves help-mode behavior."""
         monkeypatch.setenv("OPENTRACES_NO_TUI", "true")
         monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: True)
         launched = []
@@ -219,6 +219,17 @@ class TestMachineMode:
         result = runner.invoke(main, [])
         assert result.exit_code == 0
         assert len(launched) == 0
+
+    def test_interactive_bare_invocation_prints_help(self, monkeypatch):
+        """Interactive bare invocation no longer launches the legacy TUI."""
+        monkeypatch.delenv("OPENTRACES_NO_TUI", raising=False)
+        monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: True)
+        launched = []
+        monkeypatch.setattr("opentraces.cli._launch_tui_ui", lambda *a, **kw: launched.append(1))
+        result = CliRunner().invoke(main, [])
+        assert result.exit_code == 0
+        assert len(launched) == 0
+        assert "opentraces" in result.output.lower()
 
 
 # ---------------------------------------------------------------------------

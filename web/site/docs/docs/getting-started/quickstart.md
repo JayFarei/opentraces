@@ -16,6 +16,7 @@ opentraces setup
 
 `setup` is the machine-wide wizard. It walks each integration with one prompt, defaults in brackets:
 
+- **tracking mode** [global], whether to auto-enroll every project an agent touches (global) or only projects where you explicitly run `opentraces init` (manual). Global mode enrolls each project private + review-required the first time a capture hook fires there. Set non-interactively with `opentraces config tracking-mode global|manual`.
 - **claude-code, git, skill** capture hooks [yes], Stop/PostCompact hooks, post-commit correlator, and the Claude Code skill.
 - **watcher** [yes], background incremental backfill after each commit. Powers `opentraces trail blame`.
 - **bucket** [yes], configure the private bucket sync target (the private workspace state that backs the trace index and Trace Trails).
@@ -27,6 +28,8 @@ opentraces setup
 Per-project review policy and dataset remotes are not set here; they live in `opentraces init` and `opentraces dataset remote ...` respectively.
 
 ## 3. Initialize the Project
+
+> Under the default **global** tracking mode this step is optional: the project you are working in is auto-enrolled (private + review-required) the first time an agent runs in it. Run `init` to enroll a project explicitly, pick its agents, or import existing sessions, and always under **manual** mode.
 
 ```bash
 opentraces init
@@ -85,17 +88,12 @@ opentraces dataset run my-dataset --since-last-run
 ## 7. Review the Rows
 
 ```bash
-opentraces dataset review my-dataset --tui     # terminal review
-opentraces dataset review my-dataset --web     # browser review
-opentraces dataset review my-dataset approve <row-id>
-opentraces dataset review my-dataset approve --all
+opentraces dataset review my-dataset --json
+opentraces dataset review approve my-dataset <row-id>
+opentraces dataset review approve my-dataset --all
 ```
 
-![Web review](/docs/assets/web-review.png)
-
-![Web graph](/docs/assets/web-graph.png)
-
-![Terminal review](/docs/assets/tui.png)
+The old TUI and web review clients are decommissioned while the next dataset-scoped review UI is redesigned, so row review is CLI-first for now.
 
 ## 8. Publish
 
@@ -118,7 +116,7 @@ ds = load_dataset("owner/team-traces")
 
 ## Next Steps
 
-- [Inbox & Review](/docs/workflow/review), dataset review (TUI and web) and CLI review flows
+- [Inbox & Review](/docs/workflow/review), dataset row review and CLI approval flows
 - [Publish](/docs/workflow/pushing), remotes, visibility, migrations, and gates
 - [Security Tiers](/docs/security/tiers), review policy and layered scanning
 - [CLI Reference](/docs/cli/commands), full 0.4 command surface

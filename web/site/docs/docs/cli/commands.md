@@ -71,7 +71,7 @@ The 0.4 command surface is grouped into six top-level command groups (`auth`, `b
 | `dataset publish` | Publish reviewed dataset rows and contract files to the active remote |
 | `dataset remote` | Manage dataset-scoped HuggingFace remotes (`add`, `create`, `list`, `remove`, `visibility`) |
 | `dataset remove` | Remove a local dataset after explicit confirmation |
-| `dataset review` | Review, approve, reject, or reset dataset rows (TUI and web review entrypoints) |
+| `dataset review` | Review, approve, reject, or reset dataset rows |
 | `dataset run` | Run the dataset workflow in dry-run, current-agent, or headless mode |
 | `dataset schedule` | Manage local dataset schedules (`add`, `list`, `logs`, `pause`, `remove`, `resume`, `show`) |
 | `dataset status` | Show row count and publication-state breakdown for a dataset |
@@ -498,20 +498,19 @@ Runs the dataset workflow.
 
 ```bash
 opentraces dataset review my-dataset
-opentraces dataset review my-dataset --tui
-opentraces dataset review my-dataset --web
-opentraces dataset review my-dataset approve <row-id>
-opentraces dataset review my-dataset reject <row-id>
-opentraces dataset review my-dataset reset <row-id>
-opentraces dataset review my-dataset approve --all
+opentraces dataset review my-dataset --json
+opentraces dataset review approve my-dataset <row-id>
+opentraces dataset review reject my-dataset <row-id>
+opentraces dataset review reset my-dataset <row-id>
+opentraces dataset review approve my-dataset --all
 ```
 
-Review, approve, reject, or reset dataset rows. The `--tui` and `--web` flags open the interactive inbox surfaces (these replace the standalone `opentraces tui` and `opentraces web` commands from 0.3).
+Review, approve, reject, or reset dataset rows. The legacy interactive TUI/web review clients are decommissioned for now, so `--tui` and `--web` return a decommission notice instead of opening a client.
 
 | Flag | Description |
 |------|-------------|
-| `--tui` | Open TUI review |
-| `--web` | Open web review |
+| `--tui` | Legacy interactive review client; currently unavailable |
+| `--web` | Legacy interactive review client; currently unavailable |
 | `--all` | With `approve`, `reject`, or `reset`, apply to every eligible row |
 | `--json` | Emit structured JSON |
 

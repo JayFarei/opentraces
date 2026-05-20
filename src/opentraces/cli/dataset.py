@@ -979,10 +979,28 @@ def dataset_run(
         )
 
 
+_INTERACTIVE_REVIEW_DECOMMISSIONED = (
+    "Interactive TUI/web review clients are decommissioned for now. "
+    "Use `opentraces dataset review <name> --json` to inspect rows, "
+    "then `opentraces dataset review approve|reject|reset <name> ...`."
+)
+
+
 @dataset_group.command("review", cls=OpentracesCommand)
 @click.argument("args", nargs=-1)
-@click.option("--tui", "mode", flag_value="tui", default=None, help="Open TUI review.")
-@click.option("--web", "mode", flag_value="web", help="Open web review.")
+@click.option(
+    "--tui",
+    "mode",
+    flag_value="tui",
+    default=None,
+    help="Legacy interactive review client; currently unavailable.",
+)
+@click.option(
+    "--web",
+    "mode",
+    flag_value="web",
+    help="Legacy interactive review client; currently unavailable.",
+)
 @click.option(
     "--all",
     "all_rows",
@@ -1015,6 +1033,16 @@ def dataset_review(args: tuple[str, ...], mode: str | None, all_rows: bool, as_j
         return
     if len(args) > 1:
         click.echo("Usage: ot dataset review <name>", err=True)
+        sys.exit(2)
+    if mode in {"tui", "web"}:
+        if as_json:
+            click.echo(json.dumps({
+                "status": "error",
+                "error": "interactive_review_decommissioned",
+                "message": _INTERACTIVE_REVIEW_DECOMMISSIONED,
+            }, indent=2, sort_keys=True))
+        else:
+            click.echo(_INTERACTIVE_REVIEW_DECOMMISSIONED, err=True)
         sys.exit(2)
     name = args[0]
     try:

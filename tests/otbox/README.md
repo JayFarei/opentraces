@@ -256,7 +256,7 @@ Current catalogue highlights (full sweep: `make otbox-journeys` runs
 | `dataset-sync-skill-history` | core | 0 | gold | `dataset schedule` lifecycle on `c-captured-multi-skill` |
 | `doctor-health` | extended | 0 | bronze | CLI: doctor JSON health |
 | `web-viewer-smoke` | extended | 0 | bronze | Web: Flask review backend, headless |
-| `tui-review-smoke` | extended | 0 | bronze | TUI: lazytraces in tmux |
+| `tui-review-smoke` | extended | 0 | bronze | Legacy TUI smoke, gated by `decommissioned_ui` |
 | `install-smoke-tier1` | extended | 1 | bronze | cross-OS install smoke (opt-in) |
 
 ## Captured-session checkpoints — artifact-preferred, synthetic-fallback

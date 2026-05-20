@@ -12,13 +12,11 @@ requires-python = ">=3.10"
 dependencies = [
     "opentraces-schema>=0.3.0,<1.0.0",
     "click>=8.0",
-    "flask>=3.0",
     "huggingface_hub>=0.20.0",
     "mmh3>=4.0",
     "pyclack-cli>=0.4.0",
     "pyyaml>=6.0",
     "requests>=2.31.0",
-    "textual>=0.50.0",
 ]
 
 [project.optional-dependencies]
@@ -35,7 +33,6 @@ release = ["build", "twine"]
 [project.scripts]
 opentraces = "opentraces.cli:main"
 ot = "opentraces.cli:main"
-lazytraces = "opentraces.clients.tui:main"
 
 [project.urls]
 Homepage = "https://opentraces.ai"

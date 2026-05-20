@@ -1,84 +1,84 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 94.634916,
+    "cold_ms": 95.2175,
     "extra": {},
-    "max_rss_delta_mb": 0.03125,
-    "mean_ms": 120.4290748,
-    "p50_ms": 107.262875,
-    "p95_ms": 152.204625,
-    "peak_rss_mb": 105.859375,
-    "python_heap_peak_mb": 0.49945926666259766,
+    "max_rss_delta_mb": 0.046875,
+    "mean_ms": 80.97500840000001,
+    "p50_ms": 76.799042,
+    "p95_ms": 95.2175,
+    "peak_rss_mb": 102.484375,
+    "python_heap_peak_mb": 0.49965381622314453,
     "samples": [
       {
-        "duration_ms": 94.634916,
+        "duration_ms": 95.2175,
         "metadata": {
           "commit_count": 1,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-292/test_watcher_perf_watcher_quie0/watcher-quiet-smoke/run-02/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-313/test_watcher_perf_watcher_quie0/watcher-quiet-smoke/run-02/proj",
           "scenario": "watcher-quiet-smoke",
           "trace_count": 0
         },
-        "peak_rss_mb": 105.765625,
-        "python_heap_peak_mb": 0.49945926666259766,
-        "rss_after_mb": 105.71875,
-        "rss_before_mb": 105.71875,
+        "peak_rss_mb": 102.34375,
+        "python_heap_peak_mb": 0.4976835250854492,
+        "rss_after_mb": 102.296875,
+        "rss_before_mb": 102.25,
+        "rss_delta_mb": 0.046875
+      },
+      {
+        "duration_ms": 75.60575,
+        "metadata": {
+          "commit_count": 1,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-313/test_watcher_perf_watcher_quie0/watcher-quiet-smoke/run-04/proj",
+          "scenario": "watcher-quiet-smoke",
+          "trace_count": 0
+        },
+        "peak_rss_mb": 102.359375,
+        "python_heap_peak_mb": 0.4984626770019531,
+        "rss_after_mb": 102.3125,
+        "rss_before_mb": 102.3125,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 101.602125,
+        "duration_ms": 73.383375,
         "metadata": {
           "commit_count": 1,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-292/test_watcher_perf_watcher_quie0/watcher-quiet-smoke/run-04/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-313/test_watcher_perf_watcher_quie0/watcher-quiet-smoke/run-06/proj",
           "scenario": "watcher-quiet-smoke",
           "trace_count": 0
         },
-        "peak_rss_mb": 105.765625,
-        "python_heap_peak_mb": 0.4968862533569336,
-        "rss_after_mb": 105.71875,
-        "rss_before_mb": 105.71875,
-        "rss_delta_mb": 0.0
-      },
-      {
-        "duration_ms": 107.262875,
-        "metadata": {
-          "commit_count": 1,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-292/test_watcher_perf_watcher_quie0/watcher-quiet-smoke/run-06/proj",
-          "scenario": "watcher-quiet-smoke",
-          "trace_count": 0
-        },
-        "peak_rss_mb": 105.78125,
-        "python_heap_peak_mb": 0.49816322326660156,
-        "rss_after_mb": 105.734375,
-        "rss_before_mb": 105.734375,
-        "rss_delta_mb": 0.0
-      },
-      {
-        "duration_ms": 146.440833,
-        "metadata": {
-          "commit_count": 1,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-292/test_watcher_perf_watcher_quie0/watcher-quiet-smoke/run-08/proj",
-          "scenario": "watcher-quiet-smoke",
-          "trace_count": 0
-        },
-        "peak_rss_mb": 105.796875,
-        "python_heap_peak_mb": 0.49695873260498047,
-        "rss_after_mb": 105.75,
-        "rss_before_mb": 105.734375,
-        "rss_delta_mb": 0.015625
-      },
-      {
-        "duration_ms": 152.204625,
-        "metadata": {
-          "commit_count": 1,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-292/test_watcher_perf_watcher_quie0/watcher-quiet-smoke/run-10/proj",
-          "scenario": "watcher-quiet-smoke",
-          "trace_count": 0
-        },
-        "peak_rss_mb": 105.859375,
-        "python_heap_peak_mb": 0.4978933334350586,
-        "rss_after_mb": 105.8125,
-        "rss_before_mb": 105.78125,
+        "peak_rss_mb": 102.4375,
+        "python_heap_peak_mb": 0.4817962646484375,
+        "rss_after_mb": 102.390625,
+        "rss_before_mb": 102.359375,
         "rss_delta_mb": 0.03125
+      },
+      {
+        "duration_ms": 76.799042,
+        "metadata": {
+          "commit_count": 1,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-313/test_watcher_perf_watcher_quie0/watcher-quiet-smoke/run-08/proj",
+          "scenario": "watcher-quiet-smoke",
+          "trace_count": 0
+        },
+        "peak_rss_mb": 102.453125,
+        "python_heap_peak_mb": 0.4495849609375,
+        "rss_after_mb": 102.40625,
+        "rss_before_mb": 102.40625,
+        "rss_delta_mb": 0.0
+      },
+      {
+        "duration_ms": 83.869375,
+        "metadata": {
+          "commit_count": 1,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-313/test_watcher_perf_watcher_quie0/watcher-quiet-smoke/run-10/proj",
+          "scenario": "watcher-quiet-smoke",
+          "trace_count": 0
+        },
+        "peak_rss_mb": 102.484375,
+        "python_heap_peak_mb": 0.49965381622314453,
+        "rss_after_mb": 102.4375,
+        "rss_before_mb": 102.4375,
+        "rss_delta_mb": 0.0
       }
     ]
   },

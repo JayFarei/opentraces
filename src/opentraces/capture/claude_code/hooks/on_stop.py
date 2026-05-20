@@ -101,9 +101,25 @@ def _trail_state(cwd: str | None) -> dict:
 
 def main() -> None:
     try:
+        from opentraces.capture.claude_code.hooks._trails import arm_hook_watchdog
+
+        arm_hook_watchdog()
+    except Exception:
+        pass
+
+    try:
         payload = json.load(sys.stdin)
     except Exception:
         sys.exit(0)
+
+    try:
+        from opentraces.capture.claude_code.hooks._trails import (
+            auto_enroll_from_cwd,
+        )
+
+        auto_enroll_from_cwd(payload.get("cwd"))
+    except Exception:
+        pass
 
     transcript_path = payload.get("transcript_path")
     if not transcript_path:

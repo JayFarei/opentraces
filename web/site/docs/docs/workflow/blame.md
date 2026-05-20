@@ -112,13 +112,9 @@ Rows with line-level attribution show real line counts and a coverage percentage
 
 `--lines`, `--entities`, and a `PATH` argument are commit-mode only; trace-mode output is always summary-level.
 
-## Web Viewer
+## Dataset Review UI
 
-`opentraces dataset review <name> --web` exposes the same blame data in the browser. Switch to the `graph` tab to browse the commit spine on the left and the per-commit blame on the right.
-
-![opentraces dataset review --web — graph / blame view](/docs/assets/blame/web-blame-view.png)
-
-The viewer is keyboard-first: `j`/`k` navigates commits, `enter` loads the blame panel, `q` quits. The trace-side panel mirrors the CLI, with hook-linked commits collapsed under a `▸ N hook-linked commits (no line counts)` disclosure so the primary list stays dense with line-attributed rows.
+The old browser viewer is decommissioned for now. Use the CLI blame surfaces above until the next dataset-scoped review UI lands.
 
 ## Evidence Tiers
 

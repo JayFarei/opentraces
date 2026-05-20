@@ -1,9 +1,8 @@
 name = "tui-review-smoke"
 description = """
-TUI startup journey. Drives the lazytraces Textual TUI in a tmux
-session inside the box, lets it render, and captures the pane. Proves
-the TUI product surface boots against a seeded world and renders its
-review chrome.
+Legacy TUI startup journey. The raw-trace TUI product surface is
+decommissioned until the next dataset-scoped review UI lands, so this
+journey is deliberately capability-gated out of the default matrix.
 
 Requires tmux. The tmux step pins the box's isolated HOME explicitly so
 a running tmux server cannot leak the developer's real data into the
@@ -12,7 +11,7 @@ captured pane.
 lane = "extended"
 tier = 0
 seed = "smoke"
-requires = ["cli", "tmux"]
+requires = ["cli", "tmux", "decommissioned_ui"]
 
 [[steps]]
 type = "tmux"

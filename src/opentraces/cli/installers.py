@@ -464,6 +464,23 @@ def _run_setup_wizard() -> None:
     print_banner(tagline="setup wizard")
     human_echo("")
 
+    # 0. Tracking mode — the headline choice (plan 081). Global (default)
+    #    auto-enrolls every project an agent touches; manual keeps the
+    #    explicit `opentraces init` opt-in. Persisted to global config.
+    cfg = load_config()
+    current_mode = cfg.capture.tracking_mode
+    human_echo(f"  {_cli._bold('tracking mode'):<28} {_cli._ok(current_mode)}")
+    track_global = _wizard_confirm(
+        "track every project automatically?",
+        default=(current_mode == "global"),
+        hint="global auto-enrolls each project an agent touches; no per-project 'opentraces init'",
+    )
+    new_mode = "global" if track_global else "manual"
+    if new_mode != current_mode:
+        cfg.capture.tracking_mode = new_mode
+        save_config(cfg)
+    human_echo(f"    {_cli._ok(new_mode)}")
+
     # 1. Hook installers (claude-code, git, skill) — one prompt each,
     #    default yes.
     for name, cls in get_hook_installers().items():
@@ -627,9 +644,18 @@ def _run_setup_wizard() -> None:
 
     human_echo("")
     human_echo(_cli._bold("Next steps"))
-    human_echo(
-        f"  • to track a project:  {_cli._bold('cd <project> && opentraces init')}"
-    )
+    if new_mode == "global":
+        human_echo(
+            "  • tracking mode is global: every project an agent touches is "
+            "auto-enrolled (private + review-required)."
+        )
+        human_echo(
+            f"  • to opt one project out:  {_cli._bold('opentraces remove')}"
+        )
+    else:
+        human_echo(
+            f"  • to track a project:  {_cli._bold('cd <project> && opentraces init')}"
+        )
     human_echo(
         f"  • to inspect health:   {_cli._bold('opentraces doctor')}"
     )
@@ -1830,11 +1856,21 @@ def _versions_section(report: dict) -> None:
         _row("ok", "schema", report["schema_version"])
 
 
+def _tracking_mode_section(report: dict) -> None:
+    mode = report.get("tracking_mode", "global")
+    _section("Tracking mode")
+    if mode == "global":
+        _row("ok", "mode", "global", detail="auto-enroll every project an agent touches")
+    else:
+        _row("off", "mode", "manual", detail="explicit 'opentraces init' opt-in per project")
+
+
 def _render_doctor_human(report: dict) -> None:
     _cli.print_banner(tagline="doctor")
 
     _versions_section(report)
     _security_section(report["security"])
+    _tracking_mode_section(report)
     _opted_in_section(report.get("opted_in_projects") or {})
 
     _section("Authentication")

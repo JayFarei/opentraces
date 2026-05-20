@@ -1,4 +1,7 @@
-"""Textual TUI for the OpenTraces repo inbox.
+"""Legacy Textual TUI for the OpenTraces repo inbox.
+
+This raw-trace review client is decommissioned for now. The implementation is
+retained as reference material until the next dataset-scoped review UI lands.
 
 Two-column layout:
 
@@ -31,15 +34,13 @@ from rich.theme import Theme
 from textual import events, on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import ListItem, ListView, RichLog, Static
 
 from ...core.config import (
     get_project_state_path,
-    get_project_traces_dir,
     load_project_config,
-    project_is_opted_in,
 )
 from ...core.inbox import get_stage, load_traces
 from ...core.review import (
@@ -1831,22 +1832,13 @@ class OpenTracesApp(App):
 
 
 def main() -> None:
-    cwd = Path.cwd()
-    staging_dir = get_project_traces_dir(cwd) if project_is_opted_in(cwd) else cwd
-
-    args = sys.argv[1:]
-    i = 0
-    while i < len(args):
-        if args[i] == "--staging-dir" and i + 1 < len(args):
-            staging_dir = Path(args[i + 1])
-            i += 2
-        elif args[i].startswith("--staging-dir="):
-            staging_dir = Path(args[i].split("=", 1)[1])
-            i += 1
-        else:
-            i += 1
-
-    OpenTracesApp(staging_dir=staging_dir).run()
+    print(
+        "The legacy opentraces TUI client is decommissioned for now. "
+        "Use `opentraces dataset review <name> --json` and "
+        "`opentraces dataset review approve|reject|reset <name> ...`.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 
 
 if __name__ == "__main__":

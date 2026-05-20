@@ -9,8 +9,18 @@ push behavior.
 
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import json
 from pathlib import Path
+
+import pytest
+
+pytest.skip(
+    "legacy web review client is decommissioned until the next dataset review UI "
+    "iteration lands",
+    allow_module_level=True,
+)
 
 from opentraces.clients.web.server import create_app
 from opentraces.core.state import StateManager, TraceStatus

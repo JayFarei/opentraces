@@ -1,70 +1,70 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 665.128541,
+    "cold_ms": 471.396041,
     "extra": {},
-    "max_rss_delta_mb": 0.28125,
-    "mean_ms": 527.7004065,
-    "p50_ms": 470.469459,
-    "p95_ms": 665.128541,
-    "peak_rss_mb": 105.65625,
-    "python_heap_peak_mb": 0.6529302597045898,
+    "max_rss_delta_mb": 0.140625,
+    "mean_ms": 481.37819775,
+    "p50_ms": 423.553416,
+    "p95_ms": 633.752584,
+    "peak_rss_mb": 108.328125,
+    "python_heap_peak_mb": 0.6500606536865234,
     "samples": [
       {
-        "duration_ms": 665.128541,
+        "duration_ms": 471.396041,
         "metadata": {
           "commit_count": 1,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-292/test_watcher_perf_watcher_acti0/watcher-active-smoke/run-00/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-306/test_watcher_perf_watcher_acti0/watcher-active-smoke/run-00/proj",
           "scenario": "watcher-active-smoke",
           "trace_count": 0
         },
-        "peak_rss_mb": 104.484375,
-        "python_heap_peak_mb": 0.6426162719726562,
-        "rss_after_mb": 104.4375,
-        "rss_before_mb": 104.234375,
-        "rss_delta_mb": 0.203125
+        "peak_rss_mb": 108.0625,
+        "python_heap_peak_mb": 0.6480607986450195,
+        "rss_after_mb": 108.015625,
+        "rss_before_mb": 107.90625,
+        "rss_delta_mb": 0.109375
       },
       {
-        "duration_ms": 470.469459,
+        "duration_ms": 396.81075,
         "metadata": {
           "commit_count": 1,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-292/test_watcher_perf_watcher_acti0/watcher-active-smoke/run-02/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-306/test_watcher_perf_watcher_acti0/watcher-active-smoke/run-02/proj",
           "scenario": "watcher-active-smoke",
           "trace_count": 0
         },
-        "peak_rss_mb": 104.828125,
-        "python_heap_peak_mb": 0.6529302597045898,
-        "rss_after_mb": 104.828125,
-        "rss_before_mb": 104.5625,
-        "rss_delta_mb": 0.265625
+        "peak_rss_mb": 108.09375,
+        "python_heap_peak_mb": 0.6500606536865234,
+        "rss_after_mb": 108.046875,
+        "rss_before_mb": 108.015625,
+        "rss_delta_mb": 0.03125
       },
       {
-        "duration_ms": 467.819834,
+        "duration_ms": 423.553416,
         "metadata": {
           "commit_count": 1,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-292/test_watcher_perf_watcher_acti0/watcher-active-smoke/run-04/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-306/test_watcher_perf_watcher_acti0/watcher-active-smoke/run-04/proj",
           "scenario": "watcher-active-smoke",
           "trace_count": 0
         },
-        "peak_rss_mb": 105.25,
-        "python_heap_peak_mb": 0.6274499893188477,
-        "rss_after_mb": 105.203125,
-        "rss_before_mb": 104.953125,
-        "rss_delta_mb": 0.25
+        "peak_rss_mb": 108.203125,
+        "python_heap_peak_mb": 0.6262149810791016,
+        "rss_after_mb": 108.1875,
+        "rss_before_mb": 108.046875,
+        "rss_delta_mb": 0.140625
       },
       {
-        "duration_ms": 507.383792,
+        "duration_ms": 633.752584,
         "metadata": {
           "commit_count": 1,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-292/test_watcher_perf_watcher_acti0/watcher-active-smoke/run-06/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-306/test_watcher_perf_watcher_acti0/watcher-active-smoke/run-06/proj",
           "scenario": "watcher-active-smoke",
           "trace_count": 0
         },
-        "peak_rss_mb": 105.65625,
-        "python_heap_peak_mb": 0.6286077499389648,
-        "rss_after_mb": 105.609375,
-        "rss_before_mb": 105.328125,
-        "rss_delta_mb": 0.28125
+        "peak_rss_mb": 108.328125,
+        "python_heap_peak_mb": 0.62628173828125,
+        "rss_after_mb": 108.28125,
+        "rss_before_mb": 108.1875,
+        "rss_delta_mb": 0.09375
       }
     ]
   },

@@ -14,7 +14,6 @@ pip install -e ".[dev]"
 ## Optional Dependencies
 
 ```bash
-pip install -e ".[web,tui]"       # Web and TUI inbox clients
 pip install -e ".[release]"       # Build and publish tools (build, twine)
 ```
 
@@ -31,7 +30,7 @@ export OPENTRACES_TEST_PROJECT_DIR=~/.claude/projects/<your-project-slug>
 pytest tests/ -v
 ```
 
-The repository also has frontend test suites under `web/viewer/` and buildable docs under `web/site/`.
+The legacy raw-trace TUI and React viewer are retained in the tree but decommissioned from the default build/test gate until the next dataset-scoped review UI lands. The buildable docs live under `web/site/`.
 
 ## Layout
 
@@ -46,8 +45,8 @@ Core directories:
 - `src/opentraces/enrichment/` - git signals, attribution, dependencies, metrics
 - `src/opentraces/quality/` - scoring and upload gates
 - `src/opentraces/security/` - redaction and scanning pipeline
-- `src/opentraces/clients/` - TUI and web backend clients
-- `web/viewer/` - React trace review UI
+- `src/opentraces/clients/` - legacy TUI and web backend clients (decommissioned)
+- `web/viewer/` - legacy React trace review UI (decommissioned)
 - `web/site/` - Next.js docs and marketing site
 - `tests/` - Python test suite
 

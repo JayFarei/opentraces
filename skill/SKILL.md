@@ -37,17 +37,22 @@ opentraces setup auth
 opentraces setup bucket          # configure remote-by-default private bucket sync
 opentraces setup skill           # install the opentraces skill into agent harnesses
 opentraces setup upgrade         # upgrade CLI + refresh project skill file
+opentraces config tracking-mode  # show; pass global|manual to set
 opentraces auth whoami
 opentraces init
 opentraces status
 opentraces doctor
 ```
 
-`setup` is machine-global: hooks, auth, watcher, TruffleHog, LLM review, and
-supporting binaries. `init` is project enrollment only; dataset remotes and
-review policy belong under `opentraces dataset ...`. Private bucket
-configuration belongs under `opentraces setup bucket` and `opentraces
-bucket remote`.
+`setup` is machine-global: tracking mode, hooks, auth, watcher, TruffleHog,
+LLM review, and supporting binaries. Tracking mode (`opentraces config
+tracking-mode`) controls enrollment: `global` (default) auto-enrolls every
+project an agent touches — git or not — private + review-required the first
+time a capture hook fires there, so `init` is optional; `manual` keeps the
+explicit per-project `opentraces init` opt-in. `init` is project enrollment
+only; dataset remotes and review policy belong under `opentraces dataset
+...`. Private bucket configuration belongs under `opentraces setup bucket`
+and `opentraces bucket remote`.
 
 ## Trace Retrieval
 

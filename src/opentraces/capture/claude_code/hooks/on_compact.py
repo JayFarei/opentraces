@@ -15,6 +15,12 @@ from datetime import datetime, timezone
 
 def main() -> None:
     try:
+        from opentraces.capture.claude_code.hooks._trails import arm_hook_watchdog
+
+        arm_hook_watchdog()
+    except Exception:
+        pass
+    try:
         payload = json.load(sys.stdin)
     except Exception:
         sys.exit(0)

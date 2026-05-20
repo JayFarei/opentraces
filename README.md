@@ -338,10 +338,10 @@ src/opentraces/
   enrichment/           # Read-only enrichers: git signals, attribution, dependencies, metrics
   quality/              # Trace quality assessment and rubrics
   security/             # Secret scanning, anonymization, classification
-  clients/              # Presentation layers (text, tui, web)
+  clients/              # Legacy TUI/web review clients (currently decommissioned)
   workflow_templates/   # Bundled dataset workflow skill templates
 web/
-  viewer/               # React SPA trace review UI
+  viewer/               # Legacy React trace review UI (currently decommissioned)
   site/                 # Next.js marketing site
   coming-soon/          # Static coming-soon page (Vercel)
 skill/                  # Claude Code skill definition (skills.sh convention)

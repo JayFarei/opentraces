@@ -235,9 +235,18 @@ class CaptureOTLPConfig(BaseModel):
 
 
 class CaptureConfig(BaseModel):
-    """Capture-side settings: per-capture-source configuration."""
+    """Capture-side settings: per-capture-source configuration.
+
+    ``tracking_mode`` controls project enrollment (plan 081). ``"global"``
+    (default) auto-enrolls any project an agent session touches — git or
+    not — the first time a capture hook fires there, seeding the project
+    with the standard private + review-required policy. ``"manual"``
+    preserves the explicit per-project ``opentraces init`` opt-in: the
+    hook path performs no auto-enrollment.
+    """
 
     otlp: CaptureOTLPConfig = Field(default_factory=CaptureOTLPConfig)
+    tracking_mode: Literal["global", "manual"] = "global"
 
     model_config = {"extra": "ignore"}
 
@@ -886,6 +895,35 @@ def register_project(config: Config, project_dir: Path) -> bool:
         return False
     config.projects[key] = new_reg
     return True
+
+
+def auto_enroll_if_global(project_dir: Path) -> bool:
+    """Enroll ``project_dir`` if global tracking mode is active (plan 081).
+
+    No-op (returns False) when the project is already enrolled, when
+    ``capture.tracking_mode`` is ``"manual"``, or on any unexpected error.
+    Enrollment goes through ``register_project``, so the project inherits
+    the standard private + review-required marker policy. Returns True
+    only when a fresh enrollment was written.
+
+    Best-effort by contract: this runs on the capture-hook hot path and
+    must never raise into the agent, so all failures are swallowed.
+    """
+    try:
+        if project_is_opted_in(project_dir):
+            return False
+        config = load_config()
+        if config.capture.tracking_mode != "global":
+            return False
+        if register_project(config, project_dir):
+            save_config(config)
+            return True
+        return False
+    except Exception:
+        logger.debug(
+            "auto_enroll_if_global failed for %s", project_dir, exc_info=True
+        )
+        return False
 
 
 def unregister_project(config: Config, project_dir: Path) -> bool:

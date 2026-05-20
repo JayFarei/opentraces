@@ -136,3 +136,16 @@ def test_dataset_and_workflow_groups_are_registered_on_root_cli():
     result = runner.invoke(main, ["workflow", "list", "--json"])
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["workflows"] == []
+
+
+def test_dataset_review_interactive_clients_are_decommissioned():
+    runner = CliRunner()
+
+    result = runner.invoke(dataset_group, ["review", "example-dataset", "--web"])
+    assert result.exit_code == 2
+    assert "Interactive TUI/web review clients are decommissioned" in result.output
+
+    result = runner.invoke(dataset_group, ["review", "example-dataset", "--tui", "--json"])
+    assert result.exit_code == 2
+    payload = json.loads(result.output)
+    assert payload["error"] == "interactive_review_decommissioned"

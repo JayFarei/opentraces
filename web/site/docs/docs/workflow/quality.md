@@ -32,7 +32,8 @@ To assess a dataset already on Hugging Face, the recommended path is to import i
 
 ```bash
 opentraces dataset run my-dataset
-opentraces dataset review my-dataset --tui
+opentraces dataset review my-dataset --json
+opentraces dataset review approve my-dataset --all
 opentraces dataset publish my-dataset
 ```
 

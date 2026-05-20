@@ -6,6 +6,8 @@ These tests build a synthetic staging dir with a few canned traces, mount the
 against the wireframe layout).
 """
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import json
@@ -14,6 +16,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+
+pytest.skip(
+    reason=(
+        "legacy TUI client is decommissioned until the next dataset review UI "
+        "iteration lands"
+    ),
+    allow_module_level=True,
+)
 
 from opentraces.clients.tui import OpenTracesApp
 from opentraces.core.state import StateManager, TraceStatus

@@ -27,7 +27,7 @@ def test_optional_viewer_build_hook_skips_missing_bundle(tmp_path: Path) -> None
     assert hook.build_config.build_force_include == {}
 
 
-def test_optional_viewer_build_hook_includes_bundle_for_wheel(tmp_path: Path) -> None:
+def test_optional_viewer_build_hook_ignores_bundle_for_wheel(tmp_path: Path) -> None:
     viewer_dist = tmp_path / "web" / "viewer" / "dist"
     viewer_dist.mkdir(parents=True)
     (viewer_dist / "index.html").write_text("<!doctype html>")
@@ -37,12 +37,10 @@ def test_optional_viewer_build_hook_includes_bundle_for_wheel(tmp_path: Path) ->
 
     hook.initialize("standard", build_data)
 
-    assert hook.build_config.build_force_include == {
-        str(viewer_dist): "opentraces/static/viewer",
-    }
+    assert hook.build_config.build_force_include == {}
 
 
-def test_optional_viewer_build_hook_preserves_bundle_in_sdist(tmp_path: Path) -> None:
+def test_optional_viewer_build_hook_ignores_bundle_for_sdist(tmp_path: Path) -> None:
     viewer_dist = tmp_path / "web" / "viewer" / "dist"
     viewer_dist.mkdir(parents=True)
     (viewer_dist / "index.html").write_text("<!doctype html>")
@@ -52,6 +50,4 @@ def test_optional_viewer_build_hook_preserves_bundle_in_sdist(tmp_path: Path) ->
 
     hook.initialize("standard", build_data)
 
-    assert hook.build_config.build_force_include == {
-        str(viewer_dist): "web/viewer/dist",
-    }
+    assert hook.build_config.build_force_include == {}

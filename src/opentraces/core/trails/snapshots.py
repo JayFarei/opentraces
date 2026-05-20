@@ -12,6 +12,7 @@ from typing import Any
 
 from opentraces_schema.models import TraceRecord
 
+from ..paths import MARKER_FILENAME
 from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
 from .event_log import append_event_batch
 from .ids import (
@@ -288,7 +289,17 @@ def _patch_drafts_for_step(
 
 
 def write_worktree_tree(repo: Path) -> dict[str, str]:
-    """Compute a Git tree from the current worktree without touching the index."""
+    """Compute a Git tree from the current worktree without touching the index.
+
+    Excludes opentraces' own ``.opentraces.json`` enrollment marker: it is
+    opentraces bookkeeping, not user code, so it must not perturb the
+    worktree fingerprint used for lineage anchoring and rewind
+    materialization. Without this, merely enrolling a project — via
+    ``opentraces init`` or global-mode auto-enroll, both of which write the
+    marker — would change every subsequent ``tree_id``. The exclusion runs
+    against the throwaway temp index (``GIT_INDEX_FILE``), so the user's
+    real index and worktree are never touched.
+    """
     repo = repo.resolve()
     with tempfile.TemporaryDirectory(prefix="opentraces-worktree-index-") as td:
         env = os.environ.copy()
@@ -298,6 +309,12 @@ def write_worktree_tree(repo: Path) -> dict[str, str]:
         else:
             _git(repo, ["read-tree", "--empty"], env=env)
         _git(repo, ["add", "-A", "--", "."], env=env)
+        _git(
+            repo,
+            ["rm", "--cached", "--quiet", "--ignore-unmatch", "--", MARKER_FILENAME],
+            env=env,
+            check=False,
+        )
         tree = _git(repo, ["write-tree"], env=env)
     return GitObjectID(hex=tree).model_dump(mode="json")
 

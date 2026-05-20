@@ -1,7 +1,15 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 from dataclasses import replace
 import pytest
+
+pytest.skip(
+    "legacy React viewer perf lane is decommissioned until the next dataset "
+    "review UI iteration lands",
+    allow_module_level=True,
+)
 
 from tests.perf.conftest import PerfRuntime
 from tests.perf.harness.measure import write_artifact

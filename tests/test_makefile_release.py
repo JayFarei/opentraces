@@ -31,8 +31,8 @@ def test_release_cleans_once_before_builds_and_uploads_built_artifacts() -> None
     assert lines.count(SCHEMA_BUILD) == 1
     assert lines.count(CLI_BUILD) == 1
     assert lines.index(CLEAN) < lines.index(SCHEMA_BUILD)
-    assert lines.index(SCHEMA_BUILD) < lines.index(VIEWER_BUILD)
-    assert lines.index(VIEWER_BUILD) < lines.index(CLI_BUILD)
+    assert VIEWER_BUILD not in lines
+    assert lines.index(SCHEMA_BUILD) < lines.index(CLI_BUILD)
     assert lines.index(CLI_BUILD) < lines.index(SCHEMA_UPLOAD)
     assert lines.index(SCHEMA_UPLOAD) < lines.index(CLI_UPLOAD)
 

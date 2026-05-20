@@ -7,6 +7,36 @@ import subprocess
 from pathlib import Path
 
 
+def arm_hook_watchdog(seconds: int = 12) -> None:
+    """Guarantee the hook process exits within ``seconds``.
+
+    Hooks are best-effort and must never block Claude Code or linger. If any
+    capture step stalls (slow or locked git, contended filesystem), SIGALRM
+    exits the process cleanly so it can't pile up as an orphan. No-ops where
+    SIGALRM is unavailable (non-main thread / unsupported platform).
+
+    Never arms inside the pytest runner: tests invoke hook ``main()`` in
+    process, so a leaked ``os._exit(0)`` alarm would kill the test process
+    itself (no summary, truncated output). The watchdog only bounds the
+    real fire-and-forget hook subprocess, where ``PYTEST_CURRENT_TEST`` is
+    absent.
+    """
+    import os
+    import signal
+
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+
+    def _bail(_signum: int, _frame: object) -> None:
+        os._exit(0)
+
+    try:
+        signal.signal(signal.SIGALRM, _bail)
+        signal.alarm(max(1, int(seconds)))
+    except (ValueError, OSError):
+        pass
+
+
 def git_head(cwd: Path) -> dict[str, str] | None:
     try:
         sha = subprocess.check_output(
@@ -114,6 +144,28 @@ def _target_root(cwd: str | None, tool_name: str | None, tool_input: object) -> 
         if root is not None:
             return root
     return _git_toplevel(base)
+
+
+def auto_enroll_from_cwd(cwd: str | None) -> None:
+    """Auto-enroll the project at ``cwd`` under global tracking mode (plan 081).
+
+    Resolves the enrollment target as the Git toplevel when ``cwd`` is
+    inside a repo, otherwise the resolved ``cwd`` itself (non-git projects
+    enroll too). Best-effort: never raises into the hook.
+    """
+    if not cwd:
+        return
+    try:
+        base = Path(cwd).resolve()
+    except Exception:
+        return
+    target = _git_toplevel(base) or base
+    try:
+        from opentraces.core.config import auto_enroll_if_global
+
+        auto_enroll_if_global(target)
+    except Exception:
+        pass
 
 
 def trail_state(

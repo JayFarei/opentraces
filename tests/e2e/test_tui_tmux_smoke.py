@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import os
 import shutil
 import shlex
@@ -10,6 +12,12 @@ import time
 import uuid
 
 import pytest
+
+pytest.skip(
+    "legacy TUI client is decommissioned until the next dataset review UI "
+    "iteration lands",
+    allow_module_level=True,
+)
 
 from ._smoke_helpers import require_opt_in, seed_opted_in_project
 

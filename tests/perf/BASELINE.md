@@ -8,8 +8,6 @@ Generated from `tests/perf/artifacts/latest/summary.json`.
 |---|---:|---:|---:|---:|
 | onboarding-terminal | primary | 1 | 0 | 0 |
 | capture-refresh | primary | 4 | 0 | 0 |
-| web-review | primary | 8 | 1 | 0 |
-| tui-review | primary | 3 | 1 | 0 |
 | cli-review-batch | primary | 3 | 0 | 0 |
 | provenance-graph-blame | primary | 7 | 0 | 0 |
 
@@ -41,7 +39,7 @@ Generated from `tests/perf/artifacts/latest/summary.json`.
 | web-refresh-smoke | capture-refresh | web | web.api_refresh | 253.22 | 257.80 | 249.44 | 190.30 | 0.76 | 0.00 | 500.00 |
 | web-stats-smoke | web-review | web | web.api_stats | 20.03 | 20.79 | 20.03 | 190.30 | 0.76 | 0.00 | 60.00 |
 | web-trace-tree-smoke | web-review | web | web.api_trace_tree | 20.56 | 21.23 | 21.23 | 190.31 | 0.76 | 0.00 | 60.00 |
-| web-traces-smoke | web-review | web | web.api_traces | 20.03 | 21.22 | 20.08 | 190.31 | 0.76 | 0.00 | 60.00 |
+| web-traces-smoke | web-review | web | web.api_traces | 20.03 | 21.22 | 20.08 | 190.31 | 0.76 | 0.05 | 60.00 |
 
 ## Viewer-Specific Baselines
 
@@ -55,6 +53,8 @@ Generated from `tests/perf/artifacts/latest/summary.json`.
 
 | Journey | Why Not In Perf Baseline Yet |
 |---|---|
+| web-review | Decommissioned legacy raw-trace web review surface. Scenarios remain catalogued for history but are skipped until the next dataset-scoped review UI lands. |
+| tui-review | Decommissioned legacy raw-trace TUI surface. Scenarios remain catalogued for history but are skipped until the next dataset-scoped review UI lands. |
 | quality-and-export | The old root assess/export commands are no longer part of the current local flow. Dataset-specific quality and export/consume paths should get fresh perf scenarios once the dataset workflow hardens. |
 | push-and-publish | The old root push perf target has been removed with the staged-trace push flow. A fresh dataset publish perf target should be added once the local dataset publication contract is stable. |
 | dataset-import-and-consume | Mapped explicitly from the docs but not part of the representative perf harness yet because the hot path is remote-I/O dominated and downstream consumption is outside the app's local optimization boundary. |

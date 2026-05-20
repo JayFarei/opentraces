@@ -487,7 +487,7 @@ def _default_repo(identity: dict | None) -> str:
 def _require_project_opted_in(action: str) -> None:
     """Hard gate: exit 2 if cwd has not run ``opentraces init``.
 
-    Used by TUI / web / push — surfaces a clear error rather than
+    Used by project-bound actions to surface a clear error rather than
     silently acting on an uninitialized project.
     """
     from ..core.config import NotOptedInError, project_is_opted_in
@@ -498,13 +498,14 @@ def _require_project_opted_in(action: str) -> None:
 
 
 def _launch_tui_ui(fullscreen: bool = False, limit: int | None = 500) -> None:
-    from ..core.config import get_project_traces_dir
-    from ..clients.tui import OpenTracesApp
-
-    _require_project_opted_in("review")
-    project_staging = get_project_traces_dir(Path.cwd())
-    app = OpenTracesApp(staging_dir=project_staging, limit=limit)
-    app.run()
+    del fullscreen
+    del limit
+    click.echo(
+        "The legacy TUI review client is decommissioned for now. "
+        "Use `opentraces dataset review <name> --json`.",
+        err=True,
+    )
+    sys.exit(2)
 
 
 def _listener_pid_for_port(port: int) -> int | None:
@@ -670,37 +671,14 @@ def _serve_web_app(app, *, host: str, port: int) -> str | None:
 
 
 def _launch_web_ui(port: int = 5050, open_browser: bool = False) -> None:
-    from ..core.config import get_project_traces_dir, get_project_state_path
-    from ..clients.web import create_app
-
-    _require_project_opted_in("review")
-    project_staging = get_project_traces_dir(Path.cwd())
-    project_state = get_project_state_path(Path.cwd())
-    # Installed wheel: <site-packages>/opentraces/static/viewer
-    pkg_path = Path(__file__).parent.parent / "static" / "viewer"
-    if pkg_path.exists():
-        viewer_dist = pkg_path
-    else:
-        # Editable install / source tree: web/viewer/dist at repo root
-        viewer_dist = Path(__file__).parent.parent.parent.parent / "web" / "viewer" / "dist"
-        if not viewer_dist.exists():
-            viewer_dist = None
-
-    app = create_app(
-        str(project_staging),
-        state_path=str(project_state),
-        viewer_dist=str(viewer_dist) if viewer_dist else None,
+    del port
+    del open_browser
+    click.echo(
+        "The legacy web review client is decommissioned for now. "
+        "Use `opentraces dataset review <name> --json`.",
+        err=True,
     )
-    url = f"http://localhost:{port}"
-    click.echo(f"Starting opentraces web inbox at {url}")
-    click.echo("Press Ctrl+C to stop.")
-    if open_browser:
-        _schedule_browser_open(url)
-    stop_reason = _serve_web_app(app, host="127.0.0.1", port=port)
-    if stop_reason == "browser disconnected":
-        click.echo("Browser closed. Stopped opentraces web inbox.")
-    elif stop_reason == "browser quit":
-        click.echo("Stopped opentraces web inbox.")
+    sys.exit(2)
 
 
 def _parse_agent_selection(agent_text: str) -> list[str]:
@@ -764,16 +742,8 @@ def main(ctx: click.Context, json_mode: bool) -> None:
     if ctx.invoked_subcommand is not None:
         return
 
-    if os.environ.get("OPENTRACES_NO_TUI") or not _is_interactive_terminal():
-        click.echo(ctx.get_help())
-        return
-
-    try:
-        _launch_tui_ui()
-    except ImportError:
-        click.echo("TUI dependencies are not installed.")
-        click.echo("Install with: pip install opentraces[tui]")
-        click.echo("Or run: opentraces web")
+    click.echo(ctx.get_help())
+    return
 
 
 HF_OAUTH_CLIENT_ID = "dc6cdff4-4835-462b-84fa-6aa3328a26f9"
@@ -1465,6 +1435,29 @@ def config_set(
     save_config(cfg)
     click.echo(f"Set {key}={value} (global)")
     emit_json({"status": "ok", "scope": "global", "key": key, "value": value})
+
+
+@config.command("tracking-mode")
+@click.argument("mode", required=False, type=click.Choice(["global", "manual"]))
+def config_tracking_mode(mode: str | None) -> None:
+    """Show or set the project tracking mode (plan 081).
+
+      ot config tracking-mode            # show current mode
+      ot config tracking-mode global     # auto-enroll every project an agent touches
+      ot config tracking-mode manual     # explicit 'opentraces init' opt-in per project
+
+    Global mode auto-enrolls projects (git or not) with a private +
+    review-required policy the first time a capture hook fires there.
+    """
+    cfg = load_config()
+    if mode is None:
+        click.echo(cfg.capture.tracking_mode)
+        emit_json({"status": "ok", "tracking_mode": cfg.capture.tracking_mode})
+        return
+    cfg.capture.tracking_mode = mode
+    save_config(cfg)
+    click.echo(f"Set tracking-mode={mode} (global)")
+    emit_json({"status": "ok", "tracking_mode": mode})
 
 
 # --------------------------------------------------------------------------- #
@@ -2534,7 +2527,6 @@ def status(limit: int) -> None:
                 meta_all = getattr(record, "metadata", None) or {}
                 sec_meta = meta_all.get("security") or {}
                 th_meta = (sec_meta.get("tools") or {}).get("trufflehog") or {}
-                th_findings = th_meta.get("findings")
                 th_ran = bool(th_meta) or (th_enabled and t1_ran)
                 llm_payload = meta_all.get("llm_review") or {}
                 llm_ran = bool(llm_payload.get("review_key"))
@@ -3533,6 +3525,23 @@ def _ingest_session(transcript_path: str, project_override: str | None) -> None:
     degrades the user's session; it's not worth it. The watcher sweep
     will recover anything this path misses.
     """
+    # Hard self-timeout: this child is fire-and-forget and unreaped, so it
+    # must never pin a core indefinitely. If ingest hasn't finished within
+    # the budget, exit hard — the watcher sweep recovers anything missed.
+    import os
+    import signal
+
+    def _bail(_signum: int, _frame: object) -> None:
+        os._exit(0)
+
+    watchdog_armed = False
+    try:
+        signal.signal(signal.SIGALRM, _bail)
+        signal.alarm(180)
+        watchdog_armed = True
+    except (ValueError, OSError):
+        pass  # not the main thread / platform without SIGALRM
+
     try:
         path = Path(transcript_path)
         if not path.exists():
@@ -3547,10 +3556,18 @@ def _ingest_session(transcript_path: str, project_override: str | None) -> None:
             return  # not enlisted — watcher on other projects will catch it
 
         from ..core.ingest import ingest_one_session
-        ingest_one_session(path, project_dir)
+        # Don't block behind another in-flight ingest for this session; a
+        # follower that can't get the lock skips (idempotent + watcher net).
+        ingest_one_session(path, project_dir, wait_for_lock=False)
     except Exception:  # noqa: BLE001
         # Belt: never let a hook break the user's agent session.
         return
+    finally:
+        if watchdog_armed:
+            try:
+                signal.alarm(0)
+            except (ValueError, OSError):
+                pass
 
 
 @main.command("_scan", hidden=True)
@@ -4210,13 +4227,12 @@ def capabilities(as_json: bool) -> None:
             "full_snippet_extraction",
             "attribution_blocks",
             "classifier",
-            "web_review",
+            "dataset_review_cli",
             "sharded_upload",
             "commit_groups",
         ],
         "env_vars": {
             "HF_TOKEN": "HuggingFace access token (highest priority over saved credentials)",
-            "OPENTRACES_NO_TUI": "Set to any value to suppress TUI launch on bare invocation",
         },
     }
     click.echo(json.dumps(caps, indent=2))

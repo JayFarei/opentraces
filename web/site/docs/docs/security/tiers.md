@@ -146,11 +146,9 @@ Use `doctor` to confirm the tier is healthy before relying on `dataset publish` 
 Human review is always available through:
 
 ```bash
-opentraces dataset review my-dataset --web
-opentraces dataset review my-dataset --tui
 opentraces dataset review my-dataset
-opentraces dataset review my-dataset approve <row-id>
-opentraces dataset review my-dataset reject <row-id>
+opentraces dataset review approve my-dataset <row-id>
+opentraces dataset review reject my-dataset <row-id>
 ```
 
 This is the final check for project-specific context, sensitive business details, and rows that are technically safe but not worth publishing. For ad-hoc trace inspection (outside a dataset), use `opentraces trace query` and `opentraces trace get`.

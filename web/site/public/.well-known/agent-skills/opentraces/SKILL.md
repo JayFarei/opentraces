@@ -18,7 +18,7 @@ publishes reviewed dataset rows to HuggingFace remotes.
 
 ## Current Command Model
 
-- Global setup: `opentraces setup`, `opentraces setup auth`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces auth`
+- Global setup: `opentraces setup`, `opentraces setup auth`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces config tracking-mode`, `opentraces auth`
 - Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`, `opentraces remove`
 - Trace retrieval and search: `opentraces trace query`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
 - Trace Trails (visible surface): `opentraces trail blame`, `opentraces trail graph`, `opentraces trail track`
@@ -41,17 +41,23 @@ opentraces setup auth
 opentraces setup bucket          # opt into remote-by-default private bucket sync
 opentraces setup skill           # install the opentraces skill into agent harnesses
 opentraces setup upgrade         # upgrade CLI + refresh project skill file
+opentraces config tracking-mode  # show; pass global|manual to set
 opentraces auth whoami
 opentraces init
 opentraces status
 opentraces doctor
 ```
 
-`setup` is machine-global: hooks, auth, watcher, TruffleHog, LLM review, and
-supporting binaries. `init` is project enrollment only; dataset remotes and
-review policy belong under `opentraces dataset ...` and `opentraces config
-set review_policy <auto|review> --project`. Private bucket configuration
-belongs under `opentraces setup bucket` and `opentraces bucket remote`.
+`setup` is machine-global: tracking mode, hooks, auth, watcher, TruffleHog,
+LLM review, and supporting binaries. Tracking mode (`opentraces config
+tracking-mode`) controls enrollment: `global` (default) auto-enrolls every
+project an agent touches — git or not — private + review-required the first
+time a capture hook fires there, so `init` is optional; `manual` keeps the
+explicit per-project `opentraces init` opt-in. `init` is project enrollment
+only; dataset remotes and review policy belong under `opentraces dataset
+...` and `opentraces config set review_policy <auto|review> --project`.
+Private bucket configuration belongs under `opentraces setup bucket` and
+`opentraces bucket remote`.
 
 ## Trace Retrieval
 

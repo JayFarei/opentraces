@@ -16,7 +16,7 @@ opentraces trail graph                    # commit + trace history
 opentraces trail track <trace-id>         # walk trace lineage through Git history
 opentraces dataset new my-dataset --workflow my-workflow
 opentraces dataset run my-dataset         # synthesize dataset rows from retained traces
-opentraces dataset review my-dataset --tui  # approve, reject, redact
+opentraces dataset review approve my-dataset --all
 opentraces dataset publish my-dataset     # upload reviewed rows to the active remote
 ```
 
@@ -47,10 +47,9 @@ The [schema](/docs/schema/overview) is a standalone package and the contract bet
 | **[Authentication](/docs/getting-started/authentication)** | OAuth, PATs, `HF_TOKEN`, auth precedence |
 | **[Quick Start](/docs/getting-started/quickstart)** | Initialize a repo, review traces, upload your first shard |
 | **[Commands](/docs/cli/commands)** | Current 0.4 command reference |
-| **[Inbox & Review](/docs/workflow/review)** | Dataset review (TUI and web) and CLI review loop |
+| **[Inbox & Review](/docs/workflow/review)** | Dataset row review and CLI approval loop |
 | **[Publish](/docs/workflow/pushing)** | Dataset publication, remotes, visibility, migration, quality badges |
 | **[Security Tiers](/docs/security/tiers)** | Regex, entropy, TruffleHog, Tier 2 review, human approval |
 | **[Security Configuration](/docs/security/configuration)** | Global config, project marker, exclusions, custom redaction |
 | **[Schema](/docs/schema/overview)** | Trace structure and field semantics |
 | **[Consume](/docs/workflow/consume)** | Loading datasets back out of Hugging Face |
-

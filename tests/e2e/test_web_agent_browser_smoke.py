@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import os
 import shutil
 import subprocess
 import uuid
 
 import pytest
+
+pytest.skip(
+    "legacy web review client is decommissioned until the next dataset review UI "
+    "iteration lands",
+    allow_module_level=True,
+)
 
 from ._smoke_helpers import (
     free_port,

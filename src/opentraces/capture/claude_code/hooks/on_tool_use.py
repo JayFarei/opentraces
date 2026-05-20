@@ -38,6 +38,8 @@ from datetime import datetime, timezone
 import mmh3
 
 from opentraces.capture.claude_code.hooks._trails import (
+    arm_hook_watchdog,
+    auto_enroll_from_cwd,
     observe_tool_boundary_for_hook,
     trail_state,
 )
@@ -168,10 +170,13 @@ def _dual_emit_agent_trace(cwd: str | None, data: dict, session_id: str | None) 
 
 
 def main() -> None:
+    arm_hook_watchdog()
     try:
         payload = json.load(sys.stdin)
     except Exception:
         sys.exit(0)
+
+    auto_enroll_from_cwd(payload.get("cwd"))
 
     transcript_path = payload.get("transcript_path")
     if not transcript_path:

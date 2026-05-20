@@ -10,6 +10,7 @@ propagate to the agent session.
 from __future__ import annotations
 
 import json
+import signal
 from pathlib import Path
 
 import pytest
@@ -98,6 +99,7 @@ class TestIngestSessionCommand:
                    "--project", str(opted_in_project)]
         )
         assert result.exit_code == 0, result.output
+        assert signal.alarm(0) == 0
 
     def test_no_opted_in_project_exits_cleanly(
         self, runner, tmp_path, monkeypatch

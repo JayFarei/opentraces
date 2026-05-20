@@ -764,6 +764,9 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
     return {
         "security_version": SECURITY_VERSION,
         "schema_version": _schema_version(),
+        "tracking_mode": getattr(
+            getattr(cfg, "capture", None), "tracking_mode", "global"
+        ),
         "opted_in_projects": {
             "count": len(opted_in),
             "paths": opted_in,

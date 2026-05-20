@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+
+pytest.skip(
+    "legacy web review client perf lane is decommissioned until the next "
+    "dataset review UI iteration lands",
+    allow_module_level=True,
+)
 
 from tests.perf.conftest import PerfRuntime
 from tests.perf.harness.measure import measure_python_factory, write_artifact

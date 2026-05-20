@@ -1,8 +1,7 @@
 """Shared rendering helpers for LLM review verdicts and entity counts.
 
-Consumed by the CLI, the TUI, and the Flask/React web review client so
-all three surfaces speak with one voice. Keeping this in the security
-module means no client has to know about dataclass shapes.
+Consumed by the CLI and retained legacy review clients. Keeping this in the
+security module means no client has to know about dataclass shapes.
 """
 
 from __future__ import annotations
@@ -90,11 +89,11 @@ def verdict_to_payload(
     reviewed_at: str = "",
     prompt_version: str = "",
 ) -> dict:
-    """JSON-safe payload for the web review client.
+    """JSON-safe payload for review clients and dataset metadata.
 
     Provenance kwargs (``api_format``, ``model``, ``base_url``,
     ``reviewed_at``, ``prompt_version``) are included when provided so
-    downstream surfaces (TUI, web viewer, HF dataset metadata) can tell
+    downstream surfaces (legacy clients, HF dataset metadata) can tell
     users *which* LLM issued the verdict, not just *a* verdict.
     """
     if verdict is None:

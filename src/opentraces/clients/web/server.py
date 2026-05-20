@@ -1,8 +1,11 @@
-"""Flask application for the opentraces web review interface.
+"""Legacy Flask application for the opentraces web review interface.
 
 Serves a local web UI for trace review: browse sessions,
 approve/reject/redact traces, and rescan records through the local
 security pipeline.
+
+This raw-trace review client is decommissioned for now. The implementation is
+retained as reference material until the next dataset-scoped review UI lands.
 """
 
 from __future__ import annotations

@@ -31,7 +31,7 @@ build-viewer:
 build-schema:
 	cd $(SCHEMA_DIR) && python3 -m build
 
-build-cli: build-viewer
+build-cli:
 	python3 -m build
 
 build: clean build-schema build-cli

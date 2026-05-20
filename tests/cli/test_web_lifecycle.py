@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import time
 
 import pytest
+
+pytest.skip(
+    reason=(
+        "legacy web review client is decommissioned until the next dataset "
+        "review UI iteration lands"
+    ),
+    allow_module_level=True,
+)
 
 pytest.importorskip("flask")
 

@@ -28,7 +28,7 @@ Paste this into your coding agent (Claude Code, Cursor, Codex, etc.):
 {{AGENT_PROMPT}}
 ```
 
-The agent installs the CLI, authenticates, and initializes. `init` handles the skill installation automatically. After that the agent uses the skill file for everything else.
+The agent runs this as an interview: it asks you how to configure opentraces, one decision at a time, and waits for your answer before applying it. You choose the tracking mode (global auto-enroll vs manual per-project opt-in), whether to authenticate with Hugging Face now, and any optional security passes. The prompt is tool-agnostic, so agents with a structured question UI render it as choices while others simply ask in chat. After setup the agent uses the skill file for everything else.
 
 ## From Source
 

@@ -83,7 +83,7 @@ For HuggingFace dataset import via the older `hermes` adapter, the `FormatImport
 ```bash
 opentraces trace query --since 1d
 opentraces dataset run my-dataset
-opentraces dataset review my-dataset --tui
+opentraces dataset review my-dataset --json
 ```
 
 Use `trace query` to search retained traces, then drive dataset workflows to synthesize rows for review and publication.
