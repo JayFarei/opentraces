@@ -18,6 +18,12 @@ _TEST_COMMAND_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Max chars retained for a surfaced Task/Agent dispatch prompt or
+# description on a ``subagent_call`` node's metadata. Generous enough to
+# carry the substantive instruction; intent derivation truncates further
+# to its own display limit when it lifts this onto a burst.
+SUBAGENT_DISPATCH_TEXT_MAX = 2000
+
 # Action types that consumers typically want intent-tagged. The forward
 # pass on build sets ``active_user_step`` for every node, but tests pin
 # the contract on this set so the contract stays observable.
@@ -60,12 +66,14 @@ def build_trace_map(record: TraceRecord, *, trail_projection: Any | None = None)
     )
 
     for step in steps:
+        provenance = _step_provenance(step)
         if step.role == "user" and step.content:
             builder.add_node(
                 unit_id=f"tu:{record.trace_id}:step:{step.step_index}",
                 action_type="user_instruction",
                 step_index=step.step_index,
                 text_preview=_preview(step.content),
+                metadata=dict(provenance),
             )
         elif step.role == "agent" and step.content:
             builder.add_node(
@@ -73,6 +81,7 @@ def build_trace_map(record: TraceRecord, *, trail_projection: Any | None = None)
                 action_type=_agent_text_action_type(step.content, is_last=step is last_agent_text_step),
                 step_index=step.step_index,
                 text_preview=_preview(step.content),
+                metadata=dict(provenance),
             )
 
         for call in step.tool_calls:
@@ -107,10 +116,15 @@ def build_trace_map(record: TraceRecord, *, trail_projection: Any | None = None)
                     )
                 )
                 action_type = "file_edit"
+            if action_type == "subagent_call":
+                dispatch = _subagent_dispatch_metadata(call.input)
+                if dispatch:
+                    metadata["subagent_dispatch"] = dispatch
             if files_modified_abs:
                 metadata["files_modified_absolute"] = files_modified_abs
             if files_read_abs:
                 metadata["files_read_absolute"] = files_read_abs
+            metadata.update(provenance)
             node = builder.add_node(
                 unit_id=f"tu:{record.trace_id}:tool:{call.tool_call_id}",
                 action_type=action_type,
@@ -130,7 +144,7 @@ def build_trace_map(record: TraceRecord, *, trail_projection: Any | None = None)
                 action_type="error_signal" if observation.error else "tool_result",
                 step_index=step.step_index,
                 text_preview=_preview(observation.output_summary or observation.content or observation.error or ""),
-                metadata={"source_call_id": observation.source_call_id},
+                metadata={"source_call_id": observation.source_call_id, **provenance},
             )
 
     limitations: list[str] = []
@@ -521,6 +535,48 @@ def _agent_text_action_type(content: str, *, is_last: bool) -> str:
     return "agent_message"
 
 
+def _step_provenance(step: Any) -> dict[str, Any]:
+    """Sub-agent provenance to stamp on every node derived from ``step``.
+
+    Returns an empty dict for main-agent steps so their nodes' metadata
+    is byte-identical to before this change. Sub-agent steps carry
+    ``call_type`` plus the ``parent_step`` join key (pointing at the
+    dispatching ``Task``/``Agent`` step) and ``agent_role`` when known, so
+    a downstream burst pass can both flag the work as sub-agent and rejoin
+    it to the dispatching Task prompt.
+    """
+    if getattr(step, "call_type", None) != "subagent":
+        return {}
+    provenance: dict[str, Any] = {"call_type": "subagent"}
+    parent_step = getattr(step, "parent_step", None)
+    if isinstance(parent_step, int):
+        provenance["parent_step"] = parent_step
+    agent_role = getattr(step, "agent_role", None)
+    if isinstance(agent_role, str) and agent_role:
+        provenance["agent_role"] = agent_role
+    return provenance
+
+
+def _subagent_dispatch_metadata(tool_input: dict[str, Any]) -> dict[str, Any]:
+    """Extract the sub-agent's instruction from a ``Task``/``Agent`` input.
+
+    Returns a redacted, length-capped ``{subagent_type, description,
+    prompt}`` block (only the keys that are present) for stashing on the
+    ``subagent_call`` node. This is what lets a consumer recover the
+    sub-agent's actual intent — the parent's Task prompt — rather than the
+    parent session's last user instruction.
+    """
+    out: dict[str, Any] = {}
+    subagent_type = tool_input.get("subagent_type")
+    if isinstance(subagent_type, str) and subagent_type:
+        out["subagent_type"] = subagent_type
+    for key in ("description", "prompt"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = _preview(value, limit=SUBAGENT_DISPATCH_TEXT_MAX)
+    return out
+
+
 def _tool_action_type(tool_name: str, tool_input: dict[str, Any]) -> str:
     normalized = tool_name.lower().replace("_", "").replace("-", "")
     command = str(tool_input.get("command") or "")
@@ -530,6 +586,8 @@ def _tool_action_type(tool_name: str, tool_input: dict[str, Any]) -> str:
         return "file_read"
     if normalized in {"bash", "shell"} and _TEST_COMMAND_RE.search(command):
         return "test_run"
+    if normalized in {"task", "agent"}:
+        return "subagent_call"
     if "skill" in normalized:
         return "skill_invocation"
     return "tool_call"
@@ -623,6 +681,12 @@ def _tool_preview(tool_name: str, tool_input: dict[str, Any]) -> str:
         return _preview(f"{tool_name} {tool_input['file_path']}")
     if "file" in tool_input:
         return _preview(f"{tool_name} {tool_input['file']}")
+    # Task/Agent dispatch: surface the sub-agent's instruction so the
+    # node preview reflects what the sub-agent was told to do rather than
+    # the bare tool name.
+    dispatch_text = tool_input.get("description") or tool_input.get("prompt")
+    if isinstance(dispatch_text, str) and dispatch_text.strip():
+        return _preview(f"{tool_name}: {dispatch_text}")
     return tool_name
 
 

@@ -278,8 +278,58 @@ def derive_intent_chain(
     }
 
 
+def derive_subagent_intent(
+    dispatch_node: TraceMapNode,
+    dispatch_step: int | None,
+) -> dict[str, Any]:
+    """Derive the structured intent for a *sub-agent* burst.
+
+    A sub-agent's driving instruction is the ``Task``/``Agent`` tool
+    prompt the parent passed, not a ``user_instruction``. That prompt is
+    surfaced on the dispatching ``subagent_call`` node's metadata under
+    ``subagent_dispatch`` (see ``core.trace_map``). This returns the same
+    shape as :func:`derive_intent_chain` so the burst-intent surface stays
+    uniform, with the spec sourced from the Task ``prompt`` (falling back
+    to ``description``) and an extra ``subagent`` block recording
+    provenance.
+
+    Returns ``None`` when the dispatch node carries no usable prompt or
+    description — callers should then fall back to the user-instruction
+    chain.
+    """
+    meta = getattr(dispatch_node, "metadata", None) or {}
+    dispatch = meta.get("subagent_dispatch")
+    if not isinstance(dispatch, dict):
+        return None  # type: ignore[return-value]
+
+    prompt = (dispatch.get("prompt") or "").strip()
+    description = (dispatch.get("description") or "").strip()
+    subagent_type = dispatch.get("subagent_type")
+    spec_text = prompt or description
+    if not spec_text:
+        return None  # type: ignore[return-value]
+
+    spec_entry = {
+        "step": dispatch_step,
+        "text": _truncate(spec_text, SPEC_TEXT_DISPLAY_LIMIT),
+    }
+    return {
+        "trigger": None,
+        "most_substantive_spec": spec_entry,
+        "spec_chain": [spec_entry],
+        "subagent": {
+            "subagent_type": subagent_type if isinstance(subagent_type, str) else None,
+            "description": (
+                _truncate(description, SPEC_TEXT_DISPLAY_LIMIT) if description else None
+            ),
+            "dispatch_step": dispatch_step,
+        },
+    }
+
+
 __all__ = [
     "derive_intent_chain",
+    "derive_subagent_intent",
     "is_trigger",
     "TRIGGER_MAX_LEN",
     "TRIGGER_REMAINDER_MAX",

@@ -300,6 +300,18 @@ def detect_bursts(
     user_instruction_nodes: list[TraceMapNode] = [
         node for node in nodes if node.action_type == "user_instruction"
     ]
+    # Sub-agent re-attribution lookups: a burst whose contributing edits
+    # are sub-agent work should source its intent from the dispatching
+    # Task prompt (carried on the ``subagent_call`` node), not the parent
+    # session's user-instruction chain. ``parent_step`` on a sub-agent
+    # node points at the dispatching step; ``dispatch_by_step`` resolves
+    # that step to the node carrying the prompt.
+    node_by_id: dict[str, TraceMapNode] = {node.node_id: node for node in nodes}
+    dispatch_by_step: dict[int, TraceMapNode] = {
+        node.step_index: node
+        for node in nodes
+        if node.action_type == "subagent_call" and node.step_index is not None
+    }
     # The trace map's text_preview clamps to 160 chars per node — fine
     # for compact CLI display, but it loses substantive content for the
     # intent chain (entry #6 step 19 contains "how is that different
@@ -401,7 +413,12 @@ def detect_bursts(
             trail_events = None
 
     for burst in bursts:
-        _augment_intent_chain(burst, user_instruction_nodes)
+        _augment_intent_chain(
+            burst,
+            user_instruction_nodes,
+            node_by_id=node_by_id,
+            dispatch_by_step=dispatch_by_step,
+        )
         # ``burst.burst_commit_sha`` was already populated in the
         # pre-merge pass above; no need to recompute here.
         # Re-filter unique_files / patches to the burst's commit when
@@ -814,8 +831,19 @@ def _tool_call_id(tc: Any) -> str | None:
 def _augment_intent_chain(
     burst: Burst,
     user_instruction_nodes: list[TraceMapNode],
+    *,
+    node_by_id: dict[str, TraceMapNode] | None = None,
+    dispatch_by_step: dict[int, TraceMapNode] | None = None,
 ) -> None:
     """Compute the structured ``intent`` for ``burst`` and merge it in.
+
+    For a *sub-agent* burst (every contributing edit is sub-agent work)
+    the intent is sourced from the dispatching ``Task``/``Agent`` prompt
+    rather than the parent session's user-instruction chain — the
+    parent's last user turn says nothing about what the sub-agent was
+    dispatched to do, and the renumbering of inlined sub-agent steps to
+    the trace tail would otherwise mis-attribute it. Mixed or main-agent
+    bursts fall back to the user-instruction chain.
 
     The chain walks from the start of the trace up to the burst's first
     step. We import lazily to avoid a hard cycle if ``core.intent`` ever
@@ -824,12 +852,67 @@ def _augment_intent_chain(
     """
     from . import intent as intent_module  # lazy to keep circular-import surface zero
 
+    dispatch = _burst_subagent_dispatch(burst, node_by_id, dispatch_by_step)
+    if dispatch is not None:
+        chain = intent_module.derive_subagent_intent(
+            dispatch["dispatch_node"], dispatch["parent_step"]
+        )
+        if chain is not None:
+            burst.intent["trigger"] = chain.get("trigger")
+            burst.intent["most_substantive_spec"] = chain.get("most_substantive_spec")
+            burst.intent["spec_chain"] = list(chain.get("spec_chain") or [])
+            burst.intent["intent_source"] = "subagent_dispatch"
+            burst.intent["subagent"] = chain.get("subagent")
+            return
+
     burst_start = burst.step_range[0] if burst.step_range else 0
     chain = intent_module.derive_intent_chain(user_instruction_nodes, burst_start)
     # Merge: keep commit-related fields populated by I3.
     burst.intent["trigger"] = chain.get("trigger")
     burst.intent["most_substantive_spec"] = chain.get("most_substantive_spec")
     burst.intent["spec_chain"] = list(chain.get("spec_chain") or [])
+
+
+def _burst_subagent_dispatch(
+    burst: Burst,
+    node_by_id: dict[str, TraceMapNode] | None,
+    dispatch_by_step: dict[int, TraceMapNode] | None,
+) -> dict[str, Any] | None:
+    """Resolve the dispatching ``subagent_call`` node for a sub-agent burst.
+
+    Returns ``{"dispatch_node", "parent_step"}`` when *every* contributing
+    edit node is sub-agent work sharing a resolvable dispatch step, else
+    ``None``. The all-or-nothing rule keeps mixed bursts (a rare main +
+    sub-agent overlap) on the safe user-instruction fallback.
+    """
+    if not node_by_id or not dispatch_by_step:
+        return None
+    # The decision rests on the burst's ``file_edit`` nodes — those are
+    # the ones build_trace_map stamps with sub-agent provenance.
+    # ``patch_created`` nodes are synthesized by the trail projection
+    # outside the step loop and carry no ``call_type``; they anchor the
+    # same edits, so we simply ignore them here rather than letting their
+    # missing provenance veto the attribution.
+    parent_steps: list[int] = []
+    saw_subagent_edit = False
+    for node_id in burst.contributing_node_ids:
+        node = node_by_id.get(node_id)
+        if node is None or node.action_type != "file_edit":
+            continue
+        meta = node.metadata or {}
+        if meta.get("call_type") != "subagent":
+            return None  # a main-agent edit in the burst → user-chain fallback
+        saw_subagent_edit = True
+        parent_step = meta.get("parent_step")
+        if isinstance(parent_step, int):
+            parent_steps.append(parent_step)
+    if not saw_subagent_edit or not parent_steps:
+        return None
+    parent_step = Counter(parent_steps).most_common(1)[0][0]
+    dispatch_node = dispatch_by_step.get(parent_step)
+    if dispatch_node is None:
+        return None
+    return {"dispatch_node": dispatch_node, "parent_step": parent_step}
 
 
 def _augment_burst_commit_sha(
