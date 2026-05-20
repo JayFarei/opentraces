@@ -127,6 +127,38 @@ def _watcher_interval_for(project_cwd: Path, default: int = DEFAULT_INTERVAL) ->
     return max(30, iv)  # sanity floor — don't let pathological configs spin
 
 
+def _read_head_sha(project_cwd: Path) -> str | None:
+    """Resolve HEAD to a sha by reading ``.git`` directly — no subprocess fork.
+
+    Returns None when HEAD can't be resolved from loose refs / packed-refs
+    (``.git`` is a worktree/submodule file, detached-HEAD edge cases, unusual
+    layouts); callers fall back to ``git rev-list`` in that case.
+    """
+    git_dir = project_cwd / ".git"
+    try:
+        head = (git_dir / "HEAD").read_text().strip()
+    except OSError:
+        return None
+    if not head.startswith("ref:"):
+        return head or None  # detached HEAD — already a sha
+    ref = head[4:].strip()
+    try:
+        return (git_dir / ref).read_text().strip() or None
+    except OSError:
+        pass
+    try:
+        for line in (git_dir / "packed-refs").read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith(("#", "^")):
+                continue
+            sha, _, name = line.partition(" ")
+            if name == ref:
+                return sha or None
+    except OSError:
+        pass
+    return None
+
+
 def _count_new_commits(project_cwd: Path, last_sha: str | None) -> int:
     """``git rev-list --count <last>..HEAD``, 0 on any failure."""
     if not last_sha:
@@ -208,8 +240,13 @@ def _run_trace_trails_runtime(
     report: TickReport,
     *,
     force_maturation: bool = False,
-) -> None:
-    """Best-effort Plan 54 runtime loop for one watcher tick."""
+) -> bool:
+    """Best-effort Plan 54 runtime loop for one watcher tick.
+
+    Returns True when the tick actually changed local trail state (fs
+    observations, reconciled patches, or matured anchors) or maturation was
+    forced. Callers use this to skip the HF remote reconcile on idle ticks.
+    """
     try:
         from ..capture.fs_watcher.runtime import poll_project_once
         from ..core.trails import reconcile_watcher_observations
@@ -242,34 +279,49 @@ def _run_trace_trails_runtime(
                     project_cwd,
                     "; ".join(summary.errors[:3]),
                 )
-        try:
-            from ..core.bucket_store import sync_trail_events_from_repo
+        # Only export the trail event log and re-project the Context Tree to
+        # the bucket when this tick actually changed something. These two
+        # operations are unbounded in cost (full git ref export + whole
+        # context-tree projection) and were the dominant per-tick cost across
+        # hundreds of idle projects; gating them on real change is what keeps
+        # an idle sweep cheap.
+        changed = bool(
+            force_maturation
+            or report.fs_observations
+            or report.fs_patches_created
+            or report.fs_patches_upgraded
+            or report.trail_maturation_searches
+            or report.trail_maturation_anchors
+        )
+        if changed:
             from ..core.config import get_project_dir
-
             project_slug = get_project_dir(project_cwd).name
-            sync_trail_events_from_repo(project_cwd, repo_id=project_slug)
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "bucket TrailEvent export refresh failed for %s",
-                project_cwd,
-                exc_info=True,
-            )
-        # Plan 079: first-class Context Tree bucket projection. Stage 2
-        # is additive; the trail-piggyback above remains.
-        try:
-            from ..core.bucket_store import project_context_tree_to_bucket
-            from ..core.config import get_project_dir
+            try:
+                from ..core.bucket_store import sync_trail_events_from_repo
 
-            project_slug = get_project_dir(project_cwd).name
-            project_context_tree_to_bucket(project_cwd, project_slug=project_slug)
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "bucket Context Tree projection failed for %s",
-                project_cwd,
-                exc_info=True,
-            )
+                sync_trail_events_from_repo(project_cwd, repo_id=project_slug)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "bucket TrailEvent export refresh failed for %s",
+                    project_cwd,
+                    exc_info=True,
+                )
+            # Plan 079: first-class Context Tree bucket projection. Stage 2
+            # is additive; the trail-piggyback above remains.
+            try:
+                from ..core.bucket_store import project_context_tree_to_bucket
+
+                project_context_tree_to_bucket(project_cwd, project_slug=project_slug)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "bucket Context Tree projection failed for %s",
+                    project_cwd,
+                    exc_info=True,
+                )
+        return changed
     except Exception:  # noqa: BLE001
         logger.exception("Trace Trails runtime failed for %s", project_cwd)
+        return False
 
 
 def _bucket_reconcile_once(*, reason: str) -> dict:
@@ -314,7 +366,14 @@ def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
         last_sha = state.get_last_backfilled_commit()
         last_run = state.get_last_watcher_run_at()
 
-        new_commits = _count_new_commits(project_cwd, last_sha)
+        # Fork-free fast path: if HEAD still points at the commit we last
+        # backfilled there are no new commits, so skip the ``git rev-list``
+        # subprocess. Across hundreds of enlisted projects this removes a
+        # fork+exec per project on every sweep.
+        if last_sha and _read_head_sha(project_cwd) == last_sha:
+            new_commits = 0
+        else:
+            new_commits = _count_new_commits(project_cwd, last_sha)
         jsonl_active = _jsonl_activity_since(project_cwd, last_run)
 
         report.new_commits = int(new_commits)
@@ -324,9 +383,15 @@ def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
             raise RuntimeError("simulated crash: after_probe")
 
         if new_commits == 0 and not jsonl_active:
-            _run_trace_trails_runtime(project_cwd, report, force_maturation=False)
-            _run_bucket_remote_sync(report)
-            # Quiet tick — still record that we probed.
+            # Quiet tick: still poll + reconcile + mature (anchors mature over
+            # time, independent of new commits/JSONL), but only reconcile the
+            # HF remote when that runtime actually changed local state. An idle
+            # project must not pay a network reconcile on every sweep.
+            changed = _run_trace_trails_runtime(
+                project_cwd, report, force_maturation=False
+            )
+            if changed:
+                _run_bucket_remote_sync(report)
             state.set_last_watcher_run_at()
             report.duration_ms = (time.monotonic() - t0) * 1000.0
             logger.info("quiet tick %s (%.1fms)", project_cwd, report.duration_ms)

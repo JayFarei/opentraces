@@ -308,11 +308,18 @@ def build_context_tree_projection(
     lazy: bool = False,
     bucket_root: Path | None = None,
     project_slug: str | None = None,
+    trace_id: str | None = None,
 ) -> ContextTreeProjection:
     """Read the canonical event log and project Context Tree events.
 
     Single-pass over ``read_events(repo)``; no git operations beyond
     what ``read_events`` already does (process-level cached).
+
+    When ``trace_id`` is given, only that trace's events are projected.
+    This is safe — each trace's layers and nodes are emitted within its
+    own events (layer dedup is in-memory only, not cross-trace in the log)
+    — and lets per-session ingest project just the new trace instead of
+    re-walking the entire history.
 
     Args:
         repo: git repo root containing the canonical event log ref.
@@ -346,6 +353,13 @@ def build_context_tree_projection(
     capture_limitations_by_trace: dict[str, list[str]] = {}
 
     for event in read_events(repo):
+        if trace_id is not None:
+            ev_tid = event.trace_id or (
+                event.payload.get("trace_id")
+                if isinstance(event.payload, dict) else None
+            )
+            if ev_tid != trace_id:
+                continue
         et = event.event_type
         if et == CONTEXT_LAYER_CAPTURED:
             if lazy:

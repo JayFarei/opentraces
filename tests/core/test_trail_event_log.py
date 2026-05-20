@@ -197,6 +197,99 @@ def test_append_creates_event_log_ref_in_sha256_repo(tmp_path: Path) -> None:
     assert event_log_status(tmp_path)["state"] == "ok"
 
 
+def _append_simple(repo: Path, trace_id: str, snapshot_id: str) -> None:
+    append_event_batch(
+        repo,
+        [TrailEventDraft(
+            event_type="trace_snapshot_created", trace_id=trace_id, step_index=1,
+            capture_method=["hook_posttooluse"],
+            payload={"snapshot_id": snapshot_id, "limitations": []},
+        )],
+        writer="test-fixture",
+    )
+
+
+def test_incremental_verify_equals_full_verify(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    _append_simple(tmp_path, "tA", "s1")
+    _append_simple(tmp_path, "tA", "s2")
+    # First verify persists a clean watermark.
+    first = event_log_status(tmp_path)
+    assert first["state"] == "ok"
+    assert event_log._load_verify_watermark(tmp_path) is not None
+
+    # Append more; the watermark head is now an ancestor of HEAD.
+    event_log.invalidate_read_events_cache(tmp_path)
+    _append_simple(tmp_path, "tB", "s3")
+    _append_simple(tmp_path, "tB", "s4")
+    event_log.invalidate_read_events_cache(tmp_path)
+
+    wm = event_log._load_verify_watermark(tmp_path)
+    head = event_log._ref_head(tmp_path)
+    assert wm is not None and wm["head"] != head
+    # The incremental path must produce a clean result over only the delta.
+    inc = event_log._try_incremental_verify(tmp_path, head, wm)
+    assert inc is not None, "incremental verify should engage for a descendant head"
+
+    # Full verify from scratch (no watermark, cold caches) must match exactly.
+    wm_path = event_log._verify_watermark_path(tmp_path)
+    if wm_path and wm_path.exists():
+        wm_path.unlink()
+    event_log.invalidate_read_events_cache(tmp_path)
+    full = event_log.verify_event_log(tmp_path)
+
+    assert inc == full
+    assert full["event_count"] == 4
+    assert full["content_hashes_valid"] and full["event_chain_valid"]
+    assert full["errors"] == []
+
+
+def test_incremental_verify_detects_corruption_in_new_events(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    _append_simple(tmp_path, "tA", "s1")
+    # Clean baseline establishes the watermark.
+    assert event_log_status(tmp_path)["state"] == "ok"
+    base_head = _git(tmp_path, "rev-parse", EVENT_LOG_REF)
+
+    # Append a second batch, then tamper it while preserving base_head as the
+    # parent — so the watermark head IS an ancestor and the incremental path
+    # engages on the new (corrupt) event.
+    event_log.invalidate_read_events_cache(tmp_path)
+    _append_simple(tmp_path, "tB", "s2")
+    head = _git(tmp_path, "rev-parse", EVENT_LOG_REF)
+    raw = _git(tmp_path, "show", f"{head}:events/000000000002.json")
+    tampered = json.loads(raw)
+    tampered["payload"]["snapshot_id"] = "tampered"
+    tampered_blob = subprocess.check_output(
+        ["git", "hash-object", "-w", "--stdin"], cwd=tmp_path,
+        input=json.dumps(tampered, sort_keys=True, indent=2) + "\n", text=True,
+    ).strip()
+    with tempfile.TemporaryDirectory() as td:
+        env = os.environ.copy()
+        env["GIT_INDEX_FILE"] = str(Path(td) / "index")
+        subprocess.run(["git", "read-tree", head], cwd=tmp_path, env=env, check=True)
+        subprocess.run(
+            ["git", "update-index", "--cacheinfo",
+             f"100644,{tampered_blob},events/000000000002.json"],
+            cwd=tmp_path, env=env, check=True,
+        )
+        tree = subprocess.check_output(
+            ["git", "write-tree"], cwd=tmp_path, env=env, text=True
+        ).strip()
+    new_head = subprocess.check_output(
+        ["git", "commit-tree", tree, "-p", base_head, "-m", "tampered"],
+        cwd=tmp_path, text=True,
+    ).strip()
+    subprocess.run(["git", "update-ref", EVENT_LOG_REF, new_head, head],
+                   cwd=tmp_path, check=True)
+    event_log.invalidate_read_events_cache(tmp_path)
+
+    status = event_log_status(tmp_path)
+    assert status["state"] == "invalid"
+    assert status["content_hashes_valid"] is False
+    assert any("content_hash mismatch" in e for e in status["errors"])
+
+
 def test_verify_detects_tampered_event_content_hash(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     append_event_batch(

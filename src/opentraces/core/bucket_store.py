@@ -629,13 +629,47 @@ def sync_events_mirror(
         _atomic_write_json(events_v1_index_path(), index)
         return index
 
+    from .trails.event_log import _is_ancestor
+
     events = sorted(read_events(repo, verify=False), key=lambda e: e.event_sequence)
 
-    # Group events by batch_id; preserve commit order (event_sequence is
-    # contiguous, so the first sequence in a batch defines its position).
+    # Incremental fast-path: existing batch files are immutable (one batch per
+    # append, content-addressed), so when the prior index head is an ancestor
+    # of the current head we only group + write batches for events appended
+    # since. New batches always sort after existing ones, so their ordinals
+    # (and therefore filenames + contents) match a full rebuild byte-for-byte
+    # — keeping the replay-equals-git invariant.
+    index_path = events_v1_index_path()
+    prior_index: dict[str, Any] | None = None
+    if index_path.exists():
+        try:
+            prior_index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            prior_index = None
+    prior_head = prior_index.get("event_log_head") if prior_index else None
+    prior_seq = int(prior_index.get("latest_event_sequence", 0)) if prior_index else 0
+    prior_batch_count = int(prior_index.get("batch_count", 0)) if prior_index else 0
+    incremental = (
+        prior_index is not None
+        and isinstance(prior_head, str)
+        and events_v1_batches_dir().exists()
+        and _is_ancestor(repo, prior_head, status.get("head") or prior_head)
+    )
+
+    if incremental and prior_head == status.get("head"):
+        # Nothing new since the last mirror; leave the bucket untouched.
+        return prior_index
+
+    work_events = (
+        [e for e in events if e.event_sequence > prior_seq]
+        if incremental else events
+    )
+    seq_offset = prior_batch_count if incremental else 0
+
+    # Group the events we need to write by batch_id, in sequence order.
     batch_order: list[str] = []
     by_batch: dict[str, list[Any]] = {}
-    for event in events:
+    for event in work_events:
         bid = event.batch_id
         if bid not in by_batch:
             by_batch[bid] = []
@@ -646,9 +680,12 @@ def sync_events_mirror(
     batches_dir.mkdir(parents=True, exist_ok=True)
 
     batches_written = 0
-    last_batch_id: str | None = None
-    latest_event_sequence = 0
-    for seq, bid in enumerate(batch_order, start=1):
+    last_batch_id: str | None = (
+        prior_index.get("last_batch_id") if incremental else None
+    )
+    latest_event_sequence = prior_seq if incremental else 0
+    for offset, bid in enumerate(batch_order, start=1):
+        seq = seq_offset + offset
         batch_events = by_batch[bid]
         # Filename: <seq>-<batch-id>.jsonl.gz; seq is zero-padded for sort.
         safe_bid = _path_part(bid)
@@ -673,7 +710,7 @@ def sync_events_mirror(
         "repo_id": repo_id,
         "event_log_ref": EVENT_LOG_REF,
         "event_log_head": status.get("head"),
-        "batch_count": len(batch_order),
+        "batch_count": seq_offset + len(batch_order),
         "last_batch_id": last_batch_id,
         "latest_event_sequence": latest_event_sequence,
         "state": status.get("state"),
@@ -968,7 +1005,9 @@ def project_context_tree_to_bucket(
     from .context_tree.query import build_context_tree_projection
     from .trails import event_log_status, read_events
 
-    projection = build_context_tree_projection(repo)
+    # When a single trace is targeted (the per-session ingest path), build
+    # only that trace's projection instead of re-walking the whole history.
+    projection = build_context_tree_projection(repo, trace_id=trace_id)
     status = event_log_status(repo)
     event_log_head = status.get("head")
     blob_scope = _context_blob_scope()

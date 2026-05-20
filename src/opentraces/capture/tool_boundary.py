@@ -102,13 +102,17 @@ def observe_tool_boundary(
 
 
 def _worktree_root(cwd: Path) -> Path | None:
-    proc = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
     if proc.returncode != 0 or not proc.stdout.strip():
         return None
     return Path(proc.stdout.strip()).resolve()

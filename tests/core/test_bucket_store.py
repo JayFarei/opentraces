@@ -330,3 +330,50 @@ def test_trail_event_log_exports_into_portable_bucket_segment(tmp_path):
     rows = gzip.decompress(batch_files[0].read_bytes()).decode("utf-8").splitlines()
     assert len(rows) == 1
     assert json.loads(rows[0])["trace_id"] == "trace-trail-export"
+
+
+def test_incremental_event_mirror_equals_full_rebuild(tmp_path, monkeypatch):
+    """Differential-cache guard: an incrementally-synced mirror is byte-identical
+    to a from-scratch full rebuild (same filenames, same gzip bytes, same index
+    counters) — the invariant behind ``bucket-events-mirror-replay-equals-git``."""
+    import shutil
+    from opentraces.core import paths
+    from opentraces.core.bucket_store import sync_events_mirror
+    from opentraces.core.trails import TrailEventDraft, append_event_batch
+    from opentraces.core.trails.event_log import invalidate_read_events_cache
+
+    def _append(tid, sid):
+        append_event_batch(
+            tmp_path,
+            [TrailEventDraft(
+                event_type="trace_snapshot_created", trace_id=tid, step_index=1,
+                capture_method=["hook_posttooluse"],
+                payload={"snapshot_id": sid, "limitations": []},
+            )],
+            writer="test-fixture",
+        )
+
+    _init_repo(tmp_path)
+    _append("t1", "s1")
+    _append("t2", "s2")
+    sync_events_mirror(tmp_path, repo_id="demo")          # full (first time)
+    invalidate_read_events_cache(tmp_path)
+    _append("t3", "s3")
+    _append("t4", "s4")
+    inc_index = sync_events_mirror(tmp_path, repo_id="demo")  # incremental
+
+    events_dir = paths.bucket_dir() / "events" / "v1"
+    batches_dir = events_dir / "batches"
+    inc_files = {p.name: p.read_bytes() for p in batches_dir.glob("*.jsonl.gz")}
+
+    # Wipe the mirror and rebuild from scratch.
+    shutil.rmtree(events_dir)
+    invalidate_read_events_cache(tmp_path)
+    full_index = sync_events_mirror(tmp_path, repo_id="demo")
+    full_files = {p.name: p.read_bytes() for p in batches_dir.glob("*.jsonl.gz")}
+
+    assert inc_files == full_files, "incremental mirror diverged from full rebuild"
+    assert len(inc_files) == 4
+    for key in ("batch_count", "last_batch_id", "latest_event_sequence"):
+        assert inc_index[key] == full_index[key]
+    assert inc_index["batch_count"] == 4

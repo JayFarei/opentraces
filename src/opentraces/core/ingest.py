@@ -161,23 +161,37 @@ def _lock_path_for(project_dir: Path, session_id: str) -> Path:
     return lock_dir / f"{session_id}.lock"
 
 
-class _FileLock:
-    """``with _FileLock(path): ...`` — non-blocking is NOT what we want here.
+class _LockHeld(Exception):
+    """Raised when a non-blocking ``_FileLock`` can't be acquired."""
 
-    A blocking exclusive flock keeps things correct under contention:
-    the second caller simply waits for the first to finish. Short hold
-    times make this cheap.
+
+class _FileLock:
+    """``with _FileLock(path): ...`` — blocking exclusive flock by default.
+
+    A blocking flock keeps things correct under contention: the second
+    caller waits for the first to finish. That relies on short hold times.
+    Pass ``blocking=False`` for the fire-and-forget path so a stuck or
+    slow holder can't make followers pile up — a non-acquired follower
+    raises ``_LockHeld`` and the caller skips (ingest is idempotent and the
+    watcher sweep is the safety net).
     """
 
-    def __init__(self, lock_path: Path) -> None:
+    def __init__(self, lock_path: Path, *, blocking: bool = True) -> None:
         self._lock_path = lock_path
+        self._blocking = blocking
         self._fd: int | None = None
 
     def __enter__(self) -> "_FileLock":
         import os
         self._fd = os.open(str(self._lock_path),
                            os.O_CREAT | os.O_RDWR, 0o644)
-        fcntl.flock(self._fd, fcntl.LOCK_EX)
+        flags = fcntl.LOCK_EX if self._blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+        try:
+            fcntl.flock(self._fd, flags)
+        except OSError as exc:
+            os.close(self._fd)
+            self._fd = None
+            raise _LockHeld(str(self._lock_path)) from exc
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -221,6 +235,7 @@ def ingest_one_session(
     *,
     reparse: bool = False,
     cfg: Config | None = None,
+    wait_for_lock: bool = True,
 ) -> IngestResult:
     """Ingest a single Claude Code session JSONL into the project's inbox.
 
@@ -235,9 +250,17 @@ def ingest_one_session(
     session_id = _session_id_from(jsonl_path)
 
     try:
-        with _FileLock(_lock_path_for(project_dir, session_id)):
+        with _FileLock(_lock_path_for(project_dir, session_id),
+                       blocking=wait_for_lock):
             return _ingest_locked(jsonl_path, project_dir, session_id,
                                   reparse=reparse, cfg=cfg)
+    except _LockHeld:
+        # Another ingest already owns this session; it (or the watcher
+        # sweep) will cover the work. Skip rather than stack behind it.
+        return IngestResult(
+            session_id=session_id, action="skipped",
+            error="another ingest holds this session lock",
+        )
     except Exception as e:  # noqa: BLE001
         logger.exception("ingest failed for %s", jsonl_path)
         return IngestResult(
@@ -489,7 +512,10 @@ def _ingest_locked(
     try:
         from .bucket_store import project_context_tree_to_bucket
 
-        project_context_tree_to_bucket(project_dir, project_slug=project_slug)
+        project_context_tree_to_bucket(
+            project_dir, project_slug=project_slug,
+            trace_id=final_record.trace_id,
+        )
     except Exception:
         logger.warning(
             "context tree bucket projection failed for %s", trace_id, exc_info=True

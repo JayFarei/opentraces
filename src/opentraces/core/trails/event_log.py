@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import pickle
 import subprocess
 import tempfile
 import uuid
@@ -21,6 +22,15 @@ from .models import (
 
 EVENT_LOG_REF = "refs/opentraces/local/events/v1"
 EVENT_LOG_APPEND_MAX_RETRIES = 5
+
+# Bump when the on-disk snapshot format or the TrailEvent shape changes so a
+# stale cache is ignored rather than mis-parsed.
+_EVENT_CACHE_FORMAT = 1
+
+# Only re-pickle the full event snapshot once the unsaved delta reaches this
+# many events — small per-ingest deltas read from the existing snapshot + a
+# cheap range read without rewriting the whole (potentially 100s of MB) file.
+_SNAPSHOT_REFRESH_MIN_DELTA = 2000
 
 
 def _utc_now() -> str:
@@ -467,14 +477,157 @@ def _read_blobs_batch(cwd: Path, entries: list[tuple[str, str]]) -> list[bytes]:
     return blobs
 
 
-def _read_events_from_head(cwd: Path, head: str) -> list[TrailEvent]:
-    commits = _git(cwd, ["rev-list", "--reverse", head]).stdout.splitlines()
+def _read_events_in_range(cwd: Path, since: str | None, head: str) -> list[TrailEvent]:
+    """Parse events from commits in ``since..head`` (or all of ``head``).
+
+    ``since`` is excluded; passing None reads the full history reachable
+    from ``head``. Result is NOT sorted — callers merge + sort.
+    """
+    spec = f"{since}..{head}" if since else head
+    commits = _git(cwd, ["rev-list", "--reverse", spec]).stdout.splitlines()
     entries = _event_blob_entries(cwd, commits)
-    events = [
+    return [
         TrailEvent.model_validate_json(raw)
         for raw in _read_blobs_batch(cwd, entries)
     ]
+
+
+def _read_events_from_head(cwd: Path, head: str) -> list[TrailEvent]:
+    events = _read_events_in_range(cwd, None, head)
     events.sort(key=lambda event: event.event_sequence)
+    return events
+
+
+def _event_cache_path(cwd: Path) -> Path | None:
+    """Per-repo snapshot path inside the git dir (cross-process, repo-local).
+
+    Returns None when the git dir can't be resolved (callers fall back to a
+    full read).
+    """
+    proc = _git(cwd, ["rev-parse", "--git-dir"], check=False)
+    if proc.returncode != 0:
+        return None
+    git_dir = Path(proc.stdout.strip())
+    if not git_dir.is_absolute():
+        git_dir = (Path(cwd) / git_dir).resolve()
+    return git_dir / "opentraces" / "event_log_snapshot.pkl"
+
+
+def _verify_watermark_path(cwd: Path) -> Path | None:
+    snap = _event_cache_path(cwd)
+    return None if snap is None else snap.with_name("event_log_verified.json")
+
+
+def _load_verify_watermark(cwd: Path) -> dict[str, Any] | None:
+    """Load the persisted clean-verification watermark, or None."""
+    path = _verify_watermark_path(cwd)
+    if path is None or not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if (
+        not isinstance(data, dict)
+        or data.get("format") != _EVENT_CACHE_FORMAT
+        or not isinstance(data.get("head"), str)
+        or not isinstance(data.get("last_event_sequence"), int)
+    ):
+        return None
+    return data
+
+
+def _save_verify_watermark(cwd: Path, data: dict[str, Any]) -> None:
+    """Persist the clean-verification watermark atomically. Best-effort."""
+    path = _verify_watermark_path(cwd)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        with os.fdopen(fd, "w") as fh:
+            json.dump(data, fh)
+        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001 — watermark is an optimization, never fatal
+        return
+
+
+def _load_event_snapshot(cwd: Path) -> tuple[str, list[TrailEvent]] | None:
+    """Load (head, events) from the on-disk snapshot, or None if unusable."""
+    path = _event_cache_path(cwd)
+    if path is None or not path.is_file():
+        return None
+    try:
+        blob = pickle.loads(path.read_bytes())
+        if (
+            not isinstance(blob, dict)
+            or blob.get("format") != _EVENT_CACHE_FORMAT
+            or not isinstance(blob.get("head"), str)
+            or not isinstance(blob.get("events"), list)
+        ):
+            return None
+        return blob["head"], blob["events"]
+    except Exception:  # noqa: BLE001 — any corruption ⇒ fall back to full read
+        return None
+
+
+def _save_event_snapshot(cwd: Path, head: str, events: list[TrailEvent]) -> None:
+    """Atomically persist the parsed events keyed by ``head``. Best-effort."""
+    path = _event_cache_path(cwd)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = pickle.dumps(
+            {"format": _EVENT_CACHE_FORMAT, "head": head, "events": events},
+            protocol=pickle.HIGHEST_PROTOCOL,
+        )
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(payload)
+            os.replace(tmp, path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    except Exception:  # noqa: BLE001 — cache is an optimization, never fatal
+        return
+
+
+def _read_events_incremental(cwd: Path, head: str) -> list[TrailEvent]:
+    """Read all events at ``head`` reusing a cross-process snapshot.
+
+    Reads + validates only the commits appended since the snapshot's head;
+    falls back to a full read whenever the snapshot is missing, stale, or the
+    snapshot head is not an ancestor of ``head`` (history rewrite / supersede).
+    """
+    snapshot = _load_event_snapshot(cwd)
+    if snapshot is not None:
+        snap_head, snap_events = snapshot
+        if snap_head == head:
+            return snap_events
+        is_ancestor = _git(
+            cwd, ["merge-base", "--is-ancestor", snap_head, head], check=False
+        ).returncode == 0
+        if is_ancestor:
+            try:
+                new_events = _read_events_in_range(cwd, snap_head, head)
+                merged = snap_events + new_events
+                merged.sort(key=lambda event: event.event_sequence)
+                # Re-persisting the full snapshot costs O(total events) of
+                # pickle I/O, so only refresh it once the delta is large
+                # enough to amortize that write. Small deltas (e.g. a single
+                # session ingest, which advances HEAD several times) read from
+                # the existing snapshot + a cheap range read and skip the
+                # rewrite entirely — otherwise the ingest re-pickles the whole
+                # log on every HEAD advance.
+                if len(new_events) >= _SNAPSHOT_REFRESH_MIN_DELTA:
+                    _save_event_snapshot(cwd, head, merged)
+                return merged
+            except Exception:  # noqa: BLE001 — fall back to a clean full read
+                pass
+    events = _read_events_from_head(cwd, head)
+    _save_event_snapshot(cwd, head, events)
     return events
 
 
@@ -491,6 +644,12 @@ _READ_EVENTS_CACHE: dict[
     tuple[str, str, bool], list[TrailEvent]
 ] = {}
 
+# Per-(repo, head) memo for the expensive whole-log verification. The event
+# log is append-only, so a given head's verification result is stable; this
+# stops sync/status callers from re-validating every event on every call
+# within a process.
+_VERIFY_STATUS_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+
 
 def read_events(cwd: Path, *, verify: bool = True) -> list[TrailEvent]:
     head = _ref_head(cwd)
@@ -500,7 +659,7 @@ def read_events(cwd: Path, *, verify: bool = True) -> list[TrailEvent]:
     cached = _READ_EVENTS_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    events = _read_events_from_head(cwd, head)
+    events = _read_events_incremental(cwd, head)
     if verify:
         errors = verify_event_log(cwd, events=events)["errors"]
         if errors:
@@ -526,11 +685,15 @@ def invalidate_read_events_cache(cwd: Path | None = None) -> None:
     """
     if cwd is None:
         _READ_EVENTS_CACHE.clear()
+        _VERIFY_STATUS_CACHE.clear()
         return
     repo_key = str(Path(cwd).resolve())
     for key in list(_READ_EVENTS_CACHE.keys()):
         if key[0] == repo_key:
             _READ_EVENTS_CACHE.pop(key, None)
+    for key in list(_VERIFY_STATUS_CACHE.keys()):
+        if key[0] == repo_key:
+            _VERIFY_STATUS_CACHE.pop(key, None)
 
 
 def _parents_are_linear(cwd: Path) -> tuple[bool, list[str], int]:
@@ -549,6 +712,119 @@ def _parents_are_linear(cwd: Path) -> tuple[bool, list[str], int]:
             errors.append(f"{commit[:12]} does not parent previous batch {previous[:12] if previous else '?'}")
         previous = commit
     return not errors, errors, len(lines)
+
+
+def _is_ancestor(cwd: Path, ancestor: str, descendant: str) -> bool:
+    return _git(
+        cwd, ["merge-base", "--is-ancestor", ancestor, descendant], check=False
+    ).returncode == 0
+
+
+def _check_event_chain(
+    events_sorted: list[TrailEvent],
+    *,
+    start_sequence: int,
+    start_previous_event_id: str | None,
+) -> tuple[bool, bool, list[str], str | None]:
+    """Content-hash + chain checks over an ordered run of events.
+
+    ``start_sequence`` / ``start_previous_event_id`` seed the expected values
+    so a partial (incremental) run continues the chain from a prior point.
+    Returns (content_ok, chain_ok, errors, last_event_id).
+    """
+    content_ok = True
+    chain_ok = True
+    errors: list[str] = []
+    previous_event_id = start_previous_event_id
+    expected_sequence = start_sequence
+    for event in events_sorted:
+        if event.content_hash != payload_content_hash(event.payload):
+            content_ok = False
+            errors.append(f"event {event.event_sequence}: content_hash mismatch")
+        if event.event_id != expected_event_id(event):
+            content_ok = False
+            errors.append(f"event {event.event_sequence}: event_id mismatch")
+        if event.event_sequence != expected_sequence:
+            chain_ok = False
+            errors.append(f"event {event.event_sequence}: non-contiguous event_sequence")
+        if event.previous_event_id != previous_event_id:
+            chain_ok = False
+            errors.append(f"event {event.event_sequence}: previous_event_id mismatch")
+        previous_event_id = event.event_id
+        expected_sequence += 1
+    return content_ok, chain_ok, errors, previous_event_id
+
+
+def _verify_result_from_watermark(wm: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ref": EVENT_LOG_REF,
+        "exists": True,
+        "head": wm["head"],
+        "batch_count": int(wm.get("batch_count", 0)),
+        "event_count": int(wm.get("event_count", 0)),
+        "batch_parents_linear": True,
+        "content_hashes_valid": True,
+        "event_chain_valid": True,
+        "errors": [],
+    }
+
+
+def _try_incremental_verify(
+    cwd: Path, head: str, wm: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Verify only events appended since a clean watermark.
+
+    The log is append-only and content-addressed (git-immutable), so events
+    already verified at ``wm['head']`` cannot change. We re-check parent
+    linearity (cheap) and only run content/chain checks on events beyond the
+    watermark sequence. Returns the result on success, or None to signal the
+    caller should fall back to a full verify (so it can report all errors).
+    """
+    linear, _parent_errors, batch_count = _parents_are_linear(cwd)
+    if not linear:
+        return None
+    try:
+        events = read_events(cwd, verify=False)
+    except Exception:  # noqa: BLE001
+        return None
+    wm_seq = int(wm["last_event_sequence"])
+    new = sorted(
+        (e for e in events if e.event_sequence > wm_seq),
+        key=lambda e: e.event_sequence,
+    )
+    # Contiguity sanity: the count of trusted (≤ wm_seq) events must be exactly
+    # wm_seq. Any mismatch means the prefix changed — bail to a full verify.
+    if len(events) != wm_seq + len(new):
+        return None
+    content_ok, chain_ok, errs, last_eid = _check_event_chain(
+        new,
+        start_sequence=wm_seq + 1,
+        start_previous_event_id=wm.get("last_event_id"),
+    )
+    if errs or not content_ok or not chain_ok:
+        return None
+    last_seq = new[-1].event_sequence if new else wm_seq
+    last_id = last_eid if new else wm.get("last_event_id")
+    result = {
+        "ref": EVENT_LOG_REF,
+        "exists": True,
+        "head": head,
+        "batch_count": batch_count,
+        "event_count": len(events),
+        "batch_parents_linear": True,
+        "content_hashes_valid": True,
+        "event_chain_valid": True,
+        "errors": [],
+    }
+    _save_verify_watermark(cwd, {
+        "format": _EVENT_CACHE_FORMAT,
+        "head": head,
+        "last_event_sequence": last_seq,
+        "last_event_id": last_id,
+        "event_count": len(events),
+        "batch_count": batch_count,
+    })
+    return result
 
 
 def verify_event_log(
@@ -572,41 +848,61 @@ def verify_event_log(
             "errors": [],
         }
 
+    # Whole-log verification (events is None) is keyed by head and memoized:
+    # the log is append-only so the result can't change for a fixed head.
+    cache_key = (str(Path(cwd).resolve()), head)
+    if events is None and cache_key in _VERIFY_STATUS_CACHE:
+        return _VERIFY_STATUS_CACHE[cache_key]
+
+    # Incremental fast-path: if a clean verification was persisted at an
+    # ancestor head, re-verify only the events appended since — every event is
+    # still verified exactly once over the life of the log, but no single call
+    # re-hashes the whole history.
+    if events is None:
+        wm = _load_verify_watermark(cwd)
+        if wm is not None and wm.get("head") == head:
+            result = _verify_result_from_watermark(wm)
+            _VERIFY_STATUS_CACHE[cache_key] = result
+            return result
+        if wm is not None and _is_ancestor(cwd, wm["head"], head):
+            inc = _try_incremental_verify(cwd, head, wm)
+            if inc is not None:
+                _VERIFY_STATUS_CACHE[cache_key] = inc
+                return inc
+
     linear, parent_errors, batch_count = _parents_are_linear(cwd)
     errors.extend(parent_errors)
 
+    cache_result = events is None
     if events is None:
-        events = []
-        commits = _git(cwd, ["rev-list", "--reverse", EVENT_LOG_REF]).stdout.splitlines()
-        for commit in commits:
-            names = _git(cwd, ["ls-tree", "-r", "--name-only", commit, "events"]).stdout.splitlines()
-            for name in sorted(n for n in names if n.startswith("events/") and n.endswith(".json")):
-                raw = _git(cwd, ["show", f"{commit}:{name}"]).stdout
-                try:
-                    events.append(TrailEvent.model_validate_json(raw))
-                except Exception as exc:
-                    errors.append(f"{name}: invalid event JSON: {exc}")
+        # Reuse the snapshot-backed batched reader instead of a ``git show``
+        # per event — the per-blob form forked a subprocess for each of (here)
+        # hundreds of thousands of events, pegging a core for minutes every
+        # time sync called event_log_status.
+        try:
+            events = read_events(cwd, verify=False)
+        except Exception as exc:  # noqa: BLE001 — corrupt blob ⇒ report, don't crash
+            result = {
+                "ref": EVENT_LOG_REF,
+                "exists": True,
+                "head": head,
+                "batch_count": batch_count,
+                "event_count": 0,
+                "batch_parents_linear": linear,
+                "content_hashes_valid": False,
+                "event_chain_valid": False,
+                "errors": errors + [f"event log read failed: {exc}"],
+            }
+            _VERIFY_STATUS_CACHE[cache_key] = result
+            return result
 
-    content_ok = True
-    chain_ok = True
-    previous_event_id: str | None = None
-    for expected_sequence, event in enumerate(sorted(events, key=lambda e: e.event_sequence), start=1):
-        expected_hash = payload_content_hash(event.payload)
-        if event.content_hash != expected_hash:
-            content_ok = False
-            errors.append(f"event {event.event_sequence}: content_hash mismatch")
-        if event.event_id != expected_event_id(event):
-            content_ok = False
-            errors.append(f"event {event.event_sequence}: event_id mismatch")
-        if event.event_sequence != expected_sequence:
-            chain_ok = False
-            errors.append(f"event {event.event_sequence}: non-contiguous event_sequence")
-        if event.previous_event_id != previous_event_id:
-            chain_ok = False
-            errors.append(f"event {event.event_sequence}: previous_event_id mismatch")
-        previous_event_id = event.event_id
+    events_sorted = sorted(events, key=lambda e: e.event_sequence)
+    content_ok, chain_ok, chain_errors, _last_eid = _check_event_chain(
+        events_sorted, start_sequence=1, start_previous_event_id=None
+    )
+    errors.extend(chain_errors)
 
-    return {
+    result = {
         "ref": EVENT_LOG_REF,
         "exists": True,
         "head": head,
@@ -617,6 +913,27 @@ def verify_event_log(
         "event_chain_valid": chain_ok,
         "errors": errors,
     }
+    if cache_result:
+        # Persist a clean watermark so future calls (this process or a fresh
+        # cold one) can verify only the delta.
+        if (
+            not errors and content_ok and chain_ok and linear and events_sorted
+        ):
+            last = events_sorted[-1]
+            _save_verify_watermark(cwd, {
+                "format": _EVENT_CACHE_FORMAT,
+                "head": head,
+                "last_event_sequence": last.event_sequence,
+                "last_event_id": last.event_id,
+                "event_count": len(events),
+                "batch_count": batch_count,
+            })
+        repo_key = cache_key[0]
+        for key in list(_VERIFY_STATUS_CACHE.keys()):
+            if key[0] == repo_key and key != cache_key:
+                _VERIFY_STATUS_CACHE.pop(key, None)
+        _VERIFY_STATUS_CACHE[cache_key] = result
+    return result
 
 
 def event_log_status(cwd: Path) -> dict[str, Any]:

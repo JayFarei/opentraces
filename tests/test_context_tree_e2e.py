@@ -69,6 +69,80 @@ def _ingest_and_project(fixture_name: str, tmp_path: Path):
     return summary, projection
 
 
+class TestScopedProjectionEqualsFull:
+    """Differential-cache guard: building a single trace's projection must
+    equal the full build filtered to that trace. This is the invariant that
+    makes per-session ingest's ``trace_id``-scoped projection safe."""
+
+    def test_scoped_build_matches_full_build_per_trace(self, tmp_path):
+        from opentraces.core.trails.event_log import append_event_batch
+        from opentraces.core.trails.models import TrailEventDraft
+
+        _init_git_repo(tmp_path)
+
+        # Trace X: a real context-tree capture.
+        tx = "trace-context-tree-linear"
+        transcript = _run_fixture("context-tree-linear", tmp_path)
+        emit_context_tree_events_from_record(
+            project_dir=tmp_path,
+            final_record=TraceRecord(
+                trace_id=tx, session_id="sess-x",
+                agent=Agent(name="claude-code", version="otbox-fake-1.0"),
+                steps=[],
+            ),
+            transcript_path=transcript,
+        )
+
+        # Trace Y: an unrelated event interleaved in the same log. Its events
+        # must not leak into trace X's scoped projection, and must not be
+        # dropped from the full build.
+        ty = "trace-other"
+        append_event_batch(
+            tmp_path,
+            [TrailEventDraft(
+                event_type="trace_patch_created", trace_id=ty, step_index=1,
+                capture_method=["test"],
+                payload={
+                    "trace_patch_id": "py1", "file_path": "z.py",
+                    "affected_range": {"start_line": 1, "end_line": 1},
+                    "authored_text": "z\n", "raw_authored_hash": "h",
+                    "git_clean_hash": "h", "limitations": [],
+                },
+            )],
+            writer="test-fixture",
+        )
+
+        full = build_context_tree_projection(tmp_path)
+        scoped = build_context_tree_projection(tmp_path, trace_id=tx)
+
+        # The full build's context nodes belong only to trace X (Y has none).
+        assert set(full.nodes_by_trace) == {tx}
+        assert set(scoped.nodes_by_trace) == {tx}
+        # Same node ids in the same order.
+        assert scoped.nodes_by_trace[tx] == full.nodes_by_trace[tx]
+        assert scoped.nodes_by_trace[tx], "fixture should yield nodes"
+        # Every referenced layer survives the scoped build, and node payloads
+        # are byte-identical between scoped and full.
+        for node_id in scoped.nodes_by_trace[tx]:
+            node = scoped.nodes_by_id[node_id]
+            for layer_id in (
+                node.system_layer_id, node.messages_layer_id,
+                node.tool_registry_layer_id, node.runtime_state_layer_id,
+            ):
+                assert layer_id in scoped.layers_by_id, (
+                    f"scoped build dropped layer {layer_id}"
+                )
+            assert (
+                scoped.nodes_by_id[node_id].model_dump(mode="json")
+                == full.nodes_by_id[node_id].model_dump(mode="json")
+            )
+
+        # Scoping to the unrelated trace yields no context nodes.
+        assert build_context_tree_projection(
+            tmp_path, trace_id=ty
+        ).nodes_by_trace == {}
+
+
 class TestRoundTrip:
 
     def test_linear_round_trips(self, tmp_path):
