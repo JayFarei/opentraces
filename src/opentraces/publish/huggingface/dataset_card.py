@@ -332,9 +332,9 @@ document](https://opentraces.ai/plans/041) for the full decision table.
 
 ### Privacy stance
 
-Every trace passes through a redaction + classification pipeline before
-leaving the contributor's machine (secrets regex + entropy, Trufflehog,
-and classifier review). Content hashes use murmur3 (not cryptographic)
+Security tools are optional utilities that may be run by the contributing
+workflow before publication; inspect each row's `metadata.security.tools_applied`
+to see what actually ran. Content hashes use murmur3 (not cryptographic)
 and are designed for cross-tool comparison, not confidentiality.
 Contributors review each trace before publishing. If you recognize
 content in this dataset that should not be public, open an issue and

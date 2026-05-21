@@ -43,6 +43,7 @@ from .datasets import (
     save_manifest,
 )
 from .workflows import WorkflowPackage, load_workflow
+from ..security.privacy import DEFAULT_PRIVACY_TIER
 
 
 class ExecutorUnavailableError(RuntimeError):
@@ -126,7 +127,7 @@ def run_dataset_workflow(
         "source_provenance": source_provenance,
         "scope": scope or {"scope": "all-projects"},
         "limit": limit,
-        "privacy_tier": privacy_tier,
+        "privacy_tier": privacy_tier or DEFAULT_PRIVACY_TIER,
         "trail_freshness_policy": trail_freshness_policy,
         "trail_freshness": trail_freshness,
     }
@@ -173,7 +174,7 @@ def run_dataset_workflow(
                 rows,
                 run_id=run_id,
                 dry_run=dry_run,
-                privacy_tier=privacy_tier,
+                privacy_tier=run_packet["privacy_tier"],
                 run_provenance={
                     "run_id": run_id,
                     "scheduled": scheduled,
@@ -303,7 +304,7 @@ def _run_instructions(run_packet: dict[str, Any]) -> str:
         "Read `run_packet.json` and `schema_snapshot.json`. Use `ot trace query`, "
         "`ot trace slice`, `ot trace map`, and `ot trace get` as needed. Emit plain JSONL rows "
         f"matching the schema to `{run_packet['output_path']}`.\n\n"
-        f"Privacy tier for appended rows: `{run_packet.get('privacy_tier') or 'medium'}`.\n\n"
+        f"Privacy tier for appended rows: `{run_packet.get('privacy_tier') or DEFAULT_PRIVACY_TIER}`.\n\n"
         f"Trace Trail freshness policy: `{run_packet.get('trail_freshness_policy')}`.\n\n"
         f"Set `OT_DATASET_OUTPUT={run_packet['output_path']}` when running helper scripts.\n"
     )

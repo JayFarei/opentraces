@@ -30,7 +30,12 @@ def test_plan058_manifest_defaults_and_publication_state_required_review():
     assert dataset.manifest.remote_schema == "refuse_if_newer"
     assert dataset.manifest.publication_policy.review == "required"
 
-    summary = append_rows("remote-ready", [_row("Needs a human review.")], run_id="run-1")
+    summary = append_rows(
+        "remote-ready",
+        [_row("Needs a human review.")],
+        run_id="run-1",
+        privacy_tier="medium",
+    )
     state = read_publication_state("remote-ready")
 
     assert state.rows[summary.row_ids[0]].status == "needs_review"
@@ -57,7 +62,12 @@ def test_plan058_publication_policy_auto_and_review_decisions_do_not_mutate_rows
         workflow_digest="sha256:workflow",
         publication_policy={"review": "auto"},
     )
-    summary = append_rows("auto-publish", [_row("Ready without human review.")], run_id="run-1")
+    summary = append_rows(
+        "auto-publish",
+        [_row("Ready without human review.")],
+        run_id="run-1",
+        privacy_tier="medium",
+    )
     row_id = summary.row_ids[0]
 
     assert read_publication_state("auto-publish").rows[row_id].status == "publishable"
@@ -95,6 +105,7 @@ def test_plan058_publish_stages_only_publishable_rows_and_never_uploads_control_
         "publishable",
         [_row("Safe public row.", trace_id="trace-good")],
         run_id="run-1",
+        privacy_tier="medium",
     )
     blocked = append_rows(
         "publishable",
@@ -135,40 +146,40 @@ def test_plan058_publish_stages_only_publishable_rows_and_never_uploads_control_
     assert state.rows[blocked.row_ids[0]].status == "blocked"
 
 
-def test_plan058_append_rows_redacts_by_default_and_tracks_privacy_tier():
+def test_plan058_append_rows_defaults_to_raw_off_privacy_tier():
     from opentraces.core.datasets import (
         append_rows,
         create_dataset,
         dataset_path,
         read_publication_state,
     )
-    from opentraces.security import SECURITY_VERSION
 
     create_dataset(
-        "redacted-by-default",
+        "raw-by-default",
         workflow_skill="curator",
         workflow_digest="sha256:workflow",
         publication_policy={"review": "auto"},
     )
     summary = append_rows(
-        "redacted-by-default",
+        "raw-by-default",
         [
             _row(
-                "Uses sk-proj-abcdefghijklmnopqrstuvwxyz123456 and should be filtered.",
+                "Uses sk-proj-abcdefghijklmnopqrstuvwxyz123456 and remains raw.",
                 trace_id="trace-secret",
             )
         ],
         run_id="run-1",
     )
 
-    data = (dataset_path("redacted-by-default") / "data" / "train.jsonl").read_text()
-    assert "sk-proj-" not in data
-    assert "[REDACTED]" in data
-    entry = read_publication_state("redacted-by-default").rows[summary.row_ids[0]]
-    assert entry.status == "publishable"
-    assert entry.privacy_tier == "medium"
-    assert entry.security_version == SECURITY_VERSION
-    assert entry.redactions_applied >= 1
+    data = (dataset_path("raw-by-default") / "data" / "train.jsonl").read_text()
+    assert "sk-proj-" in data
+    assert "[REDACTED]" not in data
+    entry = read_publication_state("raw-by-default").rows[summary.row_ids[0]]
+    assert entry.status == "blocked"
+    assert entry.privacy_tier == "off"
+    assert entry.security_version is None
+    assert entry.redactions_applied == 0
+    assert "privacy_tier_off" in entry.block_reasons
 
 
 def test_plan058_append_rows_writes_row_provenance_sidecar():
@@ -296,7 +307,12 @@ def test_plan058_publish_retries_parent_commit_conflict_and_preserves_remote_uni
         publication_policy={"review": "auto"},
     )
     add_dataset_remote("conflict", "me/conflict", visibility="private")
-    append_rows("conflict", [_row("Local row.", trace_id="trace-local")], run_id="run-1")
+    append_rows(
+        "conflict",
+        [_row("Local row.", trace_id="trace-local")],
+        run_id="run-1",
+        privacy_tier="medium",
+    )
 
     published = publish_dataset("conflict", contributor="tester", max_retries=2)
     assert published.uploaded is True

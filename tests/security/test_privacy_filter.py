@@ -151,6 +151,7 @@ class TestPipelineIntegration:
         _registry._TOOLS = new_tools  # type: ignore[assignment]
         try:
             cfg = Config()
+            cfg.security.regex.enabled = True
             cfg.security.privacy_filter.enabled = True
             rec = _record(description=text)
             rec, report = sanitize_record(rec, cfg=cfg)

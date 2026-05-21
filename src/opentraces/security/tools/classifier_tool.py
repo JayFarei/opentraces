@@ -18,8 +18,8 @@ class ClassifierJudge:
     def enabled(self, cfg: Any) -> bool:
         block = cfg_block(cfg, self.name)
         if block is None:
-            return True
-        return bool(getattr(block, "enabled", True))
+            return False
+        return bool(getattr(block, "enabled", False))
 
     def _sensitivity(self, cfg: Any) -> str:
         block = cfg_block(cfg, self.name)

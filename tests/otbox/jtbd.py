@@ -48,7 +48,7 @@ JTBD_PATH = REPO_ROOT / "kb" / "plans" / "063-jtbd-command-map.md"
 # Plan 070 M70-3 / R4: ``inspect-security-pipeline`` now has a credible-
 # state journey (``security-sanitize-captured-content.toml``) that
 # asserts the security pipeline ran on a real captured Claude session
-# (the always-on regex + entropy detectors fingerprinted the trace)
+# (the checkpoint explicitly enables regex + entropy to fingerprint the trace)
 # AND that the user-facing ``trace query`` projection does not leak
 # the secret literal — against the ``c-captured-with-secrets``
 # checkpoint. The existing ``inspect-security-pipeline.toml`` stays

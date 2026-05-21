@@ -128,7 +128,11 @@ class LLMPIIDetectorTool:
         block = cfg_block(cfg, self.name)
         is_on = self.enabled(cfg)
         if not is_on:
-            state, detail = "disabled", None
+            state = "disabled"
+            detail = (
+                "advanced: no setup command is registered yet; configure "
+                "security.llm_pii directly before enabling"
+            )
         else:
             backend = getattr(block, "api_format", "?")
             model = getattr(block, "model", "?")
@@ -141,6 +145,6 @@ class LLMPIIDetectorTool:
             enabled=is_on,
             state=state,
             detail=detail,
-            setup_cmd="opentraces setup llm-pii",
-            disable_cmd="opentraces setup llm-pii --disable",
+            setup_cmd=None,
+            disable_cmd=None,
         )

@@ -85,7 +85,8 @@ def run_tools(
     """
     report = PipelineReport()
     sec = ensure_security_metadata(record)
-    tools_section = sec.setdefault("tools", {})
+    tools_section: dict[str, Any] = {}
+    sec["tools"] = tools_section
 
     for tool in tools:
         try:

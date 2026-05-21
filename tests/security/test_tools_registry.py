@@ -83,15 +83,17 @@ class TestRegistryShape:
 
 
 class TestEnableState:
-    def test_default_config_enables_always_on_only(self) -> None:
-        """A bare ``Config()`` has trufflehog off, llm_pii off — only the
-        always-on detectors and the default-on transformer + classifier run."""
+    def test_default_config_enables_no_tools(self) -> None:
+        """A bare ``Config()`` has no automatic security tools enabled."""
         cfg = Config()
         enabled = {t.name for t in iter_enabled(cfg)}
-        assert "regex" in enabled
-        assert "entropy" in enabled
-        assert "trufflehog" not in enabled
-        assert "llm_pii" not in enabled
+        assert enabled == set()
+
+    def test_regex_and_entropy_enable_flags_toggle_iter_enabled(self) -> None:
+        cfg = Config()
+        cfg.security.regex.enabled = True
+        cfg.security.entropy.enabled = True
+        assert {"regex", "entropy"} <= {t.name for t in iter_enabled(cfg)}
 
     def test_trufflehog_enable_flag_toggles_iter_enabled(self) -> None:
         cfg = Config()
@@ -108,12 +110,9 @@ class TestEnableState:
         cfg.security.classifier.enabled = False
         assert "classifier" not in {t.name for t in iter_enabled(cfg)}
 
-    def test_no_cfg_yields_only_always_on(self) -> None:
-        """iter_enabled(None) returns only tools whose enabled(None) is True
-        — by design that's regex + entropy (no config gate)."""
-        enabled = {t.name for t in iter_enabled(None)}
-        assert "regex" in enabled
-        assert "entropy" in enabled
+    def test_no_cfg_yields_no_enabled_tools(self) -> None:
+        """iter_enabled(None) has no implicit always-on tools."""
+        assert {t.name for t in iter_enabled(None)} == set()
 
 
 class TestDescribe:
@@ -128,16 +127,17 @@ class TestDescribe:
     def test_describe_default_states(self) -> None:
         cfg = Config()
         infos = {i.name: i for i in describe_all(cfg)}
-        assert infos["regex"].state == "always-on"
-        assert infos["entropy"].state == "always-on"
+        assert infos["regex"].state == "disabled"
+        assert infos["entropy"].state == "disabled"
         assert infos["trufflehog"].state == "disabled"
         assert infos["privacy_filter"].state == "disabled"
         assert infos["llm_pii"].state == "disabled"
-        assert infos["path_anonymizer"].state == "enabled"
-        assert infos["classifier"].state == "enabled"
+        assert infos["path_anonymizer"].state == "disabled"
+        assert infos["classifier"].state == "disabled"
 
     def test_describe_includes_setup_commands_for_optin_tools(self) -> None:
         infos = {i.name: i for i in describe_all(Config())}
         assert infos["trufflehog"].setup_cmd == "opentraces setup trufflehog"
         assert infos["trufflehog"].disable_cmd == "opentraces setup trufflehog --disable"
-        assert infos["llm_pii"].setup_cmd == "opentraces setup llm-pii"
+        assert infos["llm_pii"].setup_cmd is None
+        assert "no setup command" in (infos["llm_pii"].detail or "")

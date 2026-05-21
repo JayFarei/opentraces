@@ -119,6 +119,18 @@ _PORTABLE_FIELDS = (
 BACKFILL_DECISIONS = ("Y", "declined", "never")
 
 
+class RegexConfig(BaseModel):
+    """Settings for the opt-in built-in regex detector."""
+
+    enabled: bool = False
+
+
+class EntropyConfig(BaseModel):
+    """Settings for the opt-in high-entropy detector."""
+
+    enabled: bool = False
+
+
 class TruffleHogConfig(BaseModel):
     """Tier 1.5 TruffleHog secret-scanning settings (Plan 032 Part A)."""
 
@@ -167,15 +179,15 @@ class LLMPIIConfig(BaseModel):
 
 
 class PathAnonymizerConfig(BaseModel):
-    """Default-on transformer that rewrites local usernames in paths."""
+    """Opt-in transformer that rewrites local usernames in paths."""
 
-    enabled: bool = True
+    enabled: bool = False
 
 
 class ClassifierConfig(BaseModel):
-    """Default-on heuristic content classifier."""
+    """Opt-in heuristic content classifier."""
 
-    enabled: bool = True
+    enabled: bool = False
     sensitivity: Literal["low", "medium", "high"] = "medium"
 
 
@@ -196,10 +208,13 @@ class SecurityConfig(BaseModel):
     """Root security-module config.
 
     No top-level ``privacy_tier`` field — the set of tools that run is the
-    sum of the per-tool ``enabled`` flags below. Tools opted in via
-    ``opentraces setup <tool>``.
+    sum of the per-tool ``enabled`` flags below. Installer-backed tools are
+    opted in via ``opentraces setup <tool>``; lightweight local tools can also
+    be invoked directly with ``opentraces security sanitize --tools``.
     """
 
+    regex: RegexConfig = Field(default_factory=RegexConfig)
+    entropy: EntropyConfig = Field(default_factory=EntropyConfig)
     trufflehog: TruffleHogConfig = Field(default_factory=TruffleHogConfig)
     llm_review: LLMReviewConfig = Field(default_factory=LLMReviewConfig)
     llm_pii: LLMPIIConfig = Field(default_factory=LLMPIIConfig)

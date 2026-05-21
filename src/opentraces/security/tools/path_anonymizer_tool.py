@@ -26,8 +26,8 @@ class PathAnonymizerTransformer:
     def enabled(self, cfg: Any) -> bool:
         block = cfg_block(cfg, self.name)
         if block is None:
-            return True
-        return bool(getattr(block, "enabled", True))
+            return False
+        return bool(getattr(block, "enabled", False))
 
     def apply(self, record: TraceRecord, ctx: ToolContext) -> ToolResult:
         cfg = ctx.cfg

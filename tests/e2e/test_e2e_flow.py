@@ -157,7 +157,7 @@ class TestCapturedTrace:
     def test_staged_trace_has_expected_fields(
         self, runner, initialized_project, real_session_file, tmp_path
     ):
-        """A staged trace has security.scanned, anonymized paths, and metrics."""
+        """A staged trace remains raw by default and still carries metrics."""
         from opentraces_schema import TraceRecord
 
         # Capture first
@@ -187,14 +187,9 @@ class TestCapturedTrace:
         data = staged_files[0].read_text().strip()
         record = TraceRecord.model_validate_json(data)
 
-        assert record.security.scanned is True, "security.scanned not set"
+        assert record.security.scanned is False, "security should be opt-in by default"
+        assert record.metadata["security"]["tools_applied"] == []
         assert record.metrics.total_steps > 0, "metrics.total_steps is 0"
-
-        # Check that raw username paths are anonymized
-        username = os.environ.get("USER", "")
-        serialized = record.to_jsonl_line()
-        if username:
-            assert f"/Users/{username}/" not in serialized, "Raw user path found in trace"
 
 
 class TestLoginMock:

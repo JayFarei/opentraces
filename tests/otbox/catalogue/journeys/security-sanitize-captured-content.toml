@@ -8,11 +8,12 @@ OpenAI key, GitHub PAT, hex blob).
 Today's `inspect-security-pipeline.toml` sibling asserts the empty-
 state contract (`security tools list --help`, `security sanitize
 --help`) on a smoke seed. This journey asserts that when a real
-captured session lands in the bucket:
+captured session lands in the bucket after the checkpoint explicitly
+enabled regex + entropy:
 
   1. The security pipeline ACTUALLY RAN at ingest time — the trace's
      `metadata.security.tools_applied` list is non-empty and the
-     always-on regex + entropy detectors recorded findings.
+     opted-in regex + entropy detectors recorded findings.
   2. The user-facing projection (`trace query --tool Edit --json`)
      does NOT leak the secret literal — proving the trace_query
      consumer surface is safe to forward to dashboards / Slack / PRs.
@@ -24,7 +25,7 @@ Substrate honesty (from c-captured-with-secrets audit at the time of
 authoring): `secret_present_in_disk = True` — the on-disk trace
 JSONL still carries the raw secret literal inside
 `metadata.hook_pre_tool_use` / `metadata.hook_post_tool_use` payloads
-(the raw Claude Code hook bodies). The regex + entropy detectors
+(the raw Claude Code hook bodies). The explicitly enabled regex + entropy detectors
 redacted the top-level step content (6 findings, 6 redactions) but
 the hook-metadata payloads escaped the inline sanitize pass. The
 user-facing `trace query` projection is clean, which is the boundary
@@ -121,7 +122,7 @@ step = "no-secret-in-query"
 equals = 0
 
 # ---------------------------------------------------------------------
-# 4. Inspect the security tool registry. The always-on regex +
+# 4. Inspect the security tool registry. The opted-in regex +
 #    entropy detectors fired against this trace during ingest; the
 #    `tools list --json` envelope is the consumer-facing contract for
 #    "what protected this trace".
@@ -137,7 +138,7 @@ step = "security-tools-list"
 equals = 0
 
 # The registry envelope shape: a list whose first entry is the
-# always-on regex detector with `enabled = true`.
+# explicitly enabled regex detector with `enabled = true`.
 [[assertions]]
 kind = "stdout_json"
 step = "security-tools-list"

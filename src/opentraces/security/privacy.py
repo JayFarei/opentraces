@@ -5,7 +5,8 @@ runs over each record. The ``PrivacyTier`` vocabulary (``off`` / ``low`` /
 ``medium`` / ``high``) survives only as a labelled enum for the
 dataset-publishing surface (``DatasetRowSecurity.privacy_tier``, bucket
 envelope ``privacy_tier``), where it serves as a coarse shareable /
-filtered / unfiltered shorthand.
+filtered / unfiltered shorthand. ``off`` is the default; named tools are
+authoritative for what actually ran.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from .walker import ensure_security_metadata
 
 PrivacyTier = Literal["off", "low", "medium", "high"]
 
-DEFAULT_PRIVACY_TIER: PrivacyTier = "medium"
+DEFAULT_PRIVACY_TIER: PrivacyTier = "off"
 PRIVACY_TIERS: tuple[PrivacyTier, ...] = ("off", "low", "medium", "high")
 
 
@@ -74,7 +75,10 @@ def mark_record_tools_applied(
 ) -> None:
     """Stamp ``metadata.security.tools_applied`` on ``record``."""
     meta = ensure_security_metadata(record)
-    meta["tools_applied"] = list(tool_names or [])
+    names = list(tool_names or [])
+    meta["tools_applied"] = names
+    if not names:
+        meta["tools"] = {}
 
 
 def bucket_security_state(

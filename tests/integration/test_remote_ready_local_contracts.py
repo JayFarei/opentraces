@@ -102,6 +102,7 @@ def test_remote_ready_bucket_round_trip_and_sync_blockers(monkeypatch, tmp_path)
         project_slug="community-traces-hf",
         source_layer="canonical",
         legacy_mirror=False,
+        privacy_tier="medium",
     )
 
     status = runner.invoke(main, ["bucket", "status", "--json"])

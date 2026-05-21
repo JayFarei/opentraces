@@ -65,7 +65,7 @@ class ToolInfo:
     display_name: str
     kind: ToolKind
     enabled: bool
-    state: str  # "always-on" / "enabled" / "disabled" / "missing" / "unreachable"
+    state: str  # "enabled" / "disabled" / "missing" / "unreachable"
     detail: str | None = None
     setup_cmd: str | None = None
     disable_cmd: str | None = None

@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 PROMPT_VERSION = "1"
 
 _REVIEW_PROMPT = """You are a security reviewer for an AI coding agent trace dataset.
-The session has already been processed by automated secret detection
-(regex + entropy + optional TruffleHog). Your role is to catch anything
-missed — semantically sensitive content that pattern matching cannot detect.
+The session may already have been processed by explicitly configured security
+tools. Your role is to catch anything missed — semantically sensitive content
+that pattern matching cannot detect.
 
 Project context: {context}
 Session transcript (may be truncated):

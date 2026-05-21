@@ -1,4 +1,4 @@
-"""Always-on Shannon-entropy detector.
+"""Opt-in Shannon-entropy detector.
 
 Standalone wrapper around the entropy half of
 :func:`opentraces.security.secrets.scan_text`. Runs after :mod:`regex_tool` so
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import DetectorMixin, Finding, ToolInfo
+from . import DetectorMixin, Finding, ToolInfo, cfg_block
 from ..walker import FieldType
 from ..secrets import (  # private but in-package
     DEFAULT_ENTROPY_THRESHOLD,
@@ -29,13 +29,14 @@ _ENTROPY_FIELDS = (FieldType.TOOL_INPUT, FieldType.GENERAL)
 
 
 class EntropyDetector(DetectorMixin):
-    """High-entropy string detector. Always-on, field-type gated."""
+    """High-entropy string detector, field-type gated."""
 
     name = "entropy"
     display_name = "Shannon entropy"
 
     def enabled(self, cfg: Any) -> bool:
-        return True
+        block = cfg_block(cfg, self.name)
+        return bool(getattr(block, "enabled", False)) if block else False
 
     def find(self, text: str, field_type: FieldType) -> list[Finding]:
         if field_type not in _ENTROPY_FIELDS:
@@ -58,11 +59,12 @@ class EntropyDetector(DetectorMixin):
         return out
 
     def describe(self, cfg: Any) -> ToolInfo:
+        is_on = self.enabled(cfg)
         return ToolInfo(
             name=self.name,
             display_name=self.display_name,
             kind=self.kind,
-            enabled=True,
-            state="always-on",
+            enabled=is_on,
+            state="enabled" if is_on else "disabled",
             detail="high-entropy strings flagged in tool inputs and general prose",
         )

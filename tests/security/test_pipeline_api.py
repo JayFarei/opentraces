@@ -7,7 +7,7 @@ Two resolution paths feed every entry point:
                                         returns True.
 
 Callers MUST pass one; omitting both raises ValueError. ``tools_applied`` is
-stamped on the record metadata after every non-empty run, and
+stamped on the record metadata after every run, and
 ``metadata.security.tools.<name>`` carries the per-tool patch.
 """
 
@@ -62,11 +62,18 @@ class TestSanitizeText:
         with pytest.raises(ValueError, match="tools="):
             sanitize_text("sk-ant-abcdefghij1234567890")
 
-    def test_cfg_only_runs_enabled_tools(self) -> None:
-        cfg = Config()  # default: regex+entropy enabled
+    def test_cfg_only_runs_no_tools_by_default(self) -> None:
+        cfg = Config()
         clean, findings = sanitize_text("AKIAIOSFODNN7EXAMPLE", cfg=cfg)
-        assert "[REDACTED]" in clean
-        assert findings
+        assert clean == "AKIAIOSFODNN7EXAMPLE"
+        assert findings == []
+
+    def test_cfg_only_runs_explicitly_enabled_tools(self) -> None:
+        cfg = Config()
+        cfg.security.regex.enabled = True
+        clean, findings = sanitize_text("AKIAIOSFODNN7EXAMPLE", cfg=cfg)
+        assert clean == "[REDACTED]"
+        assert [f.tool for f in findings] == ["regex"]
 
 
 # ---------------------------------------------------------------------------
@@ -120,18 +127,32 @@ class TestSanitizeRecord:
         with pytest.raises(ValueError, match="tools="):
             sanitize_record(rec)
 
-    def test_cfg_runs_default_tools(self) -> None:
+    def test_cfg_runs_no_tools_by_default(self) -> None:
         rec = _trace(description="hi AKIAIOSFODNN7EXAMPLE")
+        rec.metadata["security"] = {
+            "tools_applied": ["regex"],
+            "tools": {"regex": {"findings_count": 1}},
+        }
         cfg = Config()
         rec, report = sanitize_record(rec, cfg=cfg)
-        # Default cfg → regex, entropy, path_anonymizer, classifier (and llm_pii
-        # / trufflehog skipped — those are opt-in).
-        assert "regex" in report.tools_applied
-        assert "entropy" in report.tools_applied
-        assert "path_anonymizer" in report.tools_applied
-        assert "classifier" in report.tools_applied
-        assert "trufflehog" not in report.tools_applied
-        assert "llm_pii" not in report.tools_applied
+        assert report.tools_applied == []
+        assert rec.metadata["security"]["tools_applied"] == []
+        assert rec.metadata["security"]["tools"] == {}
+
+    def test_cfg_runs_explicitly_enabled_tools(self) -> None:
+        rec = _trace(description="hi AKIAIOSFODNN7EXAMPLE")
+        cfg = Config()
+        cfg.security.regex.enabled = True
+        cfg.security.entropy.enabled = True
+        cfg.security.path_anonymizer.enabled = True
+        cfg.security.classifier.enabled = True
+        rec, report = sanitize_record(rec, cfg=cfg)
+        assert report.tools_applied == [
+            "regex",
+            "entropy",
+            "path_anonymizer",
+            "classifier",
+        ]
 
     def test_explicit_tools_ignores_cfg(self) -> None:
         rec = _trace(description="hi AKIAIOSFODNN7EXAMPLE")

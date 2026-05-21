@@ -1,7 +1,8 @@
 """`c-captured-with-secrets` — plan 068 M68-2.
 
 A sibling of ``c-captured-real-session`` that exercises the opentraces
-security pipeline end-to-end through a real captured agent session.
+security pipeline end-to-end through a real captured agent session after
+explicitly enabling the regex + entropy tools.
 The corpus (``session-with-secrets``) has the agent create a
 ``src/config.py`` whose content carries synthetic but
 detector-shaped credentials (fake OpenAI API key, fake GitHub PAT,
@@ -15,8 +16,8 @@ inspects the trace JSONL on disk and records:
   * the tool name list.
 
 This is intentionally an audit, not a gate: the checkpoint records
-whatever the live pipeline did and the pytest layer asserts the
-desired behaviour. That keeps the corpus stable while the registry
+whatever the explicitly enabled pipeline did and the pytest layer asserts
+the desired behaviour. That keeps the corpus stable while the registry
 and per-tool enabled defaults evolve.
 """
 
@@ -88,10 +89,27 @@ def _captured_with_secrets_delta(driver: Driver, box: Box) -> None:
         "opentraces init",
     )
 
-    # 3. opentraces setup git.
+    # 3. opentraces setup git, then explicitly opt into the local
+    #    deterministic security tools. The shipped default is raw capture;
+    #    this checkpoint is the opt-in security-finding fixture.
     _check(
         driver.exec(box, [*cli, "setup", "git"]),
         "opentraces setup git",
+    )
+    testvenv_python = f"{project}/.testvenv/bin/python"
+    _check(
+        driver.exec(box, [
+            testvenv_python,
+            "-c",
+            (
+                "from opentraces.core.config import load_config, save_config; "
+                "cfg = load_config(); "
+                "cfg.security.regex.enabled = True; "
+                "cfg.security.entropy.enabled = True; "
+                "save_config(cfg)"
+            ),
+        ]),
+        "enable regex + entropy security tools",
     )
 
     # 4. Place the fake harness + corpus on the box.
@@ -119,7 +137,6 @@ def _captured_with_secrets_delta(driver: Driver, box: Box) -> None:
     transcript_path = (
         f"{home}/.claude/projects/{encoded_project}/{_SESSION_ID}.jsonl"
     )
-    testvenv_python = f"{project}/.testvenv/bin/python"
     _check(
         driver.exec(box, [testvenv_python, harness_dst], env_extra={
             "OTBOX_FAKE_SESSION": _SESSION_NAME,
@@ -130,9 +147,8 @@ def _captured_with_secrets_delta(driver: Driver, box: Box) -> None:
         "fake harness invocation",
     )
 
-    # 6. _ingest-session — this is the step that drives the security
-    #    pipeline (``security.sanitize_record`` runs inline during
-    #    ingest). The saved JSONL under
+    # 6. _ingest-session — this is the step that drives the explicitly
+    #    enabled security pipeline. The saved JSONL under
     #    ``<state_dir>/traces/<trace_id>.jsonl`` is what we audit
     #    below.
     _check(
@@ -255,8 +271,9 @@ register(
         description=(
             "c-installed-source + a real captured Claude Code session "
             "whose Edit creates src/config.py with synthetic OpenAI / "
-            "GitHub / hex secrets. Audits the resulting on-disk trace "
-            "JSONL for security-pipeline fingerprints and records "
+            "GitHub / hex secrets after opting into regex + entropy. "
+            "Audits the resulting on-disk trace JSONL for security-pipeline "
+            "fingerprints and records "
             "whether the secret literal survived ingestion — the seed "
             "for plan 068's security-pipeline UAT journeys."
         ),
