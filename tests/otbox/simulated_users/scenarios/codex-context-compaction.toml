@@ -1,0 +1,16 @@
+name = "codex-context-compaction"
+description = "C5: drive Codex through a context-heavy task intended to surface compression or an honest limitation."
+agent = "codex"
+binary_name = "codex"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Inspect the project, summarize the current app behavior in notes/context-summary.md, make a small supporting edit in src/app.py, and commit both files. If your context is compacted or summarized during the task, continue and finish the commit."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 300
+
+[capture]
+artifact_dir = "codex-context-compaction"
+expected_paths = ["notes/context-summary.md", "src/app.py"]

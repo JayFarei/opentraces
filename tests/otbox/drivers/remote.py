@@ -267,7 +267,7 @@ class RemoteDriver(Driver):
         host_root = str(box.root)
         remote_env: dict[str, str] = {}
         for key in ("HOME", "OPENTRACES_PLAN058_FAKE_REMOTE_ROOT",
-                    "GIT_CONFIG_GLOBAL"):
+                    "GIT_CONFIG_GLOBAL", "GIT_CEILING_DIRECTORIES"):
             val = host_env.get(key, "")
             if val.startswith(host_root):
                 remote_env[key] = val.replace(host_root, remote, 1)
@@ -379,7 +379,7 @@ class RemoteDriver(Driver):
         remote_env = {}
         for k, v in host_env.items():
             if k in ("HOME", "OPENTRACES_PLAN058_FAKE_REMOTE_ROOT",
-                     "GIT_CONFIG_GLOBAL") and v.startswith(host_root):
+                     "GIT_CONFIG_GLOBAL", "GIT_CEILING_DIRECTORIES") and v.startswith(host_root):
                 remote_env[k] = v.replace(host_root, remote, 1)
             elif k in ("HF_HUB_DISABLE_IMPLICIT_TOKEN", "GIT_PAGER",
                        "PAGER", "OTBOX_BOX_ID"):

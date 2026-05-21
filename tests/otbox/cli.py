@@ -87,6 +87,138 @@ def _load_journey_results(box: Box) -> list[JourneyResult]:
     return results
 
 
+def _capture_agent_name(agent: str | None) -> str | None:
+    if agent in {"codex", "codex-cli"}:
+        return "codex-cli"
+    if agent in {"claude", "claude-code"}:
+        return "claude-code"
+    return agent
+
+
+def _postprocess_capture_box(driver, box: Box, agent: str | None) -> list[dict]:
+    """Synchronously materialize traces before capture-refresh snapshots.
+
+    Agent Stop hooks are intentionally fire-and-forget in production, but
+    capture artifacts are acceptance evidence. They need the derived trace
+    state, bucket exports, context events, and search index to exist before
+    the box is archived.
+    """
+    normalized = _capture_agent_name(agent)
+    if normalized not in {"codex-cli", "claude-code"}:
+        return []
+
+    paths = driver.paths(box)
+    project = paths["project"]
+    home = paths["home"]
+    cli = f"{project}/.testvenv/bin/opentraces"
+    reports: list[dict] = []
+
+    if normalized == "codex-cli":
+        session_files = driver.glob(
+            box,
+            f"{home}/.codex/sessions/[0-9][0-9][0-9][0-9]/"
+            "[0-9][0-9]/[0-9][0-9]/rollout-*.jsonl",
+        )
+    else:
+        session_files = driver.glob(box, f"{home}/.claude/projects/*/*.jsonl")
+
+    for session_file in session_files:
+        result = driver.exec(
+            box,
+            [
+                cli,
+                "_ingest-session",
+                session_file,
+                "--agent",
+                normalized,
+                "--project",
+                project,
+            ],
+            cwd=project,
+            timeout=30,
+        )
+        reports.append({
+            "step": "ingest-session",
+            "session_file": session_file,
+            "ok": result.ok,
+            "returncode": result.returncode,
+            "stderr": result.stderr.strip()[:300],
+        })
+        if not result.ok:
+            raise OtboxError(
+                "post-capture ingest failed for "
+                f"{session_file}: {result.stderr.strip() or result.stdout.strip()}"
+            )
+
+    if normalized == "codex-cli" and not session_files:
+        raise OtboxError("post-capture ingest found no Codex rollout JSONL files")
+
+    tick = driver.exec(
+        box,
+        [cli, "setup", "watcher", "tick", "--project", project, "--json"],
+        cwd=project,
+        timeout=30,
+    )
+    reports.append({
+        "step": "watcher-tick",
+        "ok": tick.ok,
+        "returncode": tick.returncode,
+        "stderr": tick.stderr.strip()[:300],
+    })
+    if not tick.ok:
+        raise OtboxError(
+            f"post-capture watcher tick failed: {tick.stderr.strip() or tick.stdout.strip()}"
+        )
+
+    head = driver.exec(box, ["git", "-C", project, "rev-parse", "HEAD"], timeout=10)
+    if head.ok and head.stdout.strip():
+        mature = driver.exec(
+            box,
+            [
+                cli,
+                "trail",
+                "mature",
+                "--commit",
+                head.stdout.strip(),
+                "--project",
+                project,
+                "--json",
+            ],
+            cwd=project,
+            timeout=30,
+        )
+        reports.append({
+            "step": "trail-mature",
+            "ok": mature.ok,
+            "returncode": mature.returncode,
+            "stderr": mature.stderr.strip()[:300],
+        })
+        if not mature.ok:
+            raise OtboxError(
+                "post-capture trail mature failed: "
+                f"{mature.stderr.strip() or mature.stdout.strip()}"
+            )
+
+    index = driver.exec(
+        box,
+        [cli, "trace", "index", "rebuild"],
+        cwd=project,
+        timeout=30,
+    )
+    reports.append({
+        "step": "trace-index-rebuild",
+        "ok": index.ok,
+        "returncode": index.returncode,
+        "stderr": index.stderr.strip()[:300],
+    })
+    if not index.ok:
+        raise OtboxError(
+            f"post-capture trace index rebuild failed: {index.stderr.strip() or index.stdout.strip()}"
+        )
+
+    return reports
+
+
 def _journey_from_dict(data: dict) -> JourneyResult:
     from .journey import AssertionResult, StepResult
     from .drivers.base import ExecResult
@@ -800,6 +932,8 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
         )
         return 3
 
+    postprocess = _postprocess_capture_box(driver, box, scenario.agent)
+
     # PASS → snapshot the box, copy the archive into the artifact dir.
     snap_name = f"_capture-refresh-{scenario.name}-{box.box_id}"
     snap_info = create_snapshot(box, snap_name, overwrite=True)
@@ -829,6 +963,7 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
         "base_checkpoint": base_checkpoint,
         "opentraces_schema_version": schema_version,
         "opentraces_cli_version": cli_version,
+        "postprocess": postprocess,
     }
     metadata_path.write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n"

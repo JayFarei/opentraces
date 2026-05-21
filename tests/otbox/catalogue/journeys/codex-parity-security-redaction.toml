@@ -1,0 +1,38 @@
+name = "codex-parity-security-redaction"
+description = """
+Plan 083 C15 scaffold: Codex security-redaction parity. Pending a
+captured Codex security fixture with security findings in checkpoint
+provides metadata. This is not live acceptance until the artifact lands.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-security-session"]
+plan_083_matrix_ids = ["C15"]
+status = "pending-codex-security-artifact"
+
+[preconditions]
+min_captured_traces = 1
+requires_security_findings = true
+
+[[steps]]
+type = "cli"
+id = "security-tools"
+argv = ["security", "tools", "list", "--json"]
+
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["doctor", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "security-tools"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "doctor"
+equals = 0

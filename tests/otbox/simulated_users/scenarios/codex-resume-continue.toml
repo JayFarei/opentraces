@@ -1,0 +1,21 @@
+name = "codex-resume-continue"
+description = "C7: drive Codex through a two-turn continuation shape for resume/fork capture."
+agent = "codex"
+binary_name = "codex"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Start a small refactor plan for src/app.py and write the first implementation step, but pause before committing."
+expect_regex = "(?is)(done|complete|completed|implemented|updated|pause|ready|next)"
+timeout_s = 240
+
+[[turns]]
+prompt = "Continue from the prior work, finish the refactor, update README.md if needed, run a focused check, and commit the final result."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 300
+
+[capture]
+artifact_dir = "codex-resume-continue"
+expected_paths = ["src/app.py", "README.md"]

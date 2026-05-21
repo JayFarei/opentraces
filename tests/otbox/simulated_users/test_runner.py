@@ -20,15 +20,22 @@ The four cases below pin the public contract:
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from tests.otbox.checkpoints import resolve_checkpoint
 from tests.otbox.drivers import get_driver
+from tests.otbox.env import isolated_env
+from tests.otbox.simulated_users import runner as runner_module
 from tests.otbox.simulated_users.runner import (
     ScenarioResult,
     Turn,
+    _dismiss_codex_hook_review,
+    _ensure_box_project_git_repo,
+    _install_opentraces_hooks_in_box,
+    _prep_codex_project_trust,
     _prep_agent_home,
     run_simulated_session,
 )
@@ -213,14 +220,15 @@ def test_runner_writes_pane_log(driver, installed_box, tmp_path):
 # 5. _prep_agent_home — claude HOME seeding (theme + auth + editor mode)
 # ---------------------------------------------------------------------------
 def test_prep_agent_home_noop_for_non_claude(tmp_path):
-    """Non-claude agents (echo, codex, hermes, None) must be no-ops so
+    """Non-real agents (echo, hermes, None) must be no-ops so
     the existing echo-meta fast path stays untouched."""
     box_home = tmp_path / "box_home"
-    for agent in (None, "echo", "codex", "hermes"):
+    for agent in (None, "echo", "hermes"):
         assert _prep_agent_home(box_home, agent) is None
     # No files should have been created.
     assert not (box_home / ".claude.json").exists()
     assert not (box_home / ".claude" / ".credentials.json").exists()
+    assert not (box_home / ".codex").exists()
 
 
 def test_prep_agent_home_skips_when_host_unconfigured(tmp_path, monkeypatch):
@@ -257,3 +265,260 @@ def test_prep_agent_home_seeds_claude_box(tmp_path, monkeypatch):
     assert settings["anonymousId"] == "test-id"
     creds = (box_home / ".claude" / ".credentials.json").read_text()
     assert "oauthAccount" in creds
+
+
+# ---------------------------------------------------------------------------
+# 6. _prep_agent_home — codex HOME seeding (auth + sanitized config)
+# ---------------------------------------------------------------------------
+def test_prep_agent_home_skips_codex_when_host_auth_missing(tmp_path, monkeypatch):
+    fake_host = tmp_path / "fake_host"
+    (fake_host / ".codex").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(fake_host))
+
+    err = _prep_agent_home(tmp_path / "box_home", "codex")
+
+    assert err is not None
+    assert "auth.json" in err
+
+
+def test_prep_agent_home_seeds_codex_without_project_history(tmp_path, monkeypatch):
+    fake_host = tmp_path / "fake_host"
+    host_codex = fake_host / ".codex"
+    host_codex.mkdir(parents=True)
+    (host_codex / "auth.json").write_text('{"OPENAI_API_KEY":"test"}\n')
+    (host_codex / "config.toml").write_text(
+        '\n'.join([
+            'model = "gpt-5.5"',
+            'model_reasoning_effort = "xhigh"',
+            '',
+            '[projects."/Users/example/private-project"]',
+            'trust_level = "trusted"',
+            '',
+            '[features]',
+            'goals = true',
+        ])
+        + "\n"
+    )
+    monkeypatch.setenv("HOME", str(fake_host))
+    box_home = tmp_path / "box_home"
+
+    err = _prep_agent_home(box_home, "codex-cli")
+
+    assert err is None
+    assert (
+        (box_home / ".codex" / "auth.json").read_text()
+        == '{"OPENAI_API_KEY":"test"}\n'
+    )
+    config = (box_home / ".codex" / "config.toml").read_text()
+    assert 'model = "gpt-5.5"' in config
+    assert '[features]' in config
+    assert "private-project" not in config
+    assert "[projects." not in config
+
+
+def test_prep_codex_project_trust_adds_only_box_project(tmp_path):
+    box_home = tmp_path / "box_home"
+    project = tmp_path / "box" / "project"
+    project.mkdir(parents=True)
+    (box_home / ".codex").mkdir(parents=True)
+    (box_home / ".codex" / "config.toml").write_text('model = "gpt-5.5"\n')
+
+    _prep_codex_project_trust(box_home, project)
+    _prep_codex_project_trust(box_home, project)
+
+    config = (box_home / ".codex" / "config.toml").read_text()
+    assert 'model = "gpt-5.5"' in config
+    assert f'[projects."{project.resolve()}"]' in config
+    assert 'trust_level = "trusted"' in config
+    assert config.count(f'[projects."{project.resolve()}"]') == 1
+
+
+def test_isolated_env_sets_git_ceiling(monkeypatch, tmp_path):
+    from tests.otbox import env as otbox_env
+    from tests.otbox.env import Box
+
+    monkeypatch.setattr(otbox_env, "BOXES_DIR", tmp_path / "boxes")
+    box = Box("unit")
+
+    env = isolated_env(box)
+
+    assert env["GIT_CEILING_DIRECTORIES"] == str(box.root)
+
+
+def test_ensure_box_project_git_repo_seeds_local_repo(tmp_path, monkeypatch):
+    from tests.otbox import env as otbox_env
+    from tests.otbox.env import Box
+
+    monkeypatch.setattr(otbox_env, "BOXES_DIR", tmp_path / "boxes")
+    box = Box("unit")
+    box.project.mkdir(parents=True)
+    (box.project / "README.md").write_text("fixture\n", encoding="utf-8")
+    (box.project / "src").mkdir()
+    (box.project / "src" / "app.py").write_text(
+        'def greet(name: str) -> str:\n    return f"hello, {name}"\n',
+        encoding="utf-8",
+    )
+    (box.project / ".testvenv" / "bin").mkdir(parents=True)
+    (box.project / ".testvenv" / "bin" / "opentraces").write_text(
+        "fixture", encoding="utf-8"
+    )
+
+    err = _ensure_box_project_git_repo(box)
+
+    assert err is None
+    assert (box.project / ".git").is_dir()
+    tracked = subprocess.run(
+        ["git", "-C", str(box.project), "ls-files"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    assert "README.md" in tracked
+    assert "src/app.py" in tracked
+    assert ".gitignore" in tracked
+    assert ".testvenv/bin/opentraces" not in tracked
+
+
+def test_dismiss_codex_hook_review_uses_trust_shortcut(monkeypatch):
+    panes = iter([
+        "Hooks\n⚠ 8 hooks need review\nPress t to trust all",
+        "ready",
+    ])
+    keys: list[str] = []
+
+    monkeypatch.setattr(runner_module, "_capture_pane", lambda _session: next(panes))
+    monkeypatch.setattr(runner_module, "_send_tmux_key", lambda _session, key: keys.append(key))
+    monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
+
+    assert _dismiss_codex_hook_review("session") is True
+    assert keys == ["t"]
+
+
+def test_dismiss_codex_hook_review_handles_numbered_menu(monkeypatch):
+    panes = iter([
+        "Hooks need review\n› 1. Review hooks\n  2. Trust all and continue",
+        "ready",
+    ])
+    keys: list[str] = []
+
+    monkeypatch.setattr(runner_module, "_capture_pane", lambda _session: next(panes))
+    monkeypatch.setattr(runner_module, "_send_tmux_key", lambda _session, key: keys.append(key))
+    monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
+
+    assert _dismiss_codex_hook_review("session") is True
+    assert keys == ["Down", "Enter"]
+
+
+# ---------------------------------------------------------------------------
+# 7. Hook install dispatch
+# ---------------------------------------------------------------------------
+def test_install_hooks_dispatches_codex_cli(tmp_path, monkeypatch):
+    from subprocess import CompletedProcess
+
+    from tests.otbox import env as otbox_env
+    from tests.otbox.env import Box
+
+    monkeypatch.setattr(otbox_env, "BOXES_DIR", tmp_path / "boxes")
+    box = Box("unit")
+    cli = box.project / ".testvenv" / "bin" / "opentraces"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("#!/bin/sh\n")
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "tests.otbox.simulated_users.runner.subprocess.run",
+        fake_run,
+    )
+
+    err = _install_opentraces_hooks_in_box(box, "codex")
+
+    assert err is None
+    assert [call[1:] for call in calls] == [
+        ["setup", "codex-cli"],
+        ["init", "--start-fresh", "--agent", "codex-cli"],
+        ["setup", "git"],
+    ]
+
+
+def test_install_hooks_dispatches_claude_and_noops_echo(tmp_path, monkeypatch):
+    from subprocess import CompletedProcess
+
+    from tests.otbox import env as otbox_env
+    from tests.otbox.env import Box
+
+    monkeypatch.setattr(otbox_env, "BOXES_DIR", tmp_path / "boxes")
+    box = Box("unit")
+    assert _install_opentraces_hooks_in_box(box, "echo") is None
+
+    cli = box.project / ".testvenv" / "bin" / "opentraces"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("#!/bin/sh\n")
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(list(argv))
+        return CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        "tests.otbox.simulated_users.runner.subprocess.run",
+        fake_run,
+    )
+
+    err = _install_opentraces_hooks_in_box(box, "claude-code")
+
+    assert err is None
+    assert [call[1:] for call in calls] == [
+        ["setup", "claude-code"],
+        ["init", "--start-fresh", "--agent", "claude-code"],
+        ["setup", "git"],
+    ]
+
+
+def test_runner_codex_calls_prep_and_hook_install_before_tmux(tmp_path, monkeypatch):
+    from tests.otbox import env as otbox_env
+    from tests.otbox.env import Box
+    from tests.otbox.simulated_users import runner as runner_mod
+
+    monkeypatch.setattr(otbox_env, "BOXES_DIR", tmp_path / "boxes")
+    box = Box("unit")
+    box.project.mkdir(parents=True)
+    calls: list[str] = []
+
+    def fake_which(name: str):
+        if name == "tmux":
+            return "/usr/bin/tmux"
+        return str(ECHO_BINARY) if name == str(ECHO_BINARY) else None
+
+    monkeypatch.setattr(runner_mod.shutil, "which", fake_which)
+    monkeypatch.setattr(
+        runner_mod,
+        "_prep_agent_home",
+        lambda home, agent: calls.append(f"prep:{agent}") or None,
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_prep_codex_project_trust",
+        lambda home, project: calls.append("trust"),
+    )
+    monkeypatch.setattr(
+        runner_mod,
+        "_install_opentraces_hooks_in_box",
+        lambda box_arg, agent: calls.append(f"install:{agent}") or "hook install failed",
+    )
+
+    result = run_simulated_session(
+        driver=None,
+        box=box,
+        binary=str(ECHO_BINARY),
+        turns=[Turn(prompt="hi", expect_regex="ok", timeout_s=1.0)],
+        output_dir=_output_dir(tmp_path),
+        agent="codex",
+    )
+
+    assert result.verdict == "FAIL"
+    assert result.error_message == "hook install failed"
+    assert calls == ["prep:codex", "trust", "install:codex"]

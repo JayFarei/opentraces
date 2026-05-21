@@ -1,0 +1,38 @@
+name = "codex-parity-subagent"
+description = """
+Plan 083 C4 scaffold: Codex sub-agent/delegation parity. This is a
+release-gate name only until a sub-agent capture artifact and
+checkpoint are available. Do not treat a SKIP as live acceptance.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-subagent-session"]
+plan_083_matrix_ids = ["C4"]
+status = "pending-codex-subagent-artifact"
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "ctx-tree"
+argv = ["ctx", "tree", "--json"]
+
+[[steps]]
+type = "cli"
+id = "ctx-step"
+argv = ["ctx", "step", "0", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-step"
+equals = 0

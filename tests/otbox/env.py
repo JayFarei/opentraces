@@ -211,6 +211,7 @@ def isolated_env(box: Box, extra: dict | None = None) -> dict[str, str]:
     # Keep the box hermetic: never let a real git identity or pager leak in.
     env["GIT_CONFIG_GLOBAL"] = str(box.home / ".gitconfig")
     env["GIT_CONFIG_SYSTEM"] = os.devnull
+    env["GIT_CEILING_DIRECTORIES"] = str(box.root)
     env["GIT_PAGER"] = "cat"
     env["PAGER"] = "cat"
     env["OTBOX_BOX_ID"] = box.box_id

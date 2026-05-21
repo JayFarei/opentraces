@@ -1,0 +1,16 @@
+name = "codex-subagent-compaction"
+description = "C14: drive Codex through sub-agent plus context-compression pressure, or record stable limitations."
+agent = "codex"
+binary_name = "codex"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Delegate or structure the work as a sub-task if your Codex surface supports it, inspect the project enough to pressure context summarization, write notes/subagent-compaction.md with the result or limitation, make one small code edit, and commit."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 300
+
+[capture]
+artifact_dir = "codex-subagent-compaction"
+expected_paths = ["notes/subagent-compaction.md", "src/app.py"]

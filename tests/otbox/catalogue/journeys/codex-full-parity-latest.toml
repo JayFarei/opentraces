@@ -1,0 +1,43 @@
+name = "codex-full-parity-latest"
+description = """
+Plan 083 release-gate scaffold: aggregate name for the release-critical
+Codex parity set. The current journey runner has no include/composite
+step type, so this file records the gate name and runs a cheap CLI
+smoke only after the Codex captured-state preconditions are satisfied.
+The actual release command should run the individual codex-parity-*
+journeys plus mixed-agent-bucket-parity.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-codex-full-parity-latest"]
+plan_083_matrix_ids = ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C12", "C15"]
+includes = [
+  "codex-parity-linear",
+  "codex-parity-bash-debugging",
+  "codex-parity-multi-file-patch",
+  "codex-parity-subagent",
+  "codex-parity-compaction",
+  "codex-parity-skill-invocation",
+  "codex-parity-resume",
+  "codex-parity-mcp-permission",
+  "codex-parity-security-redaction",
+  "mixed-agent-bucket-parity",
+]
+status = "pending-composite-runner-or-release-script"
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "status"
+equals = 0

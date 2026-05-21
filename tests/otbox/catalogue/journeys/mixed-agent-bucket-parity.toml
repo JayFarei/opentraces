@@ -1,0 +1,49 @@
+name = "mixed-agent-bucket-parity"
+description = """
+Plan 083 C8 scaffold: mixed Claude/Codex bucket parity. The target
+checkpoint is plan 083's future c-mixed-agent-parity-bucket. It SKIPs
+until a mixed-agent artifact exists. Do not report it as a passed
+mixed-bucket proof before that artifact lands.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-mixed-agent-parity-bucket"]
+plan_083_matrix_ids = ["C8"]
+status = "pending-mixed-agent-bucket-artifact"
+
+[preconditions]
+min_captured_traces = 2
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "bucket-status"
+argv = ["bucket", "status", "--json"]
+
+[[steps]]
+type = "cli"
+id = "bucket-verify"
+argv = ["bucket", "verify", "--sample", "2", "--json"]
+
+[[steps]]
+type = "cli"
+id = "bucket-replay"
+argv = ["bucket", "replay", "--repo", "{project}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-status"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-verify"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-replay"
+equals = 0

@@ -52,6 +52,9 @@ from pathlib import Path
 from ..drivers.base import Driver
 from ..env import Box, isolated_env
 
+_CODEX_AGENTS = {"codex", "codex-cli"}
+_CLAUDE_AGENTS = {"claude", "claude-code"}
+
 
 # ---------------------------------------------------------------------------
 # dataclasses (public API surface — Agents B + C consume these)
@@ -175,10 +178,58 @@ def _send_keys(session: str, text: str) -> None:
         ["tmux", "send-keys", "-t", session, "-l", text],
         capture_output=True,
     )
+    time.sleep(0.25)
     subprocess.run(
         ["tmux", "send-keys", "-t", session, "Enter"],
         capture_output=True,
     )
+
+
+def _send_tmux_key(session: str, key: str) -> None:
+    """Send one tmux key token without adding Enter."""
+    subprocess.run(
+        ["tmux", "send-keys", "-t", session, key],
+        capture_output=True,
+    )
+
+
+def _dismiss_codex_hook_review(session: str, *, timeout_s: float = 8.0) -> bool:
+    """Trust the box-local Codex hooks before scenario prompts are sent.
+
+    Codex v0.132 shows a hook-review interstitial the first time a HOME
+    sees new lifecycle hooks. capture-refresh deliberately installs
+    opentraces hooks into a fresh box HOME, so the runner must clear that
+    screen or the first scenario prompt is swallowed by the review UI.
+    """
+    deadline = time.monotonic() + max(0.1, timeout_s)
+    while time.monotonic() < deadline:
+        pane = _capture_pane(session)
+        lower = pane.lower()
+        if "hooks need review" not in lower and "hooks are new or changed" not in lower:
+            time.sleep(0.25)
+            continue
+
+        if "press t to trust all" in lower:
+            _send_tmux_key(session, "t")
+        elif "trust all and continue" in lower:
+            _send_tmux_key(session, "Down")
+            _send_tmux_key(session, "Enter")
+        else:
+            _send_tmux_key(session, "t")
+
+        time.sleep(1.0)
+        pane_after = _capture_pane(session).lower()
+        if "hooks need review" in pane_after or "hooks are new or changed" in pane_after:
+            if "press t to trust all" in pane_after:
+                _send_tmux_key(session, "t")
+            elif "trust all and continue" in pane_after:
+                _send_tmux_key(session, "Down")
+                _send_tmux_key(session, "Enter")
+            else:
+                _send_tmux_key(session, "t")
+            time.sleep(1.0)
+        return True
+    return False
 
 
 def _kill_session(session: str) -> None:
@@ -204,6 +255,141 @@ def _copy_initial_state(initial_state_dir: Path, project: Path) -> None:
             shutil.copytree(entry, target, dirs_exist_ok=True)
         else:
             shutil.copy2(entry, target)
+
+
+def _ensure_box_project_git_repo(box: Box) -> str | None:
+    """Ensure the scenario project is a box-local git repo.
+
+    ``c-installed-source`` intentionally installs opentraces into
+    ``box.project/.testvenv`` but does not seed an application repo.
+    Real-agent capture scenarios need the opposite shape: a tiny
+    project with a local Git history, while the installed CLI remains
+    ignored implementation detail. Without this, Git can walk out of
+    ``.otbox`` into the developer's checkout.
+    """
+    project = Path(box.project)
+    project.mkdir(parents=True, exist_ok=True)
+    Path(box.home).mkdir(parents=True, exist_ok=True)
+    gitignore = project / ".gitignore"
+    ignore_lines = [
+        ".testvenv/",
+        ".agents/",
+        ".opentraces/",
+        ".opentraces.json",
+        "__pycache__/",
+        ".pytest_cache/",
+    ]
+    if gitignore.exists():
+        existing = gitignore.read_text(encoding="utf-8").splitlines()
+    else:
+        existing = []
+    missing = [line for line in ignore_lines if line not in existing]
+    if missing:
+        body = "\n".join([*existing, *missing]).strip()
+        gitignore.write_text(f"{body}\n", encoding="utf-8")
+
+    env = isolated_env(box)
+
+    def run(argv: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            argv,
+            cwd=str(project),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    if not (project / ".git").is_dir():
+        init = run(["git", "init", "--quiet", "--initial-branch=main"])
+        if init.returncode != 0:
+            init = run(["git", "init", "--quiet"])
+        if init.returncode != 0:
+            return f"git init failed: {(init.stderr or init.stdout).strip()[:200]}"
+
+    for key, value in (
+        ("user.email", "otbox-agent@opentraces.local"),
+        ("user.name", "otbox agent"),
+    ):
+        config = run(["git", "config", key, value])
+        if config.returncode != 0:
+            return (
+                f"git config {key} failed: "
+                f"{(config.stderr or config.stdout).strip()[:200]}"
+            )
+
+    add = run(["git", "add", "-A"])
+    if add.returncode != 0:
+        return f"git add failed: {(add.stderr or add.stdout).strip()[:200]}"
+
+    diff = run(["git", "diff", "--cached", "--quiet"])
+    if diff.returncode == 0:
+        return None
+    if diff.returncode != 1:
+        return f"git diff --cached failed: {(diff.stderr or diff.stdout).strip()[:200]}"
+
+    commit = run(["git", "commit", "-q", "-m", "seed: initial project"])
+    if commit.returncode != 0:
+        return f"git commit failed: {(commit.stderr or commit.stdout).strip()[:200]}"
+    return None
+
+
+def _agent_name(agent: str | None) -> str | None:
+    if agent in _CODEX_AGENTS:
+        return "codex-cli"
+    if agent in _CLAUDE_AGENTS:
+        return "claude"
+    return agent
+
+
+def _strip_codex_project_tables(config_text: str) -> str:
+    """Return host Codex config without per-project history tables."""
+    kept: list[str] = []
+    skipping_project = False
+    for line in config_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            skipping_project = (
+                stripped.startswith("[projects.")
+                or stripped.startswith("[[projects.")
+            )
+        if not skipping_project:
+            kept.append(line)
+    body = "\n".join(kept).strip()
+    return f"{body}\n" if body else ""
+
+
+def _toml_quote(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _prep_codex_project_trust(box_home: Path, project_dir: Path) -> None:
+    """Add a trusted-project entry to the box-local Codex config."""
+    codex_dir = box_home / ".codex"
+    config_path = codex_dir / "config.toml"
+    codex_dir.mkdir(parents=True, exist_ok=True)
+    if not config_path.exists():
+        config_path.write_text("", encoding="utf-8")
+
+    body = config_path.read_text(encoding="utf-8")
+    project = str(project_dir.resolve())
+    variants = {project}
+    if project.startswith("/private"):
+        variants.add(project.removeprefix("/private"))
+    else:
+        variants.add(f"/private{project}")
+
+    additions: list[str] = []
+    for variant in sorted(variants):
+        table = f'[projects."{_toml_quote(variant)}"]'
+        if table not in body:
+            additions.append(f'{table}\ntrust_level = "trusted"\n')
+    if additions:
+        separator = "\n" if body and not body.endswith("\n\n") else ""
+        config_path.write_text(
+            f"{body}{separator}" + "\n".join(additions),
+            encoding="utf-8",
+        )
 
 
 def _prep_agent_home(box_home: Path, agent: str | None) -> str | None:
@@ -248,7 +434,33 @@ def _prep_agent_home(box_home: Path, agent: str | None) -> str | None:
     or an error string the caller turns into a SKIP verdict if the
     operator's host state isn't usable.
     """
-    if agent != "claude":
+    normalized_agent = _agent_name(agent)
+    if normalized_agent == "codex-cli":
+        host_home = Path(os.path.expanduser("~"))
+        host_codex = host_home / ".codex"
+        host_auth = host_codex / "auth.json"
+        host_config = host_codex / "config.toml"
+        box_codex = box_home / ".codex"
+        if not host_auth.is_file():
+            return (
+                f"agent prep: host {host_auth} not found — run `codex login` "
+                "or authenticate Codex CLI first"
+            )
+        box_codex.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(host_auth, box_codex / "auth.json")
+        if host_config.is_file():
+            try:
+                sanitized = _strip_codex_project_tables(
+                    host_config.read_text(encoding="utf-8")
+                )
+            except OSError as exc:
+                return f"agent prep: failed to read host {host_config}: {exc}"
+            (box_codex / "config.toml").write_text(sanitized, encoding="utf-8")
+        else:
+            (box_codex / "config.toml").write_text("", encoding="utf-8")
+        return None
+
+    if normalized_agent != "claude":
         return None
     host_home = Path(os.path.expanduser("~"))
     host_settings = host_home / ".claude.json"
@@ -323,17 +535,16 @@ def _prep_claude_project_trust(box_home: Path, project_dir: Path) -> None:
     settings_path.write_text(_json.dumps(settings, indent=2), encoding="utf-8")
 
 
-def _install_opentraces_hooks_in_box(box: Box) -> str | None:
-    """Install opentraces Claude Code hooks into the box's HOME.
+def _install_opentraces_hooks_in_box(box: Box, agent: str | None = "claude") -> str | None:
+    """Install opentraces hooks into the box's HOME for one agent.
 
     The capture-refresh contract is to produce a real trace artifact,
-    which requires opentraces' PreToolUse/PostToolUse/Stop/PostCompact
-    hooks to be wired into Claude's ``$HOME/.claude/settings.json``
-    BEFORE the agent boots. The box ships with an editable opentraces
-    install at ``box.project/.testvenv/bin/opentraces`` (the
+    which requires opentraces' agent hooks to be wired into the box
+    HOME BEFORE the agent boots. The box ships with an editable
+    opentraces install at ``box.project/.testvenv/bin/opentraces`` (the
     ``c-installed-source`` checkpoint provisions it), so we invoke
-    ``opentraces setup claude-code`` against the isolated HOME via the
-    box's CLI.
+    ``opentraces setup <agent>`` against the isolated HOME via the box
+    CLI.
 
     Also runs ``opentraces init`` in the project (so the project has
     a registered ``project-<slug>`` state dir under
@@ -345,6 +556,10 @@ def _install_opentraces_hooks_in_box(box: Box) -> str | None:
     """
     from ..env import isolated_env
 
+    normalized_agent = _agent_name(agent)
+    if normalized_agent in (None, "echo", "hermes"):
+        return None
+
     testvenv_cli = Path(box.project) / ".testvenv" / "bin" / "opentraces"
     if not testvenv_cli.is_file():
         return (
@@ -352,9 +567,18 @@ def _install_opentraces_hooks_in_box(box: Box) -> str | None:
             f"`c-installed-source` did not run?"
         )
     env = isolated_env(box)
-    # 1. Install Claude Code hooks into the box's $HOME/.claude/settings.json
+    if normalized_agent == "claude":
+        setup_agent = "claude-code"
+        init_agent = "claude-code"
+    elif normalized_agent == "codex-cli":
+        setup_agent = "codex-cli"
+        init_agent = "codex-cli"
+    else:
+        return None
+
+    # 1. Install agent hooks into the box's isolated HOME.
     setup_hooks = subprocess.run(
-        [str(testvenv_cli), "setup", "claude-code"],
+        [str(testvenv_cli), "setup", setup_agent],
         cwd=str(box.project),
         env=env,
         capture_output=True,
@@ -363,12 +587,12 @@ def _install_opentraces_hooks_in_box(box: Box) -> str | None:
     )
     if setup_hooks.returncode != 0:
         return (
-            f"opentraces setup claude-code failed (rc={setup_hooks.returncode}): "
+            f"opentraces setup {setup_agent} failed (rc={setup_hooks.returncode}): "
             f"{(setup_hooks.stderr or setup_hooks.stdout).strip()[:200]}"
         )
     # 2. Register the project so traces have somewhere to land.
     init = subprocess.run(
-        [str(testvenv_cli), "init", "--start-fresh", "--agent", "claude-code"],
+        [str(testvenv_cli), "init", "--start-fresh", "--agent", init_agent],
         cwd=str(box.project),
         env=env,
         capture_output=True,
@@ -377,7 +601,7 @@ def _install_opentraces_hooks_in_box(box: Box) -> str | None:
     )
     if init.returncode != 0:
         return (
-            f"opentraces init failed (rc={init.returncode}): "
+            f"opentraces init --agent {init_agent} failed (rc={init.returncode}): "
             f"{(init.stderr or init.stdout).strip()[:200]}"
         )
     # 3. Install the post-commit hook so trail-blame anchors mature.
@@ -620,6 +844,20 @@ def run_simulated_session(
 
     binary_version = _detect_binary_version(binary_abs)
 
+    normalized_agent = _agent_name(agent)
+
+    if normalized_agent in {"codex-cli", "claude"}:
+        repo_error = _ensure_box_project_git_repo(box)
+        if repo_error is not None:
+            return ScenarioResult(
+                verdict="FAIL",
+                binary_path=binary_abs,
+                binary_version=binary_version,
+                turn_count=0,
+                pane_log_path=str(pane_log_path),
+                error_message=repo_error,
+            )
+
     # --- seed isolated HOME with agent onboarding state --------------------
     prep_error = _prep_agent_home(Path(box.home), agent)
     if prep_error is not None:
@@ -632,6 +870,19 @@ def run_simulated_session(
             error_message=prep_error,
         )
 
+    if normalized_agent == "codex-cli":
+        _prep_codex_project_trust(Path(box.home), Path(box.project))
+        hook_install_error = _install_opentraces_hooks_in_box(box, agent)
+        if hook_install_error is not None:
+            return ScenarioResult(
+                verdict="FAIL",
+                binary_path=binary_abs,
+                binary_version=binary_version,
+                turn_count=0,
+                pane_log_path=str(pane_log_path),
+                error_message=hook_install_error,
+            )
+
     # --- claude: --print headless mode (no tmux, no MCP prompts) -----------
     # ``claude``'s interactive TUI uses tmux's alternate-screen buffer and
     # blocks on MCP-server trust prompts; neither is dismissable from the
@@ -640,13 +891,13 @@ def run_simulated_session(
     # interactive mode, and composes for multi-turn via --continue. So
     # for claude we skip tmux entirely. Other agents (echo, codex,
     # hermes) keep the original PTY/tmux path below.
-    if agent == "claude":
+    if normalized_agent == "claude":
         # Pre-ack MCP trust for the box's project so even if the runner
         # ever needs to drop back to interactive mode the prompt is
         # already silenced. Also short-circuits the cwd-ancestry .mcp.json
         # walk that picks up the host operator's ~/.mcp.json.
         _prep_claude_project_trust(Path(box.home), Path(box.project))
-        hook_install_error = _install_opentraces_hooks_in_box(box)
+        hook_install_error = _install_opentraces_hooks_in_box(box, agent)
         if hook_install_error is not None:
             return ScenarioResult(
                 verdict="FAIL",
@@ -725,6 +976,13 @@ def run_simulated_session(
             log.write("=== preamble ===\n")
             log.write(_capture_pane(session))
             log.write("\n")
+            if normalized_agent == "codex-cli":
+                dismissed = _dismiss_codex_hook_review(session)
+                log.write(
+                    f"=== codex hook review dismissed={dismissed} ===\n"
+                )
+                log.write(_capture_pane(session))
+                log.write("\n")
 
             for turn_idx, turn in enumerate(turns):
                 _send_keys(session, turn.prompt)

@@ -1,0 +1,16 @@
+name = "codex-mcp-tool"
+description = "C10: drive Codex through an MCP-oriented inspection task using the fixture project."
+agent = "codex"
+binary_name = "codex"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Inspect any configured tool or MCP context available to you, write notes/mcp-tool-observation.md with what was available, and commit the note. If no MCP tool is configured, record that limitation explicitly."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 240
+
+[capture]
+artifact_dir = "codex-mcp-tool"
+expected_paths = ["notes/mcp-tool-observation.md"]

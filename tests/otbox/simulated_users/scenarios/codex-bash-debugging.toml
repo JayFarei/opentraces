@@ -1,0 +1,16 @@
+name = "codex-bash-debugging"
+description = "C2/C12: drive Codex through a failing shell check, code fix, rerun, and commit."
+agent = "codex"
+binary_name = "codex"
+
+[initial_state]
+template = "failing-python-check-project"
+
+[[turns]]
+prompt = "Run `python3 check_app.py`, diagnose the failure, fix src/app.py, rerun `python3 check_app.py` until it passes, and commit the passing fix with a concise message."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 300
+
+[capture]
+artifact_dir = "codex-bash-debugging"
+expected_paths = ["src/app.py"]

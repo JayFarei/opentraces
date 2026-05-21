@@ -14,6 +14,8 @@ offline, deterministic, substrate-agnostic.
 from __future__ import annotations
 
 import json
+import re
+import sqlite3
 import tarfile
 import time
 from dataclasses import dataclass
@@ -116,24 +118,116 @@ def create_snapshot(box: Box, name: str, *, overwrite: bool = False) -> Snapshot
     return info
 
 
+def _quote_sqlite_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _replace_box_roots(
+    text: str,
+    *,
+    old_root: str,
+    new_root: str,
+    boxes_root: Path,
+) -> str:
+    text = text.replace(old_root, new_root)
+    boxes_prefix = re.escape(str(boxes_root))
+    box_root_re = re.compile(rf"{boxes_prefix}/otb_[0-9a-fA-F]+")
+    return box_root_re.sub(new_root, text)
+
+
+def _rewrite_sqlite_absolute_paths(
+    path: Path,
+    old_root: str,
+    new_root: str,
+    boxes_root: Path,
+) -> int:
+    """Rewrite old box roots inside known path-bearing SQLite projections.
+
+    The Trace Index stores ``repo_path`` / ``trace_path`` columns in SQLite, so
+    a text-file-only restore can leave a path-valid archive with a stale index.
+    Keep this generic over TEXT columns so future projection tables inherit the
+    portability fix without coupling this helper to opentraces internals.
+    """
+    if not path.exists():
+        return 0
+
+    try:
+        with sqlite3.connect(path) as conn:
+            rows = list(
+                conn.execute(
+                    """
+                    select name from sqlite_master
+                    where type = 'table' and name not like 'sqlite_%'
+                    order by name
+                    """
+                )
+            )
+            rewritten = 0
+            for (table_name,) in rows:
+                quoted_table = _quote_sqlite_identifier(str(table_name))
+                columns = list(conn.execute(f"pragma table_info({quoted_table})"))
+                for column in columns:
+                    col_name = str(column[1])
+                    col_type = str(column[2] or "").upper()
+                    if "TEXT" not in col_type and "CHAR" not in col_type and "CLOB" not in col_type:
+                        continue
+                    quoted_col = _quote_sqlite_identifier(col_name)
+                    values = [
+                        str(row[0])
+                        for row in conn.execute(
+                            f"select {quoted_col} from {quoted_table} where {quoted_col} is not null"
+                        )
+                    ]
+                    discovered_roots = {
+                        match
+                        for value in values
+                        for match in re.findall(
+                            rf"{re.escape(str(boxes_root))}/otb_[0-9a-fA-F]+",
+                            value,
+                        )
+                    }
+                    roots = [old_root, *sorted(discovered_roots)]
+                    for root in roots:
+                        if root == new_root:
+                            continue
+                        before = conn.total_changes
+                        conn.execute(
+                            f"""
+                            update {quoted_table}
+                            set {quoted_col} = replace({quoted_col}, ?, ?)
+                            where instr({quoted_col}, ?) > 0
+                            """,
+                            (root, new_root, root),
+                        )
+                        rewritten += conn.total_changes - before
+            conn.commit()
+            return rewritten
+    except sqlite3.DatabaseError:
+        return 0
+
+
 def rewrite_absolute_paths(box: Box, old_root: str) -> int:
     """Repoint opentraces' baked-in absolute paths at the new box root.
 
     opentraces records the project's absolute repo path in
     ``~/.opentraces/config.json`` (and occasionally in per-project
-    ``state.json``). After restoring into a new box id, those still point
-    at the origin box. We rewrite every UTF-8 text file under the
-    isolated ``~/.opentraces`` plus the project marker. The origin/target
-    roots differ only in the ``otb_xxxx`` segment, so substitution is
-    unambiguous.
+    ``state.json``). The Trace Index also stores absolute repo paths in
+    SQLite. After restoring into a new box id, those still point at the
+    origin box. We rewrite every UTF-8 text file under the isolated
+    ``~/.opentraces``, the project marker, venv entrypoint shebangs, and
+    known SQLite projections. The origin/target roots differ only in the
+    ``otb_xxxx`` segment, so substitution is unambiguous.
     """
     new_root = str(box.root)
+    boxes_root = box.root.parent
     if old_root == new_root:
         return 0
     targets: list[Path] = []
     ot_dir = box.opentraces_dir
     if ot_dir.exists():
         targets.extend(p for p in ot_dir.rglob("*") if p.is_file())
+    if box.meta_path.exists():
+        targets.append(box.meta_path)
     marker = box.project / ".opentraces.json"
     if marker.exists():
         targets.append(marker)
@@ -152,10 +246,30 @@ def rewrite_absolute_paths(box: Box, old_root: str) -> int:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        if old_root not in text:
+        new_text = _replace_box_roots(
+            text,
+            old_root=old_root,
+            new_root=new_root,
+            boxes_root=boxes_root,
+        )
+        if new_text == text:
             continue
-        path.write_text(text.replace(old_root, new_root), encoding="utf-8")
+        path.write_text(new_text, encoding="utf-8")
         rewritten += 1
+
+    sqlite_targets = [box.opentraces_dir / "index" / "index.db"]
+    search_projection_root = (
+        box.opentraces_dir / "bucket" / "projections" / "search" / "v1"
+    )
+    if search_projection_root.exists():
+        sqlite_targets.extend(search_projection_root.rglob("*.sqlite"))
+    for path in sqlite_targets:
+        rewritten += _rewrite_sqlite_absolute_paths(
+            path,
+            old_root,
+            new_root,
+            boxes_root,
+        )
     return rewritten
 
 
@@ -188,6 +302,12 @@ def restore_snapshot(name: str, *, box_id: str | None = None) -> tuple[Box, dict
         except (OSError, json.JSONDecodeError):
             pass
     rewritten = rewrite_absolute_paths(box, info.origin_root)
+    if box.meta_path.exists():
+        try:
+            rewritten_meta = json.loads(box.meta_path.read_text())
+            box.notes = rewritten_meta.get("notes", {}) or box.notes
+        except (OSError, json.JSONDecodeError):
+            pass
     duration = time.monotonic() - start
 
     box.save()  # overwrite the extracted meta.json with the new identity

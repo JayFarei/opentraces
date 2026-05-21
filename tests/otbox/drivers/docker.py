@@ -119,7 +119,8 @@ class DockerDriver(Driver):
         host_env = isolated_env(box, env_extra)
         container_env: dict[str, str] = {}
         host_root = str(box.root)
-        for key in ("HOME", "OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", "GIT_CONFIG_GLOBAL"):
+        for key in ("HOME", "OPENTRACES_PLAN058_FAKE_REMOTE_ROOT",
+                    "GIT_CONFIG_GLOBAL", "GIT_CEILING_DIRECTORIES"):
             val = host_env.get(key, "")
             if val.startswith(host_root):
                 container_env[key] = val.replace(host_root, CONTAINER_BOX_ROOT, 1)

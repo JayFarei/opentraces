@@ -1,0 +1,16 @@
+name = "codex-subagent-edit"
+description = "C4: drive Codex through a sub-agent or delegated-task shape when the surface supports it."
+agent = "codex"
+binary_name = "codex"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "If your Codex CLI supports sub-agents or delegated subtasks, use that surface to inspect src/app.py, then implement a small farewell helper yourself, run a focused check, and commit. If delegation is unavailable, record the limitation in your final response."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 300
+
+[capture]
+artifact_dir = "codex-subagent-edit"
+expected_paths = ["src/app.py"]

@@ -1,0 +1,38 @@
+name = "codex-parity-mcp-permission"
+description = """
+Plan 083 C9/C10 scaffold: Codex permission-boundary plus MCP parity.
+Pending an MCP/permission capture artifact. Default CI should list and
+parse this journey, then SKIP when run from the current checkpoint.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-mcp-session"]
+plan_083_matrix_ids = ["C9", "C10"]
+status = "pending-codex-mcp-permission-artifact"
+
+[preconditions]
+min_captured_traces = 1
+mcp_servers_connected = 1
+
+[[steps]]
+type = "cli"
+id = "ctx-tree"
+argv = ["ctx", "tree", "--json"]
+
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["doctor", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "doctor"
+equals = 0

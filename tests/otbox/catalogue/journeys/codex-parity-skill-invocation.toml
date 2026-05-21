@@ -1,0 +1,38 @@
+name = "codex-parity-skill-invocation"
+description = """
+Plan 083 C6 scaffold: Codex skill invocation capture parity. Pending
+artifact evidence that the invocation was observed from explicit
+high-confidence signals, not inferred from prompt text.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-skill-session"]
+plan_083_matrix_ids = ["C6"]
+status = "pending-codex-skill-artifact"
+
+[preconditions]
+min_captured_traces = 1
+requires_skills = ["opentraces"]
+
+[[steps]]
+type = "cli"
+id = "trace-map"
+argv = ["trace", "map", "--json"]
+
+[[steps]]
+type = "cli"
+id = "dataset-status"
+argv = ["dataset", "status", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-map"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-status"
+equals = 0

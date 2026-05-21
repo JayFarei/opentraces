@@ -1,0 +1,67 @@
+name = "codex-parity-multi-file-patch"
+description = """
+Plan 083 C3 scaffold: Codex multi-file patch parity. Pending the
+captured multi-file Codex artifact; default CI sees a precondition
+SKIP, not a live Codex requirement.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-multi-file-session"]
+plan_083_matrix_ids = ["C3"]
+status = "artifact-backed"
+
+[preconditions]
+min_captured_traces = 1
+
+[[steps]]
+type = "cli"
+id = "trace-map"
+argv = ["trace", "map", "{trace_id}", "--bursts", "--json"]
+
+[[steps]]
+type = "cli"
+id = "trace-slice"
+argv = ["trace", "slice", "{trace_id}", "--template", "bursts", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-map"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-map"
+path = "trace_id"
+equals = "{trace_id}"
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "trace-map"
+path = "map.nodes.0.files_modified"
+equals = ["src/app.py", "src/helpers.py", "tests/test_app.py"]
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "trace-map"
+path = "map.nodes.0.metadata.patches"
+equals = 3
+
+[[assertions]]
+kind = "returncode"
+step = "trace-slice"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trace-slice"
+path = "trace_id"
+equals = "{trace_id}"
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "trace-slice"
+path = "slices.0.trace_patch_refs"
+equals = 4

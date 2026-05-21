@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -89,6 +90,68 @@ def test_vertical_slice(driver):
         assert result.verdict == "PASS", result.reason
         # publish actually populated the fake HF remote
         assert (restored.fake_remote / "otbox-smoke" / "dataset" / "dataset_infos.json").exists()
+    finally:
+        for b in (box, restored):
+            if b is not None and b.root.exists():
+                get_driver(b.driver).teardown(b)
+        delete_snapshot(snap_name)
+
+
+def test_snapshot_restore_rewrites_trace_index_sqlite_paths(driver):
+    """Restored cached checkpoints must not keep origin-box Trace Index paths."""
+    snap_name = f"otbox-sqlite-paths-{os.getpid()}"
+    box = _fresh_box(driver)
+    restored: Box | None = None
+    try:
+        index_path = box.opentraces_dir / "index" / "index.db"
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(index_path) as conn:
+            conn.execute(
+                """
+                create table trail_sources (
+                    project_slug text primary key,
+                    repo_path text not null,
+                    ref_sha text not null,
+                    indexed_at text not null,
+                    limitations_json text not null default '[]'
+                )
+                """
+            )
+            conn.execute(
+                """
+                create table traces (
+                    trace_id text primary key,
+                    trace_path text not null
+                )
+                """
+            )
+            conn.execute(
+                "insert into trail_sources(project_slug, repo_path, ref_sha, indexed_at) values (?, ?, ?, ?)",
+                ("project", str(box.project), "abc123", "2026-05-21T00:00:00Z"),
+            )
+            conn.execute(
+                "insert into traces(trace_id, trace_path) values (?, ?)",
+                ("trace-1", str(box.opentraces_dir / "projects" / "project" / "trace.jsonl")),
+            )
+
+        create_snapshot(box, snap_name, overwrite=True)
+        restored, restore_meta = restore_snapshot(snap_name)
+
+        assert restore_meta["paths_rewritten"] >= 2
+        restored_index = restored.opentraces_dir / "index" / "index.db"
+        with sqlite3.connect(restored_index) as conn:
+            repo_path = conn.execute(
+                "select repo_path from trail_sources where project_slug = ?",
+                ("project",),
+            ).fetchone()[0]
+            trace_path = conn.execute(
+                "select trace_path from traces where trace_id = ?",
+                ("trace-1",),
+            ).fetchone()[0]
+
+        assert repo_path == str(restored.project)
+        assert str(restored.root) in trace_path
+        assert str(box.root) not in trace_path
     finally:
         for b in (box, restored):
             if b is not None and b.root.exists():

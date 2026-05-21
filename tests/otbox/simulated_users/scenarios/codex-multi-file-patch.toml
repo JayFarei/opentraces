@@ -1,0 +1,16 @@
+name = "codex-multi-file-patch"
+description = "C3: drive Codex through create/edit/delete style multi-file patch capture."
+agent = "codex"
+binary_name = "codex"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Refactor the greeting code across multiple files: keep src/app.py as the public entrypoint, add src/helpers.py for shared text helpers, add a small tests/test_app.py check, remove any obsolete dead code you introduce, run the focused check, and commit the change."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 300
+
+[capture]
+artifact_dir = "codex-multi-file-patch"
+expected_paths = ["src/app.py", "src/helpers.py", "tests/test_app.py"]

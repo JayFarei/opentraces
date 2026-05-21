@@ -315,6 +315,46 @@ on PATH (today: plan 073's Mac Mini work), commit the resulting
 artifacts under `tests/otbox/captures/<name>/`, and the next checkpoint
 resolution picks them up automatically.
 
+### Codex parity lane (plan 083)
+
+The Codex lane is scaffolded as an offline-safe otbox release lane.
+Scenario TOMLs live under `tests/otbox/simulated_users/scenarios/` and
+are driven by the same `capture-refresh` command as Claude/Hermes:
+
+```bash
+.venv/bin/python -m tests.otbox capture-refresh --scenario codex-linear-edit --json
+.venv/bin/python -m tests.otbox capture-refresh --scenario codex-bash-debugging --json
+.venv/bin/python -m tests.otbox capture-refresh --scenario codex-subagent-edit --json
+.venv/bin/python -m tests.otbox capture-refresh --scenario codex-context-compaction --json
+```
+
+If `codex` is not on `PATH` or is not authenticated, capture refresh
+exits 0 with `status: "skipped"` and does not write artifacts. That is
+the default-CI contract; live Codex acceptance is opt-in and must be
+run on a logged-in machine.
+
+The current checkpoint wiring registers
+`c-captured-codex-real-session` as an artifact-preferred checkpoint for
+`codex-linear-edit`. In this scaffold pass, the Plan 083 journey names
+are present and parseable but intentionally marked pending until the
+corresponding live artifacts/checkpoints land:
+
+```bash
+./otbox matrix --journey 'codex-parity-*'
+./otbox matrix --journey mixed-agent-bucket-parity
+./otbox matrix --journey codex-full-parity-latest
+```
+
+Without committed Codex artifacts and widened checkpoint `provides`
+metadata, these journeys SKIP with a precondition-conflict reason. Do
+not count that SKIP as a passed live gate. The release gate names are:
+`codex-parity-linear`, `codex-parity-bash-debugging`,
+`codex-parity-multi-file-patch`, `codex-parity-subagent`,
+`codex-parity-compaction`, `codex-parity-skill-invocation`,
+`codex-parity-resume`, `codex-parity-mcp-permission`,
+`codex-parity-security-redaction`, `mixed-agent-bucket-parity`, and
+`codex-full-parity-latest`.
+
 ## Simulated-user capture pipeline (plan 071)
 
 The pipeline that produces those artifacts is a PTY/tmux runner driving
@@ -466,6 +506,7 @@ make otbox-matrix          # (journey × checkpoint) sweep
 make otbox-inventory       # rebuild journey-inventory.md + plan 063/069 SSoT gates (strict)
 make otbox-agent-session   # plan 064/068/072 substrate: 12 PASS + 1 SKIP
 make capture-refresh SCENARIO=echo-meta   # plan 071 capture lifecycle (meta-test)
+.venv/bin/python -m pytest tests/otbox/test_codex_simulated_user_runner.py -q  # plan 083 Codex lane scaffold
 ```
 
 `make otbox-tier1` sets `OT_OTBOX_TIER1=1`. With `OT_OTBOX_SSH_TARGET`
@@ -541,3 +582,5 @@ otbox-agent-session` together are the verification commands.
   checkpoint's `provides=...` doesn't satisfy the declared keys.
   Either weaken the preconditions, change the pin, or drop the
   explicit pin and let the resolver pick the first matching checkpoint.
+  For the plan-083 Codex parity scaffold this is expected until the
+  live Codex artifacts and checkpoint `provides` metadata land.

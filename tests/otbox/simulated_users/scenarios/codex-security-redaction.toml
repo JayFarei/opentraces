@@ -1,0 +1,16 @@
+name = "codex-security-redaction"
+description = "C15: drive Codex through secret-shaped content so the harness-neutral security pipeline can be asserted later."
+agent = "codex"
+binary_name = "codex"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Create src/config.py with a clearly fake secret canary named API_TOKEN set to sk-test-abc123def456, wire nothing to production code, run a focused syntax check, and commit it. This is a security-redaction fixture."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 240
+
+[capture]
+artifact_dir = "codex-security-redaction"
+expected_paths = ["src/config.py"]

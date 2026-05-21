@@ -352,6 +352,14 @@ def _captured_session(box: Box) -> dict[str, str]:
     result["head_commit_sha"] = str(pr_audit.get("head_commit_sha") or "")
     result["branch_commit_count"] = str(pr_audit.get("branch_commit_count") or 0)
 
+    codex_audit = box.notes.get("c_captured_codex_session_audit") or {}
+    if codex_audit:
+        result["trace_id"] = str(codex_audit.get("trace_id") or result.get("trace_id", ""))
+        result["session_id"] = str(codex_audit.get("session_id") or result.get("session_id", ""))
+        result["commit_sha"] = str(codex_audit.get("commit_sha") or result.get("commit_sha", ""))
+        result["step_index"] = str(codex_audit.get("step_index") or result.get("step_index", ""))
+        result["transcript_path"] = str(codex_audit.get("transcript_path") or result.get("transcript_path", ""))
+
     # Plan 078: expose OTel checkpoint audit fields. Overrides plan-064
     # values when the journey forks from an OTel checkpoint because the
     # OTel audits also pin a session/trace id under the same key names.
@@ -984,11 +992,6 @@ def render_transcript(
         lines.append("```")
         lines.append("")
         step_asserts = groups.get(step.step_id, [])
-        passing = [
-            a.spec.get("kind", a.kind) if isinstance(a.spec, dict) else a.kind
-            for a in step_asserts
-            if a.ok
-        ]
         if step_asserts:
             label = "PASS" if all(a.ok for a in step_asserts) else "MIXED"
             kinds = ", ".join(a.kind for a in step_asserts) or "(none)"

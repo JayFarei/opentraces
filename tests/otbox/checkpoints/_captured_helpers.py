@@ -241,7 +241,10 @@ def read_state_json(driver, box: Box) -> tuple[str, dict]:
     from . import CheckpointError  # local import — avoid cycle at module load
 
     paths = driver.paths(box)
-    state_dirs = driver.glob(box, f"{paths['opentraces_dir']}/projects/*")
+    state_dirs = [
+        path for path in driver.glob(box, f"{paths['opentraces_dir']}/projects/*")
+        if driver.exec(box, ["test", "-f", f"{path}/state.json"]).ok
+    ]
     if len(state_dirs) != 1:
         raise CheckpointError(
             f"expected exactly one opted-in project after artifact restore, "

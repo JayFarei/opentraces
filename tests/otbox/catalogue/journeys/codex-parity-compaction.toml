@@ -1,0 +1,39 @@
+name = "codex-parity-compaction"
+description = """
+Plan 083 C5 scaffold: Codex context compression/compaction parity.
+Pending the compacted Codex artifact and checkpoint. The journey is
+safe in default CI because its pinned checkpoint currently cannot
+satisfy the captured Context Tree preconditions.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-compacted-session"]
+plan_083_matrix_ids = ["C5"]
+status = "pending-codex-compaction-artifact"
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "ctx-compactions"
+argv = ["ctx", "compactions", "--json"]
+
+[[steps]]
+type = "cli"
+id = "ctx-tree"
+argv = ["ctx", "tree", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-compactions"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree"
+equals = 0

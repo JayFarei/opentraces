@@ -1,0 +1,38 @@
+name = "codex-parity-resume"
+description = """
+Plan 083 C7 scaffold: Codex resume/fork continuation parity. This
+names the release gate while the parser/resumer subplans finish the
+live artifact and checkpoint.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-resume-session"]
+plan_083_matrix_ids = ["C7"]
+status = "pending-codex-resume-artifact"
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "ctx-resume"
+argv = ["ctx", "resume", "--help"]
+
+[[steps]]
+type = "cli"
+id = "trace-get-help"
+argv = ["trace", "get", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-resume"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "trace-get-help"
+equals = 0

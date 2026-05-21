@@ -1,0 +1,16 @@
+name = "codex-readonly-search"
+description = "C11: drive Codex through read/search-heavy work that should not emit patches."
+agent = "codex"
+binary_name = "codex"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Read the project and report where greet is defined and where it is documented. Do not edit files and do not commit."
+expect_regex = "(?is)(done|complete|completed|greet|src/app.py|read-only|readonly)"
+timeout_s = 180
+
+[capture]
+artifact_dir = "codex-readonly-search"
+expected_paths = ["README.md", "src/app.py"]
