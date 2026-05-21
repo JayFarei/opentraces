@@ -4,23 +4,23 @@ import { useState } from "react";
 
 const tiers = [
   {
-    id: "auto",
-    name: "auto",
+    id: "explicit",
+    name: "explicit tools",
     nameStyle: { color: "var(--accent)" },
-    desc: "Scan, redact, and auto-approve safe traces into staged. Push still happens explicitly.",
+    desc: "Workflows call security sanitize with a named tool list.",
     tag: null,
   },
   {
-    id: "review",
-    name: "review",
+    id: "config",
+    name: "config enabled",
     nameStyle: {},
-    desc: "Review and approve every trace before pushing. Nothing leaves without approval.",
+    desc: "Only tools explicitly enabled in config run with --use-config.",
     tag: "default",
   },
 ];
 
 export default function SecurityTiers() {
-  const [selected, setSelected] = useState("review");
+  const [selected, setSelected] = useState("config");
 
   return (
     <div>

@@ -4,7 +4,7 @@ export default function ShareFrom() {
   return (
     <section>
       <SectionRule label="get started" />
-      <div className="section-title">Start pushing traces in 60 seconds. Get something back.</div>
+      <div className="section-title">Capture traces privately. Publish only the rows you mean to share.</div>
 
       {/* Two-column: left = how, right = why */}
       <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 48, marginBottom: 0 }}>
@@ -46,7 +46,10 @@ export default function ShareFrom() {
             <div style={{ flex: 1 }}>
               <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 4 }}>Publish</div>
               <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
-                <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces dataset new my-dataset
+                <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces workflow create my-workflow
+              </div>
+              <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+                <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces dataset run my-dataset
               </div>
               <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)" }}>
                 <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces dataset publish my-dataset
@@ -82,10 +85,10 @@ export default function ShareFrom() {
           <div style={{ border: "1px solid var(--border)", marginBottom: 12 }}>
             <div style={{ padding: 20, borderBottom: "1px solid var(--border)" }}>
               <div style={{ fontFamily: "var(--font-display)", fontSize: 15, fontWeight: 500, color: "var(--text)", marginBottom: 6 }}>
-                Private datasets by default
+                Private bucket by default
               </div>
               <p style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.6 }}>
-                Every push creates a private HF dataset. Like a private repo on GitHub. Publish when you are ready, on your terms.
+                Raw traces stay in your local bucket unless you opt into private bucket sync. Datasets are projected row streams you publish separately.
               </p>
             </div>
             <div style={{ padding: 20, borderBottom: "1px solid var(--border)" }}>

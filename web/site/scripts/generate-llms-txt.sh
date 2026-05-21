@@ -31,9 +31,14 @@ for f in \
   "$DOCS_DIR/cli/supported-agents.md" \
   "$DOCS_DIR/cli/troubleshooting.md" \
   "$DOCS_DIR/workflow/parsing.md" \
+  "$DOCS_DIR/workflow/bucket.md" \
+  "$DOCS_DIR/workflow/trace-discovery.md" \
+  "$DOCS_DIR/workflow/blame.md" \
+  "$DOCS_DIR/workflow/context-tree.md" \
+  "$DOCS_DIR/workflow/workflow-templates.md" \
+  "$DOCS_DIR/workflow/datasets.md" \
   "$DOCS_DIR/workflow/review.md" \
   "$DOCS_DIR/workflow/quality.md" \
-  "$DOCS_DIR/workflow/blame.md" \
   "$DOCS_DIR/workflow/pushing.md" \
   "$DOCS_DIR/workflow/consume.md" \
   "$DOCS_DIR/workflow/export.md" \

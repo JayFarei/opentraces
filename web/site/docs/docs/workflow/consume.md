@@ -1,46 +1,18 @@
 # Consume
 
-Once traces are on Hugging Face Hub, you can read them back as files or through the `datasets` library.
+There are two consumer paths:
 
-## File-Oriented Access
+1. **Published datasets:** reviewed workflow rows on Hugging Face Hub.
+2. **Private bucket evidence:** raw trace envelopes and companions synced to a
+   private bucket remote.
 
-[hf-mount](https://github.com/huggingface/hf-mount) exposes a dataset as a virtual filesystem. That works well for agents that prefer normal file operations.
-
-Install:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/huggingface/hf-mount/main/install.sh | sh
-```
-
-Mount and inspect:
-
-```bash
-hf-mount start repo datasets/your-org/agent-traces /mnt/traces
-ls /mnt/traces/data/
-head -n 1 /mnt/traces/data/traces_*.jsonl
-```
-
-For private or gated datasets, authenticate first:
-
-```bash
-hf auth login
-```
-
-Unmount when done:
-
-```bash
-hf-mount stop /mnt/traces
-```
-
-## Structured Access
-
-Use Hugging Face `datasets` for notebooks, analysis, or training pipelines.
+## Published Dataset Rows
 
 ```python
 from datasets import load_dataset
 
-ds = load_dataset("your-org/agent-traces")
-print(ds["train"][0]["trace_id"])
+ds = load_dataset("owner/team-traces", split="train")
+print(ds[0])
 ```
 
 For streaming:
@@ -48,61 +20,40 @@ For streaming:
 ```python
 from datasets import load_dataset
 
-ds = load_dataset("your-org/agent-traces", streaming=True)
-for trace in ds["train"]:
-    print(trace["trace_id"])
+ds = load_dataset("owner/team-traces", streaming=True)
+for row in ds["train"]:
+    print(row)
 ```
 
-## Record Shape
+Rows are workflow-specific. A command-trajectory eval dataset and a PR intent
+summary dataset will not have the same row schema, even if they came from the
+same bucket traces.
 
-Each JSONL line is a `TraceRecord`. A representative subset looks like:
+## Private Bucket Lookup
 
-```json
-{
-  "schema_version": "0.4.0",
-  "trace_id": "tr_01abc...",
-  "agent": {
-    "name": "claude-code",
-    "model": "..."
-  },
-  "task": {
-    "description": "Fix failing tests in auth module"
-  },
-  "metrics": {
-    "total_steps": 14,
-    "estimated_cost_usd": 0.031
-  },
-  "steps": ["..."]
-}
-```
-
-See the [schema overview](/docs/schema/overview) for the full contract.
-
-## Local Lookup: Traces, Commits, And Lines
-
-Once you install the git correlator with `opentraces setup git`, local commands can resolve code history back to traces.
-
-### Search retained traces
+Use the CLI when the consumer needs raw trace evidence, Git anchors, or Context
+Tree nodes:
 
 ```bash
-opentraces trace query --since 7d
-opentraces trace query --cwd --candidate-kind bug_fix
-opentraces --json trace query --files "src/**/*.py"
+opentraces trace get <trace-id> --remote owner/private-bucket --json
+opentraces trace query --remote-bucket --cwd --json
+opentraces trail blame commit <sha> --json
+opentraces ctx tree <trace-id> --json
+opentraces bucket prefetch <trace-id> --remote owner/private-bucket
 ```
 
-### Resolve a commit back to traces
+Bucket evidence can be large and private. Do not treat a bucket remote as a
+public dataset unless you intentionally made that storage public.
+
+## File-Oriented Access
+
+For published Hugging Face datasets, `hf-mount` can expose shards as files:
 
 ```bash
-opentraces trail blame abc1234
-opentraces trail blame abc1234 src/auth.py
-opentraces trail blame abc1234 src/auth.py --lines
-opentraces --json trail blame abc1234
+hf-mount start repo datasets/your-org/agent-traces /mnt/traces
+ls /mnt/traces/data/
+head -n 1 /mnt/traces/data/*.jsonl
+hf-mount stop /mnt/traces
 ```
 
-`trail blame` takes a commit SHA (bare or `c:<sha>`) and an optional path to scope output to one file. Use `--lines` for git-blame-style per-line output. This is useful for provenance, code archaeology, and dataset filtering by evidence quality.
-
-## Choosing An Access Pattern
-
-- Use `hf-mount` when the consumer wants to browse files or let an agent inspect shards directly
-- Use `datasets` for notebooks, analysis jobs, and training pipelines
-- Use local `trace query` and `trail blame` for repo-specific provenance work
+For private/gated datasets, authenticate with Hugging Face first.

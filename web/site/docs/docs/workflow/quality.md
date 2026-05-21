@@ -1,6 +1,9 @@
-# Assess
+# Quality
 
-Trace quality scoring against the current downstream-facing rubrics runs inside dataset workflows. In 0.4 the standalone `opentraces assess` verb has been retired; assessment is a step in `opentraces dataset run` and the resulting scorecard is embedded into the dataset card on `opentraces dataset publish`.
+Trace quality scoring runs inside dataset workflows. The standalone
+`opentraces assess` verb has been retired; assessment is a workflow step in
+`opentraces dataset run` and any scorecard is embedded into the dataset card on
+`opentraces dataset publish`.
 
 ## Publication Integration
 
@@ -14,7 +17,7 @@ An optional LLM judge can add qualitative scoring; workflows may configure it vi
 
 ## Personas
 
-Every trace is scored across five consumer-facing personas:
+Workflows commonly score rows across five consumer-facing personas:
 
 | Persona | What it checks |
 |---------|----------------|
@@ -37,4 +40,6 @@ opentraces dataset review approve my-dataset --all
 opentraces dataset publish my-dataset
 ```
 
-Or, when you want a stricter publication gate, configure the workflow to require a clean Tier 2 verdict on every row before approval (see [Security Tiers](/docs/security/tiers)).
+When you want stricter publication gates, configure the workflow to require
+specific row checks, explicit security-tool output, or a clean LLM review
+verdict before approval. See [Security Tools](/docs/security/tiers).

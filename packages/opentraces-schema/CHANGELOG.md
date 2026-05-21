@@ -6,6 +6,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html) with
 schema-specific semantics described in VERSION-POLICY.md.
 
+## [0.6.0] - 2026-05-21
+
+Promotes trace patches to the authoritative dev-time output spine and removes
+the legacy unified-diff field from `Outcome`.
+
+See [RATIONALE-0.6.0.md](RATIONALE-0.6.0.md) for design notes.
+
+### Added
+
+**Trace patch spine (plan 080)**
+
+- `Patch` model — one produced change per Edit/Write-derived trace patch,
+  with `patch_id`, file path, step/tool joins, capture methods, snapshot refs,
+  optional Git anchor, supersede chain, and capture limitations.
+- `GitAnchor` model — evidence and firmness metadata for a patch matched into
+  Git history.
+- `TraceRecord.patches: list[Patch]` — the authoritative output set for a
+  dev-time trace. A trace patch is one tool-produced change/hunk, not one
+  file and not necessarily one commit.
+
+### Changed
+
+- `Outcome.committed`, `Outcome.commit_sha`, and `TraceRecord.git_links` are
+  compatibility projections derived from `patches[].anchor` and
+  `patches[].superseded_by`.
+- Full patch, trail, context, and source evidence is resolved through bucket
+  companions (`trail.jsonl.gz`, `context.jsonl.gz`, `sources.jsonl.gz`) instead
+  of being embedded into `TraceRecord`.
+
+### Removed
+
+- `Outcome.patch` was removed. Consumers should read `TraceRecord.patches[]`
+  for the structured output spine and use the trace's Trail companion for full
+  patch history/diff content.
+
 ## [0.5.0] - 2026-05-18
 
 Adds two Context Tree cross-reference fields (plan 077). Strictly additive

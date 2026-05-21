@@ -18,14 +18,17 @@ publishes reviewed dataset rows to HuggingFace remotes.
 - Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`, `opentraces remove`
 - Trace retrieval and search: `opentraces trace query`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
 - Trace Trails (visible surface): `opentraces trail blame commit <sha>`, `opentraces trail blame pr render|create|update`, `opentraces trail graph`, `opentraces trail track`
-- Bucket (private capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
+- Context Tree: `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `ctx list/info`
+- Bucket (private capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
 - Workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`
 - Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`.
+- Security tools: `opentraces security tools list/info`, `opentraces security sanitize --tools <names>` or `--use-config`
+- OTLP capture source: `opentraces setup capture-otlp`, `opentraces capture-otlp start|stop|status|restart|flush`
 
 Old flat inbox commands such as `opentraces list`, `add`, `reject`, `push`,
 `pull`, `web`, and `tui` are not part of the public command tree. Several
 Trace Trails substrate commands (`trail explain`, `sync`, `timeline`,
-`teleport`, `resolve`, `attach`, `rebuild`, `diff`, `resume`, `follow`,
+`teleport`, `resolve`, `attach`, `rebuild`, `diff`, `resume`,
 `snapshots`, `snapshot checkout`) remain callable for scripting and
 debugging but are hidden from `--help` after the CLI spine simplification.
 
@@ -150,26 +153,63 @@ inspect or resume it in a blank workspace.
 
 ## Bucket
 
-The bucket is the private store of every captured trace. It keeps a local cache
-under `~/.opentraces/projects/<slug>/bucket/` and is remote-by-default through a
-private HuggingFace bucket remote (S3-backed storage) when configured with
-`opentraces setup bucket`; use `opentraces setup bucket --local-only` to opt out.
-Sync is always explicit or daemon-triggered by bucket-aware capture paths.
+The bucket is the private store of every captured trace. It keeps raw
+capture-time evidence under `~/.opentraces/bucket/`: per-trace envelopes,
+patch history, `trail.jsonl.gz`, `context.jsonl.gz`, `sources.jsonl.gz`,
+content-addressed blobs, an event-log mirror, and `manifest.json`. It is
+local-only until `opentraces setup bucket` configures a private HuggingFace
+bucket remote. Bucket sync is separate from dataset publication.
 
 ```bash
 opentraces bucket status --json
 opentraces bucket manifest --json
+opentraces bucket verify --json
+opentraces bucket repair --json
+opentraces bucket prune --dry-run --json
+opentraces bucket prefetch <trace_id> --json
 opentraces bucket remote status --json
 opentraces bucket remote push --json
 opentraces bucket remote pull --json
 opentraces bucket remote diff --json
-opentraces bucket replay --project <repo-dir>
+opentraces bucket replay --repo <repo-dir>
 ```
 
 Buckets are distinct from datasets. A bucket holds raw captured traces; a
 dataset holds workflow-projected rows. `bucket replay` replays
 bucket-exported Trace Trails into a Git repository (useful when a teammate
 hands you a bucket and you need to materialise its evidence locally).
+
+## Context Tree
+
+The Context Tree answers "what did the agent see at this step?" It rides on
+the same canonical event log as Trace Trails and is addressed by
+`Step.context_node_id` in schema `0.6.0`.
+
+```bash
+opentraces ctx list --json
+opentraces ctx info <trace_id> --json
+opentraces ctx tree <trace_id> --json
+opentraces ctx show <context_node_id> --json
+opentraces ctx step <trace_id> <step_index> --json
+opentraces ctx reads <trace_id> --json
+opentraces ctx writes <trace_id> --json
+opentraces ctx diff <node_a> <node_b> --json
+opentraces ctx compactions <trace_id> --json
+opentraces ctx resume <context_node_id> --json
+opentraces ctx prune <context_node_id> --source-jsonl <session.jsonl>
+opentraces ctx resolve ot://context-node/<id> --json
+opentraces ctx anchor-for-step <trace_id> <step_index>
+```
+
+Claude/Codex JSONL capture gives a useful structural approximation. For
+higher-fidelity Claude Code context capture, set up the OTLP source:
+
+```bash
+opentraces setup capture-otlp
+opentraces capture-otlp start
+opentraces capture-otlp status --json
+opentraces capture-otlp flush --session <session_id> --project <repo> --trace-id <trace_id>
+```
 
 ## Workflows
 
@@ -224,6 +264,27 @@ may mark rows publishable, but remote egress is still explicit: publish is a
 separate user action. `dataset publish --min-retention` and `--exclude-state`
 filter rows by survival quality before staging.
 
+## Security Tools
+
+Security tools are optional and default off. Workflows can run named tools
+directly, or use the project/global config to select enabled tools.
+
+```bash
+opentraces security tools list --json
+opentraces security tools info regex --json
+printf '%s\n' '{"text":"OPENAI_API_KEY=sk-demo"}' | opentraces security sanitize --tools regex
+printf '%s\n' '{"row":{"path":"/Users/alice/project"}}' | opentraces security sanitize --tools path_anonymizer
+printf '%s\n' '{"record":{...}}' | opentraces security sanitize --use-config
+opentraces setup trufflehog
+opentraces setup privacy-filter
+opentraces setup llm-review
+```
+
+Registered inline tools are `regex`, `entropy`, `trufflehog`,
+`privacy_filter`, `llm_pii`, `path_anonymizer`, and `classifier`. Session-level
+LLM review is configured by `setup llm-review` but is a dataset publication
+reviewer, not part of the per-record sanitize registry.
+
 ## JSON Mode
 
 Prefer `--json` for agent automation:
@@ -234,6 +295,8 @@ opentraces --json trace query --skill grill-me
 opentraces --json trace map <trace_id>
 opentraces --json trail track <trace_id>
 opentraces --json bucket status
+opentraces --json ctx tree <trace_id>
+opentraces security tools list --json
 opentraces --json dataset status <name>
 ```
 

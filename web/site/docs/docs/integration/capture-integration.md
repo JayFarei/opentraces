@@ -1,6 +1,6 @@
 # Capture Integration Spec
 
-This is the contract for adding support for a new agent (Codex, Cursor, Aider, OpenAI's coding CLI, a custom in-house agent) to opentraces. Follow this spec end-to-end and your agent's traces flow through the same parse, redaction, review, push, and Trace Trails pipeline that Claude Code uses today.
+This is the contract for adding support for a new agent (Cursor, Aider, a custom in-house agent, or another coding CLI) to opentraces. Follow this spec end-to-end and your agent's traces flow through the same parse, redaction, review, push, and Trace Trails pipeline that Claude Code and Codex CLI use today.
 
 The spec is layered: each tier adds capability. You can ship Tier 1 in an afternoon and add Tier 4 once the basics work.
 
@@ -25,7 +25,7 @@ A "capture integration" provides one or more of:
 | 3. Hooks + installer | Hook scripts that record git state on Stop, plus the `HookInstaller` that registers them | The agent has hooks but no per-tool-call file-edit metadata |
 | 4. Trace Trails capture | Hooks emit pre-tool and post-tool worktree tree IDs via `write_worktree_tree()`, with a stable `tool_call_id` linking pre and post | Full parity with Claude Code's plan-54 integration |
 
-Hermes is a Tier 1 example. Claude Code is a Tier 4 example. Pick the highest tier the external system will support and target that.
+Hermes is a Tier 1 example. Claude Code and Codex CLI are Tier 4 examples. Pick the highest tier the external system will support and target that.
 
 ## The protocols
 
@@ -127,15 +127,17 @@ Edit `_register_defaults()`:
 ```python
 def _register_defaults() -> None:
     PARSERS["claude-code"] = ClaudeCodeParser
-    PARSERS["codex-cli"] = CodexCliParser              # NEW
+    PARSERS["codex-cli"] = CodexCliParser
+    PARSERS["my-agent"] = MyAgentParser                # NEW
 
     IMPORTERS["hermes"] = HermesParser
     IMPORTERS["my-format"] = MyFormatParser            # NEW (if you add a format)
 
     HOOK_INSTALLERS["claude-code"] = ClaudeCodeHookInstaller
+    HOOK_INSTALLERS["codex-cli"] = CodexCliHookInstaller
     HOOK_INSTALLERS["git"] = GitHookInstaller
     HOOK_INSTALLERS["skill"] = SkillInstaller
-    HOOK_INSTALLERS["codex-cli"] = CodexCliHookInstaller  # NEW (if Tier 3+)
+    HOOK_INSTALLERS["my-agent"] = MyAgentHookInstaller  # NEW (if Tier 3+)
 ```
 
 Also add the module to the `REGISTRY` dict at the top of the file, that's what makes the subpackage importable through `opentraces.capture.codex_cli`.
@@ -147,7 +149,8 @@ Also add the module to the `REGISTRY` dict at the top of the file, that's what m
 ```python
 HARNESS_DIRS: dict[str, Path] = {
     "claude-code": Path.home() / ".claude" / "skills" / "opentraces",
-    "codex-cli": Path.home() / ".codex" / "skills" / "opentraces",   # NEW
+    "codex-cli": Path.home() / ".codex" / "skills" / "opentraces",
+    "my-agent": Path.home() / ".my-agent" / "skills" / "opentraces",   # NEW
 }
 ```
 
@@ -155,18 +158,15 @@ This makes `opentraces setup skill --harness codex-cli` symlink the bundled skil
 
 ### Known coupling that must be generalized for live agents
 
-Several call sites in the existing code path import `ClaudeCodeParser` (or the per-agent `resume` module) directly instead of going through the registry. Adding a second live-agent parser requires generalizing them:
+The Codex CLI work generalized the main parse, install, capability, watcher, and trace-resume paths through the registry. A few legacy or deeper resume surfaces are still intentionally narrower:
 
 | File:line | Current state | What to do |
 |-----------|---------------|------------|
-| `src/opentraces/core/ingest.py:46` | `from ..capture.claude_code.parse import ClaudeCodeParser` | Look up parser via `get_parsers()[agent_name]` based on the project's `agents` config |
-| `src/opentraces/quality/engine.py:575` | `from ..capture.claude_code import ClaudeCodeParser` | Same |
-| `src/opentraces/cli/__init__.py:1181` | `from ..capture.claude_code import ClaudeCodeParser` (inside `_capture_sessions_into_project`) | Iterate over the project's `agents` and dispatch to the matching parser |
-| `src/opentraces/cli/__init__.py:2181` | `if "claude-code" not in agents: return False` (in `_install_capture_hook`) | Iterate over the project's `agents` and dispatch to the matching `HookInstaller` |
-| `src/opentraces/cli/__init__.py:4180` | `"agents": ["claude-code"]` (capabilities endpoint) | Return `list(get_parsers().keys())` |
-| `src/opentraces/clients/web/server.py:525`, `src/opentraces/cli/trace.py:1621` | `from ..capture.claude_code.resume import ...` | Add a `resume` registry, or accept that resume is per-agent until then |
+| `src/opentraces/cli/__init__.py::_capture_sessions_into_project` | Legacy import helper parses an explicitly supplied Claude session directory with `get_parser("claude-code")` | Generalize only if a future CLI path accepts arbitrary agent session directories |
+| `src/opentraces/clients/web/server.py:api_trace_resume` | Web API imports Claude Code's step resolver directly | Route through the resumer registry or keep the web step-resume API Claude-only |
+| `src/opentraces/cli/trace.py::_resume_trace_impl` | Native resume/fork is registry-backed, but snapshot-backed `--at-step` materialization is Claude-only | Add an agent-specific `resolve_at_step` implementation before advertising step resume for another harness |
 
-These are pre-existing TODOs from when the codebase was Claude-Code-only. They are not your spec's fault, but you will hit them. Generalizing the registry dispatch is part of "adding the second live agent."
+Do not infer support from a parser alone. A new live agent is complete only when the parser, hook installer, resumer behavior, watcher activity, and CLI/docs surfaces agree.
 
 ## Tier 1: File importer
 
@@ -202,7 +202,7 @@ Storage discovery is the agent-specific bit. Examples:
 | Agent | Session storage | Encoding |
 |-------|-----------------|----------|
 | Claude Code | `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl` | non-alnum chars in `cwd` replaced with `-` |
-| Codex CLI | `~/.codex/sessions/<project>/<session>.jsonl` (example) | per the agent's convention |
+| Codex CLI | `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl` | global dated rollout tree; project identity comes from session metadata |
 
 Quality gate: call `from opentraces.quality.engine import meets_quality_threshold` and return `None` from `parse_session` when it fails. The parser is responsible for filtering, the ingest pipeline trusts you.
 
@@ -259,7 +259,7 @@ Reference: `src/opentraces/capture/claude_code/hooks/on_stop.py:136` (`_spawn_in
 
 Implement `HookInstaller`. Idempotency is the load-bearing requirement. Steps:
 
-1. Resolve the agent's settings file (`~/.codex/settings.json`, `~/.cursor/config.json`, etc.).
+1. Resolve the agent's hook/settings file (`~/.codex/hooks.json`, `~/.cursor/config.json`, etc.).
 2. Validate the file as JSON before touching it. Abort cleanly on parse error.
 3. Copy your hook scripts to `~/<agent>/hooks/opentraces_<name>.py`, `chmod +x`.
 4. Register them in the settings under whatever schema the agent uses.
@@ -328,12 +328,12 @@ All of this lands in `refs/opentraces/local/events/v1` as an append-only Git ref
 
 ## Watcher integration
 
-The watcher daemon (`src/opentraces/watcher/daemon.py`) is mostly agent-agnostic. It polls per-project, runs an mtime probe over agent session files, and calls `core.ingest.scan_project` on activity.
+The watcher daemon (`src/opentraces/watcher/daemon.py`) is mostly agent-agnostic. It polls per-project, runs an mtime probe over registered parser session files, and calls `core.ingest.scan_project` on activity.
 
-What is agent-specific: `_claude_jsonl_dir(project_cwd)` (daemon.py:106) is the only Claude-Code-specific path probe. To add a new live agent's storage path:
+The default path uses `capture.discover_project_sessions(project_cwd)`, so a parser's `discover_sessions()` implementation is normally enough. To add special recursive probes for nested sidecar files that should wake the watcher but are not independently parseable:
 
-1. Add a per-agent dir resolver, e.g. `_codex_session_dir(project_cwd)`.
-2. Extend `_jsonl_activity_since` to check both directories, or refactor it to iterate over a list returned by `[parser.session_dir(cwd) for parser in get_parsers().values()]` (cleanest, requires adding `session_dir` to `SessionParser`).
+1. Add a per-agent directory resolver.
+2. Extend `_jsonl_activity_since` to include those files in the mtime probe while keeping ingestion routed through the registered parser.
 
 What is shared: nothing in `watcher/installer.py` changes per agent, the macOS launchd plist and Linux systemd timer install one shared `ot-watcher` shim that polls all enlisted projects regardless of which agent they use.
 
@@ -414,21 +414,19 @@ The substrate, security pipeline, and quality engine all operate on the `TraceRe
 
 ### Hardcoded coupling: refactor risk
 
-The "Known coupling" section above lists five sites where `ClaudeCodeParser` is imported by name and must be generalized through the registry before a second live agent works. **Some of these refactors will pass silently with the current test suite.** Treat that as a real risk, not a footnote.
+The "Known coupling" section above lists remaining narrow surfaces. When adding a future agent, keep the same risk model: direct imports and hardcoded agent names can pass silently unless the tests force a second parser through the path.
 
 | Coupling site | Existing test that would catch a wrong refactor | Risk |
 |---------------|--------------------------------------------------|------|
-| `core/ingest.py:46` | `tests/core/test_ingest.py`, calls `ingest_one_session` with synthetic Claude Code JSONL. Catches dispatch-failure (returns `None`, raises) but not silent-wrong-parser (test fixture is parseable by either) | Medium |
-| `quality/engine.py:575` (`assess_multi_project`) | None. `tests/quality/test_multi_project_eval.py` uses synthetic sessions and never reaches this dispatch path | **High, passes silently** |
-| `cli/__init__.py:1181` | None. Inside `_capture_sessions_into_project` (likely dead-code path; tests live alongside the watcher tick) | Low, unreachable |
-| `cli/__init__.py` legacy `parse` command | None. Legacy `parse` CLI command, no CliRunner tests for this verb | **High, passes silently** |
-| `cli/__init__.py:4180` (capabilities hardcoded list) | None | **High, passes silently** |
+| Legacy `_capture_sessions_into_project` | None. The active watcher path is covered separately | Low, legacy helper |
+| Web `api_trace_resume` | Web route tests do not force non-Claude step resume | Medium |
+| Agent-specific `--at-step` resume | `tests/cli/test_codex_resume.py` covers Codex native resume/fork hints, not snapshot-backed step materialization | Medium |
 
-**Required tests to add before refactoring** (without these, the second live agent's PR is unsafe to merge):
+**Required tests to add before refactoring**:
 
-1. A `tests/quality/test_multi_project_dispatch.py` test that calls `assess_multi_project` with two agents' sessions present and asserts each is parsed by the correct parser. Otherwise the registry lookup at this site is unverified.
-2. A CliRunner test invoking `opentraces parse <session>` against a non-Claude-Code session, asserting it dispatches to the right parser.
-3. A CliRunner test asserting `opentraces capabilities` returns `agents` derived from `get_parsers().keys()`, not a static list.
+1. A test that drives the exact narrowed surface with a non-Claude parser or resumer.
+2. A negative test proving unsupported `--at-step` resume fails honestly for the new harness.
+3. A capability or docs assertion if the refactor changes what users can discover.
 
 ### Apparatus you may need to extend
 
@@ -522,17 +520,17 @@ Agent-agnostic. Real git repo, `.opentraces.json` marker, call `_wd.run_once(pro
 | `tests/fixtures/trace_record_stability/v02_sample.jsonl` | sample records | Add one line from your agent here to gain round-trip stability coverage |
 | `OT_REAL_REPL=1` env var | `tests/integration/conftest.py:19-31` | Opt-in gate for live REPL scenarios. Mark your tests with `@pytest.mark.real_repl` to inherit the same skip behavior |
 
-## Worked example: adding Codex CLI
+## Reference implementation: Codex CLI
 
-Concrete walkthrough so you can map the abstract spec to a real change. Codex CLI (hypothetical) stores sessions at `~/.codex/sessions/<project>/<session>.jsonl` and supports lifecycle hooks via `~/.codex/config.toml`.
+Concrete walkthrough so you can map the abstract spec to the shipped Codex CLI adapter. Codex CLI stores sessions at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl` and opentraces registers lifecycle hooks through `~/.codex/hooks.json`.
 
-1. **Create the package**: `src/opentraces/capture/codex_cli/{__init__.py, parse.py, install.py, hooks/{on_session_start.py, on_tool_call_begin.py, on_tool_call_end.py, on_session_end.py}}`.
+1. **Package**: `src/opentraces/capture/codex_cli/{__init__.py, parse.py, sessions.py, context_tree_capture.py, trail_capture.py, resume.py, install.py, hooks/...}`.
 
-2. **Implement `CodexCliParser`** in `parse.py` with `agent_name = "codex-cli"`, `discover_sessions` walking `~/.codex/sessions/<encoded-cwd>/*.jsonl`, `parse_session` doing the JSONL-to-`TraceRecord` mapping. If Codex hooks emit `opentraces_hook` lines, index them into `metadata["hook_pre_tool_use"]` and friends so plan-54 just works.
+2. **`CodexCliParser`** in `parse.py` uses `agent_name = "codex-cli"`, discovers dated rollout files, maps Codex `session_meta`, `turn_context`, `event_msg`, and `response_item` rows into `TraceRecord`, and indexes opentraces hook sidecars into `metadata["hook_pre_tool_use"]`, `metadata["hook_post_tool_use"]`, and `metadata["hook_stop"]`.
 
-3. **Implement the four hook scripts**. Each one reads JSON from stdin, computes the trail blob (`write_worktree_tree(cwd)`), appends one `opentraces_hook` line to the transcript, and exits 0. The Stop hook also fire-and-forgets `python -m opentraces _ingest-session <transcript> --project <cwd>`.
+3. **Hook scripts** cover `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, and `Stop`. Boundary hooks compute Trail tree IDs and always exit 0 so capture never blocks Codex.
 
-4. **Implement `CodexCliHookInstaller`** in `install.py` with `installer_name = "codex-cli"`, copying the four scripts to `~/.codex/hooks/opentraces_*.py` and registering them in `~/.codex/config.toml` under whatever Codex's hooks schema is. Validate-before-write, atomic-replace, idempotent.
+4. **`CodexCliHookInstaller`** in `install.py` uses `installer_name = "codex-cli"`, copies scripts to `~/.codex/hooks/opentraces/`, and registers command hooks in `~/.codex/hooks.json`. It validates before writing, prunes stale opentraces hooks, preserves unrelated hooks, and is idempotent.
 
 5. **Register** in `src/opentraces/capture/__init__.py` `_register_defaults()`:
    ```python
@@ -540,21 +538,23 @@ Concrete walkthrough so you can map the abstract spec to a real change. Codex CL
    HOOK_INSTALLERS["codex-cli"] = CodexCliHookInstaller
    ```
 
-6. **Generalize the hardcoded Claude Code references** listed under "Known coupling" above. This is unavoidable for the second live agent.
+6. **Keep remaining narrow surfaces honest**. Native Codex resume/fork is registered through the resumer registry, while snapshot-backed `--at-step` materialization remains Claude-only and must fail explicitly for Codex.
 
-7. **Wire the watcher** by adding `_codex_session_dir(project_cwd)` and extending `_jsonl_activity_since` in `watcher/daemon.py` to check both Claude and Codex directories.
+7. **Watcher participation** comes from the registered parser's `discover_sessions()` path. The watcher uses `capture.discover_project_sessions(project_cwd)` for agent session mtimes and keeps a Claude-specific nested-subagent probe only for files that should wake the watcher but are not separate root sessions.
 
-8. **Tests** (consult the coverage matrix above for the full bar). At minimum:
+8. **Tests** (consult the coverage matrix above for the full bar). The shipped Codex lane is covered by:
    - `tests/capture/test_parser_codex_cli.py` (Tier 2 pattern, including the registry-presence smoke test)
-   - `tests/capture/test_codex_hooks.py` (Tier 3a pattern; subprocess pattern if hooks are non-Python)
+   - `tests/capture/test_parser_codex_cli_advanced.py` (skills, sidecars, subagent metadata, advanced raw shapes)
+   - `tests/capture/test_codex_hooks.py` (Tier 3a hook sidecars)
    - `tests/cli/test_codex_installer.py` (Tier 3b pattern, including `get_hook_installers()` registry test)
-   - `tests/capture/test_codex_trail_capture.py` if shipping Tier 4 (parser indexes hook metadata, `emit_step_window_events_from_record` produces expected events, missing-pre-or-post negative case)
-   - `tests/cli/test_codex_phase7_uat.py` adapting `_append_anchored_patch` with your `writer` and `capture_method` to inherit lineage-consumer coverage
+   - `tests/capture/test_codex_trail_capture.py` (parser indexes hook metadata and emits Trail events)
+   - `tests/capture/test_codex_context_tree_capture.py` (Context Tree step joins and hook-backed event emission)
    - `tests/cli/test_codex_cli_surface.py` (`init --agent codex-cli`, `setup codex-cli` happy path, `capabilities` lists codex-cli)
-   - `tests/e2e/test_e2e_dogfood_codex.py` with its own `OPENTRACES_TEST_CODEX_PROJECT_DIR` env-var skip guard
-   - One sample `TraceRecord` line appended to `tests/fixtures/trace_record_stability/v02_sample.jsonl`
-   - **Coupling refactor tests** (mandatory before refactoring the hardcoded `ClaudeCodeParser` imports): `tests/quality/test_multi_project_dispatch.py`, a CliRunner test for `opentraces parse` against a non-Claude session, and a CliRunner test asserting `capabilities.agents` is registry-derived
-   - **Registry consistency tests** (one-time backfill before second live agent lands): `tests/capture/test_registry.py` with agent-name uniqueness, two-parser dispatch, `_register_defaults` idempotency
+   - `tests/cli/test_codex_resume.py` (native resume/fork hints and explicit unsupported `--at-step` behavior)
+   - `tests/core/test_bucket_mixed_agent_manifest.py` (agent summaries in mixed-agent bucket manifests)
+   - `tests/quality/test_multi_project_dispatch.py` (two-parser dispatch through the quality path)
+   - `tests/capture/test_registry.py` (agent-name uniqueness, two-parser dispatch, `_register_defaults` idempotency)
+   - `tests/otbox/test_codex_simulated_user_runner.py` and `tests/otbox/test_codex_bucket_parity.py` (offline-safe otbox Codex harness contracts)
 
 9. **Docs**: add a row to `docs/cli/supported-agents.md`, update `src/opentraces/capture/README.md`, update `CLAUDE.md` Stack section if needed. The `docs-update` skill catches the rest.
 

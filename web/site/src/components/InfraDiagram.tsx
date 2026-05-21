@@ -8,7 +8,7 @@ interface Agent {
 
 const devTimeAgents: Agent[] = [
   { name: "Claude Code", ready: true },
-  { name: "Codex", ready: false },
+  { name: "Codex", ready: true },
   { name: "Cursor", ready: false },
   { name: "OpenCode", ready: false },
 ];
@@ -20,10 +20,10 @@ const runTimeAgents: Agent[] = [
   { name: "DeepAgents", ready: false },
 ];
 
-const pipelineSteps = ["init", "capture", "parse", "enrich", "sanitise"];
+const pipelineSteps = ["capture", "bucket", "trace", "trail", "ctx", "workflow", "dataset"];
 const pushModes = [
-  { name: "auto", label: "capture, redact, auto-stage safe traces" },
-  { name: "review", label: "human inbox, stage, push (default)" },
+  { name: "bucket", label: "raw private evidence, optional sync" },
+  { name: "dataset", label: "reviewed workflow rows to HF" },
 ];
 
 const useCases = [
@@ -104,7 +104,7 @@ export default function InfraDiagram() {
           </div>
 
           <div className="arch-line" style={{ marginTop: 12, marginBottom: 4 }} />
-          <div className="arch-label">push mode</div>
+          <div className="arch-label">egress surface</div>
           <div className="arch-line" style={{ height: 12 }} />
 
           <div className="arch-fork">
@@ -122,7 +122,7 @@ export default function InfraDiagram() {
         </div>
 
         <div className="arch-line" />
-        <div className="arch-label">JSONL shards, private or public</div>
+        <div className="arch-label">approved row shards, private or public</div>
         <div className="arch-line" />
 
         {/* HF Hub destination */}

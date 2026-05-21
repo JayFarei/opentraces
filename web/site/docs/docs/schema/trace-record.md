@@ -6,13 +6,15 @@ The top-level record. One per JSONL line, one per agent trace.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `schema_version` | string | yes | Schema version, e.g. `"0.4.0"` |
+| `schema_version` | string | yes | Schema version, e.g. `"0.6.0"` |
 | `trace_id` | string (UUID) | yes | Unique identifier for this trace |
 | `session_id` | string | yes | Agent session reference |
 | `content_hash` | string | no | SHA-256 of the serialized record, populated when written |
 | `execution_context` | string | no | `"devtime"` (code-editing agent) or `"runtime"` (action-trajectory / RL agent). Null for pre-0.2 traces. |
 | `lifecycle` | string | no | `"provisional"` (session ended, not yet tied to a revision) or `"final"` (post-commit hook correlated this trace to a commit). Defaults to `"provisional"`. Added 0.3.0 (RFC #25). |
+| `patches` | array\<Patch\> | no | Authoritative dev-time output set. One `Patch` per tool-produced change/hunk. Added 0.6.0. |
 | `git_links` | array\<GitLink\> | no | Evidence-graded links to commits/revisions this trace contributed to. A trace may link to many commits (rebase, squash, long session); a commit may link to many traces (cherry-pick, composition). Added 0.3.0. See [Outcome & Attribution](/docs/schema/outcome-attribution) for the evidence-tier taxonomy and `GitLink` fields. |
+| `context_tree_summary` | object | no | Context Tree projection summary (`node_count`, `layer_count`, `active_path_leaf_id`, `capture_limitations` when present). Added 0.5.0. |
 | `generation_index` | integer | no | Monotonic per-`session_id` generation counter. Generations are replacement snapshots, not stitchable supersets: later generations may carry different redactions, enrichments, or security-pipeline output. Consumers resolving "latest" should group by `session_id` and take `max(generation_index)`. Added 0.3.0. |
 
 ## Timestamps
@@ -134,5 +136,34 @@ Open-ended object for future extensions.
 
 - `content_hash` is filled in when the record is serialized with `to_jsonl_line()`
 - `task`, `environment`, `steps`, and the nested blocks all have defaults in the Python model
-- `security.scanned` confirms the security pipeline (scan, redact, classify) was applied
+- `security.scanned` is legacy summary metadata; current per-tool details live under `metadata.security.tools_applied` and `metadata.security.tools`
 - `task.repository_url` is the canonical remote URL (added 0.3.0, RFC #22). Prefer it over `repository` when normalizing across hosts.
+- `Outcome.patch` was removed in 0.6.0. Use `patches[]` plus the bucket Trail companion (`trail.jsonl.gz`) for patch history and diff content.
+
+## Patch Spine
+
+```json
+{
+  "patches": [
+    {
+      "patch_id": "tracepatch-sha256:...",
+      "file_path": "src/parser.py",
+      "step_index": 7,
+      "tool_call_id": "tc_123",
+      "capture_method": ["hook_pretooluse", "hook_posttooluse"],
+      "snapshot_before_id": "snapshot-sha256:...",
+      "snapshot_after_id": "snapshot-sha256:...",
+      "anchor": {
+        "commit_sha": "abc123...",
+        "evidence_tier": "exact_range_hash",
+        "evidence_firmness": "firm_observed"
+      },
+      "superseded_by": [],
+      "limitations": []
+    }
+  ]
+}
+```
+
+`patches[]` is the stable join between the JSONL trace, Trace Trails, Context
+Tree, and dataset workflow rows.

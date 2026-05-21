@@ -20,7 +20,7 @@ For headless runs:
 opentraces init --agent claude-code
 opentraces dataset new my-dataset --workflow my-workflow --schema schema.json
 opentraces dataset run my-dataset --executor claude-code-headless
-opentraces dataset review my-dataset approve --all
+opentraces dataset review approve my-dataset --all
 opentraces dataset publish my-dataset --to my-org/dataset
 ```
 
@@ -28,7 +28,7 @@ If the runner is seeding from an existing JSONL file instead of running a workfl
 
 ```bash
 opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
-opentraces dataset review my-import approve --all
+opentraces dataset review approve my-import --all
 opentraces dataset publish my-import --to my-org/dataset
 ```
 
@@ -45,6 +45,7 @@ If you rely on optional integrations, configure them explicitly in automation:
 
 ```bash
 opentraces setup trufflehog --enable
+opentraces setup privacy-filter --enable
 opentraces setup llm-review --enable
 ```
 
@@ -72,7 +73,7 @@ Those commands assume the required binary or endpoint is already available.
   env:
     HF_TOKEN: ${{ secrets.HF_TOKEN }}
   run: |
-    opentraces dataset review ci-dataset approve --all
+    opentraces dataset review approve ci-dataset --all
     opentraces dataset remote create ci-dataset my-org/dataset --private
     opentraces dataset publish ci-dataset
 ```
@@ -82,4 +83,4 @@ Those commands assume the required binary or endpoint is already available.
 - Use `--private` (the default for `dataset remote create`) for proprietary codebases
 - Use `dataset publish --to owner/dataset` for one-shot destination overrides
 - Use `dataset publish --check-only` to validate gates without uploading
-- Tier 2 LLM review runs inside the workflow; rows arrive at `publish` already verdicted
+- Optional LLM review runs inside the workflow; rows arrive at `publish` already verdicted when the workflow requires it

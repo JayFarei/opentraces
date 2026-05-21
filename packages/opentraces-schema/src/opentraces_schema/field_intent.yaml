@@ -226,8 +226,8 @@ outcome.description:
   description: Outcome description
   good_example: ''
   failure_modes: []
-outcome.patch:
-  description: Unified diff from session
+patches:
+  description: Authoritative trace patch spine; one tool-produced change per entry
   good_example: ''
   failure_modes: []
 outcome.committed:

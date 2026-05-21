@@ -37,7 +37,7 @@ nav:
       - Supported Agents: cli/supported-agents.md
       - Troubleshooting: cli/troubleshooting.md
   - Security:
-      - Security Tiers: security/tiers.md
+      - Security Tools: security/tiers.md
       - Scanning & Redaction: security/scanning.md
       - Configuration: security/configuration.md
   - Schema:
@@ -48,11 +48,16 @@ nav:
       - Standards Alignment: schema/standards.md
       - Versioning: schema/versioning.md
   - Workflow:
-      - Parse: workflow/parsing.md
-      - Review: workflow/review.md
-      - Assess: workflow/quality.md
-      - Blame: workflow/blame.md
-      - Publish: workflow/pushing.md
+      - Capture: workflow/parsing.md
+      - Private Bucket: workflow/bucket.md
+      - Trace Discovery: workflow/trace-discovery.md
+      - Trace Trails: workflow/blame.md
+      - Context Tree: workflow/context-tree.md
+      - Workflow Templates: workflow/workflow-templates.md
+      - Dataset Rows: workflow/datasets.md
+      - Dataset Row Review: workflow/review.md
+      - Quality: workflow/quality.md
+      - Dataset Publish: workflow/pushing.md
       - Consume: workflow/consume.md
       - Export: workflow/export.md
   - Integration:

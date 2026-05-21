@@ -1,69 +1,47 @@
-# Inbox
+# Dataset Row Review
 
-The public review surface currently lives in the CLI under `opentraces dataset review`. The old standalone `web` and `tui` trace-review clients are decommissioned, and `dataset review --web` / `--tui` are intentionally unavailable until the next dataset-scoped review UI lands.
-
-```bash
-opentraces dataset review <name>           # default summary
-opentraces dataset review <name> --json    # row details
-opentraces dataset review approve <name> <row-id>
-opentraces dataset review reject <name> <row-id>
-opentraces dataset review reset <name> <row-id>
-opentraces dataset review approve <name> --all
-```
-
-For the project-level snapshot (stage counts, recent traces, active remote) keep using `opentraces status`. For searching retained traces, use `opentraces trace query`.
-
-## CLI
+Review applies to dataset rows, not to raw bucket traces. A workflow projects
+trace evidence into rows; then those rows are approved, rejected, reset, or
+published.
 
 ```bash
 opentraces dataset status my-dataset
-opentraces dataset review my-dataset
+opentraces dataset review my-dataset --json
 opentraces dataset review approve my-dataset <row-id>
-opentraces dataset review approve my-dataset --all
 opentraces dataset review reject my-dataset <row-id>
 opentraces dataset review reset my-dataset <row-id>
+opentraces dataset review approve my-dataset --all
 ```
 
-Use the CLI when you want scriptable review or a precise edit loop:
+The legacy `--web` and `--tui` flags currently return decommission notices.
+Use the CLI row review surface until the next dataset-scoped UI lands.
 
-- `dataset status` reports row counts by state
-- `dataset review` with a dataset name prints the dataset's review summary
-- `approve` / `reject` / `reset` operate on row ids, optionally with `--all`
-- Pass `--json` for machine-readable output
+## Row States
 
-For trace-level search (across retained traces, not dataset rows) use `opentraces trace query`.
-
-## Stage Vocabulary
-
-| Stage | Meaning |
+| State | Meaning |
 |-------|---------|
 | `inbox` | Needs review |
-| `approved` | Ready for the next publish |
+| `approved` | Ready for publish |
 | `published` | Uploaded upstream |
 | `rejected` | Kept local only |
-| `blocked` | Needs action before it can be approved |
+| `blocked` | Needs action before approval |
 
-Internally the state machine tracks additional states. The public CLI and UIs collapse those down to the visible stages above.
+## What To Check
 
-## What To Look For
+- residual secrets or PII that the workflow did not sanitize;
+- internal hostnames, repository paths, or customer identifiers;
+- rows that are too short, low quality, or unrelated to the dataset objective;
+- stale Trace Trail survival state if the row depends on live code evidence;
+- context windows that are too broad or too narrow for the training/eval task.
 
-- Secrets that escaped redaction
-- Internal hostnames and collaboration URLs
-- Customer names, paths, or identifiers
-- Rows that are too short or too trivial
-- Tool outputs that should be redacted before sharing
+## Security Tools
 
-## Inbox Flow
-
-```bash
-opentraces dataset review approve my-dataset --all
-opentraces dataset publish my-dataset
-```
-
-If you want a faster automatic path, set the project to auto-approve clean traces at capture time:
+Security tools are optional and default off. Workflows can run them before rows
+reach review:
 
 ```bash
-opentraces config set review_policy auto --project
+printf '%s\n' '{"row": {...}}' \
+  | opentraces security sanitize --tools regex,entropy,path_anonymizer
 ```
 
-That still does not publish automatically. Upload remains explicit.
+Review is still the final human or workflow gate before publication.

@@ -2,32 +2,32 @@ import SectionRule from "./SectionRule";
 
 const features = [
   {
-    title: "git for traces",
-    desc: "init, status, dataset new, dataset publish. The workflow you know, applied to agent sessions.",
+    title: "private trace bucket",
+    desc: "Capture-time envelopes, patch history, trail/context companions, blobs, and manifests stay local until you sync them.",
   },
   {
-    title: "security pipeline",
-    desc: "Regex + entropy + optional TruffleHog and LLM review. Stable placeholders like [EMAIL_1] keep traces coherent.",
+    title: "trace discovery",
+    desc: "trace query, map, slice, and get expose deterministic packets for workflow row builders.",
   },
   {
-    title: "auto or review",
-    desc: "Per-dataset policy: auto-approve safe rows, or gate every row through the TUI or browser reviewer.",
+    title: "optional security tools",
+    desc: "Regex, entropy, TruffleHog, privacy-filter, LLM PII, path anonymization, and classifier are explicit and default off.",
   },
   {
-    title: "trail blame and graph",
-    desc: "Every shipped line back to the prompt behind it. trail blame and trail graph map commits to their agent sessions.",
+    title: "trace trails",
+    desc: "trail blame commit, trail blame pr, trail graph, and trail track connect trace patches to Git survival.",
   },
   {
-    title: "schema depth",
-    desc: "Steps, tool calls, reasoning, sub-agents, tokens, attribution, outcome in one record.",
+    title: "context tree",
+    desc: "ctx commands reconstruct what the agent saw at a step and produce resume packets.",
   },
   {
-    title: "huggingface native",
-    desc: "Sharded JSONL on HF Hub. Load via datasets.load_dataset() or mount it as a virtual filesystem. No lock-in.",
+    title: "workflow templates",
+    desc: "Skill-format packages project raw trace evidence into compliant rows for a chosen objective.",
   },
   {
-    title: "quality scoring",
-    desc: "Five persona rubrics score every trace. Publish gates enforce minimums via dataset publish.",
+    title: "dataset row review",
+    desc: "Approve, reject, reset, schedule, and publish projected rows without pushing the raw bucket.",
   },
   {
     title: "content-hash dedup",

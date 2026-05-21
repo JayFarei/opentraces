@@ -58,11 +58,13 @@ opentraces dataset status my-dataset
 opentraces dataset review my-dataset
 ```
 
-Then approve, reject, or reset rows interactively (`--tui` / `--web`), or directly from the CLI:
+Then approve, reject, or reset rows directly from the CLI. The legacy `--tui`
+and `--web` flags currently return decommission notices.
 
 ```bash
-opentraces dataset review my-dataset reset <row-id>
-opentraces dataset review my-dataset reject <row-id>
+opentraces dataset review reset my-dataset <row-id>
+opentraces dataset review reject my-dataset <row-id>
+opentraces dataset review approve my-dataset <row-id>
 ```
 
 ### Publish Fails

@@ -13,7 +13,7 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
 
 ```json
 {
-  "schema_version": "0.4.0",
+  "schema_version": "0.6.0",
   "trace_id": "uuid",
   "session_id": "uuid",
   "content_hash": "<sha256-hex>",
@@ -32,7 +32,9 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
   "security": { },
   "attribution": { },
   "lifecycle": "provisional",
+  "patches": [ ],
   "git_links": [ ],
+  "context_tree_summary": { },
   "generation_index": 0,
   "metadata": { }
 }
@@ -50,6 +52,8 @@ opentraces uses a training-first JSONL schema where each line is one complete ag
 | `content_hash` | Two scopes, two algorithms by design. Top-level `TraceRecord.content_hash` is SHA-256 of the serialized record — cryptographic collision resistance for cross-contributor dedup at upload time. `AttributionRange.content_hash` is `murmur3:<32-hex>` — fast cross-tool matching of specific line ranges, per Agent Trace v0.1.0. The murmur3 prefix (added 0.3.0) replaces the prior md5-truncated form and only applies to attribution-range hashes. |
 | `reasoning_content` | Explicit chain-of-thought field. Improved SWE-Bench by ~3 pts (Cognition data). |
 | `outcome.committed` | Did the trace's changes get committed? Cheap, deterministic quality signal. |
+| `patches[]` | Authoritative dev-time output set. One `Patch` per tool-produced change/hunk, joined to Trace Trails for full patch history. |
+| `context_tree_summary` | Compact roll-up of Context Tree capture so consumers can tell whether "what the agent saw" evidence exists. |
 | `attribution` | Embedded Agent Trace block. Bridges trajectory (process) with code attribution (output). |
 
 ## Schema Package

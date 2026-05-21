@@ -7,7 +7,7 @@ import { AGENT_PROMPT } from "@/lib/agent-prompt";
 import pkg from "@/lib/version.json";
 import type { HeroMetricItem } from "@/lib/homepage-metrics";
 
-const tabLabels = ["setup", "init", "status", "review", "blame", "publish", "consume"];
+const tabLabels = ["setup", "bucket", "trace", "trail", "ctx", "workflow", "dataset"];
 const AGENT_LINES = AGENT_PROMPT.split("\n").length;
 
 const installMethods = [
@@ -52,8 +52,8 @@ function SetupContent() {
     ["watcher", "install?", "powers blame"],
     ["bucket", "configure?", "remote sync"],
     ["hf login", "log in?", "alice-dev"],
-    ["trufflehog", "Tier 1.5?", "v3.63.1"],
-    ["llm review", "enable?", "gemma4:latest"],
+    ["security", "optional?", "tools off"],
+    ["llm review", "optional?", "configured later"],
   ];
   return (
     <>
@@ -92,20 +92,20 @@ function SetupContent() {
 function InitContent() {
   type Row = { label: string; value: string; valCls: string; status?: string; statusCls?: string };
   const rows: Row[] = [
-    { label: "agent", value: "claude-code", valCls: "di", status: "detected", statusCls: "di" },
-    { label: "hook", value: "PreToolUse, Stop, PostCompact", valCls: "f", status: "installed", statusCls: "ok" },
-    { label: "git hook", value: "post-commit", valCls: "f", status: "linked", statusCls: "ok" },
-    { label: "hf login", value: "alice-dev", valCls: "s", status: "✓", statusCls: "ok" },
-    { label: "import", value: "42 traces", valCls: "f", status: "✓ imported", statusCls: "ok" },
+    { label: "traces", value: "128 envelopes", valCls: "f", status: "local", statusCls: "ok" },
+    { label: "events", value: "42 batches", valCls: "f", status: "replayable", statusCls: "ok" },
+    { label: "blobs", value: "1.8 GB", valCls: "n", status: "verified", statusCls: "ok" },
+    { label: "remote", value: "alice/opentraces-bucket", valCls: "s", status: "manual", statusCls: "di" },
+    { label: "datasets", value: "separate", valCls: "di", status: "projected rows", statusCls: "di" },
   ];
   return (
     <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces init</span></span>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces bucket status</span></span>
       <span className="terminal-line terminal-line-gap" />
       <div className="rail-frame">
         <span className="terminal-line rail-frame-label">
-          <span className="pill">opentraces</span>
-          <span className="di">  init</span>
+          <span className="pill">bucket</span>
+          <span className="di">  private capture store</span>
         </span>
         {rows.map((r) => (
           <span key={r.label} className="terminal-line wiz-row">
@@ -116,15 +116,11 @@ function InitContent() {
           </span>
         ))}
         <span className="terminal-line rail-frame-label">
-          <span className="di">Initialized</span>
+          <span className="di">Raw evidence is private until bucket sync</span>
         </span>
       </div>
-      <span className="terminal-line rail-frame-label">
-        <span className="di">{"\u2022"} Created </span><span className="s">.opentraces.json</span>
-      </span>
-      <span className="terminal-line rail-frame-label">
-        <span className="di">{"\u2022"} Installed claude-code hook</span>
-      </span>
+      <span className="terminal-line rail-frame-label"><span className="di">{"\u2022"} traces/v1 envelopes + companions</span></span>
+      <span className="terminal-line rail-frame-label"><span className="di">{"\u2022"} blobs/v1 context + raw payloads</span></span>
     </>
   );
 }
@@ -132,60 +128,38 @@ function InitContent() {
 function StatusContent() {
   return (
     <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces status</span></span>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces trace query --cwd --since 7d</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  my-project inbox</span></span>
-      <span className="terminal-line"><span className="di">  review policy: </span><span className="s">review</span></span>
-      <span className="terminal-line"><span className="di">  remote: </span><span className="s">Jayfarei/opentraces</span></span>
+      <span className="terminal-line"><span className="di">  candidates </span><span className="n">12</span><span className="di">  source=</span><span className="s">index</span></span>
+      <span className="terminal-line"><span className="di">  facets: </span><span className="s">skill, files, survival, intent</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  inbox </span><span className="n">3</span> <span className="di"> staged </span><span className="n">0</span> <span className="di"> pushed </span><span className="n">0</span></span>
-      <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 2h ago    </span><span className="s">{"\u201C"}refactor auth middleware{"\u201D"}</span>   <span className="n">47</span> <span className="di">steps</span>  <span className="di">inbox</span></span>
-      <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} 5h ago    </span><span className="s">{"\u201C"}fix billing webhook{"\u201D"}</span>        <span className="n">23</span> <span className="di">steps</span>  <span className="w">1 flag {"\u26A0"}</span></span>
-      <span className="terminal-line"><span className="di">  {"\u2514\u2500\u2500"} yesterday </span><span className="s">{"\u201C"}add settings page{"\u201D"}</span>          <span className="n">65</span> <span className="di">steps</span>  <span className="di">inbox</span></span>
+      <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} </span><span className="n">tr_7f31</span><span className="di"> </span><span className="s">fix billing webhook</span><span className="di">  </span><span className="ok">alive_on_path</span></span>
+      <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} </span><span className="n">tr_c42a</span><span className="di"> </span><span className="s">refactor auth middleware</span><span className="di">  </span><span className="ok">alive_transformed</span></span>
+      <span className="terminal-line"><span className="di">  {"\u2514\u2500\u2500"} </span><span className="n">tr_91bb</span><span className="di"> </span><span className="s">add settings page</span><span className="di">  </span><span className="w">unknown</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  next: opentraces dataset review --web</span></span>
+      <span className="terminal-line"><span className="di">  next: opentraces trace map tr_7f31 --bursts</span></span>
     </>
   );
 }
 
 function ReviewContent() {
   return (
-    <div className="terminal-tui-mockup">
-      <div className="tui-row tui-header">
-        <span className="tui-left">SESSIONS (3 staged)</span>
-        <span className="tui-right">DETAIL</span>
-      </div>
-      <div className="tui-body">
-        <div className="tui-left">
-          <div className="tui-session tui-active"><span className="tui-dot ok">●</span> &quot;refactor auth&quot; <span className="n">47</span> steps</div>
-          <div className="tui-session"><span className="tui-dot">○</span> &quot;fix billing&quot; <span className="n">23</span> steps</div>
-          <div className="tui-session"><span className="tui-dot">○</span> &quot;add settings&quot; <span className="n">65</span> steps</div>
-        </div>
-        <div className="tui-right">
-          <div className="tui-detail-title">refactor auth middleware</div>
-          <div className="tui-detail-meta">claude-code · opus-4-6</div>
-          <div className="tui-detail-meta">233s · 42,891 tokens · $3.21</div>
-          <div className="tui-detail-meta">review · 2 redacted · 0 flags</div>
-          <div className="tui-detail-sep">steps</div>
-          <div className="tui-step"><span className="di">[0]</span> <span className="s">user</span>  &quot;refactor the auth..&quot;</div>
-          <div className="tui-step"><span className="di">[1]</span> <span className="f">agent</span> Read auth.py</div>
-          <div className="tui-step"><span className="di">[2]</span> <span className="f">agent</span> Edit auth.py L42-67</div>
-          <div className="tui-step"><span className="di">[3]</span> <span className="s">user</span>  &quot;looks good, also..&quot;</div>
-          <div className="tui-step"><span className="di">[4]</span> <span className="f">agent</span> Write tests/auth.py</div>
-        </div>
-      </div>
-      <div className="tui-row tui-footer">
-        <span>inbox: 3 · approved: 0</span>
-        <span>j/k navigate · space approve · r refresh · q quit</span>
-      </div>
-    </div>
+    <>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces ctx step tr_7f31 7</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  node </span><span className="n">sha256:9b2e...</span></span>
+      <span className="terminal-line"><span className="di">  layers </span><span className="s">system messages tool_registry runtime_state</span></span>
+      <span className="terminal-line"><span className="di">  reads  </span><span className="n">14</span><span className="di">  writes </span><span className="n">3</span><span className="di">  compactions </span><span className="n">1</span></span>
+      <span className="terminal-line terminal-line-gap" />
+      <span className="terminal-line"><span className="di">  next: </span><span className="c">opentraces ctx resume sha256:9b2e...</span></span>
+    </>
   );
 }
 
 function BlameContent() {
   return (
     <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces trail blame ac019172</span></span>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces trail blame commit ac019172</span></span>
       <span className="terminal-line terminal-line-gap" />
       <span className="terminal-line"><span className="di">{"\u2502"}</span></span>
       <span className="terminal-line">
@@ -242,14 +216,13 @@ function BlameContent() {
 function PushContent() {
   return (
     <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces dataset publish my-dataset</span></span>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces workflow create eval --template skill-command-trajectory-eval-v1</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Publishing 3 approved rows (private)...</span></span>
+      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">created workflow </span><span className="s">eval</span></span>
+      <span className="terminal-line"><span className="di">    script: scripts/build_rows.py</span></span>
+      <span className="terminal-line"><span className="di">    input: Trace Slices + bucket refs</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">Pushed {"\u2192"}</span> <span className="s">Jayfarei/opentraces</span> <span className="di">(private)</span></span>
-      <span className="terminal-line"><span className="di">    135 steps {"\u00B7"} 42,891 tokens {"\u00B7"} $3.21 estimated</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Run </span><span className="c">opentraces dataset remote visibility my-dataset --public</span><span className="di"> to make public.</span></span>
+      <span className="terminal-line"><span className="di">  next: </span><span className="c">opentraces dataset new eval-rows --workflow ./workflows/eval/</span></span>
     </>
   );
 }
@@ -257,23 +230,13 @@ function PushContent() {
 function ConsumeContent() {
   return (
     <>
-      <span className="terminal-line"><span className="p">~$</span> <span className="c">hf-mount jayfarei/opentraces /mnt/traces</span></span>
+      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces dataset publish eval-rows --check-only</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  Starting daemon (pid=</span><span className="n">21104</span><span className="di">) </span><span className="ok">ready</span></span>
-      <span className="terminal-line"><span className="di">    stop: hf-mount-daemon stop /mnt/traces</span></span>
+      <span className="terminal-line"><span className="di">  rows </span><span className="n">18</span><span className="di">  approved </span><span className="n">18</span><span className="di">  rejected </span><span className="n">0</span></span>
+      <span className="terminal-line"><span className="di">  security tools </span><span className="s">regex,entropy</span><span className="di">  policy </span><span className="s">pass</span></span>
+      <span className="terminal-line"><span className="di">  bucket evidence </span><span className="ok">retained private</span></span>
       <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="p">~$</span> <span className="c">ls -la /mnt/traces/</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  total 3</span></span>
-      <span className="terminal-line"><span className="di">  -r--r--r--  jay  staff  </span><span className="n">2.1 MB</span><span className="di">  Mar 29  </span><span className="s">traces-0001.jsonl</span></span>
-      <span className="terminal-line"><span className="di">  -r--r--r--  jay  staff  </span><span className="n">1.8 MB</span><span className="di">  Mar 29  </span><span className="s">traces-0002.jsonl</span></span>
-      <span className="terminal-line"><span className="di">  -r--r--r--  jay  staff  </span><span className="n">983 KB</span><span className="di">  Mar 30  </span><span className="s">traces-0003.jsonl</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="p">~$</span> <span className="c">grep -c &quot;tool_use&quot; /mnt/traces/*.jsonl</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="s">traces-0001.jsonl</span><span className="di">: </span><span className="n">847</span></span>
-      <span className="terminal-line"><span className="s">traces-0002.jsonl</span><span className="di">: </span><span className="n">612</span></span>
-      <span className="terminal-line"><span className="s">traces-0003.jsonl</span><span className="di">: </span><span className="n">291</span></span>
+      <span className="terminal-line"><span className="di">  next: </span><span className="c">opentraces dataset publish eval-rows</span></span>
     </>
   );
 }
@@ -296,7 +259,7 @@ export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
           <p className="hero-sub">
             When LLMs drive the logic, traces become the real source: the record of decisions, tool calls, and reasoning behind the outcome.
             <br /><br />
-            open<strong>traces</strong> lets you parse, sanitise, review, and push those sessions to HuggingFace Hub so you or others can build on real workflows, not synthetic benchmarks.
+            open<strong>traces</strong> captures sessions into a private bucket, lets workflows project compliant dataset rows, and publishes only the reviewed rows you choose to share.
           </p>
           <div className="hero-install-tabs">
             {installMethods.map((m, i) => (

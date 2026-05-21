@@ -102,7 +102,7 @@ Useful follow-ups:
 - `opentraces setup capture-otlp` and `opentraces capture-otlp start/status/flush` enable the higher-fidelity OTel capture source for Claude Code Context Trees.
 - `opentraces bucket status`, `bucket manifest`, `bucket verify`, `bucket repair`, `bucket prune`, and `bucket prefetch` inspect and maintain the local private trace bucket.
 - `opentraces bucket remote push/pull/status/diff` syncs the private bucket with a private HuggingFace bucket remote (S3-backed storage) configured via `opentraces setup bucket`.
-- `opentraces trace get/query --remote-bucket` and `opentraces trail search --remote-bucket` pull that private bucket remote before reading local trace or Trail state.
+- `opentraces trace query/get --remote-bucket` pulls the configured private bucket remote before reading local trace state; `opentraces trace get --remote <owner/repo>` reads a specific HF bucket directly.
 - `opentraces bucket replay` replays bucket-exported Trace Trails into a Git repository.
 - `opentraces workflow create/list/templates/remove` manages local dataset workflow skill packages.
 - `opentraces dataset list/new/run/review/publish/status` manages local datasets and row publication; `opentraces dataset remote create` binds a HuggingFace remote, and `opentraces dataset schedule` controls recurring runs.
@@ -302,7 +302,7 @@ format-then-commit pipelines all anchor — but firmness drops from
 | Commands | https://opentraces.ai/docs/cli/commands |
 | Supported Agents | https://opentraces.ai/docs/cli/supported-agents |
 | Troubleshooting | https://opentraces.ai/docs/cli/troubleshooting |
-| Security Tiers | https://opentraces.ai/docs/security/tiers |
+| Security Tools | https://opentraces.ai/docs/security/tiers |
 | Security Configuration | https://opentraces.ai/docs/security/configuration |
 | Security Scanning | https://opentraces.ai/docs/security/scanning |
 | Schema Overview | https://opentraces.ai/docs/schema/overview |
@@ -311,9 +311,12 @@ format-then-commit pipelines all anchor — but firmness drops from
 | Outcome & Attribution | https://opentraces.ai/docs/schema/outcome-attribution |
 | Schema Versioning | https://opentraces.ai/docs/schema/versioning |
 | Parsing | https://opentraces.ai/docs/workflow/parsing |
-| Inbox & Review | https://opentraces.ai/docs/workflow/review |
-| Push | https://opentraces.ai/docs/workflow/pushing |
-| Blame & Graph | https://opentraces.ai/docs/workflow/blame |
+| Dataset Row Review | https://opentraces.ai/docs/workflow/review |
+| Dataset Publish | https://opentraces.ai/docs/workflow/pushing |
+| Trace Trails | https://opentraces.ai/docs/workflow/blame |
+| Private Bucket | https://opentraces.ai/docs/workflow/bucket |
+| Context Tree | https://opentraces.ai/docs/workflow/context-tree |
+| Trace Discovery | https://opentraces.ai/docs/workflow/trace-discovery |
 | Export | https://opentraces.ai/docs/workflow/export |
 | Assess | https://opentraces.ai/docs/workflow/quality |
 | Consume | https://opentraces.ai/docs/workflow/consume |

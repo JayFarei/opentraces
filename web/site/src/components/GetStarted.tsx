@@ -21,8 +21,9 @@ function CopyBox({ cmd, desc }: { cmd: string; desc: string }) {
 
 const terminalSteps = [
   { cmd: "pipx install opentraces", desc: "install the CLI" },
-  { cmd: "opentraces setup && opentraces init", desc: "ensure the global install, then connect this project's capture hooks" },
-  { cmd: "opentraces dataset new my-dataset", desc: "scaffold a local dataset; run, review, and stage rows" },
+  { cmd: "opentraces setup && opentraces bucket status", desc: "connect capture and inspect the private bucket" },
+  { cmd: "opentraces trace query --since 7d", desc: "find retained traces before loading full transcripts" },
+  { cmd: "opentraces workflow create my-workflow", desc: "project trace evidence into dataset rows" },
   { cmd: "opentraces dataset publish my-dataset", desc: "publish approved rows to your HuggingFace dataset" },
 ];
 
@@ -37,7 +38,7 @@ export default function GetStarted() {
   return (
     <section>
       <SectionRule label="get started" />
-      <div className="section-title">Start pushing traces in 60 seconds.</div>
+      <div className="section-title">Capture privately, publish projected rows.</div>
       <p className="section-sub">
         Open data is the new open source. Your agent traces are the most valuable dataset
         nobody is collecting. Start contributing to the commons.

@@ -1,6 +1,6 @@
 # Quick Start
 
-From local capture to a published Hugging Face dataset.
+From local capture to a published Hugging Face dataset row stream.
 
 ## 1. Install
 
@@ -8,115 +8,149 @@ From local capture to a published Hugging Face dataset.
 pipx install opentraces
 ```
 
-## 2. Set Up
+## 2. Set Up The Machine
 
 ```bash
 opentraces setup
 ```
 
-`setup` is the machine-wide wizard. It walks each integration with one prompt, defaults in brackets:
+`setup` is the machine-wide wizard. It can configure:
 
-- **tracking mode** [global], whether to auto-enroll every project an agent touches (global) or only projects where you explicitly run `opentraces init` (manual). Global mode enrolls each project private + review-required the first time a capture hook fires there. Set non-interactively with `opentraces config tracking-mode global|manual`.
-- **claude-code, git, skill** capture hooks [yes], Stop/PostCompact hooks, post-commit correlator, and the Claude Code skill.
-- **watcher** [yes], background incremental backfill after each commit. Powers `opentraces trail blame`.
-- **bucket** [yes], configure the private bucket sync target (the private workspace state that backs the trace index and Trace Trails).
-- **entity-parser (sem)** [yes], entity-level diffs for richer commit attribution.
-- **HuggingFace login** [yes], device-code flow, needed before you can publish a dataset or sync the bucket to a remote. You can defer and run `opentraces auth login` later.
-- **trufflehog** (Tier 1.5) [no], global secret-scanner toggle. Findings redact in place and force review.
-- **llm-review** (Tier 2) [no], global toggle for third-party LLM review. Configure provider via `opentraces setup llm-review`.
+- **tracking mode** (`global` by default), so agent sessions can auto-enroll
+  projects private + review-required the first time capture fires.
+- **capture hooks** for Claude Code and Codex CLI.
+- **git hook** and **watcher**, which mature Trace Trails after commits land.
+- **bucket remote**, optional private HuggingFace sync for raw retained
+  evidence.
+- **HuggingFace login**, needed for bucket sync and dataset remotes.
+- **optional security tools**, such as TruffleHog, privacy-filter, and
+  LLM review. Per-record tools default off until a workflow or config enables
+  them.
 
-Per-project review policy and dataset remotes are not set here; they live in `opentraces init` and `opentraces dataset remote ...` respectively.
+You can run specific setup commands non-interactively:
 
-## 3. Initialize the Project
+```bash
+opentraces setup claude-code
+opentraces setup codex-cli
+opentraces setup git
+opentraces setup bucket
+opentraces setup capture-otlp
+opentraces setup trufflehog
+opentraces setup privacy-filter
+opentraces setup llm-review
+```
 
-> Under the default **global** tracking mode this step is optional: the project you are working in is auto-enrolled (private + review-required) the first time an agent runs in it. Run `init` to enroll a project explicitly, pick its agents, or import existing sessions, and always under **manual** mode.
+## 3. Enroll A Project
+
+Under global tracking this is optional, but it is still useful when you want to
+import existing sessions or be explicit about the connected agent.
 
 ```bash
 opentraces init
+opentraces init --agent claude-code --import-existing
+opentraces init --agent codex-cli
 ```
 
-`init` wires the current repo into opentraces and prompts you for:
+`init` writes `.opentraces.json` and registers machine-local state under
+`~/.opentraces/`.
 
-- **Agents** to connect (e.g. `claude-code`).
-- **Import existing traces**, if this repo already has Claude Code sessions, `init` asks whether to import them now or start fresh.
+## 4. Inspect The Private Bucket
 
-It writes the committable marker at `.opentraces.json`, registers machine-local storage under `~/.opentraces/projects/<slug>/`, and installs the per-repo capture hook for the chosen agent.
-
-## 4. Inspect Retained Traces
+Captured traces land in the private bucket first. This is not a public dataset.
 
 ```bash
-opentraces status
-opentraces trace query --since 7d
+opentraces bucket status
+opentraces bucket manifest --json
+opentraces bucket verify --sample 100
+```
+
+To sync the raw bucket to a private remote:
+
+```bash
+opentraces setup bucket
+opentraces bucket remote push
+opentraces bucket remote status
+```
+
+## 5. Search, Map, And Slice Traces
+
+```bash
+opentraces trace query --since 7d --cwd
+opentraces trace map <trace-id> --bursts
+opentraces trace slice <trace-id> --template bursts
 opentraces trace get <trace-id>
 ```
 
-`status` reports the project snapshot, stage counts, and recent traces. `trace query` is the full search surface across retained traces, with lexical, semantic, faceted, and survival-state filters. `trace get` resolves one trace, trace unit, map node, or `ot://` Trail resource.
+`trace query` returns bounded candidates. `trace map` exposes the trace's
+deterministic evidence graph and edit bursts. `trace slice` creates bounded
+packets that workflows can turn into rows.
 
-For commit-level attribution:
+For commit-level provenance:
 
 ```bash
-opentraces trail blame <sha>           # which traces contributed to a commit
-opentraces trail graph                  # commit + trace history
-opentraces trail track <trace-id>       # walk trace lineage through Git history
+opentraces trail blame commit <sha>
+opentraces trail blame pr render --base main
+opentraces trail graph
+opentraces trail track <trace-id>
 ```
 
-## 5. Create a Dataset
-
-Datasets are the publication unit in 0.4. Each dataset has its own schema, workflow, remotes, and publication state. Create one:
+For model context at a decision point:
 
 ```bash
-opentraces workflow create my-workflow
-opentraces dataset new my-dataset --workflow my-workflow
+opentraces ctx tree <trace-id>
+opentraces ctx step <trace-id> 7
+opentraces ctx resume <context-node-id>
 ```
 
-For ad-hoc seeding from an existing JSONL file:
+## 6. Create A Workflow-Backed Dataset
+
+Datasets are projected rows, not raw trace uploads. Start from a template or a
+custom workflow package.
 
 ```bash
-opentraces dataset new my-dataset --rows-file rows.jsonl --schema schema.json
+opentraces workflow templates
+opentraces workflow create my-workflow --template skill-command-trajectory-eval-v1
+opentraces dataset new my-dataset --workflow ./workflows/my-workflow/
 ```
 
-## 6. Run the Workflow
+Ad-hoc seeding is also available:
 
 ```bash
+opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
+```
+
+## 7. Run And Review
+
+```bash
+opentraces dataset run my-dataset --dry-run --limit 5
 opentraces dataset run my-dataset
-opentraces dataset run my-dataset --dry-run
-opentraces dataset run my-dataset --since-last-run
-```
-
-`dataset run` invokes the workflow against retained traces and appends rows into the dataset, advancing the cursor for subsequent runs.
-
-## 7. Review the Rows
-
-```bash
+opentraces dataset status my-dataset
 opentraces dataset review my-dataset --json
 opentraces dataset review approve my-dataset <row-id>
 opentraces dataset review approve my-dataset --all
 ```
 
-The old TUI and web review clients are decommissioned while the next dataset-scoped review UI is redesigned, so row review is CLI-first for now.
+The legacy `--web` and `--tui` review clients currently return decommission
+notices. Use the CLI row review surface until the dataset-scoped UI lands.
 
-## 8. Publish
+## 8. Publish Reviewed Rows
 
 ```bash
 opentraces dataset remote create my-dataset owner/team-traces --private
+opentraces dataset publish my-dataset --check-only
 opentraces dataset publish my-dataset
 ```
 
-`dataset publish` uploads reviewed rows and contract files to the bound remote as a new shard. Pass `--check-only` to run all gates without uploading.
-
-## What Happens Next
-
-Your dataset is available on Hugging Face:
-
-```python
-from datasets import load_dataset
-
-ds = load_dataset("owner/team-traces")
-```
+`dataset publish` uploads approved rows and contract files to the bound remote
+as new shards. It does not publish the raw bucket unless you separately run
+`bucket remote push`.
 
 ## Next Steps
 
-- [Inbox & Review](/docs/workflow/review), dataset row review and CLI approval flows
-- [Publish](/docs/workflow/pushing), remotes, visibility, migrations, and gates
-- [Security Tiers](/docs/security/tiers), review policy and layered scanning
-- [CLI Reference](/docs/cli/commands), full 0.4 command surface
+- [Private Bucket](/docs/workflow/bucket), raw retained evidence and sync
+- [Trace Discovery](/docs/workflow/trace-discovery), query/map/slice/get
+- [Trace Trails](/docs/workflow/blame), Git anchors and survival
+- [Context Tree](/docs/workflow/context-tree), what the agent saw
+- [Workflow Templates](/docs/workflow/workflow-templates), row projection packages
+- [Dataset Rows](/docs/workflow/datasets), review states and schedules
+- [Security Tools](/docs/security/tiers), optional default-off tools

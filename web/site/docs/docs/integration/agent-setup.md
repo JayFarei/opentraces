@@ -9,30 +9,35 @@ Inside a repo, the normal path is:
 ```bash
 opentraces auth login
 opentraces init --agent claude-code
+opentraces init --agent codex-cli
 ```
 
 `init` writes `.opentraces.json`, registers the repo in the global config, and installs the per-agent capture hook. Dataset remotes and review policy are configured separately (`opentraces dataset remote ...`, `opentraces config set review_policy review --project`).
 
-## Claude Code
+## Claude Code And Codex CLI
 
-Claude Code is the current live-capture adapter.
+Claude Code and Codex CLI are live-capture adapters.
 
 For a full setup:
 
 ```bash
 opentraces setup claude-code
+opentraces setup codex-cli
 opentraces setup git
 opentraces setup skill
 opentraces setup bucket
+opentraces setup capture-otlp
 opentraces setup watcher install
 ```
 
 What each integration does:
 
 - `setup claude-code` installs the `PreToolUse`, `PostToolUse`, `Stop`, and `PostCompact` hooks in `~/.claude/settings.json`
+- `setup codex-cli` installs native Codex CLI hook commands in `~/.codex/hooks.json`
 - `setup git` installs the post-commit correlator that powers `opentraces trail blame`
 - `setup skill` installs the vendor-neutral skill under `~/.agents/skills/opentraces/` and symlinks it into supported harnesses (e.g. `~/.claude/skills/opentraces`)
 - `setup bucket` configures the private bucket sync target (the workspace state that backs the trace index and Trace Trails)
+- `setup capture-otlp` enables the higher-fidelity Claude Code Context Tree capture source
 - `setup watcher` installs the background attribution daemon
 
 ## Machine-Readable Agent Flows
@@ -45,7 +50,9 @@ opentraces --json trace query --cwd --since 1d
 opentraces --json trace get <trace-id>
 opentraces --json config show
 opentraces --json trail track <trace-id>
-opentraces --json trail blame <sha>
+opentraces --json trail blame commit <sha>
+opentraces --json ctx tree <trace-id>
+opentraces security tools list --json
 ```
 
 That avoids scraping human-oriented terminal layouts. `trail track` returns the VCS-anchored evidence chain (Trace Patch, Git Anchor, Patch Trail) as structured JSON. To resolve an `ot://` resource directly, pass it to `opentraces trace get`.
@@ -55,11 +62,12 @@ That avoids scraping human-oriented terminal layouts. `trail track` returns the 
 A coding agent can drive the normal human workflow:
 
 ```bash
-opentraces dataset review my-dataset approve --all
+opentraces dataset review approve my-dataset --all
 opentraces dataset publish my-dataset
 ```
 
-For LLM-reviewed publication, run the workflow's review step before `publish`, then `dataset publish` will see clean Tier 2 verdicts on each row.
+For LLM-reviewed publication, run the workflow's review step before `publish`,
+then `dataset publish` will see clean row verdicts.
 
 ## Discovering Agent Capabilities
 

@@ -20,7 +20,8 @@ The `steps` array contains the conversation as a sequence of LLM API calls. Each
   "observations": [],
   "snippets": [],
   "token_usage": {},
-  "timestamp": "ISO8601"
+  "timestamp": "ISO8601",
+  "context_node_id": "sha256:..."
 }
 ```
 
@@ -43,6 +44,7 @@ The `steps` array contains the conversation as a sequence of LLM API calls. Each
 | `snippets` | Snippet[] | no | Extracted code blocks |
 | `token_usage` | TokenUsage | no | Per-step token usage breakdown |
 | `timestamp` | string | no | ISO8601 timestamp |
+| `context_node_id` | string | no | Context Tree node id for the model view at this step. Added 0.5.0. |
 
 ### `call_type` Values
 
@@ -138,3 +140,18 @@ Sub-agent steps use `parent_step` to link back to the invoking step:
 ```
 
 Sub-agent transcripts are linked by `session_id` reference to separate trajectory records, not embedded.
+
+## Context Tree Join
+
+When Context Tree capture is available, `context_node_id` points at the node
+that represents the model's visible context for the step. Resolve it with:
+
+```bash
+opentraces ctx show <context-node-id> --json
+opentraces ctx step <trace-id> <step-index> --json
+opentraces ctx resume <context-node-id> --json
+```
+
+JSONL reconstruction can be an approximation for some agents. OTLP capture
+for Claude Code can provide fuller system prompt, tool schema, and sampling
+parameter evidence.

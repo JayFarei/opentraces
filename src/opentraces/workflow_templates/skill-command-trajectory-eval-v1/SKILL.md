@@ -10,12 +10,13 @@ requires:
 
 # skill-command-trajectory-eval-v1
 
-Build a compact, publish-safe evaluation dataset from the raw
-`skill-command-trajectories` evidence dataset.
+Build a compact, publish-safe evaluation row projection from the raw
+`skill-command-trajectories` evidence source.
 
-The source dataset is intentionally verbose: it keeps full steps, Trace Map
-nodes, and raw evidence so attribution can be audited. This workflow emits the
-smaller row shape an eval harness actually needs:
+The source evidence is intentionally verbose: it keeps full steps, Trace Map
+nodes, and raw trace/bucket references so attribution can be audited. This
+workflow is the projection layer: it emits the smaller row shape an eval
+harness actually needs:
 
 - clean command intent
 - expected skill or command label
@@ -85,6 +86,6 @@ This row shape supports deterministic checks:
 - modified-file overlap
 - tool-family classification
 
-Raw evidence stays in the source dataset. Eval rows carry only compact labels
-and the source raw row ordinal for audit. The private evidence dataset retains
-the exact trace ids, unit ids, and `ot://` refs.
+Raw evidence stays in the private evidence source/bucket. Eval rows carry only
+compact labels and the source raw row ordinal for audit. The private evidence
+source retains the exact trace ids, unit ids, and `ot://` refs.

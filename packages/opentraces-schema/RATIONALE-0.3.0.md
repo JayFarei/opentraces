@@ -35,7 +35,7 @@ security-pipeline output. Consumers resolving "latest" should group by
 ## Richer attribution
 
 **`Attribution.revision`.** Pins an attribution block to the commit it
-describes. Enables `opentraces blame` to walk from a line at HEAD back
+describes. Enables the current `opentraces trail blame commit` surface to walk from a line at HEAD back
 through `git blame`, revision, and revision-pinned attribution.
 
 **`Attribution.unaccounted_files`.** Surfaces Bash-applied edits (sed,

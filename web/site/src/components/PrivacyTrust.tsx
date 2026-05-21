@@ -5,46 +5,37 @@ import SectionRule from "./SectionRule";
 
 const modes = [
   {
-    id: "auto",
-    name: "Auto",
-    label: "auto",
+    id: "explicit",
+    name: "Explicit",
+    label: "--tools",
     color: "var(--accent)",
-    desc: "Safe traces are scanned, redacted, and auto-approved at capture time. Publish is still explicit.",
+    desc: "A workflow names the exact tools it wants. Defaults stay off.",
     terminal: [
-      { p: "~$", c: "ot config set review_policy auto", f: "--project" },
+      { p: "~$", c: "ot security tools list" },
       { gap: true },
-      { ok: "\u2713", di: " review_policy = ", s: "auto" },
+      { di: "[off] regex" },
+      { di: "[off] entropy" },
+      { di: "[off] path_anonymizer" },
       { gap: true },
-      { p: "~$", c: "ot dataset new my-set" },
-      { ok: "\u2713", di: " created dataset ", s: "my-set" },
-      { gap: true },
-      { p: "~$", c: "ot dataset run my-set" },
-      { di: "ot: scanning rows..." },
-      { di: "auto-redacted ", n: "4", diEnd: " secrets (JWT, API key, email, DB URL)" },
-      { ok: "\u2713", di: " auto-approved 1 row into ", s: "approved" },
+      { p: "~$", c: "ot security sanitize", f: "--tools regex,entropy" },
+      { ok: "\u2713", di: " tools_applied = ", s: "[regex, entropy]" },
     ],
   },
   {
-    id: "review",
-    name: "Review",
-    label: "review (default)",
+    id: "config",
+    name: "Config",
+    label: "--use-config",
     color: "var(--text)",
-    desc: "Rows land in the dataset for review. Open the TUI or browser, then approve the ones you want to publish.",
+    desc: "Configured tools run only after the user enables them.",
     terminal: [
-      { p: "~$", c: "ot dataset new my-set" },
+      { p: "~$", c: "ot setup trufflehog" },
       { gap: true },
-      { ok: "\u2713", di: " created dataset ", s: "my-set" },
+      { ok: "\u2713", di: " enabled ", s: "trufflehog" },
       { gap: true },
-      { p: "~$", c: "ot dataset status my-set" },
-      { di: "rows: 8 inbox" },
-      { di: "  approve / redact / reject each row" },
+      { p: "~$", c: "ot security sanitize", f: "--use-config" },
+      { ok: "\u2713", di: " tools_applied = ", s: "[trufflehog]" },
       { gap: true },
-      { p: "~$", c: "ot dataset review my-set --web" },
-      { di: "approved 6 rows" },
-      { gap: true },
-      { p: "~$", c: "ot dataset publish my-set" },
-      { di: "auto-redacted ", n: "3", diEnd: " secrets" },
-      { ok: "\u2713", di: " uploaded 6 approved rows \u2192 ", s: "jayfarei/opentraces" },
+      { p: "~$", c: "ot dataset review approve my-set --all" },
     ],
   },
 ];
@@ -91,19 +82,19 @@ function TerminalLine({ line }: { line: TermLine }) {
 }
 
 export default function PrivacyTrust() {
-  const [activeTier, setActiveTier] = useState("review");
+  const [activeTier, setActiveTier] = useState("explicit");
   const active = modes.find((t) => t.id === activeTier)!;
 
   return (
     <section>
       <SectionRule label="privacy & trust" />
-      <div className="section-title">Every trace scrubbed before it leaves your machine.</div>
+      <div className="section-title">Security tools are explicit, optional, and inspectable.</div>
 
       {/* Redaction demo as the hero visual */}
       <div className="privacy-grid">
         <div style={{ display: "flex", flexDirection: "column" }}>
           <p className="section-sub" style={{ marginBottom: 20 }}>
-            Layered scanning: 30 regex patterns, Shannon entropy, optional TruffleHog (800+ detectors, opt-in), and optional local LLM review. Stable placeholders like [EMAIL_1] preserve referential meaning across a trace.
+            Per-record tools default off. Workflows can run regex, entropy, TruffleHog, privacy-filter, LLM PII, path anonymization, and classifier checks explicitly before dataset rows are approved.
           </p>
 
           {/* Pipeline flow: four connected boxes */}
@@ -112,7 +103,7 @@ export default function PrivacyTrust() {
               { n: "1", label: "regex" },
               { n: "2", label: "entropy" },
               { n: "3", label: "trufflehog" },
-              { n: "4", label: "llm review" },
+              { n: "4", label: "privacy-filter" },
             ].map((step, i, arr) => (
               <span key={step.n} style={{ display: "inline-flex", alignItems: "stretch", flex: "1 1 0", minWidth: 0 }}>
                 <div style={{
@@ -159,7 +150,7 @@ export default function PrivacyTrust() {
         {/* Tier selector as companion, not hero */}
         <div style={{ display: "flex", flexDirection: "column" }}>
           <div style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.7, marginBottom: 16 }}>
-            Two ways to push traces to a dataset, configured per-project.
+            Two ways to run tools in a bucket flow or dataset workflow.
           </div>
           <div style={{ display: "flex", gap: 0, marginBottom: 12, border: "1px solid var(--border)" }}>
             {modes.map((t) => (
@@ -169,7 +160,7 @@ export default function PrivacyTrust() {
                 style={{
                   flex: 1,
                   padding: "10px 12px",
-                  borderRight: t.id === "auto" ? "1px solid var(--border)" : "none",
+                  borderRight: t.id === "explicit" ? "1px solid var(--border)" : "none",
                   border: "none",
                   borderBottom: activeTier === t.id ? `2px solid ${t.color}` : "2px solid transparent",
                   background: activeTier === t.id ? "var(--surface)" : "transparent",
@@ -193,7 +184,7 @@ export default function PrivacyTrust() {
           {/* Terminal preview per tier */}
           <div className="terminal" style={{ marginTop: "auto" }}>
             <div className="terminal-bar">
-              <span>{active.name.toLowerCase()} policy</span>
+              <span>{active.name.toLowerCase()} tools</span>
             </div>
             <div className="terminal-body" style={{ minHeight: 320, overflowY: "auto" }}>
               {active.terminal.map((line, i) => (

@@ -59,12 +59,13 @@ python ~/.opentraces/workflows/pr-intent-summary-v1/scripts/build_rows.py
 ```
 
 The script reads `OT_RUN_PACKET` for the run packet and writes rows to
-`OT_DATASET_OUTPUT`. It is fully deterministic — same inputs produce
-byte-identical output (modulo dict ordering).
+`OT_DATASET_OUTPUT`. Core lineage fields are deterministic. Optional LLM
+polish is on by default for the rendered summary; set `OT_LLM_POLISH=0` when a
+byte-identical deterministic row stream is required.
 
 ## Consumers
 
-- `opentraces trail pr render | create | update` — renders the row stream
+- `opentraces trail blame pr render | create | update` — renders the row stream
   as a GitHub PR body and (for create/update) pushes via `gh`.
 
 Future consumers can read the same JSONL and project to other destinations

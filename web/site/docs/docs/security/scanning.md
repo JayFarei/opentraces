@@ -1,62 +1,77 @@
 # Scanning & Redaction
 
-The security pipeline is context-aware and runs in two passes:
+Scanning happens only when a caller opts into tools. The public entrypoints are:
 
-1. Scan the trace record field-by-field using the field type to decide whether entropy analysis is enabled.
-2. Scan the final serialized JSONL bytes to catch anything introduced during enrichment or serialization.
+- Python: `opentraces.security.sanitize_record(record, tools=[...])`
+- Python config mode: `sanitize_record(record, cfg=cfg)`
+- CLI: `opentraces security sanitize --tools ...`
+- CLI config mode: `opentraces security sanitize --use-config`
 
-## What Gets Scanned
+Callers must pass either an explicit tool list or a config. Config mode runs
+only tools whose `cfg.security.<tool>.enabled` flag is true.
 
-| Field | Context | Notes |
-|-------|---------|-------|
-| `system_prompts` | General | Full scan |
-| `task.description` | General | Full scan |
-| `steps[].content` | General | Full scan |
-| `steps[].reasoning_content` | Reasoning | Regex only, no entropy |
-| `steps[].tool_calls[].input` | Tool input | Full scan for input-like tools, regex-only for result-like tools |
-| `steps[].observations[].content` | Tool result | Regex only, no entropy |
-| `steps[].observations[].output_summary` | Tool result | Regex only, no entropy |
-| `steps[].observations[].error` | Tool result | Regex only, no entropy |
-| `steps[].snippets[].text` | General | Full scan |
-| `outcome.patch` | General | Full scan |
-| `environment.vcs.diff` | General | Full scan, truncated before storage when the repo diff is very large |
+## Tool Kinds
 
-The scanner also applies a second pass over the serialized JSONL output so redaction does not depend on field shape alone.
+| Kind | Examples | Behavior |
+|------|----------|----------|
+| Detector | `regex`, `entropy`, `trufflehog`, `privacy_filter`, `llm_pii` | Emits redactable spans |
+| Transformer | `path_anonymizer` | Rewrites the record without span findings |
+| Judge | `classifier` | Emits a verdict without mutating content |
 
-## What Gets Redacted
+## Field Context
 
-Detected secrets and path fragments are replaced with `[REDACTED]` or hashed path segments, depending on the detector:
+Detector tools receive a field-type hint so they can be stricter on inputs and
+less noisy on tool output:
+
+| Field type | Typical use |
+|------------|-------------|
+| `tool_input` | shell commands, file writes, API payloads |
+| `tool_result` | command output and observations |
+| `reasoning` | agent reasoning text |
+| `general` | prompts, summaries, snippets, row text |
+
+CLI example:
+
+```bash
+printf '%s\n' '{"text":"curl -H Authorization: Bearer sk-demo"}' \
+  | opentraces security sanitize --tools regex --field-type tool_input
+```
+
+## Patch And Bucket Evidence
+
+Schema `0.6.0` removed `Outcome.patch`. A workflow that needs to sanitize
+patch content should read from `TraceRecord.patches[]` and the bucket Trail
+companion (`trail.jsonl.gz`) instead of expecting a single unified diff field.
+
+Raw bucket evidence is retained by default. Sanitized dataset rows are a
+workflow projection over that evidence; they do not rewrite the original agent
+transcript or the raw capture bucket unless the workflow explicitly writes a
+new sanitized artifact.
+
+## Redaction Shape
+
+Detectors replace matched spans with redaction markers. The exact marker can
+vary by tool and field:
 
 ```text
 Before: export OPENAI_API_KEY=sk-abc123...
 After:  export OPENAI_API_KEY=[REDACTED]
 ```
 
+Path anonymization is a transformer:
+
 ```text
-Before: /Users/jay/src/project/...
-After:  /Users/[REDACTED]/src/project/...
+Before: /Users/alice/src/client-project/
+After:  /Users/[REDACTED]/src/client-project/
 ```
 
-The staged JSONL is rewritten in place. Raw Claude Code session files on disk are not modified.
+## Custom Strings
 
-> **Note:** Detected secrets can also be replaced with named placeholders such as `[API_KEY_1]`, `[EMAIL_2]`, `[PERSON_3]` when the EntityMap is in use. `USER_PATH` entities normalize paths in place (for example replacing only the username segment). See [Security Tiers](/docs/security/tiers) for the full tier model and the optional Tier 1.5 / 1.8 / 2 layers.
-
-## Heuristic Classifier
-
-A heuristic classifier runs on top of scanning and redaction. It flags:
-
-- internal hostnames
-- AWS account IDs in ARNs
-- database connection strings
-- internal collaboration URLs
-- dense UUID / hash sequences
-- deep file paths that may reveal internal structure
-
-## Custom Redaction
+Custom redaction strings can be configured for workflows that use config mode:
 
 ```bash
 opentraces config set custom_redact_strings INTERNAL_API_KEY --append
 opentraces config set custom_redact_strings corp-secret-prefix- --append
 ```
 
-Custom redaction strings are treated as literal matches wherever they appear in trace content. `--append` adds to the existing list instead of replacing it.
+Custom strings are literal matches wherever they appear in scanned content.

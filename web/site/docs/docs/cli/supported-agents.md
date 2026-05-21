@@ -7,9 +7,12 @@
 | Mode | Identifier | Status | Notes |
 |------|------------|--------|-------|
 | Live capture | `claude-code` | Supported | Installed via `opentraces init` or `opentraces setup claude-code` |
+| Live capture | `codex-cli` | Supported | Installed via `opentraces init --agent codex-cli` or `opentraces setup codex-cli` |
+| Context capture source | `capture-otlp` | Supported for Claude Code | Installed via `opentraces setup capture-otlp`; feeds Context Tree events |
 | Dataset import | `hermes` | Supported | Registered `FormatImporter`. Invoked from dataset workflows or via the schema package's serializers |
 
-Planned adapters can follow the same contracts without changing the review, publish, or schema layers.
+Planned adapters can follow the same contracts without changing the bucket,
+workflow, review, publish, or schema layers.
 
 ## Live Capture vs Import
 
@@ -21,6 +24,8 @@ That distinction matters in the public CLI:
 
 ```bash
 opentraces init --agent claude-code
+opentraces init --agent codex-cli
+opentraces setup capture-otlp
 opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 ```
 
@@ -32,7 +37,8 @@ The capture layer exposes small protocols:
 - `FormatImporter` for file or dataset imports
 - `HookInstaller` for external integrations like Claude Code and git
 
-This is why review, security, and push stay consistent even as new sources are added.
+This is why review, optional security tools, bucket storage, and dataset
+publication stay consistent even as new sources are added.
 
 ## What Gets Normalized
 

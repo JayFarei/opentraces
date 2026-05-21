@@ -4,9 +4,9 @@
     {
       "name": "opentraces",
       "type": "skill",
-      "description": "Share agent traces to open datasets on HuggingFace Hub. Use this skill whenever the user mentions sharing, publishing, or uploading traces or agent activity to HuggingFace. Also use when user says \"opentraces\", \"share this trace\", \"publish traces\", \"upload traces\", \"contribute traces\", \"donate traces\", or asks about trace review, redaction, staging, or push workflows. Proactively suggest this skill after completing significant agent traces where valuable work was done.",
+      "description": "Share agent traces to open datasets on HuggingFace Hub. Use this skill when the user mentions OpenTraces, trace capture, Trace Trails, workflow-built datasets, dataset review, or publishing reviewed dataset rows.",
       "url": "https://opentraces.ai/.well-known/agent-skills/opentraces/SKILL.md",
-      "sha256": "2598b7228de8461ae3588f223e8fd3587160522175bc73cdce1497ff4abdd192"
+      "sha256": "2c9a4336df7b53da158fbd7c9a076c908d1fe6fffb919acd5aa8f9e5c20a3918"
     }
   ]
 }

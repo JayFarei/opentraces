@@ -1,43 +1,51 @@
 # opentraces
 
-Open schema + CLI for capturing coding-agent traces, reviewing them locally, and publishing structured datasets to Hugging Face Hub.
+Open schema + CLI for capturing agent traces into a private bucket, searching
+and slicing them locally, and publishing workflow-projected dataset rows to
+Hugging Face Hub.
 
-opentraces is built around a simple rule: capture locally, review locally, push explicitly. The tool parses agent sessions into a stable schema, runs layered security scanning and redaction, enriches each trace with git and attribution signals, and uploads sharded JSONL to a dataset you control.
+opentraces has three separate layers:
+
+1. **Bucket:** raw capture-time evidence. It stays local by default and can be
+   synced to a private HuggingFace bucket remote.
+2. **Trace substrates:** Trace Index, Trace Map, Trace Slices, Trace Trails,
+   and Context Tree. These answer what happened, what changed, and what the
+   agent saw.
+3. **Datasets:** workflow-built row projections over one or more traces. These
+   are reviewed and published independently from the raw bucket.
 
 ## Workflow
 
 ```bash
-opentraces setup                          # wire opentraces into your system
-opentraces init                           # initialize the project marker
-opentraces status                         # snapshot of inbox stages and recent traces
+opentraces setup                          # install capture hooks and optional integrations
+opentraces init                           # explicitly enroll this project, if not auto-enrolled
+opentraces bucket status                  # inspect private retained trace evidence
 opentraces trace query --since 7d         # search retained traces
-opentraces trail blame <sha>              # which traces contributed to a commit
-opentraces trail graph                    # commit + trace history
-opentraces trail track <trace-id>         # walk trace lineage through Git history
+opentraces trace map <trace-id> --bursts  # deterministic edit/intent map
+opentraces trace slice <trace-id> --template bursts
+opentraces trail blame commit <sha>       # which traces contributed to a commit
+opentraces ctx tree <trace-id>            # what the agent saw across the trace
+opentraces workflow templates             # choose a row projection template
 opentraces dataset new my-dataset --workflow my-workflow
 opentraces dataset run my-dataset         # synthesize dataset rows from retained traces
 opentraces dataset review approve my-dataset --all
 opentraces dataset publish my-dataset     # upload reviewed rows to the active remote
 ```
 
-`init` writes the committable project marker at `.opentraces.json`. Captured traces, runtime state, and upload bookkeeping stay machine-local under `~/.opentraces/projects/<slug>/`.
+`init` writes the committable project marker at `.opentraces.json`. Captured
+traces, bucket state, and upload bookkeeping stay machine-local under
+`~/.opentraces/`.
 
 ## What You Get
 
-**For individual developers.** A local inbox for reviewing traces before upload, plus a standard dataset format you can publish privately or publicly.
+**For individual developers.** A private trace bucket, deterministic local
+search, and dataset publishing only when you choose to project and approve rows.
 
-**For teams.** Shared remotes on Hugging Face, explicit review policy per repo, and deterministic upload shards that never append in place.
+**For teams.** Shared bucket remotes for retained evidence, per-dataset
+HuggingFace remotes for curated rows, and reproducible workflow templates.
 
-**For dataset consumers.** A schema designed for training, evaluation, analytics, and attribution rather than a raw dump of vendor-specific logs.
-
-## Schema Design
-
-The [schema](/docs/schema/overview) is a standalone package and the contract between capture, review, export, and downstream consumers.
-
-- Training: normalized steps, tool calls, observations, reasoning, outcomes
-- Analytics: token counts, cost estimates, timing, cache behavior
-- Attribution: git links and file or line provenance when available
-- Interop: export paths for ATIF and Agent Trace style consumers
+**For dataset consumers.** Schema-valid row streams for training, evaluation,
+teacher/student reinforcement learning, analytics, and attribution.
 
 ## Start Here
 
@@ -45,11 +53,15 @@ The [schema](/docs/schema/overview) is a standalone package and the contract bet
 |---------|---------------|
 | **[Installation](/docs/getting-started/installation)** | Install, verify, upgrade, uninstall |
 | **[Authentication](/docs/getting-started/authentication)** | OAuth, PATs, `HF_TOKEN`, auth precedence |
-| **[Quick Start](/docs/getting-started/quickstart)** | Initialize a repo, review traces, upload your first shard |
-| **[Commands](/docs/cli/commands)** | Current 0.4 command reference |
-| **[Inbox & Review](/docs/workflow/review)** | Dataset row review and CLI approval loop |
-| **[Publish](/docs/workflow/pushing)** | Dataset publication, remotes, visibility, migration, quality badges |
-| **[Security Tiers](/docs/security/tiers)** | Regex, entropy, TruffleHog, Tier 2 review, human approval |
-| **[Security Configuration](/docs/security/configuration)** | Global config, project marker, exclusions, custom redaction |
-| **[Schema](/docs/schema/overview)** | Trace structure and field semantics |
-| **[Consume](/docs/workflow/consume)** | Loading datasets back out of Hugging Face |
+| **[Quick Start](/docs/getting-started/quickstart)** | Capture into a bucket, search traces, build and publish a dataset |
+| **[Commands](/docs/cli/commands)** | Current `opentraces` command reference |
+| **[Private Bucket](/docs/workflow/bucket)** | Raw trace envelopes, companions, manifests, sync, replay |
+| **[Trace Discovery](/docs/workflow/trace-discovery)** | `trace query`, `trace map`, `trace slice`, `trace get`, `trace index` |
+| **[Trace Trails](/docs/workflow/blame)** | Git anchors, survival states, blame, graph, PR body generation |
+| **[Context Tree](/docs/workflow/context-tree)** | `ctx` commands and OTLP capture for what the agent saw |
+| **[Workflow Templates](/docs/workflow/workflow-templates)** | Build deterministic row projections from bucket traces |
+| **[Dataset Rows](/docs/workflow/datasets)** | Local HF-shaped datasets, review states, remotes, schedules |
+| **[Dataset Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |
+| **[Security Tools](/docs/security/tiers)** | Optional default-off security/privacy tool registry |
+| **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.6.0` field semantics |
+| **[Consume](/docs/workflow/consume)** | Loading published datasets and resolving private bucket evidence |

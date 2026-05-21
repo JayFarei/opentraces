@@ -12,6 +12,11 @@ This module collapses the former top-level `agents/`, `parsers/`, and `installer
   - `parse.py` — `ClaudeCodeParser` (live session parser).
   - `hooks/` — `on_stop`, `on_compact`, `on_tool_use`. Copied to `~/.claude/hooks/` by `opentraces setup claude-code`.
   - `install.py` — `ClaudeCodeHookInstaller` (HookInstaller protocol adapter).
+- `codex_cli/` — Codex CLI adapter.
+  - `parse.py` / `sessions.py` — dated rollout JSONL discovery and `CodexCliParser`.
+  - `hooks/` — Codex lifecycle hook commands. Copied to `~/.codex/hooks/opentraces/` by `opentraces setup codex-cli`.
+  - `install.py` — `CodexCliHookInstaller`, which registers hooks in `~/.codex/hooks.json`.
+  - `context_tree_capture.py`, `trail_capture.py`, `resume.py` — substrate adapters and native resume/fork hints.
 - `hermes.py` — Hermes (Lambda) file importer: `HermesParser`.
 - `git/` — VCS integration.
   - `install.py` — post-commit hook installer (owned-hook + chain semantics).
@@ -21,7 +26,7 @@ This module collapses the former top-level `agents/`, `parsers/`, and `installer
 
 `capture/__init__.py` exposes:
 
-- `PARSERS` — live session parsers keyed by agent name (e.g. `claude-code`).
+- `PARSERS` — live session parsers keyed by agent name (e.g. `claude-code`, `codex-cli`).
 - `IMPORTERS` — file-based importers keyed by format name (e.g. `hermes`).
 - `get_parsers()`, `get_importers()`, `resolve_import_format()` — lazy accessors.
 
@@ -37,13 +42,13 @@ The full contributor-facing contract, with worked examples for Tiers 1 to 4 (fil
    - `FormatImporter` for file-based imports.
    - `HookInstaller` if you wire scripts into the agent's settings.
 3. Add hooks under `capture/<name>/hooks/` if the external tool supports them. For Trace Trails participation, hooks must call `core.trails.write_worktree_tree(cwd)` synchronously at tool boundaries, call `capture.tool_boundary.observe_tool_boundary(...)` for mutating tools, and emit `opentraces_hook` lines into the transcript with `metadata["hook_pre_tool_use"]` / `["hook_post_tool_use"]` keys. If the agent uses non-Claude tool names, pass `may_mutate=True` after applying the adapter's own tool policy instead of modifying `fs_watcher/`.
-4. Register in `_register_defaults()` in `capture/__init__.py`. Generalize the hardcoded Claude-Code-only call sites listed in the integration spec under "Known coupling" before shipping a second live agent.
+4. Register in `_register_defaults()` in `capture/__init__.py`. Check the integration spec's "Known coupling" section before advertising a new agent; remaining narrow surfaces must either be generalized or documented as unsupported for that harness.
 5. Add tests under `tests/capture/test_parser_<name>.py` and any hook/install tests, following the recipes in the integration spec's "Test pattern catalog."
 
 Parser specs for new harnesses must also define how command and skill surfaces are separated. A parser should preserve explicit skill or slash-command invocation evidence in `TraceRecord.metadata["skill_invocations"]`, keep built-in commands out of that list, and avoid turning injected skill bodies into user steps or task intent. See the integration spec's "Skills and command invocations" section before adding a new live parser.
 
 ## See also
 
-- [`docs/integration/capture-integration.md`](../../../web/site/docs/docs/integration/capture-integration.md) — full contributor spec with worked Codex example.
+- [`docs/integration/capture-integration.md`](../../../web/site/docs/docs/integration/capture-integration.md) — full contributor spec with the Codex CLI reference implementation.
 - Root `CLAUDE.md` — full project structure and Trace Trails decisions.
 - `src/opentraces/publish/README.md` — the outbound boundary (symmetric to this one).

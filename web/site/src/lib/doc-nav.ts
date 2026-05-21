@@ -6,7 +6,6 @@ export interface DocEntry {
 
 export const DOC_NAV: DocEntry[] = [
   { slug: "", title: "Overview" },
-  { slug: "overview/releases", title: "Releases" },
 
   // Getting Started
   { slug: "getting-started/installation", title: "Installation", group: "Getting Started" },
@@ -19,7 +18,7 @@ export const DOC_NAV: DocEntry[] = [
   { slug: "cli/troubleshooting", title: "Troubleshooting", group: "CLI" },
 
   // Security
-  { slug: "security/tiers", title: "Security Tiers", group: "Security" },
+  { slug: "security/tiers", title: "Security Tools", group: "Security" },
   { slug: "security/scanning", title: "Scanning & Redaction", group: "Security" },
   { slug: "security/configuration", title: "Configuration", group: "Security" },
 
@@ -32,11 +31,16 @@ export const DOC_NAV: DocEntry[] = [
   { slug: "schema/versioning", title: "Versioning", group: "Schema" },
 
   // Workflow
-  { slug: "workflow/parsing", title: "Parse", group: "Workflow" },
-  { slug: "workflow/review", title: "Review", group: "Workflow" },
-  { slug: "workflow/quality", title: "Assess", group: "Workflow" },
-  { slug: "workflow/blame", title: "Blame", group: "Workflow" },
-  { slug: "workflow/pushing", title: "Publish", group: "Workflow" },
+  { slug: "workflow/parsing", title: "Capture", group: "Workflow" },
+  { slug: "workflow/bucket", title: "Private Bucket", group: "Workflow" },
+  { slug: "workflow/trace-discovery", title: "Trace Discovery", group: "Workflow" },
+  { slug: "workflow/blame", title: "Trace Trails", group: "Workflow" },
+  { slug: "workflow/context-tree", title: "Context Tree", group: "Workflow" },
+  { slug: "workflow/workflow-templates", title: "Workflow Templates", group: "Workflow" },
+  { slug: "workflow/datasets", title: "Dataset Rows", group: "Workflow" },
+  { slug: "workflow/review", title: "Dataset Row Review", group: "Workflow" },
+  { slug: "workflow/quality", title: "Quality", group: "Workflow" },
+  { slug: "workflow/pushing", title: "Dataset Publish", group: "Workflow" },
   { slug: "workflow/consume", title: "Consume", group: "Workflow" },
   { slug: "workflow/export", title: "Export", group: "Workflow" },
 

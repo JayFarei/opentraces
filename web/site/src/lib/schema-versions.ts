@@ -249,8 +249,8 @@ const v030: SchemaVersion = {
     "Task.repository_url: canonical remote URL alongside owner/repo",
     "AttributionRange.content_hash format now murmur3:<32-hex> (replaces md5-truncated-8) for cross-tool line-range matching; top-level TraceRecord.content_hash remains SHA-256 for dedup",
     "Post-commit hook correlates trace to revision; PostToolUse hook captures edits as they happen",
-    "opentraces blame <sha> [path], opentraces graph, opentraces backfill, opentraces setup git, list --by-commit",
-    "opentraces pull owner/dataset --parser hermes (importer), opentraces export --format agent-trace; show --markdown (prompt-injection-safe)",
+    "Historical 0.3 command names: blame/graph/backfill/setup git/list --by-commit; current CLI groups these under trail/dataset surfaces",
+    "Historical importer/export verbs; current import/export behavior is workflow or schema-package driven",
   ],
   models: v020.models.map((m) => {
     if (m.id === "trace-record") {
@@ -368,8 +368,91 @@ const v040: SchemaVersion = {
   }),
 };
 
+const v050: SchemaVersion = {
+  version: "0.5.0",
+  date: "2026-05-18",
+  summary: "Context Tree cross-reference fields. Adds Step.context_node_id and TraceRecord.context_tree_summary so consumers can join a trace step to what the model saw.",
+  highlights: [
+    "Step.context_node_id points at the ContextNode for that step when captured",
+    "TraceRecord.context_tree_summary rolls up node/layer counts and capture limitations",
+    "Context Tree data remains a substrate companion, not embedded into every JSONL row",
+  ],
+  models: v040.models.map((m) => {
+    if (m.id === "trace-record") {
+      return {
+        ...m,
+        fields: [
+          ...m.fields.map((f) =>
+            f.name === "schema_version" ? { ...f, description: 'e.g. "0.5.0"' } : f,
+          ),
+          { name: "context_tree_summary", type: "dict", required: false, description: "Summary of Context Tree capture: node_count, layer_count, active_path_leaf_id, capture_limitations." },
+        ],
+      };
+    }
+    if (m.id === "step") {
+      return {
+        ...m,
+        fields: [
+          ...m.fields,
+          { name: "context_node_id", type: "string | null", required: false, description: "Context Tree node id for the model view at this step." },
+        ],
+      };
+    }
+    return m;
+  }),
+};
+
+const v060: SchemaVersion = {
+  version: "0.6.0",
+  date: "2026-05-21",
+  summary: "Trace patch spine. Adds TraceRecord.patches[] as the authoritative dev-time output set and removes the legacy Outcome.patch field.",
+  highlights: [
+    "TraceRecord.patches[] is the authoritative output spine: one Patch per tool-produced change/hunk",
+    "Patch.anchor links a trace patch to Git evidence and survival tracking",
+    "Outcome.patch removed; full diff/history lives in the bucket Trail companion",
+    "Outcome.committed, Outcome.commit_sha, and TraceRecord.git_links remain compatibility projections derived from patch anchors",
+  ],
+  models: v050.models.map((m) => {
+    if (m.id === "trace-record") {
+      return {
+        ...m,
+        fields: [
+          ...m.fields.map((f) =>
+            f.name === "schema_version" ? { ...f, description: 'e.g. "0.6.0"' } : f,
+          ),
+          { name: "patches", type: "Patch[]", required: false, description: "Authoritative dev-time output set. One Patch per tool-produced change/hunk." },
+        ],
+      };
+    }
+    if (m.id === "outcome") {
+      return {
+        ...m,
+        fields: m.fields.filter((f) => f.name !== "patch"),
+      };
+    }
+    return m;
+  }).concat([
+    {
+      id: "patch", title: "Patch",
+      desc: "A trace-produced change. Full patch history resolves through the bucket Trail companion.",
+      fields: [
+        { name: "patch_id", type: "string", required: true, description: "Content-addressed trace patch id." },
+        { name: "file_path", type: "string", required: true, description: "Path at creation time." },
+        { name: "step_index", type: "int | null", required: false, description: "Producing step index." },
+        { name: "tool_call_id", type: "string | null", required: false, description: "Producing tool call id." },
+        { name: "capture_method", type: "string[]", required: false, description: "Capture methods such as hook_pretooluse, hook_posttooluse, watcher_backstop." },
+        { name: "snapshot_before_id", type: "string | null", required: false, description: "Before snapshot id." },
+        { name: "snapshot_after_id", type: "string | null", required: false, description: "After snapshot id." },
+        { name: "anchor", type: "GitAnchor | null", required: false, description: "Git match when the patch matures into a commit." },
+        { name: "superseded_by", type: "string[]", required: false, description: "Commit supersede chain after amend/rebase/squash." },
+        { name: "limitations", type: "string[]", required: false, description: "Capture quality flags." },
+      ],
+    },
+  ]),
+};
+
 /* All versions, newest first. Add new versions here. */
-export const versions: SchemaVersion[] = [v040, v030, v020, v011, v010];
+export const versions: SchemaVersion[] = [v060, v050, v040, v030, v020, v011, v010];
 
 export const latestVersion = versions[0].version;
 
