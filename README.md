@@ -94,6 +94,7 @@ Useful follow-ups:
 
 - `opentraces doctor` checks auth, integrations, and pipeline health.
 - `opentraces setup auth` logs in to HuggingFace for dataset remotes.
+- `opentraces setup codex-cli` installs terminal Codex CLI hooks in `~/.codex/hooks.json`; run `opentraces init --agent codex-cli` inside each repo you want to capture. Codex Desktop is not covered.
 - `opentraces trace query/map/slice/get` searches, maps, slices, and retrieves retained traces.
 - `opentraces trace index rebuild` rebuilds the local Trace Index after capture changes.
 - `opentraces trace teleport` moves a trace and retained Git evidence between workspaces.

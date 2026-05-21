@@ -32,6 +32,26 @@ Claude Code and Codex CLI are live capture sources. Hermes remains an import
 adapter consumed by workflows/schema tooling, not a direct public capture
 command.
 
+Codex CLI capture requires both machine setup and repo enrollment:
+
+```bash
+opentraces setup codex-cli
+opentraces init --agent codex-cli
+```
+
+`setup codex-cli` registers native Codex hook commands in
+`~/.codex/hooks.json` and copies hook scripts under
+`~/.codex/hooks/opentraces/`. The hooks write sidecar JSONL under
+`.opentraces/codex-cli/hooks/` in the active repo and trigger a bounded ingest
+on Stop. They are passive observers; permission requests are recorded but not
+approved or denied.
+
+Codex Context Tree capture is reconstructed from rollout JSONL plus hook
+sidecars with `capture_method = transcript_reconstruction`. It produces useful
+session-level Context Tree nodes, but it is not the Claude Code OTLP raw-body
+capture path and it does not decrypt encrypted Codex reasoning. Snapshot-backed
+`--at-step` resume remains Claude Code only.
+
 ## Optional OTLP Context Capture
 
 For higher-fidelity Claude Code Context Trees:

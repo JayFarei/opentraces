@@ -14,6 +14,65 @@ opentraces init --agent codex-cli
 
 `init` writes `.opentraces.json`, registers the repo in the global config, and installs the per-agent capture hook. Dataset remotes and review policy are configured separately (`opentraces dataset remote ...`, `opentraces config set review_policy review --project`).
 
+## Codex CLI Setup
+
+Install and authenticate Codex CLI itself before wiring opentraces into it.
+opentraces does not install Codex, does not manage Codex auth, and does not
+cover Codex Desktop.
+
+Machine setup:
+
+```bash
+opentraces setup codex-cli
+```
+
+Project enrollment:
+
+```bash
+cd /path/to/repo
+opentraces init --agent codex-cli
+```
+
+`setup codex-cli` copies hook entrypoints to
+`~/.codex/hooks/opentraces/` and registers native Codex hook commands in
+`~/.codex/hooks.json`. Each future Codex CLI session in an enrolled repo can
+then write project-local sidecar JSONL under
+`.opentraces/codex-cli/hooks/<session-id>.jsonl`; the Stop hook triggers a
+bounded ingest pass through the Codex parser.
+
+The install is idempotent and preserves unrelated Codex hooks. Useful flags:
+
+```bash
+opentraces setup codex-cli --dry-run
+opentraces setup codex-cli --remove
+opentraces setup codex-cli --hooks-file ~/.codex/hooks.json
+opentraces setup codex-cli --hooks-dir ~/.codex/hooks/opentraces
+```
+
+There is no `setup codex-cli --status` flag. Use `opentraces doctor` for
+installation health and `opentraces capabilities --json` to confirm that
+`codex-cli` is registered.
+
+If `~/.codex/hooks.json` is malformed, setup exits with a `CORRUPT_HOOKS`
+installation error instead of partially rewriting the file. Fix or remove that
+file, then rerun `opentraces setup codex-cli`.
+
+Codex hooks are observational. They record lifecycle, permission-request, tool
+boundary, compaction, git, and ingest signals, but they should not approve,
+deny, or mutate Codex permission prompts. Hook failures are swallowed so capture
+does not block the agent session.
+
+`opentraces init --agent codex-cli` connects the current repo for future Codex
+sessions. `--import-existing` is currently a Claude Code import path; do not
+expect it to backfill old Codex CLI sessions. Existing Codex rollout files are
+handled only by supported Codex capture/ingest paths when they carry enough
+project metadata.
+
+Codex native resume is available through `opentraces trace get <trace> --resume`
+or the hidden compatibility alias `opentraces trail resume <trace>`. Snapshot
+forking with `--at-step` remains Claude Code only. Context continuation packets
+are produced separately with `opentraces ctx resume <context-node-id> --json`.
+
 ## Claude Code And Codex CLI
 
 Claude Code and Codex CLI are live-capture adapters.
@@ -33,7 +92,7 @@ opentraces setup watcher install
 What each integration does:
 
 - `setup claude-code` installs the `PreToolUse`, `PostToolUse`, `Stop`, and `PostCompact` hooks in `~/.claude/settings.json`
-- `setup codex-cli` installs native Codex CLI hook commands in `~/.codex/hooks.json`
+- `setup codex-cli` installs native Codex CLI hook commands in `~/.codex/hooks.json` and copies hook scripts to `~/.codex/hooks/opentraces/`
 - `setup git` installs the post-commit correlator that powers `opentraces trail blame`
 - `setup skill` installs the vendor-neutral skill under `~/.agents/skills/opentraces/` and symlinks it into supported harnesses (e.g. `~/.claude/skills/opentraces`)
 - `setup bucket` configures the private bucket sync target (the workspace state that backs the trace index and Trace Trails)

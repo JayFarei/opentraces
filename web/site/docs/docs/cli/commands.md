@@ -77,6 +77,19 @@ Security setup commands only enable the tools you choose. Regex, entropy,
 path anonymization, classifier, TruffleHog, privacy-filter, and LLM PII are
 not on by default for per-record sanitization.
 
+`opentraces setup codex-cli` supports:
+
+| Flag | Meaning |
+|------|---------|
+| `--dry-run` | Print the hook-copy and `hooks.json` update plan without writing files |
+| `--remove` | Remove opentraces Codex hook commands and copied scripts |
+| `--hooks-file TEXT` | Override the Codex hooks file, default `~/.codex/hooks.json` |
+| `--hooks-dir TEXT` | Override the copied hook script directory, default `~/.codex/hooks/opentraces/` |
+
+It registers native Codex hook commands for future Codex CLI sessions. Use
+`opentraces doctor` for install health; there is no `setup codex-cli --status`
+flag.
+
 ## Project Commands
 
 ```bash
@@ -92,7 +105,8 @@ opentraces remove --all
 
 `init --agent` accepts `claude`, `claude-code`, `codex`, or `codex-cli`.
 `--import-existing` currently imports existing Claude Code traces for the
-current repo; Codex imports are capture-side.
+current repo. Codex CLI capture starts with future sessions after
+`opentraces setup codex-cli` and `opentraces init --agent codex-cli`.
 
 ## Trace Discovery
 

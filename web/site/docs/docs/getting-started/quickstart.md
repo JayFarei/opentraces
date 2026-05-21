@@ -40,6 +40,9 @@ opentraces setup privacy-filter
 opentraces setup llm-review
 ```
 
+For Codex, install and authenticate Codex CLI first. `setup codex-cli` wires
+terminal Codex CLI hooks only; it does not cover Codex Desktop.
+
 ## 3. Enroll A Project
 
 Under global tracking this is optional, but it is still useful when you want to
@@ -53,6 +56,10 @@ opentraces init --agent codex-cli
 
 `init` writes `.opentraces.json` and registers machine-local state under
 `~/.opentraces/`.
+
+`--import-existing` currently backfills Claude Code sessions for the current
+repo. Codex CLI capture starts with sessions run after the Codex hooks and
+project enrollment are in place.
 
 ## 4. Inspect The Portable Bucket
 

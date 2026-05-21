@@ -14,9 +14,9 @@ This module collapses the former top-level `agents/`, `parsers/`, and `installer
   - `install.py` — `ClaudeCodeHookInstaller` (HookInstaller protocol adapter).
 - `codex_cli/` — Codex CLI adapter.
   - `parse.py` / `sessions.py` — dated rollout JSONL discovery and `CodexCliParser`.
-  - `hooks/` — Codex lifecycle hook commands. Copied to `~/.codex/hooks/opentraces/` by `opentraces setup codex-cli`.
+  - `hooks/` — Codex lifecycle hook commands. Copied to `~/.codex/hooks/opentraces/` by `opentraces setup codex-cli`; write sidecars under `.opentraces/codex-cli/hooks/`.
   - `install.py` — `CodexCliHookInstaller`, which registers hooks in `~/.codex/hooks.json`.
-  - `context_tree_capture.py`, `trail_capture.py`, `resume.py` — substrate adapters and native resume/fork hints.
+  - `context_tree_capture.py`, `resume.py` — Context Tree reconstruction and native Codex resume handoff.
 - `hermes.py` — Hermes (Lambda) file importer: `HermesParser`.
 - `git/` — VCS integration.
   - `install.py` — post-commit hook installer (owned-hook + chain semantics).

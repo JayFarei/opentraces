@@ -524,13 +524,13 @@ Agent-agnostic. Real git repo, `.opentraces.json` marker, call `_wd.run_once(pro
 
 Concrete walkthrough so you can map the abstract spec to the shipped Codex CLI adapter. Codex CLI stores sessions at `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-*.jsonl` and opentraces registers lifecycle hooks through `~/.codex/hooks.json`.
 
-1. **Package**: `src/opentraces/capture/codex_cli/{__init__.py, parse.py, sessions.py, context_tree_capture.py, trail_capture.py, resume.py, install.py, hooks/...}`.
+1. **Package**: `src/opentraces/capture/codex_cli/{__init__.py, parse.py, sessions.py, context_tree_capture.py, resume.py, install.py, hooks/...}`.
 
 2. **`CodexCliParser`** in `parse.py` uses `agent_name = "codex-cli"`, discovers dated rollout files, maps Codex `session_meta`, `turn_context`, `event_msg`, and `response_item` rows into `TraceRecord`, and indexes opentraces hook sidecars into `metadata["hook_pre_tool_use"]`, `metadata["hook_post_tool_use"]`, and `metadata["hook_stop"]`.
 
 3. **Hook scripts** cover `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `PreCompact`, `PostCompact`, and `Stop`. Boundary hooks compute Trail tree IDs and always exit 0 so capture never blocks Codex.
 
-4. **`CodexCliHookInstaller`** in `install.py` uses `installer_name = "codex-cli"`, copies scripts to `~/.codex/hooks/opentraces/`, and registers command hooks in `~/.codex/hooks.json`. It validates before writing, prunes stale opentraces hooks, preserves unrelated hooks, and is idempotent.
+4. **`CodexCliHookInstaller`** in `install.py` uses `installer_name = "codex-cli"`, copies scripts to `~/.codex/hooks/opentraces/`, and registers command hooks in `~/.codex/hooks.json`. Hook scripts write project-local sidecars under `.opentraces/codex-cli/hooks/`. The installer validates before writing, prunes stale opentraces hooks, preserves unrelated hooks, and is idempotent.
 
 5. **Register** in `src/opentraces/capture/__init__.py` `_register_defaults()`:
    ```python

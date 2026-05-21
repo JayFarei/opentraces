@@ -18,6 +18,7 @@ Ask which agents to connect.
 - Claude Code: \`opentraces setup claude-code\`
 - Codex CLI: \`opentraces setup codex-cli\`
 Also run \`opentraces setup skill\` so supported agents can drive the CLI, and \`opentraces setup git\` for post-commit Trace Trails.
+For Codex, first confirm the terminal Codex CLI is installed and authenticated. This does not cover Codex Desktop. Codex hooks are observational; they must not approve or deny permission prompts.
 
 Step 4 - Authenticate:
 Run \`opentraces auth whoami\`.
@@ -29,6 +30,7 @@ Step 5 - Initialize a project when needed:
 If tracking mode is global, the project auto-enrolls on first capture. To enroll explicitly:
 \`opentraces init --agent claude-code --import-existing\`
 \`opentraces init --agent codex-cli\`
+Codex capture starts with future sessions after setup and init. \`--import-existing\` is a Claude Code backfill path, not a Codex backfill path.
 
 Step 6 - Optional bucket sync:
 Ask whether to configure private bucket sync. If yes:
@@ -66,6 +68,7 @@ Context Tree:
 - \`opentraces ctx step <trace-id> <step-index>\` resolves one step's context
 - \`opentraces ctx resume <context-node-id>\` creates a resume packet
 - \`opentraces setup capture-otlp\` enables higher-fidelity Claude Code context capture
+Codex Context Tree capture uses transcript reconstruction and does not decrypt encrypted reasoning. Snapshot-backed \`--at-step\` resume is Claude Code only.
 
 Dataset workflows and datasets:
 - \`opentraces workflow templates\` lists row-projection templates

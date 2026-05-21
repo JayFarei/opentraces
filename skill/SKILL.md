@@ -38,11 +38,13 @@ debugging but are hidden from `--help` after the CLI spine simplification.
 opentraces setup
 opentraces setup auth
 opentraces setup bucket          # configure remote-by-default private bucket sync
+opentraces setup codex-cli       # install terminal Codex CLI hooks in ~/.codex/hooks.json
 opentraces setup skill           # install the opentraces skill into agent harnesses
 opentraces setup upgrade         # upgrade CLI + refresh project skill file
 opentraces config tracking-mode  # show; pass global|manual to set
 opentraces auth whoami
 opentraces init
+opentraces init --agent codex-cli
 opentraces status
 opentraces doctor
 ```
@@ -56,6 +58,13 @@ explicit per-project `opentraces init` opt-in. `init` is project enrollment
 only; dataset remotes and review policy belong under `opentraces dataset
 ...`. Private bucket configuration belongs under `opentraces setup bucket`
 and `opentraces bucket remote`.
+
+Codex support is for terminal Codex CLI, not Codex Desktop. Install and
+authenticate Codex first, then run `opentraces setup codex-cli` once and
+`opentraces init --agent codex-cli` in each repo. Hooks are passive observers:
+they record sidecars under `.opentraces/codex-cli/hooks/` and must not approve
+or deny permission prompts. Codex capture starts with future sessions;
+`--import-existing` is a Claude Code backfill path.
 
 ## Trace Retrieval
 
@@ -204,7 +213,9 @@ opentraces ctx resolve ot://context-node/<id> --json
 opentraces ctx anchor-for-step <trace_id> <step_index>
 ```
 
-Claude/Codex JSONL capture gives a useful structural approximation. For
+Claude/Codex JSONL capture gives a useful structural approximation. Codex uses
+`capture_method=transcript_reconstruction`, does not decrypt encrypted
+reasoning, and does not support snapshot-backed `--at-step` resume. For
 higher-fidelity Claude Code context capture, set up the OTLP source:
 
 ```bash

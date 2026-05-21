@@ -32,9 +32,31 @@ Check:
 opentraces status
 opentraces trace query --cwd --since 1d
 opentraces setup claude-code
+opentraces setup codex-cli --dry-run
+opentraces capabilities --json
 ```
 
 If you are using Claude Code, make sure the capture hooks are installed and that the repo has actual Claude Code session files under `~/.claude/projects/`.
+
+If you are using Codex CLI, make sure Codex itself is installed and
+authenticated, then run both `opentraces setup codex-cli` and
+`opentraces init --agent codex-cli` in the repo. Codex sessions are captured
+after hooks are installed; `--import-existing` is not a Codex backfill path.
+Sidecar hook files should appear under `.opentraces/codex-cli/hooks/` after a
+future Codex session runs.
+
+### Codex Hooks File Is Corrupt
+
+`opentraces setup codex-cli` validates `~/.codex/hooks.json` before writing. If
+it reports `CORRUPT_HOOKS`, fix the JSON or move the file aside, then rerun:
+
+```bash
+opentraces setup codex-cli
+opentraces doctor
+```
+
+The installer is idempotent and preserves unrelated hooks, but it will not try
+to repair malformed JSON automatically.
 
 ### Stale Trace Trails
 
