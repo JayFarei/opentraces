@@ -102,7 +102,7 @@ priority = "primary"
 profiled = true
 doc_refs = [
   "web/site/docs/docs/workflow/blame.md",
-  "web/site/docs/docs/workflow/consume.md",
+  "web/site/docs/docs/clients/private-bucket.md",
   "web/site/src/components/Hero.tsx",
   "web/site/src/components/Features.tsx",
 ]
@@ -120,19 +120,21 @@ live_tests = []
 notes = "This is the primary provenance workflow the docs emphasize for understanding which trace produced which shipped code."
 
 [[journeys]]
-id = "quality-and-export"
-title = "Local dataset quality and downstream consumption"
+id = "dataset-gates-and-consume"
+title = "Dataset publication gates and downstream consumption"
 priority = "secondary"
 profiled = false
 doc_refs = [
-  "web/site/docs/docs/workflow/quality.md",
-  "web/site/docs/docs/workflow/export.md",
+  "web/site/docs/docs/workflow/review.md",
   "web/site/docs/docs/workflow/pushing.md",
+  "web/site/docs/docs/clients/overview.md",
+  "web/site/docs/docs/clients/dataset-consumers.md",
+  "web/site/docs/docs/workflow/workflow-templates.md",
 ]
 perf_scenarios = []
 user_smoke_tests = []
 live_tests = []
-notes = "The old root assess/export commands are no longer part of the current local flow. Dataset-specific quality and export/consume paths should get fresh perf scenarios once the dataset workflow hardens."
+notes = "Standalone Quality and Export pages are decommissioned. Dataset-specific row checks, publication gates, and consumer projections should get fresh perf scenarios once the dataset workflow hardens."
 
 [[journeys]]
 id = "push-and-publish"
@@ -157,7 +159,7 @@ priority = "secondary"
 profiled = false
 doc_refs = [
   "web/site/docs/docs/workflow/parsing.md",
-  "web/site/docs/docs/workflow/consume.md",
+  "web/site/docs/docs/clients/dataset-consumers.md",
   "web/site/docs/docs/integration/ci-cd.md",
   "web/site/docs/docs/cli/commands.md",
 ]

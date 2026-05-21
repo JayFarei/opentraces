@@ -57,7 +57,7 @@ def _auth_identity(*a, **k):
     ],
     see_also=[
         ("opentraces status", "compact snapshot of inbox + remote."),
-        ("opentraces assess", "score trace quality."),
+        ("opentraces trace query", "search retained traces."),
     ],
 )
 def stats() -> None:

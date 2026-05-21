@@ -279,13 +279,13 @@ def _resolve_repo_id(*a, **k):
         "opentraces push --llm-review   # gate upload on Tier 2 verdict",
     ],
     see_also=[
-        ("opentraces assess", "score traces before upload"),
+        ("opentraces dataset publish", "publish approved workflow rows."),
         ("opentraces setup llm-review", "configure the Tier 2 reviewer"),
     ],
     option_groups=[
         ("Visibility", ["private", "public", "publish", "gated"]),
         ("Destination", ["repo"]),
-        ("Quality gates", ["run_assess", "llm_review"]),
+        ("Publication gates", ["run_assess", "llm_review"]),
         ("Pipeline overrides", ["no_trufflehog"]),
         ("Schema migration", ["migrate_remote", "assume_yes"]),
     ],
@@ -683,6 +683,5 @@ def push(private: bool, public: bool, publish: bool, gated: bool, repo: str | No
     except RuntimeError as e:
         click.echo(f"Error: {e}")
         sys.exit(7)
-
 
 

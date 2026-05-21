@@ -45,8 +45,12 @@ export const DOC_NAV: DocEntry[] = [
   { slug: "workflow/review", title: "Review", group: "Datasets" },
   { slug: "workflow/pushing", title: "Publish", group: "Datasets" },
 
-  // Clients
-  { slug: "workflow/consume", title: "Clients & Use Cases", group: "Clients" },
+  // Clients & Use Cases
+  { slug: "clients/overview", title: "Overview", group: "Clients & Use Cases" },
+  { slug: "clients/dataset-consumers", title: "Dataset Consumers", group: "Clients & Use Cases" },
+  { slug: "clients/private-bucket", title: "Private Bucket Clients", group: "Clients & Use Cases" },
+  { slug: "clients/agent-workflows", title: "Agent Workflows", group: "Clients & Use Cases" },
+  { slug: "clients/trace-capsule", title: "Trace Capsule", group: "Clients & Use Cases" },
 
   // Integration
   { slug: "integration/ci-cd", title: "CI/CD & Automation", group: "Integration" },

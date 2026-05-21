@@ -67,4 +67,6 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |
 | **[Security Tools](/docs/security/tiers)** | Optional default-off security/privacy tool registry |
 | **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.6.0` field semantics |
-| **[Clients & Use Cases](/docs/workflow/consume)** | Datasets, private bucket reads, context warmup, and manual trace capsules |
+| **[Clients](/docs/clients/overview)** | How consumers use rows or bucket evidence |
+| **[Agent Workflows](/docs/clients/agent-workflows)** | Context warmup and progressive session-history discovery |
+| **[Trace Capsule](/docs/clients/trace-capsule)** | Manual dataset-of-1 capsule pattern before the capsule CLI exists |

@@ -39,7 +39,11 @@ for f in \
   "$DOCS_DIR/workflow/datasets.md" \
   "$DOCS_DIR/workflow/review.md" \
   "$DOCS_DIR/workflow/pushing.md" \
-  "$DOCS_DIR/workflow/consume.md" \
+  "$DOCS_DIR/clients/overview.md" \
+  "$DOCS_DIR/clients/dataset-consumers.md" \
+  "$DOCS_DIR/clients/private-bucket.md" \
+  "$DOCS_DIR/clients/agent-workflows.md" \
+  "$DOCS_DIR/clients/trace-capsule.md" \
   "$DOCS_DIR/schema/overview.md" \
   "$DOCS_DIR/schema/trace-record.md" \
   "$DOCS_DIR/schema/steps.md" \
@@ -62,5 +66,14 @@ for f in \
     cat "$f" >> "$OUT"
   fi
 done
+
+python3 - "$OUT" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+path.write_text(text.rstrip() + "\n")
+PY
 
 echo "Generated $OUT ($(wc -l < "$OUT") lines)"

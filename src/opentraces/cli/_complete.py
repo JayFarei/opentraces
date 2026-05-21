@@ -334,8 +334,8 @@ def complete_cmd(ctx: click.Context, tokens: tuple[str, ...]) -> None:
         values += _shell_choice_candidates(cmd, partial, token_list)
         candidates.extend(sub)
         candidates.extend(values)
-        # For leaf commands with nothing else to offer, surface flags so
-        # ``otd assess <TAB>`` shows its options instead of coming back empty.
+        # For leaf commands with nothing else to offer, surface flags instead
+        # of coming back empty.
         if not sub and not values and not isinstance(cmd, click.Group):
             candidates.extend(_flag_candidates(cmd, ""))
 

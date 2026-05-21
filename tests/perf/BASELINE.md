@@ -55,7 +55,7 @@ Generated from `tests/perf/artifacts/latest/summary.json`.
 |---|---|
 | web-review | Decommissioned legacy raw-trace web review surface. Scenarios remain catalogued for history but are skipped until the next dataset-scoped review UI lands. |
 | tui-review | Decommissioned legacy raw-trace TUI surface. Scenarios remain catalogued for history but are skipped until the next dataset-scoped review UI lands. |
-| quality-and-export | The old root assess/export commands are no longer part of the current local flow. Dataset-specific quality and export/consume paths should get fresh perf scenarios once the dataset workflow hardens. |
+| dataset-gates-and-consume | Standalone Quality and Export pages are decommissioned. Dataset-specific row checks, publication gates, and consumer projections should get fresh perf scenarios once the dataset workflow hardens. |
 | push-and-publish | The old root push perf target has been removed with the staged-trace push flow. A fresh dataset publish perf target should be added once the local dataset publication contract is stable. |
 | dataset-import-and-consume | Mapped explicitly from the docs but not part of the representative perf harness yet because the hot path is remote-I/O dominated and downstream consumption is outside the app's local optimization boundary. |
 | security-and-health | These workflows matter for correctness and release health, but they are integration-heavy and not the first-line representative profiling targets for UI/provenance optimization. |

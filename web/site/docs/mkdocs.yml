@@ -59,8 +59,12 @@ nav:
       - Dataset Rows: workflow/datasets.md
       - Review: workflow/review.md
       - Publish: workflow/pushing.md
-  - Clients:
-      - Clients & Use Cases: workflow/consume.md
+  - Clients & Use Cases:
+      - Overview: clients/overview.md
+      - Dataset Consumers: clients/dataset-consumers.md
+      - Private Bucket Clients: clients/private-bucket.md
+      - Agent Workflows: clients/agent-workflows.md
+      - Trace Capsule: clients/trace-capsule.md
   - Integration:
       - CI/CD & Automation: integration/ci-cd.md
       - Agent Setup: integration/agent-setup.md

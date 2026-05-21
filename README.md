@@ -319,7 +319,9 @@ format-then-commit pipelines all anchor — but firmness drops from
 | Context Tree | https://opentraces.ai/docs/workflow/context-tree |
 | Trace Discovery | https://opentraces.ai/docs/workflow/trace-discovery |
 | Dataset Workflows | https://opentraces.ai/docs/workflow/workflow-templates |
-| Clients & Use Cases | https://opentraces.ai/docs/workflow/consume |
+| Clients | https://opentraces.ai/docs/clients/overview |
+| Agent Workflows | https://opentraces.ai/docs/clients/agent-workflows |
+| Trace Capsule | https://opentraces.ai/docs/clients/trace-capsule |
 | Agent Setup | https://opentraces.ai/docs/integration/agent-setup |
 | CI/CD | https://opentraces.ai/docs/integration/ci-cd |
 | Post-Processor Contract | https://opentraces.ai/docs/integration/post-processor-contract |
@@ -347,7 +349,7 @@ src/opentraces/
   capture/              # Inbound boundary: claude_code, hermes, git, fs_watcher, tool_boundary
   publish/              # Outbound boundary: format serializers and HuggingFace publisher
   enrichment/           # Read-only enrichers: git signals, attribution, dependencies, metrics
-  quality/              # Trace quality assessment and rubrics
+  quality/              # Parser gates and publication scoring helpers
   security/             # Secret scanning, anonymization, classification
   clients/              # Legacy TUI/web review clients (currently decommissioned)
   workflow_templates/   # Bundled dataset workflow skill templates

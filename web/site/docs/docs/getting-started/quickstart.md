@@ -153,5 +153,7 @@ as new shards. It does not publish the raw bucket unless you separately run
 - [Context Tree](/docs/workflow/context-tree), what the agent saw
 - [Dataset Workflows](/docs/workflow/workflow-templates), row projection packages
 - [Dataset Rows](/docs/workflow/datasets), review states and schedules
-- [Clients & Use Cases](/docs/workflow/consume), context warmup and manual trace capsules
+- [Clients](/docs/clients/overview), consumers and bucket evidence
+- [Agent Workflows](/docs/clients/agent-workflows), context warmup and session-history search
+- [Trace Capsule](/docs/clients/trace-capsule), manual dataset-of-1 capsule pattern
 - [Security Tools](/docs/security/tiers), optional default-off tools

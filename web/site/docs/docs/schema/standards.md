@@ -8,7 +8,7 @@ opentraces sits at the intersection of four public standards. It adopts what wor
 
 A training trajectory serialization format for agent research. Defines the step-based TAO (Thought-Action-Observation) loop, with fields for token IDs, logprobs, and reward signals designed for RL and SFT pipelines.
 
-**Relationship:** opentraces is a superset of ATIF. We adopt the step-based model, role conventions (`system | user | agent`), and field patterns. We add attribution blocks, per-step token breakdowns, environment metadata, dependency tracking, and security metadata. The downstream field mappings live in `packages/opentraces-schema/FIELD-MAPPINGS.md`; the public export workflow is still experimental.
+**Relationship:** opentraces is a superset of ATIF. We adopt the step-based model, role conventions (`system | user | agent`), and field patterns. We add attribution blocks, per-step token breakdowns, environment metadata, dependency tracking, and security metadata. The downstream field mappings live in `packages/opentraces-schema/FIELD-MAPPINGS.md`; serializers are internal building blocks for dataset workflows rather than a supported top-level client workflow.
 
 ## ADP (Agent Data Protocol)
 

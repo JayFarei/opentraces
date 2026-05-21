@@ -82,7 +82,9 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |
 | **[Security Tools](/docs/security/tiers)** | Optional default-off security/privacy tool registry |
 | **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.6.0` field semantics |
-| **[Clients & Use Cases](/docs/workflow/consume)** | Datasets, private bucket reads, context warmup, and manual trace capsules |
+| **[Clients](/docs/clients/overview)** | How consumers use rows or bucket evidence |
+| **[Agent Workflows](/docs/clients/agent-workflows)** | Context warmup and progressive session-history discovery |
+| **[Trace Capsule](/docs/clients/trace-capsule)** | Manual dataset-of-1 capsule pattern before the capsule CLI exists |
 
 ---
 
@@ -394,7 +396,9 @@ as new shards. It does not publish the raw bucket unless you separately run
 - [Context Tree](/docs/workflow/context-tree), what the agent saw
 - [Dataset Workflows](/docs/workflow/workflow-templates), row projection packages
 - [Dataset Rows](/docs/workflow/datasets), review states and schedules
-- [Clients & Use Cases](/docs/workflow/consume), context warmup and manual trace capsules
+- [Clients](/docs/clients/overview), consumers and bucket evidence
+- [Agent Workflows](/docs/clients/agent-workflows), context warmup and session-history search
+- [Trace Capsule](/docs/clients/trace-capsule), manual dataset-of-1 capsule pattern
 - [Security Tools](/docs/security/tiers), optional default-off tools
 
 ---
@@ -1665,10 +1669,31 @@ Clients consume either published dataset rows or private bucket evidence. The
 important distinction is whether the client needs curated rows or the retained
 trace environment.
 
-## Published Dataset Rows
+| Client / use case | Primary input | Start here |
+|-------------------|---------------|------------|
+| Dataset consumers | Published dataset rows | [Dataset Consumers](/docs/clients/dataset-consumers) |
+| Private bucket clients | Remote bucket evidence | [Private Bucket Clients](/docs/clients/private-bucket) |
+| Agent workflows | Trace discovery + context + Trail evidence | [Agent Workflows](/docs/clients/agent-workflows) |
+| Trace capsule | Dataset-of-1 projection over one trace slice | [Trace Capsule](/docs/clients/trace-capsule) |
 
-Use this path for evaluation jobs, teacher/student training, SFT/RL pipelines,
+Published rows are for evaluation jobs, training loops, analytics, dashboards,
+and sharing. Bucket evidence is for agents or teammates that need to inspect a
+trace environment: raw trace records, Trail anchors, Context Tree nodes, or
+source blobs.
+
+The same captured trace can feed multiple clients. One workflow can publish
+small eval rows, another can warm an agent with relevant prior context, and a
+third can create a manual trace capsule for a bug report.
+
+---
+
+# Dataset Consumers
+
+Published datasets are workflow-projected rows on Hugging Face Hub. Use this
+path for evaluation jobs, teacher/student training, SFT/RL pipelines,
 dashboards, and public or private dataset sharing.
+
+## Load Rows
 
 ```python
 from datasets import load_dataset
@@ -1691,10 +1716,42 @@ Rows are workflow-specific. A command-trajectory eval dataset and a PR intent
 summary dataset will not have the same row schema, even if they came from the
 same bucket traces.
 
-## Private Bucket Evidence
+## File-Oriented Access
 
-Use the CLI when a client needs raw trace evidence, Git anchors, or Context
-Tree nodes:
+For published Hugging Face datasets, `hf-mount` can expose shards as files:
+
+```bash
+hf-mount start repo datasets/your-org/agent-traces /mnt/traces
+ls /mnt/traces/data/
+head -n 1 /mnt/traces/data/*.jsonl
+hf-mount stop /mnt/traces
+```
+
+For private or gated datasets, authenticate with Hugging Face first.
+
+## Resolve Back To Evidence
+
+Rows should carry enough trace references for a consumer to retrieve bucket
+evidence when it is allowed:
+
+```bash
+opentraces trace get <trace-id> --remote owner/private-bucket --json
+opentraces trail track <trace-id> --json
+opentraces ctx step <trace-id> <step-index> --json
+```
+
+That lookup is separate from dataset loading. A public dataset can reference a
+private bucket without exposing the bucket itself.
+
+---
+
+# Private Bucket Clients
+
+Private bucket clients need retained trace evidence rather than curated row
+streams. Typical clients are teammate agents, local dashboards, replay tools,
+debugging scripts, and workflow builders that need raw context.
+
+## Read From A Remote Bucket
 
 ```bash
 opentraces trace query --remote-bucket --cwd --json
@@ -1704,14 +1761,44 @@ opentraces ctx tree <trace-id> --json
 opentraces bucket prefetch <trace-id> --remote owner/private-bucket
 ```
 
+`trace query` starts with bounded candidates. `trace get`, `trail`, and `ctx`
+then load the precise trace units, Git evidence, and Context Tree nodes the
+client needs.
+
+## Portable Environment Pattern
+
+A bucket is portable because it carries:
+
+- `trace.json`, the compact `TraceRecord` spine;
+- Trail event mirrors for Git evidence replay;
+- Context Tree companions and content-addressed layer blobs;
+- raw/source blobs referenced by the trace;
+- a manifest that makes remote sync and lazy fetch deterministic.
+
+That means a client can pull a bucket remote, inspect a trace, and replay Trail
+events into another Git clone without the original machine.
+
+```bash
+opentraces bucket remote pull --json
+opentraces bucket prefetch <trace-id> --json
+opentraces bucket replay --repo /path/to/git-clone --json
+```
+
 Bucket evidence can be large and private. Do not treat a bucket remote as a
 public dataset unless you intentionally made that storage public.
 
-## Context Warmup
+---
 
-Context warmup is the agent-memory use case: before starting new work, an agent
-searches session history, progressively loads the relevant trace evidence, and
-uses a small context packet to orient the next session.
+# Agent Workflows
+
+Agent workflows are clients that use opentraces as working memory. They search
+prior session history, progressively load relevant trace evidence, and hand a
+small packet to the next agent step.
+
+This is not dataset publication by default. It is an agent using the trace
+bucket to orient itself.
+
+## Context Warmup
 
 Natural-language prompt:
 
@@ -1733,16 +1820,44 @@ opentraces ctx resume <context-node-id> --json
 opentraces trail track <trace-id> --json
 ```
 
-The result is not a dataset row by default. It is a compact working packet the
-agent can read before continuing.
+The output is a compact working packet: the relevant intent, bounded trace
+slice, context resume packet, and Trail survival evidence.
 
-## Manual Trace Capsule
+## Progressive Discovery
+
+Use the cheapest read first:
+
+1. `trace query` for candidates.
+2. `trace map --bursts` for intent and edit clusters.
+3. `trace slice` for the bounded step window.
+4. `ctx step` or `ctx resume` for model-visible context.
+5. `trail track` for whether the trace output still survives.
+
+The agent only loads full trace content after the candidate is clearly useful.
+
+## Session History Search
+
+```bash
+opentraces trace query --cwd --since 30d --lex "database migration" --json
+opentraces trace query --skill opentraces --semantic "schema drift after publish" --json
+opentraces trace get <trace-id> --bursts --json
+```
+
+This lets an agent ask, "Have we solved something like this before?" without
+turning the answer into a dataset row.
+
+---
+
+# Trace Capsule
 
 The future capsule command is planned, not shipped yet. For now, emulate a
 trace capsule as a dataset of one: one trace, one bounded slice, one context
 resume packet, one Trail evidence closure, and one explicit redaction pass.
 
-Natural-language prompt:
+Think of this as a manual client pattern over the existing dataset workflow
+system. The future `opentraces capsule ...` command will make it first-class.
+
+## Natural-Language Prompt
 
 ```text
 Create a one-row trace capsule for this bug. Use the smallest trace slice that
@@ -1752,7 +1867,7 @@ Do not claim this is the future opentraces capsule command; this is the manual
 dataset-of-1 version.
 ```
 
-Commands:
+## Build The Evidence Closure
 
 ```bash
 opentraces trace query --cwd --lex "bug reproduction failure" --json
@@ -1761,7 +1876,15 @@ opentraces trace slice <trace-id> --around-step <step> --radius 4 --json
 opentraces ctx step <trace-id> <step> --json
 opentraces ctx resume <context-node-id> --json
 opentraces trail track <trace-id> --json
+```
 
+The closure should include only what the recipient needs: the captured intent,
+the relevant slice, the context resume packet, Trail anchors, and enough repo
+pinning information to understand where the bug happened.
+
+## Project It As One Dataset Row
+
+```bash
 opentraces workflow create trace-capsule --template default \
   --description "One-row bug capsule projection"
 opentraces dataset new trace-capsule-001 --workflow ./workflows/trace-capsule/
@@ -1771,30 +1894,28 @@ opentraces dataset review trace-capsule-001 --json
 opentraces dataset review approve trace-capsule-001 --all
 ```
 
-If the one-row capsule is meant to leave the machine, run explicit security
-tooling inside the workflow or over the candidate row before approval:
+If the capsule is meant to leave the machine, run explicit security tooling
+inside the workflow or over the candidate row before approval:
 
 ```bash
 printf '%s\n' '{"row": {...}}' \
   | opentraces security sanitize --tools regex,entropy,path_anonymizer
 ```
 
-The planned capsule feature will make this a first-class command surface. Until
-then, the dataset-of-1 pattern keeps the concept honest: it is just a workflow
-projection over a private bucket trace.
+## Share Or Re-run Manually
 
-## File-Oriented Access
-
-For published Hugging Face datasets, `hf-mount` can expose shards as files:
+For a private handoff, bind a private dataset remote and publish the single
+approved row:
 
 ```bash
-hf-mount start repo datasets/your-org/agent-traces /mnt/traces
-ls /mnt/traces/data/
-head -n 1 /mnt/traces/data/*.jsonl
-hf-mount stop /mnt/traces
+opentraces dataset remote create trace-capsule-001 owner/trace-capsule-001 --private
+opentraces dataset publish trace-capsule-001 --check-only
+opentraces dataset publish trace-capsule-001
 ```
 
-For private/gated datasets, authenticate with Hugging Face first.
+For a local agent replay, use the context packet and trace slice as the prompt
+material for a fresh agent session. The replay is intent-based, not byte-for-byte
+execution replay.
 
 ---
 
@@ -2446,7 +2567,7 @@ opentraces sits at the intersection of four public standards. It adopts what wor
 
 A training trajectory serialization format for agent research. Defines the step-based TAO (Thought-Action-Observation) loop, with fields for token IDs, logprobs, and reward signals designed for RL and SFT pipelines.
 
-**Relationship:** opentraces is a superset of ATIF. We adopt the step-based model, role conventions (`system | user | agent`), and field patterns. We add attribution blocks, per-step token breakdowns, environment metadata, dependency tracking, and security metadata. The downstream field mappings live in `packages/opentraces-schema/FIELD-MAPPINGS.md`; the public export workflow is still experimental.
+**Relationship:** opentraces is a superset of ATIF. We adopt the step-based model, role conventions (`system | user | agent`), and field patterns. We add attribution blocks, per-step token breakdowns, environment metadata, dependency tracking, and security metadata. The downstream field mappings live in `packages/opentraces-schema/FIELD-MAPPINGS.md`; serializers are internal building blocks for dataset workflows rather than a supported top-level client workflow.
 
 ## ADP (Agent Data Protocol)
 
