@@ -1,58 +1,58 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 292.022791,
+    "cold_ms": 275.853833,
     "extra": {},
     "max_rss_delta_mb": null,
-    "mean_ms": 289.1846106666667,
-    "p50_ms": 292.022791,
-    "p95_ms": 293.623833,
-    "peak_rss_mb": 46.421875,
+    "mean_ms": 281.206139,
+    "p50_ms": 276.313542,
+    "p95_ms": 291.451042,
+    "peak_rss_mb": 48.546875,
     "python_heap_peak_mb": null,
     "samples": [
       {
-        "duration_ms": 292.022791,
+        "duration_ms": 275.853833,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-554/test_core_perf_graph_cli_smoke0/graph-cli-smoke/run-01/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-562/test_core_perf_graph_cli_smoke0/graph-cli-smoke/run-01/proj",
           "returncode": 0,
           "scenario": "graph-cli-smoke",
-          "stdout_tail": "\u251c\u256f\n\u250a\n\u250a\u256d\u2504t:small-tr  +1 chunks       \u2502  lines 1-1 <provisional>\n\u250a\u251c\u2504t:small-tr  +1 chunks       \u2502  lines 2-2 <provisional>\n\u250a\u25cf   c:29b98866  perf 000  100%\n\u251c\u256f\n\u250a\n\u250a\u25cf   c:83165ec6  init",
+          "stdout_tail": "\u251c\u256f\n\u250a\n\u250a\u256d\u2504t:small-tr  +1 chunks       \u2502  lines 1-1 <provisional>\n\u250a\u251c\u2504t:small-tr  +1 chunks       \u2502  lines 2-2 <provisional>\n\u250a\u25cf   c:c841bb9a  perf 000  100%\n\u251c\u256f\n\u250a\n\u250a\u25cf   c:775aae42  init",
           "trace_count": 24
         },
-        "peak_rss_mb": 46.1875,
+        "peak_rss_mb": 46.53125,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
         "rss_delta_mb": null
       },
       {
-        "duration_ms": 281.907208,
+        "duration_ms": 276.313542,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-554/test_core_perf_graph_cli_smoke0/graph-cli-smoke/run-02/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-562/test_core_perf_graph_cli_smoke0/graph-cli-smoke/run-02/proj",
           "returncode": 0,
           "scenario": "graph-cli-smoke",
-          "stdout_tail": "\u251c\u256f\n\u250a\n\u250a\u256d\u2504t:small-tr  +1 chunks       \u2502  lines 1-1 <provisional>\n\u250a\u251c\u2504t:small-tr  +1 chunks       \u2502  lines 2-2 <provisional>\n\u250a\u25cf   c:9ea6e05d  perf 000  100%\n\u251c\u256f\n\u250a\n\u250a\u25cf   c:7e8d43d0  init",
+          "stdout_tail": "\u251c\u256f\n\u250a\n\u250a\u256d\u2504t:small-tr  +1 chunks       \u2502  lines 1-1 <provisional>\n\u250a\u251c\u2504t:small-tr  +1 chunks       \u2502  lines 2-2 <provisional>\n\u250a\u25cf   c:a02a7bad  perf 000  100%\n\u251c\u256f\n\u250a\n\u250a\u25cf   c:7cddcedb  init",
           "trace_count": 24
         },
-        "peak_rss_mb": 46.328125,
+        "peak_rss_mb": 46.6875,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,
         "rss_delta_mb": null
       },
       {
-        "duration_ms": 293.623833,
+        "duration_ms": 291.451042,
         "metadata": {
           "commit_count": 10,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-554/test_core_perf_graph_cli_smoke0/graph-cli-smoke/run-03/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-562/test_core_perf_graph_cli_smoke0/graph-cli-smoke/run-03/proj",
           "returncode": 0,
           "scenario": "graph-cli-smoke",
-          "stdout_tail": "\u251c\u256f\n\u250a\n\u250a\u256d\u2504t:small-tr  +1 chunks       \u2502  lines 1-1 <provisional>\n\u250a\u251c\u2504t:small-tr  +1 chunks       \u2502  lines 2-2 <provisional>\n\u250a\u25cf   c:7c609510  perf 000  100%\n\u251c\u256f\n\u250a\n\u250a\u25cf   c:85e1eb34  init",
+          "stdout_tail": "\u251c\u256f\n\u250a\n\u250a\u256d\u2504t:small-tr  +1 chunks       \u2502  lines 1-1 <provisional>\n\u250a\u251c\u2504t:small-tr  +1 chunks       \u2502  lines 2-2 <provisional>\n\u250a\u25cf   c:1208fae0  perf 000  100%\n\u251c\u256f\n\u250a\n\u250a\u25cf   c:6388731a  init",
           "trace_count": 24
         },
-        "peak_rss_mb": 46.421875,
+        "peak_rss_mb": 48.546875,
         "python_heap_peak_mb": null,
         "rss_after_mb": null,
         "rss_before_mb": null,

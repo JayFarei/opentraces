@@ -1,69 +1,69 @@
 {
   "budget_updated": false,
   "result": {
-    "cold_ms": 2529.838333,
+    "cold_ms": 2310.6245,
     "extra": {},
     "max_rss_delta_mb": 0.0,
-    "mean_ms": 2483.817552,
-    "p50_ms": 2457.859625,
-    "p95_ms": 2529.838333,
-    "peak_rss_mb": 4017.84375,
-    "python_heap_peak_mb": 0.8705177307128906,
+    "mean_ms": 2287.61555175,
+    "p50_ms": 2279.389041,
+    "p95_ms": 2321.153333,
+    "peak_rss_mb": 4067.265625,
+    "python_heap_peak_mb": 0.8703470230102539,
     "samples": [
       {
-        "duration_ms": 2529.838333,
+        "duration_ms": 2310.6245,
         "metadata": {
           "commit_count": 0,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-554/test_watcher_perf_scan_project0/scan-project-smoke/run-00/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-562/test_watcher_perf_scan_project0/scan-project-smoke/run-00/proj",
           "scenario": "scan-project-smoke",
           "trace_count": 4
         },
-        "peak_rss_mb": 4017.84375,
-        "python_heap_peak_mb": 0.8705177307128906,
-        "rss_after_mb": 4017.796875,
-        "rss_before_mb": 4017.796875,
+        "peak_rss_mb": 4067.265625,
+        "python_heap_peak_mb": 0.8703470230102539,
+        "rss_after_mb": 4067.21875,
+        "rss_before_mb": 4067.21875,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 2457.859625,
+        "duration_ms": 2239.295333,
         "metadata": {
           "commit_count": 0,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-554/test_watcher_perf_scan_project0/scan-project-smoke/run-02/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-562/test_watcher_perf_scan_project0/scan-project-smoke/run-02/proj",
           "scenario": "scan-project-smoke",
           "trace_count": 4
         },
-        "peak_rss_mb": 4017.84375,
-        "python_heap_peak_mb": 0.8660030364990234,
-        "rss_after_mb": 4017.796875,
-        "rss_before_mb": 4017.796875,
+        "peak_rss_mb": 4067.265625,
+        "python_heap_peak_mb": 0.8695154190063477,
+        "rss_after_mb": 4067.21875,
+        "rss_before_mb": 4067.21875,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 2506.4895,
+        "duration_ms": 2279.389041,
         "metadata": {
           "commit_count": 0,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-554/test_watcher_perf_scan_project0/scan-project-smoke/run-04/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-562/test_watcher_perf_scan_project0/scan-project-smoke/run-04/proj",
           "scenario": "scan-project-smoke",
           "trace_count": 4
         },
-        "peak_rss_mb": 4017.84375,
-        "python_heap_peak_mb": 0.8692169189453125,
-        "rss_after_mb": 4017.796875,
-        "rss_before_mb": 4017.796875,
+        "peak_rss_mb": 4067.265625,
+        "python_heap_peak_mb": 0.8698091506958008,
+        "rss_after_mb": 4067.21875,
+        "rss_before_mb": 4067.21875,
         "rss_delta_mb": 0.0
       },
       {
-        "duration_ms": 2441.08275,
+        "duration_ms": 2321.153333,
         "metadata": {
           "commit_count": 0,
-          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-554/test_watcher_perf_scan_project0/scan-project-smoke/run-06/proj",
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-562/test_watcher_perf_scan_project0/scan-project-smoke/run-06/proj",
           "scenario": "scan-project-smoke",
           "trace_count": 4
         },
-        "peak_rss_mb": 4017.84375,
-        "python_heap_peak_mb": 0.8697824478149414,
-        "rss_after_mb": 4017.796875,
-        "rss_before_mb": 4017.796875,
+        "peak_rss_mb": 4067.265625,
+        "python_heap_peak_mb": 0.86981201171875,
+        "rss_after_mb": 4067.21875,
+        "rss_before_mb": 4067.21875,
         "rss_delta_mb": 0.0
       }
     ]

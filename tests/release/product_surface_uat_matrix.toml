@@ -1,0 +1,487 @@
+schema_version = "opentraces.product_surface_uat_matrix.v1"
+nav_source = "web/site/docs/mkdocs.yml"
+docs_root = "web/site/docs/docs"
+goal_log = "kb/projects/opentraces/product-surface-uat-goal.md"
+
+[release_constraints]
+default_ci_offline_safe = true
+no_real_hf_publication_gate = true
+fake_remote_or_check_only_for_remote_publish = true
+bucket_dataset_separation = true
+privacy_security_posture = true
+schema_compatibility = true
+supported_agent_parity = true
+
+[[page]]
+doc = "index.md"
+area = "Home"
+journey = "End-to-end product spine: capture, bucket, trace discovery, trails, context, workflows, datasets, publish."
+command_families = ["setup", "init", "bucket", "trace", "trail", "ctx", "workflow", "dataset"]
+evidence = [
+  "otbox:agent-session-to-published-dataset",
+  "otbox:mixed-agent-bucket-parity",
+  "pytest:tests/cli/test_help_renderer.py",
+  "pytest:tests/integration/test_plan057_dataset_workflow_uat.py",
+  "log:kb/projects/opentraces/plan-083-run-log.md",
+]
+
+[[page]]
+doc = "getting-started/installation.md"
+area = "Getting Started"
+journey = "Install, verify the command is present, upgrade, and uninstall/maintain without network in default CI."
+command_families = ["opentraces --help", "opentraces --version", "setup upgrade", "doctor"]
+evidence = [
+  "otbox:install-from-source-happy-path",
+  "otbox:installed-cli-doctor",
+  "pytest:tests/cli/test_help_renderer.py",
+]
+
+[[page]]
+doc = "getting-started/authentication.md"
+area = "Getting Started"
+journey = "Hugging Face identity login/logout/whoami and token precedence without requiring live publication."
+command_families = ["auth login", "auth whoami", "auth logout", "setup auth"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "pytest:tests/cli/test_auth_group.py",
+  "pytest:tests/publish/test_hf_token_resolution.py",
+  "command:opentraces dataset publish my-dataset --check-only",
+]
+
+[[page]]
+doc = "getting-started/quickstart.md"
+area = "Getting Started"
+journey = "First user path across setup, project enrollment, bucket inspection, trace discovery, trails, context, workflows, datasets, and check-only publish."
+command_families = ["setup", "init", "bucket", "trace", "trail", "ctx", "workflow", "dataset"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "otbox:agent-session-to-published-dataset",
+  "otbox:mixed-agent-bucket-parity",
+  "otbox:codex-parity-linear",
+  "otbox:survival-walk-reverted",
+  "otbox:context-tree-otel-capture-fidelity",
+  "pytest:tests/integration/test_plan058_fake_remote_uat.py",
+  "command:opentraces dataset publish my-dataset --check-only",
+]
+
+[[page]]
+doc = "cli/commands.md"
+area = "CLI"
+journey = "Visible command inventory, hidden compatibility aliases, JSON mode, help wording, completions, and command ownership."
+command_families = ["root help", "setup", "trace", "trail", "ctx", "bucket", "workflow", "dataset", "security", "capture-otlp"]
+evidence = [
+  "otbox:codex-full-parity-latest",
+  "pytest:tests/cli/test_help_renderer.py",
+  "pytest:tests/cli/test_global_json_propagation.py",
+  "pytest:tests/otbox/test_jtbd_ssot.py",
+  "doc:tests/otbox/catalogue/journey-inventory.md",
+]
+
+[[page]]
+doc = "cli/supported-agents.md"
+area = "CLI"
+journey = "Claude Code, Codex CLI, Hermes/imported rows, live capture limits, and adapter normalization contracts."
+command_families = ["init --agent", "setup claude-code", "setup codex-cli", "dataset new --rows-file"]
+evidence = [
+  "otbox:mixed-agent-bucket-parity",
+  "otbox:codex-full-parity-latest",
+  "pytest:tests/capture/test_parser_claude_code.py",
+  "pytest:tests/capture/test_parser_codex_cli.py",
+  "pytest:tests/capture/test_parser_hermes.py",
+  "pytest:tests/capture/test_registry.py",
+]
+
+[[page]]
+doc = "cli/troubleshooting.md"
+area = "CLI"
+journey = "User-visible recovery paths for initialization, missing traces, hooks, stale trails, blocked rows, and publish failures."
+command_families = ["status", "doctor", "trace query", "setup codex-cli", "setup watcher", "dataset review", "dataset publish --check-only"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "otbox:codex-parity-security-redaction",
+  "otbox:survival-walk-reverted",
+  "pytest:tests/cli/test_doctor_panels.py",
+  "pytest:tests/cli/test_doctor_warn_missing_patches.py",
+  "pytest:tests/integration/test_plan058_fake_remote_uat.py",
+  "command:opentraces dataset publish my-dataset --check-only --json",
+]
+
+[[page]]
+doc = "security/tiers.md"
+area = "Security"
+journey = "Security tool registry, tool info, sanitizer CLI, review gates, and optional setup commands."
+command_families = ["security tools list", "security tools info", "security sanitize", "setup trufflehog", "setup privacy-filter", "setup llm-review"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "otbox:security-sanitize-captured-content",
+  "otbox:codex-parity-security-redaction",
+  "pytest:tests/cli/test_cli_security_tools.py",
+  "pytest:tests/security/test_tools_registry.py",
+  "pytest:tests/security/test_pipeline_api.py",
+  "command:opentraces dataset publish my-dataset --check-only",
+]
+
+[[page]]
+doc = "security/scanning.md"
+area = "Security"
+journey = "Context-aware redaction, span metadata, custom strings, and patch/bucket security state."
+command_families = ["security sanitize", "config set custom_redact_strings", "bucket status"]
+evidence = [
+  "otbox:security-sanitize-captured-content",
+  "pytest:tests/security/test_pipeline_api.py",
+  "pytest:tests/security/test_scanner_filters.py",
+  "pytest:tests/security/test_redact_pattern.py",
+  "pytest:tests/core/test_bucket_store.py",
+]
+
+[[page]]
+doc = "security/configuration.md"
+area = "Security"
+journey = "Global and project security configuration, opt-in detectors, custom redaction strings, and doctor reporting."
+command_families = ["config show", "config set", "doctor --security", "setup trufflehog", "setup privacy-filter", "setup llm-review"]
+evidence = [
+  "pytest:tests/cli/test_config_set.py",
+  "pytest:tests/cli/test_cli_security.py",
+  "pytest:tests/cli/test_cli_security_tools.py",
+  "pytest:tests/security/test_tools_registry.py",
+]
+
+[[page]]
+doc = "schema/overview.md"
+area = "Schema"
+journey = "TraceRecord package, training-first JSONL contract, and schema package importability."
+command_families = ["schema package", "TraceRecord JSONL"]
+evidence = [
+  "pytest:tests/schema/test_schema.py",
+  "pytest:tests/schema/test_schema_audit.py",
+  "pytest:tests/publish/test_hf_schema.py",
+]
+
+[[page]]
+doc = "schema/trace-record.md"
+area = "Schema"
+journey = "TraceRecord fields, content hashes, metadata, security, and patch spine."
+command_families = ["TraceRecord", "security metadata", "patch spine"]
+evidence = [
+  "pytest:tests/schema/test_schema.py",
+  "pytest:tests/schema/test_schema_041.py",
+  "pytest:tests/integration/test_trace_record_stability.py",
+  "pytest:tests/schema/test_schema_audit.py",
+]
+
+[[page]]
+doc = "schema/steps.md"
+area = "Schema"
+journey = "Step structure, tool calls, observations, snippets, token usage, subagent hierarchy, and Context Tree join keys."
+command_families = ["Step", "ctx step", "ctx show", "ctx resume"]
+evidence = [
+  "pytest:tests/schema/test_schema.py",
+  "pytest:tests/test_cli_ctx.py",
+  "pytest:tests/test_context_tree_cross_substrate_join.py",
+  "pytest:tests/capture/test_parser_claude_code.py",
+  "pytest:tests/capture/test_parser_codex_cli_advanced.py",
+]
+
+[[page]]
+doc = "schema/outcome-attribution.md"
+area = "Schema"
+journey = "Outcome, attribution ranges, GitLink tiers, provisional/final lifecycle, and VCS evidence."
+command_families = ["outcome", "attribution", "git links", "trail blame"]
+evidence = [
+  "pytest:tests/schema/test_schema_041.py",
+  "pytest:tests/enrichment/test_attribution_041.py",
+  "pytest:tests/enrichment/test_git_liveness.py",
+  "pytest:tests/cli/test_blame_commit_notes.py",
+]
+
+[[page]]
+doc = "schema/standards.md"
+area = "Schema"
+journey = "ATIF/ADP/Agent Trace/OTel alignment and message taxonomy compatibility."
+command_families = ["schema standards", "exporters", "OTel capture"]
+evidence = [
+  "pytest:tests/publish/test_exporters.py",
+  "pytest:tests/publish/test_exporters_agent_trace.py",
+  "pytest:tests/test_otlp_capture.py",
+  "pytest:tests/schema/test_schema.py",
+]
+
+[[page]]
+doc = "schema/versioning.md"
+area = "Schema"
+journey = "Schema version policy, migration compatibility, HF dataset_infos generation, and security version stamps."
+command_families = ["schema version", "dataset_infos", "security version", "migrations"]
+evidence = [
+  "pytest:tests/schema/test_schema.py",
+  "pytest:tests/schema/test_schema_041.py",
+  "pytest:tests/publish/test_hf_schema.py",
+  "pytest:tests/publish/test_upload.py",
+  "pytest:tests/security/test_pipeline_version.py",
+]
+
+[[page]]
+doc = "workflow/parsing.md"
+area = "Trace Workflow"
+journey = "Capture from Claude Code and Codex CLI, OTLP context capture, existing session import, enrichment, and first trace commands."
+command_families = ["setup claude-code", "setup codex-cli", "setup capture-otlp", "capture-otlp", "init --import-existing"]
+evidence = [
+  "otbox:codex-full-parity-latest",
+  "otbox:context-tree-otel-capture-fidelity",
+  "pytest:tests/capture/test_parser_claude_code.py",
+  "pytest:tests/capture/test_parser_codex_cli.py",
+  "pytest:tests/test_otlp_capture.py",
+]
+
+[[page]]
+doc = "workflow/bucket.md"
+area = "Trace Workflow"
+journey = "Portable bucket layout, inspect/verify/repair/replay, fake remote sync, prefetch, and prune."
+command_families = ["bucket status", "bucket manifest", "bucket verify", "bucket replay", "bucket remote", "bucket prefetch", "bucket prune"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "otbox:mixed-agent-bucket-parity",
+  "pytest:tests/cli/test_bucket_cli.py",
+  "pytest:tests/core/test_bucket_store.py",
+  "pytest:tests/integration/test_bucket_remote_uat.py",
+  "command:OPENTRACES_FAKE_BUCKET_REMOTE_ROOT=/tmp/fake opentraces bucket remote push --json",
+]
+
+[[page]]
+doc = "workflow/trace-discovery.md"
+area = "Trace Workflow"
+journey = "Trace Index, query, map, slice, get, remote bucket reads, and ot:// resource resolution."
+command_families = ["trace index", "trace query", "trace map", "trace slice", "trace get"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "otbox:codex-parity-linear",
+  "pytest:tests/cli/test_trace_query_plan056.py",
+  "pytest:tests/cli/test_trace_map_cli.py",
+  "pytest:tests/integration/test_plan056_trace_query_acceptance.py",
+  "command:OPENTRACES_FAKE_BUCKET_REMOTE_ROOT=/tmp/fake opentraces trace get <trace-id> --remote owner/private-bucket --json",
+]
+
+[[page]]
+doc = "workflow/blame.md"
+area = "Trace Workflow"
+journey = "Trace Trails blame, PR rendering, graph, track, survival states, and hidden substrate aliases."
+command_families = ["trail blame commit", "trail blame pr", "trail graph", "trail track"]
+evidence = [
+  "otbox:agent-session-trail-explain-happy",
+  "otbox:survival-walk-reverted",
+  "otbox:pr-blame-on-captured-branch",
+  "pytest:tests/integration/test_trace_trails_full_stack_demo.py",
+  "pytest:tests/integration/test_trace_trails_installed_runtime_uat.py",
+  "pytest:tests/integration/test_trace_trails_portrayal.py",
+]
+
+[[page]]
+doc = "workflow/context-tree.md"
+area = "Trace Workflow"
+journey = "Context Tree list/info/tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor plus OTLP lifecycle."
+command_families = ["ctx", "capture-otlp", "setup capture-otlp"]
+evidence = [
+  "otbox:codex-parity-linear",
+  "otbox:context-tree-otel-capture-fidelity",
+  "otbox:context-tree-otel-receiver-up",
+  "pytest:tests/test_cli_ctx.py",
+  "pytest:tests/test_context_tree_json_envelope_contract.py",
+  "pytest:tests/test_otlp_capture.py",
+]
+
+[[page]]
+doc = "workflow/workflow-templates.md"
+area = "Dataset Workflows"
+journey = "Workflow template discovery, workflow creation/list/remove, runtime packet contract, and evidence inputs."
+command_families = ["workflow templates", "workflow create", "workflow list", "workflow remove", "dataset run"]
+evidence = [
+  "otbox:dataset-sync-skill-history",
+  "pytest:tests/cli/test_plan057_workflow_cli.py",
+  "pytest:tests/core/test_plan057_workflows.py",
+  "pytest:tests/integration/test_plan057_dataset_workflow_uat.py",
+]
+
+[[page]]
+doc = "workflow/datasets.md"
+area = "Datasets"
+journey = "Dataset rows from workflows and rows files, run/review/status, remotes, schedules, and publish automation triggers."
+command_families = ["dataset new", "dataset run", "dataset status", "dataset review", "dataset remote", "dataset schedule"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "otbox:agent-session-to-published-dataset",
+  "otbox:dataset-sync-skill-history",
+  "pytest:tests/integration/test_plan057_dataset_workflow_uat.py",
+  "pytest:tests/integration/test_plan057_dataset_schedule.py",
+  "pytest:tests/cli/test_dataset_rows_file.py",
+  "command:opentraces dataset schedule add my-dataset --every 1h --approve-new --publish-check-only",
+]
+
+[[page]]
+doc = "workflow/review.md"
+area = "Datasets"
+journey = "Dataset row states, review/approve/reject/reset, all-row approval, and security review posture."
+command_families = ["dataset status", "dataset review"]
+evidence = [
+  "otbox:agent-session-to-published-dataset",
+  "pytest:tests/cli/test_plan057_dataset_cli.py",
+  "pytest:tests/integration/test_dataset_adhoc_roundtrip.py",
+  "pytest:tests/integration/test_plan057_dataset_workflow_uat.py",
+]
+
+[[page]]
+doc = "workflow/pushing.md"
+area = "Datasets"
+journey = "Dataset publish gates, remote binding, check-only staging, survival filters, and bucket-vs-dataset separation."
+command_families = ["dataset publish", "dataset remote", "bucket remote", "security sanitize"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "otbox:agent-session-to-published-dataset",
+  "pytest:tests/integration/test_plan058_fake_remote_uat.py",
+  "pytest:tests/integration/test_plan058_load_dataset_roundtrip.py",
+  "pytest:tests/cli/test_dataset_publish_filters.py",
+  "pytest:tests/integration/test_bucket_dataset_remote_flow_uat.py",
+  "command:opentraces dataset publish my-dataset --check-only",
+]
+
+[[page]]
+doc = "clients/overview.md"
+area = "Clients & Use Cases"
+journey = "Client surfaces over datasets, private bucket reads, agent workflows, and trace capsules."
+command_families = ["trace", "trail", "ctx", "bucket", "dataset"]
+evidence = [
+  "otbox:agent-session-to-published-dataset",
+  "otbox:mixed-agent-bucket-parity",
+  "pytest:tests/integration/test_remote_ready_local_contracts.py",
+  "pytest:tests/core/test_branch_context_render.py",
+]
+
+[[page]]
+doc = "clients/dataset-consumers.md"
+area = "Clients & Use Cases"
+journey = "Load published local/fake-remote dataset rows, file-oriented access, and resolve rows back to trace evidence."
+command_families = ["dataset publish", "trace get --remote", "trail track", "ctx step"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "pytest:tests/integration/test_plan058_load_dataset_roundtrip.py",
+  "pytest:tests/integration/test_bucket_dataset_remote_flow_uat.py",
+  "pytest:tests/integration/test_remote_ready_local_contracts.py",
+  "command:opentraces dataset publish my-dataset --check-only",
+]
+
+[[page]]
+doc = "clients/private-bucket.md"
+area = "Clients & Use Cases"
+journey = "Remote private bucket reads, prefetch, replay into a clone, and bucket-only consumer access."
+command_families = ["trace query --remote-bucket", "trace get --remote", "trail blame", "ctx tree", "bucket remote", "bucket prefetch", "bucket replay"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "otbox:mixed-agent-bucket-parity",
+  "pytest:tests/integration/test_bucket_remote_uat.py",
+  "pytest:tests/core/test_bucket_remote.py",
+  "command:OPENTRACES_FAKE_BUCKET_REMOTE_ROOT=/tmp/fake opentraces bucket remote pull --json",
+]
+
+[[page]]
+doc = "clients/agent-workflows.md"
+area = "Clients & Use Cases"
+journey = "Agent warmup, progressive discovery, session history search, context resume packets, and lineage tracking."
+command_families = ["trace query", "trace map", "trace slice", "trace get", "ctx step", "ctx resume", "trail track"]
+evidence = [
+  "otbox:codex-parity-linear",
+  "otbox:survival-walk-reverted",
+  "otbox:context-tree-otel-capture-fidelity",
+  "pytest:tests/cli/test_trace_query_plan056.py",
+  "pytest:tests/test_cli_ctx.py",
+  "pytest:tests/cli/test_trail_track.py",
+]
+
+[[page]]
+doc = "clients/trace-capsule.md"
+area = "Clients & Use Cases"
+journey = "Build one evidence closure from trace/query/map/slice/context/trail into a reviewable dataset row and check-only publish."
+command_families = ["trace query", "trace map", "trace slice", "ctx step", "ctx resume", "trail track", "workflow create", "dataset run", "dataset review", "dataset publish"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "otbox:codex-parity-linear",
+  "otbox:dataset-sync-skill-history",
+  "pytest:tests/integration/test_plan057_dataset_workflow_uat.py",
+  "pytest:tests/integration/test_plan058_fake_remote_uat.py",
+  "command:opentraces dataset publish trace-capsule-001 --check-only",
+]
+
+[[page]]
+doc = "integration/ci-cd.md"
+area = "Integration"
+journey = "CI-safe run/review/publish patterns, health checks, optional security setup, and no live HF dependency by default."
+command_families = ["dataset run", "dataset review", "dataset publish", "doctor", "setup trufflehog", "setup privacy-filter", "setup llm-review"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "pytest:tests/integration/test_plan057_dataset_workflow_uat.py",
+  "pytest:tests/integration/test_plan058_fake_remote_uat.py",
+  "pytest:tests/cli/test_cli_security.py",
+  "pytest:tests/publish/test_upload.py",
+  "command:opentraces dataset publish my-dataset --check-only",
+]
+
+[[page]]
+doc = "integration/agent-setup.md"
+area = "Integration"
+journey = "Project-local setup, Codex hooks, Claude/Codex skill setup, machine-readable agent flows, review and publish by agent."
+command_families = ["auth", "init --agent", "setup codex-cli", "setup claude-code", "setup skill", "setup bucket", "setup capture-otlp", "dataset review"]
+requires_fake_remote_or_check_only = true
+evidence = [
+  "otbox:codex-full-parity-latest",
+  "otbox:installed-cli-doctor",
+  "pytest:tests/cli/test_codex_installer.py",
+  "pytest:tests/cli/test_skill_installer.py",
+  "pytest:tests/capture/test_codex_hooks.py",
+  "command:opentraces dataset publish my-dataset --check-only",
+]
+
+[[page]]
+doc = "integration/capture-integration.md"
+area = "Integration"
+journey = "Parser/importer/hook installer contracts, registration, tiers, watcher integration, and adapter test requirements."
+command_families = ["SessionParser", "FormatImporter", "HookInstaller", "watcher", "capture registry"]
+evidence = [
+  "pytest:tests/capture/test_registry.py",
+  "pytest:tests/capture/test_parser_claude_code.py",
+  "pytest:tests/capture/test_parser_codex_cli.py",
+  "pytest:tests/capture/test_parser_hermes.py",
+  "pytest:tests/capture/test_watcher_installer.py",
+  "pytest:tests/capture/test_hooks.py",
+]
+
+[[page]]
+doc = "integration/post-processor-contract.md"
+area = "Integration"
+journey = "Post-processor stdin/stdout contract, ordered execution, strict vs non-strict failure policy, and redaction-before-processor invariant."
+command_families = ["post_processors", "doctor processors", "security before processors"]
+evidence = [
+  "pytest:tests/core/test_processors.py",
+  "pytest:tests/cli/test_cli_security.py",
+]
+
+[[page]]
+doc = "contributing/development.md"
+area = "Contributing"
+journey = "Editable install, optional dependencies, default and opt-in test commands, layout, and parser development flow."
+command_families = ["pip install -e", "pytest tests/ -v", "parser tests"]
+evidence = [
+  "pytest:tests/release/test_product_surface_uat_matrix.py",
+  "pytest:tests/capture/test_registry.py",
+  "pytest:tests/cli/test_help_renderer.py",
+  "log:kb/projects/opentraces/plan-083-run-log.md",
+]
+
+[[page]]
+doc = "contributing/schema-changes.md"
+area = "Contributing"
+journey = "Schema-change review, additive compatibility, breaking-change policy, adapter updates, and migration/release checks."
+command_families = ["schema changes", "schema compatibility", "HF features", "migration policy"]
+evidence = [
+  "pytest:tests/schema/test_schema.py",
+  "pytest:tests/schema/test_schema_041.py",
+  "pytest:tests/publish/test_hf_schema.py",
+  "pytest:tests/publish/test_upload.py",
+  "pytest:tests/schema/test_plan057_dataset_models.py",
+]
