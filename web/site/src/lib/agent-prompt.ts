@@ -48,6 +48,7 @@ Once set up, read the skill at .agents/skills/opentraces/SKILL.md for the full c
 Working with retained traces:
 - \`opentraces status\` shows the project snapshot
 - \`opentraces bucket status\` inspects the private bucket
+- \`opentraces bucket rebuild --json\` refreshes derived bucket projections
 - \`opentraces trace query\` searches retained traces
 - \`opentraces trace map <id> --bursts\` renders deterministic edit/intent bursts
 - \`opentraces trace slice <id> --template bursts\` creates workflow packets

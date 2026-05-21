@@ -51,13 +51,17 @@ blob hashes and checks for dangling references.
 
 ```bash
 opentraces bucket repair --json
+opentraces bucket rebuild --json
+opentraces bucket rebuild --substrate context-tree --json
 opentraces bucket prune --dry-run --json
 opentraces bucket prune --json
 ```
 
 `bucket repair` re-projects envelopes and the manifest from canonical events
-and blobs. `bucket prune` only deletes unreachable blobs and atomic-write temp
-files; it never deletes events or `trace.json`.
+and blobs. `bucket rebuild` refreshes one or all derived substrate projections
+from canonical state (`trail`, `traces`, `context-tree`, or `all`). `bucket
+prune` only deletes unreachable blobs and atomic-write temp files; it never
+deletes events or `trace.json`.
 
 ## Remote Sync
 

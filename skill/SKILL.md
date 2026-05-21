@@ -19,7 +19,7 @@ publishes reviewed dataset rows to HuggingFace remotes.
 - Trace retrieval and search: `opentraces trace query`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
 - Trace Trails (visible surface): `opentraces trail blame commit <sha>`, `opentraces trail blame pr render|create|update`, `opentraces trail graph`, `opentraces trail track`
 - Context Tree: `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `ctx list/info`
-- Bucket (private capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
+- Bucket (private capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket rebuild`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
 - Workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`
 - Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`.
 - Security tools: `opentraces security tools list/info`, `opentraces security sanitize --tools <names>` or `--use-config`
@@ -165,6 +165,8 @@ opentraces bucket status --json
 opentraces bucket manifest --json
 opentraces bucket verify --json
 opentraces bucket repair --json
+opentraces bucket rebuild --json
+opentraces bucket rebuild --substrate context-tree --json
 opentraces bucket prune --dry-run --json
 opentraces bucket prefetch <trace_id> --json
 opentraces bucket remote status --json
@@ -175,7 +177,8 @@ opentraces bucket replay --repo <repo-dir>
 ```
 
 Buckets are distinct from datasets. A bucket holds raw captured traces; a
-dataset holds workflow-projected rows. `bucket replay` replays
+dataset holds workflow-projected rows. `bucket rebuild` refreshes derived
+bucket projections from canonical state. `bucket replay` replays
 bucket-exported Trace Trails into a Git repository (useful when a teammate
 hands you a bucket and you need to materialise its evidence locally).
 

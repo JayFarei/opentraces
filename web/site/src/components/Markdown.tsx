@@ -40,11 +40,10 @@ export default function Markdown({ content }: { content: string }) {
             );
           },
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          code({ children, className, ...rest }: any) {
+          code({ children, className }: any) {
             const text = String(children);
 
-            const isBlock = rest.node?.position?.start?.line !== rest.node?.position?.end?.line
-              || text.includes("\n");
+            const isBlock = text.includes("\n") || Boolean(className);
             if (isBlock) {
               return <CodeBlock className={className}>{text}</CodeBlock>;
             }

@@ -100,7 +100,7 @@ Useful follow-ups:
 - `opentraces trail track <trace-id>` walks a trace's lineage through Git history and reports current `HEAD` survival.
 - `opentraces ctx tree/show/step/reads/writes/diff/resume` inspects the Context Tree: what the agent saw at a trace step.
 - `opentraces setup capture-otlp` and `opentraces capture-otlp start/status/flush` enable the higher-fidelity OTel capture source for Claude Code Context Trees.
-- `opentraces bucket status`, `bucket manifest`, `bucket verify`, `bucket repair`, `bucket prune`, and `bucket prefetch` inspect and maintain the local private trace bucket.
+- `opentraces bucket status`, `bucket manifest`, `bucket verify`, `bucket repair`, `bucket rebuild`, `bucket prune`, and `bucket prefetch` inspect and maintain the local private trace bucket.
 - `opentraces bucket remote push/pull/status/diff` syncs the private bucket with a private HuggingFace bucket remote (S3-backed storage) configured via `opentraces setup bucket`.
 - `opentraces trace query/get --remote-bucket` pulls the configured private bucket remote before reading local trace state; `opentraces trace get --remote <owner/repo>` reads a specific HF bucket directly.
 - `opentraces bucket replay` replays bucket-exported Trace Trails into a Git repository.

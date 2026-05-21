@@ -164,6 +164,8 @@ opentraces bucket manifest --json
 opentraces bucket verify --sample 100 --json
 opentraces bucket verify --full --json
 opentraces bucket repair --json
+opentraces bucket rebuild --json
+opentraces bucket rebuild --substrate context-tree --json
 opentraces bucket prune --dry-run --json
 opentraces bucket prefetch <trace-id> --json
 opentraces bucket remote status --json
