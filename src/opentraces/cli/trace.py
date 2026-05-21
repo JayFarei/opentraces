@@ -797,13 +797,13 @@ def trace_slice_cmd(
     "--resume",
     "resume",
     is_flag=True,
-    help="Hand control back to the upstream agent (Claude Code) for this trace.",
+    help="Hand control back to the native/upstream agent runtime for this trace.",
 )
 @click.option(
     "--at-step",
     "at_step",
     default=None,
-    help="With --resume: fork a new session from a specific step id (e.g. s42).",
+    help="With --resume: fork from a specific step id; currently Claude Code only.",
 )
 @click.option(
     "--dry-run",
@@ -868,8 +868,9 @@ def trace_get(
 ) -> None:
     """Resolve a trace, trace unit, map node, or ot:// Trail resource.
 
-    Pass ``--resume`` to hand control back to the upstream agent
-    (Claude Code) instead of printing the trace details. Pass
+    Pass ``--resume`` to hand control back to the native/upstream agent
+    runtime instead of printing the trace details. ``--at-step`` currently
+    requires a Claude Code trace. Pass
     ``--bursts`` to return the change-burst summary for the trace
     without re-walking the full Trace Map.
     """
@@ -1718,9 +1719,8 @@ def trace_discard(trace_id: str, confirmed: bool) -> None:
 # ---------------------------------------------------------------------------
 # ``ot trail resume`` — hand control back to the upstream agent.
 #
-# For claude-code traces we execvp into ``claude --resume <session_id>``
-# so the user drops straight into their native REPL. Other agents fall
-# back to printing the legacy hint.
+# Registered resumers can hand control back to a native agent REPL.
+# Agents without a resumer fall back to printing a generic hint.
 # ---------------------------------------------------------------------------
 
 
@@ -1740,9 +1740,9 @@ def _resume_trace_impl(
         resolve_trace_id_prefix,
         AmbiguousPrefixError,
     )
-    from ..core.agent_resume import resume_claude_code, print_generic_hint
+    from ..capture import get_resumer
+    from ..core.agent_resume import print_generic_hint
     from ..core.trails import snapshot_resume_packet
-    from ..capture.claude_code.resume import ResumeError, resolve_at_step
 
     state, staging_dir = _load_project_state()
     project_dir = Path.cwd()
@@ -1790,52 +1790,74 @@ def _resume_trace_impl(
         )
         sys.exit(6)
 
-    if agent_name in ("claude-code", "claude_code", "claude"):
+    resumer_cls = get_resumer(agent_name)
+    resumer = resumer_cls() if resumer_cls is not None else None
+
+    if resumer is not None:
         if at_step:
-            try:
-                snapshot_packet = snapshot_resume_packet(
-                    project_dir,
-                    record,
-                    at_step,
-                    state=state,
-                    dry_run=dry_run,
-                )
-            except ValueError as exc:
+            if not getattr(resumer, "supports_at_step", False):
+                message = f"--at-step resume is not supported for {agent_name} traces."
                 if as_json:
                     click.echo(
                         json.dumps(
-                            error_response("INVALID_STEP", "resume", str(exc)),
+                            error_response(
+                                "UNSUPPORTED_AT_STEP_AGENT",
+                                "resume",
+                                message,
+                            ),
                             indent=2,
                             sort_keys=True,
                         )
                     )
                 else:
-                    click.echo(str(exc), err=True)
+                    click.echo(message, err=True)
                 sys.exit(2)
-            if as_json:
-                click.echo(json.dumps(snapshot_packet, indent=2, sort_keys=True))
-                sys.exit(0)
-            if snapshot_packet.get("resume_mode") == "snapshot_backed":
-                argv = snapshot_packet.get("launch", {}).get("argv") or []
-                new_session_id = snapshot_packet.get("session", {}).get("new_session_id")
-                materialization = snapshot_packet.get("materialization") or {}
-                if dry_run:
-                    click.echo(" ".join(argv))
-                    click.echo(
-                        "would materialize snapshot "
-                        f"{snapshot_packet.get('snapshot', {}).get('snapshot_id')} "
-                        f"at {materialization.get('path')}"
+
+            if agent_name in ("claude-code", "claude_code", "claude"):
+                try:
+                    snapshot_packet = snapshot_resume_packet(
+                        project_dir,
+                        record,
+                        at_step,
+                        state=state,
+                        dry_run=dry_run,
                     )
+                except ValueError as exc:
+                    if as_json:
+                        click.echo(
+                            json.dumps(
+                                error_response("INVALID_STEP", "resume", str(exc)),
+                                indent=2,
+                                sort_keys=True,
+                            )
+                        )
+                    else:
+                        click.echo(str(exc), err=True)
+                    sys.exit(2)
+                if as_json:
+                    click.echo(json.dumps(snapshot_packet, indent=2, sort_keys=True))
                     sys.exit(0)
-                rc = resume_claude_code(
-                    new_session_id,
-                    project_cwd=Path(materialization.get("path")),
-                    dry_run=False,
-                )
-                sys.exit(rc)
+                if snapshot_packet.get("resume_mode") == "snapshot_backed":
+                    argv = snapshot_packet.get("launch", {}).get("argv") or []
+                    new_session_id = snapshot_packet.get("session", {}).get("new_session_id")
+                    materialization = snapshot_packet.get("materialization") or {}
+                    if dry_run:
+                        click.echo(" ".join(argv))
+                        click.echo(
+                            "would materialize snapshot "
+                            f"{snapshot_packet.get('snapshot', {}).get('snapshot_id')} "
+                            f"at {materialization.get('path')}"
+                        )
+                        sys.exit(0)
+                    rc = resumer.resume_session(
+                        new_session_id,
+                        project_cwd=Path(materialization.get("path")),
+                        dry_run=False,
+                    )
+                    sys.exit(rc)
 
             try:
-                target = resolve_at_step(
+                target = resumer.resolve_at_step(
                     full_id,
                     at_step,
                     staging_dir,
@@ -1843,8 +1865,8 @@ def _resume_trace_impl(
                     state=state,
                     materialize=not dry_run,
                 )
-            except ResumeError as exc:
-                click.echo(exc.message, err=True)
+            except Exception as exc:  # noqa: BLE001
+                click.echo(getattr(exc, "message", str(exc)), err=True)
                 sys.exit(6)
 
             if dry_run:
@@ -1854,15 +1876,18 @@ def _resume_trace_impl(
                 )
                 sys.exit(0)
 
-            rc = resume_claude_code(
+            rc = resumer.resume_session(
                 target.new_session_id,
                 project_cwd=project_dir,
                 dry_run=False,
             )
             sys.exit(rc)
 
-        rc = resume_claude_code(session_id, project_cwd=project_dir,
-                                dry_run=dry_run)
+        rc = resumer.resume_session(
+            session_id,
+            project_cwd=project_dir,
+            dry_run=dry_run,
+        )
         sys.exit(rc)
 
     if at_step:
@@ -1904,7 +1929,7 @@ def _resume_trace_impl(
 @click.option(
     "--at-step",
     "at_step",
-    help="Fork a new Claude Code session from a specific step id (for example: s42).",
+    help="Fork from a specific step id; currently Claude Code only.",
 )
 @click.option("--dry-run", "dry_run", is_flag=True,
               help="Print the resume command instead of exec'ing it.")

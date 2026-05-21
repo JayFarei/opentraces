@@ -65,6 +65,8 @@ def setup_group(ctx: click.Context) -> None:
     \b
       claude-code   PreToolUse/PostToolUse/Stop/PostCompact hooks that capture
                     Claude Code step boundaries and session transcripts.
+      codex-cli     Native Codex CLI hook commands that write opentraces
+                    sidecars and trigger ingestion on Stop.
       git           post-commit hook that correlates each commit to the
                     trace that produced it (via refs/notes/opentraces),
                     powering `opentraces trail blame`.
@@ -73,10 +75,12 @@ def setup_group(ctx: click.Context) -> None:
                     Has its own subcommands: install/start/stop/status/tick.
       auth          HuggingFace login for private bucket sync and dataset remotes.
       bucket        Configure the private bucket as remote-by-default or local-only.
-      trufflehog    Tier 1.5 secret scanner. Findings redact in place
-                    and block unsafe dataset publication.
-      llm-review    Tier 2 third-party LLM reviewer for dataset rows,
-                    used by dataset publication gates.
+      trufflehog    optional deep secret detector. Findings redact in place
+                    only when the tool is explicitly enabled.
+      privacy-filter
+                    optional local/HF NER PII detector (transformers + torch).
+      llm-review    optional dataset-row reviewer used by publication gates,
+                    separate from per-record sanitize tools.
 
     Run bare ``opentraces setup`` for an interactive wizard that walks every
     integration, or call a subcommand to target one directly.
@@ -612,9 +616,9 @@ def _run_setup_wizard() -> None:
     human_echo(f"  {_cli._bold('trufflehog'):<28} {th_label}")
     if not (th_enabled and th_version):
         if _wizard_confirm(
-            "enable trufflehog (Tier 1.5) globally?",
+            "enable the optional TruffleHog secret detector globally?",
             default=False,
-            hint="redacts findings in place and forces review; global setting",
+            hint="runs only when explicitly enabled; global setting",
         ):
             if th_version is None:
                 ok, method = install_binary()
@@ -634,7 +638,7 @@ def _run_setup_wizard() -> None:
     human_echo(f"  {_cli._bold('llm-review'):<28} {llm_label}")
     if not llm_enabled:
         if _wizard_confirm(
-            "enable Tier 2 LLM trace review globally?",
+            "enable optional LLM dataset-row review globally?",
             default=False,
             hint="configure via 'opentraces setup llm-review'; global setting",
         ):
@@ -770,6 +774,123 @@ def setup_claude_code(
         "hooks_added": result.added,
         "next_steps": [
             "Hooks are now active for all future Claude Code sessions.",
+            "Use 'opentraces trace query' and dataset workflows after sessions.",
+        ],
+    })
+
+
+@setup_group.command(
+    "codex-cli",
+    examples=[
+        "opentraces setup codex-cli",
+        "opentraces setup codex-cli --dry-run",
+        "opentraces setup codex-cli --remove",
+    ],
+    see_also=[
+        ("opentraces init --agent codex-cli", "connect a project to Codex capture"),
+        ("opentraces setup git", "install the post-commit hook"),
+        ("opentraces doctor", "verify the installation"),
+    ],
+    option_groups=[
+        ("Paths", ["hooks_dir", "hooks_file"]),
+        ("Action", ["dry_run", "remove"]),
+    ],
+)
+@click.option(
+    "--hooks-dir",
+    default=None,
+    help="Target directory for copied hook scripts (default: ~/.codex/hooks/opentraces/)",
+)
+@click.option(
+    "--hooks-file",
+    default=None,
+    help="Codex hooks file (default: ~/.codex/hooks.json)",
+)
+@click.option("--dry-run", is_flag=True, help="Print the plan without making changes")
+@click.option("--remove", is_flag=True, help="Uninstall hooks instead of installing")
+def setup_codex_cli(
+    hooks_dir: str | None,
+    hooks_file: str | None,
+    dry_run: bool,
+    remove: bool,
+) -> None:
+    """Install Codex CLI session-capture hooks.
+
+    Registers native Codex hook commands in ``~/.codex/hooks.json``. Hook
+    scripts write project-local sidecar JSONL under ``.opentraces/codex-cli``
+    and the Stop hook triggers bounded session ingestion through the Codex
+    parser.
+    """
+    from ..capture._base import HookInstallError
+    from ..capture.codex_cli.install import (
+        install as install_hooks,
+        plan_install,
+        remove as remove_hooks,
+    )
+
+    hd = Path(hooks_dir) if hooks_dir else None
+    hf = Path(hooks_file) if hooks_file else None
+
+    if remove:
+        result = remove_hooks(hd, hf)
+        target = result.config_files[0] if result.config_files else hf
+        human_echo(f"opentraces Codex hooks removed from {target}.")
+        emit_json({
+            "status": "ok",
+            "action": "remove",
+            "removed": result.removed,
+        })
+        return
+
+    try:
+        if dry_run:
+            plan, target = plan_install(hd, hf)
+            plan_data = [
+                {
+                    "event": item.event,
+                    "module": item.module,
+                    "source": str(item.source),
+                    "dest": str(item.dest),
+                }
+                for item in plan
+            ]
+            human_echo("[dry-run] Would install Codex hooks:")
+            for item in plan_data:
+                human_echo(
+                    f"  {item['event']}: {item['source']} -> {item['dest']}"
+                )
+            human_echo(f"[dry-run] Would update: {target}")
+            emit_json({
+                "status": "ok",
+                "dry_run": True,
+                "plan": plan_data,
+                "hooks_file": str(target),
+            })
+            return
+
+        result = install_hooks(hd, hf)
+    except HookInstallError as exc:
+        emit_json(error_response(exc.code, "install", exc.message))
+        sys.exit(5)
+
+    for dest in result.installed.values():
+        human_echo(f"Installed: {dest}")
+    if result.added:
+        human_echo(
+            f"Registered Codex hooks in {result.hooks_file}: {', '.join(result.added)}"
+        )
+    else:
+        human_echo(
+            f"Codex hooks already registered in {result.hooks_file}, no changes needed."
+        )
+
+    emit_json({
+        "status": "ok",
+        "installed": result.installed,
+        "hooks_file": str(result.hooks_file),
+        "hooks_added": result.added,
+        "next_steps": [
+            "Hooks are now active for all future Codex CLI sessions.",
             "Use 'opentraces trace query' and dataset workflows after sessions.",
         ],
     })
@@ -947,24 +1068,29 @@ def _pick_install_method_interactive() -> str | None:
         "opentraces setup trufflehog --disable",
     ],
     see_also=[
-        ("opentraces doctor", "check Tier 1.5 health"),
+        ("opentraces doctor", "check security tool health"),
     ],
 )
-@click.option("--enable", is_flag=True,
-              help="Flip Tier 1.5 on; fails TRUFFLEHOG_MISSING if binary absent")
+@click.option(
+    "--enable",
+    is_flag=True,
+    help=(
+        "Enable the optional TruffleHog detector; fails TRUFFLEHOG_MISSING "
+        "if binary absent"
+    ),
+)
 @click.option("--disable", is_flag=True,
-              help="Flip Tier 1.5 off (binary stays installed)")
+              help="Disable the optional TruffleHog detector (binary stays installed)")
 @click.option("--verify", is_flag=True, hidden=True,
               help="Legacy alias for --enable")
 @click.option("--project", "scope_project", is_flag=True,
               help="Scope this change to the project's marker (default: global config).")
 def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool, scope_project: bool = False) -> None:
-    """Enable Tier 1.5 secret scanning via TruffleHog.
+    """Configure the optional deep secret detector via TruffleHog.
 
-    Tier 1.5 runs the TruffleHog scanner on every staged and pushed trace.
-    Findings are redacted in place, recorded in trace metadata, and force
-    review before upload. Complements the always-on Tier 1a regex + 1b
-    entropy scans.
+    TruffleHog runs only when explicitly enabled in config. Findings are
+    redacted in place, recorded in trace metadata, and can block unsafe
+    dataset publication.
 
     \b
     Flows:
@@ -982,7 +1108,7 @@ def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool, scope_projec
     if disable:
         cfg.security.trufflehog.enabled = False
         save_config(cfg)
-        human_echo("TruffleHog tier disabled. Binary was not uninstalled.")
+        human_echo("TruffleHog detector disabled. Binary was not uninstalled.")
         human_hint("Re-enable with: opentraces setup trufflehog --enable")
         emit_json({"status": "ok", "action": "disable",
                    "trufflehog_enabled": False})
@@ -1088,7 +1214,7 @@ def _render_trufflehog_success(version: str, *, already_present: bool,
 
 
 # ---------------------------------------------------------------------------
-# Review-LLM setup (opt-in Tier 2: third-party LLM review for dataset egress)
+# Review-LLM setup (opt-in third-party LLM review for dataset egress)
 # ---------------------------------------------------------------------------
 
 
@@ -1367,12 +1493,12 @@ def setup_review_llm_cmd(
     no_interactive: bool,
     scope_project: bool = False,
 ) -> None:
-    """Configure the Tier 2 LLM reviewer for dataset publication gates.
+    """Configure the optional LLM dataset-row reviewer for publication gates.
 
     Points opentraces at an OpenAI-compatible, Ollama, Anthropic, or
     fake backend that can review outgoing dataset rows and flag residual
-    sensitive content the regex/entropy/TruffleHog tiers could miss
-    (semantic PII, proprietary context, policy concerns).
+    sensitive content explicit sanitize tools could miss (semantic PII,
+    proprietary context, policy concerns).
 
     Stored globally in ~/.opentraces/config.json under
     security.llm_review. One config per machine, projects inherit it.
@@ -1550,7 +1676,6 @@ def _row(mark_kind: str, label: str, value: str, *, detail: str | None = None) -
 
 
 _TIER_STATE_MARK = {
-    "always-on": "ok",
     "enabled": "ok",
     "on-demand": "ok",
     "required": "ok",
@@ -1562,7 +1687,6 @@ _TIER_STATE_MARK = {
 }
 
 _TIER_STATE_LABEL = {
-    "always-on": "always on",
     "enabled": "enabled",
     "on-demand": "on demand",
     "required": "required",
@@ -1647,10 +1771,6 @@ def _tier_toggle_hint(state: str, tier: dict) -> str | None:
     """Return the command the user can run to flip this tier's state."""
     enable = tier.get("enable_cmd")
     disable = tier.get("disable_cmd")
-    # Always-on tiers have no toggle — skip the hint line entirely to
-    # keep the report compact.
-    if state == "always-on":
-        return None
     # Human review is policy-driven, not an on/off toggle.
     if "review_policy" in tier:
         other = "auto" if tier.get("review_policy") == "review" else "review"

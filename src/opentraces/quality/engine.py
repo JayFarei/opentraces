@@ -15,7 +15,7 @@ from typing import Any
 
 from opentraces_schema import TraceRecord
 
-from .types import CheckDef, CheckResult, PersonaDef, RubricItem, RubricReport
+from .types import PersonaDef, RubricItem
 from .schema_audit import (
     SchemaAuditReport,
     audit_schema_completeness,
@@ -483,10 +483,11 @@ def generate_report(batch: BatchAssessment) -> str:
 
 @dataclass
 class ProjectInfo:
-    """Info about one Claude Code project directory."""
+    """Info about one parser-backed project/session directory."""
     name: str
     path: Path
     session_count: int
+    agent_name: str = "claude-code"
 
 
 @dataclass
@@ -572,7 +573,7 @@ def assess_multi_project(
         max_total: Total cap across all projects.
         personas: Custom persona list. If None, uses defaults.
     """
-    from ..capture.claude_code import ClaudeCodeParser
+    from ..capture import get_parser
     from ..enrichment.metrics import compute_metrics
     from ..enrichment.attribution import build_attribution
     from ..enrichment.git_signals import detect_commits_from_steps
@@ -585,7 +586,6 @@ def assess_multi_project(
     if personas is None:
         personas = _get_default_personas()
 
-    parser = ClaudeCodeParser()
     result = MultiProjectAssessment()
     all_traces: list[TraceRecord] = []
     total_sampled = 0
@@ -604,6 +604,17 @@ def assess_multi_project(
         sampled = sessions[:budget]
         total_sampled += len(sampled)
         result.total_sessions_scanned += len(sampled)
+
+        try:
+            parser = get_parser(project.agent_name)()
+        except KeyError:
+            logger.warning(
+                "Skipping %s: no parser registered for %s",
+                project.name,
+                project.agent_name,
+            )
+            result.total_traces_failed += len(sampled)
+            continue
 
         # Parse
         traces: list[TraceRecord] = []

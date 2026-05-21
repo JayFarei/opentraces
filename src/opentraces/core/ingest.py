@@ -1,6 +1,6 @@
 """Session-level ingestion core.
 
-Converts Claude Code JSONL session files into staged ``TraceRecord``
+Converts registered agent JSONL session files into staged ``TraceRecord``
 entries in the project's local inbox. This module is the single
 authoritative entry point for:
 
@@ -43,7 +43,11 @@ from typing import Callable
 
 from opentraces_schema import SCHEMA_VERSION
 
-from ..capture.claude_code.parse import ClaudeCodeParser
+from ..capture import (
+    discover_project_sessions,
+    get_parser,
+    session_id_from_path,
+)
 from ..security import SECURITY_VERSION
 from .config import (
     Config,
@@ -54,7 +58,7 @@ from .config import (
     load_project_config,
 )
 from .pipeline import process_trace
-from .repo_identity import discover_claude_jsonl_corpus
+from .repo_identity import discover_claude_jsonl_corpus as _discover_claude_jsonl_corpus
 from .state import (
     GenerationRecord,
     StateManager,
@@ -63,6 +67,11 @@ from .state import (
 from .workflow import decide_post_parse_status
 
 logger = logging.getLogger(__name__)
+
+
+def discover_claude_jsonl_corpus(repo: Path) -> list[Path]:
+    """Compatibility seam for existing tests and Claude-only callers."""
+    return _discover_claude_jsonl_corpus(repo)
 
 
 # --------------------------------------------------------------------------- #
@@ -204,9 +213,9 @@ class _FileLock:
                 self._fd = None
 
 
-def _session_id_from(jsonl_path: Path) -> str:
-    """Claude Code encodes session_id as the basename without suffix."""
-    return jsonl_path.stem
+def _session_id_from(jsonl_path: Path, parser_name: str = "claude-code") -> str:
+    """Return the native session id for a parser/source path pair."""
+    return session_id_from_path(parser_name, jsonl_path)
 
 
 def _has_grown(jsonl_path: Path, observed_size: int,
@@ -236,8 +245,9 @@ def ingest_one_session(
     reparse: bool = False,
     cfg: Config | None = None,
     wait_for_lock: bool = True,
+    parser_name: str | None = None,
 ) -> IngestResult:
-    """Ingest a single Claude Code session JSONL into the project's inbox.
+    """Ingest a single registered-agent session JSONL into the project's inbox.
 
     Idempotent: safe to call repeatedly against a live session. Returns
     an ``IngestResult`` describing what changed (new / refreshed /
@@ -247,13 +257,15 @@ def ingest_one_session(
     grown. Used by the ``_scan --reparse`` CLI path and by the schema-
     bump auto-upgrade (Phase 3) — not by the default watcher tick.
     """
-    session_id = _session_id_from(jsonl_path)
+    resolved_parser_name = parser_name or "claude-code"
+    session_id = _session_id_from(jsonl_path, resolved_parser_name)
 
     try:
         with _FileLock(_lock_path_for(project_dir, session_id),
                        blocking=wait_for_lock):
             return _ingest_locked(jsonl_path, project_dir, session_id,
-                                  reparse=reparse, cfg=cfg)
+                                  reparse=reparse, cfg=cfg,
+                                  parser_name=resolved_parser_name)
     except _LockHeld:
         # Another ingest already owns this session; it (or the watcher
         # sweep) will cover the work. Skip rather than stack behind it.
@@ -277,6 +289,7 @@ def _ingest_locked(
     *,
     reparse: bool,
     cfg: Config | None,
+    parser_name: str,
 ) -> IngestResult:
     """Inner, flock-held ingest. Must not raise; caller wraps."""
 
@@ -344,7 +357,7 @@ def _ingest_locked(
     # session (no meaningful content yet). We treat that as a clean skip
     # and still advance the observed_* bookmark so we don't reparse this
     # exact byte-state on every tick.
-    parser = ClaudeCodeParser()
+    parser = get_parser(parser_name)()
     record = parser.parse_session(jsonl_path)
     if record is None:
         state.upsert_session(
@@ -365,7 +378,7 @@ def _ingest_locked(
 
     # Persist the parser's step anchors to local state. Anchors power
     # `opentraces resume --at-step` and live outside the schema because
-    # they point into ~/.claude/projects/ on the capture machine.
+    # they point into native parser session stores on the capture machine.
     state.set_step_anchors(trace_id, getattr(parser, "step_anchors", {}) or {})
 
     resolved_cfg = cfg or load_config()
@@ -442,15 +455,26 @@ def _ingest_locked(
     # active-path record. Independent try block so a Context Tree failure
     # never blocks Trail event emission or normal ingest.
     try:
-        from ..capture.claude_code.context_tree_capture import (
-            emit_context_tree_events_from_record,
-        )
+        emit_context_tree = getattr(parser, "emit_context_tree_events_from_record", None)
+        if callable(emit_context_tree):
+            ct_summary = emit_context_tree(
+                project_dir=project_dir,
+                final_record=final_record,
+                transcript_path=jsonl_path,
+            )
+        elif parser_name == "claude-code":
+            from ..capture.claude_code.context_tree_capture import (
+                emit_context_tree_events_from_record,
+            )
 
-        ct_summary = emit_context_tree_events_from_record(
-            project_dir=project_dir,
-            final_record=final_record,
-            transcript_path=jsonl_path,
-        )
+            ct_summary = emit_context_tree_events_from_record(
+                project_dir=project_dir,
+                final_record=final_record,
+                transcript_path=jsonl_path,
+            )
+        else:
+            ct_summary = {}
+        ct_summary = ct_summary or {}
         # R10 cross-substrate join: populate Step.context_node_id from the
         # active-path step_index -> node_id map the orchestrator returned.
         # Mutating final_record.steps in place before the staging JSONL is
@@ -498,8 +522,8 @@ def _ingest_locked(
             jsonl_path,
             trace_id=final_record.trace_id,
             project_slug=project_slug,
-            source_kind="claude-code-session-jsonl",
-            parser="claude-code",
+            source_kind=f"{parser_name}-session-jsonl",
+            parser=parser_name,
         )
     except Exception:
         logger.warning("raw source bucket write failed for %s", trace_id, exc_info=True)
@@ -624,6 +648,37 @@ def _resolve_review_policy(project_dir: Path) -> str:
         return "review"
 
 
+def _project_agent_names(project_dir: Path) -> list[str] | None:
+    try:
+        agents = load_project_config(project_dir).get("agents")
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(agents, list):
+        return None
+    return [str(agent) for agent in agents if isinstance(agent, str)]
+
+
+def _discover_sessions_for_project(
+    project_dir: Path,
+    agent_names: list[str] | None,
+) -> list[tuple[str, Path]]:
+    if not agent_names:
+        return discover_project_sessions(project_dir)
+
+    out: list[tuple[str, Path]] = []
+    for agent_name in agent_names:
+        if agent_name == "claude-code":
+            out.extend(
+                ("claude-code", path)
+                for path in discover_claude_jsonl_corpus(project_dir)
+            )
+        else:
+            out.extend(
+                discover_project_sessions(project_dir, agent_names=[agent_name])
+            )
+    return sorted(out, key=lambda item: (item[0], str(item[1])))
+
+
 # --------------------------------------------------------------------------- #
 # Project-wide scan
 # --------------------------------------------------------------------------- #
@@ -632,11 +687,11 @@ def scan_project(
     project_dir: Path,
     *,
     reparse: bool = False,
-    paths: list[Path] | None = None,
+    paths: list[Path | tuple[str, Path]] | None = None,
     cfg: Config | None = None,
     on_result: Callable[[IngestResult, int, int], None] | None = None,
 ) -> ScanReport:
-    """Scan every Claude Code JSONL associated with ``project_dir``.
+    """Scan every registered parser JSONL associated with ``project_dir``.
 
     Per-session failures are isolated — one broken JSONL never aborts
     the scan. The report carries one ``IngestResult`` per session
@@ -645,24 +700,36 @@ def scan_project(
     project_dir = Path(project_dir).resolve()
 
     if paths is None:
-        candidates = discover_claude_jsonl_corpus(project_dir)
+        candidates = _discover_sessions_for_project(
+            project_dir,
+            _project_agent_names(project_dir),
+        )
     else:
-        candidates = [Path(p) for p in paths]
+        candidates = [
+            (str(item[0]), Path(item[1]))
+            if isinstance(item, tuple)
+            else ("claude-code", Path(item))
+            for item in paths
+        ]
 
     resolved_cfg = cfg or load_config()
     report = ScanReport(project_dir=project_dir)
 
     total = len(candidates)
-    for idx, jsonl in enumerate(candidates, start=1):
+    for idx, (parser_name, jsonl) in enumerate(candidates, start=1):
         try:
             result = ingest_one_session(
-                jsonl, project_dir, reparse=reparse, cfg=resolved_cfg
+                jsonl,
+                project_dir,
+                reparse=reparse,
+                cfg=resolved_cfg,
+                parser_name=parser_name,
             )
         except Exception as e:  # noqa: BLE001 — ingest_one_session already
             # wraps, but keep a belt here for the discovery path.
             logger.exception("scan_project: ingest crashed for %s", jsonl)
             result = IngestResult(
-                session_id=_session_id_from(jsonl),
+                session_id=_session_id_from(jsonl, parser_name),
                 action="error",
                 error=f"{type(e).__name__}: {e}",
             )
@@ -701,8 +768,6 @@ def _backfill_patches_from_trail_events(
     Patch ordering: by ``step_index`` ascending, then by event_sequence so
     multiple patches at the same step preserve their emission order.
     """
-    from opentraces_schema import Patch
-
     from .trails.event_log import read_events
 
     try:

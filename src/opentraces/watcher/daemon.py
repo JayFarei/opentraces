@@ -36,6 +36,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..capture import discover_project_sessions
 from ..core.config import PROJECTS_DIR, get_project_state_path
 from ..core.ingest import scan_project
 from ..core.paths import OPENTRACES_DIR
@@ -186,20 +187,25 @@ def _count_new_commits(project_cwd: Path, last_sha: str | None) -> int:
 
 
 def _jsonl_activity_since(project_cwd: Path, threshold_iso: str | None) -> bool:
-    """True if any ``*.jsonl`` under the Claude corpus has mtime > threshold."""
-    d = _claude_jsonl_dir(project_cwd)
-    if not d.is_dir():
+    """True if any registered parser session has mtime > threshold."""
+    session_paths = [path for _agent, path in discover_project_sessions(project_cwd)]
+    claude_dir = _claude_jsonl_dir(project_cwd)
+    if claude_dir.is_dir():
+        # Keep the watcher backstop sensitive to nested Claude subagent JSONLs
+        # even though the main ingest path only parses root session files.
+        session_paths.extend(claude_dir.rglob("*.jsonl"))
+    if not session_paths:
         return False
     if threshold_iso is None:
         # First probe ever; any file is "new".
-        return any(d.rglob("*.jsonl"))
+        return True
     try:
         threshold = datetime.datetime.fromisoformat(
             threshold_iso.replace("Z", "+00:00")
         ).timestamp()
     except (ValueError, TypeError):
         return True
-    for p in d.rglob("*.jsonl"):
+    for p in session_paths:
         try:
             if p.stat().st_mtime > threshold:
                 return True

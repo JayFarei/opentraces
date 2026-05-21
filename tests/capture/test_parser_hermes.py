@@ -379,7 +379,7 @@ class TestImportTraces:
 
 class TestPipelineIntegration:
     def test_process_imported_trace(self):
-        """Integration: parse -> enrich -> security pipeline."""
+        """Integration: parse -> enrich, with security tools defaulting off."""
         from opentraces.core.config import Config
         from opentraces.core.pipeline import process_imported_trace
 
@@ -391,7 +391,8 @@ class TestPipelineIntegration:
         cfg = Config()
         result = process_imported_trace(record, cfg)
 
-        assert result.record.security.scanned is True
+        assert result.record.security.scanned is False
+        assert result.record.metadata["security"]["tools_applied"] == []
         assert result.record.metrics.total_steps > 0
         # Source metrics should be preserved (FIX-3)
         assert result.record.metrics.total_input_tokens == 1000

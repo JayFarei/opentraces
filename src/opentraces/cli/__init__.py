@@ -128,9 +128,21 @@ COMMAND_SECTIONS = [
         ],
     ),
     (
+        "Context",
+        [
+            "ctx",
+        ],
+    ),
+    (
         "Bucket",
         [
             "bucket",
+        ],
+    ),
+    (
+        "Workflow",
+        [
+            "workflow",
         ],
     ),
     (
@@ -139,13 +151,40 @@ COMMAND_SECTIONS = [
             "dataset",
         ],
     ),
+    (
+        "Security",
+        [
+            "security",
+        ],
+    ),
+    (
+        "Capture",
+        [
+            "capture-otlp",
+        ],
+    ),
+    (
+        "Maintenance",
+        [
+            "git-backfill",
+        ],
+    ),
 ]
 
 # Sections whose entries should also list their non-hidden subcommands
 # inline, so the root --help reveals the verbs each group exposes.
 # Sections that carry a third tuple element (sub-categories) handle
 # their own expansion via the sub-category map, so they're not in this set.
-EXPANDED_SECTIONS = {"Trace", "Trail", "Bucket", "Dataset"}
+EXPANDED_SECTIONS = {
+    "Trace",
+    "Trail",
+    "Context",
+    "Bucket",
+    "Workflow",
+    "Dataset",
+    "Security",
+    "Capture",
+}
 
 
 # -- Color helpers ------------------------------------------------------------
@@ -322,9 +361,9 @@ class GroupedGroup(OpentracesGroup):
         return styled
 
     def format_commands(self, ctx: click.Context, formatter: click.HelpFormatter) -> None:
-        # Journey-first sectioned listing. Keep the unreleased development
-# surface narrow: no compatibility block, no old inbox-first aliases, and
-# no workflow-registry section now that workflows are referenced by datasets.
+        # Journey-first sectioned listing. Public roots are intentionally
+        # sectioned here rather than left to Click's flat listing so the live
+        # CLI remains the source of truth for docs and agent discovery.
         # A section entry may carry an optional 3rd element — a list of
         # (sub_label, [subcommand_names]) tuples — to bucket a group's
         # subcommands under labelled sub-headings.
@@ -1148,7 +1187,7 @@ def _capture_sessions_into_project(
         load_project_config, get_project_traces_dir, get_project_state_path,
         project_is_opted_in,
     )
-    from ..capture.claude_code import ClaudeCodeParser
+    from ..capture import get_parser
     from ..core.pipeline import process_trace
     from ..core.state import StateManager, TraceStatus, ProcessedFile
 
@@ -1166,7 +1205,7 @@ def _capture_sessions_into_project(
     staging = get_project_traces_dir(project_dir)
     staging.mkdir(parents=True, exist_ok=True)
 
-    parser = ClaudeCodeParser()
+    parser = get_parser("claude-code")()
 
     state_path = get_project_state_path(project_dir)
     state = StateManager(state_path=state_path)
@@ -1640,12 +1679,18 @@ def _plan043_finalize_identity(project_dir: Path) -> None:
         ("Agents", ["agents", "import_existing"]),
     ],
 )
-@click.option("--agent", "agents", multiple=True, type=click.Choice(list(SUPPORTED_AGENTS)), help="Agent runtime to connect")
+@click.option(
+    "--agent",
+    "agents",
+    multiple=True,
+    type=click.Choice(sorted({*SUPPORTED_AGENTS, "claude", "codex"})),
+    help="Agent runtime to connect",
+)
 @click.option(
     "--import-existing/--start-fresh",
     "import_existing",
     default=None,
-    help="Import existing Claude Code traces for this repo",
+    help="Import existing Claude Code traces for this repo only",
 )
 def init(
     agents: tuple[str, ...],
@@ -1814,7 +1859,12 @@ def init(
     click.echo(f"  Marker:  {marker_file}")
     click.echo(f"  Traces:  {traces_dir}")
     if hook_installed:
-        click.echo("  Hook:    .claude/settings.json (SessionEnd)")
+        hook_targets: list[str] = []
+        if "claude-code" in selected_agents:
+            hook_targets.append(".claude/settings.json")
+        if "codex-cli" in selected_agents:
+            hook_targets.append("~/.codex/hooks.json")
+        click.echo(f"  Hook:    {', '.join(hook_targets) if hook_targets else 'installed'}")
     if skill_installed:
         click.echo("  Skill:   .agents/skills/opentraces/SKILL.md")
     click.echo(f"  Agents:  {', '.join(selected_agents)}")
@@ -2170,47 +2220,71 @@ def _upgrade_impl(skill_only: bool) -> None:
 
 def _install_capture_hook(project_dir: Path, agents: list[str]) -> bool:
     """Install supported agent hooks for auto-parsing."""
-    if "claude-code" not in agents:
-        return False
+    installed_any = False
 
-    claude_dir = project_dir / ".claude"
-    settings_path = claude_dir / "settings.json"
+    if "claude-code" in agents:
+        claude_dir = project_dir / ".claude"
+        settings_path = claude_dir / "settings.json"
 
-    hook_entry = {
-        "type": "command",
-        "command": "$(command -v opentraces || command -v OTD || command -v OT) _capture --project-dir .",
-        "timeout": 60,
-    }
+        hook_entry = {
+            "type": "command",
+            "command": "$(command -v opentraces || command -v OTD || command -v OT) _capture --project-dir .",
+            "timeout": 60,
+        }
 
-    try:
-        claude_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            claude_dir.mkdir(parents=True, exist_ok=True)
 
-        settings = {}
-        if settings_path.exists():
-            try:
-                settings = json.loads(settings_path.read_text())
-            except Exception:
-                settings = {}
+            settings = {}
+            if settings_path.exists():
+                try:
+                    settings = json.loads(settings_path.read_text())
+                except Exception:
+                    settings = {}
 
-        hooks = settings.setdefault("hooks", {})
-        session_end = hooks.setdefault("SessionEnd", [])
+            hooks = settings.setdefault("hooks", {})
+            session_end = hooks.setdefault("SessionEnd", [])
 
-        # Check if hook already installed
-        for group in session_end:
-            for h in group.get("hooks", []):
-                if "opentraces" in h.get("command", ""):
-                    human_echo("  Hook already installed")
-                    return True
+            # Check if hook already installed
+            for group in session_end:
+                for h in group.get("hooks", []):
+                    if "opentraces" in h.get("command", ""):
+                        human_echo("  Claude Code hook already installed")
+                        installed_any = True
+                        break
+                if installed_any:
+                    break
 
-        # Add the hook
-        session_end.append({"hooks": [hook_entry]})
-        settings_path.write_text(json.dumps(settings, indent=2) + "\n")
-        human_echo("  Installed Claude Code SessionEnd hook")
-        return True
-    except Exception as e:
-        human_echo(f"  Could not install hook: {e}")
-        human_echo("  Add manually to .claude/settings.json")
-        return False
+            if not installed_any:
+                # Add the hook
+                session_end.append({"hooks": [hook_entry]})
+                settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+                human_echo("  Installed Claude Code SessionEnd hook")
+                installed_any = True
+        except Exception as e:
+            human_echo(f"  Could not install Claude Code hook: {e}")
+            human_echo("  Add manually to .claude/settings.json")
+
+    if "codex-cli" in agents:
+        try:
+            from ..capture._base import HookInstallError
+            from ..capture.codex_cli.install import CodexCliHookInstaller
+
+            result = CodexCliHookInstaller().install()
+            if result.ok:
+                target = result.config_files[0] if result.config_files else "~/.codex/hooks.json"
+                if result.added:
+                    human_echo(f"  Installed Codex CLI hooks: {target}")
+                else:
+                    human_echo(f"  Codex CLI hooks already installed: {target}")
+                installed_any = True
+        except HookInstallError as exc:
+            human_echo(f"  Could not install Codex CLI hooks: {exc.message}")
+            human_echo("  Run 'opentraces setup codex-cli' after fixing ~/.codex/hooks.json")
+        except Exception as exc:
+            human_echo(f"  Could not install Codex CLI hooks: {exc}")
+
+    return installed_any
 
 
 def _remove_capture_hook(project_dir: Path) -> bool:
@@ -3516,8 +3590,14 @@ def parse(auto: bool, limit: int) -> None:
 @click.option("--project", "project_override", type=click.Path(),
               default=None,
               help="Resolve against a specific project (default: cwd).")
-def _ingest_session(transcript_path: str, project_override: str | None) -> None:
-    """Ingest one Claude Code session — invoked fire-and-forget by the Stop hook.
+@click.option("--agent", "agent_name", default="claude-code",
+              help="Registered parser name for this session.")
+def _ingest_session(
+    transcript_path: str,
+    project_override: str | None,
+    agent_name: str,
+) -> None:
+    """Ingest one native agent session invoked fire-and-forget by a Stop hook.
 
     Contract: must exit 0 quickly and silently in every reasonable
     failure mode (missing file, non-enlisted project, parse failure).
@@ -3558,7 +3638,12 @@ def _ingest_session(transcript_path: str, project_override: str | None) -> None:
         from ..core.ingest import ingest_one_session
         # Don't block behind another in-flight ingest for this session; a
         # follower that can't get the lock skips (idempotent + watcher net).
-        ingest_one_session(path, project_dir, wait_for_lock=False)
+        ingest_one_session(
+            path,
+            project_dir,
+            wait_for_lock=False,
+            parser_name=agent_name,
+        )
     except Exception:  # noqa: BLE001
         # Belt: never let a hook break the user's agent session.
         return
@@ -3589,8 +3674,8 @@ def _scan(reparse: bool, session_filter: str | None,
     without user intervention. Kept available for testing, post-upgrade
     reparse, and recovering from a missed hook fire.
     """
+    from ..capture import discover_project_sessions, session_id_from_path
     from ..core.ingest import scan_project
-    from ..core.repo_identity import discover_claude_jsonl_corpus
 
     project_dir = (Path(project_override) if project_override
                    else Path.cwd()).resolve()
@@ -3602,13 +3687,17 @@ def _scan(reparse: bool, session_filter: str | None,
         )
         sys.exit(4)
 
-    paths: list[Path] | None = None
+    paths: list[tuple[str, Path]] | None = None
     if session_filter:
         # Narrow the corpus to the requested session. We still go through
         # scan_project so the per-session rules (locks, state, etc.) are
         # applied uniformly.
-        all_paths = discover_claude_jsonl_corpus(project_dir)
-        paths = [p for p in all_paths if p.stem == session_filter]
+        all_paths = discover_project_sessions(project_dir)
+        paths = [
+            (agent_name, p)
+            for agent_name, p in all_paths
+            if session_id_from_path(agent_name, p) == session_filter
+        ]
         if not paths:
             click.echo(
                 f"No JSONL found for session_id={session_filter} "
@@ -3660,11 +3749,15 @@ def _scan(reparse: bool, session_filter: str | None,
     )
 
 
-def _emit_dry_run(project_dir: Path, *, paths: list[Path] | None) -> None:
+def _emit_dry_run(
+    project_dir: Path,
+    *,
+    paths: list[Path | tuple[str, Path]] | None,
+) -> None:
     """Dry-run report: what would `_scan` do, given current state?"""
+    from ..capture import discover_project_sessions, session_id_from_path
     from ..core.config import get_project_state_path
     from ..core.ingest import _has_grown  # noqa: SLF001 — shared helper
-    from ..core.repo_identity import discover_claude_jsonl_corpus
     from ..core.state import StateManager, TraceStatus
 
     terminal = {
@@ -3672,14 +3765,21 @@ def _emit_dry_run(project_dir: Path, *, paths: list[Path] | None) -> None:
         TraceStatus.COMMITTED.value, TraceStatus.FAILED.value,
     }
 
-    candidates = paths if paths is not None else \
-        discover_claude_jsonl_corpus(project_dir)
+    if paths is not None:
+        candidates = [
+            (str(item[0]), Path(item[1]))
+            if isinstance(item, tuple)
+            else ("claude-code", Path(item))
+            for item in paths
+        ]
+    else:
+        candidates = discover_project_sessions(project_dir)
     state = StateManager(state_path=get_project_state_path(project_dir))
 
     would: list[dict] = []
     counts = {"new": 0, "refreshed": 0, "new_generation": 0, "noop": 0}
-    for p in candidates:
-        sid = p.stem
+    for agent_name, p in candidates:
+        sid = session_id_from_path(agent_name, p)
         sess = state.get_session(sid)
         if sess is None:
             action = "new"
@@ -3698,8 +3798,12 @@ def _emit_dry_run(project_dir: Path, *, paths: list[Path] | None) -> None:
                 else:
                     action = "refreshed"
         counts[action] = counts.get(action, 0) + 1
-        would.append({"session_id": sid, "action": action,
-                      "source_path": str(p)})
+        would.append({
+            "session_id": sid,
+            "agent": agent_name,
+            "action": action,
+            "source_path": str(p),
+        })
 
     payload = {
         "project": str(project_dir),
@@ -4213,23 +4317,36 @@ def capabilities(as_json: bool) -> None:
     """Show machine-discoverable feature list."""
     from opentraces_schema import SCHEMA_VERSION
 
+    from ..capture import get_parsers
+
     caps = {
         "name": "opentraces",
         "version": __version__,
         "schema_version": SCHEMA_VERSION,
-        "agents": ["claude-code"],
+        "agents": sorted(get_parsers()),
         "modes": ["auto", "review"],
         "export_formats": ["atif"],
         "features": [
             "passive_capture",
-            "session_end_hook",
-            "recursive_subagent_loading",
-            "full_snippet_extraction",
-            "attribution_blocks",
-            "classifier",
+            "claude_code_capture",
+            "codex_cli_capture",
+            "git_post_commit_correlation",
+            "private_bucket",
+            "bucket_remote_sync",
+            "trace_index",
+            "trace_query",
+            "trace_map",
+            "trace_slice",
+            "trace_teleport",
+            "trace_trails",
+            "context_tree",
+            "otlp_receiver",
+            "workflow_templates",
+            "dataset_workflows",
             "dataset_review_cli",
-            "sharded_upload",
-            "commit_groups",
+            "dataset_sharded_publish",
+            "security_tool_registry",
+            "post_processors",
         ],
         "env_vars": {
             "HF_TOKEN": "HuggingFace access token (highest priority over saved credentials)",
@@ -4248,8 +4365,8 @@ def _drop_command(name: str) -> None:
 
 # Unreleased development surface: remove old flat inbox/project commands
 # instead of carrying compatibility aliases. The canonical public roots are
-# setup/init/trace/trail/dataset. The workflow registry remains directly
-# callable for compatibility but is not part of the main journey help.
+# the sectioned setup, trace/trail/context, bucket, workflow/dataset,
+# security, capture, and maintenance surfaces declared in COMMAND_SECTIONS.
 for _legacy_root_command in [
     "list",
     "show",
@@ -4280,24 +4397,84 @@ def introspect() -> None:
     """Show full API schema for machine discovery."""
     from opentraces_schema import TraceRecord, SCHEMA_VERSION
 
+    def _jsonable_default(value):
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, (list, tuple)):
+            return [
+                item if item is None or isinstance(item, (str, int, float, bool)) else repr(item)
+                for item in value
+            ]
+        if isinstance(value, dict):
+            return {str(k): repr(v) for k, v in value.items()}
+        return repr(value)
+
+    def _option_schema(param: click.Option) -> dict[str, object]:
+        return {
+            "name": param.name,
+            "opts": list(param.opts),
+            "secondary_opts": list(param.secondary_opts),
+            "help": param.help,
+            "required": param.required,
+            "multiple": param.multiple,
+            "is_flag": param.is_flag,
+            "default": _jsonable_default(param.default),
+            "type": getattr(param.type, "name", repr(param.type)),
+        }
+
+    def _argument_schema(param: click.Argument) -> dict[str, object]:
+        return {
+            "name": param.name,
+            "required": param.required,
+            "nargs": param.nargs,
+            "type": getattr(param.type, "name", repr(param.type)),
+        }
+
+    def _command_schema(
+        name: str,
+        command: click.Command,
+        parent_ctx: click.Context | None,
+    ) -> dict[str, object]:
+        ctx = click.Context(command, info_name=name, parent=parent_ctx)
+        params = command.get_params(ctx)
+        payload: dict[str, object] = {
+            "name": name,
+            "help": command.help or command.short_help or "",
+            "short_help": command.get_short_help_str(limit=120) or "",
+            "hidden": bool(command.hidden),
+            "options": [
+                _option_schema(param)
+                for param in params
+                if isinstance(param, click.Option)
+            ],
+            "arguments": [
+                _argument_schema(param)
+                for param in params
+                if isinstance(param, click.Argument)
+            ],
+        }
+        if isinstance(command, click.Group):
+            children: dict[str, object] = {}
+            for child_name in command.list_commands(ctx):
+                child = command.get_command(ctx, child_name)
+                if child is None:
+                    continue
+                children[child_name] = _command_schema(child_name, child, ctx)
+            payload["children"] = children
+        return payload
+
+    root_ctx = click.Context(main, info_name="opentraces")
+    command_schema = {
+        name: _command_schema(name, command, root_ctx)
+        for name, command in sorted(main.commands.items())
+    }
+
     schema = {
         "name": "opentraces",
         "version": __version__,
         "schema_version": SCHEMA_VERSION,
         "trace_record_schema": TraceRecord.model_json_schema(),
-        "commands": {
-            "setup": {"description": "Wire OpenTraces into the machine"},
-            "init": {"description": "Enroll the current project", "options": ["--agent", "--import-existing", "--start-fresh"]},
-            "auth": {"description": "HuggingFace identity: login, logout, whoami"},
-            "status": {"description": "Show the current project snapshot"},
-            "doctor": {"description": "Report integration and pipeline health"},
-            "trace": {"description": "Search, map, slice, and retrieve retained traces", "subcommands": ["query", "map", "slice", "get"]},
-            "trail": {"description": "Inspect and synchronize VCS-anchored Trace Trails", "subcommands": ["blame", "explain", "graph", "resume", "search", "sync", "teleport", "timeline"]},
-            "workflow": {"description": "Compatibility registry for local dataset workflow packages", "subcommands": ["create", "list", "remove"]},
-            "dataset": {"description": "Manage local executable datasets"},
-            "capabilities": {"description": "Machine-discoverable feature list"},
-            "introspect": {"description": "Full API schema (this command)"},
-        },
+        "commands": command_schema,
         "exit_codes": {
             "0": "OK",
             "2": "Usage error (bad flags or conflicting options)",
@@ -4305,7 +4482,7 @@ def introspect() -> None:
             "4": "Network error",
             "5": "Data corrupt",
             "6": "Not found (trace, project, or resource)",
-            "7": "Lock/busy (another process is pushing)",
+            "7": "Lock/busy (concurrent local operation or remote sync lock)",
         },
     }
     click.echo(json.dumps(schema, indent=2))

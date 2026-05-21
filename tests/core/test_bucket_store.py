@@ -81,8 +81,8 @@ def test_local_trace_records_sync_to_bucket_and_prune(tmp_path):
     assert objects[0].source_layer == "canonical"
     assert objects[0].project_slug != "_staging"
     assert objects[0].envelope["record_hash"].startswith("sha256:")
-    assert objects[0].envelope["security"]["privacy_tier"] == "medium"
-    assert objects[0].envelope["security"]["syncable"] is True
+    assert objects[0].envelope["security"]["privacy_tier"] == "off"
+    assert objects[0].envelope["security"]["syncable"] is False
     assert "bucket_version" not in objects[0].envelope
     assert objects[0].envelope["written_at"].endswith("Z")
     assert "source" not in objects[0].envelope
@@ -207,6 +207,7 @@ def test_bucket_manifest_status_and_fake_remote(tmp_path, monkeypatch):
         project_slug="demo",
         source_layer="canonical",
         legacy_mirror=False,
+        privacy_tier="medium",
     )
 
     status = bucket_status()

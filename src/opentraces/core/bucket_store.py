@@ -25,7 +25,6 @@ from opentraces_schema import TraceRecord
 
 from ..security.version import SECURITY_VERSION
 from ..security.privacy import (
-    DEFAULT_PRIVACY_TIER,
     bucket_security_state,
     record_privacy_tier,
 )
@@ -1577,7 +1576,6 @@ def _per_trace_v2_summary(
     Plan 080 §4 — drives the ``traces[]`` entries in ``manifest.json``.
     """
 
-    trace_dir = traces_v1_dir(project_slug, trace_id)
     trail_path = trace_v1_trail_path(project_slug, trace_id)
     context_path = trace_v1_context_path(project_slug, trace_id)
     sources_path = trace_v1_sources_path(project_slug, trace_id)
@@ -1594,6 +1592,9 @@ def _per_trace_v2_summary(
     title: str | None = None
     lifecycle: str | None = None
     capture_methods: list[str] = []
+    agent_name: str | None = None
+    agent_version: str | None = None
+    agent_model: str | None = None
     if record is not None:
         step_count = len(record.steps or [])
         patches = record.patches or []
@@ -1603,6 +1604,10 @@ def _per_trace_v2_summary(
         )
         title = (record.task.description if record.task else None) or None
         lifecycle = record.lifecycle
+        if record.agent is not None:
+            agent_name = record.agent.name
+            agent_version = record.agent.version
+            agent_model = record.agent.model
         # Capture methods from context_tree_summary if present.
         if isinstance(record.context_tree_summary, dict):
             methods = record.context_tree_summary.get("capture_methods")
@@ -1646,6 +1651,9 @@ def _per_trace_v2_summary(
         "node_count": node_count,
         "capture_methods": capture_methods,
         "lifecycle": lifecycle,
+        "agent_name": agent_name,
+        "agent_version": agent_version,
+        "agent_model": agent_model,
         "has_trail": has_trail,
         "has_context": has_context,
         "has_sources": has_sources,
@@ -1654,6 +1662,9 @@ def _per_trace_v2_summary(
         "project_slug": project_slug,
         "trace_id": trace_id,
         "title": title,
+        "agent_name": agent_name,
+        "agent_version": agent_version,
+        "agent_model": agent_model,
         "trace_path": trace_json.relative_to(paths.bucket_dir()).as_posix(),
         "lifecycle": lifecycle or "provisional",
         "summary": summary,

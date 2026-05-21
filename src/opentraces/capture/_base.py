@@ -62,6 +62,57 @@ class SessionParser(Protocol):
 
 
 @runtime_checkable
+class ProjectSessionDiscoverer(Protocol):
+    """Optional parser capability for repo-scoped session discovery."""
+
+    agent_name: str
+
+    def discover_project_sessions(self, project_dir: Path) -> Iterator[Path]:
+        """Yield session files associated with one opentraces project."""
+        ...
+
+
+@runtime_checkable
+class SessionPathIdentifier(Protocol):
+    """Optional parser capability for deriving native session ids from paths."""
+
+    def session_id_from_path(self, session_path: Path) -> str:
+        """Return the parser's stable native session id for a source path."""
+        ...
+
+
+@runtime_checkable
+class AgentResumer(Protocol):
+    """Adapter for handing a trace back to its native agent runtime."""
+
+    agent_name: str
+    supports_at_step: bool
+
+    def resume_session(
+        self,
+        session_id: str,
+        *,
+        project_cwd: Path,
+        dry_run: bool = False,
+    ) -> int:
+        """Resume the native agent session and return a process exit code."""
+        ...
+
+    def resolve_at_step(
+        self,
+        trace_id_prefix: str,
+        step_id: str,
+        staging: Path,
+        *,
+        project_cwd: Path,
+        state: object,
+        materialize: bool = True,
+    ) -> object:
+        """Resolve an adapter-specific resume target at a trace step."""
+        ...
+
+
+@runtime_checkable
 class FormatImporter(Protocol):
     """Protocol for file-based trace importers.
 
@@ -160,5 +211,4 @@ class HookInstaller(Protocol):
     def status(self) -> dict:
         """Report current install state (for `opentraces doctor`)."""
         ...
-
 
