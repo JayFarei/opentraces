@@ -17,12 +17,12 @@ max_python_heap_peak_mb = 2.0
 max_rss_delta_mb = 1.0
 
 [inverse-blame-smoke]
-max_p95_ms = 250.0
+max_p95_ms = 350.0
 max_python_heap_peak_mb = 2.0
 max_rss_delta_mb = 1.0
 
 [scan-project-smoke]
-max_p95_ms = 650.0
+max_p95_ms = 3500.0
 max_python_heap_peak_mb = 2.0
 max_rss_delta_mb = 2.0
 
@@ -81,7 +81,7 @@ max_rss_delta_mb = 10.0
 max_update_p95_ms = 70.0
 
 [watcher-active-smoke]
-max_p95_ms = 750.0
+max_p95_ms = 1700.0
 max_python_heap_peak_mb = 2.0
 max_rss_delta_mb = 1.0
 

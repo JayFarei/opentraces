@@ -890,6 +890,13 @@ def _configure_bucket_remote(config: dict[str, Any]) -> None:
         configured["bucket"]["remote"]["sync_policy"] == "daemon",
         "setup bucket did not configure daemon sync",
     )
+    from opentraces.core.config import load_config, save_config
+
+    cfg = load_config()
+    cfg.security.regex.enabled = True
+    cfg.security.entropy.enabled = True
+    cfg.security.path_anonymizer.enabled = True
+    save_config(cfg)
 
 
 def _run_installed_runtime_demo_with_isolated_home(

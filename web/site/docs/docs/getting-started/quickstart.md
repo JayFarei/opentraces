@@ -19,6 +19,8 @@ opentraces setup
 - **tracking mode** (`global` by default), so agent sessions can auto-enroll
   projects private + review-required the first time capture fires.
 - **capture hooks** for Claude Code and Codex CLI.
+- **shared agent skill install**, which links the opentraces skill into
+  supported harnesses such as Claude Code and Codex CLI.
 - **git hook** and **watcher**, which mature Trace Trails after commits land.
 - **bucket remote**, optional private HuggingFace sync for raw retained
   evidence.
@@ -35,6 +37,7 @@ opentraces setup codex-cli
 opentraces setup git
 opentraces setup bucket
 opentraces setup capture-otlp
+opentraces setup skill
 opentraces setup trufflehog
 opentraces setup privacy-filter
 opentraces setup llm-review

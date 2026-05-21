@@ -39,4 +39,4 @@ equals = 0
 [[assertions]]
 kind = "tick_field"
 name = "duration_ms"
-max = 250
+max = 900

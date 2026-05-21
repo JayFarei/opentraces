@@ -197,7 +197,9 @@ class TestRedactionOrderingInvariant:
             agent=Agent(name="claude-code", model="m"),
             steps=[Step(step_index=0, role="user", content=f"Token {SECRET}")],
         )
-        processed = process_imported_trace(trace, Config())
+        cfg = Config()
+        cfg.security.regex.enabled = True
+        processed = process_imported_trace(trace, cfg)
         assert processed.redaction_count > 0
 
         # Stub writes its received stdin to a file; we then verify the

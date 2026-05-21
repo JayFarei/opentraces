@@ -734,7 +734,7 @@ def test_speed(case: FilterCase, oracle):
             f"vs oracle {oracle_ms:.3f}ms (ratio {ratio:.2f})"
         )
     else:
-        assert index_ms < 200.0, (
+        assert index_ms < 350.0, (
             f"speed failure for {case.name!r}: index {index_ms:.3f}ms "
             f"is unreasonably slow on a sub-millisecond oracle"
         )

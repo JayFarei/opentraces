@@ -40,6 +40,7 @@ opentraces setup auth
 opentraces setup bucket          # configure remote-by-default private bucket sync
 opentraces setup codex-cli       # install terminal Codex CLI hooks in ~/.codex/hooks.json
 opentraces setup skill           # install the opentraces skill into agent harnesses
+opentraces setup skill --harness codex-cli
 opentraces setup upgrade         # upgrade CLI + refresh project skill file
 opentraces config tracking-mode  # show; pass global|manual to set
 opentraces auth whoami
@@ -58,6 +59,11 @@ explicit per-project `opentraces init` opt-in. `init` is project enrollment
 only; dataset remotes and review policy belong under `opentraces dataset
 ...`. Private bucket configuration belongs under `opentraces setup bucket`
 and `opentraces bucket remote`.
+
+`opentraces setup skill` writes one canonical skill copy under
+`~/.agents/skills/opentraces/` and symlinks supported harnesses to it. Current
+harness targets are `claude-code` and `codex-cli`; pass `--harness <name>` to
+refresh only one link.
 
 Codex support is for terminal Codex CLI, not Codex Desktop. Install and
 authenticate Codex first, then run `opentraces setup codex-cli` once and

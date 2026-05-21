@@ -295,8 +295,8 @@
       "capture_method": [
         "trail_maturation"
       ],
-      "event_id": "<trail-event:11>",
-      "event_sequence": 11,
+      "event_id": "<trail-event:17>",
+      "event_sequence": 17,
       "event_type": "git_anchor_created"
     }
   ],
@@ -385,7 +385,7 @@
           "hex": "<git-object:05>"
         },
         "anchor_descendant_count": 0,
-        "anchor_event_sequence": 11,
+        "anchor_event_sequence": 17,
         "anchor_trail_index": 0,
         "evidence_firmness": "firm",
         "evidence_tier": "exact_range_hash",
@@ -422,7 +422,7 @@
         "hex": "<git-object:05>"
       },
       "anchor_descendant_count": 0,
-      "anchor_event_sequence": 11,
+      "anchor_event_sequence": 17,
       "anchor_trail_index": 0,
       "evidence_firmness": "firm",
       "evidence_tier": "exact_range_hash",
@@ -463,7 +463,7 @@
           "hex": "<git-object:05>"
         },
         "anchor_descendant_count": 0,
-        "anchor_event_sequence": 11,
+        "anchor_event_sequence": 17,
         "anchor_trail_index": 0,
         "evidence_firmness": "firm",
         "evidence_tier": "exact_range_hash",
@@ -519,8 +519,8 @@
         "capture_method": [
           "trail_maturation"
         ],
-        "event_id": "<trail-event:11>",
-        "event_sequence": 11,
+        "event_id": "<trail-event:17>",
+        "event_sequence": 17,
         "event_type": "git_anchor_created"
       }
     ],

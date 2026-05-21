@@ -96,6 +96,9 @@
         "_type": "Value",
         "dtype": "string"
       },
+      "context_tree_summary": {
+        "_type": "Json"
+      },
       "dependencies": [
         {
           "_type": "Value",
@@ -230,10 +233,6 @@
           "_type": "Value",
           "dtype": "string"
         },
-        "patch": {
-          "_type": "Value",
-          "dtype": "string"
-        },
         "reward": {
           "_type": "Value",
           "dtype": "float64"
@@ -259,6 +258,86 @@
           "dtype": "string"
         }
       },
+      "patches": [
+        {
+          "anchor": {
+            "blob_sha": {
+              "_type": "Value",
+              "dtype": "string"
+            },
+            "commit_sha": {
+              "_type": "Value",
+              "dtype": "string"
+            },
+            "evidence_firmness": {
+              "_type": "Value",
+              "dtype": "string"
+            },
+            "evidence_tier": {
+              "_type": "Value",
+              "dtype": "string"
+            },
+            "found": {
+              "_type": "Value",
+              "dtype": "bool"
+            },
+            "git_patch_id": {
+              "_type": "Value",
+              "dtype": "string"
+            },
+            "last_searched_at": {
+              "_type": "Value",
+              "dtype": "string"
+            },
+            "path": {
+              "_type": "Value",
+              "dtype": "string"
+            }
+          },
+          "capture_method": [
+            {
+              "_type": "Value",
+              "dtype": "string"
+            }
+          ],
+          "file_path": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "limitations": [
+            {
+              "_type": "Value",
+              "dtype": "string"
+            }
+          ],
+          "patch_id": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "snapshot_after_id": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "snapshot_before_id": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "step_index": {
+            "_type": "Value",
+            "dtype": "int64"
+          },
+          "superseded_by": [
+            {
+              "_type": "Value",
+              "dtype": "string"
+            }
+          ],
+          "tool_call_id": {
+            "_type": "Value",
+            "dtype": "string"
+          }
+        }
+      ],
       "schema_version": {
         "_type": "Value",
         "dtype": "string"
@@ -296,6 +375,10 @@
             "dtype": "string"
           },
           "content": {
+            "_type": "Value",
+            "dtype": "string"
+          },
+          "context_node_id": {
             "_type": "Value",
             "dtype": "string"
           },
@@ -475,9 +558,9 @@
     "license": "cc-by-4.0",
     "version": {
       "major": 0,
-      "minor": 4,
+      "minor": 6,
       "patch": 0,
-      "version_str": "0.4.0"
+      "version_str": "0.6.0"
     }
   }
 }

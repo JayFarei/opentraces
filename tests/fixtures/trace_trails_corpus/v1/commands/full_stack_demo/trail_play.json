@@ -1,5 +1,5 @@
 {
-  "event_count": 10,
+  "event_count": 16,
   "event_log_ref": "refs/opentraces/local/events/v1",
   "limitations": [],
   "schema_version": "opentraces.trail_timeline.v1",
@@ -181,9 +181,81 @@
     },
     {
       "capture_method": [
-        "trail_maturation"
+        "context_tree_capture"
       ],
       "event_sequence": 10,
+      "event_time": "<timestamp>",
+      "event_type": "context_layer_captured",
+      "generation_index": 0,
+      "step_id": null,
+      "step_index": null,
+      "trace_id": "<trace:01>"
+    },
+    {
+      "capture_method": [
+        "context_tree_capture"
+      ],
+      "event_sequence": 11,
+      "event_time": "<timestamp>",
+      "event_type": "context_layer_captured",
+      "generation_index": 0,
+      "step_id": null,
+      "step_index": null,
+      "trace_id": "<trace:01>"
+    },
+    {
+      "capture_method": [
+        "context_tree_capture"
+      ],
+      "event_sequence": 12,
+      "event_time": "<timestamp>",
+      "event_type": "context_layer_captured",
+      "generation_index": 0,
+      "step_id": null,
+      "step_index": null,
+      "trace_id": "<trace:01>"
+    },
+    {
+      "capture_method": [
+        "context_tree_capture"
+      ],
+      "event_sequence": 13,
+      "event_time": "<timestamp>",
+      "event_type": "context_layer_captured",
+      "generation_index": 0,
+      "step_id": null,
+      "step_index": null,
+      "trace_id": "<trace:01>"
+    },
+    {
+      "capture_method": [
+        "context_tree_capture"
+      ],
+      "event_sequence": 14,
+      "event_time": "<timestamp>",
+      "event_type": "context_node_observed",
+      "generation_index": 0,
+      "step_id": "s0",
+      "step_index": 0,
+      "trace_id": "<trace:01>"
+    },
+    {
+      "capture_method": [
+        "context_tree_capture"
+      ],
+      "event_sequence": 15,
+      "event_time": "<timestamp>",
+      "event_type": "context_tree_reconciled",
+      "generation_index": 0,
+      "step_id": null,
+      "step_index": null,
+      "trace_id": "<trace:01>"
+    },
+    {
+      "capture_method": [
+        "trail_maturation"
+      ],
+      "event_sequence": 16,
       "event_time": "<timestamp>",
       "event_type": "git_anchor_search_completed",
       "generation_index": 1,
@@ -199,7 +271,7 @@
         "algo": "sha1",
         "hex": "<git-object:05>"
       },
-      "event_sequence": 11,
+      "event_sequence": 17,
       "event_time": "<timestamp>",
       "event_type": "git_anchor_created",
       "evidence_firmness": "firm",

@@ -5,8 +5,11 @@
       "api": "api/full_stack_demo/",
       "commands": "commands/full_stack_demo/",
       "dataset": "dataset/",
-      "event_count": 18,
+      "event_count": 24,
       "event_type_counts": {
+        "context_layer_captured": 4,
+        "context_node_observed": 1,
+        "context_tree_reconciled": 1,
         "filesystem_mutation_observed": 1,
         "git_anchor_created": 1,
         "git_anchor_search_completed": 1,

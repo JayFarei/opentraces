@@ -94,7 +94,7 @@ What each integration does:
 - `setup claude-code` installs the `PreToolUse`, `PostToolUse`, `Stop`, and `PostCompact` hooks in `~/.claude/settings.json`
 - `setup codex-cli` installs native Codex CLI hook commands in `~/.codex/hooks.json` and copies hook scripts to `~/.codex/hooks/opentraces/`
 - `setup git` installs the post-commit correlator that powers `opentraces trail blame`
-- `setup skill` installs the vendor-neutral skill under `~/.agents/skills/opentraces/` and symlinks it into supported harnesses (e.g. `~/.claude/skills/opentraces`)
+- `setup skill` installs the vendor-neutral skill under `~/.agents/skills/opentraces/` and symlinks it into supported harnesses (currently `~/.claude/skills/opentraces` and `~/.codex/skills/opentraces`)
 - `setup bucket` configures the private bucket sync target (the workspace state that backs the trace index and Trace Trails)
 - `setup capture-otlp` enables the higher-fidelity Claude Code Context Tree capture source
 - `setup watcher` installs the background attribution daemon

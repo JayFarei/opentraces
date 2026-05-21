@@ -26,7 +26,7 @@
       "snapshot_resume_contract": "opentraces.snapshot_resume.v1"
     }
   },
-  "event_count": 10,
+  "event_count": 16,
   "event_log_ref": "refs/opentraces/local/events/v1",
   "events": [
     {
@@ -72,11 +72,41 @@
     {
       "event_id": "<trail-event:10>",
       "event_sequence": 10,
-      "event_type": "git_anchor_search_completed"
+      "event_type": "context_layer_captured"
     },
     {
       "event_id": "<trail-event:11>",
       "event_sequence": 11,
+      "event_type": "context_layer_captured"
+    },
+    {
+      "event_id": "<trail-event:12>",
+      "event_sequence": 12,
+      "event_type": "context_layer_captured"
+    },
+    {
+      "event_id": "<trail-event:13>",
+      "event_sequence": 13,
+      "event_type": "context_layer_captured"
+    },
+    {
+      "event_id": "<trail-event:14>",
+      "event_sequence": 14,
+      "event_type": "context_node_observed"
+    },
+    {
+      "event_id": "<trail-event:15>",
+      "event_sequence": 15,
+      "event_type": "context_tree_reconciled"
+    },
+    {
+      "event_id": "<trail-event:16>",
+      "event_sequence": 16,
+      "event_type": "git_anchor_search_completed"
+    },
+    {
+      "event_id": "<trail-event:17>",
+      "event_sequence": 17,
       "event_type": "git_anchor_created"
     }
   ],

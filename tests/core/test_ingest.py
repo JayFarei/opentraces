@@ -290,7 +290,11 @@ class TestIngestOneSession:
             event for event in read_events(project_dir)
             if event.trace_id == result.trace_id
         ]
-        assert [event.event_type for event in events] == [
+        trail_events = [
+            event for event in events
+            if event.event_type.startswith("trace_")
+        ]
+        assert [event.event_type for event in trail_events] == [
             "trace_step_window_opened",
             "trace_snapshot_created",
             "trace_snapshot_created",
@@ -335,7 +339,7 @@ class TestIngestOneSession:
         assert len(patch_events) == 1
         assert patch_events[0].step_index == write_step
         assert "new-from-hooked-session" in patch_events[0].payload["authored_text"]
-        session_closed = events[-1]
+        session_closed = trail_events[-1]
         assert session_closed.capture_method == ["hook_stop"]
         assert session_closed.payload["tree_id"] == after_tree
 
@@ -345,7 +349,8 @@ class TestIngestOneSession:
         assert [
             event.event_id for event in read_events(project_dir)
             if event.trace_id == result.trace_id
-        ] == [event.event_id for event in events]
+            and event.event_type.startswith("trace_")
+        ] == [event.event_id for event in trail_events]
 
         diff = CliRunner().invoke(
             main,
@@ -922,7 +927,9 @@ class TestAutoReviewPromotion:
 
         session_id = "sess-auto-review"
         path = _write_jsonl(project_dir, session_id, turns=3)
-        result = ingest_one_session(path, project_dir, cfg=Config())
+        cfg = Config()
+        cfg.security.classifier.enabled = True
+        result = ingest_one_session(path, project_dir, cfg=cfg)
 
         assert result.action == "new"
 

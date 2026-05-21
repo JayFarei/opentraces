@@ -1,0 +1,69 @@
+name = "maintenance-command-ownership"
+description = """
+Plan 063 drift guard journey. This tier-1 catalogue entry owns newer
+maintenance commands whose deeper behavior is covered by substrate-specific
+journeys or external service setup. The steps stay help-only so the journey
+is safe to inventory without mutating a box.
+"""
+lane = "core"
+tier = 1
+tier_label = "bronze"
+trajectories = [
+  "configure-tracking-mode",
+  "configure-codex-runtime",
+  "configure-otel-capture",
+  "bucket-spine-and-self-sufficient",
+  "restore-bucket-on-new-machine",
+]
+persona = "agent"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "config-tracking-mode-help"
+argv = ["config", "tracking-mode", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "config-tracking-mode-help"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "setup-codex-cli-help"
+argv = ["setup", "codex-cli", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-codex-cli-help"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "capture-otlp-flush-help"
+argv = ["capture-otlp", "flush", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "capture-otlp-flush-help"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "bucket-repair-help"
+argv = ["bucket", "repair", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-repair-help"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "bucket-prefetch-help"
+argv = ["bucket", "prefetch", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-prefetch-help"
+equals = 0

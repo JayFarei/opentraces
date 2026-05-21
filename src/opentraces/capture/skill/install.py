@@ -25,6 +25,7 @@ VERSION_FILE = ".opentraces-version"
 # Per-harness skill directories (relative to $HOME).
 HARNESS_DIRS: dict[str, Path] = {
     "claude-code": Path.home() / ".claude" / "skills" / "opentraces",
+    "codex-cli": Path.home() / ".codex" / "skills" / "opentraces",
 }
 
 
@@ -105,7 +106,7 @@ def _installed_version() -> str | None:
 
 @dataclass
 class SkillInstaller:
-    """HookInstaller for the opentraces Claude-Code-compatible skill."""
+    """HookInstaller for the opentraces agent skill."""
 
     installer_name: str = "skill"
     harnesses: list[str] = field(
@@ -160,7 +161,8 @@ class SkillInstaller:
             if dest.is_symlink():
                 dest.unlink()
                 removed.append(h)
-        if CANONICAL.exists():
+        removing_all_harnesses = set(self.harnesses) >= set(HARNESS_DIRS)
+        if removing_all_harnesses and CANONICAL.exists():
             shutil.rmtree(CANONICAL)
             removed.append("canonical")
         return HookInstallResult(ok=True, removed=removed)

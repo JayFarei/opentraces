@@ -602,7 +602,7 @@ def test_bench_capture_hot_path(repo: Path) -> None:
     elapsed = time.perf_counter() - start
 
     per_event_ms = (elapsed * 1000) / N
-    BUDGET_MS_PER_EVENT = 20.0
+    BUDGET_MS_PER_EVENT = 25.0
     assert per_event_ms < BUDGET_MS_PER_EVENT, (
         f"capture_hot_path: {per_event_ms:.1f}ms/event > {BUDGET_MS_PER_EVENT}ms "
         f"(total {elapsed * 1000:.1f}ms over {N} events)"

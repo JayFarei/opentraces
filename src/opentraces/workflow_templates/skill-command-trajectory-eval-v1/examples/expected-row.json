@@ -20,6 +20,7 @@
   "limitations_json": "[]",
   "outcome_commit_sha": "abc123",
   "outcome_committed": true,
+  "outcome_patch_count": 0,
   "outcome_success_label": "true",
   "project_slug": "example-project",
   "session_id": "",

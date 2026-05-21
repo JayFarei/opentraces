@@ -90,6 +90,18 @@ It registers native Codex hook commands for future Codex CLI sessions. Use
 `opentraces doctor` for install health; there is no `setup codex-cli --status`
 flag.
 
+`opentraces setup skill` installs the shared opentraces skill into
+`~/.agents/skills/opentraces/` and links it into supported harness skill
+directories:
+
+```bash
+opentraces setup skill --harness claude-code
+opentraces setup skill --harness codex-cli
+```
+
+Omit `--harness` to refresh every supported harness link. Use
+`opentraces doctor` to verify the canonical skill copy and per-harness symlinks.
+
 ## Project Commands
 
 ```bash

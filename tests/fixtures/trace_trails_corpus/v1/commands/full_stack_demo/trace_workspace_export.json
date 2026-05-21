@@ -1,5 +1,5 @@
 {
-  "event_count": 10,
+  "event_count": 16,
   "git_bundle": "<run-root>/exported.trace-workspace/git.bundle",
   "limitations": [],
   "manifest": "<run-root>/exported.trace-workspace/manifest.json",

@@ -448,7 +448,7 @@ def _run_setup_wizard() -> None:
     """Walk every integration the user should know about, one prompt each.
 
     Order (mandatory with opt-out, then optional):
-      1. claude-code / git / skill hooks  (hook installers, default yes)
+      1. agent / git / skill hooks        (hook installers, default yes)
       2. watcher                          (powers 'opentraces trail blame', default yes)
       3. entity-parser (sem)              (richer commit diffs, default yes)
       4. HuggingFace login                (log in now or skip)
@@ -485,8 +485,7 @@ def _run_setup_wizard() -> None:
         save_config(cfg)
     human_echo(f"    {_cli._ok(new_mode)}")
 
-    # 1. Hook installers (claude-code, git, skill) — one prompt each,
-    #    default yes.
+    # 1. Hook installers (agents, git, skill) — one prompt each, default yes.
     for name, cls in get_hook_installers().items():
         inst = cls()
         st = inst.status()
@@ -947,6 +946,7 @@ def setup_git(remove: bool) -> None:
         "opentraces setup skill",
         "opentraces setup skill --remove",
         "opentraces setup skill --harness claude-code",
+        "opentraces setup skill --harness codex-cli",
     ],
     see_also=[
         ("opentraces setup upgrade", "refresh the skill after a CLI update"),
@@ -963,7 +963,8 @@ def setup_skill(remove: bool, harnesses: tuple[str, ...]) -> None:
 
     Canonical copy is written to ~/.agents/skills/opentraces/ (vendor-neutral
     staging dir). Each supported harness gets a symlink, e.g.
-    ~/.claude/skills/opentraces -> ~/.agents/skills/opentraces.
+    ~/.claude/skills/opentraces -> ~/.agents/skills/opentraces or
+    ~/.codex/skills/opentraces -> ~/.agents/skills/opentraces.
 
     Re-running is an idempotent refresh: canonical is wiped and repopulated
     from the packaged skill/, the version stamp is rewritten, and broken
@@ -1008,7 +1009,7 @@ def setup_skill(remove: bool, harnesses: tuple[str, ...]) -> None:
         if h not in targets:
             continue
         if hs.get("canonical"):
-            human_echo(f"  {_cli._dim('linked:'):<14} ~/.{h.replace('-', '/')}/skills/opentraces")
+            human_echo(f"  {_cli._dim('linked:'):<14} {hs.get('symlink_path')}")
         elif hs.get("present"):
             human_echo(f"  {_cli._dim(h+':')} present but not canonical ({hs.get('kind')})")
         else:
@@ -1845,6 +1846,8 @@ def _hooks_section(hooks: list[dict]) -> None:
             _skill_row(h)
         elif name == "claude-code":
             _claude_code_row(h)
+        elif name == "codex-cli":
+            _codex_cli_row(h)
         elif name == "git":
             _git_row(h)
         else:
@@ -1944,6 +1947,13 @@ def _claude_code_row(h: dict) -> None:
         _row("off", "claude-code", "not installed", detail="run 'opentraces setup claude-code'")
         return
     _row("ok", "claude-code", "installed")
+
+
+def _codex_cli_row(h: dict) -> None:
+    if not h.get("installed"):
+        _row("off", "codex-cli", "not installed", detail="run 'opentraces setup codex-cli'")
+        return
+    _row("ok", "codex-cli", "installed")
 
 
 def _git_row(h: dict) -> None:

@@ -448,12 +448,21 @@ def append_rows(
     *,
     run_id: str,
     dry_run: bool = False,
-    privacy_tier: str | None = DEFAULT_PRIVACY_TIER,
+    privacy_tier: str | None = None,
     run_provenance: dict[str, Any] | None = None,
     trail_freshness: list[dict[str, Any]] | None = None,
 ) -> AppendSummary:
     dataset = load_dataset(name)
-    resolved_privacy_tier = normalize_privacy_tier(privacy_tier)
+    default_privacy_tier = (
+        DEFAULT_PRIVACY_TIER
+        if dataset.manifest.publication_policy.review == "auto"
+        and not dataset.manifest.remotes
+        else "medium"
+    )
+    resolved_privacy_tier = normalize_privacy_tier(
+        privacy_tier,
+        default=default_privacy_tier,
+    )
     schema = read_json(dataset.path / dataset.manifest.schema_ref.path)
     schema_digest = dataset.manifest.schema_ref.digest or digest_payload(schema)
     existing = read_row_index(name)

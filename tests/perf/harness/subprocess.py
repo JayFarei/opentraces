@@ -45,6 +45,7 @@ def build_command_plan(base_dir: Path, home_dir: Path, scenario: PerfScenario) -
                 str(OTD),
                 "trail",
                 "blame",
+                "commit",
                 sha,
                 "--project",
                 str(fixture.project_dir),

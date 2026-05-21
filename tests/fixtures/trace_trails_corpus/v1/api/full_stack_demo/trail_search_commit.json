@@ -11,25 +11,25 @@
   "projection": {
     "anchor_count": 1,
     "event_log_ref": "refs/opentraces/local/events/v1",
-    "events_seen": 11,
+    "events_seen": 17,
     "git": {
       "as_of_ref": "HEAD",
       "head_sha": "<git-commit:02>",
       "repo_ref": "ot://repo/local"
     },
     "high_watermark": {
-      "events_seen": 11,
-      "last_event_id": "<trail-event:11>",
-      "projection_digest": "<content-hash:14>"
+      "events_seen": 17,
+      "last_event_id": "<trail-event:17>",
+      "projection_digest": "<content-hash:33>"
     },
-    "last_event_id": "<trail-event:11>",
+    "last_event_id": "<trail-event:17>",
     "limitation_details": [],
     "limitations": [],
     "name": "trace_trail",
     "object_id_algorithm": "sha256",
     "object_ref_contract": "opentraces.object_ref.v1",
     "patch_count": 1,
-    "projection_digest": "<content-hash:14>",
+    "projection_digest": "<content-hash:33>",
     "stale": false,
     "version": "v1"
   },
@@ -77,7 +77,7 @@
           "hex": "<git-object:05>"
         },
         "anchor_descendant_count": 0,
-        "anchor_event_sequence": 11,
+        "anchor_event_sequence": 17,
         "anchor_trail_index": 0,
         "evidence_firmness": "firm",
         "evidence_tier": "exact_range_hash",
@@ -310,16 +310,16 @@
           "capture_method": [
             "trail_maturation"
           ],
-          "event_id": "<trail-event:11>",
-          "event_sequence": 11,
+          "event_id": "<trail-event:17>",
+          "event_sequence": 17,
           "event_time": "<timestamp>",
           "event_type": "git_anchor_created"
         }
       ],
       "source_refs": {
         "event_log_ref": "refs/opentraces/local/events/v1",
-        "git_anchor_event_id": "<trail-event:11>",
-        "git_anchor_event_sequence": 11,
+        "git_anchor_event_id": "<trail-event:17>",
+        "git_anchor_event_sequence": 17,
         "trace_patch_event_id": "<trail-event:08>",
         "trace_patch_event_sequence": 8
       },

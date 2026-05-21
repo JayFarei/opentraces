@@ -93,11 +93,16 @@ def bucket_security_state(
     still see it). The authoritative state lives in ``tools_applied``.
     """
     explicit_tier: PrivacyTier
+    legacy_scanned = (
+        bool(record.security.scanned)
+        and bool(record.security.classifier_version)
+        and record.security.classifier_version == SECURITY_VERSION
+    )
     try:
         explicit_tier = normalize_privacy_tier(
             privacy_tier,
             default=record_privacy_tier(record)
-            or (DEFAULT_PRIVACY_TIER if record.security.scanned else "off"),
+            or ("medium" if legacy_scanned else DEFAULT_PRIVACY_TIER),
         )
     except ValueError:
         explicit_tier = DEFAULT_PRIVACY_TIER

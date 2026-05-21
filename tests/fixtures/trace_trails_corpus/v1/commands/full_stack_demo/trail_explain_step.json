@@ -122,8 +122,8 @@
       "capture_method": [
         "trail_maturation"
       ],
-      "event_id": "<trail-event:11>",
-      "event_sequence": 11,
+      "event_id": "<trail-event:17>",
+      "event_sequence": 17,
       "event_type": "git_anchor_created"
     }
   ],

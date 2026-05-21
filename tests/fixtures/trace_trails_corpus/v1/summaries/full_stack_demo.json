@@ -1,6 +1,9 @@
 {
   "commit_sha": "<git-commit:02>",
   "event_counts": {
+    "context_layer_captured": 4,
+    "context_node_observed": 1,
+    "context_tree_reconciled": 1,
     "filesystem_mutation_observed": 1,
     "git_anchor_created": 1,
     "git_anchor_search_completed": 1,

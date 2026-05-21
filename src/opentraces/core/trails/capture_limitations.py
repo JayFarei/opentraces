@@ -23,6 +23,8 @@ HOOK_PAYLOAD_STATE_MISMATCH = "hook_payload_state_mismatch"
 SESSION_TERMINATED_UNEXPECTEDLY = "session_terminated_unexpectedly"
 WATCHER_BUFFER_OVERFLOW = "watcher_buffer_overflow"
 INCOMPLETE_STEP_WINDOW_CAPTURE = "incomplete_step_window_capture"
+CONTEXT_TREE_NOT_CAPTURED = "context_tree_not_captured"
+TRANSCRIPT_MODIFIED = "transcript_modified"
 
 CAPTURE_LIMITATIONS: tuple[str, ...] = (
     CONCURRENT_WRITER_OVERLAP,
@@ -33,6 +35,8 @@ CAPTURE_LIMITATIONS: tuple[str, ...] = (
     SESSION_TERMINATED_UNEXPECTEDLY,
     WATCHER_BUFFER_OVERFLOW,
     INCOMPLETE_STEP_WINDOW_CAPTURE,
+    CONTEXT_TREE_NOT_CAPTURED,
+    TRANSCRIPT_MODIFIED,
 )
 
 
