@@ -4,22 +4,23 @@
   ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀  ▀  ▀  ▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
 ```
 
-Open schema + CLI for capturing agent traces, linking them to Git evidence, building local datasets, and publishing reviewed dataset rows to Hugging Face Hub.
+Open schema + CLI for capturing agent traces into a private bucket, linking them to Git and context evidence, building workflow-projected datasets, and publishing reviewed dataset rows to Hugging Face Hub.
 
-Every coding session leaves behind the data you actually want: prompts, tool calls, reasoning, edits, outcome signals, and eventually the code that shipped. opentraces captures that locally, runs layered security passes, exposes Trace Trails over the Git evidence, and lets workflows turn traces into datasets.
+Every coding session leaves behind the data you actually want: prompts, tool calls, reasoning, edits, outcome signals, and eventually the code that shipped. opentraces captures that locally as raw bucket evidence, exposes Trace Trails for what changed, exposes Context Trees for what the agent saw, and lets workflows turn selected evidence into datasets.
 
 > Sharing traces can leak secrets, credentials, internal paths, or customer data. opentraces reduces that risk, but it does not remove it. Read the [security docs](https://opentraces.ai/docs/security/tiers) before you publish anything.
 
 ## What It Does
 
-1. Capture traces from supported agents such as Claude Code.
-2. Enrich them with task, model, token, dependency, and git metadata.
-3. Run regex, entropy, optional TruffleHog, and optional LLM review passes.
-4. Search, map, and slice retained traces without loading full transcripts.
-5. Correlate traces to later commits via Trace Trails: blame, graph, and track.
-6. Sync a private bucket of captured traces to a HuggingFace remote on demand.
+1. Capture traces from supported agents such as Claude Code and Codex CLI.
+2. Store capture-time evidence in a private bucket: `trace.json`, patch history, Trail events, Context Tree events, source events, and content-addressed blobs.
+3. Search, map, and slice retained traces without loading full transcripts.
+4. Correlate trace patches to Git history via Trace Trails: blame, graph, and track.
+5. Reconstruct what the agent saw at a step via Context Tree `ctx` commands.
+6. Sync the private bucket to a HuggingFace remote when you explicitly opt in.
 7. Run local workflow skills that turn traces into schema-valid dataset rows.
-8. Review dataset rows and publish approved rows to HuggingFace remotes.
+8. Optionally run named security tools in bucket flows or workflows before publishing rows.
+9. Review dataset rows and publish approved rows to HuggingFace remotes.
 
 ## Install
 
@@ -59,7 +60,7 @@ Use plain `pip install opentraces` only in CI or disposable environments.
 opentraces has a two-phase bootstrap: `setup` wires the machine once, `init` wires each repo.
 
 ```bash
-# one-time machine setup (capture hooks, watcher, HF login, optional tiers)
+# one-time machine setup (capture hooks, watcher, HF login, optional tools)
 opentraces setup
 
 # initialize this repo (agents and project enrollment)
@@ -74,7 +75,7 @@ opentraces trace slice <trace-id> --template bursts --json
 # walk Git-anchored trace lineage
 opentraces trail track <trace-id>
 
-# inspect or push the private bucket of captured traces
+# inspect or sync the private bucket of captured traces
 opentraces bucket status
 opentraces bucket remote push
 
@@ -95,16 +96,19 @@ Useful follow-ups:
 - `opentraces trace query/map/slice/get` searches, maps, slices, and retrieves retained traces.
 - `opentraces trace index rebuild` rebuilds the local Trace Index after capture changes.
 - `opentraces trace teleport` moves a trace and retained Git evidence between workspaces.
-- `opentraces trail blame <sha>` and `opentraces trail graph` show commit-to-trace attribution (run `opentraces setup git` first to install the post-commit correlator).
+- `opentraces trail blame commit <sha>` and `opentraces trail graph` show commit-to-trace attribution (run `opentraces setup git` first to install the post-commit correlator).
 - `opentraces trail track <trace-id>` walks a trace's lineage through Git history and reports current `HEAD` survival.
-- `opentraces bucket status` and `opentraces bucket manifest` inspect the local private trace bucket.
+- `opentraces ctx tree/show/step/reads/writes/diff/resume` inspects the Context Tree: what the agent saw at a trace step.
+- `opentraces setup capture-otlp` and `opentraces capture-otlp start/status/flush` enable the higher-fidelity OTel capture source for Claude Code Context Trees.
+- `opentraces bucket status`, `bucket manifest`, `bucket verify`, `bucket repair`, `bucket prune`, and `bucket prefetch` inspect and maintain the local private trace bucket.
 - `opentraces bucket remote push/pull/status/diff` syncs the private bucket with a private HuggingFace bucket remote (S3-backed storage) configured via `opentraces setup bucket`.
 - `opentraces trace get/query --remote-bucket` and `opentraces trail search --remote-bucket` pull that private bucket remote before reading local trace or Trail state.
 - `opentraces bucket replay` replays bucket-exported Trace Trails into a Git repository.
 - `opentraces workflow create/list/templates/remove` manages local dataset workflow skill packages.
 - `opentraces dataset list/new/run/review/publish/status` manages local datasets and row publication; `opentraces dataset remote create` binds a HuggingFace remote, and `opentraces dataset schedule` controls recurring runs.
-- `opentraces setup trufflehog` enables Tier 1.5 scanning.
-- `opentraces setup llm-review` configures Tier 2 semantic review.
+- `opentraces security tools list/info` shows the optional security/privacy tool registry.
+- `opentraces security sanitize --tools regex,entropy` runs named tools explicitly; `--use-config` runs only tools you have enabled.
+- `opentraces setup trufflehog`, `setup privacy-filter`, and `setup llm-review` configure optional security tools/reviewers.
 - `opentraces setup upgrade` upgrades the CLI and refreshes the project skill file.
 
 ## Tell Your Agent
@@ -121,7 +125,7 @@ Set up opentraces in this project.
    `opentraces setup`
 
    This walks each integration (capture hooks, watcher, HuggingFace login,
-   optional TruffleHog, optional LLM review).
+   optional TruffleHog, optional privacy-filter, optional LLM review).
 
 3. Confirm authentication:
    `opentraces auth whoami`
@@ -147,7 +151,7 @@ Set up opentraces in this project.
    - `opentraces dataset publish <name> --check-only`
 
 7. Attribution queries (run `opentraces setup git` once to install the post-commit correlator):
-   - `opentraces trail blame <sha>`
+   - `opentraces trail blame commit <sha>`
    - `opentraces trail graph`
    - `opentraces trail track <trace-id>`
 
@@ -159,17 +163,21 @@ Set up opentraces in this project.
 
 ## Security
 
-The built-in pipeline is versioned independently from the CLI and schema (currently `SECURITY_VERSION = 0.3.0`). Run `opentraces doctor --security` to see the exact tiers, versions, and commands active in your install.
+The security pipeline is versioned independently from the CLI and schema (currently `SECURITY_VERSION = 0.5.0`). The current contract is deliberately simple: all per-record security tools default off, and workflows opt into the named tools they need.
 
-| Tier | Name | Status | What it does |
-|------|------|--------|--------------|
-| 1a | Regex patterns | always on | Built-in secret detectors for known token and key formats |
-| 1b | Shannon entropy | always on | Flags high-entropy strings that look like secrets |
-| 1.5 | TruffleHog | optional | Local scan for broader secret detection, findings redacted in place |
-| 2 | LLM trace review | optional, on demand | Semantic review over the whole trace transcript |
-| 3 | Human review | always available | Web inbox, TUI, and CLI review before upload |
+| Tool | Kind | Default | What it does |
+|------|------|---------|--------------|
+| `regex` | detector | off | Built-in token/key pattern detectors |
+| `entropy` | detector | off | High-entropy secret-like strings |
+| `trufflehog` | detector | off | Optional deep secret detector, configured with `opentraces setup trufflehog` |
+| `privacy_filter` | detector | off | Optional local/HF NER PII detector, configured with `opentraces setup privacy-filter` |
+| `llm_pii` | detector | off | Advanced per-field LLM PII detector, configured directly |
+| `path_anonymizer` | transformer | off | Rewrites local usernames in filesystem paths |
+| `classifier` | judge | off | Heuristic sensitivity verdict without mutating content |
 
-See [security tiers](https://opentraces.ai/docs/security/tiers) and [scanning details](https://opentraces.ai/docs/security/scanning).
+Run `opentraces security tools list` to see the active config, and pipe JSON through `opentraces security sanitize --tools regex,entropy` when a workflow wants explicit sanitization. `--use-config` runs only tools that have been enabled in config.
+
+See [security tools](https://opentraces.ai/docs/security/tiers) and [scanning details](https://opentraces.ai/docs/security/scanning).
 
 ## Schema
 
@@ -183,7 +191,7 @@ The trace format lives in [`packages/opentraces-schema/`](packages/opentraces-sc
 - security metadata
 - optional attribution and commit correlation data
 
-The schema is a superset of ATIF and borrows ideas from Agent Trace, ADP, and OTel GenAI. Current schema version: `0.4.0`, which adds the dataset/workflow contract and the trace-index contract (TraceUnit, TraceMap, CandidatePacket) on top of `0.3.0`.
+The schema is a superset of ATIF and borrows ideas from Agent Trace, ADP, and OTel GenAI. Current schema version: `0.6.0`. It keeps `TraceRecord` as the spine, adds `Step.context_node_id` and `TraceRecord.context_tree_summary` for Context Tree joins, and makes `TraceRecord.patches[]` the authoritative output set. `Outcome.patch` was removed; clients assemble diffs from `patches[]` and the trace's `trail.jsonl.gz`.
 
 ## Trace Trails
 

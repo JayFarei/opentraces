@@ -234,19 +234,20 @@ class TestDoctor:
             "Human review",
         ]
         by_name = {t["name"]: t for t in tools}
-        assert by_name["Regex patterns"]["state"] == "always-on"
-        assert by_name["Shannon entropy"]["state"] == "always-on"
+        assert by_name["Regex patterns"]["state"] == "disabled"
+        assert by_name["Shannon entropy"]["state"] == "disabled"
         assert by_name["TruffleHog"]["state"] == "disabled"
         assert by_name["Privacy-filter (HF NER)"]["state"] == "disabled"
         assert by_name["LLM PII"]["state"] == "disabled"
-        assert by_name["Path anonymiser"]["state"] == "enabled"
-        assert by_name["Content classifier"]["state"] == "enabled"
+        assert by_name["Path anonymiser"]["state"] == "disabled"
+        assert by_name["Content classifier"]["state"] == "disabled"
         assert by_name["LLM trace review"]["state"] == "disabled"
         assert by_name["Human review"]["state"] in {
             "required", "not-required", "not-initialized",
         }
 
-        # Each toggleable tier surfaces its own command.
+        # Installer-backed tools surface commands. Lightweight local tools can
+        # still be invoked directly with `opentraces security sanitize --tools`.
         assert by_name["TruffleHog"]["enable_cmd"]
         assert by_name["TruffleHog"]["disable_cmd"]
         assert by_name["Regex patterns"]["enable_cmd"] is None

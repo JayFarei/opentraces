@@ -111,7 +111,7 @@ class TestToolsInfo:
         payload = json.loads(out)
         assert payload["name"] == "regex"
         assert payload["kind"] == "detector"
-        assert payload["enabled"] is True
+        assert payload["enabled"] is False
 
     def test_llm_pii_does_not_advertise_missing_setup_command(self) -> None:
         code, out = _run(["tools", "info", "llm_pii", "--json"])

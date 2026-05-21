@@ -1609,14 +1609,14 @@ def setup_review_llm_cmd(
 )
 @click.option(
     "--security", "security_only", is_flag=True,
-    help="Show only the security pipeline subview (versions + tiers).",
+    help="Show only the security tool subview (versions + enabled tools).",
 )
 def doctor_cmd(security_only: bool) -> None:
     """Report security pipeline and integration health.
 
     Probes every configured integration (hooks, scanners, LLM review,
-    post-processors) and reports versions, tier status, and any
-    actionable failures. Exits non-zero if a required tier is broken.
+    post-processors) and reports versions, enabled tool state, and any
+    actionable failures. Exits non-zero if a required configured tool is broken.
     """
     from ..core import doctor
 

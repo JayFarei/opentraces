@@ -47,6 +47,7 @@ STAGE_PRESENTATIONS = {
 
 
 def discover_supported_agents() -> tuple[str, ...]:
+    builtin_agents = (DEFAULT_AGENT, "codex-cli")
     try:
         from ..capture import get_parsers
 
@@ -55,10 +56,13 @@ def discover_supported_agents() -> tuple[str, ...]:
         parser_agents = ()
 
     if not parser_agents:
-        parser_agents = (DEFAULT_AGENT,)
+        parser_agents = builtin_agents
 
-    preferred_order = {DEFAULT_AGENT: 0}
-    return tuple(sorted(set(parser_agents), key=lambda agent: (preferred_order.get(agent, 99), agent)))
+    preferred_order = {DEFAULT_AGENT: 0, "codex-cli": 1}
+    return tuple(sorted(
+        {*builtin_agents, *parser_agents},
+        key=lambda agent: (preferred_order.get(agent, 99), agent),
+    ))
 
 
 SUPPORTED_AGENTS = discover_supported_agents()
@@ -79,7 +83,15 @@ def normalize_push_policy(value: str | None) -> str:
 
 
 def normalize_agents(agents: list[str] | None) -> list[str]:
-    cleaned = [agent for agent in (agents or []) if agent in SUPPORTED_AGENTS]
+    aliases = {
+        "claude": "claude-code",
+        "codex": "codex-cli",
+    }
+    cleaned = [
+        aliases.get(agent, agent)
+        for agent in (agents or [])
+        if aliases.get(agent, agent) in SUPPORTED_AGENTS
+    ]
     return cleaned or [DEFAULT_AGENT]
 
 
