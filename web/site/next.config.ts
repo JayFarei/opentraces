@@ -10,7 +10,7 @@ try {
   const match = initPy.match(/__version__\s*=\s*"([^"]+)"/);
   if (match) version = match[1];
 } catch {}
-writeFileSync(resolve(__dirname, "src/lib/version.json"), JSON.stringify({ version }));
+writeFileSync(resolve(__dirname, "src/lib/version.json"), `${JSON.stringify({ version })}\n`);
 
 // Generate Agent Skills discovery index (RFC v0.2.0) from skill/SKILL.md
 try {
