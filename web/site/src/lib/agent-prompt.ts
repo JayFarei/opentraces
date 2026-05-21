@@ -67,7 +67,7 @@ Context Tree:
 - \`opentraces ctx resume <context-node-id>\` creates a resume packet
 - \`opentraces setup capture-otlp\` enables higher-fidelity Claude Code context capture
 
-Datasets:
+Dataset workflows and datasets:
 - \`opentraces workflow templates\` lists row-projection templates
 - \`opentraces workflow create my-workflow --template skill-command-trajectory-eval-v1\`
 - \`opentraces dataset new my-set --workflow ./workflows/my-workflow/\`

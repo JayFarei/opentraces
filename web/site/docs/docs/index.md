@@ -4,17 +4,20 @@ Open schema + CLI for capturing agent traces into a private bucket, searching
 and slicing them locally, and publishing workflow-projected dataset rows to
 Hugging Face Hub.
 
-opentraces has three separate layers:
+opentraces has four separate surfaces:
 
-1. **Bucket:** raw capture-time evidence. It stays local by default and can be
-   synced to a private HuggingFace bucket remote.
-2. **Trace substrates:** Trace Index, Trace Map, Trace Slices, Trace Trails,
-   and Context Tree. These answer what happened, what changed, and what the
-   agent saw.
-3. **Datasets:** workflow-built row projections over one or more traces. These
-   are reviewed and published independently from the raw bucket.
+1. **Trace workflow:** capture agent sessions into a portable bucket, then use
+   Trace Discovery, Trace Trails, and Context Tree to inspect the retained
+   environment.
+2. **Dataset workflows:** skill-format row builders that use trace discovery,
+   context, and trail evidence to project purposeful rows.
+3. **Datasets:** local HuggingFace-shaped row stores that can be reviewed,
+   scheduled, and published.
+4. **Clients:** evaluation jobs, training loops, dashboards, context warmup,
+   and manual trace-capsule patterns that consume either rows or bucket
+   evidence.
 
-## Workflow
+## Trace Workflow
 
 ```bash
 opentraces setup                          # install capture hooks and optional integrations
@@ -55,13 +58,13 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Authentication](/docs/getting-started/authentication)** | OAuth, PATs, `HF_TOKEN`, auth precedence |
 | **[Quick Start](/docs/getting-started/quickstart)** | Capture into a bucket, search traces, build and publish a dataset |
 | **[Commands](/docs/cli/commands)** | Current `opentraces` command reference |
-| **[Private Bucket](/docs/workflow/bucket)** | Raw trace envelopes, companions, manifests, sync, replay |
+| **[Portable Bucket](/docs/workflow/bucket)** | Raw trace envelopes, companions, manifests, sync, replay |
 | **[Trace Discovery](/docs/workflow/trace-discovery)** | `trace query`, `trace map`, `trace slice`, `trace get`, `trace index` |
 | **[Trace Trails](/docs/workflow/blame)** | Git anchors, survival states, blame, graph, PR body generation |
 | **[Context Tree](/docs/workflow/context-tree)** | `ctx` commands and OTLP capture for what the agent saw |
-| **[Workflow Templates](/docs/workflow/workflow-templates)** | Build deterministic row projections from bucket traces |
+| **[Dataset Workflows](/docs/workflow/workflow-templates)** | Build deterministic row projections from bucket traces |
 | **[Dataset Rows](/docs/workflow/datasets)** | Local HF-shaped datasets, review states, remotes, schedules |
-| **[Dataset Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |
+| **[Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |
 | **[Security Tools](/docs/security/tiers)** | Optional default-off security/privacy tool registry |
 | **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.6.0` field semantics |
-| **[Consume](/docs/workflow/consume)** | Loading published datasets and resolving private bucket evidence |
+| **[Clients & Use Cases](/docs/workflow/consume)** | Datasets, private bucket reads, context warmup, and manual trace capsules |

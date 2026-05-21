@@ -44,11 +44,11 @@ opentraces [--json] <command> ...
 | `ctx` | Navigate the Context Tree: what the LLM saw at each step |
 | `bucket` | Inspect, repair, verify, sync, and replay the private trace bucket |
 
-### Workflow, Dataset, Security, Capture
+### Dataset Workflow, Dataset, Security, Capture
 
 | Command | What it does |
 |---------|---------------|
-| `workflow` | Manage local workflow skill packages |
+| `workflow` | Manage local dataset workflow skill packages |
 | `dataset` | Manage local executable datasets and row publication |
 | `security` | Optional privacy/security utilities |
 | `capture-otlp` | Run and control the OTLP receiver capture source |
@@ -179,7 +179,7 @@ The bucket is the private capture-time store. It is separate from datasets:
 bucket sync moves raw retained evidence, while dataset publish moves approved
 workflow rows.
 
-## Workflows
+## Dataset Workflows
 
 ```bash
 opentraces workflow templates
@@ -191,7 +191,8 @@ opentraces workflow list --digest
 opentraces workflow remove my-workflow --yes
 ```
 
-Workflow packages are skill-format row builders. `dataset run` invokes them.
+Workflow packages are skill-format row builders. `dataset run` invokes them to
+project bucket traces into dataset rows.
 
 ## Datasets
 

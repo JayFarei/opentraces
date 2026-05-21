@@ -87,7 +87,8 @@ opentraces dataset run bug-fixes --dry-run --limit 5
 opentraces dataset publish bug-fixes --check-only
 ```
 
-`init` writes the committable marker at `.opentraces.json`. Captured traces, runtime state, and upload bookkeeping stay machine-local under `~/.opentraces/projects/<slug>/`.
+`init` writes the committable marker at `.opentraces.json`. Captured traces,
+bucket state, and upload bookkeeping stay machine-local under `~/.opentraces/`.
 
 Useful follow-ups:
 
@@ -312,14 +313,13 @@ format-then-commit pipelines all anchor — but firmness drops from
 | Schema Versioning | https://opentraces.ai/docs/schema/versioning |
 | Parsing | https://opentraces.ai/docs/workflow/parsing |
 | Dataset Row Review | https://opentraces.ai/docs/workflow/review |
-| Dataset Publish | https://opentraces.ai/docs/workflow/pushing |
+| Publish | https://opentraces.ai/docs/workflow/pushing |
 | Trace Trails | https://opentraces.ai/docs/workflow/blame |
-| Private Bucket | https://opentraces.ai/docs/workflow/bucket |
+| Portable Bucket | https://opentraces.ai/docs/workflow/bucket |
 | Context Tree | https://opentraces.ai/docs/workflow/context-tree |
 | Trace Discovery | https://opentraces.ai/docs/workflow/trace-discovery |
-| Export | https://opentraces.ai/docs/workflow/export |
-| Assess | https://opentraces.ai/docs/workflow/quality |
-| Consume | https://opentraces.ai/docs/workflow/consume |
+| Dataset Workflows | https://opentraces.ai/docs/workflow/workflow-templates |
+| Clients & Use Cases | https://opentraces.ai/docs/workflow/consume |
 | Agent Setup | https://opentraces.ai/docs/integration/agent-setup |
 | CI/CD | https://opentraces.ai/docs/integration/ci-cd |
 | Post-Processor Contract | https://opentraces.ai/docs/integration/post-processor-contract |

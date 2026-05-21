@@ -42,7 +42,7 @@ Bucket sync moves raw retained evidence. Dataset publish moves approved
 projected rows. A private bucket remote can exist even when no dataset has
 been published.
 
-## Security And Quality Gates
+## Security And Publication Gates
 
 Publication gates operate on dataset rows. If a workflow requires sanitization
 or LLM review, it should run those steps before approving rows.

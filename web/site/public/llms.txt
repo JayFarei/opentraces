@@ -19,17 +19,20 @@ Open schema + CLI for capturing agent traces into a private bucket, searching
 and slicing them locally, and publishing workflow-projected dataset rows to
 Hugging Face Hub.
 
-opentraces has three separate layers:
+opentraces has four separate surfaces:
 
-1. **Bucket:** raw capture-time evidence. It stays local by default and can be
-   synced to a private HuggingFace bucket remote.
-2. **Trace substrates:** Trace Index, Trace Map, Trace Slices, Trace Trails,
-   and Context Tree. These answer what happened, what changed, and what the
-   agent saw.
-3. **Datasets:** workflow-built row projections over one or more traces. These
-   are reviewed and published independently from the raw bucket.
+1. **Trace workflow:** capture agent sessions into a portable bucket, then use
+   Trace Discovery, Trace Trails, and Context Tree to inspect the retained
+   environment.
+2. **Dataset workflows:** skill-format row builders that use trace discovery,
+   context, and trail evidence to project purposeful rows.
+3. **Datasets:** local HuggingFace-shaped row stores that can be reviewed,
+   scheduled, and published.
+4. **Clients:** evaluation jobs, training loops, dashboards, context warmup,
+   and manual trace-capsule patterns that consume either rows or bucket
+   evidence.
 
-## Workflow
+## Trace Workflow
 
 ```bash
 opentraces setup                          # install capture hooks and optional integrations
@@ -70,16 +73,16 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Authentication](/docs/getting-started/authentication)** | OAuth, PATs, `HF_TOKEN`, auth precedence |
 | **[Quick Start](/docs/getting-started/quickstart)** | Capture into a bucket, search traces, build and publish a dataset |
 | **[Commands](/docs/cli/commands)** | Current `opentraces` command reference |
-| **[Private Bucket](/docs/workflow/bucket)** | Raw trace envelopes, companions, manifests, sync, replay |
+| **[Portable Bucket](/docs/workflow/bucket)** | Raw trace envelopes, companions, manifests, sync, replay |
 | **[Trace Discovery](/docs/workflow/trace-discovery)** | `trace query`, `trace map`, `trace slice`, `trace get`, `trace index` |
 | **[Trace Trails](/docs/workflow/blame)** | Git anchors, survival states, blame, graph, PR body generation |
 | **[Context Tree](/docs/workflow/context-tree)** | `ctx` commands and OTLP capture for what the agent saw |
-| **[Workflow Templates](/docs/workflow/workflow-templates)** | Build deterministic row projections from bucket traces |
+| **[Dataset Workflows](/docs/workflow/workflow-templates)** | Build deterministic row projections from bucket traces |
 | **[Dataset Rows](/docs/workflow/datasets)** | Local HF-shaped datasets, review states, remotes, schedules |
-| **[Dataset Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |
+| **[Publish](/docs/workflow/pushing)** | Publication gates, shards, visibility, bucket-vs-dataset split |
 | **[Security Tools](/docs/security/tiers)** | Optional default-off security/privacy tool registry |
 | **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.6.0` field semantics |
-| **[Consume](/docs/workflow/consume)** | Loading published datasets and resolving private bucket evidence |
+| **[Clients & Use Cases](/docs/workflow/consume)** | Datasets, private bucket reads, context warmup, and manual trace capsules |
 
 ---
 
@@ -292,7 +295,7 @@ opentraces init --agent codex-cli
 `init` writes `.opentraces.json` and registers machine-local state under
 `~/.opentraces/`.
 
-## 4. Inspect The Private Bucket
+## 4. Inspect The Portable Bucket
 
 Captured traces land in the private bucket first. This is not a public dataset.
 
@@ -340,7 +343,7 @@ opentraces ctx step <trace-id> 7
 opentraces ctx resume <context-node-id>
 ```
 
-## 6. Create A Workflow-Backed Dataset
+## 6. Create A Dataset Workflow
 
 Datasets are projected rows, not raw trace uploads. Start from a template or a
 custom workflow package.
@@ -385,12 +388,13 @@ as new shards. It does not publish the raw bucket unless you separately run
 
 ## Next Steps
 
-- [Private Bucket](/docs/workflow/bucket), raw retained evidence and sync
+- [Portable Bucket](/docs/workflow/bucket), raw retained evidence and sync
 - [Trace Discovery](/docs/workflow/trace-discovery), query/map/slice/get
 - [Trace Trails](/docs/workflow/blame), Git anchors and survival
 - [Context Tree](/docs/workflow/context-tree), what the agent saw
-- [Workflow Templates](/docs/workflow/workflow-templates), row projection packages
+- [Dataset Workflows](/docs/workflow/workflow-templates), row projection packages
 - [Dataset Rows](/docs/workflow/datasets), review states and schedules
+- [Clients & Use Cases](/docs/workflow/consume), context warmup and manual trace capsules
 - [Security Tools](/docs/security/tiers), optional default-off tools
 
 ---
@@ -441,11 +445,11 @@ opentraces [--json] <command> ...
 | `ctx` | Navigate the Context Tree: what the LLM saw at each step |
 | `bucket` | Inspect, repair, verify, sync, and replay the private trace bucket |
 
-### Workflow, Dataset, Security, Capture
+### Dataset Workflow, Dataset, Security, Capture
 
 | Command | What it does |
 |---------|---------------|
-| `workflow` | Manage local workflow skill packages |
+| `workflow` | Manage local dataset workflow skill packages |
 | `dataset` | Manage local executable datasets and row publication |
 | `security` | Optional privacy/security utilities |
 | `capture-otlp` | Run and control the OTLP receiver capture source |
@@ -576,7 +580,7 @@ The bucket is the private capture-time store. It is separate from datasets:
 bucket sync moves raw retained evidence, while dataset publish moves approved
 workflow rows.
 
-## Workflows
+## Dataset Workflows
 
 ```bash
 opentraces workflow templates
@@ -588,7 +592,8 @@ opentraces workflow list --digest
 opentraces workflow remove my-workflow --yes
 ```
 
-Workflow packages are skill-format row builders. `dataset run` invokes them.
+Workflow packages are skill-format row builders. `dataset run` invokes them to
+project bucket traces into dataset rows.
 
 ## Datasets
 
@@ -955,17 +960,30 @@ opentraces dataset run my-dataset --dry-run
 
 ---
 
-# Private Bucket
+# Portable Bucket
 
-The bucket is the raw capture-time store. It is local-only until you opt into a
-private HuggingFace bucket remote.
+The bucket is the portable environment for captured trace evidence. It is
+local by default, can sync to a private remote, and is self-sufficient enough
+for another machine to inspect trace records, replay Trail events, and lazy-load
+Context Tree blobs without access to the original workstation.
 
 Buckets are distinct from datasets:
 
 | Layer | Contents | Egress |
 |-------|----------|--------|
-| Bucket | raw traces, patch history, Trail events, Context Tree events, source events, blobs, manifest | `opentraces bucket remote push` |
+| Bucket | raw trace envelopes, patch history, Trail events, Context Tree events, source events, blobs, manifest | `opentraces bucket remote push` |
 | Dataset | workflow-projected rows over one or more traces | `opentraces dataset publish` |
+
+## Principles
+
+- **Raw evidence stays private first.** Capture writes to the local bucket, not
+  to a public dataset.
+- **The bucket is replayable.** Trail events and manifests are enough to rebuild
+  derived projections and restore the canonical Git event ref.
+- **Large evidence is lazy.** Context and raw blobs are content-addressed, so
+  readers can inspect manifests first and fetch only what they need.
+- **Datasets are projections.** Publishing a dataset row does not publish the
+  bucket unless you separately sync the bucket remote.
 
 ## Layout
 
@@ -1004,21 +1022,20 @@ opentraces bucket verify --full --json
 `bucket status` avoids expensive blob enumeration. `bucket verify` recomputes
 blob hashes and checks for dangling references.
 
-## Repair And Prune
+## Repair, Rebuild, And Replay
 
 ```bash
 opentraces bucket repair --json
 opentraces bucket rebuild --json
 opentraces bucket rebuild --substrate context-tree --json
-opentraces bucket prune --dry-run --json
-opentraces bucket prune --json
+opentraces bucket replay --repo /path/to/git-clone --json
 ```
 
 `bucket repair` re-projects envelopes and the manifest from canonical events
 and blobs. `bucket rebuild` refreshes one or all derived substrate projections
 from canonical state (`trail`, `traces`, `context-tree`, or `all`). `bucket
-prune` only deletes unreachable blobs and atomic-write temp files; it never
-deletes events or `trace.json`.
+replay` reconstructs the canonical Trace Trails Git event ref in another Git
+repository from bucket-exported events.
 
 ## Remote Sync
 
@@ -1028,21 +1045,22 @@ opentraces bucket remote status --json
 opentraces bucket remote diff --json
 opentraces bucket remote push --json
 opentraces bucket remote pull --json
+opentraces bucket prefetch <trace-id> --json
 ```
 
 Sync order is substrate-aware: blobs, then events, then envelopes, then the
-manifest. A configured bucket remote does not publish dataset rows.
+manifest. `prefetch` warms one trace's blobs before `trace get` or `ctx` loads
+them. A configured bucket remote does not publish dataset rows.
 
-## Prefetch And Replay
+## Cleanup
 
 ```bash
-opentraces bucket prefetch <trace-id> --json
-opentraces bucket replay --repo /path/to/git-clone --json
+opentraces bucket prune --dry-run --json
+opentraces bucket prune --json
 ```
 
-`prefetch` warms a cold local bucket from remote before `trace get` or `ctx`
-loads blobs. `replay` reconstructs the canonical Trace Trails Git event ref in
-a repository from bucket-exported events.
+`bucket prune` only deletes unreachable blobs and atomic-write temp files. It
+never deletes events or `trace.json`.
 
 ---
 
@@ -1130,14 +1148,30 @@ opentraces trace get ot://trace/<id>/patches/<patch-id>/trail --json
 Trace Trails answer: what did this trace change, and where does that change
 live in Git now?
 
+They are the Git evidence layer for traces. The trace says what happened during
+the agent session. Trails preserve the patch history of that trace against Git
+history: the original patch, the commit anchor, and whether the authored content
+still survives at `HEAD`.
+
+## Principles
+
+- **Trace patches are the unit of authorship.** A patch is one tool-produced
+  change or hunk, not one whole file and not one final diff.
+- **Git anchors are evidence, not guesswork.** The post-commit path matches
+  trace patches into commits and records the confidence of that match.
+- **Survival can change over time.** A patch may be alive, transformed,
+  reverted, moved, partially preserved, or lost as Git history evolves.
+- **The log is canonical.** Snapshot refs and CLI projections are rebuildable
+  from append-only Trail events.
+
 The canonical substrate is an append-only event log under:
 
 ```text
 refs/opentraces/local/events/v1
 ```
 
-Bucket exports mirror that event log in `bucket/events/v1/`. Snapshot refs and
-CLI projections are rebuildable from the canonical events.
+Bucket exports mirror that event log in `bucket/events/v1/`, which makes the
+bucket portable across machines.
 
 ## Mental Model
 
@@ -1186,27 +1220,18 @@ opentraces trail track --since 12h --json
 | `partially_preserved` | Some authored lines survive |
 | `repaired` | A later change repaired/touched the anchored range |
 
-## Blame A Commit
+## Common Reads
 
 ```bash
 opentraces trail blame commit ac019172
 opentraces trail blame commit ac019172 src/auth.py --lines
-opentraces trail blame commit ac019172 --json
-```
-
-Commit mode answers which traces contributed to the commit. `--lines` and
-`--entities` are commit-mode only.
-
-## Blame A Trace
-
-```bash
-opentraces trail blame commit t:<trace-id>
 opentraces trail blame commit t:<trace-id> --include-overlapping
-opentraces trail blame commit t:<trace-id> --json
+opentraces trail track <trace-id> --json
 ```
 
-Trace mode answers which commits carry the trace's output. Weak overlap links
-are hidden unless `--include-overlapping` is passed.
+Commit mode answers which traces contributed to a commit. Trace mode answers
+which commits carry a trace's output. `trail track` follows one trace, patch, or
+anchor through the current Git state.
 
 ## PR Consumer
 
@@ -1220,36 +1245,32 @@ The PR consumer is workflow-based. It runs the bundled
 `pr-intent-summary-v1` workflow over the branch context and renders one row per
 commit with deterministic trace lineage and intent summaries.
 
-## Repair And Replay
-
-Bucket replay reconstructs the canonical Trail event ref in a Git repository:
-
-```bash
-opentraces bucket replay --repo /path/to/git-clone --json
-```
-
-If projections drift, run:
-
-```bash
-opentraces bucket repair --json
-opentraces bucket verify --json
-```
-
-Substrate/debug trail commands remain callable for scripts, but the public
-front door is `trail blame`, `trail graph`, `trail track`, and `bucket replay`.
-
 ---
 
 # Context Tree
 
 The Context Tree answers: what did the model see at this point in the trace?
+
 It is the sibling substrate to Trace Trails. Trace Trails tracks what changed;
-Context Tree tracks the visible context used to make the change.
+Context Tree tracks the visible context used to make that change: messages,
+system instructions, tool registry, runtime state, compaction boundaries, and
+resume points.
 
 Schema joins:
 
 - `Step.context_node_id`
 - `TraceRecord.context_tree_summary`
+
+## Principles
+
+- **Context is geometry.** A trace is not just a transcript; it is a tree of
+  model-visible context nodes across turns, compactions, forks, and resumes.
+- **Layers are content-addressed.** Context nodes point to layer blobs, so the
+  bucket can move the environment without embedding every byte into each row.
+- **Reads and writes are queryable.** `ctx reads` and `ctx writes` expose what
+  the agent observed and changed from the context substrate.
+- **Resume is a first-class output.** `ctx resume` creates a structured packet
+  for an agent to restart from a context node.
 
 ## Commands
 
@@ -1310,15 +1331,31 @@ emission is fire-and-forget.
 
 - resume from a specific context node;
 - compare two steps after compaction;
-- build training rows that include the exact visible context;
-- audit whether a tool write was made with enough surrounding information.
+- build training rows that include the visible context;
+- audit whether a tool write was made with enough surrounding information;
+- warm a new session by pulling only the relevant prior trace context.
 
 ---
 
-# Workflow Templates
+# Dataset Workflows
 
-Workflows are skill-format packages that turn bucket traces into typed row
-streams. They are the boundary between raw retained evidence and datasets.
+Dataset workflows are skill-format packages that turn bucket traces into typed
+row streams. They are the boundary between retained evidence and the dataset
+you actually want: eval rows, SFT examples, branch summaries, bug capsules, or
+custom training objectives.
+
+This is separate from the trace workflow. Capture fills a bucket; dataset
+workflows read that bucket and decide what row shape to emit.
+
+## Principles
+
+- **A workflow is purposeful.** It encodes the row schema and training or
+  evaluation objective.
+- **Discovery stays deterministic.** Workflows use `trace query`, `trace map`,
+  `trace slice`, `trail`, and `ctx` commands to find and bound evidence.
+- **Rows are projections.** A row may contain summaries, references, scores, or
+  a small evidence closure; it is not the raw trace.
+- **Security is explicit.** Workflows opt into the security tools they require.
 
 ## Manage Workflows
 
@@ -1358,6 +1395,23 @@ The dataset-free primitive is `execute_workflow(workflow_name, scope,
 output_path)`. Dataset runs wrap that primitive with manifest, cursor, review,
 and publication state.
 
+## Evidence Inputs
+
+A workflow can use the trace substrates directly:
+
+```bash
+opentraces trace query --lex "fix failing test" --cwd --json
+opentraces trace map <trace-id> --bursts --json
+opentraces trace slice <trace-id> --template bursts --json
+opentraces trail track <trace-id> --json
+opentraces ctx step <trace-id> 7 --json
+opentraces ctx resume <context-node-id> --json
+```
+
+Typical row builders do a progressive read: query for candidates, map the
+candidate trace, slice the relevant span, then attach Trail and Context evidence
+only when the row schema needs it.
+
 ## Built-In Templates
 
 | Template | Purpose |
@@ -1366,9 +1420,25 @@ and publication state.
 | `skill-command-trajectory-eval-v1` | Compact eval rows for command/skill trajectory attribution |
 | `pr-intent-summary-v1` | Branch-context rows consumed by `opentraces trail blame pr render/create/update` |
 
+## Everything-Style Workflows
+
+The general pattern is: choose a schema, choose a trace scope, choose the
+evidence closure, and emit rows. A workflow can be broad enough to support an
+"everything" dataset for one objective, while still keeping the raw bucket
+private.
+
+For example, a command-trajectory workflow may include:
+
+- the user intent summary from `trace map --bursts`;
+- the bounded step window from `trace slice`;
+- patch survival from `trail track`;
+- visible context from `ctx step` or `ctx resume`;
+- security metadata from an explicit `security sanitize` pass.
+
 ## Security In Workflows
 
-Security tools are optional. A workflow can invoke them explicitly:
+Security tools are optional and default off. A workflow can invoke them
+explicitly:
 
 ```bash
 printf '%s\n' '{"row": {...}}' \
@@ -1383,7 +1453,7 @@ printf '%s\n' '{"record": {...}}' \
 ```
 
 This keeps the dataset contract explicit: the workflow decides what row shape
-and what sanitization are required for its training objective.
+and what sanitization are required for its objective.
 
 ---
 
@@ -1515,54 +1585,6 @@ Review is still the final human or workflow gate before publication.
 
 ---
 
-# Quality
-
-Trace quality scoring runs inside dataset workflows. The standalone
-`opentraces assess` verb has been retired; assessment is a workflow step in
-`opentraces dataset run` and any scorecard is embedded into the dataset card on
-`opentraces dataset publish`.
-
-## Publication Integration
-
-`opentraces dataset publish` always carries the latest assessment for the dataset. Workflows can opt the assessment into a stricter publication gate by declaring it; rows without a clean assessment verdict will be filtered out at publish time.
-
-## Scoring Model
-
-Assessment is deterministic by default. The core score is computed from Python checks over each `TraceRecord` (and its dataset row projections), without external calls or randomness.
-
-An optional LLM judge can add qualitative scoring; workflows may configure it via the bundled `setup llm-review` provider.
-
-## Personas
-
-Workflows commonly score rows across five consumer-facing personas:
-
-| Persona | What it checks |
-|---------|----------------|
-| Conformance | Schema correctness and structural completeness |
-| Training | SFT-readiness: dialogue quality, tool-call structure, usable reasoning |
-| RL | Outcome and reward-signal usefulness |
-| Analytics | Metrics, timing, cost, and observability coverage |
-| Domain | Metadata that makes the trace discoverable and reusable |
-
-## Remote Datasets
-
-To assess a dataset already on Hugging Face, the recommended path is to import its rows into a local dataset and run the workflow's assessment step against them. Direct remote assessment is no longer a standalone CLI verb.
-
-## Typical Flows
-
-```bash
-opentraces dataset run my-dataset
-opentraces dataset review my-dataset --json
-opentraces dataset review approve my-dataset --all
-opentraces dataset publish my-dataset
-```
-
-When you want stricter publication gates, configure the workflow to require
-specific row checks, explicit security-tool output, or a clean LLM review
-verdict before approval. See [Security Tools](/docs/security/tiers).
-
----
-
 # Dataset Publish
 
 `opentraces dataset publish <name>` uploads approved workflow rows and contract
@@ -1607,7 +1629,7 @@ Bucket sync moves raw retained evidence. Dataset publish moves approved
 projected rows. A private bucket remote can exist even when no dataset has
 been published.
 
-## Security And Quality Gates
+## Security And Publication Gates
 
 Publication gates operate on dataset rows. If a workflow requires sanitization
 or LLM review, it should run those steps before approving rows.
@@ -1637,15 +1659,16 @@ models and row manifest.
 
 ---
 
-# Consume
+# Clients & Use Cases
 
-There are two consumer paths:
-
-1. **Published datasets:** reviewed workflow rows on Hugging Face Hub.
-2. **Private bucket evidence:** raw trace envelopes and companions synced to a
-   private bucket remote.
+Clients consume either published dataset rows or private bucket evidence. The
+important distinction is whether the client needs curated rows or the retained
+trace environment.
 
 ## Published Dataset Rows
+
+Use this path for evaluation jobs, teacher/student training, SFT/RL pipelines,
+dashboards, and public or private dataset sharing.
 
 ```python
 from datasets import load_dataset
@@ -1668,14 +1691,14 @@ Rows are workflow-specific. A command-trajectory eval dataset and a PR intent
 summary dataset will not have the same row schema, even if they came from the
 same bucket traces.
 
-## Private Bucket Lookup
+## Private Bucket Evidence
 
-Use the CLI when the consumer needs raw trace evidence, Git anchors, or Context
+Use the CLI when a client needs raw trace evidence, Git anchors, or Context
 Tree nodes:
 
 ```bash
-opentraces trace get <trace-id> --remote owner/private-bucket --json
 opentraces trace query --remote-bucket --cwd --json
+opentraces trace get <trace-id> --remote owner/private-bucket --json
 opentraces trail blame commit <sha> --json
 opentraces ctx tree <trace-id> --json
 opentraces bucket prefetch <trace-id> --remote owner/private-bucket
@@ -1683,6 +1706,82 @@ opentraces bucket prefetch <trace-id> --remote owner/private-bucket
 
 Bucket evidence can be large and private. Do not treat a bucket remote as a
 public dataset unless you intentionally made that storage public.
+
+## Context Warmup
+
+Context warmup is the agent-memory use case: before starting new work, an agent
+searches session history, progressively loads the relevant trace evidence, and
+uses a small context packet to orient the next session.
+
+Natural-language prompt:
+
+```text
+Find prior traces in this repo related to the current task. Start with a broad
+trace query, inspect only the most relevant candidates, then load the smallest
+context and Trail evidence needed to brief the next agent step. Do not publish
+anything.
+```
+
+Commands:
+
+```bash
+opentraces trace query --cwd --lex "auth middleware regression" --json
+opentraces trace map <trace-id> --bursts --json
+opentraces trace slice <trace-id> --template bursts --json
+opentraces ctx step <trace-id> 7 --json
+opentraces ctx resume <context-node-id> --json
+opentraces trail track <trace-id> --json
+```
+
+The result is not a dataset row by default. It is a compact working packet the
+agent can read before continuing.
+
+## Manual Trace Capsule
+
+The future capsule command is planned, not shipped yet. For now, emulate a
+trace capsule as a dataset of one: one trace, one bounded slice, one context
+resume packet, one Trail evidence closure, and one explicit redaction pass.
+
+Natural-language prompt:
+
+```text
+Create a one-row trace capsule for this bug. Use the smallest trace slice that
+captures the failing intent, attach the context resume packet and Trail anchors,
+run explicit security tools, then create a local dataset with one reviewed row.
+Do not claim this is the future opentraces capsule command; this is the manual
+dataset-of-1 version.
+```
+
+Commands:
+
+```bash
+opentraces trace query --cwd --lex "bug reproduction failure" --json
+opentraces trace map <trace-id> --bursts --json
+opentraces trace slice <trace-id> --around-step <step> --radius 4 --json
+opentraces ctx step <trace-id> <step> --json
+opentraces ctx resume <context-node-id> --json
+opentraces trail track <trace-id> --json
+
+opentraces workflow create trace-capsule --template default \
+  --description "One-row bug capsule projection"
+opentraces dataset new trace-capsule-001 --workflow ./workflows/trace-capsule/
+opentraces dataset run trace-capsule-001 --scope trace --trace <trace-id> --dry-run
+opentraces dataset run trace-capsule-001 --scope trace --trace <trace-id>
+opentraces dataset review trace-capsule-001 --json
+opentraces dataset review approve trace-capsule-001 --all
+```
+
+If the one-row capsule is meant to leave the machine, run explicit security
+tooling inside the workflow or over the candidate row before approval:
+
+```bash
+printf '%s\n' '{"row": {...}}' \
+  | opentraces security sanitize --tools regex,entropy,path_anonymizer
+```
+
+The planned capsule feature will make this a first-class command surface. Until
+then, the dataset-of-1 pattern keeps the concept honest: it is just a workflow
+projection over a private bucket trace.
 
 ## File-Oriented Access
 
@@ -1696,45 +1795,6 @@ hf-mount stop /mnt/traces
 ```
 
 For private/gated datasets, authenticate with Hugging Face first.
-
----
-
-# Export
-
-Cross-format export in 0.4 is handled by the schema package directly. The legacy `opentraces export` top-level command has been retired; the underlying serializers (`agent-trace`, `atif`) live in `packages/opentraces-schema/` and are invoked by dataset workflows that need them.
-
-## Agent Trace v0.1.0
-
-Agent Trace serialization follows the Cursor/community [RFCs](https://github.com/cursor/agent-trace). The exporter pulls directly from the fields adopted in schema 0.3.0:
-
-- `Task.repository_url` (RFC #22)
-- `TraceRecord.lifecycle` and `git_links[]` (RFC #25, #27)
-- `Attribution.revision`, `Attribution.unaccounted_files` (RFC #5, #26)
-- `AttributionRange.change_type`, `AttributionRange.original`, `AttributionRange.contributor` (RFC #5, #11)
-- `AttributionConversation.ids`, `AttributionConversation.related` (RFC #9, #16)
-
-All Agent Trace `content_hash` values use the `murmur3:<32-hex>` prefix inherited from the opentraces record.
-
-To produce Agent Trace JSONL from a dataset, define a workflow that calls the Agent Trace serializer over reviewed rows, or invoke the serializer directly from a script:
-
-```python
-from opentraces_schema import TraceRecord
-from opentraces.publish.agent_trace import serialize_record_to_agent_trace
-
-# ...load TraceRecord, then:
-agent_trace_payload = serialize_record_to_agent_trace(record)
-```
-
-## ATIF
-
-`packages/opentraces-schema/FIELD-MAPPINGS.md` is the source of truth for third-party converters between `TraceRecord` and ATIF. The serializer at `src/opentraces/publish/atif.py` performs the conversion.
-
-A public round-trip ATIF converter is tracked on the roadmap.
-
-## What Is Not Ready Yet
-
-- A full ATIF round-trip converter
-- A user-facing `opentraces export` verb (was removed in 0.4)
 
 ---
 
@@ -2419,7 +2479,8 @@ A code attribution spec (CC BY 4.0) that records which lines of code came from w
 
 Adoption is additive — pre-0.3.0 traces validate unchanged.
 
-The Agent Trace v0.1.0 serializer lives in `src/opentraces/publish/agent_trace.py` and is consumed by dataset workflows that need to emit Agent Trace JSONL. See [Export](/docs/workflow/export) for details.
+The Agent Trace v0.1.0 serializer lives in `src/opentraces/publish/agent_trace.py`
+and can be called by dataset workflows that need to emit Agent Trace-shaped rows.
 
 ## OTel GenAI Semantic Conventions
 

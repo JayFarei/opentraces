@@ -30,19 +30,23 @@ export const DOC_NAV: DocEntry[] = [
   { slug: "schema/standards", title: "Standards Alignment", group: "Schema" },
   { slug: "schema/versioning", title: "Versioning", group: "Schema" },
 
-  // Workflow
-  { slug: "workflow/parsing", title: "Capture", group: "Workflow" },
-  { slug: "workflow/bucket", title: "Private Bucket", group: "Workflow" },
-  { slug: "workflow/trace-discovery", title: "Trace Discovery", group: "Workflow" },
-  { slug: "workflow/blame", title: "Trace Trails", group: "Workflow" },
-  { slug: "workflow/context-tree", title: "Context Tree", group: "Workflow" },
-  { slug: "workflow/workflow-templates", title: "Workflow Templates", group: "Workflow" },
-  { slug: "workflow/datasets", title: "Dataset Rows", group: "Workflow" },
-  { slug: "workflow/review", title: "Dataset Row Review", group: "Workflow" },
-  { slug: "workflow/quality", title: "Quality", group: "Workflow" },
-  { slug: "workflow/pushing", title: "Dataset Publish", group: "Workflow" },
-  { slug: "workflow/consume", title: "Consume", group: "Workflow" },
-  { slug: "workflow/export", title: "Export", group: "Workflow" },
+  // Trace Workflow
+  { slug: "workflow/parsing", title: "Capture", group: "Trace Workflow" },
+  { slug: "workflow/bucket", title: "Portable Bucket", group: "Trace Workflow" },
+  { slug: "workflow/trace-discovery", title: "Trace Discovery", group: "Trace Workflow" },
+  { slug: "workflow/blame", title: "Trace Trails", group: "Trace Workflow" },
+  { slug: "workflow/context-tree", title: "Context Tree", group: "Trace Workflow" },
+
+  // Dataset Workflows
+  { slug: "workflow/workflow-templates", title: "Dataset Workflows", group: "Dataset Workflows" },
+
+  // Datasets
+  { slug: "workflow/datasets", title: "Dataset Rows", group: "Datasets" },
+  { slug: "workflow/review", title: "Review", group: "Datasets" },
+  { slug: "workflow/pushing", title: "Publish", group: "Datasets" },
+
+  // Clients
+  { slug: "workflow/consume", title: "Clients & Use Cases", group: "Clients" },
 
   // Integration
   { slug: "integration/ci-cd", title: "CI/CD & Automation", group: "Integration" },

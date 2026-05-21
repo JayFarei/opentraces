@@ -54,7 +54,7 @@ opentraces init --agent codex-cli
 `init` writes `.opentraces.json` and registers machine-local state under
 `~/.opentraces/`.
 
-## 4. Inspect The Private Bucket
+## 4. Inspect The Portable Bucket
 
 Captured traces land in the private bucket first. This is not a public dataset.
 
@@ -102,7 +102,7 @@ opentraces ctx step <trace-id> 7
 opentraces ctx resume <context-node-id>
 ```
 
-## 6. Create A Workflow-Backed Dataset
+## 6. Create A Dataset Workflow
 
 Datasets are projected rows, not raw trace uploads. Start from a template or a
 custom workflow package.
@@ -147,10 +147,11 @@ as new shards. It does not publish the raw bucket unless you separately run
 
 ## Next Steps
 
-- [Private Bucket](/docs/workflow/bucket), raw retained evidence and sync
+- [Portable Bucket](/docs/workflow/bucket), raw retained evidence and sync
 - [Trace Discovery](/docs/workflow/trace-discovery), query/map/slice/get
 - [Trace Trails](/docs/workflow/blame), Git anchors and survival
 - [Context Tree](/docs/workflow/context-tree), what the agent saw
-- [Workflow Templates](/docs/workflow/workflow-templates), row projection packages
+- [Dataset Workflows](/docs/workflow/workflow-templates), row projection packages
 - [Dataset Rows](/docs/workflow/datasets), review states and schedules
+- [Clients & Use Cases](/docs/workflow/consume), context warmup and manual trace capsules
 - [Security Tools](/docs/security/tiers), optional default-off tools

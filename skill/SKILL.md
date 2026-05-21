@@ -19,8 +19,8 @@ publishes reviewed dataset rows to HuggingFace remotes.
 - Trace retrieval and search: `opentraces trace query`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
 - Trace Trails (visible surface): `opentraces trail blame commit <sha>`, `opentraces trail blame pr render|create|update`, `opentraces trail graph`, `opentraces trail track`
 - Context Tree: `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `ctx list/info`
-- Bucket (private capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket rebuild`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
-- Workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`
+- Bucket (portable capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket rebuild`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
+- Dataset workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`
 - Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`.
 - Security tools: `opentraces security tools list/info`, `opentraces security sanitize --tools <names>` or `--use-config`
 - OTLP capture source: `opentraces setup capture-otlp`, `opentraces capture-otlp start|stop|status|restart|flush`
@@ -214,11 +214,12 @@ opentraces capture-otlp status --json
 opentraces capture-otlp flush --session <session_id> --project <repo> --trace-id <trace_id>
 ```
 
-## Workflows
+## Dataset Workflows
 
 Workflows are skill-format packages (or Markdown files) that know how to turn
-trace evidence into dataset rows. The main path is to scaffold one with
-`opentraces workflow create` and then bind it to a dataset:
+trace evidence into dataset rows. They use trace discovery, Trace Trails, and
+Context Tree evidence to emit purposeful row streams. The main path is to
+scaffold one with `opentraces workflow create` and then bind it to a dataset:
 
 ```bash
 opentraces workflow templates --json

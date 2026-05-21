@@ -1,13 +1,27 @@
 # Context Tree
 
 The Context Tree answers: what did the model see at this point in the trace?
+
 It is the sibling substrate to Trace Trails. Trace Trails tracks what changed;
-Context Tree tracks the visible context used to make the change.
+Context Tree tracks the visible context used to make that change: messages,
+system instructions, tool registry, runtime state, compaction boundaries, and
+resume points.
 
 Schema joins:
 
 - `Step.context_node_id`
 - `TraceRecord.context_tree_summary`
+
+## Principles
+
+- **Context is geometry.** A trace is not just a transcript; it is a tree of
+  model-visible context nodes across turns, compactions, forks, and resumes.
+- **Layers are content-addressed.** Context nodes point to layer blobs, so the
+  bucket can move the environment without embedding every byte into each row.
+- **Reads and writes are queryable.** `ctx reads` and `ctx writes` expose what
+  the agent observed and changed from the context substrate.
+- **Resume is a first-class output.** `ctx resume` creates a structured packet
+  for an agent to restart from a context node.
 
 ## Commands
 
@@ -68,5 +82,6 @@ emission is fire-and-forget.
 
 - resume from a specific context node;
 - compare two steps after compaction;
-- build training rows that include the exact visible context;
-- audit whether a tool write was made with enough surrounding information.
+- build training rows that include the visible context;
+- audit whether a tool write was made with enough surrounding information;
+- warm a new session by pulling only the relevant prior trace context.
