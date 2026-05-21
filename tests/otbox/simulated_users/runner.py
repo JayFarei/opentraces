@@ -232,6 +232,25 @@ def _dismiss_codex_hook_review(session: str, *, timeout_s: float = 8.0) -> bool:
     return False
 
 
+def _handle_codex_rate_limit_prompt(session: str, pane: str) -> bool:
+    """Accept Codex CLI's lower-model fallback prompt when it appears.
+
+    The live capture lane should keep moving when Codex offers an explicit
+    fallback from the operator's default model to a cheaper model. We only
+    handle the first-choice fallback prompt; hard usage-limit failures with no
+    switch option still time out and preserve the pane log for inspection.
+    """
+    lower = pane.lower()
+    if "usage limit" not in lower and "approaching rate limits" not in lower:
+        return False
+    if "switch to gpt-5.4-mini" not in lower:
+        return False
+
+    _send_tmux_key(session, "Enter")
+    time.sleep(1.0)
+    return True
+
+
 def _kill_session(session: str) -> None:
     """Best-effort tmux session cleanup."""
     subprocess.run(
@@ -993,6 +1012,9 @@ def run_simulated_session(
                 while time.monotonic() < deadline:
                     time.sleep(poll_interval)
                     last_pane = _capture_pane(session)
+                    if normalized_agent == "codex-cli":
+                        if _handle_codex_rate_limit_prompt(session, last_pane):
+                            continue
                     if pattern.search(last_pane):
                         matched = True
                         break

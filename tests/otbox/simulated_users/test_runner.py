@@ -34,6 +34,7 @@ from tests.otbox.simulated_users.runner import (
     Turn,
     _dismiss_codex_hook_review,
     _ensure_box_project_git_repo,
+    _handle_codex_rate_limit_prompt,
     _install_opentraces_hooks_in_box,
     _prep_codex_project_trust,
     _prep_agent_home,
@@ -407,6 +408,26 @@ def test_dismiss_codex_hook_review_handles_numbered_menu(monkeypatch):
 
     assert _dismiss_codex_hook_review("session") is True
     assert keys == ["Down", "Enter"]
+
+
+def test_handle_codex_rate_limit_prompt_accepts_mini_switch(monkeypatch):
+    keys: list[str] = []
+
+    monkeypatch.setattr(runner_module, "_send_tmux_key", lambda _session, key: keys.append(key))
+    monkeypatch.setattr(runner_module.time, "sleep", lambda _seconds: None)
+
+    handled = _handle_codex_rate_limit_prompt(
+        "session",
+        """
+        You've hit your usage limit.
+        Switch to gpt-5.4-mini for lower credit usage?
+        › 1. Switch to gpt-5.4-mini
+          2. Keep current model
+        """,
+    )
+
+    assert handled is True
+    assert keys == ["Enter"]
 
 
 # ---------------------------------------------------------------------------
