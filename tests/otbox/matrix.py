@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -21,6 +22,9 @@ from .checkpoints import CheckpointError, resolve_checkpoint
 from .drivers.base import Driver
 from .journey import JourneyResult, available_journeys, run_journey
 from .jtbd import load_jtbd_map
+
+TIER1_FLAG = "OT_OTBOX_TIER1"
+TIER1_OPT_IN_REASON = f"set {TIER1_FLAG}=1 to opt into Tier 1 matrix runs"
 
 
 @dataclass
@@ -141,6 +145,21 @@ def run_matrix(
         report.journeys_run = len({r.journey for r in report.rows})
         report.error_count = sum(1 for r in report.rows if r.verdict == "ERROR")
         return report
+
+    if os.environ.get(TIER1_FLAG) != "1":
+        runnable_pairs: list[tuple[dict, str | None]] = []
+        for journey, base in pairs:
+            if int(journey.get("tier", 0)) == 1:
+                report.rows.append(MatrixRow(
+                    journey=journey["name"],
+                    base_checkpoint=base or "(none)",
+                    verdict="SKIP",
+                    reason=TIER1_OPT_IN_REASON,
+                    duration_s=0.0,
+                ))
+            else:
+                runnable_pairs.append((journey, base))
+        pairs = runnable_pairs
 
     # Group by base checkpoint so each base is resolved once per run; the
     # underlying cache + snapshot-fork makes subsequent forks cheap.
