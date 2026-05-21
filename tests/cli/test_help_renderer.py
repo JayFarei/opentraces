@@ -14,7 +14,13 @@ GLOBAL_SETUP_VERBS = ["setup", "auth", "config", "completions"]
 PROJECT_SETUP_VERBS = ["init", "status", "doctor", "remove"]
 TRACE_VERBS = ["trace"]
 TRAIL_VERBS = ["trail"]
+CONTEXT_VERBS = ["ctx"]
+BUCKET_VERBS = ["bucket"]
+WORKFLOW_VERBS = ["workflow"]
 DATASET_VERBS = ["dataset"]
+SECURITY_VERBS = ["security"]
+CAPTURE_VERBS = ["capture-otlp"]
+MAINTENANCE_VERBS = ["git-backfill"]
 
 # Legacy/internal verbs still registered at the root but NOT advertised in
 # the journey-first sections.
@@ -28,7 +34,13 @@ SECTION_HEADERS_IN_ORDER = [
     "PROJECT SETUP COMMANDS",
     "TRACE COMMANDS",
     "TRAIL COMMANDS",
+    "CONTEXT COMMANDS",
+    "BUCKET COMMANDS",
+    "WORKFLOW COMMANDS",
     "DATASET COMMANDS",
+    "SECURITY COMMANDS",
+    "CAPTURE COMMANDS",
+    "MAINTENANCE COMMANDS",
 ]
 
 
@@ -124,6 +136,37 @@ def test_dataset_block_contains_current_primary_verbs():
     block = _section_block(out, "DATASET COMMANDS")
     for verb in DATASET_VERBS:
         assert re.search(rf"\b{re.escape(verb)}\b", block), (verb, block)
+
+
+@pytest.mark.parametrize(
+    ("header", "verbs"),
+    [
+        ("CONTEXT COMMANDS", CONTEXT_VERBS),
+        ("BUCKET COMMANDS", BUCKET_VERBS),
+        ("WORKFLOW COMMANDS", WORKFLOW_VERBS),
+        ("SECURITY COMMANDS", SECURITY_VERBS),
+        ("CAPTURE COMMANDS", CAPTURE_VERBS),
+        ("MAINTENANCE COMMANDS", MAINTENANCE_VERBS),
+    ],
+)
+def test_new_public_blocks_contain_current_primary_verbs(header, verbs):
+    out = _run_help()
+    block = _section_block(out, header)
+    for verb in verbs:
+        assert re.search(rf"\b{re.escape(verb)}\b", block), (verb, block)
+
+
+def test_every_public_root_is_advertised_in_root_help():
+    out = _run_help()
+    advertised = _strip_framing(out)
+    public_roots = sorted(
+        name for name, cmd in main.commands.items() if not getattr(cmd, "hidden", False)
+    )
+    for verb in public_roots:
+        row_pattern = rf"(?m)^\s*ot {re.escape(verb)}\b"
+        assert re.search(row_pattern, advertised), (
+            f"public root {verb!r} is registered but missing from root --help"
+        )
 
 
 def test_legacy_verbs_are_not_advertised():

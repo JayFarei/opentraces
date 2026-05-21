@@ -12,6 +12,7 @@ import json
 
 from click.testing import CliRunner
 
+from opentraces.cli import main
 from opentraces.cli.security import security_group
 
 
@@ -111,3 +112,18 @@ class TestToolsInfo:
         assert payload["name"] == "regex"
         assert payload["kind"] == "detector"
         assert payload["enabled"] is True
+
+    def test_llm_pii_does_not_advertise_missing_setup_command(self) -> None:
+        code, out = _run(["tools", "info", "llm_pii", "--json"])
+        assert code == 0, out
+        payload = json.loads(out)
+        assert payload["setup_cmd"] is None
+        assert payload["disable_cmd"] is None
+        assert "advanced" in payload["detail"]
+
+
+def test_security_group_uses_canonical_help_renderer() -> None:
+    result = CliRunner().invoke(main, ["security", "--help"], color=False)
+    assert result.exit_code == 0, result.output
+    assert "opentraces security" in result.output
+    assert "Commands" in result.output

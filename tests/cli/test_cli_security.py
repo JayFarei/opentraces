@@ -67,6 +67,20 @@ def isolated_config(tmp_path, monkeypatch):
 
 
 class TestSetupTruffleHogVerify:
+    def test_setup_security_help_uses_optional_tool_language(self, runner, isolated_config) -> None:
+        result = runner.invoke(main, ["setup", "--help"], color=False)
+        assert result.exit_code == 0, result.output
+        assert "optional deep secret detector" in result.output
+        assert "optional dataset-row reviewer" in result.output
+        assert "Tier 1.5" not in result.output
+        assert "Tier 2" not in result.output
+
+    def test_setup_trufflehog_help_uses_optional_tool_language(self, runner, isolated_config) -> None:
+        result = runner.invoke(main, ["setup", "trufflehog", "--help"], color=False)
+        assert result.exit_code == 0, result.output
+        assert "optional deep secret detector" in result.output
+        assert "Tier 1.5" not in result.output
+
     def test_verify_missing_binary(self, runner, isolated_config, monkeypatch) -> None:
         monkeypatch.setattr(
             "opentraces.security.trufflehog.shutil.which", lambda _: None

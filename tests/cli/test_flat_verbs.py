@@ -38,12 +38,18 @@ def test_old_root_verbs_are_not_registered(verb: str) -> None:
 def test_canonical_roots_are_registered() -> None:
     result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
-    for verb in ["setup", "init", "trace", "trail", "bucket", "dataset"]:
+    public_roots = sorted(
+        name for name, cmd in main.commands.items() if not getattr(cmd, "hidden", False)
+    )
+    for verb in public_roots:
         assert f"ot {verb}" in result.output
-    assert "ot workflow" not in result.output
 
 
-def test_workflow_registry_remains_callable_but_not_advertised() -> None:
+def test_workflow_registry_is_callable_and_advertised() -> None:
+    help_result = CliRunner().invoke(main, ["--help"])
+    assert help_result.exit_code == 0
+    assert "ot workflow" in help_result.output
+
     result = CliRunner().invoke(main, ["workflow", "--help"])
     assert result.exit_code == 0
     assert "create" in result.output

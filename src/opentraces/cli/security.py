@@ -24,6 +24,7 @@ from typing import Any
 
 import click
 
+from ._help import OpentracesCommand, OpentracesGroup
 from ..core.config import load_config
 from ..security import (
     FieldType,
@@ -40,9 +41,9 @@ from ..security.tools._registry import get as get_tool
 # ---------------------------------------------------------------------------
 
 
-@click.group("security")
+@click.group("security", cls=OpentracesGroup)
 def security_group() -> None:
-    """Privacy/security sanitization tools."""
+    """Optional privacy/security utilities."""
 
 
 # ---------------------------------------------------------------------------
@@ -90,17 +91,20 @@ def _findings_to_dicts(findings) -> list[dict[str, Any]]:
     return [asdict(f) for f in findings]
 
 
-@security_group.command("sanitize")
+@security_group.command("sanitize", cls=OpentracesCommand)
 @click.option(
     "--tools",
     "tools_csv",
     default=None,
-    help="Comma-separated tool names to run (e.g. 'regex,trufflehog'). Mutually exclusive with --use-config.",
+    help=(
+        "Comma-separated optional tool names to run (e.g. 'regex,trufflehog'). "
+        "Mutually exclusive with --use-config."
+    ),
 )
 @click.option(
     "--use-config",
     is_flag=True,
-    help="Resolve enabled tools from the project's loaded config.",
+    help="Run only tools explicitly enabled in the loaded config.",
 )
 @click.option(
     "--field-type",
@@ -185,12 +189,12 @@ def sanitize_cmd(tools_csv: str | None, use_config: bool, field_type: str) -> No
 # ---------------------------------------------------------------------------
 
 
-@security_group.group("tools")
+@security_group.group("tools", cls=OpentracesGroup)
 def tools_group() -> None:
     """Inspect the security/privacy tool registry."""
 
 
-@tools_group.command("list")
+@tools_group.command("list", cls=OpentracesCommand)
 @click.option("--json", "json_out", is_flag=True, help="Machine-readable JSON output.")
 def tools_list(json_out: bool) -> None:
     """List every registered tool with its current enable state."""
@@ -205,7 +209,7 @@ def tools_list(json_out: bool) -> None:
         click.echo(f"  [{marker}] {info.name:18s} {info.kind:11s}  {info.state:10s}  {detail}")
 
 
-@tools_group.command("info")
+@tools_group.command("info", cls=OpentracesCommand)
 @click.argument("name")
 @click.option("--json", "json_out", is_flag=True, help="Machine-readable JSON output.")
 def tools_info(name: str, json_out: bool) -> None:

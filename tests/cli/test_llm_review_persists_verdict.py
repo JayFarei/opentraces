@@ -18,4 +18,5 @@ def test_setup_llm_review_remains_the_global_configuration_entrypoint() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["setup", "llm-review", "--help"])
     assert result.exit_code == 0
-    assert "Configure the Tier 2 LLM reviewer" in result.output
+    assert "Configure the optional LLM dataset-row reviewer" in result.output
+    assert "Tier 2" not in result.output
