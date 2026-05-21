@@ -25,7 +25,7 @@ argv = ["security", "tools", "list", "--json"]
 [[steps]]
 type = "cli"
 id = "doctor"
-argv = ["doctor", "--json"]
+argv = ["doctor"]
 
 [[assertions]]
 kind = "returncode"

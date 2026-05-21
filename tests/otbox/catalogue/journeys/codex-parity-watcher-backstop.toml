@@ -1,0 +1,38 @@
+name = "codex-parity-watcher-backstop"
+description = """
+Plan 083 C13: Codex watcher-backstop parity. The restored artifact keeps the
+trace queryable and the bucket verifiable after shell-created filesystem
+mutations.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-watcher-session"]
+plan_083_matrix_ids = ["C13"]
+status = "pending-codex-watcher-artifact"
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "trace-map"
+argv = ["trace", "map", "{trace_id}", "--json"]
+
+[[steps]]
+type = "cli"
+id = "bucket-verify"
+argv = ["bucket", "verify", "--sample", "1", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-map"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-verify"
+equals = 0

@@ -20,12 +20,12 @@ mcp_servers_connected = 1
 [[steps]]
 type = "cli"
 id = "ctx-tree"
-argv = ["ctx", "tree", "--json"]
+argv = ["ctx", "tree", "{trace_id}", "--json"]
 
 [[steps]]
 type = "cli"
 id = "doctor"
-argv = ["doctor", "--json"]
+argv = ["doctor"]
 
 [[assertions]]
 kind = "returncode"

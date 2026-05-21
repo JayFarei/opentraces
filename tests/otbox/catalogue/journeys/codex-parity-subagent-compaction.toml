@@ -1,0 +1,37 @@
+name = "codex-parity-subagent-compaction"
+description = """
+Plan 083 C14: Codex sub-agent plus compaction pressure. The restored artifact
+must keep Context Tree and compaction surfaces executable for the trace.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-subagent-compaction-session"]
+plan_083_matrix_ids = ["C14"]
+status = "pending-codex-subagent-compaction-artifact"
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "ctx-tree"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[steps]]
+type = "cli"
+id = "ctx-compactions"
+argv = ["ctx", "compactions", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-compactions"
+equals = 0

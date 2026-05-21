@@ -69,6 +69,42 @@ register_codex_capture_checkpoint(
 )
 
 register_codex_capture_checkpoint(
+    name="c-captured-codex-permission-session",
+    capture_name="codex-permission-request",
+    description=(
+        "Artifact-preferred Codex permission-boundary capture checkpoint. "
+        "Pending until tests/otbox/captures/codex-permission-request exists."
+    ),
+)
+
+register_codex_capture_checkpoint(
+    name="c-captured-codex-readonly-session",
+    capture_name="codex-readonly-search",
+    description=(
+        "Artifact-preferred Codex read/search-only capture checkpoint. "
+        "Pending until tests/otbox/captures/codex-readonly-search exists."
+    ),
+)
+
+register_codex_capture_checkpoint(
+    name="c-captured-codex-watcher-session",
+    capture_name="codex-watcher-backstop",
+    description=(
+        "Artifact-preferred Codex watcher-backstop capture checkpoint. "
+        "Pending until tests/otbox/captures/codex-watcher-backstop exists."
+    ),
+)
+
+register_codex_capture_checkpoint(
+    name="c-captured-codex-subagent-compaction-session",
+    capture_name="codex-subagent-compaction",
+    description=(
+        "Artifact-preferred Codex sub-agent plus compaction capture checkpoint. "
+        "Pending until tests/otbox/captures/codex-subagent-compaction exists."
+    ),
+)
+
+register_codex_capture_checkpoint(
     name="c-captured-codex-security-session",
     capture_name="codex-security-redaction",
     description=(

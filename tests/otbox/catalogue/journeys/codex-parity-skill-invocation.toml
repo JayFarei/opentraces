@@ -20,12 +20,12 @@ requires_skills = ["opentraces"]
 [[steps]]
 type = "cli"
 id = "trace-map"
-argv = ["trace", "map", "--json"]
+argv = ["trace", "map", "{trace_id}", "--json"]
 
 [[steps]]
 type = "cli"
-id = "dataset-status"
-argv = ["dataset", "status", "--json"]
+id = "trace-get"
+argv = ["trace", "get", "{trace_id}", "--json"]
 
 [[assertions]]
 kind = "returncode"
@@ -34,5 +34,5 @@ equals = 0
 
 [[assertions]]
 kind = "returncode"
-step = "dataset-status"
+step = "trace-get"
 equals = 0

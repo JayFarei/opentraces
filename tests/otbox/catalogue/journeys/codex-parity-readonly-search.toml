@@ -1,0 +1,37 @@
+name = "codex-parity-readonly-search"
+description = """
+Plan 083 C11: Codex read/search-only parity. The restored artifact proves
+non-mutating tool-heavy work remains queryable without needing a patch.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-readonly-session"]
+plan_083_matrix_ids = ["C11"]
+status = "pending-codex-readonly-artifact"
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "trace-get"
+argv = ["trace", "get", "{trace_id}", "--json"]
+
+[[steps]]
+type = "cli"
+id = "trace-map"
+argv = ["trace", "map", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-get"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "trace-map"
+equals = 0

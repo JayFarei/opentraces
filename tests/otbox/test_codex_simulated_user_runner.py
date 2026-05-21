@@ -50,7 +50,11 @@ CODEX_JOURNEYS = (
     "codex-parity-skill-invocation",
     "codex-parity-resume",
     "codex-parity-mcp-permission",
+    "codex-parity-permission-request",
+    "codex-parity-readonly-search",
+    "codex-parity-watcher-backstop",
     "codex-parity-security-redaction",
+    "codex-parity-subagent-compaction",
     "mixed-agent-bucket-parity",
     "codex-full-parity-latest",
 )
@@ -67,7 +71,13 @@ CODEX_JOURNEY_CHECKPOINTS = {
     "codex-parity-skill-invocation": ["c-captured-codex-skill-session"],
     "codex-parity-resume": ["c-captured-codex-resume-session"],
     "codex-parity-mcp-permission": ["c-captured-codex-mcp-session"],
+    "codex-parity-permission-request": ["c-captured-codex-permission-session"],
+    "codex-parity-readonly-search": ["c-captured-codex-readonly-session"],
+    "codex-parity-watcher-backstop": ["c-captured-codex-watcher-session"],
     "codex-parity-security-redaction": ["c-captured-codex-security-session"],
+    "codex-parity-subagent-compaction": [
+        "c-captured-codex-subagent-compaction-session"
+    ],
     "mixed-agent-bucket-parity": ["c-mixed-agent-parity-bucket"],
     "codex-full-parity-latest": ["c-codex-full-parity-latest"],
 }
@@ -155,7 +165,14 @@ def test_codex_bash_checkpoint_registered():
         ("c-captured-codex-skill-session", "codex-skill-invocation"),
         ("c-captured-codex-resume-session", "codex-resume-continue"),
         ("c-captured-codex-mcp-session", "codex-mcp-tool"),
+        ("c-captured-codex-permission-session", "codex-permission-request"),
+        ("c-captured-codex-readonly-session", "codex-readonly-search"),
+        ("c-captured-codex-watcher-session", "codex-watcher-backstop"),
         ("c-captured-codex-security-session", "codex-security-redaction"),
+        (
+            "c-captured-codex-subagent-compaction-session",
+            "codex-subagent-compaction",
+        ),
         ("c-mixed-agent-parity-bucket", "mixed-agent-bucket-parity"),
         ("c-codex-full-parity-latest", "codex-full-parity-latest"),
     ],

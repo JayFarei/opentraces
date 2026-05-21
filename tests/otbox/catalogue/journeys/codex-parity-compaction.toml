@@ -21,12 +21,12 @@ context_tree_built = true
 [[steps]]
 type = "cli"
 id = "ctx-compactions"
-argv = ["ctx", "compactions", "--json"]
+argv = ["ctx", "compactions", "{trace_id}", "--json"]
 
 [[steps]]
 type = "cli"
 id = "ctx-tree"
-argv = ["ctx", "tree", "--json"]
+argv = ["ctx", "tree", "{trace_id}", "--json"]
 
 [[assertions]]
 kind = "returncode"

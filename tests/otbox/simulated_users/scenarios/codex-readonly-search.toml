@@ -7,8 +7,8 @@ binary_name = "codex"
 template = "single-file-python-project"
 
 [[turns]]
-prompt = "Read the project and report where greet is defined and where it is documented. Do not edit files and do not commit."
-expect_regex = "(?is)(done|complete|completed|greet|src/app.py|read-only|readonly)"
+prompt = "Inspect the project without editing files. Report the code location for the greeting helper and the docs location for the greeting behavior. Do not commit."
+expect_regex = "(?is)(src/app\\.py.*README\\.md|README\\.md.*src/app\\.py)"
 timeout_s = 180
 
 [capture]

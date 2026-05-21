@@ -1,0 +1,38 @@
+name = "codex-parity-permission-request"
+description = """
+Plan 083 C9: Codex permission-boundary capture parity. The artifact should
+restore a Codex trace that preserved permission-adjacent metadata without
+mutating user policy.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-captured-codex-permission-session"]
+plan_083_matrix_ids = ["C9"]
+status = "pending-codex-permission-artifact"
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "trace-get"
+argv = ["trace", "get", "{trace_id}", "--json"]
+
+[[steps]]
+type = "cli"
+id = "ctx-tree"
+argv = ["ctx", "tree", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-get"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree"
+equals = 0
