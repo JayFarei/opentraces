@@ -4,7 +4,7 @@ Scope: current branch `feat/buckets-trails-milestone` against `main`.
 Starting diff: 793 files changed, 151820 insertions, 11174 deletions.
 Review standard: strict maintainability review for structural regressions, missed simplifications, spaghetti branching, abstraction/type-boundary problems, file-size explosions, and misplaced logic.
 
-Status: branch-vs-main pass in progress; no open blocker/high finding after the current scan and focused bucket-layout cleanup.
+Status: complete; no open blocker/high finding remains after the branch-vs-main scan, bucket-layout cleanup, and otbox direct-journey fix.
 
 ## Review Focus
 
@@ -25,7 +25,7 @@ Status: branch-vs-main pass in progress; no open blocker/high finding after the 
 
 ## Review Evidence
 
-- Branch head verified as `0aca134fd11a5b2447926650ec5e059e63b150aa`; `git merge-base --is-ancestor 0aca134fd11a5b2447926650ec5e059e63b150aa main` currently exits 1, so landing remains incomplete.
+- Branch head verified as `0aca134fd11a5b2447926650ec5e059e63b150aa`; final `git merge-base --is-ancestor 0aca134fd11a5b2447926650ec5e059e63b150aa main` exits 0.
 - Diff scale: `793 files changed, 151820 insertions(+), 11174 deletions(-)`.
 - Otbox inventory count currently matches the handoff baseline: 122 catalogue journey TOMLs and 15 simulated-user scenario TOMLs.
 - Structural scans run:
@@ -35,7 +35,7 @@ Status: branch-vs-main pass in progress; no open blocker/high finding after the 
   - AST function/class size and branch-count scan for changed Python files
   - targeted source outline review of `bucket_store.py`, `trace_index.py`, `cli/trail.py`, `cli/ctx.py`, `core/datasets.py`, `core/bursts.py`, `core/trails/sync.py`, and `capture/claude_code/context_tree_capture.py`
 
-Current approval bar status: no open blocker/high maintainability finding. Remaining work is landing/no-regression verification, not a known thermo-nuclear blocker.
+Current approval bar status: no open blocker/high maintainability finding remains.
 
 ## Completion Bar
 

@@ -42,4 +42,4 @@ Decision: Remaining gates are final dirty-state review, any needed focused rerun
 ## Attempt 4 - 2026-05-21T20:23:58Z
 Change: Fast-forwarded `main` to the verified feature branch plus landing-fix commit.
 Evidence: `git merge --ff-only feat/buckets-trails-milestone` updated `main` from `bec61e8ac6f84188d0f616537aecfb8792d179bb` to `6c0c2bafc8b5518e2ef51e32dc41336bcb558f84`. `git merge-base --is-ancestor 0aca134fd11a5b2447926650ec5e059e63b150aa main` exits 0, and `git merge-base --is-ancestor 6c0c2bafc8b5518e2ef51e32dc41336bcb558f84 main` exits 0. Final reliable lazyusage check reported Codex `5h.used_pct=12`, `source=api`, `stale=false`, `error=null`.
-Decision: COMPLETE pending final status check after committing this evidence note.
+Decision: COMPLETE; final status check after the evidence commits shows `main` clean and `0aca134fd11a5b2447926650ec5e059e63b150aa` reachable from `main`.
