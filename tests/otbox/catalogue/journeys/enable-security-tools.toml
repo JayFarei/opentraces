@@ -1,15 +1,16 @@
-name = "enable-security-tiers"
+name = "enable-security-tools"
 description = """
-Security pipeline opt-in (plan 063 §1: `enable-security-tier-1x` +
-`enable-security-tier-2`): `setup trufflehog` enables Tier 1.5
-secret scanning; `setup privacy-filter` enables Tier 1.8 PII NER;
-`setup llm-review` enables Tier 2 LLM publication gating. Journey
-asserts the help surfaces.
+Security tool opt-in (plan 063 §1: `configure-security-detectors` +
+`configure-security-reviewer`): `setup trufflehog` configures the
+optional TruffleHog detector; `setup privacy-filter` configures the
+optional `openai/privacy-filter` PII detector; `setup llm-review`
+configures the optional LLM dataset-row reviewer. Journey asserts the
+help surfaces.
 """
 lane = "core"
 tier = 0
 seed = "smoke"
-trajectories = ["enable-security-tier-1x", "enable-security-tier-2"]
+trajectories = ["configure-security-detectors", "configure-security-reviewer"]
 persona = "both"
 requires = ["cli"]
 

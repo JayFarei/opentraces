@@ -66,10 +66,10 @@ the single source of truth. Drift fails CI under `--strict`.
 | `setup bucket` | configure-bucket | bronze | configure-bucket | Configure the private bucket sync target. |
 | `setup claude-code` | connect-agent-runtime | bronze | connect-agent-runtime | Install the Claude Code session-capture hooks. |
 | `setup git` | connect-agent-runtime | bronze | connect-agent-runtime | Install the post-commit hook that correlates commits to traces. |
-| `setup llm-review` | enable-security-tier-2 | bronze | enable-security-tiers | Configure the Tier 2 LLM reviewer for dataset publication gates. |
-| `setup privacy-filter` | enable-security-tier-1x | bronze | enable-security-tiers | Configure the ``openai/privacy-filter`` PII detector. |
+| `setup llm-review` | configure-security-reviewer | bronze | enable-security-tools | Configure the optional LLM reviewer for dataset publication gates. |
+| `setup privacy-filter` | configure-security-detectors | bronze | enable-security-tools | Configure the optional ``openai/privacy-filter`` PII detector. |
 | `setup skill` | connect-agent-runtime | bronze | connect-agent-runtime | Install the opentraces skill globally and link it into each agent harness. |
-| `setup trufflehog` | enable-security-tier-1x | bronze | enable-security-tiers | Enable Tier 1.5 secret scanning via TruffleHog. |
+| `setup trufflehog` | configure-security-detectors | bronze | enable-security-tools | Configure the optional TruffleHog secret detector. |
 | `setup upgrade` | maintain-install | bronze | maintain-install | Upgrade opentraces CLI and refresh the project skill file. |
 | `setup watcher` | _group_ | — | **unowned** | Install and control the background attribution watcher. |
 | `setup watcher install` | enable-live-attribution | bronze | enable-live-attribution | Install the background attribution watcher. |
@@ -167,8 +167,8 @@ the single source of truth. Drift fails CI under `--strict`.
 | decommission-dataset | bronze | 1 |
 | dev-quality-maintenance | bronze | 1 |
 | enable-live-attribution | bronze | 1 |
-| enable-security-tier-1x | bronze | 1 |
-| enable-security-tier-2 | bronze | 1 |
+| configure-security-detectors | bronze | 1 |
+| configure-security-reviewer | bronze | 1 |
 | enable-shell-completions | bronze | 1 |
 | inspect-security-pipeline | gold | 2 |
 | maintain-install | bronze | 1 |
