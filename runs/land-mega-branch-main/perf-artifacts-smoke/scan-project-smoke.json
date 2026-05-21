@@ -1,0 +1,88 @@
+{
+  "budget_updated": false,
+  "result": {
+    "cold_ms": 943.984292,
+    "extra": {},
+    "max_rss_delta_mb": 0.09375,
+    "mean_ms": 954.19540625,
+    "p50_ms": 951.57525,
+    "p95_ms": 962.576292,
+    "peak_rss_mb": 105.421875,
+    "python_heap_peak_mb": 0.8727760314941406,
+    "samples": [
+      {
+        "duration_ms": 943.984292,
+        "metadata": {
+          "commit_count": 0,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-568/test_watcher_perf_scan_project0/scan-project-smoke/run-00/proj",
+          "scenario": "scan-project-smoke",
+          "trace_count": 4
+        },
+        "peak_rss_mb": 105.125,
+        "python_heap_peak_mb": 0.8727760314941406,
+        "rss_after_mb": 105.078125,
+        "rss_before_mb": 105.046875,
+        "rss_delta_mb": 0.03125
+      },
+      {
+        "duration_ms": 962.576292,
+        "metadata": {
+          "commit_count": 0,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-568/test_watcher_perf_scan_project0/scan-project-smoke/run-02/proj",
+          "scenario": "scan-project-smoke",
+          "trace_count": 4
+        },
+        "peak_rss_mb": 105.15625,
+        "python_heap_peak_mb": 0.870182991027832,
+        "rss_after_mb": 105.109375,
+        "rss_before_mb": 105.09375,
+        "rss_delta_mb": 0.015625
+      },
+      {
+        "duration_ms": 951.57525,
+        "metadata": {
+          "commit_count": 0,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-568/test_watcher_perf_scan_project0/scan-project-smoke/run-04/proj",
+          "scenario": "scan-project-smoke",
+          "trace_count": 4
+        },
+        "peak_rss_mb": 105.28125,
+        "python_heap_peak_mb": 0.8709068298339844,
+        "rss_after_mb": 105.234375,
+        "rss_before_mb": 105.140625,
+        "rss_delta_mb": 0.09375
+      },
+      {
+        "duration_ms": 958.645791,
+        "metadata": {
+          "commit_count": 0,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-568/test_watcher_perf_scan_project0/scan-project-smoke/run-06/proj",
+          "scenario": "scan-project-smoke",
+          "trace_count": 4
+        },
+        "peak_rss_mb": 105.421875,
+        "python_heap_peak_mb": 0.8292551040649414,
+        "rss_after_mb": 105.375,
+        "rss_before_mb": 105.28125,
+        "rss_delta_mb": 0.09375
+      }
+    ]
+  },
+  "scenario": {
+    "adapter": "python",
+    "budget": {
+      "max_p95_ms": 3500.0,
+      "max_python_heap_peak_mb": 2.0,
+      "max_rss_delta_mb": 2.0
+    },
+    "domain": "watcher",
+    "fixture": "scan_project",
+    "lane": "smoke",
+    "name": "scan-project-smoke",
+    "params": {},
+    "repetitions": 4,
+    "target": "ingest.scan_project",
+    "tier": "small",
+    "warmups": 0
+  }
+}

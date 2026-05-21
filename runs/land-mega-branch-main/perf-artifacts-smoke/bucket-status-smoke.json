@@ -1,0 +1,76 @@
+{
+  "budget_updated": false,
+  "result": {
+    "cold_ms": 156.996084,
+    "extra": {},
+    "max_rss_delta_mb": null,
+    "mean_ms": 157.06350033333334,
+    "p50_ms": 156.996084,
+    "p95_ms": 157.266334,
+    "peak_rss_mb": 47.296875,
+    "python_heap_peak_mb": null,
+    "samples": [
+      {
+        "duration_ms": 156.996084,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-568/test_cli_perf_bucket_status_sm0/bucket-status-smoke/run-01/proj",
+          "returncode": 0,
+          "scenario": "bucket-status-smoke",
+          "stdout_tail": "      \"sync_policy\": \"daemon\",\n      \"url\": null,\n      \"visibility\": \"private\"\n    },\n    \"storage\": \"local\"\n  },\n  \"status\": \"ok\"\n}",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 37.625,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      },
+      {
+        "duration_ms": 156.928083,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-568/test_cli_perf_bucket_status_sm0/bucket-status-smoke/run-02/proj",
+          "returncode": 0,
+          "scenario": "bucket-status-smoke",
+          "stdout_tail": "      \"sync_policy\": \"daemon\",\n      \"url\": null,\n      \"visibility\": \"private\"\n    },\n    \"storage\": \"local\"\n  },\n  \"status\": \"ok\"\n}",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 47.296875,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      },
+      {
+        "duration_ms": 157.266334,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-568/test_cli_perf_bucket_status_sm0/bucket-status-smoke/run-03/proj",
+          "returncode": 0,
+          "scenario": "bucket-status-smoke",
+          "stdout_tail": "      \"sync_policy\": \"daemon\",\n      \"url\": null,\n      \"visibility\": \"private\"\n    },\n    \"storage\": \"local\"\n  },\n  \"status\": \"ok\"\n}",
+          "trace_count": 24
+        },
+        "peak_rss_mb": 33.640625,
+        "python_heap_peak_mb": null,
+        "rss_after_mb": null,
+        "rss_before_mb": null,
+        "rss_delta_mb": null
+      }
+    ]
+  },
+  "scenario": {
+    "adapter": "subprocess",
+    "budget": {},
+    "domain": "cli",
+    "fixture": "stack",
+    "lane": "smoke",
+    "name": "bucket-status-smoke",
+    "params": {},
+    "repetitions": 3,
+    "target": "cli.bucket_status",
+    "tier": "small",
+    "warmups": 1
+  }
+}

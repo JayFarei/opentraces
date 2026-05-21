@@ -22,7 +22,9 @@ import argparse
 import json
 import os
 import sys
+import tomllib
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .artifacts import collect_artifacts
@@ -41,6 +43,7 @@ from .env import (
 from .journey import (
     JourneyResult,
     available_journeys,
+    journey_path,
     run_journey,
 )
 from .seed import available_seeds, run_seed
@@ -85,6 +88,35 @@ def _load_journey_results(box: Box) -> list[JourneyResult]:
         data = json.loads(path.read_text())
         results.append(_journey_from_dict(data))
     return results
+
+
+def _journey_from_checkpoints(name: str) -> list[str]:
+    doc = tomllib.loads(journey_path(name).read_text())
+    return list(doc.get("from_checkpoints") or [])
+
+
+def _resolve_box_for_journey(args: argparse.Namespace) -> tuple[Box, Any, dict]:
+    """Resolve the execution box for a direct ``otbox journey`` run."""
+
+    if args.box:
+        box = resolve_box(args.box)
+        return box, get_driver(box.driver), {}
+
+    checkpoints = _journey_from_checkpoints(args.name)
+    if len(checkpoints) == 1:
+        from .checkpoints import resolve_checkpoint
+
+        driver = get_driver("local")
+        cp_result = resolve_checkpoint(driver, checkpoints[0])
+        set_current_box_id(cp_result.box.box_id)
+        return cp_result.box, driver, {
+            "base_checkpoint": cp_result.name,
+            "checkpoint_cache_hit": cp_result.cache_hit,
+            "checkpoint_snapshot": cp_result.snapshot_name,
+        }
+
+    box = resolve_box(None)
+    return box, get_driver(box.driver), {}
 
 
 def _capture_agent_name(agent: str | None) -> str | None:
@@ -560,8 +592,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_journey(args: argparse.Namespace) -> int:
-    box = resolve_box(args.box)
-    driver = get_driver(box.driver)
+    box, driver, resolution = _resolve_box_for_journey(args)
     result = run_journey(driver, box, args.name)
     _persist_journey(box, result)
 
@@ -580,11 +611,16 @@ def cmd_journey(args: argparse.Namespace) -> int:
         )
 
     payload = {"action": "journey", **result.to_dict()}
+    if resolution:
+        payload["resolution"] = resolution
     if bundle:
         payload["artifacts"] = bundle
     if transcript_path:
         payload["transcript"] = transcript_path
     human_lines = [f"journey: {result.name} -> {result.verdict}"]
+    if resolution:
+        cache = "cache hit" if resolution["checkpoint_cache_hit"] else "cold build"
+        human_lines.append(f"  base: {resolution['base_checkpoint']} ({cache})")
     if result.reason:
         human_lines.append(f"  reason: {result.reason}")
     for s in result.steps:

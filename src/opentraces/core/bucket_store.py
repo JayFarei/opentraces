@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import unquote, urlparse
 
 from pydantic import ValidationError
 
@@ -29,6 +29,35 @@ from ..security.privacy import (
     record_privacy_tier,
 )
 from . import paths
+from .bucket_layout import (
+    _digest_hex,
+    _path_part,
+    blobs_v1_context_path,
+    blobs_v1_raw_path,
+    blobs_v1_root,
+    bucket_manifest_path,
+    bucket_sync_state_path,
+    context_layer_blob_path,
+    context_tree_dir,
+    context_tree_head_path,
+    context_tree_nodes_path,
+    context_tree_reconciliation_path,
+    contexts_root,
+    events_v1_batches_dir,
+    events_v1_index_path,
+    events_v1_root,
+    legacy_trace_records_root,
+    raw_sources_root,
+    trace_records_root,
+    trace_v1_context_path,
+    trace_v1_history_dir,
+    trace_v1_json_path,
+    trace_v1_sources_path,
+    trace_v1_trail_path,
+    traces_v1_dir,
+    traces_v1_root,
+    trail_events_root,
+)
 
 
 TRACE_RECORD_BUCKET_SCHEMA = "opentraces.bucket.trace_record.v1"
@@ -83,174 +112,6 @@ class BucketSyncSummary:
     unchanged: int = 0
     removed: int = 0
     skipped: int = 0
-
-
-def trace_records_root() -> Path:
-    """Return the local bucket root for normalized TraceRecord envelopes."""
-
-    return paths.bucket_dir() / "objects" / "traces" / "v1"
-
-
-def legacy_trace_records_root() -> Path:
-    """Return the pre-v2 trace-record root kept for one-way compatibility."""
-
-    return paths.bucket_dir() / "trace-records"
-
-
-def raw_sources_root() -> Path:
-    """Return the local bucket root for optional raw source artifacts."""
-
-    return paths.bucket_dir() / "objects" / "raw" / "v1"
-
-
-def trail_events_root() -> Path:
-    """Return the local bucket root for portable Trace Trail event exports."""
-
-    return paths.bucket_dir() / "events" / "trail" / "v1"
-
-
-def contexts_root() -> Path:
-    """Return the local bucket root for first-class Context Tree projections (plan 079).
-
-    Plan 080: retained as a compat alias for the per-trace envelope root; the
-    canonical context-event storage now lives under ``bucket/traces/v1`` and
-    ``bucket/blobs/v1`` (see ``traces_v1_root`` / ``blobs_v1_root``).
-    """
-
-    return paths.bucket_dir() / "contexts" / "v1"
-
-
-# ---------------------------------------------------------------------------
-# Plan 080 — Bucket layout v2 path helpers
-# ---------------------------------------------------------------------------
-
-
-def traces_v1_root() -> Path:
-    """Return ``bucket/traces/v1`` — per-trace envelope root (plan 080 §4)."""
-
-    return paths.bucket_dir() / "traces" / "v1"
-
-
-def traces_v1_dir(project_slug: str, trace_id: str) -> Path:
-    """Per-trace envelope directory holding trace.json + 3 companion JSONL.gz."""
-
-    return traces_v1_root() / _path_part(project_slug) / _path_part(trace_id)
-
-
-def trace_v1_json_path(project_slug: str, trace_id: str) -> Path:
-    return traces_v1_dir(project_slug, trace_id) / "trace.json"
-
-
-def trace_v1_trail_path(project_slug: str, trace_id: str) -> Path:
-    return traces_v1_dir(project_slug, trace_id) / "trail.jsonl.gz"
-
-
-def trace_v1_context_path(project_slug: str, trace_id: str) -> Path:
-    return traces_v1_dir(project_slug, trace_id) / "context.jsonl.gz"
-
-
-def trace_v1_sources_path(project_slug: str, trace_id: str) -> Path:
-    return traces_v1_dir(project_slug, trace_id) / "sources.jsonl.gz"
-
-
-def trace_v1_history_dir(project_slug: str, trace_id: str) -> Path:
-    return traces_v1_dir(project_slug, trace_id) / "trace_history"
-
-
-def blobs_v1_root() -> Path:
-    """Return ``bucket/blobs/v1`` — content-addressed blob root (plan 080 §4)."""
-
-    return paths.bucket_dir() / "blobs" / "v1"
-
-
-def blobs_v1_context_path(project_slug: str, layer_id: str) -> Path:
-    """Per-project context layer blob path: ``blobs/v1/<proj>/context/<hh>/<hash>.json.gz``."""
-
-    digest_hex = _digest_hex(layer_id)
-    return (
-        blobs_v1_root()
-        / _path_part(project_slug)
-        / "context"
-        / digest_hex[:2]
-        / f"{digest_hex}.json.gz"
-    )
-
-
-def blobs_v1_raw_path(project_slug: str, content_digest: str, *, suffix: str = ".blob") -> Path:
-    """Per-project raw source blob path."""
-
-    digest_hex = _digest_hex(content_digest)
-    return (
-        blobs_v1_root()
-        / _path_part(project_slug)
-        / "raw"
-        / digest_hex[:2]
-        / f"{digest_hex}{suffix}"
-    )
-
-
-def events_v1_root() -> Path:
-    """Return ``bucket/events/v1`` — canonical event log mirror root (plan 080 §4)."""
-
-    return paths.bucket_dir() / "events" / "v1"
-
-
-def events_v1_batches_dir() -> Path:
-    return events_v1_root() / "batches"
-
-
-def events_v1_index_path() -> Path:
-    return events_v1_root() / "index.json"
-
-
-def context_tree_dir(project_slug: str, trace_id: str) -> Path:
-    """Return the per-trace Context Tree dir holding head/nodes/reconciliation."""
-
-    return contexts_root() / _path_part(project_slug) / _path_part(trace_id)
-
-
-def context_tree_head_path(project_slug: str, trace_id: str) -> Path:
-    return context_tree_dir(project_slug, trace_id) / "head.json"
-
-
-def context_tree_nodes_path(project_slug: str, trace_id: str) -> Path:
-    return context_tree_dir(project_slug, trace_id) / "nodes.jsonl"
-
-
-def context_tree_reconciliation_path(project_slug: str, trace_id: str) -> Path:
-    return context_tree_dir(project_slug, trace_id) / "reconciliation.json"
-
-
-def context_layer_blob_path(
-    project_slug: str, layer_id: str, *, scope: str = "project"
-) -> Path:
-    """Resolve the per-layer blob path under the current namespace scope.
-
-    Plan 080 §4: canonical layer blobs live at
-    ``bucket/blobs/v1/<project>/context/<hh>/<hash>.json.gz`` (gzipped,
-    deterministic mtime=0). The ``scope`` parameter is retained for plan 079
-    compatibility — ``"global"`` writes under a shared ``_shared`` namespace
-    in the same blob root.
-    """
-
-    digest_hex = _digest_hex(layer_id)
-    if scope == "global":
-        return (
-            blobs_v1_root()
-            / "_shared"
-            / "context"
-            / digest_hex[:2]
-            / f"{digest_hex}.json.gz"
-        )
-    return blobs_v1_context_path(project_slug, layer_id)
-
-
-def bucket_manifest_path() -> Path:
-    return paths.bucket_dir() / "manifest.json"
-
-
-def bucket_sync_state_path() -> Path:
-    return paths.bucket_dir() / "sync_state.json"
 
 
 def read_bucket_sync_state() -> dict[str, Any]:
@@ -3304,18 +3165,10 @@ def _digest_bytes(payload: bytes) -> str:
     return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
-def _digest_hex(digest: str) -> str:
-    return digest.split(":", 1)[1] if ":" in digest else digest
-
-
 def _canonical_json(payload: Any, *, pretty: bool = False) -> str:
     if pretty:
         return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-
-
-def _path_part(value: str) -> str:
-    return quote(str(value), safe="-._~")
 
 
 def _utc_now() -> str:

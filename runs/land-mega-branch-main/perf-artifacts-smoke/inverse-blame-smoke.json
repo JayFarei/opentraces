@@ -1,0 +1,92 @@
+{
+  "budget_updated": false,
+  "result": {
+    "cold_ms": 21.914917,
+    "extra": {},
+    "max_rss_delta_mb": 0.015625,
+    "mean_ms": 21.271854249999997,
+    "p50_ms": 21.054958,
+    "p95_ms": 21.914917,
+    "peak_rss_mb": 104.984375,
+    "python_heap_peak_mb": 0.8240413665771484,
+    "samples": [
+      {
+        "duration_ms": 21.914917,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-568/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-02/proj",
+          "scenario": "inverse-blame-smoke",
+          "trace_count": 24,
+          "trace_id": "small-trace-0000"
+        },
+        "peak_rss_mb": 104.953125,
+        "python_heap_peak_mb": 0.8235511779785156,
+        "rss_after_mb": 104.953125,
+        "rss_before_mb": 104.9375,
+        "rss_delta_mb": 0.015625
+      },
+      {
+        "duration_ms": 21.470625,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-568/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-04/proj",
+          "scenario": "inverse-blame-smoke",
+          "trace_count": 24,
+          "trace_id": "small-trace-0000"
+        },
+        "peak_rss_mb": 104.96875,
+        "python_heap_peak_mb": 0.8240413665771484,
+        "rss_after_mb": 104.96875,
+        "rss_before_mb": 104.953125,
+        "rss_delta_mb": 0.015625
+      },
+      {
+        "duration_ms": 20.646917,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-568/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-06/proj",
+          "scenario": "inverse-blame-smoke",
+          "trace_count": 24,
+          "trace_id": "small-trace-0000"
+        },
+        "peak_rss_mb": 104.96875,
+        "python_heap_peak_mb": 0.8237762451171875,
+        "rss_after_mb": 104.96875,
+        "rss_before_mb": 104.96875,
+        "rss_delta_mb": 0.0
+      },
+      {
+        "duration_ms": 21.054958,
+        "metadata": {
+          "commit_count": 10,
+          "project_dir": "/private/tmp/pytest-of-jayfarei/pytest-568/test_core_perf_inverse_blame_s0/inverse-blame-smoke/run-08/proj",
+          "scenario": "inverse-blame-smoke",
+          "trace_count": 24,
+          "trace_id": "small-trace-0000"
+        },
+        "peak_rss_mb": 104.984375,
+        "python_heap_peak_mb": 0.8224821090698242,
+        "rss_after_mb": 104.984375,
+        "rss_before_mb": 104.96875,
+        "rss_delta_mb": 0.015625
+      }
+    ]
+  },
+  "scenario": {
+    "adapter": "python",
+    "budget": {
+      "max_p95_ms": 350.0,
+      "max_python_heap_peak_mb": 2.0,
+      "max_rss_delta_mb": 1.0
+    },
+    "domain": "core",
+    "fixture": "stack",
+    "lane": "smoke",
+    "name": "inverse-blame-smoke",
+    "params": {},
+    "repetitions": 4,
+    "target": "graph_api.load_inverse_blame",
+    "tier": "small",
+    "warmups": 1
+  }
+}
