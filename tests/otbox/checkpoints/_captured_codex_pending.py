@@ -9,7 +9,11 @@ artifact.
 
 from __future__ import annotations
 
-from ._captured_codex_common import register_codex_capture_checkpoint
+from ._captured_codex_common import (
+    register_codex_capture_checkpoint,
+    register_codex_full_parity_checkpoint,
+    register_mixed_agent_bucket_checkpoint,
+)
 
 
 register_codex_capture_checkpoint(
@@ -114,27 +118,39 @@ register_codex_capture_checkpoint(
     extra_provides={"has_security_findings": True},
 )
 
-register_codex_capture_checkpoint(
+register_mixed_agent_bucket_checkpoint(
     name="c-mixed-agent-parity-bucket",
-    capture_name="mixed-agent-bucket-parity",
+    codex_capture_name="codex-linear-edit",
+    claude_capture_name="add-helper-function",
     description=(
-        "Artifact-preferred mixed Claude/Codex bucket parity checkpoint. "
-        "Pending until tests/otbox/captures/mixed-agent-bucket-parity exists."
+        "Artifact-preferred mixed-agent-bucket-parity checkpoint. "
+        "Composes tests/otbox/captures/codex-linear-edit with the frozen "
+        "Claude add-helper-function capture when both artifacts exist."
     ),
-    extra_provides={"captured_traces": 2},
 )
 
-register_codex_capture_checkpoint(
+register_codex_full_parity_checkpoint(
     name="c-codex-full-parity-latest",
-    capture_name="codex-full-parity-latest",
+    representative_capture_name="codex-linear-edit",
+    capture_names=[
+        "codex-linear-edit",
+        "codex-bash-debugging",
+        "codex-multi-file-patch",
+        "codex-subagent-edit",
+        "codex-context-compaction",
+        "codex-skill-invocation",
+        "codex-resume-continue",
+        "codex-mcp-tool",
+        "codex-permission-request",
+        "codex-readonly-search",
+        "codex-watcher-backstop",
+        "codex-security-redaction",
+        "codex-subagent-compaction",
+    ],
     description=(
-        "Artifact-preferred aggregate Codex full-parity checkpoint. "
-        "Pending until tests/otbox/captures/codex-full-parity-latest exists."
+        "Artifact-preferred codex-full-parity-latest aggregate checkpoint. "
+        "Provides the aggregate release gate only when every individual "
+        "Codex parity artifact exists; restores codex-linear-edit as the "
+        "representative smoke project."
     ),
-    extra_provides={
-        "captured_traces": 2,
-        "skills": ["opentraces"],
-        "mcp_servers_connected": 1,
-        "has_security_findings": True,
-    },
 )

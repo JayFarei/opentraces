@@ -26,7 +26,7 @@ includes = [
   "codex-parity-security-redaction",
   "mixed-agent-bucket-parity",
 ]
-status = "pending-composite-runner-or-release-script"
+status = "artifact-backed-aggregate"
 
 [preconditions]
 min_captured_traces = 1
@@ -34,10 +34,10 @@ context_tree_built = true
 
 [[steps]]
 type = "cli"
-id = "status"
-argv = ["status", "--json"]
+id = "bucket-status"
+argv = ["bucket", "status", "--json"]
 
 [[assertions]]
 kind = "returncode"
-step = "status"
+step = "bucket-status"
 equals = 0
