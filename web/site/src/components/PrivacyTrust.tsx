@@ -82,8 +82,8 @@ function TerminalLine({ line }: { line: TermLine }) {
 }
 
 export default function PrivacyTrust() {
-  const [activeTier, setActiveTier] = useState("explicit");
-  const active = modes.find((t) => t.id === activeTier)!;
+  const [activeMode, setActiveMode] = useState("explicit");
+  const active = modes.find((t) => t.id === activeMode)!;
 
   return (
     <section>
@@ -147,7 +147,7 @@ export default function PrivacyTrust() {
           </div>
         </div>
 
-        {/* Tier selector as companion, not hero */}
+        {/* Mode selector as companion, not hero */}
         <div style={{ display: "flex", flexDirection: "column" }}>
           <div style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.7, marginBottom: 16 }}>
             Two ways to run tools in a bucket flow or dataset workflow.
@@ -156,21 +156,21 @@ export default function PrivacyTrust() {
             {modes.map((t) => (
               <button
                 key={t.id}
-                onClick={() => setActiveTier(t.id)}
+                onClick={() => setActiveMode(t.id)}
                 style={{
                   flex: 1,
                   padding: "10px 12px",
                   borderRight: t.id === "explicit" ? "1px solid var(--border)" : "none",
                   border: "none",
-                  borderBottom: activeTier === t.id ? `2px solid ${t.color}` : "2px solid transparent",
-                  background: activeTier === t.id ? "var(--surface)" : "transparent",
+                  borderBottom: activeMode === t.id ? `2px solid ${t.color}` : "2px solid transparent",
+                  background: activeMode === t.id ? "var(--surface)" : "transparent",
                   cursor: "pointer",
                   fontFamily: "var(--font-mono)",
                   fontSize: 11,
                   textAlign: "center",
                 }}
               >
-                <div style={{ fontWeight: 500, color: activeTier === t.id ? t.color : "var(--text-muted)" }}>
+                <div style={{ fontWeight: 500, color: activeMode === t.id ? t.color : "var(--text-muted)" }}>
                   {t.name}
                 </div>
                 <div style={{ fontSize: 9, color: "var(--text-dim)", marginTop: 2 }}>{t.label}</div>
@@ -181,7 +181,7 @@ export default function PrivacyTrust() {
             {active.desc}
           </div>
 
-          {/* Terminal preview per tier */}
+          {/* Terminal preview per mode */}
           <div className="terminal" style={{ marginTop: "auto" }}>
             <div className="terminal-bar">
               <span>{active.name.toLowerCase()} tools</span>

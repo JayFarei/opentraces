@@ -40,13 +40,16 @@ export default function ShareFrom() {
             </div>
           </div>
 
-          {/* Step 3: Publish */}
+          {/* Step 3: Project and publish */}
           <div style={{ display: "flex", gap: 16, marginBottom: 24 }}>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 20, fontWeight: 300, color: "var(--text-dim)", width: 28, flexShrink: 0, textAlign: "right" }}>3</div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 4 }}>Publish</div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 4 }}>Project and publish</div>
               <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
                 <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces workflow create my-workflow
+              </div>
+              <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+                <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces dataset new my-dataset --workflow ./workflows/my-workflow
               </div>
               <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
                 <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces dataset run my-dataset

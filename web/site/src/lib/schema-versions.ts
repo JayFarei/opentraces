@@ -430,8 +430,34 @@ const v060: SchemaVersion = {
         fields: m.fields.filter((f) => f.name !== "patch"),
       };
     }
+    if (m.id === "security") {
+      return {
+        ...m,
+        desc: "Security scan summary. Detailed tool output lives under metadata.security.",
+        fields: [
+          { name: "scanned", type: "boolean", required: false, description: "Whether security processing was applied to this record." },
+          { name: "flags_reviewed", type: "int", required: false, description: "Number of security flags reviewed." },
+          { name: "redactions_applied", type: "int", required: false, description: "Number of redactions applied." },
+          { name: "classifier_version", type: "string | null", required: false, description: "Classifier tool version when classifier ran." },
+        ],
+      };
+    }
     return m;
   }).concat([
+    {
+      id: "git-anchor", title: "GitAnchor",
+      desc: "Typed link from a Patch to its appearance in Git.",
+      fields: [
+        { name: "last_searched_at", type: "string", required: true, description: "ISO8601 timestamp set after the first maturation search." },
+        { name: "found", type: "boolean", required: true, description: "Whether a matching commit was found." },
+        { name: "commit_sha", type: "string | null", required: false, description: "Matched commit SHA when found." },
+        { name: "path", type: "string | null", required: false, description: "Path in the commit; may differ after rename." },
+        { name: "blob_sha", type: "string | null", required: false, description: "Matched Git blob SHA." },
+        { name: "git_patch_id", type: "string | null", required: false, description: "Git patch-id, stable across rebase." },
+        { name: "evidence_tier", type: "string | null", required: false, description: "Evidence match label such as exact_range_hash, patch_id, formatter_divergent, overlapping_hunk, or orphan." },
+        { name: "evidence_firmness", type: "string | null", required: false, description: "Firmness label such as firm_observed, provisional, human_asserted, or unknown." },
+      ],
+    },
     {
       id: "patch", title: "Patch",
       desc: "A trace-produced change. Full patch history resolves through the bucket Trail companion.",

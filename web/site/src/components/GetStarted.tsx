@@ -24,6 +24,8 @@ const terminalSteps = [
   { cmd: "opentraces setup && opentraces bucket status", desc: "connect capture and inspect the private bucket" },
   { cmd: "opentraces trace query --since 7d", desc: "find retained traces before loading full transcripts" },
   { cmd: "opentraces workflow create my-workflow", desc: "project trace evidence into dataset rows" },
+  { cmd: "opentraces dataset new my-dataset --workflow ./workflows/my-workflow", desc: "bind the workflow to a local HF-shaped dataset" },
+  { cmd: "opentraces dataset run my-dataset", desc: "append projected rows from matching traces" },
   { cmd: "opentraces dataset publish my-dataset", desc: "publish approved rows to your HuggingFace dataset" },
 ];
 
@@ -31,7 +33,7 @@ const agentSteps = [
   { cmd: "set up opentraces for this project", desc: "installs, authenticates, and connects the capture hook" },
   { cmd: "scaffold a dataset and run it over my latest traces", desc: "agent calls dataset new + dataset run to populate rows from your traces" },
   { cmd: "review the dataset rows and approve the safe ones", desc: "agent walks each row, checks redactions, approves what's safe to share" },
-  { cmd: "publish the approved rows to HuggingFace", desc: "uploads approved rows to your private dataset" },
+  { cmd: "publish the approved rows to HuggingFace", desc: "uploads approved rows to the configured dataset remote" },
 ];
 
 export default function GetStarted() {

@@ -15,12 +15,12 @@ const tiers = [
     name: "config enabled",
     nameStyle: {},
     desc: "Only tools explicitly enabled in config run with --use-config.",
-    tag: "default",
+    tag: "opt-in",
   },
 ];
 
 export default function SecurityTiers() {
-  const [selected, setSelected] = useState("config");
+  const [selected, setSelected] = useState("explicit");
 
   return (
     <div>
@@ -32,7 +32,7 @@ export default function SecurityTiers() {
         >
           <input
             type="radio"
-            name="tier"
+            name="security-mode"
             checked={selected === t.id}
             onChange={() => setSelected(t.id)}
           />
