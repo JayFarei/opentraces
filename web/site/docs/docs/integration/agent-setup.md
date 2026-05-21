@@ -68,10 +68,10 @@ expect it to backfill old Codex CLI sessions. Existing Codex rollout files are
 handled only by supported Codex capture/ingest paths when they carry enough
 project metadata.
 
-Codex native resume is available through `opentraces trace get <trace> --resume`
-or the hidden compatibility alias `opentraces trail resume <trace>`. Snapshot
-forking with `--at-step` remains Claude Code only. Context continuation packets
-are produced separately with `opentraces ctx resume <context-node-id> --json`.
+Codex native resume is available through `opentraces trace get <trace> --resume`.
+Snapshot forking with `--at-step` remains Claude Code only. Context
+continuation packets are produced separately with
+`opentraces ctx resume <context-node-id> --json`.
 
 ## Claude Code And Codex CLI
 

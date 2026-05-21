@@ -164,7 +164,7 @@ The Codex CLI work generalized the main parse, install, capability, watcher, and
 |-----------|---------------|------------|
 | `src/opentraces/cli/__init__.py::_capture_sessions_into_project` | Legacy import helper parses an explicitly supplied Claude session directory with `get_parser("claude-code")` | Generalize only if a future CLI path accepts arbitrary agent session directories |
 | `src/opentraces/clients/web/server.py:api_trace_resume` | Web API imports Claude Code's step resolver directly | Route through the resumer registry or keep the web step-resume API Claude-only |
-| `src/opentraces/cli/trace.py::_resume_trace_impl` | Native resume/fork is registry-backed, but snapshot-backed `--at-step` materialization is Claude-only | Add an agent-specific `resolve_at_step` implementation before advertising step resume for another harness |
+| `src/opentraces/cli/trace.py::_resume_trace_impl` | Native resume handoff is registry-backed, but snapshot-backed `--at-step` materialization is Claude-only | Add an agent-specific `resolve_at_step` implementation before advertising step resume for another harness |
 
 Do not infer support from a parser alone. A new live agent is complete only when the parser, hook installer, resumer behavior, watcher activity, and CLI/docs surfaces agree.
 
@@ -538,7 +538,7 @@ Concrete walkthrough so you can map the abstract spec to the shipped Codex CLI a
    HOOK_INSTALLERS["codex-cli"] = CodexCliHookInstaller
    ```
 
-6. **Keep remaining narrow surfaces honest**. Native Codex resume/fork is registered through the resumer registry, while snapshot-backed `--at-step` materialization remains Claude-only and must fail explicitly for Codex.
+6. **Keep remaining narrow surfaces honest**. Native Codex resume handoff is registered through the resumer registry, while snapshot-backed `--at-step` materialization remains Claude-only and must fail explicitly for Codex.
 
 7. **Watcher participation** comes from the registered parser's `discover_sessions()` path. The watcher uses `capture.discover_project_sessions(project_cwd)` for agent session mtimes and keeps a Claude-specific nested-subagent probe only for files that should wake the watcher but are not separate root sessions.
 
@@ -550,7 +550,7 @@ Concrete walkthrough so you can map the abstract spec to the shipped Codex CLI a
    - `tests/capture/test_codex_trail_capture.py` (parser indexes hook metadata and emits Trail events)
    - `tests/capture/test_codex_context_tree_capture.py` (Context Tree step joins and hook-backed event emission)
    - `tests/cli/test_codex_cli_surface.py` (`init --agent codex-cli`, `setup codex-cli` happy path, `capabilities` lists codex-cli)
-   - `tests/cli/test_codex_resume.py` (native resume/fork hints and explicit unsupported `--at-step` behavior)
+   - `tests/cli/test_codex_resume.py` (native resume handoff and explicit unsupported `--at-step` behavior)
    - `tests/core/test_bucket_mixed_agent_manifest.py` (agent summaries in mixed-agent bucket manifests)
    - `tests/quality/test_multi_project_dispatch.py` (two-parser dispatch through the quality path)
    - `tests/capture/test_registry.py` (agent-name uniqueness, two-parser dispatch, `_register_defaults` idempotency)
