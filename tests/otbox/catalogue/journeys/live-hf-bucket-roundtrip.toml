@@ -102,6 +102,20 @@ kind = "returncode"
 step = "pull"
 equals = 0
 
+# --- byte/digest-identical restore: the rebuilt local bucket's whole-bucket
+# digest must match the remote again (state==current proves the eager pull
+# reconstructed every substrate, not just the spine) ----------------------
+[[steps]]
+type = "cli"
+id = "status-after-pull"
+argv = ["bucket", "remote", "status", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-after-pull"
+path = "remote.state"
+equals = "current"
+
 # --- the captured trace survived the remote round-trip --------------------
 [[steps]]
 type = "cli"

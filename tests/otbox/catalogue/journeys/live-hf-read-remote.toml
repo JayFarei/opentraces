@@ -91,6 +91,23 @@ kind = "stdout_contains"
 step = "ctx-list-remote"
 value = "{trace_id}"
 
+# --- read the per-trace context substrate from the remote (fetches the
+# context.jsonl.gz companion, not just the manifest) -----------------------
+[[steps]]
+type = "cli"
+id = "ctx-info-remote"
+argv = ["ctx", "info", "{trace_id}", "--remote", "{live_bucket_repo}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-info-remote"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "ctx-info-remote"
+value = "{trace_id}"
+
 # --- warm the local bucket from the remote (eager blob pull) --------------
 [[steps]]
 type = "cli"
