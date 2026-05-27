@@ -1,0 +1,62 @@
+{
+  "processed_files": {},
+  "traces": {
+    "6961102e-e930-4c67-aeff-6335858fcdea": {
+      "trace_id": "6961102e-e930-4c67-aeff-6335858fcdea",
+      "session_id": "sess-legacy-v033-refactor",
+      "status": "staged",
+      "created_at": 1779913633.4854422,
+      "file_path": "$LEGACY_HOME/.opentraces/projects/project-27e5e3e0/traces/6961102e-e930-4c67-aeff-6335858fcdea.jsonl"
+    }
+  },
+  "commit_groups": {},
+  "last_backfilled_commit": null,
+  "last_backfill_at": null,
+  "sessions": {
+    "sess-legacy-v033-refactor": {
+      "session_id": "sess-legacy-v033-refactor",
+      "source_path": "$LEGACY_HOME/.claude/projects/-private-tmp-legacy-v033-j-83uq1b-project/sess-legacy-v033-refactor.jsonl",
+      "observed_size": 1578,
+      "observed_mtime": 1779913633.3524551,
+      "session_end_seen": false,
+      "post_commit_triggered": false,
+      "parent_session_id": null,
+      "parent_step_id": null,
+      "generations": [
+        {
+          "trace_id": "6961102e-e930-4c67-aeff-6335858fcdea",
+          "generation": 1,
+          "captured_size": 1578,
+          "captured_mtime": 1779913633.3524551,
+          "schema_version": "0.3.0",
+          "security_version": "0.3.0",
+          "status_at_capture": "staged",
+          "supersedes": null,
+          "supersedes_reason": null,
+          "created_at": "2026-05-27T20:27:13.485617Z"
+        }
+      ]
+    }
+  },
+  "step_labels": {},
+  "step_anchors": {
+    "6961102e-e930-4c67-aeff-6335858fcdea": {
+      "1": {
+        "entry_uuid": "u1",
+        "line_no": 0,
+        "session_file_relpath": "-private-tmp-legacy-v033-j-83uq1b-project/sess-legacy-v033-refactor.jsonl"
+      },
+      "2": {
+        "entry_uuid": "a1",
+        "line_no": 1,
+        "session_file_relpath": "-private-tmp-legacy-v033-j-83uq1b-project/sess-legacy-v033-refactor.jsonl"
+      },
+      "3": {
+        "entry_uuid": "a2",
+        "line_no": 3,
+        "session_file_relpath": "-private-tmp-legacy-v033-j-83uq1b-project/sess-legacy-v033-refactor.jsonl"
+      }
+    }
+  },
+  "state_version": "5"
+}

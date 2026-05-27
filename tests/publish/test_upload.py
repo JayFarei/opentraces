@@ -420,6 +420,39 @@ class TestSchemaMigration:
         assert lines[1]["schema_version"] == "0.5.0"
         assert lines[1]["future_field"] == {"keep": "me"}
 
+    def test_migrate_shard_reconstructs_legacy_outcome_patch(self, tmp_path):
+        """S6 (plan 085): a 0.3.0 shard row carrying outcome.patch migrates to
+        0.6.0 with patches[] reconstructed and the raw diff preserved — no
+        silent devtime data loss on the HF path."""
+        shard_file = tmp_path / "shard.jsonl"
+        legacy = _make_trace(trace_id="legacy").model_dump(mode="json")
+        legacy["schema_version"] = "0.3.0"
+        legacy["patches"] = []
+        legacy.setdefault("outcome", {})
+        legacy["outcome"]["patch"] = (
+            "--- a/foo.py\n+++ b/foo.py\n@@ -1 +1,2 @@\n x\n+y\n"
+        )
+        shard_file.write_text(json.dumps(legacy) + "\n")
+
+        with patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
+            mock_api = MockApi.return_value
+            mock_api.list_repo_files = MagicMock(return_value=["data/traces_test.jsonl"])
+            mock_api.hf_hub_download = MagicMock(return_value=str(shard_file))
+            mock_api.upload_file = MagicMock()
+
+            uploader = HFUploader(token="fake-token", repo_id="user/dataset")
+            uploader.api = mock_api
+
+            result = uploader.migrate_outdated_shards("0.6.0")
+
+        assert result["migrated_records"] == 1
+        payload = mock_api.upload_file.call_args.kwargs["path_or_fileobj"].decode("utf-8")
+        row = json.loads(payload.splitlines()[0])
+        assert row["schema_version"] == "0.6.0"
+        assert [p["file_path"] for p in row["patches"]] == ["foo.py"]
+        assert row["metadata"]["legacy"]["patch"].startswith("--- a/foo.py")
+        assert "patch" not in row["outcome"]
+
 
 def _require_live_push_env() -> tuple[str, str]:
     """Return live-test credentials or skip if not explicitly enabled."""

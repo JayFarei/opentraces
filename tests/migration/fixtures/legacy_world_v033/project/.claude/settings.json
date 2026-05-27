@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$(command -v opentraces || command -v OTD || command -v OT) _capture --project-dir .",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
