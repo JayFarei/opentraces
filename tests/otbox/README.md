@@ -82,6 +82,8 @@ otbox  (repo-root shim, like otd)
        artifacts.py        PR-ready evidence bundles
        inventory.py        Click registry × journey ownership + tier rollup
        jtbd.py             plan 063 SSoT + AGENT_FACING_TRAJECTORIES_MIN_GOLD gate
+       live_hf.py          live-HF lane: ephemeral private-repo provision/cleanup/sweep
+       test_live_hf_slice.py  opt-in live-HF runner (OT_OTBOX_LIVE_HF=1; see "Live HuggingFace lane")
        checkpoints/        named, resumable starting states + provides=...
          _empty / _prereqs / _installed_source
          _captured_session / _captured_with_revert / _captured_with_secrets
@@ -190,7 +192,7 @@ tier = 0                                       # 0 = local/docker, 1 = remote le
 tier_label = "gold"                            # bronze | silver | gold (plan 069 R4)
 trajectories = ["build-dataset-from-lineage"]  # plan 063 trajectory slugs
 persona = "agent"
-requires = ["cli", "git"]                      # capability gate (cli, git, tmux, tier1, real_repl)
+requires = ["cli", "git"]                      # capability gate (cli, git, tmux, tier1, real_repl, live_hf)
 from_checkpoints = ["c-captured-real-session"] # plan 062 — explicit pin
 
 # Plan 069 R1: declarative world-state needs. Any checkpoint whose
