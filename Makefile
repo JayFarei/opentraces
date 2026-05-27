@@ -1,7 +1,7 @@
 .PHONY: version-check dirty-check clean build-viewer build-schema build-cli build \
        test lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
-       otbox-matrix otbox-inventory otbox-agent-session capture-refresh
+       otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf capture-refresh
 
 SCHEMA_DIR := packages/opentraces-schema
 VERSION := $(shell python3 -c "import re; m=re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('src/opentraces/__init__.py').read()); print(m.group(1))")
@@ -81,6 +81,15 @@ otbox-inventory:
 # autonomous-delivery contract uses to gate the slice.
 otbox-agent-session:
 	$(OTBOX_PY) -m pytest tests/otbox/test_fake_harness.py tests/otbox/test_agent_session_slice.py tests/otbox/test_real_agent_optin.py -v
+
+# Opt-in LIVE HuggingFace lane: runs the live_hf journeys end-to-end against
+# REAL private HF dataset repos (ephemeral, keep-on-failure, under the token
+# owner's namespace). Requires OT_OTBOX_LIVE_HF=1 plus a token — either
+# OPENTRACES_LIVE_HF_TOKEN / HF_TOKEN, or a cached `hf auth login`. SKIPs (never
+# fails) without the gate, so it is excluded from default CI. See
+# tests/otbox/README.md "Live HuggingFace lane".
+otbox-live-hf:
+	OT_OTBOX_LIVE_HF=1 $(OTBOX_PY) -m pytest tests/otbox/test_live_hf_slice.py -v
 
 # Plan 071 — capture-refresh against a simulated-user scenario. The
 # default-CI safe value is `echo-meta` (uses the in-tree echo binary).

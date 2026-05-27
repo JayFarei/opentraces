@@ -1,0 +1,87 @@
+name = "live-hf-dataset-publish"
+description = """
+LIVE HuggingFace dataset publish against a real private dataset repo
+({live_dataset_repo}, provisioned per box). Mirrors
+agent-session-to-published-dataset but binds a REAL HF remote and runs a
+real `dataset publish`: create the dataset from the captured trace's
+lineage, bind {live_dataset_repo} as a private remote, approve every row,
+and publish — the sharded JSONL upload + dataset_infos.json land on
+huggingface.co (verified repo-side by the live runner: private=True,
+dataset_infos.json + data/ shards present).
+
+Requires the opt-in `live_hf` capability, so it SKIPs in default CI.
+Forks from c-captured-real-session for a real captured trace.
+"""
+lane = "core"
+tier = 1
+persona = "agent"
+requires = ["cli", "git", "live_hf"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# --- seed a row referencing the captured trace ----------------------------
+[[steps]]
+type = "write_file"
+id = "write-rows"
+path = "live_rows.jsonl"
+content = """
+{"source_trace_id": "{trace_id}", "source_unit_id": "tu:{trace_id}:trace", "summary": "live: captured session row for HF publish"}
+"""
+
+[[steps]]
+type = "write_file"
+id = "write-schema"
+path = "live_schema.json"
+content = """
+{"type": "object", "properties": {"source_trace_id": {"type": "string"}, "source_unit_id": {"type": "string"}, "summary": {"type": "string"}}, "required": ["source_trace_id", "summary"]}
+"""
+
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = ["dataset", "new", "live-publish", "--rows-file", "live_rows.jsonl", "--schema", "live_schema.json"]
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-new"
+equals = 0
+
+# --- bind a REAL private HF dataset remote --------------------------------
+[[steps]]
+type = "cli"
+id = "remote-create"
+argv = ["dataset", "remote", "create", "live-publish", "{live_dataset_repo}", "--private"]
+
+[[assertions]]
+kind = "returncode"
+step = "remote-create"
+equals = 0
+
+# --- approve every row ----------------------------------------------------
+[[steps]]
+type = "cli"
+id = "review-approve"
+argv = ["dataset", "review", "approve", "live-publish", "--all"]
+
+[[assertions]]
+kind = "returncode"
+step = "review-approve"
+equals = 0
+
+# --- publish to the REAL HF remote ----------------------------------------
+[[steps]]
+type = "cli"
+id = "publish"
+argv = ["dataset", "publish", "live-publish"]
+
+[[assertions]]
+kind = "returncode"
+step = "publish"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "publish"
+value = "published: rows=1"

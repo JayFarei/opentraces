@@ -56,10 +56,11 @@ class LocalDriver(Driver):
         cwd: Path | str | None = None,
         env_extra: dict | None = None,
         timeout: float | None = None,
+        live_hf: bool = False,
     ) -> ExecResult:
         argv = [str(a) for a in argv]
         run_cwd = str(cwd) if cwd is not None else str(box.project)
-        env = isolated_env(box, env_extra)
+        env = isolated_env(box, env_extra, live_hf=live_hf)
         timed_out = False
         with timed() as clock:
             try:
@@ -95,6 +96,7 @@ class LocalDriver(Driver):
         *,
         cwd: Path | str | None = None,
         env_extra: dict | None = None,
+        live_hf: bool = False,
     ) -> subprocess.Popen:
         """Start a long-running process inside the box (e.g. `ot web`).
 
@@ -106,7 +108,7 @@ class LocalDriver(Driver):
         return subprocess.Popen(  # noqa: S603 - argv is a list, not shell
             argv,
             cwd=run_cwd,
-            env=isolated_env(box, env_extra),
+            env=isolated_env(box, env_extra, live_hf=live_hf),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

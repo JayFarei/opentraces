@@ -503,9 +503,52 @@ make otbox-tier1           # full Tier 1 slice + catalogue (opt-in, OT_OTBOX_TIE
 make otbox-matrix          # (journey × checkpoint) sweep
 make otbox-inventory       # rebuild journey-inventory.md + plan 063/069 SSoT gates (strict)
 make otbox-agent-session   # plan 064/068/072 substrate slice
+make otbox-live-hf         # LIVE HuggingFace lane (opt-in, real private repos)
 make capture-refresh SCENARIO=echo-meta   # plan 071 capture lifecycle (meta-test)
 .venv/bin/python -m pytest tests/otbox/test_codex_simulated_user_runner.py -q  # plan 083 Codex lane scaffold
 ```
+
+## Live HuggingFace lane
+
+Every otbox lane above runs against the **filesystem fake remote** — the
+`isolated_env()` chokepoint strips HF credentials, sets
+`HF_HUB_DISABLE_IMPLICIT_TOKEN=1`, and points the fake-remote env vars at
+`box.fake_remote`. That proves the wiring but never the real HF contract.
+
+`make otbox-live-hf` is the one lane that talks to **huggingface.co**, end to
+end, against **real private dataset repos**. It exercises private bucket sync
+(push / status / diff / pull / restore), continuous daemon sync (the watcher
+auto-pushes on an active tick, no explicit `bucket remote push`), dataset
+publish (real sharded upload + `dataset_infos.json`), and read-from-remote
+(`trace get --remote`, `ctx list --remote`, `bucket prefetch`).
+
+```bash
+hf auth login                       # or: export OPENTRACES_LIVE_HF_TOKEN=hf_...
+OT_OTBOX_LIVE_HF=1 make otbox-live-hf
+```
+
+Gated three ways, so it SKIPs (never fails) in default CI and stays out of
+`make otbox-journeys` / `make otbox-matrix`:
+
+1. `OT_OTBOX_LIVE_HF=1` — the lane switch (also adds the `live_hf` capability).
+2. A resolvable HF **write** token — env `OPENTRACES_LIVE_HF_TOKEN` / `HF_TOKEN`,
+   or a cached `hf auth login`. The runner surfaces it as
+   `OPENTRACES_LIVE_HF_TOKEN` so `isolated_env(live_hf=True)` can inject it into
+   the box (whose HOME is isolated, so a cached token file is otherwise invisible).
+3. `huggingface_hub` importable (it is a core dep).
+
+Repos are **ephemeral and kept-on-failure**: each box provisions
+`<owner>/otbox-live-bucket-<box_id>` and `<owner>/otbox-live-ds-<box_id>` (owner
+from `whoami()`), created by the real CLI flows under test. A passing journey
+deletes them; a failing one keeps them and prints their URLs for debugging. A
+session-start orphan sweep removes any `otbox-live-*` repo older than 24h.
+
+The four journeys (`live-hf-bucket-roundtrip`, `live-hf-bucket-daemon-sync`,
+`live-hf-dataset-publish`, `live-hf-read-remote`) are `tier = 1`,
+`requires = ["live_hf"]`, and fork from `c-captured-real-session`
+(`min_captured_traces = 1`). Implementation: `tests/otbox/live_hf.py`
+(provisioning/cleanup/sweep), `tests/otbox/test_live_hf_slice.py` (runner +
+repo-side `_post_verify`), and the `live_hf` seam in `env.py::isolated_env`.
 
 `make otbox-tier1` sets `OT_OTBOX_TIER1=1`. With `OT_OTBOX_SSH_TARGET`
 already set, it runs against the operator's tailnet target; without

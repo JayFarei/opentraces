@@ -192,7 +192,9 @@ def resolve_cli_argv() -> list[str]:
     return ["python3", "-c", _CLI_BOOTSTRAP]
 
 
-def isolated_env(box: Box, extra: dict | None = None) -> dict[str, str]:
+def isolated_env(
+    box: Box, extra: dict | None = None, *, live_hf: bool = False
+) -> dict[str, str]:
     """Build the environment for any command run inside a box.
 
     Redirects ``HOME`` so ``~/.opentraces`` and ``~/.claude`` resolve into
@@ -200,14 +202,33 @@ def isolated_env(box: Box, extra: dict | None = None) -> dict[str, str]:
     credentials, and points the dataset fake-remote seam at the box's
     fake-remote root. This is the single chokepoint that guarantees zero
     host residue.
+
+    When ``live_hf=True`` (the opt-in ``live_hf`` capability lane), the HF
+    seams flip: the fake-remote env vars are *not* set and a real HF token
+    is injected so the CLI talks to ``huggingface.co``. ``HOME`` and all
+    git hermeticity stay unchanged, so ``~/.opentraces`` state remains
+    box-isolated — only the remote backend goes live.
     """
     env = os.environ.copy()
     env["HOME"] = str(box.home)
-    env["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
-    env.pop("HF_TOKEN", None)
-    env.pop("HUGGINGFACE_TOKEN", None)
-    env.pop("HUGGING_FACE_HUB_TOKEN", None)
-    env["OPENTRACES_PLAN058_FAKE_REMOTE_ROOT"] = str(box.fake_remote)
+    if live_hf:
+        # Live lane: do NOT strip credentials or set the fake-remote seams.
+        # Inject the real token (config._resolve_hf_token checks HF_TOKEN first).
+        token = (
+            os.environ.get("OPENTRACES_LIVE_HF_TOKEN")
+            or os.environ.get("HF_TOKEN")
+        )
+        if token:
+            env["HF_TOKEN"] = token
+        env.pop("HF_HUB_DISABLE_IMPLICIT_TOKEN", None)
+        env.pop("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT", None)
+        env.pop("OPENTRACES_FAKE_BUCKET_REMOTE_ROOT", None)
+    else:
+        env["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
+        env.pop("HF_TOKEN", None)
+        env.pop("HUGGINGFACE_TOKEN", None)
+        env.pop("HUGGING_FACE_HUB_TOKEN", None)
+        env["OPENTRACES_PLAN058_FAKE_REMOTE_ROOT"] = str(box.fake_remote)
     # Keep the box hermetic: never let a real git identity or pager leak in.
     env["GIT_CONFIG_GLOBAL"] = str(box.home / ".gitconfig")
     env["GIT_CONFIG_SYSTEM"] = os.devnull

@@ -468,6 +468,19 @@ def _context(driver: Driver, box: Box, port: int) -> dict[str, str]:
         "port": str(port),
     }
     ctx.update(_captured_session(box))
+    # live_hf lane: expose the ephemeral private repo ids provisioned for this
+    # box so journey TOMLs can reference {live_bucket_repo}/{live_dataset_repo}.
+    # Absent on the fake lane (registry returns None), leaving placeholders
+    # un-expanded — which is fine, fake-lane journeys never reference them.
+    try:
+        from .live_hf import get_live_repos
+
+        live = get_live_repos(box.box_id)
+        if live is not None:
+            ctx["live_bucket_repo"] = live.bucket_repo
+            ctx["live_dataset_repo"] = live.dataset_repo
+    except Exception:  # noqa: BLE001 - never let live wiring break the fake lane
+        pass
     return ctx
 
 
@@ -506,6 +519,17 @@ def _capabilities(driver: Driver, box: Box) -> set[str]:
         caps.add("tier1")
     if os.environ.get("OT_REAL_REPL") == "1":
         caps.add("real_repl")
+    # live_hf: opt-in lane that talks to real huggingface.co (private bucket +
+    # dataset repos). Requires the gate env, a resolvable token, and the
+    # huggingface_hub import — absent any of these, live journeys SKIP.
+    if os.environ.get("OT_OTBOX_LIVE_HF") == "1" and (
+        os.environ.get("OPENTRACES_LIVE_HF_TOKEN") or os.environ.get("HF_TOKEN")
+    ):
+        try:
+            import huggingface_hub  # noqa: F401
+            caps.add("live_hf")
+        except ImportError:
+            pass
     return caps
 
 
@@ -524,6 +548,8 @@ def _run_step(
     raw: dict,
     ctx: dict,
     services: dict[str, subprocess.Popen],
+    *,
+    live_hf: bool = False,
 ) -> StepResult:
     step = _expand(raw, ctx)
     step_type = step.get("type", "cli")
@@ -534,7 +560,7 @@ def _run_step(
 
     if step_type in ("cli", "shell"):
         argv = [*driver.cli_argv(box), *step["argv"]] if step_type == "cli" else list(step["argv"])
-        result = driver.exec(box, argv, env_extra=step.get("env"), timeout=timeout)
+        result = driver.exec(box, argv, env_extra=step.get("env"), timeout=timeout, live_hf=live_hf)
         ok = result.returncode == expect_rc and not result.timed_out
         msg = (
             ""
@@ -568,7 +594,7 @@ def _run_step(
                 f"driver {driver.name!r} does not support background services",
             )
         argv = _argv_for(step, driver, box)
-        proc = driver.popen(box, argv, env_extra=step.get("env"))
+        proc = driver.popen(box, argv, env_extra=step.get("env"), live_hf=live_hf)
         services[step_id] = proc
         ready_url = step.get("ready_url")
         if ready_url:
@@ -1097,13 +1123,17 @@ def run_journey(driver: Driver, box: Box, name: str) -> JourneyResult:
     if seed and box.seed and seed != box.seed:
         result.reason = f"note: journey expects seed {seed!r}, box was seeded {box.seed!r}"
 
+    # live_hf journeys flip the HF seams (real token, no fake remote) for every
+    # CLI/service step in this run. Fake-lane journeys stay fully offline.
+    live_hf = "live_hf" in requires
+
     port = free_port()
     ctx = _context(driver, box, port)
     services: dict[str, subprocess.Popen] = {}
     failed_step = False
     try:
         for index, raw in enumerate(raw_steps):
-            step_result = _run_step(driver, box, index, raw, ctx, services)
+            step_result = _run_step(driver, box, index, raw, ctx, services, live_hf=live_hf)
             result.steps.append(step_result)
             # refresh context — state_dir may only resolve after `init` runs
             ctx = _context(driver, box, port)
