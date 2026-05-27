@@ -93,3 +93,18 @@ Evidence:
   is exactly the 4 live-hf journeys moving SKIP -> live PASS; fake-lane catalogue
   stayed green in the same session (per-journey gating, no cross-contamination).
 Committed f926e44012, pushed origin main. Decision: COMPLETE.
+
+## Attempt 6 — 2026-05-27 (coverage-gap critical pass)
+Change: critically assessed the 4 requested HF coverage gaps. Built
+live-hf-bucket-multi-trace (forks c-captured-multi-skill, 3 traces, whole-bucket
+sync + byte-identical restore; runner now resolves each journey's own checkpoint
+instead of a hardcoded one). Found two gaps NOT buildable as passing tests:
+(1) schema-ahead/migration/dedup live only in HFUploader via `opentraces push`,
+which is NOT registered on the CLI (not in main.commands); the reachable
+`dataset publish` stubs those for real HF -> documented as a product gap, not a
+test. (2) context-blob round-trip / ctx show --remote needs OTel context-tree
+capture infra (pending) -> deferred. (3) trail blame/graph have no --remote ->
+no read-breadth verb to add (ctx list/info already covered).
+Evidence: OT_OTBOX_LIVE_HF=1 pytest tests/otbox/test_live_hf_slice.py -> 5 passed
+in 273.63s; orphan sweep -> 0 otbox-live-* repos remain. Product gap recorded in
+README "Known coverage limits" + memory. Decision: COMPLETE for buildable scope.

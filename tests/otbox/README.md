@@ -552,12 +552,43 @@ from `whoami()`), created by the real CLI flows under test. A passing journey
 deletes them; a failing one keeps them and prints their URLs for debugging. A
 session-start orphan sweep removes any `otbox-live-*` repo older than 24h.
 
-The four journeys (`live-hf-bucket-roundtrip`, `live-hf-bucket-daemon-sync`,
-`live-hf-dataset-publish`, `live-hf-read-remote`) are `tier = 1`,
-`requires = ["live_hf"]`, and fork from `c-captured-real-session`
-(`min_captured_traces = 1`). Implementation: `tests/otbox/live_hf.py`
-(provisioning/cleanup/sweep), `tests/otbox/test_live_hf_slice.py` (runner +
-repo-side `_post_verify`), and the `live_hf` seam in `env.py::isolated_env`.
+The five journeys are `tier = 1`, `requires = ["live_hf"]`:
+`live-hf-bucket-roundtrip`, `live-hf-bucket-daemon-sync`,
+`live-hf-dataset-publish`, `live-hf-read-remote` (fork `c-captured-real-session`,
+`min_captured_traces = 1`) and `live-hf-bucket-multi-trace` (forks
+`c-captured-multi-skill`, `min_captured_traces = 3`, proves multi-trace
+whole-bucket sync + byte-identical restore). Implementation:
+`tests/otbox/live_hf.py` (provisioning/cleanup/sweep),
+`tests/otbox/test_live_hf_slice.py` (runner + repo-side `_post_verify`), and the
+`live_hf` seam in `env.py::isolated_env`.
+
+### Known coverage limits (deliberate, as of this lane)
+
+These HF scenarios are **not** covered live, for concrete reasons (not
+oversight) — read before assuming the lane proves them:
+
+- **Schema-ahead / shard migration / publish dedup are NOT live-tested**, and
+  this reflects a real product gap rather than a test gap. The only
+  implementation of `RemoteSchemaAheadError`, `migrate_outdated_shards`, and
+  shard dedup (`HFUploader` in `publish/huggingface/upload.py`) is reached
+  **only** from the `opentraces push` command, which is **not registered on the
+  CLI** (`push` is absent from `main.commands`). The reachable publication path,
+  `opentraces dataset publish` (`core/datasets.py`), **stubs** the schema-ahead
+  guard (`_check_remote_schema_not_ahead`), the dedup (`_remote_row_ids`), and
+  the diff (`_changed_staged_files`) for real HF — they `return`/no-op when the
+  remote is not the filesystem fake. So schema-evolution safety and idempotent
+  re-publish are effectively unenforced on the live `dataset publish` path.
+  Wiring HFUploader's guards into `dataset publish` (or re-exposing `push`) is a
+  product follow-up; until then there is nothing to assert as passing.
+- **Context-layer blob round-trip / `ctx show --remote` / non-eager pull
+  differentiation** are deferred: they need a bucket with `blobs/v1/.../context`
+  blobs, which only the OTel Context-Tree capture checkpoints produce, and that
+  capture path is itself opt-in/pending (receiver + `pty_runner`). The covered
+  traces have raw-body blobs (asserted) but no context-layer blobs.
+- **`trail blame/graph --remote` are not covered** because those verbs have no
+  `--remote` flag; only `trace get`, `ctx list/info/show`, and `bucket prefetch`
+  accept `--remote`. Read-from-remote covers `trace get` + `ctx list` + `ctx
+  info`; `ctx show --remote` is blocked by the same no-blobs limitation above.
 
 `make otbox-tier1` sets `OT_OTBOX_TIER1=1`. With `OT_OTBOX_SSH_TARGET`
 already set, it runs against the operator's tailnet target; without

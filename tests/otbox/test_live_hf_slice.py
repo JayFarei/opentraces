@@ -30,13 +30,24 @@ from tests.otbox.checkpoints import resolve_checkpoint
 from tests.otbox.drivers import get_driver
 from tests.otbox.journey import JourneyResult, run_journey
 
-# The captured-session checkpoint gives every journey a real trace with
-# blobs + events to push (preconditions: min_captured_traces = 1).
-CHECKPOINT = "c-captured-real-session"
+# Each journey declares its own `from_checkpoints`; resolve that rather than
+# hardcoding one (e.g. the multi-trace journey forks c-captured-multi-skill).
+_DEFAULT_CHECKPOINT = "c-captured-real-session"
+
+
+def _checkpoint_for(journey: str) -> str:
+    import tomllib
+
+    from tests.otbox.journey import journey_path
+
+    doc = tomllib.loads(journey_path(journey).read_text())
+    cps = doc.get("from_checkpoints") or []
+    return cps[0] if cps else _DEFAULT_CHECKPOINT
 
 LIVE_JOURNEYS = [
     "live-hf-bucket-roundtrip",
     "live-hf-bucket-daemon-sync",
+    "live-hf-bucket-multi-trace",
     "live-hf-dataset-publish",
     "live-hf-read-remote",
 ]
@@ -45,8 +56,12 @@ LIVE_JOURNEYS = [
 _BUCKET_JOURNEYS = {
     "live-hf-bucket-roundtrip",
     "live-hf-bucket-daemon-sync",
+    "live-hf-bucket-multi-trace",
     "live-hf-read-remote",
 }
+
+# Journeys whose bucket must carry multiple traces + a multi-batch event log.
+_MULTI_TRACE_JOURNEYS = {"live-hf-bucket-multi-trace"}
 
 
 # Stable, scrubber-proof token location. This dev environment runs an HF-token
@@ -221,6 +236,21 @@ def _post_verify(repos: live_hf.LiveRepos, journey: str) -> None:
     api = live_hf._api(repos.token)
     if journey in _BUCKET_JOURNEYS:
         _verify_whole_bucket_synced(api, repos.bucket_repo)
+    if journey in _MULTI_TRACE_JOURNEYS:
+        files = set(api.list_repo_files(repo_id=repos.bucket_repo, repo_type="dataset"))
+        spines = [
+            f for f in files
+            if f.startswith("traces/v1/") and f.endswith("/trace.json")
+        ]
+        assert len(spines) >= 3, (
+            f"multi-trace bucket should carry >=3 trace.json spines, got "
+            f"{len(spines)}: {sorted(spines)}"
+        )
+        batches = [
+            f for f in files
+            if f.startswith("events/v1/batches/") and f.endswith(".jsonl.gz")
+        ]
+        assert len(batches) >= 1, f"no event-log batches on {repos.bucket_repo}"
     if journey == "live-hf-dataset-publish":
         info = api.repo_info(repo_id=repos.dataset_repo, repo_type="dataset")
         assert info.private is True, f"{repos.dataset_repo} must be private"
@@ -236,7 +266,7 @@ def _post_verify(repos: live_hf.LiveRepos, journey: str) -> None:
 @pytest.mark.parametrize("journey", LIVE_JOURNEYS)
 def test_live_hf_journey(driver, journey):
     _require_live()
-    cp = resolve_checkpoint(driver, CHECKPOINT)
+    cp = resolve_checkpoint(driver, _checkpoint_for(journey))
     box = cp.box
     # Provision BEFORE run_journey so _context() can expand
     # {live_bucket_repo}/{live_dataset_repo} from the registry.
