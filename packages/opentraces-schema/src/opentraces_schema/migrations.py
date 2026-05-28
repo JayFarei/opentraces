@@ -137,3 +137,26 @@ def migrate_record(raw: dict[str, Any], target_version: str | None = None) -> di
             outcome.pop("patch", None)
 
     return out
+
+
+def load_record_dict(raw: dict[str, Any], target_version: str | None = None):
+    """Validate a raw TraceRecord dict, forward-migrating it first.
+
+    The migration-aware constructor every read path should use. A record
+    captured at schema 0.3.0 carries ``outcome.patch``; a bare
+    ``TraceRecord.model_validate`` silently drops it. Routing through here
+    reconstructs ``patches[]`` (and preserves the raw diff under
+    ``metadata.legacy.patch``) before validation, so a legacy trace read on a
+    0.6.0 client keeps its diff. No-op on already-current records because
+    ``migrate_record`` is idempotent.
+    """
+    from .models import TraceRecord
+
+    return TraceRecord.model_validate(migrate_record(raw, target_version))
+
+
+def load_record_json(text: str, target_version: str | None = None):
+    """``load_record_dict`` over a JSON string (one record per call)."""
+    import json
+
+    return load_record_dict(json.loads(text), target_version=target_version)

@@ -25,6 +25,7 @@ from opentraces_schema import (
     TraceRecord,
     TraceSignal,
     TraceUnit,
+    load_record_json,
 )
 
 from . import paths
@@ -1450,7 +1451,7 @@ def _iter_trace_file_records(trace_path: Path) -> list[TraceRecord]:
         if not line.strip():
             continue
         try:
-            records.append(TraceRecord.model_validate_json(line))
+            records.append(load_record_json(line))
         except (ValueError, json.JSONDecodeError, ValidationError):
             continue
     return records

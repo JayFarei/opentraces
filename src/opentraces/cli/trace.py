@@ -1044,7 +1044,7 @@ def _try_load_trace_record(trace_id: str):
 def _read_trace_record_from_path(trace_path: Path):
     """Load a TraceRecord from a legacy JSONL shard or bucket object."""
 
-    from opentraces_schema import TraceRecord
+    from opentraces_schema import load_record_json
 
     from ..core.bucket_store import read_trace_record_object
 
@@ -1055,7 +1055,9 @@ def _read_trace_record_from_path(trace_path: Path):
         (line for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()),
         "",
     )
-    return TraceRecord.model_validate_json(first_line)
+    # Legacy 0.3.x shards carry outcome.patch; route through the migration-aware
+    # loader so patches[] + metadata.legacy.patch survive the read (no-op on 0.4+).
+    return load_record_json(first_line)
 
 
 class _BackendUnavailable(RuntimeError):
@@ -1070,7 +1072,7 @@ def _read_trace_record_via_backend(trace_id: str, remote: str):
     logic is unchanged; only the data source swaps.
     """
 
-    from opentraces_schema import TraceRecord
+    from opentraces_schema import load_record_dict
 
     try:
         from ..core.bucket_backend import get_backend
@@ -1081,7 +1083,7 @@ def _read_trace_record_via_backend(trace_id: str, remote: str):
 
     backend = get_backend(remote)
     payload = backend.get_trace_json(trace_id)
-    return TraceRecord.model_validate(payload)
+    return load_record_dict(payload)
 
 
 def _trace_id_from_ref(ref: str) -> str:
@@ -1244,7 +1246,7 @@ def _load_trace_record(staging_dir: Path, trace_id: str):
     ``t:`` CLI-ish form. Ambiguous or unknown prefixes return
     ``(None, None)``.
     """
-    from opentraces_schema import TraceRecord
+    from opentraces_schema import load_record_json
 
     # Strip the `t:` decorative prefix from graph output.
     probe = trace_id[2:] if trace_id[:2].lower() == "t:" else trace_id
@@ -1268,7 +1270,7 @@ def _load_trace_record(staging_dir: Path, trace_id: str):
     data = staging_file.read_text().strip()
     if not data:
         return None, staging_file
-    record = TraceRecord.model_validate_json(data.splitlines()[0])
+    record = load_record_json(data.splitlines()[0])
     return record, staging_file
 
 
@@ -1281,7 +1283,7 @@ def _load_trace_record(staging_dir: Path, trace_id: str):
 def trace_list(stage: str | None, model: str | None, agent: str | None, limit: int, by_commit: bool) -> None:
     """List staged traces with optional filters."""
     import time as _time
-    from opentraces_schema import TraceRecord
+    from opentraces_schema import TraceRecord, load_record_json
 
     state, staging_dir = _load_project_state()
     staged_files = list(staging_dir.glob("*.jsonl")) if staging_dir.exists() else []
@@ -1306,7 +1308,7 @@ def trace_list(stage: str | None, model: str | None, agent: str | None, limit: i
     for sf in staged_files:
         try:
             data = sf.read_text().strip()
-            record = TraceRecord.model_validate_json(data.splitlines()[0])
+            record = load_record_json(data.splitlines()[0])
             parsed.append((record, _ts_epoch(record)))
         except Exception:
             continue
@@ -1555,8 +1557,8 @@ def _trace_commit_impl(trace_id: str) -> None:
     message = short_trace_id(trace_id, 12)
     try:
         if entry.file_path:
-            from opentraces_schema import TraceRecord
-            record = TraceRecord.model_validate_json(Path(entry.file_path).read_text().strip())
+            from opentraces_schema import load_record_json
+            record = load_record_json(Path(entry.file_path).read_text().strip())
             task_desc = (record.task or {}).get("description", "") if isinstance(record.task, dict) else (getattr(record.task, "description", "") if record.task else "")
             if task_desc:
                 message = task_desc[:80]
@@ -1768,11 +1770,11 @@ def _resume_trace_impl(
         # Filename is historically the session_id for Claude Code captures,
         # not the trace_id. Fall back to scanning all JSONL files for a
         # matching trace_id or session_id.
-        from opentraces_schema import TraceRecord as _TR
+        from opentraces_schema import load_record_json as _load_record_json
         for p in staging_dir.glob("*.jsonl"):
             try:
                 line = p.read_text().strip().splitlines()[0]
-                rec = _TR.model_validate_json(line)
+                rec = _load_record_json(line)
             except Exception:
                 continue
             if rec.trace_id == full_id or rec.session_id == full_id:

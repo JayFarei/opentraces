@@ -109,3 +109,133 @@ Append one entry per iteration. Newest at the bottom.
   S1/S7/S8/S9/S10/S11/S12 (S2/S3/S4/S6 already covered by pytest), precondition
   vocab + tiered-gate/inventory wiring, S8 config-forward-compat verification,
   then docs (Phase 5).
+
+## 2026-05-28 — RESUME: Phase 3 + S7 + Phase 5 docs COMPLETE
+
+- Change (R3 checkpoints): `tests/otbox/checkpoints/_legacy_v033.py` registers
+  otbox's first previous-version world. `c-legacy-v033` (composed on
+  `c-installed-source`) restores the frozen v0.3.3 fixture into the box
+  (driver-mediated per-file copy + `$LEGACY_HOME`/`$LEGACY_PROJECT` rehydrate)
+  then git-inits a real repo; `c-legacy-v033-upgraded` runs a fresh 0.4 capture
+  (the simple-refactor fake-harness session, which owns `src/app.py` so it
+  coexists with the legacy root `app.py`) inside the legacy repo — the box ends
+  with the legacy 0.3.0 trace AND a new 0.4 trace, opentraces refs created
+  additively over the pre-existing history. Registered in `checkpoints/__init__.py`.
+  Provides vocab: `legacy_world_restored`, `migration_applied`, `no_data_loss`,
+  `migration_idempotent`, `pre_migration_schema`, `captured_traces`.
+- Change (R4): extended `journey.py::_checkpoint_satisfies` with the migration
+  precondition vocab (bool flags + `pre_migration_schema` string match) and
+  `journey.py::_captured_session` templating exposes `{legacy_trace_id}` /
+  `{new_trace_id}` / `{head_before_capture}` / `{step_index}` from the new
+  checkpoint audits. `otbox matrix --inventory --strict` -> "jtbd: drift OK".
+- Change (Phase 3 journeys): 7 tier-0 migration TOMLs under
+  `tests/otbox/catalogue/journeys/migration-s{1,5,8,9,10,11,12}-*.toml`. S1
+  read-compat (silver), S5 read-in-place / empty bucket (silver), S8 config
+  forward-compat via `config show` JSON (silver), S9 git-ref additivity (gold),
+  S10 idempotency (silver), S11 non-destructive on-disk preservation (silver),
+  S12 end-to-end upgrade GOLD ship gate. S1/S5/S8/S10/S11 fork from
+  `c-legacy-v033`; S9/S12 from `c-legacy-v033-upgraded`.
+- Finding: the 0.4 first-touch is `trace index rebuild` — without it `trace get`
+  / `trace map` return rc=6 for the legacy trace (they read the v2 bucket which
+  is 0.4-only); `trace query` finds it via the index. After rebuild all read
+  surfaces resolve. S1 runs it first; S5 asserts the bucket is empty
+  (`bucket status --json` -> `bucket.traces == []`, `ctx list` -> `traces == []`)
+  i.e. read-in-place, no auto-adoption (matches the S5 product decision).
+- Change (S7): `tests/test_migration_0_3_3_to_0_4.py` gains 3 tests. The
+  schema-ahead guard (`HFUploader._sync_dataset_infos`) is byte-identical in
+  0.3.3 and 0.4; only `LOCAL_SCHEMA_VERSION` differs. Layer A (default CI) pins
+  local=0.3.0 + remote=0.6.0 and asserts `RemoteSchemaAheadError` + no overwrite.
+  Layer B drives the REAL v0.3.3 client (subprocess into the /tmp venv) and
+  asserts the 0.3.3 code refuses; SKIPs when the venv is absent (CI-safe). The
+  0.3.3 push CLI (`cli/publish.py`) maps the error to exit 3 + `ot setup upgrade`.
+- Change (Phase 5 docs): VERSION-POLICY.md now states the migrations module is
+  IMPLEMENTED (a removal that ships a non-lossy registered migration is the
+  accepted mechanism); CHANGELOG 0.6.0 "Removed" gains a Migration sub-note;
+  new `packages/opentraces-schema/MIGRATION-0.3.3-to-0.4.md` records the patch
+  decision + read-in-place + reciprocal-refusal + non-destructive contract.
+- Evidence: `pytest tests/test_migration_0_3_3_to_0_4.py tests/publish/test_upload.py
+  tests/otbox/test_otbox_slice.py` -> 119 passed, 1 skipped (the 7 migration
+  journeys among them). Full `tests/otbox/` + `packages/opentraces-schema/`
+  -> 188 passed, 67 skipped. S2 audit: bare_dropped_fields == ['outcome.patch'];
+  migrated_patch_files == ['foo.py','bar.py']; legacy_patch_preserved == true.
+- ALL S1-S12 now covered (S2/S3/S4/S6 pytest; S1/S5/S8/S9/S10/S11/S12 otbox
+  journeys; S7 pytest incl. real-v0.3.3 layer). Plan 085 deliverable complete.
+- Full `pytest tests/`: 3018 passed / 173 skipped / 2 xfailed / 4 failed. The 4
+  reds are NOT from this work: 3 are tests/perf timing gates (one confirmed
+  passing in isolation; failed under concurrent load) and 1 is a pre-existing
+  trace-trails corpus-currency drift (`projection_digest` stale) that fails on
+  clean origin/main too (verified via stash). Triaged separately per CLAUDE.md.
+
+## 2026-05-29 — Upgrade-UAT coverage audit (18-agent workflow) + CONFIRMED P0 bug
+
+- Ran an 18-agent Workflow (`upgrade-uat-coverage-map`, run wf_eb8533cb-ef6)
+  mapping all documented functionality (37 docs + README + 125 CLI commands =
+  262 features) vs current upgrade coverage. Full catalogue:
+  `runs/migration-0.3.3-to-0.4/UPGRADE-UAT-AUDIT.md` (69 proposed cases: 35 P0 /
+  29 P1 / 5 P2; 44 uncovered + 25 partial).
+- Verdict: plan-085 is migration-CORE, not a genuine end-to-end upgrade UAT.
+  Roughly 25-35% of documented upgrade behavior is tested; the breakage-spine
+  (schema migration, read-in-place, additivity, reciprocal refusal) is solid,
+  but the forward-onboarding surface a real upgrader runs (setup wizard, auth
+  reuse, dataset create/run/review/publish, capture-otlp/real context capture,
+  security tool RUNS over legacy content, bucket remote sync, two-store egress
+  separation) is untested on upgrade.
+- CONFIRMED P0 BUG (verified two ways, not just agent-claimed): the live read
+  path drops the legacy diff. `cli/trace.py:1058 _read_trace_record_from_path`
+  calls `TraceRecord.model_validate_json` with NO `migrate_record` wrap (same at
+  1271/1309/1559/1775). Empirical: on c-legacy-v033 the on-disk 0.3.0 record has
+  `outcome.patch` (136 chars) but `trace get <id> --json` returns `patches[]`
+  length 0, `metadata.legacy` absent, patch gone. `migrate_record` only runs in
+  the HF publish path (itself unreachable from the live CLI per prior memory).
+  So the documented "old traces readable with patches[]" promise is FALSE on the
+  surface users hit. S1 missed it (asserted rc=0 + trace_id, never patch content).
+  Fix is small (route reads through a migration-aware loader) but lives in
+  `src/opentraces/cli/trace.py` — OUTSIDE plan-085's original "Use only"
+  allowlist, so it needs explicit user go-ahead before I touch it.
+- Recommended phased plan (in the audit doc): Phase 0 = fix the read-path drop +
+  land U-trace-2 (pytest) + U-trace-1 (journey) as guards; Phase 1 = fixture-only
+  pytests; Phase 2 = enrich the c-legacy-v033 checkpoint family (+ a real-OTLP
+  upgraded checkpoint, pty_runner step); Phase 3 = the journey bulk; plus the
+  parts only a real two-venv pip-0.3.3->0.4 UAT can prove.
+
+## 2026-05-29 — GOAL (full-release UAT) Phase 0 COMPLETE: P0 read-path fix + guards
+
+- Scope note: the /goal explicitly EXPANDS plan-085's allowlist to cover
+  `src/opentraces/cli/trace.py` + the read/index/bucket loaders for the P0 fix.
+- Change (single source of truth): `opentraces_schema.migrations` gains
+  `load_record_dict(raw)` + `load_record_json(text)` — the migration-aware
+  constructors (`TraceRecord.model_validate(migrate_record(...))`). Exported
+  from `opentraces_schema.__init__` (+ `migrate_record`). Idempotent no-op on
+  0.4+ records; reconstructs `patches[]` + preserves `metadata.legacy.patch` on
+  legacy 0.3.x records.
+- Change (route every legacy-shard read through it):
+  * `cli/trace.py` — `_read_trace_record_from_path` (the named P0 site, JSONL
+    fallback), `_read_trace_record_via_backend` (remote dict), `_load_trace_record`
+    (staging by id), `trace_list` loop, `_commit_single` message build, and the
+    `trace get` filename-fallback scan. All 6 direct `model_validate_json` /
+    `model_validate` record sites now go through the loaders.
+  * `core/trace_index.py::_iter_trace_file_records` (index build over legacy
+    shards — so `trace query`/`map` reflect the migrated record).
+  * `core/bucket_store.py::_read_jsonl_trace_records`. (The two bucket-OBJECT
+    sites at 266/1565 are 0.4-only by the read-in-place contract; left untouched
+    to keep the diff on the actual legacy path.)
+- Evidence (empirical before/after, frozen legacy shard
+  `legacy_world_v033/.../6961102e-*.jsonl`, on-disk schema 0.3.0, outcome.patch
+  136 chars): BEFORE (bare validate) `patches=0`, `metadata.legacy` absent;
+  AFTER (`_read_trace_record_from_path`) `patches=1` (file `app.py`),
+  `metadata.legacy.patch` present. The documented "old traces readable with
+  patches[]" promise now holds on the surface users hit.
+- Guards landed:
+  * U-trace-2 (pytest) — `test_u_trace_2_live_read_path_keeps_legacy_patch`
+    pins BOTH the old broken behaviour (bare validate drops it) and the fixed
+    live-loader behaviour over the frozen fixture.
+  * U-trace-1 (otbox journey, gold) —
+    `migration-u-trace-1-patch-survives-read.toml` forks `c-legacy-v033`,
+    `trace index rebuild` then `trace get {legacy_trace_id} --json`, asserts
+    `trace.patches.0.file_path == app.py` + `trace.metadata.legacy.patch`
+    present through the live CLI end-to-end.
+- Verification: `pytest tests/test_migration_0_3_3_to_0_4.py` 16/16 (was 15);
+  the 8 migration otbox journeys (incl. U-trace-1) 8/8 in 19.6s;
+  `pytest tests/test_migration_0_3_3_to_0_4.py tests/otbox/test_otbox_slice.py`
+  -> 95 passed. No regression in the read path.
+- Next: Phase 1 (fixture-only pytests from the audit's P0 set), then Phase 2/3.

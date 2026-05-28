@@ -1,0 +1,72 @@
+name = "migration-u-trace-1-patch-survives-read"
+description = """
+Upgrade-UAT U-trace-1 (Phase 0 regression guard). Proves the confirmed P0
+read-path drop is fixed on the surface a real upgrader hits: `trace get`
+over a legacy schema-0.3.0 trace must expose the reconstructed `patches[]`
+AND preserve the raw unified diff under `metadata.legacy.patch`, instead of
+silently dropping `outcome.patch` (the pre-fix behaviour).
+
+Forks from `c-legacy-v033`. The 0.4 first-touch is `trace index rebuild`;
+after it `trace get {legacy_trace_id} --json` resolves the legacy trace and,
+post-fix, routes the on-disk 0.3.0 record through the migration-aware loader
+so the diff survives the read.
+
+Pairs with the pytest guard
+`tests/test_migration_0_3_3_to_0_4.py::test_u_trace_2_live_read_path_keeps_legacy_patch`,
+which pins the same property at the loader level. This journey is the
+end-to-end CLI proof.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+# --- 0.4 first-touch: build the projection over the legacy trace ----------
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+# --- read the legacy trace through the live CLI ---------------------------
+[[steps]]
+type = "cli"
+id = "get"
+argv = ["trace", "get", "{legacy_trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "index-rebuild"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "get"
+equals = 0
+
+# Resolves the right legacy trace by id.
+[[assertions]]
+kind = "stdout_json"
+step = "get"
+path = "trace.trace_id"
+equals = "{legacy_trace_id}"
+
+# P0 GUARD: patches[] is reconstructed (the legacy edit touched app.py), so the
+# array is non-empty and the first patch names the migrated file.
+[[assertions]]
+kind = "stdout_json"
+step = "get"
+path = "trace.patches.0.file_path"
+equals = "app.py"
+
+# P0 GUARD: the raw legacy unified diff is preserved (non-null) under
+# metadata.legacy.patch, so nothing is lost on the read.
+[[assertions]]
+kind = "stdout_json"
+step = "get"
+path = "trace.metadata.legacy.patch"
