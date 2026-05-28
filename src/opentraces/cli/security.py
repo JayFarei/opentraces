@@ -155,13 +155,16 @@ def sanitize_cmd(tools_csv: str | None, use_config: bool, field_type: str) -> No
         return
 
     if "record" in payload:
-        from opentraces_schema import TraceRecord
+        from opentraces_schema import load_record_dict
 
         rec_data = payload.get("record")
         if not isinstance(rec_data, dict):
             raise click.UsageError('"record" must be an object')
         try:
-            record = TraceRecord.model_validate(rec_data)
+            # Migration-aware load so a legacy 0.3.x record's diff is reconstructed
+            # into patches[] + preserved under metadata.legacy.patch (which the
+            # walker then scans) instead of being silently dropped before sanitize.
+            record = load_record_dict(rec_data)
         except Exception as exc:  # noqa: BLE001 — schema validation
             raise click.UsageError(f"invalid TraceRecord: {exc}") from exc
         record, report = sanitize_record(record, tools=tools, cfg=cfg_for_call)

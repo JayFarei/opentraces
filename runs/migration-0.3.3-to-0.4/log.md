@@ -239,3 +239,47 @@ Append one entry per iteration. Newest at the bottom.
   `pytest tests/test_migration_0_3_3_to_0_4.py tests/otbox/test_otbox_slice.py`
   -> 95 passed. No regression in the read path.
 - Next: Phase 1 (fixture-only pytests from the audit's P0 set), then Phase 2/3.
+
+## 2026-05-29 — Phase 1 (pytest layer) P0 batch + a second read-loader fix
+
+- Dispatched 3 read-only Explore agents to map the integration-heavy P0 paths
+  (datasets, security sanitize, HF-publish/egress). Key findings, evidence-backed:
+  * U-hf-1 CONFIRMED (prior memory is correct): live `dataset publish`
+    (`core.datasets.publish_dataset`) does NOT reach `HFUploader` — it uploads
+    via `HfApi.upload_folder` directly, and its own schema-ahead check
+    (`_check_remote_schema_not_ahead`) no-ops against a real remote because
+    `_fake_remote_dir` only resolves under `OPENTRACES_PLAN058_FAKE_REMOTE_ROOT`.
+    `HFUploader.{ensure_repo_exists,_sync_dataset_infos,migrate_outdated_shards}`
+    are wired only to the legacy `opentraces push` (`cli/publish.py`). Forward HF
+    shard migration on a real `dataset publish` upgrade is an unverified PRODUCT
+    GAP, now pinned by a test rather than assumed.
+  * Second read-path drop found: `cli/security.py` `{"record"}` sanitize path
+    used a bare `TraceRecord.model_validate(rec_data)`, so a legacy record POSTed
+    to `security sanitize` lost its diff before scanning. FIXED -> `load_record_dict`
+    (in-scope read loader per the goal). Now the legacy diff lands under
+    `metadata.legacy.patch` where the walker can scan it.
+  * Honest negatives recorded (audit premises that the code refutes):
+    `dataset new --rows-file` is an OPAQUE-row importer (JSON-Schema validated,
+    no TraceRecord migration) so it does NOT reconstruct patches[] (U-ds-2 is a
+    characterization, deferred); `Outcome(patch=...)` is silently DROPPED, not
+    rejected (U-hf-7 "fails loudly" is false); reconstructed patches[] are
+    file-granular not hunk-granular (U-trail-7).
+- Change: new `tests/test_migration_upgrade_uat.py` (11 tests, all default-CI-safe):
+  U-ctx-2 (P0, ctx fields inert on migrated record), U-trail-7 (P1 lib half,
+  labeled file-granular degradation), U-setup-10 (P1, attribution/git_links
+  preserved verbatim), U-sec-2 (P0, x3: canonical-order tools_applied + patch
+  survival, regex redacts a planted secret, CLI record path is migration-aware),
+  U-ds-8 (P0, x2: processor receives migrated 0.6.0 shape; invalid_output flagged
+  + --strict raises), U-bucket-2 (P0, egress opt-in not token-gated), U-bucket-3
+  (P0, two-store separation), U-hf-1 (P0, dataset-publish-not-HFUploader pin).
+- Change (src): `cli/security.py` record-ingestion -> `load_record_dict`.
+- Verification: `pytest tests/test_migration_upgrade_uat.py` 11/11;
+  regression sweep over the touched subsystems (cli security x2, core processors,
+  security pipeline/api, plan057/058 datasets+remotes, publish upload,
+  migration core) -> 269 passed / 1 skipped. No regression from the security CLI
+  loader change.
+- Deferred (time-bound, per goal P0>P1>P2): U-ds-2 (opaque-row characterization),
+  U-ds-7 (needs Phase 2 bucket state), U-sec-3 (mostly subsumed by U-sec-2; patch
+  CONTENT lives in trail companion which security never reads — documented
+  deferral), U-hf-3/6/7, U-sec-6, U-setup-9. Phase 2 (checkpoint enrichment) +
+  Phase 3 (journey bulk) + Phase 4 (two-venv real UAT) remain.
