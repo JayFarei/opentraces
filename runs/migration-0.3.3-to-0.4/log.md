@@ -283,3 +283,33 @@ Append one entry per iteration. Newest at the bottom.
   CONTENT lives in trail companion which security never reads — documented
   deferral), U-hf-3/6/7, U-sec-6, U-setup-9. Phase 2 (checkpoint enrichment) +
   Phase 3 (journey bulk) + Phase 4 (two-venv real UAT) remain.
+
+## 2026-05-29 — Phase 3 (journeys) P0 batch against existing checkpoints
+
+- Scope choice: Phase 2's expensive infra (real-OTLP `c-legacy-v033-otel-upgraded`
+  checkpoint + `pty_runner` step) is flagged hard-blocked/deferred in CLAUDE.md,
+  so I targeted the highest-value Phase 3 P0 journeys that run against the
+  EXISTING c-legacy-v033 checkpoint: the "net-new verbs over a legacy world stay
+  HONEST" cases (the dominant first-touch upgrader surprise).
+- Probed the real CLI shapes against a restored legacy world before asserting
+  (no guessing): `ctx tree` -> limitations `["context_tree_not_captured"]`,
+  `trail track` -> `event_count 0` + limitations `["missing_trace_events"]`,
+  `ctx list` -> empty `opentraces.ctx.list.v2`, `trace map --bursts` -> rc=0 with
+  a deterministic `change_burst` node. (`doctor` has no `--json` subcommand flag;
+  U-config-3 deferred to avoid the global-flag-placement ambiguity.)
+- Change: 3 tier-0 journeys forking `c-legacy-v033`:
+  * `migration-u-ctx-1-honest-no-evidence.toml` (silver) — ctx list empty + ctx
+    tree resolves the legacy id with zero nodes + `context_tree_not_captured`.
+  * `migration-u-trail-1-honest-unknown.toml` (gold) — trail track returns
+    event_count 0, empty timeline, named event-log ref, `missing_trace_events`;
+    no fabricated survival verdict/confidence.
+  * `migration-u-trace-8-bursts-degrade.toml` (silver) — trace map --bursts rc=0
+    with a deterministic burst map over the migrated trace (no crash).
+- Verification: all 11 migration otbox journeys pass (7 plan-085 + U-trace-1 +
+  U-ctx-1 + U-trail-1 + U-trace-8) in 21s; `otbox matrix --inventory --strict`
+  -> "jtbd: drift check OK".
+- Remaining (deferred, time-bound): Phase 2 OTLP/pty_runner infra; the bulk of
+  Phase 3 P0/P1 journeys that need the enriched checkpoint (credential file,
+  stale skill/hook, privacy_tier, pre-existing settings.json) — U-setup-2..6,
+  U-bucket-1/4/5, U-trail-2/3/4, U-ctx-5, U-ds-1, U-config-1/2/5, U-auth-*;
+  Phase 4 two-venv real UAT; Phase 5 manual-UAT.
