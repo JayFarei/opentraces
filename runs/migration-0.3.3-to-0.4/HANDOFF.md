@@ -54,10 +54,28 @@ metadata already records `opentraces_schema_version` / `opentraces_cli_version`
 ## Scenario list (full) — in the spec, summarized here
 
 S1 read-compat/no-crash · S2 schema field-loss audit · S3 `patch`→`patches[]`
-reconstruction · S4 trace-id idempotency · S5 bucket adoption from legacy traces
-· S6 HF shard forward-migration · S7 HF downgrade refusal (reciprocal) · S8
-config forward-compat · S9 git-ref additivity · S10 migration idempotency · S11
-non-destructive/recoverable · S12 end-to-end upgrade journey (gold ship gate).
+reconstruction · S4 trace-id idempotency · S5 legacy traces read-in-place
+(RESOLVED: 0.3 had no bucket, nothing to adopt) · S6 HF shard forward-migration
+· S7 HF downgrade refusal (reciprocal) · S8 config forward-compat · S9 git-ref
+additivity · S10 migration idempotency · S11 non-destructive/recoverable · S12
+end-to-end upgrade journey (gold ship gate).
+
+## STATUS (2026-05-28, PAUSED for handoff)
+
+DONE on `main` (`3efdeeae9c`), 16 tests green, no regression — see
+`runs/migration-0.3.3-to-0.4/log.md` for the blow-by-blow:
+- Phase 1 / S2 audit · Phase 4 keystone (the `migrate_record` reconstruction +
+  HF wiring — the whole point) · S6 · R1 frozen v0.3.3 world
+  (`tests/migration/fixtures/legacy_world_v033/`) + R2 restore helper · S1
+  read-compat verified against the live 0.4 CLI · v0.3.3 venv builds at
+  `/tmp/ot-v033-worktree/.venv-v033` (recreate via `git worktree add` v0.3.3 +
+  stub `web/viewer/dist/index.html` before `pip install -e .`).
+
+RESUME from Phase 3: `c-legacy-v033` checkpoint wrapping
+`tests/migration/restore_legacy_world.py`, then journey TOMLs for
+S1/S7/S8/S9/S10/S11/S12 (S2/S3/S4/S6 are pytest-covered), precondition vocab +
+tiered-gate/inventory wiring, S8 config-compat check, Phase 5 docs. S5 is
+read-in-place (assert, don't build adoption).
 
 ## How to verify
 

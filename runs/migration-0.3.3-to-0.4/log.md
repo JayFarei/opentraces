@@ -88,3 +88,24 @@ Append one entry per iteration. Newest at the bottom.
   restore + tests). Remaining: c-legacy-v033 checkpoint + 12 journey TOMLs +
   precondition vocab/gate (Phase 3), S5 per decision, S8 config-forward-compat
   check, docs (Phase 5).
+
+## 2026-05-28 — PAUSE for handoff (user decision)
+
+- Pushed the green increment to origin main: `3efdeeae9c`.
+- S5 RESOLVED by user steer: **"0.3 didn't have legacy"** -> 0.3.3 had no bucket
+  at all, so there is nothing to *migrate into* a bucket. The contract is
+  **read-in-place**: legacy `traces/*.jsonl` stay fully readable on 0.4 (S1
+  proves this), and the bucket holds only 0.4+ captures. Do NOT build a forced
+  bucket adoption. An opt-in `bucket adopt-legacy` is optional future polish,
+  NOT required for non-lossy migration — revisit only if explicitly wanted.
+  => S5 journey should assert read-in-place + a documented note (no new CLI
+  surface); S12 e2e should NOT require legacy traces in the bucket.
+- User asked to STOP and `/handoff` for resume. Pausing here. Active Claude Code
+  `/goal` Stop hook is still set — resume session should re-issue the goal (or
+  the user clears it with `/goal clear`).
+- RESUME POINTER: this log + `kb/plans/085-...` + `runs/migration-0.3.3-to-0.4/`.
+  Next concrete work on resume: Phase 3 — build `c-legacy-v033` checkpoint
+  (wraps `tests/migration/restore_legacy_world.py`) + the journey TOMLs for
+  S1/S7/S8/S9/S10/S11/S12 (S2/S3/S4/S6 already covered by pytest), precondition
+  vocab + tiered-gate/inventory wiring, S8 config-forward-compat verification,
+  then docs (Phase 5).
