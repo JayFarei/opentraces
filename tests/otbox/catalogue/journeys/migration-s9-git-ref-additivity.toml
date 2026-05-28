@@ -1,0 +1,80 @@
+name = "migration-s9-git-ref-additivity"
+description = """
+Plan 085 S9 — git-ref additivity. Capturing a new session on 0.4 inside
+the legacy repo creates `refs/opentraces/local/events/v1` +
+`refs/notes/opentraces` (and trace-snapshot refs) WITHOUT rewriting the
+repo's pre-existing history.
+
+Forks from `c-legacy-v033-upgraded`, where the 0.4 capture already ran
+inside the restored 0.3.3 repo. The assertions prove:
+
+  * the canonical opentraces event-log ref + notes ref now exist;
+  * the pre-capture HEAD (`{head_before_capture}`, the legacy-world
+    restore commit) is still an ancestor of HEAD — history was appended
+    to, never rewritten;
+  * the new 0.4 trace's lineage resolves through `trail track`.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033-upgraded"]
+
+[preconditions]
+migration_applied = true
+
+# --- the canonical opentraces refs exist ---------------------------------
+[[steps]]
+type = "shell"
+id = "events-ref"
+argv = ["git", "-C", "{project}", "rev-parse", "--verify", "refs/opentraces/local/events/v1"]
+
+[[steps]]
+type = "shell"
+id = "notes-ref"
+argv = ["git", "-C", "{project}", "rev-parse", "--verify", "refs/notes/opentraces"]
+
+# --- pre-existing history was preserved (append-only) --------------------
+[[steps]]
+type = "shell"
+id = "ancestry"
+argv = ["git", "-C", "{project}", "merge-base", "--is-ancestor", "{head_before_capture}", "HEAD"]
+
+# --- the new 0.4 trace's lineage resolves --------------------------------
+[[steps]]
+type = "cli"
+id = "track"
+argv = ["trail", "track", "{new_trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "events-ref"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "notes-ref"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "ancestry"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "track"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "track"
+path = "event_log_ref"
+equals = "refs/opentraces/local/events/v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "track"
+path = "trace_id"
+equals = "{new_trace_id}"

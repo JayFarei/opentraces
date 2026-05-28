@@ -258,6 +258,27 @@ def _checkpoint_satisfies(
         if have < need:
             return False, f"mcp_servers_connected {have} < {need}"
 
+    # Plan 085 migration-suite vocabulary. Boolean keys require the
+    # checkpoint to advertise the same flag True; ``pre_migration_schema``
+    # is an exact-string match against the restored legacy schema version.
+    for flag in (
+        "legacy_world_restored",
+        "migration_applied",
+        "no_data_loss",
+        "migration_idempotent",
+    ):
+        if preconditions.get(flag):
+            if not bool(p.get(flag)):
+                return False, f"{flag} is not True"
+
+    want_schema = preconditions.get("pre_migration_schema")
+    if want_schema is not None:
+        have_schema = p.get("pre_migration_schema")
+        if have_schema != want_schema:
+            return False, (
+                f"pre_migration_schema {have_schema!r} != {want_schema!r}"
+            )
+
     return True, ""
 
 
@@ -351,6 +372,30 @@ def _captured_session(box: Box) -> dict[str, str]:
     result["base_commit_sha"] = str(pr_audit.get("base_commit_sha") or "")
     result["head_commit_sha"] = str(pr_audit.get("head_commit_sha") or "")
     result["branch_commit_count"] = str(pr_audit.get("branch_commit_count") or 0)
+
+    # Plan 085: expose the legacy-world checkpoint audits so migration
+    # journeys forking from c-legacy-v033 / -upgraded can address the
+    # restored 0.3.0 trace via {legacy_trace_id} and the fresh 0.4 capture
+    # via {new_trace_id} without re-resolving them from box.notes.
+    legacy_audit = box.notes.get("c_legacy_v033_audit") or {}
+    if legacy_audit:
+        result["legacy_trace_id"] = str(legacy_audit.get("legacy_trace_id") or "")
+        result["pre_migration_schema"] = str(legacy_audit.get("pre_migration_schema") or "")
+        result["legacy_slug"] = str(legacy_audit.get("legacy_slug") or "")
+    upgraded_audit = box.notes.get("c_legacy_v033_upgraded_audit") or {}
+    if upgraded_audit:
+        result["legacy_trace_id"] = str(
+            upgraded_audit.get("legacy_trace_id") or result.get("legacy_trace_id", "")
+        )
+        result["pre_migration_schema"] = str(
+            upgraded_audit.get("pre_migration_schema") or result.get("pre_migration_schema", "")
+        )
+        result["new_trace_id"] = str(upgraded_audit.get("new_trace_id") or "")
+        result["new_commit_sha"] = str(upgraded_audit.get("new_commit_sha") or "")
+        result["head_before_capture"] = str(upgraded_audit.get("head_before_capture") or "")
+        result["step_index"] = str(
+            upgraded_audit.get("edit_step_index") or result.get("step_index", "")
+        )
 
     codex_audit = box.notes.get("c_captured_codex_session_audit") or {}
     if codex_audit:

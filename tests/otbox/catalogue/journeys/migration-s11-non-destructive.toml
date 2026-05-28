@@ -1,0 +1,72 @@
+name = "migration-s11-non-destructive"
+description = """
+Plan 085 S11 — non-destructive / recoverable. Migration never mutates the
+original 0.3.3 JSONL/state in place: reading the legacy world on 0.4
+(index rebuild + status) leaves the on-disk schema-0.3.0 trace record
+byte-intact, including the `outcome.patch` the 0.6.0 model no longer
+exposes. The pre-upgrade trace data stays recoverable.
+
+Forks from `c-legacy-v033`. The reconstruction that recovers `patch` into
+`patches[]` on PUBLISH (HF / bucket) is pytest-covered; this journey
+proves the READ path is purely additive and never rewrites the source.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+# --- the 0.4 CLI touches the legacy world --------------------------------
+[[steps]]
+type = "cli"
+id = "rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["status"]
+
+# --- the original 0.3.0 JSONL is still byte-intact on disk ---------------
+# schema_version is still 0.3.0 (the read path never re-stamped it).
+[[steps]]
+type = "shell"
+id = "schema-preserved"
+argv = ["grep", "-q", "\"schema_version\": \"0.3.0\"", "{opentraces_dir}/projects/{legacy_slug}/traces/{legacy_trace_id}.jsonl"]
+
+# The legacy outcome.patch raw bytes are still on disk — the 0.6.0 model
+# drops `patch` on load, but the source record is never rewritten, so the
+# devtime diff remains recoverable.
+[[steps]]
+type = "shell"
+id = "patch-preserved"
+argv = ["grep", "-q", "\"patch\"", "{opentraces_dir}/projects/{legacy_slug}/traces/{legacy_trace_id}.jsonl"]
+
+[[assertions]]
+kind = "returncode"
+step = "rebuild"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "status"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "schema-preserved"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "patch-preserved"
+equals = 0
+
+[[assertions]]
+kind = "path_exists"
+path = "{opentraces_dir}/projects/{legacy_slug}/traces/{legacy_trace_id}.jsonl"

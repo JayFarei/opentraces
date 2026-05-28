@@ -1,0 +1,142 @@
+name = "migration-s12-end-to-end-upgrade"
+description = """
+Plan 085 S12 — end-to-end upgrade journey (GOLD ship gate). The full arc
+on a real legacy world: restore the frozen 0.3.3 box -> upgrade to 0.4 ->
+read the old 0.3.0 trace -> capture a new 0.4 session inside the same repo
+-> all three substrates (trace / trail / context) coherent.
+
+Forks from `c-legacy-v033-upgraded`: the restore + 0.4 capture already
+ran (the upgrade-in-place path). This journey proves the post-upgrade
+world holds BOTH traces coherently:
+
+  * trace substrate: `trace get` resolves both the legacy 0.3.0 trace and
+    the new 0.4 trace by id;
+  * trail substrate: `trail track` + `trail explain` resolve the new
+    capture's lineage (anchored_in_git, src/app.py edit on the step);
+  * context substrate: `ctx list` responds with its canonical envelope.
+    Per the S5 decision the bucket is NOT required to hold the legacy
+    trace; the context tree is empty because the synthetic Trace/Trail
+    capture emits no context_* events (honest read-in-place scope).
+
+This is the gold-tier acceptance proof for the 0.3.3 -> 0.4 upgrade.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033-upgraded"]
+
+[preconditions]
+migration_applied = true
+no_data_loss = true
+
+# --- 0.4 first-touch over the upgraded world -----------------------------
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["status"]
+
+# --- trace substrate: both traces readable by id -------------------------
+[[steps]]
+type = "cli"
+id = "get-legacy"
+argv = ["trace", "get", "{legacy_trace_id}", "--json"]
+
+[[steps]]
+type = "cli"
+id = "get-new"
+argv = ["trace", "get", "{new_trace_id}", "--json"]
+
+# --- trail substrate: the new capture's lineage is coherent --------------
+[[steps]]
+type = "cli"
+id = "track-new"
+argv = ["trail", "track", "{new_trace_id}", "--json"]
+
+[[steps]]
+type = "cli"
+id = "explain-new"
+argv = ["trail", "explain", "--trace", "{new_trace_id}", "--step", "{step_index}", "--json"]
+
+# --- context substrate: canonical envelope -------------------------------
+[[steps]]
+type = "cli"
+id = "ctx-list"
+argv = ["ctx", "list", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "index-rebuild"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "status"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "get-legacy"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "get-legacy"
+path = "trace.trace_id"
+equals = "{legacy_trace_id}"
+
+[[assertions]]
+kind = "returncode"
+step = "get-new"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "get-new"
+path = "trace.trace_id"
+equals = "{new_trace_id}"
+
+[[assertions]]
+kind = "returncode"
+step = "track-new"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "track-new"
+path = "trace_id"
+equals = "{new_trace_id}"
+
+[[assertions]]
+kind = "returncode"
+step = "explain-new"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-new"
+path = "relation"
+equals = "anchored_in_git"
+
+[[assertions]]
+kind = "stdout_json"
+step = "explain-new"
+path = "file_path"
+equals = "src/app.py"
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-list"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-list"
+path = "schema_version"
+equals = "opentraces.ctx.list.v2"
