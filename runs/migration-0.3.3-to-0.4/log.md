@@ -350,3 +350,40 @@ Append one entry per iteration. Newest at the bottom.
 - Next session decision: commit to building the Phase 2a enriched checkpoint
   (unblocks ~13 P0 journeys) and/or the Phase 4 two-venv make target, or treat
   the current migration-core + onboarding-honesty coverage as the v1 ship line.
+
+## 2026-05-29 — Phase 3 P0 onboarding journeys (existing checkpoint, no enrichment)
+
+- Resumed per stop-hook: item (3) needs more P0 journeys green. Many run against
+  the EXISTING c-legacy-v033 checkpoint with no OTLP/enrichment, so I implemented
+  those first. Probed real CLI shapes against a restored legacy world before
+  asserting (no guessing).
+- Change: 4 tier-0 journeys forking c-legacy-v033:
+  * `migration-u-config-2-legacy-marker-loads.toml` (P0, silver) — `config show`
+    loads the legacy config_version 0.2.0 verbatim, `status` honors review_policy
+    review. HONEST FINDING: config_version is NOT stamped forward on read (the
+    loader is forward-TOLERANT, not forward-migrating), so the audit's U-config-1
+    "migrated forward / not stale 0.2.0" premise does not hold; asserted real behavior.
+  * `migration-u-setup-3-init-idempotent.toml` (P0, silver) — `init --agent
+    claude-code` over an enrolled legacy project returns "Already initialized",
+    idempotent on re-run.
+  * `migration-u-setup-4-setup-git-clean-install.toml` (P0, silver) — `setup git`
+    installs the correlator on a legacy repo with no prior event log
+    (state.installed/owned_hook_present/chain_present all true), idempotent.
+  * `migration-u-ds-3-pull-removed.toml` (P1, bronze) — removed `pull` verb exits
+    rc=2 (used `expect_returncode=2` so the intentional non-zero isn't a step
+    failure). HONEST FINDING: it is the generic Click "No such command 'pull'"
+    with NO `dataset new --rows-file` replacement hint; the audit's hint premise
+    does not hold. Logged as a UX gap.
+- Discovered runner mechanic: a `cli`/`shell` step that exits non-zero is counted
+  a "step failure" (journey FAIL) even when all assertions pass, UNLESS the step
+  declares `expect_returncode`. Used that for the pull case.
+- Verification: 15 migration journeys pass (was 11); `otbox matrix --inventory
+  --strict` drift OK.
+- Honest-findings backlog (product/UX gaps surfaced, not test bugs): config_version
+  not forward-stamped (U-config-1); `pull` has no replacement hint (U-ds-3);
+  `dataset list` shows an auto-created legacy-bridge dataset, not an empty array
+  (U-ds-6). These are candidates for a follow-up product decision.
+- Next: U-trail-2/U-config-5/U-trail-4 against c-legacy-v033-upgraded (existing);
+  then checkpoint enrichment (credential/privacy_tier/settings.json) for U-auth-*
+  / U-bucket-1; then a BLOCKED entry + runnable manual-UAT steps for the real-OTLP
+  / two-venv cases (item 4).

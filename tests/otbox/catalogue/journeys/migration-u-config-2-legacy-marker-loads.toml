@@ -1,0 +1,62 @@
+name = "migration-u-config-2-legacy-marker-loads"
+description = """
+Upgrade-UAT U-config-2 (P0). The 0.4 config loader is forward-tolerant of the
+pre-bucket 0.3.3 marker shape: a config_version 0.2.0 home (no bucket defaults,
+no post_processors) loads without a validation error and the legacy per-project
+review policy is still honored.
+
+Forks from `c-legacy-v033`. NOTE (honest finding): the loader READS the 0.2.0
+config fine but does NOT stamp config_version forward on read, so the audit's
+U-config-1 "migrated forward / not stale 0.2.0" premise does not hold; this
+journey asserts the true forward-TOLERANT behavior, not a forward-stamp.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+[[steps]]
+type = "cli"
+id = "config-show"
+argv = ["--json", "config", "show"]
+
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["--json", "status"]
+
+[[assertions]]
+kind = "returncode"
+step = "config-show"
+equals = 0
+
+# Legacy 0.2.0 marker loads verbatim (forward-tolerant, not forward-stamped).
+[[assertions]]
+kind = "stdout_json"
+step = "config-show"
+path = "config_version"
+equals = "0.2.0"
+
+[[assertions]]
+kind = "returncode"
+step = "status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "status"
+path = "status"
+equals = "ok"
+
+# The legacy per-project review policy still forces manual review post-upgrade.
+[[assertions]]
+kind = "stdout_json"
+step = "status"
+path = "review_policy"
+equals = "review"

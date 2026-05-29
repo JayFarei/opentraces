@@ -40,7 +40,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `completions uninstall` | enable-shell-completions | bronze | enable-shell-completions | Remove completions for SHELL (auto-detects if omitted). |
 | `config` | _group_ | — | **unowned** | Manage opentraces configuration. |
 | `config set` | configure-settings | gold | bucket-remote-sync-scope-per-trace, bucket-self-sufficient-context-tree-outcome-roundtrip, configure-settings | Set a configuration value. |
-| `config show` | configure-settings | silver | cli-lifecycle, configure-settings, migration-s8-config-forward-compat | Display current configuration (secrets masked). |
+| `config show` | configure-settings | silver | cli-lifecycle, configure-settings, migration-s8-config-forward-compat, migration-u-config-2-legacy-marker-loads | Display current configuration (secrets masked). |
 | `config tracking-mode` | configure-tracking-mode | bronze | maintenance-command-ownership | Show or set the project tracking mode (plan 081). |
 | `ctx` | _group_ | gold | context-tree-demo-acceptance, context-tree-determinism, context-tree-outcome-3-teleport-resume-from-step-N, context-tree-outcome-4-checkpoint-for-experiments | Navigate the Context Tree: what the LLM saw at each step. |
 | `ctx anchor-for-step` | resume-from-context | silver | context-tree-temporal-anchor-precision | Print the trail_anchor_hint.commit_id for the ContextNode at STEP_INDEX. |
@@ -80,7 +80,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `dataset status` | build-publishable-dataset | bronze | build-publishable-dataset-shape | Show row count and publication-state breakdown for a dataset. |
 | `doctor` | verify-install | gold | codex-parity-mcp-permission, codex-parity-security-redaction, context-tree-otel-doctor, doctor-health, install-smoke-tier1, migration-s1-read-compat, migration-s8-config-forward-compat, tier1-cross-os-install, tier1-warm-reuse, verify-install | Report security pipeline and integration health. |
 | `git-backfill` | attribution-backfill | bronze | attribution-backfill | Retroactively correlate inbox traces to past commits. |
-| `init` | onboard-repo | bronze | onboard-repo | Initialize opentraces in the current project. |
+| `init` | onboard-repo | silver | migration-u-setup-3-init-idempotent, onboard-repo | Initialize opentraces in the current project. |
 | `remove` | offboard-repo | bronze | cli-lifecycle | Remove opentraces from the current project. |
 | `security` | _group_ | — | **unowned** | Optional privacy/security utilities. |
 | `security sanitize` | inspect-security-pipeline | bronze | inspect-security-pipeline | Sanitise JSON read from stdin. |
@@ -93,7 +93,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `setup capture-otlp` | configure-otel-capture | silver | context-tree-otel-settings-patcher | Patch ~/.claude/settings.json so Claude Code emits OTel, and (optionally) |
 | `setup claude-code` | connect-agent-runtime | bronze | connect-agent-runtime | Install the Claude Code session-capture hooks. |
 | `setup codex-cli` | configure-codex-runtime | bronze | maintenance-command-ownership | Install Codex CLI session-capture hooks. |
-| `setup git` | connect-agent-runtime | bronze | connect-agent-runtime | Install the post-commit hook that correlates commits to traces. |
+| `setup git` | connect-agent-runtime | silver | connect-agent-runtime, migration-u-setup-4-setup-git-clean-install | Install the post-commit hook that correlates commits to traces. |
 | `setup llm-review` | configure-security-reviewer | bronze | enable-security-tools | Configure the optional LLM dataset-row reviewer for publication gates. |
 | `setup privacy-filter` | configure-security-detectors | bronze | enable-security-tools | Configure the ``openai/privacy-filter`` PII detector. |
 | `setup skill` | connect-agent-runtime | bronze | connect-agent-runtime | Install the opentraces skill globally and link it into each agent harness. |
@@ -107,7 +107,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `setup watcher stop` | enable-live-attribution | bronze | enable-live-attribution | Stop the watcher service (unit remains installed). |
 | `setup watcher tick` | enable-live-attribution | bronze | enable-live-attribution, live-hf-bucket-daemon-sync | Run one tick now and print reports (diagnostic). |
 | `setup watcher uninstall` | enable-live-attribution | bronze | enable-live-attribution | Unload and remove the watcher unit file. |
-| `status` | onboard-repo | gold | cli-lifecycle, cli-publish-happy-path, migration-s1-read-compat, migration-s11-non-destructive, migration-s12-end-to-end-upgrade, tier1-cold-publish, tier1-snapshot-restore, tier1-warm-reuse | Show status of the current opentraces project. |
+| `status` | onboard-repo | gold | cli-lifecycle, cli-publish-happy-path, migration-s1-read-compat, migration-s11-non-destructive, migration-s12-end-to-end-upgrade, migration-u-config-2-legacy-marker-loads, tier1-cold-publish, tier1-snapshot-restore, tier1-warm-reuse | Show status of the current opentraces project. |
 | `trace` | _group_ | — | **unowned** | Search, map, slice, and retrieve retained traces. |
 | `trace get` | resolve-trace-artifact | gold | bucket-cross-machine-content-identity, bucket-prune-orphan-only, bucket-self-sufficient-everything, bucket-symmetric-local-remote, bucket-write-order-discipline-local, cli-lifecycle, codex-parity-bash-debugging, codex-parity-linear, codex-parity-permission-request, codex-parity-readonly-search, codex-parity-resume, codex-parity-skill-invocation, live-hf-bucket-roundtrip, live-hf-read-remote, migration-s1-read-compat, migration-s12-end-to-end-upgrade, migration-u-trace-1-patch-survives-read, trace-spine-cross-substrate-resolution, trace-spine-trace-get-shape, trail-mature-updates-patch-anchor | Resolve a trace, trace unit, map node, or ot:// Trail resource. |
 | `trace index` | _group_ | — | **unowned** | Rebuild and inspect local trace search projections. |
