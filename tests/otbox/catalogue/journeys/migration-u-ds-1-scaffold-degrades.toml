@@ -1,0 +1,72 @@
+name = "migration-u-ds-1-scaffold-degrades"
+description = """
+Upgrade-UAT U-ds-1 (P0, degradation half). A fresh upgrader can scaffold a
+workflow + dataset on a legacy-only world, and `dataset run --dry-run` degrades
+gracefully to zero eligible candidates (rc=0, no crash) rather than erroring.
+
+Forks from `c-legacy-v033`. HONEST FINDING: a read-in-place legacy 0.3.0 trace
+does NOT surface as a dataset candidate because dataset workflows project over
+bucket-adopted traces and the legacy trace is intentionally never adopted
+(consistent with the S5 read-in-place / no-auto-adoption decision). So the
+audit's "projected row carries migrated patches[]" half cannot be shown over a
+legacy-only world; this journey pins the graceful zero-eligible behavior, which
+is the real upgrader experience.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "workflow-create"
+argv = ["--json", "workflow", "create", "ds1wf", "--template", "default"]
+
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = ["--json", "dataset", "new", "ds1", "--workflow", "{opentraces_dir}/workflows/ds1wf"]
+
+[[steps]]
+type = "cli"
+id = "dataset-run"
+argv = ["--json", "dataset", "run", "ds1", "--dry-run"]
+
+[[assertions]]
+kind = "returncode"
+step = "workflow-create"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-new"
+equals = 0
+
+# dataset run degrades gracefully on the legacy-only world: rc=0, zero candidates.
+[[assertions]]
+kind = "returncode"
+step = "dataset-run"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "dataset-run"
+path = "run.candidate_count"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "dataset-run"
+path = "run.emitted_count"
+equals = 0

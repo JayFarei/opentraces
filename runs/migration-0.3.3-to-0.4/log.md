@@ -488,3 +488,34 @@ NET: items (1)/(2)/(4) of the goal are met; item (3) is met for every P0 that is
 cleanly achievable in default CI against the existing checkpoints/fixtures. The
 residual P0s are BLOCKED-and-documented (OTLP) or gated on a scope decision
 (live-HF-lane / enrichment infra / product calls), surfaced for the user.
+
+## 2026-05-29 — Two more network-free P0 journeys (U-setup-5, U-ds-1)
+
+- Pushed further on the "scope-gated" list after the stop-hook nudge; several
+  were network-free and just needed probing.
+- Change: 2 journeys forking c-legacy-v033.
+  * `migration-u-setup-5-watcher-tick-safe.toml` (P0) — `setup watcher tick`
+    bootstraps a legacy-only project safely (rc=0) and reports
+    `jsonl_activity=false`, proving it never misclassifies the read-in-place
+    legacy traces/*.jsonl as fresh agent sessions; idempotent on a 2nd tick.
+  * `migration-u-ds-1-scaffold-degrades.toml` (P0, degradation half) —
+    workflow create + dataset new + dataset run --dry-run scaffolds on a legacy
+    world and degrades gracefully to candidate_count 0 / emitted_count 0 (rc=0,
+    no crash). HONEST FINDING: a read-in-place legacy trace is NOT a dataset
+    candidate (workflows project over bucket-adopted traces; legacy traces are
+    never adopted per S5), so the "projects migrated patches[]" half cannot be
+    shown over a legacy-only world. Used {opentraces_dir} (existing journey var)
+    for the workflow path, no new infra needed.
+- Dropped with reason: U-config-1 config-set half — `config set
+  security.regex.enabled true` returns rc=2 "Unknown config key" (the CLI
+  rejects unknown nested keys by design), so the audit's "config set creates the
+  nested security subtree" premise does not hold; the forward-stamp half is a
+  product question (config_version stays 0.2.0). U-trail-4 deferred: git_links
+  commit_reachable/content_alive are lazy (None until a recompute trigger I'd
+  need to map) so a clean history-rewrite liveness assertion needs more API
+  investigation.
+- Verification: 20 migration journeys pass (was 18); inventory drift OK.
+- P0 tally now: 21 cases substantively green (added U-setup-5, U-ds-1). Residual:
+  4 OTLP-BLOCKED (documented manual-UAT) + the live-HF-lane/mock cases
+  (U-auth-1 live, U-bucket-4/5) + deeper-API cases (U-trail-4, U-bucket-1,
+  U-ctx-5) which remain the next-session fork.
