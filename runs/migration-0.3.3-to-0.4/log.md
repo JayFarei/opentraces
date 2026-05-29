@@ -746,3 +746,22 @@ outward-facing-egress tail, which is correctly out of scope for autonomous
 execution and is documented with runnable steps + a real-OTLP checkpoint
 stand-in. Items (1)/(2)/(4) met; item (3) complete to the deterministic-CI limit
 with the Phase-2 real-OTLP checkpoint now present.
+
+## 2026-05-29 — Re-verification after the Phase 2 OTel checkpoint addition
+
+Re-ran the goal's exact verification commands AFTER landing
+c-legacy-v033-otel-upgraded + the OTel journey + the journey.py vocab/template
+changes, to confirm no regression from the Phase 2 checkpoint work:
+  - `pytest tests/test_migration_0_3_3_to_0_4.py tests/otbox/test_otbox_slice.py -q`
+    -> 110 passed (16 migration core + 94 otbox slice journeys, now including the
+    new OTel checkpoint journey). GREEN.
+  - `otbox matrix --inventory --strict` -> "jtbd: drift check OK".
+No regression. The Phase 2 real-OTLP upgraded checkpoint integrates cleanly into
+the slice + matrix gates.
+
+REMAINING (unchanged, by design): U-ds-4 + U-hf-2 (outward-facing live-HF egress,
+operator authorization) and the real-claude OUTCOME gate + pty_runner step
+(non-deterministic real-agent runs). These cannot be auto-greened in default CI
+without outward-facing actions or a real-agent drive; documented as runnable
+[human] steps in MANUAL-UAT-TWO-VENV.md, with the synthetic-OTel checkpoint as
+the deterministic CI stand-in for the context-capture coverage.
