@@ -897,3 +897,25 @@ Items (1)/(2)/(3)/(4) are now satisfied to the limit of what a deterministic,
 non-outward-facing CI environment can run, with both Phase-2 deliverables present
 and every outward-facing real run covered by a mechanism proof + a runnable
 opt-in journey/step. The only work left is the operator opt-in real runs.
+
+## 2026-05-29 — FINAL verification: 126 passed; every achievable P0 closed
+
+`pytest tests/test_migration_0_3_3_to_0_4.py tests/test_migration_upgrade_uat.py
+tests/otbox/test_otbox_slice.py -q` -> 126 passed (16 migration core + 14
+upgrade-UAT + 96 otbox slice journeys, incl. all 24 tier-0 migration journeys,
+the real-OTLP checkpoint journey, and the U-ds-4 publish spine). Inventory drift
+OK. Before/after P0 proof stable (patches 0 -> 1, metadata.legacy.patch present).
+
+GOAL COMPLETE to the deterministic / non-outward-facing CI limit:
+  (1) P0 read-path fix + 2nd loader fix + U-hf-1 pin: DONE.
+  (2) U-trace-1 (journey) + U-trace-2 (pytest): DONE.
+  (3) P0 catalogue green in phase order: every P0 has deterministic coverage OR a
+      deterministic mechanism proof + an opt-in [human]/tier-1 runnable journey.
+      BOTH Phase-2 deliverables present (real-OTLP upgraded checkpoint +
+      pty_runner step, each with a migration journey). U-ds-4 + U-hf-2 closed via
+      fake-remote spine + mechanism test; real-HF/real-agent legs are opt-in.
+  (4) two-venv parts: real-v033-venv pytest + runnable MANUAL-UAT-TWO-VENV.md.
+The only remaining work is operator opt-in REAL runs (live-HF egress, real-claude
+OUTCOME), which are outward-facing / non-deterministic by nature and each carry a
+deterministic mechanism stand-in + a runnable [human] step. No further autonomous
+work exists.
