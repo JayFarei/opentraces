@@ -541,6 +541,18 @@ def trace_index_status_cmd(as_json: bool) -> None:
         "Useful for offline runs and hot CLI paths that don't need the prose."
     ),
 )
+@click.option(
+    "--waste",
+    "as_waste",
+    is_flag=True,
+    help="Emit the context-waste findings for the trace (opentraces.context_waste.v1).",
+)
+@click.option(
+    "--run-intel",
+    "as_run_intel",
+    is_flag=True,
+    help="Emit deterministic resteer/recovery/loop annotations for the trace.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_map_cmd(
     target: str,
@@ -555,6 +567,8 @@ def trace_map_cmd(
     as_bursts: bool,
     burst_gap: int | None,
     no_commit_lookup: bool,
+    as_waste: bool,
+    as_run_intel: bool,
     as_json: bool,
 ) -> None:
     """Show a deterministic Trace Map or bounded candidate slice."""
@@ -566,6 +580,19 @@ def trace_map_cmd(
         trace_map_around,
         walk_trace_map,
     )
+
+    if sum(bool(v) for v in (as_bursts, as_waste, as_run_intel)) > 1:
+        click.echo("Use only one of --bursts, --waste, or --run-intel.", err=True)
+        sys.exit(2)
+
+    # --waste / --run-intel route through the same one-shot impl helpers as
+    # `trace get`, so the two surfaces emit byte-identical payloads.
+    if as_waste:
+        _trace_get_waste_impl(target, as_json)
+        return
+    if as_run_intel:
+        _trace_get_run_intel_impl(target, as_json)
+        return
 
     trace_id = _trace_id_from_ref(target)
     trace_map = get_trace_map(trace_id)
@@ -852,6 +879,36 @@ def trace_slice_cmd(
         "(plan 080 §7 — symmetric local/remote read). Format: 'user/repo'."
     ),
 )
+@click.option(
+    "--waste",
+    "as_waste",
+    is_flag=True,
+    help="Emit the context-waste findings for the trace (opentraces.context_waste.v1).",
+)
+@click.option(
+    "--large-output-chars",
+    type=int,
+    default=None,
+    help="With --waste: override the large-output threshold (default 12000).",
+)
+@click.option(
+    "--file-read-window-min",
+    type=int,
+    default=None,
+    help="With --waste: override the repeated-file-read window in minutes (default 20).",
+)
+@click.option(
+    "--search-window-min",
+    type=int,
+    default=None,
+    help="With --waste: override the repeated-search window in minutes (default 10).",
+)
+@click.option(
+    "--run-intel",
+    "as_run_intel",
+    is_flag=True,
+    help="Emit deterministic resteer/recovery/loop annotations for the trace.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_get(
     ref: str,
@@ -861,6 +918,11 @@ def trace_get(
     as_bursts: bool,
     burst_gap: int | None,
     no_commit_lookup: bool,
+    as_waste: bool,
+    large_output_chars: int | None,
+    file_read_window_min: int | None,
+    search_window_min: int | None,
+    as_run_intel: bool,
     remote_bucket: bool,
     force_remote_bucket: bool,
     remote: str | None,
@@ -893,12 +955,30 @@ def trace_get(
             click.echo(f"Unable to read remote bucket: {exc}", err=True)
             sys.exit(3)
 
+    if sum(bool(v) for v in (as_bursts, as_waste, as_run_intel, resume)) > 1:
+        click.echo("Use only one of --bursts, --waste, --run-intel, or --resume.", err=True)
+        sys.exit(2)
+
     if resume:
         _resume_trace_impl(ref, at_step, dry_run, as_json)
         return
 
     if as_bursts:
         _trace_get_bursts_impl(ref, burst_gap, as_json, commit_lookup=not no_commit_lookup)
+        return
+
+    if as_waste:
+        _trace_get_waste_impl(
+            ref,
+            as_json,
+            large_output_chars=large_output_chars,
+            file_read_window_min=file_read_window_min,
+            search_window_min=search_window_min,
+        )
+        return
+
+    if as_run_intel:
+        _trace_get_run_intel_impl(ref, as_json)
         return
 
     # --remote: route the trace.json read through the D1 backend
@@ -976,6 +1056,57 @@ def trace_get(
         click.echo(payload["resource"].get("resource_type", ref))
 
 
+@trace_group.command("compare", cls=OpentracesCommand)
+@click.argument("trace_a")
+@click.argument("trace_b")
+@click.option("--no-quality", is_flag=True, help="Skip the deterministic quality persona delta.")
+@click.option(
+    "--burst-gap",
+    "burst_gap",
+    type=int,
+    default=None,
+    help="Burst gap applied to BOTH traces for comparable burst deltas (default 35).",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_compare_cmd(
+    trace_a: str,
+    trace_b: str,
+    no_quality: bool,
+    burst_gap: int | None,
+    as_json: bool,
+) -> None:
+    """Compare two traces: metrics, quality, burst/error signals, and security deltas."""
+    from ..core.bursts import DEFAULT_BURST_GAP
+    from ..core.trace_compare import compare_traces
+
+    def _load(ref: str):
+        from ..core.trace_index import get_trace_path
+
+        trace_path = get_trace_path(_trace_id_from_ref(ref))
+        if trace_path is None or not trace_path.exists():
+            click.echo(f"Trace not found: {ref}", err=True)
+            sys.exit(6)
+        return _read_trace_record_from_path(trace_path)
+
+    record_a = _load(trace_a)
+    record_b = _load(trace_b)
+    gap = burst_gap if burst_gap is not None else DEFAULT_BURST_GAP
+    payload = compare_traces(
+        record_a,
+        record_b,
+        include_quality=not no_quality,
+        burst_gap=gap,
+    )
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    m = payload["delta"]["metrics"]
+    click.echo(f"compare {payload['trace_a']} -> {payload['trace_b']}")
+    for field in ("total_steps", "total_input_tokens", "estimated_cost_usd"):
+        t = m[field]
+        click.echo(f"  {field}: {t['a']} -> {t['b']}  (delta {t['delta']})")
+
+
 def _trace_get_bursts_impl(
     ref: str,
     burst_gap: int | None,
@@ -1020,6 +1151,56 @@ def _trace_get_bursts_impl(
             f"#{index} steps {b.step_range[0]}..{b.step_range[1]}  "
             f"files={files}  patches={len(b.patches)}  anchors={anchors}"
         )
+
+
+def _trace_get_waste_impl(
+    ref: str,
+    as_json: bool,
+    *,
+    large_output_chars: int | None = None,
+    file_read_window_min: int | None = None,
+    search_window_min: int | None = None,
+) -> None:
+    """Emit the context-waste findings for ``ref`` (opentraces.context_waste.v1)."""
+    from ..core.context_waste import detect_context_waste
+
+    trace_id = _trace_id_from_ref(ref)
+    record = _try_load_trace_record(trace_id)
+    if record is None:
+        click.echo(f"Trace record not found: {ref}", err=True)
+        sys.exit(6)
+    kwargs: dict[str, int] = {}
+    if large_output_chars is not None:
+        kwargs["large_output_chars"] = large_output_chars
+    if file_read_window_min is not None:
+        kwargs["file_read_window_minutes"] = file_read_window_min
+    if search_window_min is not None:
+        kwargs["search_window_minutes"] = search_window_min
+    report = detect_context_waste(record, **kwargs)
+    payload = {"status": "ok", "trace_id": trace_id, "waste": report.to_dict()}
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for f in report.findings:
+        click.echo(f"{f.pattern}  step {f.step_index}  {f.reason}")
+
+
+def _trace_get_run_intel_impl(ref: str, as_json: bool) -> None:
+    """Emit deterministic resteer/recovery/loop annotations for ``ref``."""
+    from ..core.run_intel import detect_run_signals
+
+    trace_id = _trace_id_from_ref(ref)
+    record = _try_load_trace_record(trace_id)
+    if record is None:
+        click.echo(f"Trace record not found: {ref}", err=True)
+        sys.exit(6)
+    report = detect_run_signals(record)
+    payload = report.to_envelope()
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    for s in report.signals:
+        click.echo(f"{s.kind}  step {s.step_index}  {s.reason}")
 
 
 def _try_load_trace_record(trace_id: str):
