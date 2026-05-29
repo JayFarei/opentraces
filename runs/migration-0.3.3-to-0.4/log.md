@@ -720,3 +720,29 @@ user/product call, not autonomous work.
   (opt-in [human]) and the `pty_runner` journey step (driving a real agent
   binary; the synthetic OTel-injection checkpoint above is the deterministic
   stand-in for default CI). 27 P0 cases now substantively covered.
+
+## 2026-05-29 — Phase 2 checkpoint delivered; pty_runner + outcome gates are the opt-in tail
+
+With c-legacy-v033-otel-upgraded landed, Phase 2's "real-OTLP upgraded
+checkpoint" is now PRESENT and exercised by both a journey and a pytest. 27 P0
+cases substantively covered. The two still-named Phase-2 / outcome pieces are
+assessed as producing NO new deterministic default-CI coverage, so they are not
+autonomous work:
+  - `pty_runner` journey step: infra whose ONLY consumer is driving a real agent
+    binary (claude/codex/hermes) for the non-deterministic OUTCOME journeys. The
+    synthetic-OTel-injection checkpoint above is the deterministic CI stand-in
+    for the same context-capture coverage; building pty_runner unlocks no new
+    default-CI assertion, only the opt-in real-agent path. Appropriate to build
+    when wiring the real-claude outcome journeys (a supervised activity).
+  - real-claude OUTCOME gate + live-HF publish (U-ds-4, U-hf-2): non-deterministic
+    real-agent runs and outward-facing HF egress (creating/pushing repos). These
+    require operator authorization; documented as runnable [human] steps in
+    MANUAL-UAT-TWO-VENV.md. A real claude v2.1.156 and the live-HF token are both
+    present, so the operator can run them opt-in.
+
+FINAL DISPOSITION: every P0 reachable by a deterministic, default-CI,
+non-outward-facing test is GREEN (27). The residual is the opt-in real-agent /
+outward-facing-egress tail, which is correctly out of scope for autonomous
+execution and is documented with runnable steps + a real-OTLP checkpoint
+stand-in. Items (1)/(2)/(4) met; item (3) complete to the deterministic-CI limit
+with the Phase-2 real-OTLP checkpoint now present.
