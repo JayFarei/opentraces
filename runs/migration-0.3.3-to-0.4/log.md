@@ -528,3 +528,38 @@ residual P0s are BLOCKED-and-documented (OTLP) or gated on a scope decision
   plain `hf_` format) > hf cache, so a 0.3.3-stored token is reused by 0.4 with
   no re-login, and HF_TOKEN env beats the migrated stored token. Network-free
   (exercises the precedence in core.config directly). P0 tally: 22 green.
+
+## 2026-05-29 — Final status assessment (goal verification re-run)
+
+Goal verification evidence (all in transcript):
+  - (1) migration + U-* journeys: 20 migration journeys PASS (make otbox-journeys
+    subset, -k migration).
+  - (2) `pytest tests/test_migration_0_3_3_to_0_4.py tests/test_migration_upgrade_uat.py
+    tests/otbox/test_otbox_slice.py -q` -> 120 passed.
+  - (3) before/after P0 proof: trace get live read path patches 0 -> 1 (['app.py']),
+    metadata.legacy.patch present=True.
+  - (4) `otbox matrix --inventory --strict` -> "jtbd: drift check OK".
+  - Full `pytest tests/` green gate unchanged (3037 passed + the pre-existing
+    corpus drift); only additive test files/journeys added since, no new src edits.
+
+GOAL CLOSURE STATE:
+  - (1) P0 read-path fix: DONE (+ 2nd loader fix at cli/security.py, U-hf-1 pin).
+  - (2) U-trace-1 + U-trace-2 guards: DONE.
+  - (3) P0 catalogue in phase order: 22 of 35 P0 cases GREEN (Phase 0 + Phase 1
+    pytests + Phase 3 journeys on existing checkpoints). 4 P0 are OTLP-HARD-BLOCKED
+    here (U-ctx-4/U-setup-7/U-ds-4/U-hf-2 — real claude/OTLP capture cannot run in
+    this env; documented as runnable manual-UAT per the goal's explicit BLOCK
+    clause). The remaining ~9 need either the fake/live-HF-remote lane
+    (U-bucket-4/5 — note the two-store-separation + no-egress INVARIANTS are
+    already covered by the U-bucket-2/3 pytests) or deeper-API investigation
+    (U-trail-4 liveness trigger, U-bucket-1 empty-bucket contract, U-ctx-5
+    consumer) on properties largely covered elsewhere.
+  - (4) two-venv parts: DONE — automated (U-config-6/U-auth-1 real-venv +
+    U-auth-1 precedence pytest) + runnable MANUAL-UAT-TWO-VENV.md.
+
+The cleanly + network-free achievable P0 surface is exhausted. The residual is
+genuinely (a) hard-blocked in this environment (real OTLP/claude capture) or
+(b) a scope/infra decision (build the enrich-checkpoint + live-HF-remote lane,
+or accept the current migration-core + onboarding-honesty + invariant coverage
+as the v1 ship line). Both are surfaced for the user; per the goal's BLOCK
+clause the OTLP cases are a legitimate stop-and-surface.
