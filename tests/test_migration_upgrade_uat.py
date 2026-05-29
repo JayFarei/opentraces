@@ -356,3 +356,32 @@ def test_u_config_6_real_v033_home_is_read_by_real_v04(tmp_path):
     assert cfg["config_version"] == "0.2.0"  # legacy version preserved, no crash
 
     assert v04("status").returncode == 0
+
+
+# --- U-auth-1 (P0) — 0.3.3-stored hf_token survives + env-over-stored ----------
+
+def test_u_auth_1_legacy_credential_reused_and_env_wins(monkeypatch, tmp_path):
+    """U-auth-1 (P0). A token stored by 0.3.3 at the version-stable opentraces
+    credentials path (plain `hf_...` text at ~/.opentraces/credentials) is reused
+    by the 0.4 resolver without re-login, and an HF_TOKEN env var beats the
+    migrated stored token. Network-free: exercises the resolution precedence in
+    core.config directly. The credential path + format are unchanged across the
+    0.3.3 -> 0.4 jump, so an upgrader keeps HF auth.
+    """
+    from opentraces.core import config as cfg_mod
+
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
+    # Point the resolver at a throwaway credentials file (the 0.3.3-format store).
+    cred = tmp_path / "credentials"
+    cred.write_text("hf_legacy_stored_0337")
+    monkeypatch.setattr(cfg_mod, "CREDENTIALS_PATH", cred)
+    # Avoid leaking the real user's hf cache into the assertion.
+    monkeypatch.setattr(cfg_mod.Path, "home", staticmethod(lambda: tmp_path))
+
+    # The 0.3.3-stored token is reused by 0.4 with no re-login.
+    assert cfg_mod._resolve_hf_token() == "hf_legacy_stored_0337"
+
+    # HF_TOKEN env beats the migrated stored credential.
+    monkeypatch.setenv("HF_TOKEN", "hf_env_override_999")
+    assert cfg_mod._resolve_hf_token() == "hf_env_override_999"

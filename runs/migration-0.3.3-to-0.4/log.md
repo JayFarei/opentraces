@@ -519,3 +519,12 @@ residual P0s are BLOCKED-and-documented (OTLP) or gated on a scope decision
   4 OTLP-BLOCKED (documented manual-UAT) + the live-HF-lane/mock cases
   (U-auth-1 live, U-bucket-4/5) + deeper-API cases (U-trail-4, U-bucket-1,
   U-ctx-5) which remain the next-session fork.
+
+## 2026-05-29 — U-auth-1 (token reuse) network-free pytest
+
+- Change: `test_u_auth_1_legacy_credential_reused_and_env_wins` in
+  tests/test_migration_upgrade_uat.py (13/13). `_resolve_hf_token()` reads
+  HF_TOKEN > HUGGINGFACE_TOKEN > ~/.opentraces/credentials (version-stable path +
+  plain `hf_` format) > hf cache, so a 0.3.3-stored token is reused by 0.4 with
+  no re-login, and HF_TOKEN env beats the migrated stored token. Network-free
+  (exercises the precedence in core.config directly). P0 tally: 22 green.
