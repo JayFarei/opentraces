@@ -1,0 +1,114 @@
+name = "migration-u-ds-4-spine-to-published-shard"
+description = """
+Upgrade-UAT U-ds-4 (P0). The full dataset publish spine works from a migrated
+0.3.3 project all the way to a published 0.6.0 shard: a row referencing the
+legacy trace's lineage is seeded, approved, bound to a private remote, and
+published, landing dataset_infos.json + a data shard on the (fake) HF remote.
+
+Forks from `c-legacy-v033`. Publishes to the box's FAKE HF remote
+(OPENTRACES_PLAN058_FAKE_REMOTE_ROOT, set for every box), so it is deterministic
+and NON-outward-facing, no live HF egress. HONEST SCOPE: this is the rows-file
+spine (the documented pull-replacement). The workflow + headless-executor
+candidate path cannot project the legacy trace because read-in-place legacy
+traces are never bucket-adopted (S5), so the published row carries the legacy
+trace as lineage metadata rather than a workflow-projected TraceRecord. The
+real-HF + real-headless-agent leg stays the opt-in [human] step in
+MANUAL-UAT-TWO-VENV.md section 6.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "query"
+argv = ["trace", "query", "farewell"]
+
+[[steps]]
+type = "write_file"
+id = "write-rows"
+path = "migrated_rows.jsonl"
+content = """
+{"source_trace_id": "{legacy_trace_id}", "summary": "migrated 0.3.3 trace: add a farewell() helper"}
+"""
+
+[[steps]]
+type = "write_file"
+id = "write-schema"
+path = "migrated_schema.json"
+content = """
+{"type": "object", "properties": {"source_trace_id": {"type": "string"}, "summary": {"type": "string"}}, "required": ["source_trace_id", "summary"]}
+"""
+
+[[steps]]
+type = "cli"
+id = "dataset-new"
+argv = ["dataset", "new", "migrated-upgrade", "--rows-file", "migrated_rows.jsonl", "--schema", "migrated_schema.json"]
+
+[[steps]]
+type = "cli"
+id = "remote-create"
+argv = ["dataset", "remote", "create", "migrated-upgrade", "migrated/dataset", "--private"]
+
+[[steps]]
+type = "cli"
+id = "review-approve"
+argv = ["dataset", "review", "approve", "migrated-upgrade", "--all"]
+
+[[steps]]
+type = "cli"
+id = "publish"
+argv = ["dataset", "publish", "migrated-upgrade"]
+
+# The legacy trace resolves (queryable post-rebuild).
+[[assertions]]
+kind = "returncode"
+step = "query"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "dataset-new"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "remote-create"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "review-approve"
+equals = 0
+
+# Publish lands the row on the fake HF remote.
+[[assertions]]
+kind = "returncode"
+step = "publish"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "publish"
+value = "published: rows=1"
+
+[[assertions]]
+kind = "path_exists"
+path = "{fake_remote}/migrated/dataset/dataset_infos.json"
+
+[[assertions]]
+kind = "file_count_min"
+path = "{fake_remote}/migrated/dataset/data"
+min = 1

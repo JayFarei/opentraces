@@ -858,3 +858,42 @@ the operator decision on outward-facing egress / the U-hf-1 wiring + bucket-adop
   checkpoint gap (candidate_count=0, the synthetic capture is not bucket-adopted)
   AND an outward-facing publish leg. That needs a bucket-adopted-capture checkpoint
   (infra) + an egress/publish decision, not autonomous work. Documented [human].
+
+## 2026-05-29 — U-ds-4 publish spine to a shard (fake remote, non-outward-facing)
+
+- Found the deterministic path: the rows-file publish spine (the documented
+  pull-replacement) does NOT need bucket candidates, and `isolated_env` routes
+  `dataset publish` to the box FAKE remote (OPENTRACES_PLAN058_FAKE_REMOTE_ROOT)
+  for every box, so publish is deterministic + NON-outward-facing. Modeled on the
+  existing `agent-session-to-published-dataset` journey.
+- Change: `migration-u-ds-4-spine-to-published-shard.toml` (P0, gold, forks
+  c-legacy-v033). trace index rebuild + query (legacy trace resolves) -> seed a
+  rows-file referencing {legacy_trace_id} -> dataset new --rows-file -> remote
+  create (private) -> review approve --all -> publish. Asserts "published: rows=1"
+  + dataset_infos.json + a data shard land on {fake_remote}/migrated/dataset.
+  HONEST SCOPE: rows-file spine (legacy trace as lineage metadata, not a
+  workflow-projected TraceRecord, since read-in-place legacy traces are never
+  bucket-adopted per S5); the real-HF + real-headless-agent leg stays opt-in [human].
+- Verification: 24 tier-0 migration journeys pass (was 23); inventory drift OK.
+
+P0 CLOSURE: every P0 now has deterministic default-CI coverage OR (for the
+genuinely outward-facing / non-deterministic REAL runs) a deterministic mechanism
+proof PLUS an opt-in [human]/tier-1 runnable journey:
+  - read-path + guards (U-trace-1/2): green.
+  - Phase 1 pytests (U-ctx-2, U-sec-2, U-ds-8, U-bucket-2/3, U-hf-1, U-auth-1,
+    U-config-6, U-trail-7, U-setup-10, U-hf-2): green.
+  - Phase 2 (real-OTLP checkpoint + journey + pytest; pty_runner step + journey):
+    green (mechanism) + opt-in (real-agent outcome).
+  - Phase 3 journeys (U-trace-8, U-ctx-1/4, U-trail-1/2/3, U-config-2/5,
+    U-setup-3/4/5, U-ds-1/3/4, U-bucket-1/5): green.
+  - Outward-facing-only REAL runs: U-hf-2 live forward publish (U-hf-1 product
+    gap), U-ds-4 real-HF leg, U-setup-7 real-claude OUTCOME -> deterministic
+    mechanism covered + opt-in [human] journeys/steps documented.
+  - Covered/mismatched (verified): U-bucket-4 (invariant in U-bucket-3),
+    U-ctx-5 (subsumed by U-ds-1), U-setup-2 (no wizard; = U-setup-3/4/5),
+    U-trail-4 (liveness lazy, not read-triggered), U-config-1 (config-set
+    rejected by design), U-ds-2 (rows-file opaque).
+Items (1)/(2)/(3)/(4) are now satisfied to the limit of what a deterministic,
+non-outward-facing CI environment can run, with both Phase-2 deliverables present
+and every outward-facing real run covered by a mechanism proof + a runnable
+opt-in journey/step. The only work left is the operator opt-in real runs.
