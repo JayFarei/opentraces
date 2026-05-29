@@ -387,3 +387,25 @@ Append one entry per iteration. Newest at the bottom.
   then checkpoint enrichment (credential/privacy_tier/settings.json) for U-auth-*
   / U-bucket-1; then a BLOCKED entry + runnable manual-UAT steps for the real-OTLP
   / two-venv cases (item 4).
+
+## 2026-05-29 — Phase 3 P0 trail-honesty journeys on the upgraded checkpoint
+
+- Probed the existing c-legacy-v033-upgraded box directly (resolve_checkpoint +
+  driver.exec) to capture real shapes: `trail blame commit {head_before_capture}`
+  (pre-upgrade restore commit) -> rc=0, coverage.attributed 0 / total 0, traces []
+  (honest empty, the cache exists post-capture but has nothing for the old
+  commit); `trail blame commit {new_commit_sha}` -> rc=0, coverage.ratio 1.0, one
+  trace (the real 0.4 anchor). `git-backfill` on c-legacy-v033 -> rc=0,
+  commits_correlated 0, errors [] (no fabricated anchors, tolerates no notes ref).
+- Change: 2 journeys.
+  * `migration-u-trail-2-blame-commit-honest.toml` (P0, gold, forks
+    c-legacy-v033-upgraded) — blame commit is empty-but-valid for the pre-upgrade
+    commit and fully-attributed for the 0.4 capture; no fabricated trace id.
+  * `migration-u-trail-3-backfill-honest.toml` (P0, silver, forks c-legacy-v033)
+    — setup git + git-backfill tolerate the empty state with zero errors and zero
+    fabricated correlations.
+- Verification: 17 migration journeys pass (was 15); inventory drift OK.
+- Deferred with reason: U-ds-1 (dataset new --workflow + run) needs the
+  workflow path which materializes under HOME/.opentraces/workflows/<name> (a
+  dynamic box path with no template var yet) -> needs a {home}/{workflows_dir}
+  journey var or a relative-path convention; parked rather than hardcode.

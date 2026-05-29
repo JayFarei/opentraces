@@ -79,7 +79,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `dataset schedule show` | automate-dataset-runs | gold | automate-dataset-runs, dataset-sync-skill-history | Show one dataset workflow schedule. |
 | `dataset status` | build-publishable-dataset | bronze | build-publishable-dataset-shape | Show row count and publication-state breakdown for a dataset. |
 | `doctor` | verify-install | gold | codex-parity-mcp-permission, codex-parity-security-redaction, context-tree-otel-doctor, doctor-health, install-smoke-tier1, migration-s1-read-compat, migration-s8-config-forward-compat, tier1-cross-os-install, tier1-warm-reuse, verify-install | Report security pipeline and integration health. |
-| `git-backfill` | attribution-backfill | bronze | attribution-backfill | Retroactively correlate inbox traces to past commits. |
+| `git-backfill` | attribution-backfill | silver | attribution-backfill, migration-u-trail-3-backfill-honest | Retroactively correlate inbox traces to past commits. |
 | `init` | onboard-repo | silver | migration-u-setup-3-init-idempotent, onboard-repo | Initialize opentraces in the current project. |
 | `remove` | offboard-repo | bronze | cli-lifecycle | Remove opentraces from the current project. |
 | `security` | _group_ | — | **unowned** | Optional privacy/security utilities. |
@@ -93,7 +93,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `setup capture-otlp` | configure-otel-capture | silver | context-tree-otel-settings-patcher | Patch ~/.claude/settings.json so Claude Code emits OTel, and (optionally) |
 | `setup claude-code` | connect-agent-runtime | bronze | connect-agent-runtime | Install the Claude Code session-capture hooks. |
 | `setup codex-cli` | configure-codex-runtime | bronze | maintenance-command-ownership | Install Codex CLI session-capture hooks. |
-| `setup git` | connect-agent-runtime | silver | connect-agent-runtime, migration-u-setup-4-setup-git-clean-install | Install the post-commit hook that correlates commits to traces. |
+| `setup git` | connect-agent-runtime | silver | connect-agent-runtime, migration-u-setup-4-setup-git-clean-install, migration-u-trail-3-backfill-honest | Install the post-commit hook that correlates commits to traces. |
 | `setup llm-review` | configure-security-reviewer | bronze | enable-security-tools | Configure the optional LLM dataset-row reviewer for publication gates. |
 | `setup privacy-filter` | configure-security-detectors | bronze | enable-security-tools | Configure the ``openai/privacy-filter`` PII detector. |
 | `setup skill` | connect-agent-runtime | bronze | connect-agent-runtime | Install the opentraces skill globally and link it into each agent harness. |
@@ -121,7 +121,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `trace teleport open` | recreate-trace-environment | bronze | recreate-trace-environment-empty-state-contract, recreate-trace-environment | Open a portable trace workspace into a blank project directory. |
 | `trail` | _group_ | — | **unowned** | Inspect and sync VCS-anchored Trace Trails. |
 | `trail blame` | _group_ | — | **unowned** | Per-commit attribution and PR-shaped projections of trace lineage. |
-| `trail blame commit` | commit-attribution-audit | gold | bucket-self-sufficient-everything, bucket-symmetric-local-remote, trail-blame-and-graph | Attribution between traces and commits. |
+| `trail blame commit` | commit-attribution-audit | gold | bucket-self-sufficient-everything, bucket-symmetric-local-remote, migration-u-trail-2-blame-commit-honest, trail-blame-and-graph | Attribution between traces and commits. |
 | `trail blame pr` | _group_ | — | **unowned** | Render and publish PR bodies from blame-shaped trace lineage. |
 | `trail blame pr create` | pr-lineage-publish | bronze | pr-lineage-publish | Create (or update) a GitHub PR with this branch's lineage body. |
 | `trail blame pr render` | pr-lineage-publish | gold | pr-blame-on-captured-branch, pr-lineage-publish | Render the PR body for the current branch. |
