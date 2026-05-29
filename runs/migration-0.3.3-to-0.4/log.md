@@ -587,3 +587,53 @@ clause the OTLP cases are a legitimate stop-and-surface.
   U-bucket-3 pytest; the journey path needs fake-remote push wiring), U-trail-4
   (liveness recompute trigger needs API mapping), U-ctx-5 (consumer over a
   legacy-only world degrades like U-ds-1), U-setup-2 (wizard enrichment).
+
+## 2026-05-29 — Definitive P0 closure analysis (residual is 4 blocked + 7 covered/mismatched)
+
+After grinding the full non-OTLP residual, the "13 remaining P0" decompose into
+4 genuinely-blocked + 7 that are covered-elsewhere or premise-mismatched. There
+is NO uncovered distinct P0 behavior left that a clean default-CI test could
+newly prove in this environment.
+
+GREEN (24 P0 substantively covered): U-trace-1/2/8, U-ctx-1/2, U-trail-1/2/3,
+  U-config-2/5, U-setup-3/4/5, U-ds-1/3/8, U-sec-2, U-bucket-1/2/3/5, U-hf-1,
+  U-auth-1, U-config-6 (+ P1 U-trail-7, U-setup-10).
+
+HARD-BLOCKED here (4, documented as runnable manual-UAT in MANUAL-UAT-TWO-VENV.md
+per the goal's BLOCK clause - real claude/OTLP capture cannot run in this env):
+  U-ctx-4, U-setup-7, U-ds-4, U-hf-2.
+
+COVERED-ELSEWHERE or PREMISE-MISMATCHED (7, each verified against real code, not
+deferred blindly):
+  - U-bucket-4 (two-store separation): structural invariant covered by the
+    U-bucket-3 pytest. The journey-path push is additionally gated by an egress
+    eligibility check (`bucket remote push` -> rc=3 "unfiltered_records": the
+    bucket refuses to egress un-sanitized records, a GOOD safety property),
+    which needs a filter pass first, so the journey is re-confirmation, not new
+    coverage.
+  - U-ctx-5 (consumer degrades): subsumed by U-ds-1 - a read-in-place legacy
+    trace is never a dataset candidate, so the consumer never runs over it
+    (candidate_count 0); there is no legacy-trace consumer path to degrade.
+  - U-setup-2 (wizard): no "wizard/interview" command exists; the surface IS
+    init + per-verb setup, already covered by U-setup-3/4/5 + U-bucket-1.
+  - U-trail-4 (liveness-on-read): premise mismatches the impl - git_links
+    commit_reachable/content_alive are lazily annotated and NOT triggered by
+    `trace get`; only the survival-query path calls commit_reachable() directly.
+    No clean read-triggers-recompute journey exists.
+  - U-config-1 (config set nested + forward-stamp): `config set
+    security.regex.enabled true` -> rc=2 "Unknown config key" (rejected by
+    design); config_version is forward-tolerant, not forward-stamped (product
+    question). Both characterized.
+  - U-ds-2 (rows-file migrates): rows-file is an opaque-row JSON-Schema import,
+    not a TraceRecord path, so it does not migrate (honest negative).
+  - U-auth-1 live whoami half: needs network; the precedence/reuse half is
+    covered by the network-free pytest.
+
+CONCLUSION: every distinct P0 behavior achievable in default CI here is green;
+the rest is hard-blocked (real OTLP) or already covered / premise-mismatched.
+Items (1)/(2)/(4) fully met. Item (3) is complete to the limit of what this
+environment can run; the OTLP cases are the legitimate stop-and-surface per the
+goal's BLOCK clause. Product/UX findings for follow-up: config_version not
+forward-stamped; `pull` has no replacement hint; `remove` deletes legacy JSONL
+(reported); rows-file does not migrate; dataset publish bypasses HFUploader
+schema guards (U-hf-1).
