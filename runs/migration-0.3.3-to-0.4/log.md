@@ -919,3 +919,36 @@ The only remaining work is operator opt-in REAL runs (live-HF egress, real-claud
 OUTCOME), which are outward-facing / non-deterministic by nature and each carry a
 deterministic mechanism stand-in + a runnable [human] step. No further autonomous
 work exists.
+
+## 2026-05-29 — U-ds-4 LIVE leg DONE: real HuggingFace publish (operator-authorized)
+
+- Operator authorized the opt-in real-HF work. Verified the live-HF token resolves
+  (whoami -> Jayfarei) before any egress.
+- Change: `migration-u-ds-4-live-hf-publish.toml` (tier=1, requires live_hf, forks
+  c-legacy-v033) — the REAL-HF counterpart to the fake-remote spine: index rebuild
+  + query (legacy trace resolves) -> rows-file referencing {legacy_trace_id} ->
+  dataset new -> bind {live_dataset_repo} (real private HF repo) --private ->
+  review approve --all -> dataset publish to huggingface.co. Wired into
+  tests/otbox/test_live_hf_slice.py LIVE_JOURNEYS + the _DATASET_PUBLISH_JOURNEYS
+  post-verify set (repo-side: private=True, dataset_infos.json + data/*.jsonl shard).
+- Evidence (REAL egress, operator-authorized):
+  `OT_OTBOX_LIVE_HF=1 pytest test_live_hf_slice.py -k migration-u-ds-4-live-hf-publish`
+  -> PASSED. Provisioned an ephemeral private HF dataset repo under the token
+  owner's namespace, published the migrated 0.3.3 project's 0.6.0 rows, verified
+  repo-side (private + dataset_infos.json + data shard), deleted the repo on pass.
+  The original `live-hf-dataset-publish` still PASSES (refactor intact).
+- U-hf-2 LIVE forward-publish half: bounded by the pinned U-hf-1 product gap —
+  `dataset publish` uploads via HfApi and does NOT route through
+  HFUploader.migrate_outdated_shards, so a live publish into a 0.3.0-declaring
+  remote cannot trigger shard migration via the dataset-publish path. The live
+  spine publishes current-schema (0.6.0) rows; the forward-migration mechanism is
+  S6/U-hf-2-pytest, the reciprocal exit-3 refusal is S7 Layer B. No additional
+  live behavior to exercise without the HFUploader-wiring product decision.
+- Verification: tier-0 migration slice 24 passed (tier=1 live journey excluded);
+  inventory drift OK; live slice imports cleanly (LIVE_JOURNEYS=6).
+
+GOAL STATUS: the operator-authorized real-HF leg is COMPLETE (real publish to
+huggingface.co, verified). The only opt-in left is the real-claude OTLP OUTCOME
+run (U-ctx-4/U-setup-7 outcome via migration-u-setup-7-outcome-real-agent.toml,
+OT_REAL_REPL=1) — not part of the real-HF scope the operator authorized; runnable
+per MANUAL-UAT-TWO-VENV.md section 5.

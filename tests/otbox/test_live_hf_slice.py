@@ -50,7 +50,15 @@ LIVE_JOURNEYS = [
     "live-hf-bucket-multi-trace",
     "live-hf-dataset-publish",
     "live-hf-read-remote",
+    # Upgrade-UAT U-ds-4 LIVE leg: a migrated 0.3.3 project publishes to real HF.
+    "migration-u-ds-4-live-hf-publish",
 ]
+
+# Dataset-publish journeys verified repo-side against ``repos.dataset_repo``.
+_DATASET_PUBLISH_JOURNEYS = {
+    "live-hf-dataset-publish",
+    "migration-u-ds-4-live-hf-publish",
+}
 
 # Journeys whose bucket repo must end up private + carry a manifest.
 _BUCKET_JOURNEYS = {
@@ -251,7 +259,7 @@ def _post_verify(repos: live_hf.LiveRepos, journey: str) -> None:
             if f.startswith("events/v1/batches/") and f.endswith(".jsonl.gz")
         ]
         assert len(batches) >= 1, f"no event-log batches on {repos.bucket_repo}"
-    if journey == "live-hf-dataset-publish":
+    if journey in _DATASET_PUBLISH_JOURNEYS:
         info = api.repo_info(repo_id=repos.dataset_repo, repo_type="dataset")
         assert info.private is True, f"{repos.dataset_repo} must be private"
         files = set(api.list_repo_files(repo_id=repos.dataset_repo, repo_type="dataset"))
