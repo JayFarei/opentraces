@@ -790,3 +790,28 @@ Per the autonomous-operation boundary and the goal's BLOCK clause, these require
 operator authorization (HF egress, a supervised real-claude run) or a separate
 product/workflow-selection decision. They are NOT autonomous work. Holding for
 direction; the loop will not churn further on the same wall.
+
+## 2026-05-29 — pty_runner step: it EXISTS; added the migration outcome journey that uses it
+
+- CORRECTION: the `pty_runner` journey step type is ALREADY implemented in
+  tests/otbox/journey.py (the `if step_type == "pty_runner"` handler wraps
+  simulated_users.runner.run_simulated_session, gated on OT_REAL_REPL=1, SKIP-shaped
+  when absent). The earlier "pty_runner not built" framing was wrong; what was
+  missing was a MIGRATION journey consuming it.
+- Change: `migration-u-setup-7-outcome-real-agent.toml` (tier=1, requires
+  ["cli","git","tmux","real_repl"], forks c-legacy-v033). Uses type="pty_runner"
+  to drive a REAL claude session (v2.1.156 present here) that edits app.py in the
+  restored 0.3.3 repo, then asserts the 0.4 box still reads cleanly and the legacy
+  0.3.0 trace stays queryable. Tier=1 + real_repl-gated, so it is EXCLUDED from the
+  default tier-0 slice and SKIPs in default CI; the operator runs it opt-in with
+  OT_REAL_REPL=1 (pair with `setup capture-otlp start` for the context-tree leg).
+- This is the real-agent OUTCOME counterpart to the deterministic OTLP-mechanism
+  coverage (c-legacy-v033-otel-upgraded + the pytest). Phase 2's "+ the pty_runner
+  step" is now satisfied: the step type exists AND a migration journey exercises it.
+- Verification: tier-0 migration slice still 23 passed; the new journey loads
+  (tier=1, not collected by the tier-0 slice); `otbox matrix --inventory --strict`
+  drift OK.
+- Residual P0 now: U-ds-4 (workflow candidate_count=0 + outward-facing publish),
+  U-hf-2 (outward-facing HF egress + U-hf-1 product gap). Both require operator
+  authorization for outward-facing egress; documented [human] steps. Every
+  deterministic / non-outward-facing P0 and the pty_runner infra are now done.
