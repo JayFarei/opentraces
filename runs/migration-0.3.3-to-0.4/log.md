@@ -840,3 +840,21 @@ facing HF egress + the U-hf-1 product decision), none of which is autonomous wor
 Items (1)/(2)/(4) met; item (3) complete to every non-outward-facing limit incl.
 both Phase-2 pieces. The autonomous surface is definitively exhausted; holding for
 the operator decision on outward-facing egress / the U-hf-1 wiring + bucket-adoption.
+
+## 2026-05-29 — U-hf-2 explicit mechanism test (forward shard migration + schema-ahead)
+
+- Change: `test_u_hf_2_upgrade_publish_shard_migration_and_schema_ahead` in
+  tests/test_migration_upgrade_uat.py. Over the REAL frozen 0.3.0 record (mocked
+  HfApi, no live egress): HFUploader.migrate_outdated_shards("0.6.0") reconstructs
+  patches[] + preserves metadata.legacy.patch + stamps schema 0.6.0 + drops
+  outcome.patch (the "publish into a 0.3.0-declaring remote triggers migration"
+  half), and a local-0.3.0-vs-remote-0.6.0 _sync_dataset_infos raises
+  RemoteSchemaAheadError (the exit-3 fail-closed half). Gives U-hf-2 an explicit
+  catalogue-ID'd green home; the live-dataset-publish-doesn't-reach-it slice stays
+  the pinned U-hf-1 product gap and the reciprocal real-v033 refusal is S7 Layer B.
+- Verification: upgrade-uat + migration core -> 31 passed.
+- P0 tally: 28/35 substantively covered. The single genuine remaining P0 is U-ds-4
+  (full headless spine to PUBLISHED rows): blocked here by the bucket-adoption
+  checkpoint gap (candidate_count=0, the synthetic capture is not bucket-adopted)
+  AND an outward-facing publish leg. That needs a bucket-adopted-capture checkpoint
+  (infra) + an egress/publish decision, not autonomous work. Documented [human].

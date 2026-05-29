@@ -479,3 +479,62 @@ def test_u_setup_7_otel_context_capture_on_upgraded_legacy_world(tmp_path):
 
     # The legacy 0.3.0 trace is byte-unchanged by the OTLP capture (additive).
     assert shard.read_bytes() == shard_bytes_before
+
+
+# --- U-hf-2 (P0) — upgrade publish shard migration + schema-ahead (mechanism) -
+# U-hf-2 decomposes into already-covered pieces: the FORWARD shard migration
+# (0.3.0 -> 0.6.0 reconstructing patches[]) is HFUploader.migrate_outdated_shards
+# (also S6 in test_migration_0_3_3_to_0_4 / test_upload), the fail-closed
+# schema-ahead guard (exit-3) is S7, and the LIVE dataset-publish path NOT
+# reaching this is the pinned U-hf-1 product gap. This test gives U-hf-2 an
+# explicit catalogue home over the real frozen legacy record, non-outward-facing
+# (mocked HfApi, no live HF egress).
+
+def test_u_hf_2_upgrade_publish_shard_migration_and_schema_ahead(tmp_path):
+    """U-hf-2 (P0, mechanism). Publishing a legacy 0.3.0 shard forward through
+    HFUploader.migrate_outdated_shards reconstructs patches[] + preserves the raw
+    diff + stamps schema 0.6.0 (the "publish into a 0.3.0-declaring remote
+    triggers migration" half), and a local-older-than-remote schema comparison
+    fails closed with RemoteSchemaAheadError (the exit-3 fail-closed half). The
+    live `dataset publish` path does NOT route through this (see
+    test_u_hf_1_dataset_publish_does_not_reach_hfuploader); the reciprocal
+    real-v0.3.3 exit-3 refusal is S7 Layer B.
+    """
+    from unittest.mock import MagicMock, patch as _patch
+
+    from opentraces.publish.huggingface import upload as _upload
+    from opentraces.publish.huggingface.upload import HFUploader, RemoteSchemaAheadError
+
+    # --- forward shard migration over the REAL frozen 0.3.0 record ---
+    legacy = _frozen_legacy_raw()
+    assert legacy["schema_version"] == "0.3.0" and legacy["outcome"]["patch"]
+    shard = tmp_path / "shard.jsonl"
+    shard.write_text(json.dumps(legacy) + "\n")
+
+    with _patch("opentraces.publish.huggingface.upload.HfApi") as MockApi:
+        api = MockApi.return_value
+        api.list_repo_files = MagicMock(return_value=["data/traces_legacy.jsonl"])
+        api.hf_hub_download = MagicMock(return_value=str(shard))
+        api.upload_file = MagicMock()
+        uploader = HFUploader(token="fake-token", repo_id="ns/dataset")
+        uploader.api = api
+        result = uploader.migrate_outdated_shards("0.6.0")
+
+    assert result["migrated_records"] == 1
+    row = json.loads(api.upload_file.call_args.kwargs["path_or_fileobj"].decode("utf-8").splitlines()[0])
+    assert row["schema_version"] == "0.6.0"
+    assert row["patches"], "forward publish must reconstruct patches[]"
+    assert row["metadata"]["legacy"]["patch"]
+    assert "patch" not in row["outcome"]
+
+    # --- fail-closed schema-ahead: local 0.3.0 vs remote 0.6.0 -> exit-3 path ---
+    monkey_uploader = HFUploader(token="fake-token", repo_id="ns/dataset")
+    monkey_uploader._fetch_remote_schema_version = lambda: "0.6.0"
+    monkey_uploader._upload_dataset_infos = lambda: None
+    orig = _upload.LOCAL_SCHEMA_VERSION
+    try:
+        _upload.LOCAL_SCHEMA_VERSION = "0.3.0"
+        with pytest.raises(RemoteSchemaAheadError):
+            monkey_uploader._sync_dataset_infos()
+    finally:
+        _upload.LOCAL_SCHEMA_VERSION = orig
