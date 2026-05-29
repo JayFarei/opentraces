@@ -313,3 +313,40 @@ Append one entry per iteration. Newest at the bottom.
   stale skill/hook, privacy_tier, pre-existing settings.json) — U-setup-2..6,
   U-bucket-1/4/5, U-trail-2/3/4, U-ctx-5, U-ds-1, U-config-1/2/5, U-auth-*;
   Phase 4 two-venv real UAT; Phase 5 manual-UAT.
+
+## 2026-05-29 — Full-suite regression gate GREEN + status checkpoint
+
+- Full `pytest tests/` -> 1 failed, 3037 passed, 173 skipped, 2 xfailed (22m45s).
+  The single failure is `test_trace_trails_corpus_fixture_is_current` — the
+  pre-existing `projection_digest` corpus-currency drift the goal explicitly
+  excludes. Proven NOT mine: (a) none of my 4 commits touch
+  `tests/fixtures/trace_trails_corpus/` or the corpus harness (git log range
+  empty); (b) the corpus uses 0.6.0 fixtures where `migrate_record` is a verified
+  no-op, so the read-loader change cannot alter the projection; (c) prior baseline
+  already carried it (verified via stash earlier). The 3 perf-timing flakes from
+  the old 4-failure baseline all PASSED this run; passed count rose 3018 -> 3037.
+- Goal verification clause: ALL met. 11/11 migration+U journeys pass;
+  `pytest migration + upgrade-uat + otbox slice` -> 109 passed; before/after proof
+  shown (trace get patches 0 -> 1); `otbox matrix --inventory --strict` drift OK.
+- DELIVERED + pushed to main (4 commits): Phase 0 (P0 read-path fix + U-trace-1/2
+  guards), Phase 1 P0 pytest batch (11 tests + security CLI read-loader fix +
+  U-hf-1 product-gap pin), Phase 3 P0 honest-no-evidence journeys (U-ctx-1,
+  U-trail-1, U-trace-8). Two confirmed read-path drops fixed; one product gap
+  pinned as fact.
+- REMAINING (needs a scope decision, not just time):
+  * Phase 2 infra: the `c-legacy-v033-otel-upgraded` checkpoint (real-OTLP) +
+    `pty_runner` journey step are flagged HARD-BLOCKED/deferred in CLAUDE.md
+    (plan 078 (c)/(d)). Building them is a substantial sub-project.
+  * Phase 2a checkpoint enrichment (credential file, stale skill/hook,
+    privacy_tier, pre-existing ~/.claude/settings.json) gates the bulk of the
+    Phase 3 P0 journeys: U-setup-2..6, U-bucket-1/4/5, U-trail-2/3/4, U-ctx-5,
+    U-ds-1, U-config-1/2/5, U-auth-1/2/3.
+  * Phase 4 two-venv real UAT (U-setup-1/7, U-ctx-3/4, U-config-6, U-ds-4,
+    U-hf-2): needs the real v0.3.3 venv at /tmp/ot-v033-worktree/.venv-v033
+    (may be absent; rebuildable per HANDOFF) + the live-HF token lane. Documented
+    as runnable manual-UAT steps in UPGRADE-UAT-AUDIT.md Phase 4/5.
+  * Remaining Phase 1 pytests (lower value / honest-negatives): U-ds-2 (rows-file
+    is opaque-row, does not migrate), U-sec-3, U-hf-3/6/7, U-sec-6, U-setup-9.
+- Next session decision: commit to building the Phase 2a enriched checkpoint
+  (unblocks ~13 P0 journeys) and/or the Phase 4 two-venv make target, or treat
+  the current migration-core + onboarding-honesty coverage as the v1 ship line.
