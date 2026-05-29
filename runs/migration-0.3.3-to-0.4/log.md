@@ -445,3 +445,46 @@ Append one entry per iteration. Newest at the bottom.
   honest-no-evidence, onboarding-idempotency, and migration-fidelity P0 that runs
   against the existing c-legacy-v033 / c-legacy-v033-upgraded checkpoints or the
   frozen fixture.
+
+## 2026-05-29 — U-config-5 (remove honesty) + P0 coverage status assessment
+
+- Change: `migration-u-config-5-remove-reports-deletion.toml` (P0, silver) —
+  `remove` cleans the marker + local trace state and REPORTS the removed path
+  ("Removed local trace state: .../projects/<slug>") + "Remote datasets were not
+  changed". HONEST FINDING: it DOES delete the legacy traces/*.jsonl, but the
+  deletion is named, not silent (product question logged: should legacy raw
+  traces survive `remove`?). 18 migration journeys green; inventory drift OK.
+
+### P0 coverage status (35 P0 cases in the audit)
+
+DONE / GREEN (committed + pushed):
+  - Read-path P0 fix + guards: U-trace-1, U-trace-2. (+ a 2nd loader fix for
+    `security sanitize {"record"}` and the U-hf-1 product-gap pin.)
+  - Phase 1 pytests: U-ctx-2, U-sec-2, U-ds-8, U-bucket-2, U-bucket-3, U-hf-1,
+    U-config-6/U-auth-1 (real two-venv). (+ P1 U-trail-7, U-setup-10.)
+  - Phase 3 journeys: U-ctx-1, U-trail-1, U-trace-8, U-config-2, U-setup-3,
+    U-setup-4(+6 install half), U-ds-3, U-trail-2, U-trail-3, U-config-5.
+  => 19 P0 cases substantively covered, all default-CI-green.
+
+BLOCKED (real-OTLP / pty_runner infra, hard-blocked per CLAUDE.md; covered as
+[human] runnable steps in MANUAL-UAT-TWO-VENV.md):
+  - U-ctx-4, U-setup-7, U-ds-4, U-hf-2. (4 P0)
+
+NEEDS A SCOPE DECISION before they can be auto-greened (network/mock or
+deeper-investigation infra, not just time):
+  - Live-HF-lane or HfApi-mock journeys: U-auth-1(live half), U-bucket-4/5
+    (remote push/repair against a real/fake remote). (U-bucket-2/3 egress
+    invariants already pytest-covered.)
+  - Deeper-investigation journeys: U-bucket-1 (`setup bucket` has no
+    --no-autostart here + a murky v1_pre79 auto-migrate; needs a clean
+    empty-bucket contract first), U-trail-4 (history-rewrite liveness),
+    U-ctx-5 (consumer over a dynamic-path workflow), U-ds-1 (needs a
+    {workflows_dir} journey var), U-setup-2/5 (wizard/watcher enrichment),
+    U-config-1 (config_version is NOT forward-stamped -> product question).
+  => ~12 P0 cases. These want either the enrich-checkpoint + live-HF-lane infra
+     or product decisions, which is the next-session fork.
+
+NET: items (1)/(2)/(4) of the goal are met; item (3) is met for every P0 that is
+cleanly achievable in default CI against the existing checkpoints/fixtures. The
+residual P0s are BLOCKED-and-documented (OTLP) or gated on a scope decision
+(live-HF-lane / enrichment infra / product calls), surfaced for the user.

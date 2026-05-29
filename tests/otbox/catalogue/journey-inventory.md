@@ -81,7 +81,7 @@ the single source of truth. Drift fails CI under `--strict`.
 | `doctor` | verify-install | gold | codex-parity-mcp-permission, codex-parity-security-redaction, context-tree-otel-doctor, doctor-health, install-smoke-tier1, migration-s1-read-compat, migration-s8-config-forward-compat, tier1-cross-os-install, tier1-warm-reuse, verify-install | Report security pipeline and integration health. |
 | `git-backfill` | attribution-backfill | silver | attribution-backfill, migration-u-trail-3-backfill-honest | Retroactively correlate inbox traces to past commits. |
 | `init` | onboard-repo | silver | migration-u-setup-3-init-idempotent, onboard-repo | Initialize opentraces in the current project. |
-| `remove` | offboard-repo | bronze | cli-lifecycle | Remove opentraces from the current project. |
+| `remove` | offboard-repo | silver | cli-lifecycle, migration-u-config-5-remove-reports-deletion | Remove opentraces from the current project. |
 | `security` | _group_ | — | **unowned** | Optional privacy/security utilities. |
 | `security sanitize` | inspect-security-pipeline | bronze | inspect-security-pipeline | Sanitise JSON read from stdin. |
 | `security tools` | _group_ | — | **unowned** | Inspect the security/privacy tool registry. |
