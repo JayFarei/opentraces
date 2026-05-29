@@ -385,3 +385,97 @@ def test_u_auth_1_legacy_credential_reused_and_env_wins(monkeypatch, tmp_path):
     # HF_TOKEN env beats the migrated stored credential.
     monkeypatch.setenv("HF_TOKEN", "hf_env_override_999")
     assert cfg_mod._resolve_hf_token() == "hf_env_override_999"
+
+
+# --- U-ctx-4 / U-setup-7 (P0, OTLP mechanism) -------------------------------
+# The deterministic, default-CI half of the real-OTLP upgraded checkpoint:
+# synthetic OTel envelopes flushed through the real receiver/emitter land
+# context_* events (capture_method=otel) additively on an upgraded legacy world,
+# with the legacy 0.3.0 trace byte-preserved. The non-deterministic
+# real-claude-driven OUTCOME gate (claude v2.x driving a live session through the
+# receiver) stays the opt-in [human] step in MANUAL-UAT-TWO-VENV.md section 5.
+
+import time as _time
+
+
+def test_u_setup_7_otel_context_capture_on_upgraded_legacy_world(tmp_path):
+    """U-ctx-4 / U-setup-7 (P0, OTLP mechanism). On a restored 0.3.3 world,
+    synthetic OTel envelopes posted to the real receiver and flushed produce
+    context_* events on refs/opentraces/local/events/v1 with capture_method=otel,
+    while the legacy 0.3.0 trace shard is byte-unchanged. Proves the OTLP capture
+    source populates the Context Tree on an upgraded legacy repo, additively.
+    """
+    import sys as _sys
+
+    _sys.path.insert(0, str(Path(__file__).parent))
+    from migration.restore_legacy_world import restore
+
+    from opentraces.capture.otlp import start_receiver
+    from opentraces.capture.otlp.emitter import (
+        OTLPCaptureBuffer,
+        flush_session_to_project,
+    )
+    from opentraces.core.context_tree import (
+        CONTEXT_LAYER_CAPTURED,
+        CONTEXT_NODE_OBSERVED,
+        CONTEXT_TREE_RECONCILED,
+    )
+    from opentraces.core.trails.event_log import read_events
+    from tests.test_otlp_capture import (
+        HOOK_LOG_ENVELOPE,
+        MCP_LOG_ENVELOPE,
+        PLUGIN_LOG_ENVELOPE,
+        SESSION_ID,
+        SPAN_ENVELOPE,
+        _free_port,
+        _post,
+    )
+
+    world = restore(tmp_path)
+    project = world.project
+    # Byte-state of the legacy 0.3.0 shard before any OTLP capture.
+    shard = next((world.home / ".opentraces" / "projects").glob("*/traces/*.jsonl"))
+    shard_bytes_before = shard.read_bytes()
+
+    raw_bodies = tmp_path / "raw-bodies"
+    raw_bodies.mkdir()
+    buffer = OTLPCaptureBuffer()
+    port = _free_port()
+    receiver = start_receiver(port=port, bind="127.0.0.1", raw_bodies_dir=raw_bodies)
+    receiver.set_callback(buffer.handle_envelope)
+    assert receiver.wait_until_ready(timeout=5.0)
+    try:
+        _post(port, "/v1/traces", SPAN_ENVELOPE)
+        _post(port, "/v1/logs", PLUGIN_LOG_ENVELOPE)
+        _post(port, "/v1/logs", MCP_LOG_ENVELOPE)
+        _post(port, "/v1/logs", HOOK_LOG_ENVELOPE)
+
+        deadline = _time.time() + 3.0
+        while _time.time() < deadline and SESSION_ID not in buffer.session_ids():
+            _time.sleep(0.05)
+        assert SESSION_ID in buffer.session_ids()
+
+        report = flush_session_to_project(
+            project_dir=project,
+            trace_id="otel-upgrade-trace-0001",
+            session_id=SESSION_ID,
+            buffer=buffer,
+        )
+        assert report["ok"], report
+        assert report["layers_count"] == 4
+        assert report["nodes_count"] >= 1
+    finally:
+        receiver.shutdown()
+
+    # context_* events landed on the legacy repo's event ref, all capture_method=otel.
+    events = read_events(project)
+    types = {e.event_type for e in events}
+    assert CONTEXT_LAYER_CAPTURED in types
+    assert CONTEXT_NODE_OBSERVED in types
+    assert CONTEXT_TREE_RECONCILED in types
+    for e in events:
+        if e.event_type in {CONTEXT_LAYER_CAPTURED, CONTEXT_NODE_OBSERVED, CONTEXT_TREE_RECONCILED}:
+            assert e.capture_method == ["otel"]
+
+    # The legacy 0.3.0 trace is byte-unchanged by the OTLP capture (additive).
+    assert shard.read_bytes() == shard_bytes_before

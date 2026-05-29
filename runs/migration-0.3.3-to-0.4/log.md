@@ -637,3 +637,30 @@ goal's BLOCK clause. Product/UX findings for follow-up: config_version not
 forward-stamped; `pull` has no replacement hint; `remove` deletes legacy JSONL
 (reported); rows-file does not migrate; dataset publish bypasses HFUploader
 schema guards (U-hf-1).
+
+## 2026-05-29 — OTLP mechanism on an upgraded legacy world (U-ctx-4 / U-setup-7)
+
+- CORRECTION to the earlier "OTLP hard-blocked" framing: only the
+  real-claude-DRIVEN outcome gate is environment-limited. The OTLP MECHANISM
+  (receiver -> mapper -> buffer -> emitter -> context_* events) is exercised
+  deterministically with synthetic envelopes (as tests/test_otlp_capture.py
+  already does). Also note a real `claude` binary IS present here (v2.1.156),
+  so even the outcome gate is runnable as opt-in evidence, just non-deterministic
+  for default CI.
+- Change: `test_u_setup_7_otel_context_capture_on_upgraded_legacy_world` in
+  tests/test_migration_upgrade_uat.py. Restores the real 0.3.3 world, starts the
+  real OTLP receiver, posts the synthetic span+log envelopes, and
+  flush_session_to_project() into the LEGACY repo. Asserts: context_layer_captured
+  + context_node_observed + context_tree_reconciled events land on
+  refs/opentraces/local/events/v1 all with capture_method=["otel"], 4 layers,
+  >=1 node, AND the legacy 0.3.0 trace shard is byte-unchanged (OTLP capture is
+  additive over the migrated world). This is the deterministic, default-CI
+  mechanism half of U-ctx-4 (first context_* capture in a migrated repo) and
+  U-setup-7 (context event across substrates, legacy coexists).
+- Verification: upgrade-uat + migration core + otlp suites -> 37 passed.
+- P0 status update: U-ctx-4 + U-setup-7 move from "hard-blocked" to
+  "mechanism-covered (default CI) + outcome-gate opt-in [human]". 26 P0 cases now
+  substantively covered. Remaining genuine outcome-gate cases needing the live
+  network lane: U-ds-4 (full headless spine to a LIVE-HF-published dataset),
+  U-hf-2 (live publish into a 0.3.0-declaring remote) - both need the live-HF
+  token lane (opt-in tier), documented as runnable [human] steps.
