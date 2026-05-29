@@ -151,6 +151,7 @@ def _intent_for_step(record: Any, trace_map: Any, step_index: int) -> dict[str, 
                 break
     except Exception:  # pragma: no cover - bursts optional
         pass
+    headline = (headline or "").strip()
     if not headline:
         task = getattr(record, "task", None)
         headline = (getattr(task, "description", "") or "").strip()
@@ -318,7 +319,7 @@ def export_capsule(
         limitations.append("context_node_unresolved")
 
     intent = _intent_for_step(record, trace_map, resolved_step)
-    if not intent.get("headline"):
+    if not (intent.get("headline") or "").strip():
         raise CapsuleExportError(
             "capsule has no captured intent; the unit of reproduction is intent. "
             "Refusing to export a hollow capsule."

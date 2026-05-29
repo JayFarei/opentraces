@@ -171,6 +171,16 @@ def publish_capsule(
     api = HfApi(token=token)
     api.create_repo(repo_id=rid, repo_type="dataset", private=private, exist_ok=True)
 
+    # Self-reference: stamp the capsule with its own (latest-revision) URLs before
+    # upload so a capsule.json resolved standalone still knows where it lives. The
+    # sha-pinned URL we RETURN below is the immutable handle for the issue body.
+    capsule = dict(capsule)
+    capsule["share"] = {
+        "capsule_url": mint_capsule_url(rid, cid, revision="main"),
+        "human_url": human_capsule_url(rid, cid, revision="main"),
+        "published_revision": None,
+    }
+
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:

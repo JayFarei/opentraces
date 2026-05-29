@@ -179,12 +179,15 @@ def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, out, as_j
 
 @capsule_group.command("open")
 @click.argument("ref")
+@click.option("--json/--no-json", "as_json", default=True, show_default=True,
+              help="Emit the frozen capsule envelope as JSON (the agent contract).")
 @click.option("--summary", is_flag=True, help="Print the human markdown instead of JSON.")
-def open_cmd(ref, summary):
+def open_cmd(ref, as_json, summary):
     """Resolve a capsule (file / https / hf:// ref) and print its envelope.
 
     This is the agent-to-agent consume verb: one command, structured JSON out,
-    zero bespoke parsing.
+    zero bespoke parsing. The ``--json`` flag is the default and is accepted
+    explicitly so the command embedded in the issue body runs verbatim.
     """
 
     from ..core.capsule.contract import CapsuleSchemaAheadError
@@ -196,8 +199,11 @@ def open_cmd(ref, summary):
     except CapsuleSchemaAheadError as exc:
         click.echo(str(exc), err=True)
         sys.exit(2)
-    except CapsuleResolveError as exc:
-        click.echo(str(exc), err=True)
+    except (CapsuleResolveError, ValueError) as exc:
+        click.echo(f"not a resolvable opentraces capsule: {exc}", err=True)
+        sys.exit(2)
+    except Exception as exc:  # never crash with a house-foreign traceback
+        click.echo(f"failed to open capsule {ref!r}: {exc}", err=True)
         sys.exit(2)
     if summary:
         click.echo(render_capsule_markdown(capsule))

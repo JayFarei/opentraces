@@ -139,7 +139,32 @@ def test_home_paths_are_scrubbed():
     payload = {"pin": {"path": "/Users/somebody/secret/repo/file.py"}}
     redacted, manifest = redact_envelope(payload)
     blob = json.dumps(redacted)
-    assert "/Users/somebody" not in blob
+    assert "somebody" not in blob  # path-embedded username removed
+    assert manifest["home_paths_scrubbed"] >= 1
+
+
+def test_windows_path_username_is_scrubbed():
+    payload = {"pin": {"path": r"C:\Users\Alice\AppData\app\creds.json"}}
+    redacted, manifest = redact_envelope(payload)
+    assert "Alice" not in json.dumps(redacted)
+    assert manifest["home_paths_scrubbed"] >= 1
+
+
+def test_bare_local_username_token_is_scrubbed():
+    # The operator's real local username must not leak via git-author / whoami /
+    # prose, even when it is not inside a path (the adversarial-verify finding).
+    import getpass
+
+    user = getpass.getuser()
+    if len(user) < 3:
+        pytest.skip("local username too short to word-boundary scrub safely")
+    payload = {
+        "intent": {"headline": f"agent run by {user}: build failed"},
+        "ctx": {"steps": [{"content": f"$ whoami\n{user}\nERROR: permission denied for user {user}"}]},
+    }
+    redacted, manifest = redact_envelope(payload)
+    blob = json.dumps(redacted)
+    assert user not in blob
     assert manifest["home_paths_scrubbed"] >= 1
 
 
