@@ -1,0 +1,68 @@
+name = "migration-u-ctx-4-otel-capture-coexists"
+description = """
+Upgrade-UAT U-ctx-4 / U-setup-7 (P0, OTLP mechanism via journey). On an upgraded
+legacy world, an OTLP-captured Context Tree (capture_method=otel, driven through
+the real receiver/mapper/emitter chain with synthetic envelopes) is readable via
+the live `ctx tree` CLI, AND the legacy 0.3.0 trace coexists with no fabricated
+context tree.
+
+Forks from `c-legacy-v033-otel-upgraded` (the CI-safe real-OTLP upgraded
+checkpoint). The non-deterministic real-claude-driven outcome gate stays the
+opt-in [human] step in MANUAL-UAT-TWO-VENV.md section 5. Pairs with the pytest
+`test_u_setup_7_otel_context_capture_on_upgraded_legacy_world`.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033-otel-upgraded"]
+
+[preconditions]
+otel_captures_present = true
+
+[[steps]]
+type = "cli"
+id = "ctx-tree-otel"
+argv = ["--json", "ctx", "tree", "{otel_trace_id}"]
+
+[[steps]]
+type = "cli"
+id = "ctx-tree-legacy"
+argv = ["--json", "ctx", "tree", "{legacy_trace_id}"]
+
+# The OTLP-captured context tree is readable via the live CLI.
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree-otel"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-tree-otel"
+path = "trace_id"
+equals = "{otel_trace_id}"
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "ctx-tree-otel"
+path = "nodes"
+equals = 1
+
+# The legacy 0.3.0 trace coexists with no fabricated context tree.
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree-legacy"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "ctx-tree-legacy"
+path = "nodes"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "ctx-tree-legacy"
+path = "limitations"
+equals = ["context_tree_not_captured"]

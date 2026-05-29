@@ -266,6 +266,7 @@ def _checkpoint_satisfies(
         "migration_applied",
         "no_data_loss",
         "migration_idempotent",
+        "otel_captures_present",
     ):
         if preconditions.get(flag):
             if not bool(p.get(flag)):
@@ -396,6 +397,14 @@ def _captured_session(box: Box) -> dict[str, str]:
         result["step_index"] = str(
             upgraded_audit.get("edit_step_index") or result.get("step_index", "")
         )
+
+    otel_audit = box.notes.get("c_legacy_v033_otel_audit") or {}
+    if otel_audit:
+        result["legacy_trace_id"] = str(
+            otel_audit.get("legacy_trace_id") or result.get("legacy_trace_id", "")
+        )
+        result["otel_trace_id"] = str(otel_audit.get("otel_trace_id") or "")
+        result["otel_session_id"] = str(otel_audit.get("otel_session_id") or "")
 
     codex_audit = box.notes.get("c_captured_codex_session_audit") or {}
     if codex_audit:

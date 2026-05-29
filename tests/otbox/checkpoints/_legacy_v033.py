@@ -275,6 +275,136 @@ def _legacy_v033_upgraded_delta(driver: Driver, box: Box) -> None:
     }
 
 
+# --------------------------------------------------------------------------
+# c-legacy-v033-otel-upgraded — a real-OTLP context capture inside the legacy
+# repo, driven deterministically with synthetic OTel envelopes (no real claude,
+# no network). The OTLP receiver -> mapper -> emitter chain is exercised in full;
+# only the agent that would normally EMIT the OTel is synthetic. This is the
+# CI-safe Phase-2 "real-OTLP upgraded checkpoint": a legacy 0.3.3 world that now
+# also carries an OTel-captured Context Tree (capture_method=otel).
+# --------------------------------------------------------------------------
+_OTEL_UPGRADED = "c-legacy-v033-otel-upgraded"
+_OTEL_SESSION_ID = "550e8400-e29b-41d4-a716-446655440000"
+_OTEL_TRACE_ID = "otel-upgrade-trace-0001"
+
+
+def _otel_attr(key, value):
+    if isinstance(value, bool):
+        return {"key": key, "value": {"boolValue": value}}
+    if isinstance(value, int):
+        return {"key": key, "value": {"intValue": str(value)}}
+    if isinstance(value, list):
+        return {"key": key, "value": {"arrayValue": {
+            "values": [{"stringValue": str(v)} for v in value]}}}
+    return {"key": key, "value": {"stringValue": str(value)}}
+
+
+def _otel_envelopes():
+    sid = _OTEL_SESSION_ID
+    res = lambda: {"attributes": [_otel_attr("session.id", sid)]}
+    span = {"resourceSpans": [{"resource": res(), "scopeSpans": [{"spans": [{
+        "name": "claude_code.llm_request",
+        "attributes": [
+            _otel_attr("session.id", sid),
+            _otel_attr("prompt.id", "prompt-otel-0001"),
+            _otel_attr("request_id", "req_otel_0001"),
+            _otel_attr("gen_ai.system", "anthropic"),
+            _otel_attr("gen_ai.request.model", "claude-opus-4-7"),
+            _otel_attr("model", "claude-opus-4-7"),
+            _otel_attr("input_tokens", 1234),
+            _otel_attr("output_tokens", 56),
+        ]}]}]}]}
+    def _log(attrs):
+        return {"resourceLogs": [{"resource": res(), "scopeLogs": [{
+            "logRecords": [{"attributes": attrs}]}]}]}
+    plugin = _log([
+        _otel_attr("event.name", "plugin_loaded"), _otel_attr("session.id", sid),
+        _otel_attr("plugin.name", "legacy-upgrade-plugin"), _otel_attr("has_hooks", True),
+    ])
+    hook = _log([
+        _otel_attr("event.name", "hook_registered"), _otel_attr("session.id", sid),
+        _otel_attr("hook_event", "PreToolUse"), _otel_attr("hook_matcher", "Bash"),
+    ])
+    return [("/v1/traces", span), ("/v1/logs", plugin), ("/v1/logs", hook)]
+
+
+def _legacy_v033_otel_upgraded_delta(driver: Driver, box: Box) -> None:
+    """Inject a synthetic-but-real-chain OTel Context Tree capture into the
+    restored legacy repo. Local-driver only (Tier 0): writes context_* events to
+    the box's refs/opentraces/local/events/v1 via flush_session_to_project."""
+    import json as _json
+    import socket as _socket
+    import tempfile
+    import time as _t
+    import urllib.request
+    from pathlib import Path as _P
+
+    from opentraces.capture.otlp import start_receiver
+    from opentraces.capture.otlp.emitter import (
+        OTLPCaptureBuffer,
+        flush_session_to_project,
+    )
+
+    paths = driver.paths(box)
+    project = _P(paths["project"])
+    if not project.exists():
+        raise CheckpointError(
+            f"{_OTEL_UPGRADED} requires a host-local box.project (Tier 0); "
+            f"got non-local path {project}"
+        )
+
+    _s = _socket.socket()
+    _s.bind(("127.0.0.1", 0))
+    free_port = _s.getsockname()[1]
+    _s.close()
+
+    raw_bodies = _P(tempfile.mkdtemp(prefix="otbox-otel-raw-"))
+    buffer = OTLPCaptureBuffer()
+    receiver = start_receiver(port=free_port, bind="127.0.0.1", raw_bodies_dir=raw_bodies)
+    receiver.set_callback(buffer.handle_envelope)
+    if not receiver.wait_until_ready(timeout=5.0):
+        raise CheckpointError(f"{_OTEL_UPGRADED}: OTLP receiver did not start")
+    port = receiver.port
+    try:
+        for path, env in _otel_envelopes():
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}{path}",
+                data=_json.dumps(env).encode(),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                if resp.status != 200:
+                    raise CheckpointError(
+                        f"{_OTEL_UPGRADED}: receiver rejected envelope ({resp.status})"
+                    )
+        deadline = _t.time() + 3.0
+        while _t.time() < deadline and _OTEL_SESSION_ID not in buffer.session_ids():
+            _t.sleep(0.05)
+        if _OTEL_SESSION_ID not in buffer.session_ids():
+            raise CheckpointError(f"{_OTEL_UPGRADED}: session never reached buffer")
+        report = flush_session_to_project(
+            project_dir=project,
+            trace_id=_OTEL_TRACE_ID,
+            session_id=_OTEL_SESSION_ID,
+            buffer=buffer,
+        )
+        if not report.get("ok") or report.get("layers_count") != 4:
+            raise CheckpointError(f"{_OTEL_UPGRADED}: flush report not ok: {report}")
+    finally:
+        receiver.shutdown()
+
+    base_audit = box.notes.get("c_legacy_v033_audit") or {}
+    box.notes["c_legacy_v033_otel_audit"] = {
+        **base_audit,
+        "migration_applied": True,
+        "otel_trace_id": _OTEL_TRACE_ID,
+        "otel_session_id": _OTEL_SESSION_ID,
+        "otel_layers": report.get("layers_count"),
+        "otel_nodes": report.get("nodes_count"),
+    }
+
+
 register(
     Checkpoint(
         name=_BASE,
@@ -317,6 +447,31 @@ register(
             "pre_migration_schema": PRE_MIGRATION_SCHEMA,
             "pre_migration_cli": PRE_MIGRATION_CLI,
             "captured_traces": 2,
+        },
+    )
+)
+
+register(
+    Checkpoint(
+        name=_OTEL_UPGRADED,
+        composed_from=_BASE,
+        delta=_legacy_v033_otel_upgraded_delta,
+        cache=True,
+        description=(
+            "c-legacy-v033 + a deterministic OTLP Context Tree capture driven "
+            "through the real receiver/mapper/emitter chain with synthetic OTel "
+            "envelopes (no real claude, no network). The legacy 0.3.3 world now "
+            "also carries an OTel-captured context tree (capture_method=otel) on "
+            "refs/opentraces/local/events/v1, additively over the legacy trace. "
+            "The CI-safe Phase-2 real-OTLP upgraded checkpoint; the real-claude "
+            "outcome gate stays the opt-in manual-UAT step."
+        ),
+        provides={
+            "legacy_world_restored": True,
+            "migration_applied": True,
+            "otel_captures_present": True,
+            "pre_migration_schema": PRE_MIGRATION_SCHEMA,
+            "pre_migration_cli": PRE_MIGRATION_CLI,
         },
     )
 )

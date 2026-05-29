@@ -688,3 +688,35 @@ FINAL P0 DISPOSITION (35 total):
 Items (1)/(2)/(4) met. Item (3) is complete for every P0 reachable without
 outward-facing egress or a product decision. The genuine remainder is a
 user/product call, not autonomous work.
+
+## 2026-05-29 — Phase 2 real-OTLP upgraded CHECKPOINT + journey (U-ctx-4/U-setup-7)
+
+- Built the literal Phase-2 deliverable the goal names: a real-OTLP upgraded
+  checkpoint in the c-legacy-v033 family, at deterministic synthetic-envelope
+  fidelity (no real claude, no network), so it is default-CI-safe.
+- Change (checkpoint): `tests/otbox/checkpoints/_legacy_v033.py` registers
+  `c-legacy-v033-otel-upgraded` (composed on c-legacy-v033). Its delta starts the
+  REAL OTLP receiver on a free port, POSTs synthetic span+log envelopes through
+  the real receiver -> mapper -> buffer chain, then `flush_session_to_project`
+  emits context_* events (4 layers, 1 node, capture_method=otel) onto the legacy
+  repo's refs/opentraces/local/events/v1, additively over the legacy 0.3.0 trace.
+  Records `c_legacy_v033_otel_audit` (otel_trace_id, layers, nodes). Local-driver
+  (Tier 0) only, guarded.
+- Change (journey infra): journey.py gains the `otel_captures_present`
+  precondition flag and `{otel_trace_id}` / `{otel_session_id}` template vars from
+  the new audit.
+- Change (journey): `migration-u-ctx-4-otel-capture-coexists.toml` (gold, forks
+  the OTel checkpoint) — `ctx tree {otel_trace_id}` resolves the OTLP-captured
+  context tree (1 node) via the LIVE CLI, while `ctx tree {legacy_trace_id}` still
+  reports zero nodes + context_tree_not_captured (the legacy 0.3.0 trace coexists,
+  no fabricated context). This is the journey-level proof to pair with the pytest
+  `test_u_setup_7_otel_context_capture_on_upgraded_legacy_world`.
+- Verification: 23 migration journeys pass (was 22); `otbox matrix --inventory
+  --strict` drift OK.
+- P0 status: U-ctx-4 and U-setup-7 now have BOTH a checkpoint+journey AND a pytest
+  for the OTLP mechanism on an upgraded legacy world. Phase 2's "real-OTLP
+  upgraded checkpoint" is now PRESENT (synthetic-envelope fidelity). The
+  remaining un-automatable pieces are the real-claude-driven OUTCOME gate
+  (opt-in [human]) and the `pty_runner` journey step (driving a real agent
+  binary; the synthetic OTel-injection checkpoint above is the deterministic
+  stand-in for default CI). 27 P0 cases now substantively covered.
