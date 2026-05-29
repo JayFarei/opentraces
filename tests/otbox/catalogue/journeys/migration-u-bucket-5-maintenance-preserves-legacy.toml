@@ -1,0 +1,75 @@
+name = "migration-u-bucket-5-maintenance-preserves-legacy"
+description = """
+Upgrade-UAT U-bucket-5 (P0). The bucket maintenance verbs honor read-in-place:
+`bucket verify` and `bucket repair` run clean on an upgraded world and NEVER
+ingest or modify the legacy 0.3.0 traces/*.jsonl. After repair the legacy shard
+is byte-present (path unchanged) and the regenerated manifest is the v2 shape.
+
+Forks from `c-legacy-v033-upgraded` (legacy 0.3.0 trace + a real 0.4 capture).
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033-upgraded"]
+
+[preconditions]
+migration_applied = true
+
+[[steps]]
+type = "cli"
+id = "verify"
+argv = ["--json", "bucket", "verify"]
+
+[[steps]]
+type = "cli"
+id = "repair"
+argv = ["--json", "bucket", "repair"]
+
+# verify is clean (no dangling refs, no errors).
+[[assertions]]
+kind = "returncode"
+step = "verify"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify"
+path = "ok"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "verify"
+path = "verify.dangling_count"
+equals = 0
+
+# repair regenerates the v2 manifest idempotently, no errors.
+[[assertions]]
+kind = "returncode"
+step = "repair"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "repair"
+path = "repair.manifest_regenerated"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "repair"
+path = "repair.schema_version"
+equals = "opentraces.bucket.manifest.v2"
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "repair"
+path = "repair.errors"
+equals = 0
+
+# The legacy 0.3.0 shard is still on disk after repair (never adopted/deleted).
+[[assertions]]
+kind = "path_exists"
+path = "{opentraces_dir}/projects/project-27e5e3e0/traces/6961102e-e930-4c67-aeff-6335858fcdea.jsonl"

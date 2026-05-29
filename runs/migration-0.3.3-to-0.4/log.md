@@ -563,3 +563,27 @@ genuinely (a) hard-blocked in this environment (real OTLP/claude capture) or
 or accept the current migration-core + onboarding-honesty + invariant coverage
 as the v1 ship line). Both are surfaced for the user; per the goal's BLOCK
 clause the OTLP cases are a legitimate stop-and-surface.
+
+## 2026-05-29 — Bucket read-in-place P0 journeys (U-bucket-1, U-bucket-5)
+
+- Resumed grinding the non-OTLP residual per the stop hook (most were achievable,
+  not truly blocked). Probed bucket maintenance on c-legacy-v033-upgraded: the
+  legacy shard is byte-unchanged (4520 -> 4520) across `bucket repair`; `bucket
+  verify` ok=true dangling_count=0; `setup bucket --local-only` rc=0 with
+  remote.enabled=false; bucket.traces=[] (no legacy adoption).
+- Change: 2 journeys.
+  * `migration-u-bucket-5-maintenance-preserves-legacy.toml` (P0, gold, forks
+    c-legacy-v033-upgraded) — bucket verify + repair run clean (manifest v2,
+    dangling 0, errors []) and the legacy 0.3.0 shard is still on disk after
+    repair (path_exists), proving maintenance never auto-adopts/deletes legacy
+    JSONL.
+  * `migration-u-bucket-1-setup-no-adoption.toml` (P0, silver, forks
+    c-legacy-v033) — `setup bucket --local-only` opts in with the remote disabled
+    (no forced egress), bucket.traces=[] (zero legacy adoption), legacy shard
+    preserved.
+- Verification: 22 migration journeys pass (was 20); inventory drift OK.
+- P0 tally now: 24 cases substantively green. Residual: 4 OTLP-HARD-BLOCKED
+  (documented manual-UAT); U-bucket-4 (two-store push, invariant already in the
+  U-bucket-3 pytest; the journey path needs fake-remote push wiring), U-trail-4
+  (liveness recompute trigger needs API mapping), U-ctx-5 (consumer over a
+  legacy-only world degrades like U-ds-1), U-setup-2 (wizard enrichment).
