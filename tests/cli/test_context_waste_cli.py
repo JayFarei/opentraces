@@ -89,6 +89,31 @@ def test_waste_determinism(tmp_path):
     assert a.output == b.output
 
 
+def test_waste_threshold_overrides_work_on_trace_map(tmp_path):
+    project = tmp_path / "demo"
+    _enroll_project(project, "abcdef1234567890abcdef1234567890")
+    _write_project_trace(project, _waste_trace())
+    runner = CliRunner()
+    _rebuild(runner, project)
+
+    res = runner.invoke(
+        main,
+        [
+            "trace",
+            "map",
+            "trace-waste-cli",
+            "--waste",
+            "--large-output-chars",
+            "1",
+            "--json",
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    payload = json.loads(res.output)
+    assert payload["waste"]["thresholds"]["large_output_chars"] == 1
+    assert payload["waste"]["summary"]["large_output_count"] == 3
+
+
 def test_waste_run_intel_mutually_exclusive(tmp_path):
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")

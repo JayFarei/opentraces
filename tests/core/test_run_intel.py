@@ -129,6 +129,32 @@ def test_loop_excluded_outside_time_window():
     assert report.counts()["loop"] == 0
 
 
+def test_loop_uses_true_sliding_window_not_adjacent_chain():
+    # Adjacent repeats are each within 10m, but no single 10m window has 3 commands.
+    record = _record([
+        _bash(1, "pytest -x", ts="2026-05-28T10:00:00Z"),
+        _bash(2, "pytest -x", ts="2026-05-28T10:09:00Z"),
+        _bash(3, "pytest -x", ts="2026-05-28T10:18:00Z"),
+    ])
+    report = detect_run_signals(record)
+    assert report.counts()["loop"] == 0
+
+
+def test_loop_matched_text_redacts_original_command_before_fingerprint_lowercase():
+    key = "AKIAABCDEFGHIJKLMNOP"
+    command = f"aws configure set aws_access_key_id {key}"
+    record = _record([
+        _bash(1, command, ts="2026-05-28T10:00:00Z"),
+        _bash(2, command, ts="2026-05-28T10:01:00Z"),
+        _bash(3, command, ts="2026-05-28T10:02:00Z"),
+    ])
+    report = detect_run_signals(record)
+    loop = [s for s in report.signals if s.kind == "loop"][0]
+    assert key not in loop.matched_text
+    assert key.lower() not in loop.matched_text
+    assert "[REDACTED]" in loop.matched_text
+
+
 def test_failure_severity_and_confidence():
     record = _record([_bash(1, "x", obs="Traceback (most recent call last)")])
     report = detect_run_signals(record)
@@ -144,8 +170,10 @@ def test_envelope_shape_and_counts():
         _bash(3, "pytest", obs="exit code 0"),
     ])
     env = detect_run_signals(record).to_envelope()
-    assert set(env) == {"status", "trace_id", "signals", "counts"}
+    assert set(env) == {"schema_version", "status", "trace_id", "fidelity", "signals", "counts"}
+    assert env["schema_version"] == "opentraces.run_intel.v1"
     assert env["status"] == "ok"
+    assert env["fidelity"] == "record"
     assert set(env["counts"]) == {"resteer", "recovery", "loop", "failure"}
     assert sum(env["counts"].values()) == len(env["signals"])
 

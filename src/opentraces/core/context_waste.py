@@ -28,7 +28,7 @@ from typing import Any
 from opentraces_schema import TraceRecord
 
 from ..enrichment.metrics import _parse_timestamp
-from .trace_map import _files_for_tool, _tool_action_type
+from .trace_map import _files_for_tool, _preview, _tool_action_type
 
 # Thresholds — module constants so the contract is observable/tunable, exactly
 # mirroring the DEFAULT_BURST_GAP precedent in core/bursts.py.
@@ -176,8 +176,12 @@ def detect_context_waste(
                         node_id=node_id,
                         evidence={
                             "output_chars": output_chars,
-                            "source_call_id": obs.source_call_id,
-                            "tool_name": tool_name_by_call.get(obs.source_call_id),
+                            "source_call_id": _preview(obs.source_call_id),
+                            "tool_name": (
+                                _preview(tool_name_by_call[obs.source_call_id])
+                                if obs.source_call_id in tool_name_by_call
+                                else None
+                            ),
                         },
                     )
                 )
@@ -204,7 +208,7 @@ def detect_context_waste(
                                 step_index=step.step_index,
                                 node_id=node_id,
                                 evidence={
-                                    "file_path": path,
+                                    "file_path": _preview(path),
                                     "read_count": len(in_window) + 1,
                                     "window_minutes": file_read_window_minutes,
                                 },
@@ -231,7 +235,7 @@ def detect_context_waste(
                             step_index=step.step_index,
                             node_id=node_id,
                             evidence={
-                                "command_family": match.group(1),
+                                "command_family": _preview(match.group(1)),
                                 "search_count": len(in_window) + 1,
                                 "window_minutes": search_window_minutes,
                             },

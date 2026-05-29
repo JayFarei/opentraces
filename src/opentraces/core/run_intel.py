@@ -104,6 +104,7 @@ LOOP_MIN_REPEATS = 3
 LOOP_WINDOW_STEPS = 120
 LOOP_WINDOW_SECONDS = 600
 FINGERPRINT_MAX_CHARS = 240
+RUN_INTEL_SCHEMA_VERSION = "opentraces.run_intel.v1"
 
 
 def _any(patterns: list[re.Pattern[str]], text: str) -> bool:
@@ -139,6 +140,7 @@ class RunSignal:
 @dataclass
 class RunIntelReport:
     trace_id: str
+    fidelity: str
     signals: list[RunSignal] = field(default_factory=list)
 
     def counts(self) -> dict[str, int]:
@@ -149,8 +151,10 @@ class RunIntelReport:
 
     def to_envelope(self) -> dict[str, Any]:
         return {
+            "schema_version": RUN_INTEL_SCHEMA_VERSION,
             "status": "ok",
             "trace_id": self.trace_id,
+            "fidelity": self.fidelity,
             "signals": [s.to_dict() for s in self.signals],
             "counts": self.counts(),
         }
@@ -167,14 +171,23 @@ def _parse_epoch(ts: str | None) -> float | None:
     return parsed.timestamp() if parsed else None
 
 
+def _detect_fidelity(record: TraceRecord) -> str:
+    summary = getattr(record, "context_tree_summary", None)
+    if isinstance(summary, dict):
+        methods = summary.get("capture_methods") or []
+        if isinstance(methods, (list, tuple)) and "otel" in methods:
+            return "otel"
+    return "record"
+
+
 def detect_run_signals(record: TraceRecord) -> RunIntelReport:
     """Deterministically detect resteer/recovery/loop/failure signals."""
 
     trace_id = record.trace_id
     signals: list[RunSignal] = []
     last_failure_node: str | None = None
-    # fingerprint -> ordered list of (step_index, epoch|None, tool_call_id)
-    command_occurrences: dict[str, list[tuple[int, float | None, str]]] = {}
+    # fingerprint -> ordered list of (step_index, epoch|None, tool_call_id, command)
+    command_occurrences: dict[str, list[tuple[int, float | None, str, str]]] = {}
 
     for step in sorted(record.steps, key=lambda s: s.step_index):
         epoch = _parse_epoch(step.timestamp)
@@ -265,65 +278,75 @@ def detect_run_signals(record: TraceRecord) -> RunIntelReport:
                 continue
             fp = _fingerprint(command)
             command_occurrences.setdefault(fp, []).append(
-                (step.step_index, epoch, call.tool_call_id)
+                (step.step_index, epoch, call.tool_call_id, command)
             )
 
     signals.extend(_loop_signals(trace_id, command_occurrences))
 
     # Deterministic, reader-friendly ordering: by step then kind.
     signals.sort(key=lambda s: (s.step_index if s.step_index is not None else -1, s.kind))
-    return RunIntelReport(trace_id=trace_id, signals=signals)
+    return RunIntelReport(trace_id=trace_id, fidelity=_detect_fidelity(record), signals=signals)
 
 
-def _adjacent(prev, cur) -> bool:
-    """Two consecutive occurrences belong to the same loop run."""
-    prev_step, prev_epoch, _ = prev
-    cur_step, cur_epoch, _ = cur
-    if prev_epoch is not None and cur_epoch is not None:
-        return cur_epoch - prev_epoch <= LOOP_WINDOW_SECONDS
-    return cur_step - prev_step <= LOOP_WINDOW_STEPS
+def _within_loop_window(first, cur) -> bool:
+    """Whether ``cur`` is inside the detection window anchored at ``first``."""
+    first_step, first_epoch, _, _ = first
+    cur_step, cur_epoch, _, _ = cur
+    if first_epoch is not None and cur_epoch is not None:
+        return cur_epoch - first_epoch <= LOOP_WINDOW_SECONDS
+    return cur_step - first_step <= LOOP_WINDOW_STEPS
+
+
+def _build_loop_signal(trace_id: str, run) -> RunSignal:
+    anchor = run[LOOP_MIN_REPEATS - 1]  # the occurrence that became a loop
+    anchor_step, _, anchor_call, anchor_command = anchor
+    return RunSignal(
+        kind="loop",
+        severity="medium",
+        confidence=0.75,
+        reason=f"Same command repeated {len(run)} times in a loop window.",
+        step_index=anchor_step,
+        node_id=f"tu:{trace_id}:tool:{anchor_call}",
+        matched_text=_preview(anchor_command),
+        evidence_ref=f"signal:{trace_id}:tool:{anchor_call}:loop",
+        evidence={
+            "repeat_count": len(run),
+            "first_step": run[0][0],
+            "last_step": run[-1][0],
+        },
+    )
 
 
 def _loop_signals(trace_id: str, occurrences_by_fp) -> list[RunSignal]:
-    """One loop signal per run of LOOP_MIN_REPEATS+ identical commands.
+    """One loop signal per run that crosses LOOP_MIN_REPEATS inside one window.
 
     Plan 086 eval finding: the old per-occurrence emission produced N-2 loop
     signals for N repeats. We instead segment each fingerprint's occurrences
-    into windowed runs and emit a single signal per run, anchored at the
-    occurrence that crossed the threshold, carrying the full repeat_count.
+    into true sliding-window runs and emit a single signal per run, anchored at
+    the occurrence that crossed the threshold, carrying the full repeat_count.
     """
     out: list[RunSignal] = []
-    for fp, occ in occurrences_by_fp.items():
+    for _fp, occ in occurrences_by_fp.items():
         occ = sorted(occ, key=lambda o: o[0])
-        run = [occ[0]]
-        runs = []
-        for cur in occ[1:]:
-            if _adjacent(run[-1], cur):
-                run.append(cur)
-            else:
-                runs.append(run)
-                run = [cur]
-        runs.append(run)
-        for r in runs:
-            if len(r) < LOOP_MIN_REPEATS:
-                continue
-            anchor = r[LOOP_MIN_REPEATS - 1]  # the occurrence that became a loop
-            anchor_step, _, anchor_call = anchor
-            out.append(
-                RunSignal(
-                    kind="loop",
-                    severity="medium",
-                    confidence=0.75,
-                    reason=f"Same command repeated {len(r)} times within window.",
-                    step_index=anchor_step,
-                    node_id=f"tu:{trace_id}:tool:{anchor_call}",
-                    matched_text=_preview(fp),
-                    evidence_ref=f"signal:{trace_id}:tool:{anchor_call}:loop",
-                    evidence={
-                        "repeat_count": len(r),
-                        "first_step": r[0][0],
-                        "last_step": r[-1][0],
-                    },
-                )
-            )
+        if not occ:
+            continue
+
+        recent = []
+        active_run = None
+        for cur in occ:
+            recent = [item for item in recent if _within_loop_window(item, cur)]
+            recent.append(cur)
+
+            if active_run is not None:
+                if len(recent) > 1:
+                    active_run.append(cur)
+                    continue
+                out.append(_build_loop_signal(trace_id, active_run))
+                active_run = None
+
+            if len(recent) >= LOOP_MIN_REPEATS:
+                active_run = list(recent)
+
+        if active_run is not None:
+            out.append(_build_loop_signal(trace_id, active_run))
     return out

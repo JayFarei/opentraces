@@ -95,6 +95,19 @@ def test_repeated_file_read_fires_on_third():
     assert reads[0].node_id == "tu:trace-waste:tool:tc3"
 
 
+def test_repeated_file_read_redacts_secret_shaped_path():
+    secret_path = "secrets/hf_ABCDEFGHIJKLMNOPQRSTUVWX.txt"
+    record = _record([
+        _read_step(1, secret_path, 0),
+        _read_step(2, secret_path, 5),
+        _read_step(3, secret_path, 10),
+    ])
+    report = detect_context_waste(record)
+    read = [f for f in report.findings if f.pattern == "repeated_file_read"][0]
+    assert "hf_ABCDEFGHIJKLMNOPQRSTUVWX" not in read.evidence["file_path"]
+    assert "[REDACTED]" in read.evidence["file_path"]
+
+
 def test_repeated_file_read_two_reads_silent():
     same = "src/parser.py"
     record = _record([_read_step(1, same, 0), _read_step(2, same, 5)])

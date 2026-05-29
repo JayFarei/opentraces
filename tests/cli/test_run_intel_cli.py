@@ -69,7 +69,9 @@ def test_run_intel_get_and_map_parity(tmp_path):
     assert via_get.output == via_map.output
 
     payload = json.loads(via_get.output)
-    assert set(payload) == {"status", "trace_id", "signals", "counts"}
+    assert set(payload) == {"schema_version", "status", "trace_id", "fidelity", "signals", "counts"}
+    assert payload["schema_version"] == "opentraces.run_intel.v1"
+    assert payload["fidelity"] == "record"
     assert payload["counts"]["failure"] == 1
     assert payload["counts"]["recovery"] == 1
     assert payload["counts"]["resteer"] == 1

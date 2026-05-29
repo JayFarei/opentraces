@@ -52,6 +52,15 @@ def _metrics_for(record: TraceRecord):
     return metrics
 
 
+def _detect_fidelity(record: TraceRecord) -> str:
+    summary = getattr(record, "context_tree_summary", None)
+    if isinstance(summary, dict):
+        methods = summary.get("capture_methods") or []
+        if isinstance(methods, (list, tuple)) and "otel" in methods:
+            return "otel"
+    return "record"
+
+
 def _quality_for(record: TraceRecord):
     from ..quality.engine import assess_trace
 
@@ -151,6 +160,10 @@ def compare_traces(
         "status": "ok",
         "trace_a": record_a.trace_id,
         "trace_b": record_b.trace_id,
+        "fidelity": {
+            "a": _detect_fidelity(record_a),
+            "b": _detect_fidelity(record_b),
+        },
         "burst_gap": burst_gap,
         "quality_included": include_quality,
         "delta": {

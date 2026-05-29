@@ -57,6 +57,7 @@ def test_trace_compare_json(tmp_path):
     payload = json.loads(res.output)
     assert payload["status"] == "ok"
     assert payload["schema_version"] == "opentraces.trace_compare.v1"
+    assert payload["fidelity"] == {"a": "record", "b": "record"}
     delta = payload["delta"]
     assert set(delta) == {"metrics", "quality", "bursts", "signals", "security"}
     assert delta["metrics"]["total_input_tokens"] == {"a": 1000, "b": 400, "delta": -600}

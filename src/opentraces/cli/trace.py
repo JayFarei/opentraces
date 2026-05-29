@@ -548,6 +548,24 @@ def trace_index_status_cmd(as_json: bool) -> None:
     help="Emit the context-waste findings for the trace (opentraces.context_waste.v1).",
 )
 @click.option(
+    "--large-output-chars",
+    type=int,
+    default=None,
+    help="With --waste: override the large-output threshold (default 12000).",
+)
+@click.option(
+    "--file-read-window-min",
+    type=int,
+    default=None,
+    help="With --waste: override the repeated-file-read window in minutes (default 20).",
+)
+@click.option(
+    "--search-window-min",
+    type=int,
+    default=None,
+    help="With --waste: override the repeated-search window in minutes (default 10).",
+)
+@click.option(
     "--run-intel",
     "as_run_intel",
     is_flag=True,
@@ -568,6 +586,9 @@ def trace_map_cmd(
     burst_gap: int | None,
     no_commit_lookup: bool,
     as_waste: bool,
+    large_output_chars: int | None,
+    file_read_window_min: int | None,
+    search_window_min: int | None,
     as_run_intel: bool,
     as_json: bool,
 ) -> None:
@@ -588,7 +609,13 @@ def trace_map_cmd(
     # --waste / --run-intel route through the same one-shot impl helpers as
     # `trace get`, so the two surfaces emit byte-identical payloads.
     if as_waste:
-        _trace_get_waste_impl(target, as_json)
+        _trace_get_waste_impl(
+            target,
+            as_json,
+            large_output_chars=large_output_chars,
+            file_read_window_min=file_read_window_min,
+            search_window_min=search_window_min,
+        )
         return
     if as_run_intel:
         _trace_get_run_intel_impl(target, as_json)

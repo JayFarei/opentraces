@@ -90,4 +90,13 @@ def test_envelope_shape_and_determinism():
     assert out1 == out2
     assert out1["schema_version"] == "opentraces.trace_compare.v1"
     assert out1["status"] == "ok"
+    assert out1["fidelity"] == {"a": "record", "b": "record"}
     assert set(out1["delta"]) == {"metrics", "quality", "bursts", "signals", "security"}
+
+
+def test_compare_reports_per_side_otel_fidelity():
+    a = _record("ta", metrics=Metrics(total_steps=2))
+    b = _record("tb", metrics=Metrics(total_steps=3))
+    b.context_tree_summary = {"capture_methods": ["otel"]}
+    out = compare_traces(a, b, include_quality=False)
+    assert out["fidelity"] == {"a": "record", "b": "otel"}

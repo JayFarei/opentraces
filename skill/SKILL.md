@@ -140,14 +140,15 @@ opentraces trace compare <trace_a> <trace_b> --json  # add --no-quality to skip 
   (>= 12000 chars), `repeated_file_read` (same file 3+ times in 20 min), and
   `repeated_search` (rg|grep|find|ag|ack 5+ times in 10 min) findings, with a
   `summary` count block.
-- **Run signals** — `--run-intel` emits `{status, trace_id, signals, counts}` with
+- **Run signals** — `--run-intel` emits `opentraces.run_intel.v1` with
   deterministic `resteer` / `recovery` / `loop` / `failure` annotations. Recovery
   only fires after an uncleared prior failure; failure prefers structured tool
   errors over substring matches; a repeated command is ONE `loop` signal carrying
   `evidence.repeat_count`; a one-word approval never reads as a resteer.
 - **Run compare** — `trace compare <a> <b>` emits `opentraces.trace_compare.v1`:
-  `{a, b, delta}` triples over Metrics, deterministic quality persona scores, and
-  burst/error/security signals (both traces pinned to the same burst gap).
+  per-side fidelity plus `{a, b, delta}` triples over Metrics, deterministic
+  quality persona scores, and burst/error/security signals (both traces pinned
+  to the same burst gap).
 
 `--waste` and `--run-intel` are mutually exclusive with `--bursts` (and with
 each other); the `trace get` and `trace map` surfaces emit byte-identical
