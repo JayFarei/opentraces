@@ -34,6 +34,15 @@ def _trace_index_status() -> dict[str, Any]:
     index_path = default_index_path()
     rebuild_advice = "opentraces trace index rebuild"
     legacy_artifacts = _legacy_trace_index_artifacts()
+    # Plan 087 U5: report search-projection freshness cheaply (no heavy repair).
+    # ``search_projection_freshness`` is a read-only digest comparison; the
+    # remedy when stale is ``trace index refresh`` (cheap sync).
+    try:
+        from .search_projection import search_projection_freshness
+
+        search_freshness = search_projection_freshness()
+    except Exception as exc:  # noqa: BLE001 — doctor must never crash.
+        search_freshness = {"state": "error", "error": str(exc)}
     source_files = sorted(paths.PROJECTS_DIR.glob("*/traces/*.jsonl")) if paths.PROJECTS_DIR.exists() else []
     source_latest_mtime = max((p.stat().st_mtime for p in source_files), default=None)
     base = {
@@ -44,6 +53,7 @@ def _trace_index_status() -> dict[str, Any]:
         "rebuild_advice": rebuild_advice,
         "legacy_artifacts": legacy_artifacts,
         "legacy_warning": bool(legacy_artifacts),
+        "search_projection_freshness": search_freshness,
     }
     if not index_path.exists():
         return {

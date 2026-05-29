@@ -39,6 +39,11 @@ argv = ["trace", "index", "rebuild"]
 
 [[steps]]
 type = "cli"
+id = "index-refresh"
+argv = ["trace", "index", "refresh"]
+
+[[steps]]
+type = "cli"
 id = "status"
 argv = ["status"]
 
@@ -73,6 +78,11 @@ argv = ["ctx", "list", "--json"]
 [[assertions]]
 kind = "returncode"
 step = "index-rebuild"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "index-refresh"
 equals = 0
 
 [[assertions]]

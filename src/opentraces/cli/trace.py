@@ -233,7 +233,11 @@ def trace_query(
     as_json: bool,
 ) -> None:
     """Search local retained traces and return bounded candidate packets."""
-    from ..core.trace_index import query_index_page, rebuild_index
+    from ..core.trace_index import (
+        cheap_sync_query_state,
+        query_index_page,
+        rebuild_index,
+    )
 
     if lex_terms:
         if lex:
@@ -332,6 +336,13 @@ def trace_query(
             from ..core.search_projection import build_search_projection
 
             build_search_projection(index_path=summary.index_path)
+    else:
+        # Plan 087 U4 — cheap-sync-then-serve. Closes the Phase-1 stale-query
+        # window for the local bucket: a digest probe short-circuits in steady
+        # state, and a changed bucket triggers a BOUNDED incremental refresh
+        # (never the ~105s full rebuild) so the query below reflects freshly
+        # captured/altered traces. Best-effort by contract; never raises.
+        cheap_sync_query_state(query_source=query_source)
 
     try:
         query_page = query_index_page
@@ -446,6 +457,52 @@ def trace_index_rebuild_cmd(as_json: bool) -> None:
     click.echo(f"Search projection: {search_summary.build_id}")
     click.echo(f"  docs:      {search_summary.doc_count}")
     click.echo(f"  path:      {search_summary.build_path}")
+
+
+@trace_index_group.command("refresh", cls=OpentracesCommand)
+@click.option(
+    "--source",
+    "query_source",
+    type=click.Choice(["index", "projection", "both"]),
+    default="both",
+    show_default=True,
+    help="Which warm cache to keep up to date.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_index_refresh_cmd(query_source: str, as_json: bool) -> None:
+    """Keep the warm Trace Index + search projection up to date (cheap sync).
+
+    The explicit companion to the best-effort keep-warm hooks: runs the
+    digest-gated incremental sync so freshly captured traces become queryable
+    WITHOUT a full ``trace index rebuild``. Steady state (no bucket change since
+    the last sync) is a sub-2s no-op.
+    """
+    from ..core.trace_index import keep_index_warm
+
+    sources = ("index", "projection") if query_source == "both" else (query_source,)
+    result = keep_index_warm(query_sources=sources)
+    payload = {
+        "status": "ok" if result.ok else "error",
+        "synced": result.synced,
+        "changed_trace_ids": result.changed_trace_ids,
+        "deleted_trace_ids": result.deleted_trace_ids,
+        "sources": list(sources),
+    }
+    if result.error:
+        payload["error"] = result.error
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if not result.ok:
+        click.echo(f"Keep-warm failed (best-effort): {result.error}")
+        return
+    if result.synced:
+        click.echo("Search caches refreshed (incremental sync):")
+        click.echo(f"  changed: {len(result.changed_trace_ids)}")
+        click.echo(f"  deleted: {len(result.deleted_trace_ids)}")
+    else:
+        click.echo("Search caches already fresh (no change since last sync).")
 
 
 @trace_index_group.command("status", cls=OpentracesCommand)

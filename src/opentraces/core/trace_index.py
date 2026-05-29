@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 import sqlite3
 import subprocess
@@ -30,6 +32,7 @@ from opentraces_schema import (
 
 from . import paths
 from .bucket_store import (
+    bucket_manifest,
     iter_trace_record_objects,
     read_trace_record_object,
     sync_trace_records_from_local_stores,
@@ -40,11 +43,13 @@ from .trace_map import build_trace_map
 from .trace_map import slice_trace_map_for_candidate
 from .trails.query import TrailQueryProjection, build_trail_query_projection
 
+logger = logging.getLogger(__name__)
+
 
 # Cluster A — A2/A5 schema bump: ``trail_sources.limitations_json`` carries
 # structured limitations and ``indexed_at`` records when the trail projection
 # was last synced into the query index.
-INDEX_VERSION = "plan056-m1-v7"
+INDEX_VERSION = "plan056-m1-v8"
 INDEX_BUSY_TIMEOUT_MS = 5000
 INDEX_WRITE_RETRY_LIMIT = 5
 INDEX_WRITE_RETRY_BASE_SECONDS = 0.05
@@ -87,6 +92,39 @@ def _connect(db_path: Path, *, wal: bool = True) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path, timeout=INDEX_BUSY_TIMEOUT_MS / 1000.0)
     _configure_connection(conn, wal=wal)
     return conn
+
+
+def _unlink_wal_sidecars(db_path: Path) -> None:
+    """Remove any ``-wal``/``-shm`` sidecars belonging to ``db_path``.
+
+    A WAL sidecar is only valid for the exact DB file it was created against.
+    After a file-level swap of the DB (an atomic ``replace`` during rebuild, or
+    an otbox snapshot restore that copies the ``.db`` separately from its
+    sidecars) the leftover ``-wal``/``-shm`` belong to the *old* file; replaying
+    them against the new DB on the next ``PRAGMA journal_mode=WAL`` raises
+    ``sqlite3.DatabaseError: database disk image is malformed``. Discarding them
+    is safe because the index is a fully rebuildable cache.
+    """
+    for suffix in ("-wal", "-shm"):
+        sidecar = db_path.with_name(db_path.name + suffix)
+        try:
+            sidecar.unlink()
+        except OSError:
+            pass
+
+
+def _heal_corrupt_index(db_path: Path) -> None:
+    """Discard a malformed index DB (a rebuildable cache) and rebuild it once.
+
+    The local trace index is derived entirely from the retained trace stores,
+    so a corrupt or unreadable DB is never authoritative. The most common cause
+    is stale ``-wal``/``-shm`` sidecars (see ``_unlink_wal_sidecars``). Plan 087
+    U1 removed the query-time refresh that used to mask this by rebuilding on
+    every read, so the read path now self-heals on demand instead of surfacing
+    a sqlite error.
+    """
+    _unlink_wal_sidecars(db_path)
+    rebuild_index(db_path)
 
 
 def _is_lock_error(exc: sqlite3.OperationalError) -> bool:
@@ -245,6 +283,10 @@ def _rebuild_index_locked(db_path: Path) -> RebuildSummary:
             summary = _index_totals(conn, db_path)
             conn.commit()
         tmp_path.replace(db_path)
+        # The replaced DB is a brand-new file; any pre-existing ``-wal``/``-shm``
+        # sidecars belong to the old DB and would be replayed as a mismatched
+        # WAL ("database disk image is malformed") on the WAL open below.
+        _unlink_wal_sidecars(db_path)
         # Cluster A — A3: switch the freshly-renamed live DB into WAL so
         # subsequent concurrent readers and writers can coexist. We could
         # not do this on the tmp file because WAL leaves ``-wal``/``-shm``
@@ -258,17 +300,652 @@ def _rebuild_index_locked(db_path: Path) -> RebuildSummary:
         raise
 
 
-def refresh_index(index_path: Path | None = None) -> RebuildSummary:
-    """Refresh changed trace-store sources without replacing the cache file."""
+def refresh_index(
+    index_path: Path | None = None,
+    *,
+    refresh_trails: bool = True,
+    trail_project_slugs: set[str] | None = None,
+) -> RebuildSummary:
+    """Refresh changed trace-store sources without replacing the cache file.
+
+    ``refresh_trails`` (default True) preserves the historical bare-call
+    contract: the per-project trail projection is re-synced. Pass
+    ``refresh_trails=False`` to skip the entire project-home trail loop (a
+    no-op refresh then does zero per-home ref reads). ``trail_project_slugs``
+    restricts the trail loop to the named project homes (capture/watcher hooks
+    refresh only the changed project); the stale-trail-project sweep is also
+    skipped when a scoped set is given so other projects' projections survive.
+    """
 
     db_path = index_path or default_index_path()
     if not db_path.exists():
         return rebuild_index(db_path)
 
-    return _retry_on_lock(lambda: _refresh_index_locked(db_path))
+    return _retry_on_lock(
+        lambda: _refresh_index_locked(
+            db_path,
+            refresh_trails=refresh_trails,
+            trail_project_slugs=trail_project_slugs,
+        )
+    )
 
 
-def _refresh_index_locked(db_path: Path) -> RebuildSummary:
+# --------------------------------------------------------------------------
+# Plan 087 U4 — cheap-sync-then-serve for the ``trace query`` hot path.
+#
+# Phase 1 stopped the query path from auto-rebuilding (killing the 105s tax)
+# but opened a stale window: a freshly captured/altered trace was invisible
+# until an explicit refresh. U4 closes that window with a digest-gated
+# incremental sync that scales with the delta, never the corpus.
+#
+# Mechanics:
+#   1. Cheap probe — read the last-synced bucket digest from the index meta
+#      table; compute the current bucket digest. Equal => steady state, return
+#      immediately (zero refresh work, sub-2s).
+#   2. On mismatch — compute the per-trace delta (changed/added vs deleted) by
+#      diffing the current per-trace bucket digests against the snapshot stored
+#      at last sync, then run the BOUNDED incremental refreshers:
+#        - ``refresh_index`` (already incremental + R3-cheap) for the index,
+#        - ``refresh_search_projection(changed, deleted)`` for the projection.
+#   3. Persist the new digest + per-trace snapshot so the next call short-
+#      circuits. The pointer/marker advance is the last step.
+# --------------------------------------------------------------------------
+
+_SYNCED_DIGEST_KEY = "synced_bucket_digest"
+_SYNCED_TRACE_DIGESTS_KEY = "synced_trace_digests"
+# F1 (plan 087 fix) — the cheap O(1) freshness signal persisted at last sync.
+# A stat-only fingerprint over the trace-source roots; when it is unchanged the
+# steady-state probe short-circuits WITHOUT any corpus scan / manifest recompute.
+_SYNCED_CHEAP_SIGNAL_KEY = "synced_cheap_signal"
+
+
+def _synced_digest_key(query_source: str) -> str:
+    return f"{_SYNCED_DIGEST_KEY}:{query_source}"
+
+
+def _synced_trace_digests_key(query_source: str) -> str:
+    return f"{_SYNCED_TRACE_DIGESTS_KEY}:{query_source}"
+
+
+def _synced_cheap_signal_key(query_source: str) -> str:
+    # Per-source so an ``index``-source sync does not mask a still-stale
+    # ``projection`` (each source advances its own marker independently).
+    return f"{_SYNCED_CHEAP_SIGNAL_KEY}:{query_source}"
+
+
+def _cheap_bucket_signal() -> str:
+    """Return a cheap, stat-only fingerprint of the trace-source roots (F1).
+
+    This is the O(1) freshness signal for the ``trace query`` hot path. It walks
+    the four roots that feed the bucket's trace corpus — the mirrored
+    ``objects/traces/v1`` envelope root, the legacy ``trace-records`` mirror, and
+    the canonical legacy stores (``projects/*/traces/*.jsonl`` + ``staging/*.jsonl``)
+    that ``sync_trace_records_from_local_stores`` reads from — and aggregates
+    ``(path, mtime_ns, size)`` over the files it finds. NO file is opened or
+    parsed; no manifest is recomputed. A new / changed / removed trace file (in
+    either the mirror or the canonical store) flips the fingerprint, which is the
+    only signal allowed to engage the expensive delta path.
+
+    Cost is one ``os.scandir``/``stat`` per trace file (~17ms for ~3.7k files on
+    the live bucket), versus the ~46s full sync+parse+manifest the digest probe
+    used to pay on every steady-state query. Best-effort: any error yields an
+    empty signal so the caller treats it as "changed" and falls back to the heavy
+    path rather than wrongly short-circuiting.
+    """
+
+    from .bucket_layout import legacy_trace_records_root, trace_records_root
+
+    parts: list[str] = []
+
+    def _walk(root: Path) -> None:
+        if not root.exists():
+            return
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            try:
+                with os.scandir(current) as it:
+                    for entry in it:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(Path(entry.path))
+                                continue
+                            st = entry.stat(follow_symlinks=False)
+                        except OSError:
+                            continue
+                        parts.append(f"{entry.path}|{st.st_mtime_ns}|{st.st_size}")
+            except OSError:
+                continue
+
+    try:
+        _walk(trace_records_root())
+        _walk(legacy_trace_records_root())
+        projects_root = getattr(paths, "PROJECTS_DIR", None)
+        if projects_root is not None:
+            for project_home in (projects_root.iterdir() if projects_root.exists() else []):
+                if project_home.is_dir():
+                    _walk(project_home / "traces")
+        staging_root = getattr(paths, "STAGING_DIR", None)
+        if staging_root is not None:
+            _walk(staging_root)
+    except Exception:  # noqa: BLE001 — cheap signal must never raise.
+        return ""
+
+    parts.sort()
+    import hashlib
+
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+@dataclass
+class CheapSyncResult:
+    """Outcome of one :func:`cheap_sync_query_state` call."""
+
+    synced: bool
+    query_source: str
+    changed_trace_ids: list[str] = dataclass_field(default_factory=list)
+    deleted_trace_ids: list[str] = dataclass_field(default_factory=list)
+    bucket_digest: str | None = None
+
+
+def _meta_get(conn: sqlite3.Connection, key: str) -> str | None:
+    try:
+        row = conn.execute(
+            "select value from meta where key = ?", (key,)
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    return row[0] if not isinstance(row, sqlite3.Row) else row["value"]
+
+
+def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "insert or replace into meta(key, value) values (?, ?)", (key, value)
+    )
+
+
+def _current_bucket_trace_digests() -> tuple[str | None, dict[str, str]]:
+    """Return ``(top_level_digest, {trace_id: per_trace_record_hash})``.
+
+    Mirrors local project/staging stores into the bucket first (the same
+    bridge ``_iter_trace_sources`` performs before reindex) so the digest
+    reflects freshly-written-but-not-yet-indexed traces and prunes removed
+    legacy mirrors. The per-trace map is keyed off the record-object
+    ``record_hash`` (the layer the index actually syncs from); the top-level
+    digest is the deterministic ``bucket_digest`` used as the projection's
+    ``built_from_digest`` so the projection and index share one freshness
+    signal. Best-effort: any failure yields ``(None, {})`` and the caller
+    falls back to a full sync.
+    """
+
+    try:
+        sync_trace_records_from_local_stores()
+    except Exception:
+        pass
+    try:
+        per_trace = {
+            obj.trace_id: str(obj.record_hash)
+            for obj in iter_trace_record_objects()
+            if obj.trace_id
+        }
+    except Exception:
+        per_trace = {}
+    try:
+        manifest = bucket_manifest(write=False, include_objects=False)
+        top = manifest.get("bucket_digest") or manifest.get("digest")
+    except Exception:
+        top = None
+    return (str(top) if top is not None else None), per_trace
+
+
+def _compute_trace_delta(
+    current: dict[str, str], previous: dict[str, str]
+) -> tuple[list[str], list[str]]:
+    """Diff two ``{trace_id: digest}`` maps into ``(changed, deleted)``."""
+
+    changed = sorted(
+        tid
+        for tid, digest in current.items()
+        if previous.get(tid) != digest
+    )
+    deleted = sorted(tid for tid in previous if tid not in current)
+    return changed, deleted
+
+
+def _meta_get_safe(db_path: Path, key: str) -> str | None:
+    """Best-effort single meta read from the index DB (never raises)."""
+
+    try:
+        with _connect(db_path) as conn:
+            return _meta_get(conn, key)
+    except sqlite3.Error:
+        return None
+
+
+def _bootstrap_projection_markers(
+    db_path: Path,
+    *,
+    current_cheap_signal: str,
+    index_digest: str | None,
+    index_trace_digests: str | None,
+) -> str | None:
+    """Seed the projection-source cheap-sync markers from the serving build (G2).
+
+    Returns the bucket digest to report (so the caller can short-circuit O(1))
+    when the serving search projection is already fresh for ``current_cheap_signal``
+    — i.e. the projection build stamped a ``built_from_cheap_signal`` that equals
+    the current stat-only bucket signal. In that case the projection needs NO
+    delta: we persist the projection's per-source markers exactly the way the
+    index source persists its own (so the NEXT steady-state probe short-circuits
+    via the cheap-signal equality at the top of ``cheap_sync_query_state``), then
+    return.
+
+    Returns ``None`` when no serving build exists, the build never stamped a
+    cheap signal (legacy build), or the stamp does not match the current signal
+    (the bucket genuinely moved since the build) — the caller then falls through
+    to the normal delta path. Best-effort: any failure yields ``None`` so the
+    caller never wrongly short-circuits a stale projection.
+    """
+
+    try:
+        from .search_projection import search_projection_status
+
+        status = search_projection_status()
+    except Exception:  # noqa: BLE001 — bootstrap must never raise into queries.
+        return None
+    if status.get("state") != "ok":
+        return None
+    built_from_signal = status.get("built_from_cheap_signal")
+    if not built_from_signal or built_from_signal != current_cheap_signal:
+        # No stamp, or the bucket moved since the build — let the delta path run.
+        return None
+
+    # The projection is fresh for the current signal. Seed the projection
+    # markers from the index source's snapshot (same bucket, same per-trace
+    # record hashes) plus the cheap signal we just confirmed.
+    bucket_digest = status.get("built_from_digest") or index_digest
+    try:
+        with _connect(db_path) as conn:
+            _meta_set(
+                conn,
+                _synced_cheap_signal_key("projection"),
+                current_cheap_signal,
+            )
+            if bucket_digest is not None:
+                _meta_set(
+                    conn, _synced_digest_key("projection"), str(bucket_digest)
+                )
+            if index_trace_digests is not None:
+                _meta_set(
+                    conn,
+                    _synced_trace_digests_key("projection"),
+                    index_trace_digests,
+                )
+            conn.commit()
+    except sqlite3.Error:
+        return None
+    return str(bucket_digest) if bucket_digest is not None else None
+
+
+def cheap_sync_query_state(
+    *,
+    query_source: str = "index",
+    index_path: Path | None = None,
+    cheap_signal: str | None = None,
+    trace_id: str | None = None,
+) -> CheapSyncResult:
+    """Digest-gated incremental sync run immediately before a query (U4).
+
+    Closes the Phase-1 stale-query window for the local bucket without
+    reintroducing the full-rebuild cost. Steady state (no bucket change since
+    the last sync) short-circuits with zero refresh work. A changed bucket
+    triggers a BOUNDED ``refresh_index`` (and, for ``query_source ==
+    "projection"``, a bounded ``refresh_search_projection``) keyed by the
+    per-trace delta, then records the new digest snapshot.
+
+    ``cheap_signal`` (F3): an already-computed :func:`_cheap_bucket_signal`
+    snapshot. When the caller drives several query sources in one pass
+    (``keep_index_warm``), it computes the stat-only signal ONCE and threads it
+    in so each source does not re-scan the trace-source roots. ``None`` means
+    "compute it here" (the standalone query-path contract is unchanged).
+
+    ``trace_id`` (F3): the post-INGEST fast path. The capture pipeline already
+    knows the single trace it just wrote, so when ``trace_id`` is given and the
+    cheap signal moved, we skip the ~46s whole-corpus
+    :func:`_current_bucket_trace_digests` scan entirely and instead run the
+    bounded ``refresh_index`` (incremental, finds the one changed source by
+    mtime) + a projection delta scoped to exactly that trace. The per-trace
+    digest snapshot is NOT advanced on this path (only the cheap signal is), so
+    a later whole-corpus sync still reconciles correctly.
+
+    Best-effort: any failure leaves the warm cache serving and is swallowed
+    (the query still runs against whatever is on disk). It never raises into
+    the query path.
+    """
+
+    db_path = index_path or default_index_path()
+    if not db_path.exists():
+        # No warm cache yet; the query path's own cold-bootstrap will build it.
+        return CheapSyncResult(synced=False, query_source=query_source)
+
+    # --- O(1) cheap freshness probe (F1) --------------------------------
+    # Read the last-synced cheap signal + digest from the index meta and
+    # compare against a freshly-recomputed stat-only signal. If they match,
+    # NOTHING has changed in any trace-source root since the last sync, so we
+    # short-circuit WITHOUT touching ``sync_trace_records_from_local_stores`` /
+    # ``iter_trace_record_objects`` / ``bucket_manifest`` (the ~46s path).
+    try:
+        with _connect(db_path) as conn:
+            prev_digest = _meta_get(conn, _synced_digest_key(query_source))
+            prev_cheap_signal = _meta_get(conn, _synced_cheap_signal_key(query_source))
+            prev_per_trace_raw = _meta_get(
+                conn, _synced_trace_digests_key(query_source)
+            )
+    except sqlite3.Error:
+        prev_digest = None
+        prev_cheap_signal = None
+        prev_per_trace_raw = None
+
+    current_cheap_signal = (
+        cheap_signal if cheap_signal is not None else _cheap_bucket_signal()
+    )
+    if (
+        prev_cheap_signal is not None
+        and current_cheap_signal != ""
+        and prev_cheap_signal == current_cheap_signal
+    ):
+        # Steady state — no trace-source file changed since the last sync.
+        # O(1): zero corpus scan, zero manifest recompute.
+        return CheapSyncResult(
+            synced=False, query_source=query_source, bucket_digest=prev_digest
+        )
+
+    # --- G2: projection cheap-signal BOOTSTRAP (zero heavy scan) ------------
+    # The projection source's per-source markers are seeded the same way the
+    # index source seeds its own: from the freshness signal the serving artifact
+    # was built from. The index source records ``synced_cheap_signal:index`` at
+    # the end of every sync; the projection's analogue is the
+    # ``built_from_cheap_signal`` the serving search build stamped at build time
+    # (build_search_projection / refresh_search_projection both stamp it).
+    #
+    # Before G2 the projection markers were NEVER seeded until a query had
+    # already paid the full ~46s whole-corpus ``_current_bucket_trace_digests``
+    # scan once — so a steady-state ``trace query --semantic`` re-paid that heavy
+    # scan on every call (verified empty on the real bucket). When the projection
+    # markers are unseeded BUT a serving build exists whose stamped
+    # ``built_from_cheap_signal`` equals the current cheap signal, the projection
+    # is already fresh: seed all three projection markers (cheap signal from the
+    # build's stamp; digest + per-trace snapshot copied from the ``:index`` source
+    # since the index and projection are built from the same bucket) and
+    # short-circuit O(1) — NO corpus scan, NO manifest recompute. This is the
+    # only path that reaches the cheap short-circuit on a cold-projection-marker
+    # warm bucket.
+    if (
+        query_source == "projection"
+        and prev_cheap_signal is None
+        and current_cheap_signal != ""
+    ):
+        seeded = _bootstrap_projection_markers(
+            db_path,
+            current_cheap_signal=current_cheap_signal,
+            index_digest=_meta_get_safe(db_path, _synced_digest_key("index")),
+            index_trace_digests=_meta_get_safe(
+                db_path, _synced_trace_digests_key("index")
+            ),
+        )
+        if seeded is not None:
+            return CheapSyncResult(
+                synced=False,
+                query_source=query_source,
+                bucket_digest=seeded,
+            )
+
+    # --- Cheap signal moved + the caller knows the single written trace -----
+    # F3 post-INGEST fast path: refresh ONLY that one trace. Avoids the ~46s
+    # whole-corpus ``_current_bucket_trace_digests`` scan; the capture pipeline
+    # already told us exactly which trace changed.
+    if trace_id is not None:
+        try:
+            refresh_index(db_path)
+        except Exception:
+            return CheapSyncResult(synced=False, query_source=query_source)
+        if query_source == "projection":
+            try:
+                from .search_projection import refresh_search_projection
+
+                refresh_search_projection(
+                    changed_trace_ids=[trace_id],
+                    deleted_trace_ids=[],
+                    index_path=db_path,
+                )
+            except Exception:
+                # Index advanced; projection delta failed. Leave the cheap
+                # marker UNADVANCED so the next call retries this trace.
+                return CheapSyncResult(
+                    synced=True,
+                    query_source=query_source,
+                    changed_trace_ids=[trace_id],
+                    bucket_digest=prev_digest,
+                )
+        # Advance ONLY the cheap signal — not the per-trace digest snapshot.
+        # The targeted refresh did not recompute the authoritative digest map,
+        # so a later whole-corpus ``cheap_sync_query_state`` (no ``trace_id``)
+        # still reconciles. Recording the cheap signal here keeps the next
+        # steady-state probe O(1).
+        try:
+            with _connect(db_path) as conn:
+                _meta_set(
+                    conn,
+                    _synced_cheap_signal_key(query_source),
+                    _cheap_bucket_signal(),
+                )
+                conn.commit()
+        except sqlite3.Error:
+            pass
+        return CheapSyncResult(
+            synced=True,
+            query_source=query_source,
+            changed_trace_ids=[trace_id],
+            bucket_digest=prev_digest,
+        )
+
+    # --- Cheap signal moved (or never recorded): pay for the real digest -
+    try:
+        top_digest, current_per_trace = _current_bucket_trace_digests()
+    except Exception:
+        return CheapSyncResult(synced=False, query_source=query_source)
+
+    if top_digest is not None and prev_digest == top_digest:
+        # The cheap signal moved but the authoritative bucket digest is
+        # unchanged (e.g. an mtime touch with byte-identical content). No
+        # delta to apply — just record the new cheap signal so the next
+        # query short-circuits again, then short-circuit now.
+        try:
+            with _connect(db_path) as conn:
+                _meta_set(
+                    conn,
+                    _synced_cheap_signal_key(query_source),
+                    current_cheap_signal,
+                )
+                conn.commit()
+        except sqlite3.Error:
+            pass
+        return CheapSyncResult(
+            synced=False, query_source=query_source, bucket_digest=top_digest
+        )
+
+    try:
+        previous_per_trace = (
+            json.loads(prev_per_trace_raw) if prev_per_trace_raw else {}
+        )
+        if not isinstance(previous_per_trace, dict):
+            previous_per_trace = {}
+    except (ValueError, json.JSONDecodeError):
+        previous_per_trace = {}
+
+    changed, deleted = _compute_trace_delta(current_per_trace, previous_per_trace)
+
+    # Bounded index refresh — incremental + R3-cheap, never a full rebuild.
+    try:
+        refresh_index(db_path)
+    except Exception:
+        return CheapSyncResult(
+            synced=False,
+            query_source=query_source,
+            bucket_digest=top_digest,
+        )
+
+    if query_source == "projection":
+        try:
+            from .search_projection import refresh_search_projection
+
+            refresh_search_projection(
+                changed_trace_ids=changed,
+                deleted_trace_ids=deleted,
+                index_path=db_path,
+            )
+        except Exception:
+            # Index advanced; projection refresh failed. Leave the marker
+            # unadvanced so the next query retries the projection delta.
+            return CheapSyncResult(
+                synced=True,
+                query_source=query_source,
+                changed_trace_ids=changed,
+                deleted_trace_ids=deleted,
+                bucket_digest=top_digest,
+            )
+
+    # Advance the synced-digest marker LAST — anything that failed above
+    # leaves the prior marker so the next call retries the delta.
+    try:
+        with _connect(db_path) as conn:
+            if top_digest is not None:
+                _meta_set(conn, _synced_digest_key(query_source), top_digest)
+            _meta_set(
+                conn,
+                _synced_trace_digests_key(query_source),
+                json.dumps(current_per_trace, sort_keys=True),
+            )
+            # Record the cheap signal recomputed AFTER the delta sync mirrored
+            # legacy stores into the bucket, so the next steady-state probe
+            # short-circuits. Recompute (rather than reuse ``current_cheap_signal``)
+            # because the sync may have written new mirror files that must be
+            # reflected in the persisted fingerprint.
+            _meta_set(
+                conn,
+                _synced_cheap_signal_key(query_source),
+                _cheap_bucket_signal(),
+            )
+            conn.commit()
+    except sqlite3.Error:
+        pass
+
+    return CheapSyncResult(
+        synced=True,
+        query_source=query_source,
+        changed_trace_ids=changed,
+        deleted_trace_ids=deleted,
+        bucket_digest=top_digest,
+    )
+
+
+# --------------------------------------------------------------------------
+# Plan 087 U5 — best-effort keep-warm hooks.
+#
+# Capture (ingest) and the watcher sweep call ``keep_index_warm`` after they
+# have written a trace to the bucket so the warm index + search projection
+# reflect the new trace WITHOUT a manual ``trace index refresh``. This rides
+# on the U4 ``cheap_sync_query_state`` primitive: steady-state short-circuits
+# (zero refresh work), a changed bucket triggers the bounded incremental
+# refreshers.
+#
+# HARD CONTRACT: keep-warm is best-effort and MUST NOT raise into the capture
+# / scan path. Any failure is swallowed, logged at warning level, and reported
+# as ``ok=False`` so the warm cache keeps serving and capture still succeeds.
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class KeepWarmResult:
+    """Outcome of one :func:`keep_index_warm` best-effort call."""
+
+    ok: bool
+    synced: bool = False
+    changed_trace_ids: list[str] = dataclass_field(default_factory=list)
+    deleted_trace_ids: list[str] = dataclass_field(default_factory=list)
+    error: str | None = None
+
+
+def keep_index_warm(
+    *,
+    index_path: Path | None = None,
+    query_sources: tuple[str, ...] = ("index",),
+    trace_id: str | None = None,
+) -> KeepWarmResult:
+    """Best-effort keep-warm of the Trace Index (+ search projection) (U5/F3).
+
+    Runs the U4 digest-gated cheap sync for each requested query source so a
+    freshly captured trace becomes queryable without a manual refresh. Steady
+    state is a cheap no-op: the stat-only bucket signal is computed ONCE here
+    and threaded into every source (no per-source re-scan), and an unchanged
+    signal short-circuits each source with zero corpus scan / manifest recompute
+    / refresh.
+
+    F3 default — ``query_sources`` defaults to ``("index",)``. The Trace Index
+    refresh is incremental and cheap; the search-projection delta still stamps
+    the build with a heavier bucket digest, so the per-capture / per-scan hot
+    path warms only the index by default and leaves the projection to be warmed
+    on its own (the now-cheap F2 delta refresh) by callers that opt in via
+    ``query_sources=("index", "projection")``.
+
+    ``trace_id`` (F3) — when the caller is the post-INGEST hook it passes the
+    single trace it just wrote. The cheap sync then refreshes ONLY that trace
+    (no ~46s whole-corpus delta derivation).
+
+    NEVER raises: any internal failure is swallowed and surfaced as
+    ``ok=False`` so capture / scan can never be broken by an index hiccup.
+    """
+
+    try:
+        # F3: one stat-only scan, reused across every query source.
+        shared_signal = _cheap_bucket_signal()
+        synced = False
+        changed: list[str] = []
+        deleted: list[str] = []
+        for query_source in query_sources:
+            result = cheap_sync_query_state(
+                query_source=query_source,
+                index_path=index_path,
+                cheap_signal=shared_signal,
+                trace_id=trace_id,
+            )
+            if result.synced:
+                synced = True
+                for tid in result.changed_trace_ids:
+                    if tid not in changed:
+                        changed.append(tid)
+                for tid in result.deleted_trace_ids:
+                    if tid not in deleted:
+                        deleted.append(tid)
+        return KeepWarmResult(
+            ok=True,
+            synced=synced,
+            changed_trace_ids=changed,
+            deleted_trace_ids=deleted,
+        )
+    except Exception as exc:  # noqa: BLE001 — keep-warm must never raise.
+        logger.warning("keep_index_warm failed (best-effort, ignored)", exc_info=True)
+        return KeepWarmResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+
+
+def _refresh_index_locked(
+    db_path: Path,
+    *,
+    refresh_trails: bool = True,
+    trail_project_slugs: set[str] | None = None,
+) -> RebuildSummary:
     with _connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         if not _schema_supports_refresh(conn):
@@ -277,6 +954,13 @@ def _refresh_index_locked(db_path: Path) -> RebuildSummary:
         project_sources = _project_sources_by_slug()
         trail_projection_cache: dict[str, TrailQueryProjection | None] = {}
         seen_sources: set[str] = set()
+        # R3: batch the per-source freshness lookup into one scan instead of
+        # 1k+ point-SELECTs. The loop below does in-memory dict lookups so a
+        # no-op refresh over a large bucket stays cheap.
+        source_stats: dict[str, tuple[int, int]] = {
+            str(row["path"]): (int(row["mtime_ns"]), int(row["size"]))
+            for row in conn.execute("select path, mtime_ns, size from sources")
+        }
         for source in _iter_trace_sources():
             trace_path = source.trace_path
             project_slug = source.project_slug
@@ -284,14 +968,11 @@ def _refresh_index_locked(db_path: Path) -> RebuildSummary:
             source_key = str(trace_path)
             seen_sources.add(source_key)
             stat = trace_path.stat()
-            existing = conn.execute(
-                "select mtime_ns, size from sources where path = ?",
-                (source_key,),
-            ).fetchone()
+            existing = source_stats.get(source_key)
             if (
-                existing
-                and int(existing["mtime_ns"]) == stat.st_mtime_ns
-                and int(existing["size"]) == stat.st_size
+                existing is not None
+                and existing[0] == stat.st_mtime_ns
+                and existing[1] == stat.st_size
             ):
                 continue
             old_trace_ids = [
@@ -336,32 +1017,47 @@ def _refresh_index_locked(db_path: Path) -> RebuildSummary:
             _delete_trace_ids(conn, old_trace_ids)
             conn.execute("delete from sources where path = ?", (source_key,))
 
-        seen_trail_projects: set[str] = set()
-        for project_home in _iter_project_homes():
-            project_slug = project_home.name
-            seen_trail_projects.add(project_slug)
-            source_repo = project_sources.get(project_slug)
-            if source_repo and source_repo.exists():
-                _refresh_trail_projection(conn, project_slug, source_repo)
-            else:
-                _delete_trail_projection_for_project(conn, project_slug)
-                conn.execute(
-                    "delete from trail_sources where project_slug = ?",
-                    (project_slug,),
-                )
-        # Staging traces have no associated workspace repo; nothing to project.
+        if refresh_trails:
+            seen_trail_projects: set[str] = set()
+            for project_home in _iter_project_homes():
+                project_slug = project_home.name
+                if (
+                    trail_project_slugs is not None
+                    and project_slug not in trail_project_slugs
+                ):
+                    continue
+                seen_trail_projects.add(project_slug)
+                source_repo = project_sources.get(project_slug)
+                if source_repo and source_repo.exists():
+                    _refresh_trail_projection(conn, project_slug, source_repo)
+                elif _project_has_trail_rows(conn, project_slug):
+                    # R3: only pay for the multi-statement delete sweep when
+                    # there is actually a projection to prune. On the live
+                    # bucket most homes are unregistered AND have never had a
+                    # trail projection, so this collapses N redundant delete
+                    # passes into N cheap indexed EXISTS probes.
+                    _delete_trail_projection_for_project(conn, project_slug)
+                    conn.execute(
+                        "delete from trail_sources where project_slug = ?",
+                        (project_slug,),
+                    )
+            # Staging traces have no associated workspace repo; nothing to project.
 
-        stale_trail_projects = [
-            str(row["project_slug"])
-            for row in conn.execute("select project_slug from trail_sources")
-            if str(row["project_slug"]) not in seen_trail_projects
-        ]
-        for project_slug in stale_trail_projects:
-            _delete_trail_projection_for_project(conn, project_slug)
-            conn.execute(
-                "delete from trail_sources where project_slug = ?",
-                (project_slug,),
-            )
+            # A scoped refresh only touched the named homes, so the
+            # stale-trail-project sweep would otherwise delete every OTHER
+            # project's projection rows. Skip the sweep when scoped.
+            if trail_project_slugs is None:
+                stale_trail_projects = [
+                    str(row["project_slug"])
+                    for row in conn.execute("select project_slug from trail_sources")
+                    if str(row["project_slug"]) not in seen_trail_projects
+                ]
+                for project_slug in stale_trail_projects:
+                    _delete_trail_projection_for_project(conn, project_slug)
+                    conn.execute(
+                        "delete from trail_sources where project_slug = ?",
+                        (project_slug,),
+                    )
 
         conn.execute(
             "insert or replace into meta(key, value) values (?, ?)",
@@ -481,19 +1177,32 @@ def query_index_page(
     """Return one stable page of bounded candidate packets."""
 
     db_path = index_path or default_index_path()
+    # Plan 087 U1: the query hot path never auto-refreshes the warm cache.
+    # Only the cold-start bootstrap (no DB file yet) builds the index; a forced
+    # refresh/rebuild is reachable solely via explicit maintenance
+    # (``trace index rebuild``/``refresh``) or ``--force-rebuild``.
     if not db_path.exists():
         rebuild_index(db_path)
-    else:
-        refresh_index(db_path)
     parsed_facets = _parse_key_value_filters(facet_filters)
     parsed_metadata = _parse_key_value_filters(metadata_filters)
     since_dt = _parse_since(since) if since else None
     terms = _terms(lex or "")
 
     unit_type_filter = _requested_unit_type(parsed_facets, candidate_kind)
-    with _connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        rows = _select_unit_rows(conn, terms, unit_type_filter)
+
+    def _read_unit_rows() -> list[sqlite3.Row]:
+        with _connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            return _select_unit_rows(conn, terms, unit_type_filter)
+
+    try:
+        rows = _read_unit_rows()
+    except sqlite3.DatabaseError:
+        # The index is a rebuildable cache; a malformed DB (e.g. stale WAL
+        # sidecars after a snapshot restore) self-heals via a one-time rebuild
+        # rather than surfacing a sqlite error to ``trace query``.
+        _heal_corrupt_index(db_path)
+        rows = _read_unit_rows()
 
     candidates = [_unit_from_row(row) for row in rows]
     if latest_generation:
@@ -1134,6 +1843,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             ordinal integer not null,
             payload text not null
         );
+        create index idx_units_project_type on units(project_slug, unit_type);
         """
     )
 
@@ -1313,23 +2023,96 @@ def _record_trail_source(
     )
 
 
-def _trail_event_ref_sha(source_repo: Path) -> str | None:
-    try:
-        from .trails import EVENT_LOG_REF
+def _resolve_git_dir(source_repo: Path) -> Path:
+    """Resolve the git dir for ``source_repo`` without spawning git.
 
-        proc = subprocess.run(
-            ["git", "show-ref", "--hash", EVENT_LOG_REF],
-            cwd=source_repo,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+    Handles a normal ``.git`` directory, a worktree/submodule ``.git`` FILE
+    (one-line ``gitdir: <path>`` pointer), and a bare repo (no ``.git``).
+
+    For a linked worktree the per-worktree gitdir holds only per-worktree
+    refs (HEAD, etc.); shared refs like the opentraces event log live in the
+    *common* gitdir pointed at by ``commondir``. The event-log ref is a
+    shared ref, so we follow ``commondir`` when present and return the
+    common dir for ref lookups.
+    """
+    dot_git = source_repo / ".git"
+    gitdir: Path
+    if dot_git.is_dir():
+        gitdir = dot_git
+    elif dot_git.is_file():
+        gitdir = source_repo
+        text = dot_git.read_text(encoding="utf-8", errors="replace")
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("gitdir:"):
+                pointer = line[len("gitdir:"):].strip()
+                ptr_path = Path(pointer)
+                if not ptr_path.is_absolute():
+                    ptr_path = (source_repo / ptr_path).resolve()
+                gitdir = ptr_path
+                break
+    else:
+        # No .git entry: treat source_repo itself as a (possibly bare) gitdir.
+        gitdir = source_repo
+
+    # Linked worktrees store shared refs in the common gitdir.
+    commondir = gitdir / "commondir"
+    if commondir.is_file():
+        common = commondir.read_text(encoding="utf-8", errors="replace").strip()
+        if common:
+            common_path = Path(common)
+            if not common_path.is_absolute():
+                common_path = (gitdir / common_path).resolve()
+            return common_path
+    return gitdir
+
+
+def _trail_event_ref_sha(source_repo: Path) -> str | None:
+    from .trails import EVENT_LOG_REF
+
+    try:
+        gitdir = _resolve_git_dir(source_repo)
+
+        # 1) Loose ref file: gitdir/refs/opentraces/local/events/v1
+        loose = gitdir
+        for part in EVENT_LOG_REF.split("/"):
+            loose = loose / part
+        if loose.exists():
+            sha = loose.read_text(encoding="utf-8", errors="replace").strip()
+            return sha or None
+
+        # 2) packed-refs fallback.
+        packed = gitdir / "packed-refs"
+        if packed.exists():
+            for raw in packed.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or line.startswith("^"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == EVENT_LOG_REF:
+                    return parts[0] or None
+
+        # 3) Neither yields the ref — a missing event-log ref is a normal
+        #    state (project never captured a trail).
+        return None
     except (OSError, ValueError):
-        return None
-    if proc.returncode != 0:
-        return None
-    ref_sha = proc.stdout.strip()
-    return ref_sha or None
+        # Last-resort fallback for unusual/unreadable layouts only.
+        try:
+            proc = subprocess.run(
+                ["git", "show-ref", "--hash", EVENT_LOG_REF],
+                cwd=source_repo,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except (OSError, ValueError):
+            return None
+        if proc.returncode != 0:
+            return None
+        ref_sha = proc.stdout.strip()
+        return ref_sha or None
 
 
 def _delete_trace_ids(conn: sqlite3.Connection, trace_ids: list[str]) -> None:
@@ -1349,6 +2132,31 @@ def _delete_units_by_types(conn: sqlite3.Connection, unit_types: set[str]) -> No
     values = sorted(unit_types)
     placeholders = ",".join("?" for _ in values)
     _delete_units_where(conn, f"unit_type in ({placeholders})", values)
+
+
+def _project_has_trail_rows(conn: sqlite3.Connection, project_slug: str) -> bool:
+    """R3 guard: does this project have any trail projection to prune?
+
+    Two cheap indexed EXISTS probes: a trail_sources PK lookup and a
+    units(project_slug, unit_type) covering-index scan for patch/git_anchor
+    units. Returns True if either has a row, so the caller only runs the
+    expensive delete sweep when there is something to delete.
+    """
+    has_source = conn.execute(
+        "select 1 from trail_sources where project_slug = ? limit 1",
+        (project_slug,),
+    ).fetchone()
+    if has_source is not None:
+        return True
+    has_units = conn.execute(
+        """
+        select 1 from units
+        where project_slug = ? and unit_type in ('patch', 'git_anchor')
+        limit 1
+        """,
+        (project_slug,),
+    ).fetchone()
+    return has_units is not None
 
 
 def _delete_trail_projection_for_project(conn: sqlite3.Connection, project_slug: str) -> None:
