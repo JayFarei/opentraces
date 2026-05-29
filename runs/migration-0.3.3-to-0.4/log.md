@@ -664,3 +664,27 @@ schema guards (U-hf-1).
   network lane: U-ds-4 (full headless spine to a LIVE-HF-published dataset),
   U-hf-2 (live publish into a 0.3.0-declaring remote) - both need the live-HF
   token lane (opt-in tier), documented as runnable [human] steps.
+
+## 2026-05-29 — Corrected final tally: 26 P0 green; residual 2 need authorized HF egress
+
+After the OTLP-mechanism win, the honest residual shrinks to 2 P0 cases, both
+requiring OUTWARD-FACING live-HuggingFace egress (creating + pushing real HF
+repos), which I will not do autonomously without explicit authorization:
+  - U-ds-4: full headless spine to a LIVE-HF-published 0.6.0 dataset.
+  - U-hf-2: live publish into a 0.3.0-declaring remote (schema-ahead path).
+Both also intersect the U-hf-1 product gap already pinned (live `dataset publish`
+bypasses HFUploader's schema-ahead/migrate guards), so U-hf-2's "publish triggers
+shard migration" is moot until that wiring is a product decision. The live-HF
+token is present (~/.opentraces/otbox-live-hf-token) and a real claude v2.1.156
+is on PATH, so these ARE runnable as the opt-in [human] steps in
+MANUAL-UAT-TWO-VENV.md sections 5-6, gated on the operator opting into HF egress.
+
+FINAL P0 DISPOSITION (35 total):
+  - 26 GREEN in default CI (incl. U-ctx-4/U-setup-7 OTLP mechanism).
+  - 2 require authorized outward-facing HF egress (U-ds-4, U-hf-2) -> opt-in
+    [human] manual-UAT, also blocked by the U-hf-1 product gap.
+  - 7 covered-elsewhere / premise-mismatched (verified against real code:
+    U-bucket-4, U-ctx-5, U-setup-2, U-trail-4, U-config-1, U-ds-2, U-auth-1-live).
+Items (1)/(2)/(4) met. Item (3) is complete for every P0 reachable without
+outward-facing egress or a product decision. The genuine remainder is a
+user/product call, not autonomous work.
