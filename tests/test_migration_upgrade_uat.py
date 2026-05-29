@@ -291,3 +291,68 @@ def test_u_hf_1_dataset_publish_does_not_reach_hfuploader():
     import opentraces.cli.publish as legacy_push
 
     assert "HFUploader" in inspect.getsource(legacy_push)
+
+
+# --- U-config-6 / U-auth-1 (P0/P1, real-v033-venv) --------------------------
+# The genuine two-version handoff: a HOME set up by the REAL 0.3.3 CLI must be
+# read by the REAL 0.4 CLI without crashing and with the legacy config preserved.
+# Mirrors the S7 Layer-B discipline: skip when the isolated v0.3.3 venv is absent
+# so default CI stays green. The remaining two-venv parts that need a live agent
+# or network (real claude/OTLP capture, live HF publish) are documented as
+# runnable manual-UAT steps in runs/migration-0.3.3-to-0.4/MANUAL-UAT-TWO-VENV.md.
+
+import subprocess
+import sys
+
+_V033_BIN = Path(
+    os.environ.get("OT_V033_BIN", "/tmp/ot-v033-worktree/.venv-v033/bin/opentraces")
+)
+
+
+def _v04_bin() -> str:
+    # The 0.4 CLI from the venv running these tests.
+    cand = Path(sys.executable).parent / "opentraces"
+    return str(cand) if cand.exists() else "opentraces"
+
+
+def test_u_config_6_real_v033_home_is_read_by_real_v04(tmp_path):
+    """U-config-6 / U-auth-1 (real-v033-venv). A project HOME initialized by the
+    real opentraces 0.3.3 CLI is read by the real 0.4 CLI without crashing: the
+    legacy config_version is preserved (forward-tolerant) and status/config-show
+    return rc=0. Proves the actual binary-to-binary upgrade boundary, not just the
+    frozen fixture. SKIPs when the isolated v0.3.3 venv is absent.
+    """
+    if not _V033_BIN.exists():
+        pytest.skip(f"real v0.3.3 venv absent at {_V033_BIN}")
+
+    home = tmp_path / "home"
+    proj = tmp_path / "proj"
+    home.mkdir()
+    proj.mkdir()
+    env = {**os.environ, "HOME": str(home)}
+
+    def v033(*a):
+        return subprocess.run(
+            [str(_V033_BIN), *a], cwd=proj, env=env, capture_output=True, text=True
+        )
+
+    def v04(*a):
+        return subprocess.run(
+            [_v04_bin(), *a], cwd=proj, env=env, capture_output=True, text=True
+        )
+
+    assert "0.3.3" in v033("--version").stdout
+    assert "0.4" in v04("--version").stdout
+
+    # Real 0.3.3 enrolls the project.
+    init = v033("init", "--agent", "claude-code")
+    assert init.returncode == 0, init.stderr
+
+    # Real 0.4 reads the 0.3.3-written home without crashing.
+    show = v04("--json", "config", "show")
+    assert show.returncode == 0, show.stderr
+    payload = show.stdout.split("---OPENTRACES_JSON---")[-1]
+    cfg = json.loads(payload)
+    assert cfg["config_version"] == "0.2.0"  # legacy version preserved, no crash
+
+    assert v04("status").returncode == 0

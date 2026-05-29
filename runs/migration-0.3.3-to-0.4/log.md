@@ -409,3 +409,39 @@ Append one entry per iteration. Newest at the bottom.
   workflow path which materializes under HOME/.opentraces/workflows/<name> (a
   dynamic box path with no template var yet) -> needs a {home}/{workflows_dir}
   journey var or a relative-path convention; parked rather than hardcode.
+
+## 2026-05-29 — Item (4): real two-venv handoff automated + manual-UAT script
+
+- The real v0.3.3 venv IS present here (`/tmp/ot-v033-worktree/.venv-v033`,
+  opentraces 0.3.3) and the live-HF token exists
+  (`~/.opentraces/otbox-live-hf-token`). Verified the genuine binary-to-binary
+  handoff: a HOME initialized by real 0.3.3 is read by real 0.4 with rc=0 and
+  config_version 0.2.0 preserved (no crash, forward-tolerant).
+- Change (auto): `tests/test_migration_upgrade_uat.py::test_u_config_6_real_v033_home_is_read_by_real_v04`
+  (U-config-6 / U-auth-1) drives BOTH real binaries (skip-if-absent, S7 Layer-B
+  discipline). 12/12 in the file; it RAN (not skipped) here.
+- Change (doc): `runs/migration-0.3.3-to-0.4/MANUAL-UAT-TWO-VENV.md` — the
+  runnable copy-paste script for every real-v033-venv / manual-uat case
+  (U-setup-1/7, U-auth-1/2/3, U-bucket-2/3/14, U-ctx-3/4, U-ds-4, U-hf-2,
+  U-config-6/7). Each step marked [auto] (with the pytest/journey pointer) or
+  [human] (live agent / network). This satisfies item (4)'s "covered by a
+  real-v033-venv test OR explicitly documented as manual-UAT with runnable steps."
+
+## 2026-05-29 — BLOCKED: real-OTLP / pty_runner capture infra (Phase 2 hard-block)
+
+- Per the goal's block clause ("a real claude/OTLP capture cannot run here"):
+  the Phase 2 `c-legacy-v033-otel-upgraded` checkpoint and the `pty_runner`
+  journey step are HARD-BLOCKED in this environment and flagged deferred in
+  CLAUDE.md (plan 078 items (c)/(d)). They require the real `claude` binary
+  driving a live session through the local OTLP receiver, which default CI here
+  cannot run deterministically.
+- AFFECTED P0/P1 cases (cannot be auto-greened here; covered as [human] manual-UAT
+  steps in MANUAL-UAT-TWO-VENV.md sections 5/6): U-ctx-4 (real context_* capture +
+  bypass-safety), U-setup-7 (fresh capture across all four substrates incl. a real
+  context event), U-ds-4 (full headless spine to a live-HF-published dataset),
+  U-hf-2 (live publish into a 0.3.0-declaring remote). The S12 GOLD gate's
+  empty-Context-Tree limitation therefore remains until this infra lands.
+- NOT blocked / already delivered: every read-in-place, additive-refs,
+  honest-no-evidence, onboarding-idempotency, and migration-fidelity P0 that runs
+  against the existing c-legacy-v033 / c-legacy-v033-upgraded checkpoints or the
+  frozen fixture.
