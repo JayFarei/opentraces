@@ -151,9 +151,11 @@ opentraces trace compare <trace_a> <trace_b> --json  # add --no-quality to skip 
   to the same burst gap).
 
 `--waste` and `--run-intel` are mutually exclusive with `--bursts` (and with
-each other); the `trace get` and `trace map` surfaces emit byte-identical
-payloads. Each detector reports a `fidelity` of `record` or `otel`, preferring
-full wire fidelity when the trace was captured via the OTLP receiver.
+each other); on `trace get` they are also mutually exclusive with `--resume`.
+The `trace get` and `trace map` surfaces emit byte-identical payloads for
+`--waste` and `--run-intel`. Each detector reports a `fidelity` of `record` or
+`otel`, preferring full wire fidelity when the trace was captured via the OTLP
+receiver.
 
 ## Trace Trails
 

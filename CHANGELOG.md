@@ -5,6 +5,42 @@ All notable changes to the opentraces CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## MERGED-I — Trace Intelligence
+
+- **Three deterministic, derive-on-demand detectors over a single trace.**
+  All read-side, no LLM, nothing persisted, no schema-package change. Each
+  is computed on read and emitted as a frozen JSON envelope in the
+  `opentraces.*.v1` family (a field change requires a version bump).
+- **Context waste (`trace map|get --waste`).** New `core/context_waste.py`
+  emits `opentraces.context_waste.v1`: `large_output` (a single tool output
+  >= 12000 chars), `repeated_file_read` (same file 3+ times within 20 min),
+  and `repeated_search` (`rg|grep|find|ag|ack` 5+ times within 10 min)
+  findings plus a `summary` count block. Thresholds are overridable per call
+  with `--large-output-chars`, `--file-read-window-min`, and
+  `--search-window-min` on both `trace map` and `trace get`.
+- **Run signals (`trace map|get --run-intel`).** New `core/run_intel.py`
+  emits `opentraces.run_intel.v1` (`schema_version`, `status`, `trace_id`,
+  `fidelity`, `signals`, `counts`) with deterministic `resteer` / `recovery`
+  / `loop` / `failure` annotations. Recovery only fires after an uncleared
+  prior failure; failure prefers structured `Observation.error` over
+  substring matches; a repeated command is ONE `loop` signal carrying
+  `evidence.repeat_count` (true sliding window); a one-word approval never
+  reads as a resteer.
+- **Run compare (`trace compare <a> <b>`).** New `core/trace_compare.py`
+  emits `opentraces.trace_compare.v1`: per-side `fidelity` plus `{a, b,
+  delta}` triples over token/cost metrics, deterministic quality persona
+  scores (skip with `--no-quality`), and burst/error/security signals. Both
+  traces are pinned to the same burst gap (`--burst-gap`, default 35) so the
+  deltas are comparable. Degrades to `available: false` (never crashes) when
+  a trace lacks a Trace Map.
+- **Fidelity tier.** Every detector derives from the `TraceRecord` and
+  reports `fidelity: "otel"` when `context_tree_summary.capture_methods`
+  includes `otel` (plan 078 OTLP capture), otherwise `fidelity: "record"`.
+- **CLI surface.** `--waste` / `--run-intel` are mutually exclusive with
+  `--bursts` and each other (and with `--resume` on `trace get`); misuse
+  exits 2 and an unresolved trace ref exits 6. The `trace get` and `trace
+  map` surfaces emit byte-identical payloads for matching flags. See plan 086.
+
 ## MERGED-H — Trajectory Slicing
 
 - **Adaptive burst gap (T2).** `core/bursts.py::detect_bursts` now

@@ -569,7 +569,7 @@ def trace_index_status_cmd(as_json: bool) -> None:
     "--run-intel",
     "as_run_intel",
     is_flag=True,
-    help="Emit deterministic resteer/recovery/loop annotations for the trace.",
+    help="Emit deterministic resteer/recovery/loop signals for the trace (opentraces.run_intel.v1).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_map_cmd(
@@ -934,7 +934,7 @@ def trace_slice_cmd(
     "--run-intel",
     "as_run_intel",
     is_flag=True,
-    help="Emit deterministic resteer/recovery/loop annotations for the trace.",
+    help="Emit deterministic resteer/recovery/loop signals for the trace (opentraces.run_intel.v1).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
 def trace_get(
