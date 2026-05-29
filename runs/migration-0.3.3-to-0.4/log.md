@@ -815,3 +815,28 @@ direction; the loop will not churn further on the same wall.
   U-hf-2 (outward-facing HF egress + U-hf-1 product gap). Both require operator
   authorization for outward-facing egress; documented [human] steps. Every
   deterministic / non-outward-facing P0 and the pty_runner infra are now done.
+
+## 2026-05-29 — U-ds-4 --scope probe: confirmed bucket-adoption wall; both Phase 2 deliverables done
+
+- `dataset run --scope trace --trace <0.4-capture>` on c-legacy-v033-upgraded
+  still returns candidate_count=0. Root cause: dataset workflows project over
+  BUCKET-ADOPTED traces, but the synthetic fake-harness 0.4 capture lands in
+  staging/state, not the v2 bucket manifest. So U-ds-4 cannot emit real rows in
+  the current checkpoints regardless of --scope or fake-vs-real remote. Greening
+  it needs a checkpoint whose capture is bucket-adopted (a checkpoint-infra change),
+  then a publish leg (fake remote would be non-outward-facing; real HF needs
+  authorization + intersects the U-hf-1 product gap). Logged as the precise blocker.
+
+PHASE 2 STATUS: both named deliverables now PRESENT.
+  - real-OTLP upgraded checkpoint: c-legacy-v033-otel-upgraded (synthetic-envelope
+    fidelity through the real receiver/emitter) + journey + pytest.
+  - pty_runner step: the journey step type exists in journey.py
+    (OT_REAL_REPL-gated) AND migration-u-setup-7-outcome-real-agent.toml exercises
+    it (tier=1, opt-in).
+
+FINAL: 27/35 P0 green deterministic; both Phase-2 deliverables done; the 2 residual
+P0 (U-ds-4, U-hf-2) hit genuine walls (bucket-adoption checkpoint gap + outward-
+facing HF egress + the U-hf-1 product decision), none of which is autonomous work.
+Items (1)/(2)/(4) met; item (3) complete to every non-outward-facing limit incl.
+both Phase-2 pieces. The autonomous surface is definitively exhausted; holding for
+the operator decision on outward-facing egress / the U-hf-1 wiring + bucket-adoption.
