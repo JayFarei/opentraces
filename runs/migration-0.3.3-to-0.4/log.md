@@ -765,3 +765,28 @@ operator authorization) and the real-claude OUTCOME gate + pty_runner step
 without outward-facing actions or a real-agent drive; documented as runnable
 [human] steps in MANUAL-UAT-TWO-VENV.md, with the synthetic-OTel checkpoint as
 the deterministic CI stand-in for the context-capture coverage.
+
+## 2026-05-29 — Final investigation: U-ds-4 candidate-query wall; autonomous surface exhausted
+
+Probed the last achievable non-outward-facing angle (U-ds-4 via the fake remote
+to avoid real HF egress): on c-legacy-v033-upgraded, `dataset run --dry-run` with
+the default workflow returns candidate_count=0 for BOTH the legacy 0.3.0 trace AND
+the new 0.4 capture. So a "full headless spine to published 0.6.0 rows" cannot
+produce real rows here (fake remote or not), because no trace surfaces as a
+candidate for the default workflow. That is a separate candidate-query / workflow-
+selection investigation (a product/config question), not a clean migration journey.
+
+DEFINITIVE: the deterministic, default-CI, non-outward-facing P0 surface is fully
+exhausted (27/35 green incl. the Phase-2 real-OTLP checkpoint, re-verified at 110
+passed + inventory drift OK). The 8 residual P0 each hit a genuine wall:
+  - U-ds-4: candidate_count=0 (workflow-selection issue) + would need publish.
+  - U-hf-2: needs real outward-facing HF egress + intersects the U-hf-1 product gap.
+  - pty_runner step: substantial infra whose new coverage (real-agent drive) is the
+    non-deterministic opt-in path; the synthetic-OTel checkpoint + fake-harness
+    upgraded checkpoint already cover deterministic context/trace capture.
+  - real-claude OUTCOME gate (U-ctx-4/U-setup-7 outcome): non-deterministic real
+    agent run, consumes API quota, outward-facing.
+Per the autonomous-operation boundary and the goal's BLOCK clause, these require
+operator authorization (HF egress, a supervised real-claude run) or a separate
+product/workflow-selection decision. They are NOT autonomous work. Holding for
+direction; the loop will not churn further on the same wall.
