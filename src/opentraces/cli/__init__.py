@@ -151,6 +151,12 @@ COMMAND_SECTIONS = [
         ],
     ),
     (
+        "Capsule",
+        [
+            "capsule",
+        ],
+    ),
+    (
         "Security",
         [
             "security",
@@ -2855,11 +2861,15 @@ from .security import security_group as _security_group  # noqa: E402
 # Plan-077 — Context Tree substrate: ``opentraces ctx`` navigation surface.
 from .ctx import ctx_group as _ctx_group  # noqa: E402
 
+# Plan-082 — Agent-to-agent bug capsule: ``opentraces capsule`` share surface.
+from .capsule import capsule_group as _capsule_group  # noqa: E402
+
 main.add_command(_bucket_group, name="bucket")
 main.add_command(_dataset_group, name="dataset")
 main.add_command(_workflow_group, name="workflow")
 main.add_command(_security_group, name="security")
 main.add_command(_ctx_group, name="ctx")
+main.add_command(_capsule_group, name="capsule")
 
 # Plan 078: OTLP receiver capture source (third sibling of JSONL + proxy).
 from .capture_otlp import (  # noqa: E402

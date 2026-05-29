@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+export PYTHONPATH="/Users/jayfarei/src/tries/community-traces-capsule/src:/Users/jayfarei/src/tries/community-traces-capsule/packages/opentraces-schema/src"
+exec "/Users/jayfarei/src/tries/2026-03-27-community-traces-hf/.venv/bin/python" -c "from opentraces.cli import main; main()" "$@"
