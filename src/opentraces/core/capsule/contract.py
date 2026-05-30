@@ -158,4 +158,17 @@ def validate_capsule(capsule: dict[str, Any]) -> dict[str, Any]:
     missing = [k for k in REQUIRED_KEYS if k not in capsule]
     if missing:
         raise ValueError(f"capsule missing required keys: {', '.join(missing)}")
+    # Light nested-shape checks — the contract is more than a key list.
+    if not isinstance(capsule.get("repo_pin"), dict):
+        raise ValueError("capsule.repo_pin must be an object")
+    if not isinstance(capsule.get("embedded"), dict):
+        raise ValueError("capsule.embedded must be an object")
+    test = capsule.get("test")
+    if test is not None:
+        cmd = test.get("command") if isinstance(test, dict) else None
+        if not isinstance(cmd, str) or not cmd.strip():
+            raise ValueError("capsule.test, when present, must carry a non-empty string command")
+        exp = test.get("expected")
+        if not isinstance(exp, dict) or exp.get("kind") not in ("error_string", "nonzero_exit"):
+            raise ValueError("capsule.test.expected.kind must be 'error_string' or 'nonzero_exit'")
     return capsule

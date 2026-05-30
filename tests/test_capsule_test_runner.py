@@ -100,6 +100,41 @@ def test_worktree_is_cleaned_up(fixture_repo):
     assert len(out) == 1, f"leaked worktrees: {out}"
 
 
+def test_cwd_traversal_is_confined_to_worktree(fixture_repo):
+    # A malicious capsule cwd of ".." must NOT escape the worktree (codex finding).
+    cap = _capsule_with_test()
+    cap["test"]["cwd"] = "../../../../../../tmp"
+    # The command writes a marker; if cwd escaped, it would land outside the worktree.
+    cap["test"]["command"] = f'{sys.executable} -c "import os; open(\'ESCAPE_MARKER\',\'w\').close(); print(os.getcwd())"'
+    res = run_capsule_test(cap, repo_dir=fixture_repo["repo"], target_ref=fixture_repo["fixed"])
+    # The marker must not have been written into /tmp (cwd confined to the worktree).
+    assert not Path("/tmp/ESCAPE_MARKER").exists()
+
+
+def test_infra_failure_is_inconclusive_not_reproduces(fixture_repo):
+    # A command-not-found (exit 127) is an environment problem, not a reproduction.
+    cap = _capsule_with_test()
+    cap["test"]["command"] = "this-binary-does-not-exist-xyz --run"
+    cap["test"]["expected"] = {"kind": "nonzero_exit"}
+    res = run_capsule_test(cap, repo_dir=fixture_repo["repo"], target_ref=fixture_repo["fixed"])
+    assert res["verdict"] == "inconclusive", res
+    assert res.get("reason")
+
+
+def test_validate_rejects_bad_test_shape():
+    from opentraces.core.capsule.contract import validate_capsule
+
+    bad = {
+        "schema_version": "opentraces.capsule.v1", "capsule_id": "x", "content_is_untrusted": True,
+        "source": {}, "intent": {}, "failing_step": {}, "slice": {}, "context_resume_packet": {},
+        "trail_anchors": [], "repo_pin": {}, "redaction": {}, "render_state": {}, "limitations": [],
+        "embedded": {}, "share": {},
+        "test": {"command": "", "expected": {"kind": "error_string"}},  # empty command
+    }
+    with pytest.raises(ValueError):
+        validate_capsule(bad)
+
+
 def test_declared_test_shapes():
     assert declared_test(None, None) is None
     t = declared_test("pytest x", "AssertionError")

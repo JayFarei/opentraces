@@ -82,7 +82,7 @@ def render_issue_body(
     *,
     capsule_url: str | None,
     human_url: str | None = None,
-    inline_envelope: bool = True,
+    inline_envelope: bool = False,
 ) -> str:
     """Render the GitHub issue body (the human + agent surface).
 
@@ -105,11 +105,17 @@ def render_issue_body(
     sha = _short(repo_pin.get("commit_sha"))
     remote = repo_pin.get("remote_url") or "(repo)"
     what = redact_intent(summ.get("what_happened") or "", max_chars=400)
+    closure = (capsule.get("render_state") or {}).get("closure")
+    ctx_phrase = (
+        "the full context the model saw"
+        if closure == "closure_full"
+        else "the captured intent and failing step (the model-context layer was unavailable for this capture)"
+    )
     lines.append(
         f"A coding agent ran this against `{remote}`"
         + (f" @ `{sha}`" if sha else "")
-        + ". This issue carries a **replayable capsule**: the captured intent, the "
-        "failing step, and the full context the model saw, redacted and pinned."
+        + f". This issue carries a **replayable capsule**: the captured intent, the "
+        f"failing step, and {ctx_phrase}, redacted and pinned."
     )
     if what:
         lines.append("")

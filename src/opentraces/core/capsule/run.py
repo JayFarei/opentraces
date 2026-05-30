@@ -84,9 +84,17 @@ def run_capsule_test(
 
     with _worktree_at(Path(repo_dir).resolve(), target_ref) as wt:
         cwd = wt
-        sub = (test.get("cwd") or "").strip("/")
-        if sub and (wt / sub).is_dir():
-            cwd = wt / sub
+        sub = (test.get("cwd") or "").strip()
+        if sub:
+            # Confine cwd to the worktree: reject absolute paths and `..` escapes
+            # (the capsule's cwd is untrusted input).
+            candidate = (wt / sub).resolve()
+            try:
+                candidate.relative_to(wt.resolve())
+                if candidate.is_dir():
+                    cwd = candidate
+            except ValueError:
+                pass  # traversal attempt — run at the worktree root instead
         try:
             proc = subprocess.run(
                 command, shell=True, cwd=str(cwd),
@@ -102,15 +110,23 @@ def run_capsule_test(
     kind = expected.get("kind")
     value = expected.get("value")
     signal_present = (value in output) if (kind == "error_string" and value) else None
+    reason = None
 
-    if kind == "error_string" and value:
+    # 126/127 = not-executable / command-not-found. That is an environment
+    # problem (missing interpreter, missing deps), NOT evidence the bug
+    # reproduces — never report `reproduces` on it.
+    if proc.returncode in (126, 127) and not signal_present:
+        verdict = "inconclusive"
+        reason = f"command could not run (exit {proc.returncode}: not found / not executable); environment likely differs"
+    elif kind == "error_string" and value:
         if signal_present:
             verdict = "reproduces"
         elif proc.returncode == 0:
             verdict = "fixed"
         else:
             verdict = "inconclusive"  # original error gone, but still failing for another reason
-    else:  # nonzero_exit oracle
+            reason = "original error string gone but the command still exits non-zero"
+    else:  # nonzero_exit oracle (weaker: cannot tell a real fix from a no-op success)
         verdict = "fixed" if proc.returncode == 0 else "reproduces"
 
     return {
@@ -121,6 +137,11 @@ def run_capsule_test(
         "target_ref": target_ref,
         "expected": expected,
         "signal_present": signal_present,
+        "reason": reason,
+        "oracle_caveat": (
+            "substring/exit-code oracle: a no-op success reads as fixed and an env "
+            "failure can read as reproduces. Treat as a smoke check, confirm before auto-closing."
+        ),
         "output_excerpt": output[-_OUTPUT_TAIL:],
     }
 
