@@ -310,14 +310,87 @@ def create_or_update_issue(
     return {"number": None, "url": url, "action": "created"}
 
 
+def parse_issue_ref(ref: str) -> tuple[str | None, int | None]:
+    """Parse an issue reference into ``(repo, number)``.
+
+    Accepts: ``https://github.com/owner/repo/issues/8``, ``owner/repo#8``, or a
+    bare ``8`` (repo must be supplied separately).
+    """
+
+    s = ref.strip()
+    m = re.search(r"github\.com/([^/]+/[^/]+)/issues/(\d+)", s)
+    if m:
+        return m.group(1), int(m.group(2))
+    m = re.match(r"([^/\s]+/[^/\s#]+)#(\d+)$", s)
+    if m:
+        return m.group(1), int(m.group(2))
+    if s.isdigit():
+        return None, int(s)
+    return None, None
+
+
+def issue_state(repo: str, number: int) -> dict[str, Any]:
+    """Return ``{state, title, url, verdict}`` for an issue (verdict from comments)."""
+
+    gh = _require_gh()
+    out = subprocess.run(
+        [gh, "issue", "view", str(number), "--repo", repo,
+         "--json", "state,title,url,body,comments"],
+        capture_output=True, text=True, check=False,
+    )
+    if out.returncode != 0:
+        raise GhError(out.stderr or out.stdout or "gh issue view failed")
+    data = json.loads(out.stdout or "{}")
+    verdict = None
+    for comment in data.get("comments") or []:
+        m = re.search(r"opentraces-capsule-verdict:\s*\S+\s+state=(\w+)", comment.get("body") or "")
+        if m:
+            verdict = m.group(1)  # last verdict wins
+    cid = None
+    mid = re.search(r"opentraces-capsule:\s*(\S+)\s*-->", data.get("body") or "")
+    if mid:
+        cid = mid.group(1)
+    return {
+        "state": data.get("state"),
+        "title": data.get("title"),
+        "url": data.get("url"),
+        "verdict": verdict,
+        "capsule_id": cid,
+    }
+
+
+def comment_issue(repo: str, number: int, body: str) -> None:
+    gh = _require_gh()
+    out = subprocess.run(
+        [gh, "issue", "comment", str(number), "--repo", repo, "--body-file", "-"],
+        input=body, capture_output=True, text=True, check=False,
+    )
+    if out.returncode != 0:
+        raise GhError(out.stderr or out.stdout or "gh issue comment failed")
+
+
+def close_issue(repo: str, number: int, *, reason: str = "completed") -> None:
+    gh = _require_gh()
+    out = subprocess.run(
+        [gh, "issue", "close", str(number), "--repo", repo, "--reason", reason],
+        capture_output=True, text=True, check=False,
+    )
+    if out.returncode != 0:
+        raise GhError(out.stderr or out.stdout or "gh issue close failed")
+
+
 __all__ = [
     "CapsuleResolveError",
     "GhError",
     "GhUnavailableError",
+    "close_issue",
+    "comment_issue",
     "copy_to_clipboard",
     "create_or_update_issue",
     "find_capsule_issue",
     "gh_available",
+    "issue_state",
+    "parse_issue_ref",
     "human_capsule_url",
     "load_capsule_file",
     "mint_capsule_url",

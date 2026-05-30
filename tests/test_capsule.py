@@ -228,6 +228,46 @@ def test_issue_h2_uses_distilled_summary_title_not_raw_dump():
     assert "**What happened:** hit a TypeError on empty input" in body
 
 
+def test_replay_packet_carries_intent_context_and_oracle():
+    from opentraces.core.capsule.replay import build_replay_packet
+
+    cap = _make_capsule()
+    packet = build_replay_packet(cap, target_ref="HEAD")
+    assert packet["schema_version"] == "opentraces.capsule_replay.v1"
+    assert packet["capsule_id"] == cap["capsule_id"]
+    assert packet["target_ref"] == "HEAD"
+    assert packet["before_commit"] == cap["repo_pin"]["commit_sha"]
+    assert packet["context_resume_packet"] == cap["context_resume_packet"]
+    # is_failure=True + a real error → error_string_gone oracle
+    assert packet["oracle"]["strategy"] == "error_string_gone"
+    assert "fixed" in packet["oracle"]["verdict_values"]
+
+
+def test_replay_oracle_is_intent_satisfied_for_non_failure():
+    from opentraces.core.capsule.replay import build_replay_packet
+
+    cap = _make_capsule(summary={"title": "design X", "what_happened": "no error", "failure": None, "is_failure": False, "scope": "5 steps"})
+    packet = build_replay_packet(cap, target_ref="HEAD")
+    assert packet["oracle"]["strategy"] == "intent_satisfied"
+
+
+def test_verdict_comment_is_marker_tagged():
+    from opentraces.core.capsule.replay import render_verdict_comment
+
+    body = render_verdict_comment(capsule_id="abc123", state="fixed", note="looks good", target_ref="HEAD", before_commit="deadbeef0000")
+    assert "<!-- opentraces-capsule-verdict: abc123 state=fixed -->" in body
+    assert "🟢" in body and "fixed" in body
+    assert "looks good" in body
+
+
+def test_parse_issue_ref_forms():
+    from opentraces.core.capsule.share import parse_issue_ref
+
+    assert parse_issue_ref("https://github.com/o/r/issues/8") == ("o/r", 8)
+    assert parse_issue_ref("o/r#12") == ("o/r", 12)
+    assert parse_issue_ref("5") == (None, 5)
+
+
 def test_non_failure_summary_uses_session_label():
     cap = _make_capsule(summary={
         "title": "design a caching layer", "what_happened": "no explicit error captured",
