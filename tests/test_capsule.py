@@ -264,3 +264,38 @@ def test_write_then_load_roundtrip(tmp_path):
     loaded = load_capsule_file(arts["json"])
     assert loaded["capsule_id"] == cap["capsule_id"]
     assert loaded["schema_version"] == CAPSULE_SCHEMA_VERSION
+
+
+# --------------------------------------------------------------------------- #
+# New-environment self-sufficiency (consume with zero local opentraces state)
+# --------------------------------------------------------------------------- #
+
+
+def test_capsule_open_needs_no_home_or_bucket(tmp_path):
+    """A maintainer in a brand-new environment can `capsule open` a capsule with
+    no ~/.opentraces, no bucket, no project. Hermetic: a severed-HOME subprocess
+    resolves a local capsule file and creates no opentraces state."""
+
+    import os
+    import subprocess
+    import sys
+
+    cap = _make_capsule()
+    arts = write_capsule_dir(cap, tmp_path / "store")
+    fresh_home = tmp_path / "fresh_home"
+    fresh_home.mkdir()
+
+    env = dict(os.environ)
+    env["HOME"] = str(fresh_home)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    proc = subprocess.run(
+        [sys.executable, "-c", "from opentraces.cli import main; main()",
+         "capsule", "open", str(arts["json"]), "--json"],
+        capture_output=True, text=True, env=env,
+    )
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    assert out["capsule_id"] == cap["capsule_id"]
+    assert out["schema_version"] == CAPSULE_SCHEMA_VERSION
+    # The consume path must not materialize any opentraces state in the fresh HOME.
+    assert not (fresh_home / ".opentraces").exists()
