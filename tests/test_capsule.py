@@ -43,6 +43,7 @@ def _make_capsule(**overrides):
         capsule_id="abc123def456abcd",
         source={"project_slug": "p", "trace_id": "t", "step_index": 3, "agent": "codex-cli"},
         summary={"title": "fix the parser", "what_happened": "hit a TypeError", "failure": "TypeError: x", "is_failure": True, "scope": "5 steps"},
+        test=None,
         intent={"headline": "agent tried to fix the parser", "most_substantive_spec": None, "trigger": None},
         failing_step={"index": 3, "type": "agent", "error_excerpt": "Traceback ...", "had_error_marker": True},
         slice_payload={"slice_id": "s", "trace_id": "t", "steps": [], "limitations": []},

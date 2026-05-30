@@ -251,6 +251,8 @@ def export_capsule(
     node_id: str | None = None,
     radius: int = 4,
     remote_url: str | None = None,
+    test_command: str | None = None,
+    expect_error: str | None = None,
 ) -> dict[str, Any]:
     """Build a frozen ``opentraces.capsule.v1`` envelope for one failing session.
 
@@ -332,6 +334,15 @@ def export_capsule(
     summary = build_summary(
         record=record, slice_payload=slice_payload, failing_step=failing_step, intent=intent,
     )
+
+    # Runnable repro (the article's "replayable test"): a declared command wins;
+    # otherwise best-effort extraction from the failing command step.
+    from .test_extract import declared_test, extract_test_payload
+
+    test = declared_test(test_command, expect_error) or extract_test_payload(record, resolved_step)
+    if test is None:
+        limitations.append("no_executable_test")
+
     anchors = _trail_anchors(project_dir, trace_id)
     if not anchors:
         limitations.append("trail_anchors_unavailable")
@@ -374,6 +385,7 @@ def export_capsule(
         capsule_id=capsule_id,
         source=source,
         summary=summary,
+        test=test,
         intent=intent,
         failing_step=failing_step,
         slice_payload=slice_payload,

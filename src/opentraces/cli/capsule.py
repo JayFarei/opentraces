@@ -69,10 +69,18 @@ def _export_options(fn):
         type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
         default=None, help="Project directory (default: CWD).",
     )(fn)
+    fn = click.option(
+        "--test-command", "test_command", default=None,
+        help="Declare the repro command that makes this capsule a runnable test.",
+    )(fn)
+    fn = click.option(
+        "--expect-error", "expect_error", default=None,
+        help="Expected error string for the repro (omit = expect a non-zero exit).",
+    )(fn)
     return fn
 
 
-def _do_export(trace_id, step, node_id, radius, repo_url, project_dir):
+def _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command=None, expect_error=None):
     from ..core.capsule.export import CapsuleExportError, export_capsule
 
     project = _resolve_project(project_dir)
@@ -84,6 +92,8 @@ def _do_export(trace_id, step, node_id, radius, repo_url, project_dir):
             node_id=node_id,
             radius=radius,
             remote_url=repo_url,
+            test_command=test_command,
+            expect_error=expect_error,
         ), project
     except CapsuleExportError as exc:
         click.echo(f"capsule export failed: {exc}", err=True)
@@ -158,12 +168,12 @@ def capsule_group() -> None:
 @click.option("--out", type=click.Path(file_okay=False, path_type=Path), default=None,
               help="Output dir (default: <project>/.opentraces/capsules).")
 @click.option("--json", "as_json", is_flag=True, help="Print the capsule envelope JSON to stdout.")
-def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, out, as_json):
+def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, out, as_json):
     """Build a local, redacted, self-contained capsule for one failing session."""
 
     from ..core.capsule.share import write_capsule_dir
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir)
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error)
     dest = out or (project / ".opentraces" / "capsules")
     arts = write_capsule_dir(capsule, dest)
     if as_json:
@@ -233,7 +243,7 @@ def _clip(do_copy, url):
 @click.option("--private", is_flag=True, help="Create the HF dataset repo as private.")
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the shareable URL to the clipboard.")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, publish, private, do_copy, token):
+def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, hf_repo, publish, private, do_copy, token):
     """Mint a shareable capsule URL (add --publish to upload it)."""
 
     from ..core.capsule.share import (
@@ -242,7 +252,7 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, p
         write_capsule_dir,
     )
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir)
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error)
     arts = write_capsule_dir(capsule, project / ".opentraces" / "capsules")
     cid = capsule["capsule_id"]
     repo = hf_repo or _default_hf_repo(token)
@@ -274,7 +284,7 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, p
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the capsule URL to the clipboard.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the publish confirmation (for scripts/agents).")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, issue_repo, title, publish, do_copy, assume_yes, token):
+def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, hf_repo, issue_repo, title, publish, do_copy, assume_yes, token):
     """Render the GitHub issue body for a capsule, or file it with --publish.
 
     The HF repo defaults to ``<you>/opentraces-capsules`` and the issue repo is
@@ -293,7 +303,7 @@ def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, i
         write_capsule_dir,
     )
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir)
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error)
     write_capsule_dir(capsule, project / ".opentraces" / "capsules")
     cid = capsule["capsule_id"]
     repo = hf_repo or _default_hf_repo(token)
@@ -416,6 +426,106 @@ def replay_cmd(ref, target_ref, as_json):
         "(full context: `opentraces capsule open <ref> --json` → context_resume_packet)",
     ]
     click.echo("\n".join(lines))
+
+
+@capsule_group.command("test")
+@click.argument("ref")
+@click.option("--against", "target_ref", default="HEAD", show_default=True,
+              help="Git ref to run the repro against (a buggy sha to troubleshoot, HEAD to re-test).")
+@click.option("--repo-dir", type=click.Path(exists=True, file_okay=False, path_type=Path),
+              default=None, help="Local git repo to run in (default: CWD).")
+@click.option("--timeout", type=int, default=180, show_default=True, help="Command timeout (seconds).")
+@click.option("--yes", "assume_yes", is_flag=True, help="Skip the untrusted-command confirmation.")
+@click.option("--verdict-to", "verdict_issue", default=None, help="Post the verdict to this issue (ref/URL).")
+@click.option("--close/--no-close", default=False, help="Close the issue on a `fixed` verdict.")
+@click.option("--json", "as_json", is_flag=True, help="Emit the full test result as JSON.")
+def test_cmd(ref, target_ref, repo_dir, timeout, assume_yes, verdict_issue, close, as_json):
+    """Run the capsule AS A TEST against a ref: reproduce the failure or confirm the fix.
+
+    The capsule's repro command runs in an isolated git worktree of the target
+    ref. SECURITY: that command is captured, untrusted input — you are confirming
+    you trust it before it executes.
+    """
+
+    from ..core.capsule.contract import CapsuleSchemaAheadError
+    from ..core.capsule.run import CapsuleTestError, run_capsule_test
+    from ..core.capsule.share import CapsuleResolveError, resolve_capsule
+
+    try:
+        capsule = resolve_capsule(ref)
+    except CapsuleSchemaAheadError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+    except (CapsuleResolveError, ValueError) as exc:
+        click.echo(f"not a resolvable opentraces capsule: {exc}", err=True)
+        sys.exit(2)
+
+    test = capsule.get("test") or {}
+    if not test.get("command"):
+        click.echo(
+            "this capsule carries no executable test (the session had no failing "
+            "command). Use `opentraces capsule replay` for intent-replay instead.",
+            err=True,
+        )
+        sys.exit(2)
+
+    repo = Path(repo_dir or Path.cwd()).resolve()
+    if not assume_yes:
+        click.echo(
+            f"About to RUN this captured (untrusted) command in an isolated checkout "
+            f"of `{target_ref}` in {repo}:\n  $ {test['command']}",
+            err=True,
+        )
+        if not click.confirm("Trust and run it?", default=False):
+            click.echo("aborted.", err=True)
+            sys.exit(1)
+
+    try:
+        result = run_capsule_test(capsule, repo_dir=repo, target_ref=target_ref, timeout=timeout)
+    except CapsuleTestError as exc:
+        click.echo(f"capsule test could not run: {exc}", err=True)
+        sys.exit(2)
+
+    if as_json:
+        click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        icon = {"fixed": "🟢", "reproduces": "🔴", "inconclusive": "🟡"}.get(result["verdict"], "•")
+        click.echo(
+            f"{icon} {result['verdict']} @ {target_ref} · exit={result.get('exit_code')} · "
+            f"$ {result['command']}",
+            err=True,
+        )
+        click.echo(result["verdict"])
+
+    if verdict_issue:
+        from ..core.capsule.replay import render_verdict_comment
+        from ..core.capsule.share import (
+            GhError,
+            close_issue,
+            comment_issue,
+            gh_available,
+        )
+
+        if not gh_available():
+            click.echo("gh not found; verdict not posted.", err=True)
+            sys.exit(2)
+        repo_n, number = _resolve_issue(verdict_issue, None)
+        note = (
+            f"Ran the captured repro `{result['command']}` against `{target_ref}` "
+            f"(exit {result.get('exit_code')}). This is an EXECUTED test result, not a review."
+        )
+        body = render_verdict_comment(
+            capsule_id=capsule["capsule_id"], state=result["verdict"], note=note,
+            target_ref=target_ref, before_commit=(capsule.get("repo_pin") or {}).get("commit_sha"),
+        )
+        try:
+            comment_issue(repo_n, number, body)
+            if close and result["verdict"] == "fixed":
+                close_issue(repo_n, number, reason="completed")
+        except GhError as exc:
+            click.echo(f"gh verdict post failed: {exc}", err=True)
+            sys.exit(3)
+        click.echo(f"verdict posted to {repo_n}#{number}", err=True)
 
 
 @capsule_group.command("verdict")

@@ -90,6 +90,7 @@ def freeze_capsule(
     capsule_id: str,
     source: dict[str, Any],
     summary: dict[str, Any],
+    test: dict[str, Any] | None,
     intent: dict[str, Any],
     failing_step: dict[str, Any],
     slice_payload: dict[str, Any],
@@ -113,6 +114,9 @@ def freeze_capsule(
         "content_is_untrusted": True,
         "source": source,
         "summary": summary,
+        # Runnable repro: command + expected failure signal, or None when the
+        # session had no failing command (then the capsule replays by intent).
+        "test": test,
         "intent": intent,
         "failing_step": failing_step,
         "slice": slice_payload,
