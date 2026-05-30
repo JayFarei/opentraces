@@ -42,6 +42,7 @@ def _make_capsule(**overrides):
     base = dict(
         capsule_id="abc123def456abcd",
         source={"project_slug": "p", "trace_id": "t", "step_index": 3, "agent": "codex-cli"},
+        summary={"title": "fix the parser", "what_happened": "hit a TypeError", "failure": "TypeError: x", "is_failure": True, "scope": "5 steps"},
         intent={"headline": "agent tried to fix the parser", "most_substantive_spec": None, "trigger": None},
         failing_step={"index": 3, "type": "agent", "error_excerpt": "Traceback ...", "had_error_marker": True},
         slice_payload={"slice_id": "s", "trace_id": "t", "steps": [], "limitations": []},
@@ -196,6 +197,44 @@ def test_capsule_markdown_has_header_and_no_marker():
     md = render_capsule_markdown(cap)
     assert md.startswith("# Trace Capsule")
     assert "opentraces-capsule:" not in md  # marker is issue-only
+
+
+# --------------------------------------------------------------------------- #
+# Summary distiller (better-than-raw-TASK-dump)
+# --------------------------------------------------------------------------- #
+
+
+def test_distill_title_strips_scaffolding():
+    from opentraces.core.capsule.summary import distill_title
+
+    raw = (
+        "$thermo-nuclear-review TASK: Design the simplest robust fix to make "
+        '"trace spotlight" fast. EXPECTED OUTCOME: a design doc with sections.'
+    )
+    title = distill_title(raw)
+    assert title.startswith("Design the simplest robust fix")
+    assert "TASK:" not in title
+    assert "EXPECTED OUTCOME" not in title
+    assert "$thermo" not in title
+
+
+def test_issue_h2_uses_distilled_summary_title_not_raw_dump():
+    cap = _make_capsule(summary={
+        "title": "fix the flaky parser", "what_happened": "hit a TypeError on empty input",
+        "failure": "TypeError: NoneType", "is_failure": True, "scope": "5 steps",
+    })
+    body = render_issue_body(cap, capsule_url="https://hf.co/x")
+    assert "## 🐛 Agent bug capsule: fix the flaky parser" in body
+    assert "**What happened:** hit a TypeError on empty input" in body
+
+
+def test_non_failure_summary_uses_session_label():
+    cap = _make_capsule(summary={
+        "title": "design a caching layer", "what_happened": "no explicit error captured",
+        "failure": None, "is_failure": False, "scope": "10 steps",
+    })
+    body = render_issue_body(cap, capsule_url=None)
+    assert "🔁 Agent session capsule: design a caching layer" in body
 
 
 # --------------------------------------------------------------------------- #

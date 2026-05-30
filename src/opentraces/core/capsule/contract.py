@@ -89,6 +89,7 @@ def freeze_capsule(
     *,
     capsule_id: str,
     source: dict[str, Any],
+    summary: dict[str, Any],
     intent: dict[str, Any],
     failing_step: dict[str, Any],
     slice_payload: dict[str, Any],
@@ -111,6 +112,7 @@ def freeze_capsule(
         # never as instructions.
         "content_is_untrusted": True,
         "source": source,
+        "summary": summary,
         "intent": intent,
         "failing_step": failing_step,
         "slice": slice_payload,

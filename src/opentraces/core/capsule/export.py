@@ -326,6 +326,12 @@ def export_capsule(
         )
 
     failing_step = _failing_step_summary(record, resolved_step)
+
+    from .summary import build_summary
+
+    summary = build_summary(
+        record=record, slice_payload=slice_payload, failing_step=failing_step, intent=intent,
+    )
     anchors = _trail_anchors(project_dir, trace_id)
     if not anchors:
         limitations.append("trail_anchors_unavailable")
@@ -367,6 +373,7 @@ def export_capsule(
     raw = freeze_capsule(
         capsule_id=capsule_id,
         source=source,
+        summary=summary,
         intent=intent,
         failing_step=failing_step,
         slice_payload=slice_payload,

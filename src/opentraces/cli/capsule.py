@@ -93,51 +93,58 @@ def _do_export(trace_id, step, node_id, radius, repo_url, project_dir):
         sys.exit(2)
 
 
-def _mint_and_maybe_publish(capsule, *, hf_repo, execute, private, public_ack, token):
-    """Return (capsule_url, human_url, published_info|None). Exits on policy/remote errors."""
+def _infer_issue_repo(capsule) -> str | None:
+    """``owner/name`` from the capsule's repo pin — the repo the bug happened in."""
 
-    from ..core.capsule.share import (
-        human_capsule_url,
-        mint_capsule_url,
-        publish_capsule,
-    )
+    import re
 
-    cid = capsule["capsule_id"]
-    if execute:
-        if not hf_repo:
-            click.echo("--execute requires --repo <owner/name> (the HF dataset to publish to).", err=True)
-            sys.exit(2)
-        if not public_ack:
-            click.echo(
-                f"Refusing to publish to a PUBLIC destination ({hf_repo}) without "
-                "consent. Re-run with --public to acknowledge this publishes a "
-                "redacted capsule of your agent session publicly.",
-                err=True,
-            )
-            sys.exit(2)
-        tok = _hf_token(token)
-        if not tok:
-            click.echo(
-                "No Hugging Face token found. Pass --token, set HF_TOKEN, or run "
-                "`opentraces auth login`.",
-                err=True,
-            )
-            sys.exit(2)
-        try:
-            info = publish_capsule(capsule, repo_id=hf_repo, token=tok, private=private)
-        except Exception as exc:
-            click.echo(f"capsule publish failed: {exc}", err=True)
-            sys.exit(3)
-        return info["capsule_url"], info["human_url"], info
+    url = ((capsule.get("repo_pin") or {}).get("remote_url") or "").strip()
+    m = re.search(r"github\.com[/:]([^/]+/[^/.\s]+)", url)
+    return m.group(1) if m else None
 
-    # Dry: construct the URL form (not yet published).
-    if hf_repo:
-        return (
-            mint_capsule_url(hf_repo, cid, revision="main"),
-            human_capsule_url(hf_repo, cid, revision="main"),
-            None,
+
+def _default_hf_repo(token) -> str | None:
+    """``cfg.capsule_repo`` if set, else ``<hf-user>/opentraces-capsules``."""
+
+    try:
+        from ..core.config import load_config
+
+        cr = getattr(load_config(), "capsule_repo", None)
+        if cr:
+            return str(cr)
+    except Exception:
+        pass
+    tok = _hf_token(token)
+    if not tok:
+        return None
+    try:
+        from huggingface_hub import HfApi
+
+        name = HfApi(token=tok).whoami().get("name")
+        return f"{name}/opentraces-capsules" if name else None
+    except Exception:
+        return None
+
+
+def _publish_and_url(capsule, *, hf_repo, token, private):
+    """Publish to HF (capsule.json + capsule.md only). Exits on error."""
+
+    from ..core.capsule.share import publish_capsule
+
+    tok = _hf_token(token)
+    if not tok:
+        click.echo(
+            "No Hugging Face token found. Pass --token, set HF_TOKEN, or run "
+            "`opentraces auth login`.",
+            err=True,
         )
-    return None, None, None
+        sys.exit(2)
+    try:
+        info = publish_capsule(capsule, repo_id=hf_repo, token=tok, private=private)
+    except Exception as exc:
+        click.echo(f"capsule publish failed: {exc}", err=True)
+        sys.exit(3)
+    return info["capsule_url"], info["human_url"], info
 
 
 @click.group("capsule")
@@ -164,8 +171,7 @@ def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, out, as_j
         return
     manifest = (capsule.get("redaction") or {}).get("manifest") or {}
     click.echo(
-        f"capsule {capsule['capsule_id']} · intent: "
-        f"{(capsule.get('intent') or {}).get('headline','')[:70]!r}\n"
+        f"capsule {capsule['capsule_id']} · {(capsule.get('summary') or {}).get('title','')[:80]}\n"
         f"  redaction: floor {manifest.get('floor')} ran · "
         f"{manifest.get('redactions_applied',0)} redactions · "
         f"{manifest.get('home_paths_scrubbed',0)} paths scrubbed\n"
@@ -211,126 +217,136 @@ def open_cmd(ref, as_json, summary):
     click.echo(json.dumps(capsule, indent=2, ensure_ascii=False))
 
 
+def _clip(do_copy, url):
+    if do_copy and url:
+        from ..core.capsule.share import copy_to_clipboard
+
+        ok, how = copy_to_clipboard(url)
+        click.echo(f"clipboard: {'copied via ' + how if ok else how}", err=True)
+
+
 @capsule_group.command("share")
 @click.argument("trace_id")
 @_export_options
-@click.option("--repo", "hf_repo", default=None, help="HF dataset repo (owner/name) to publish to.")
-@click.option("--execute", is_flag=True, help="Actually upload capsule.json + capsule.md to HF.")
-@click.option("--public", "public_ack", is_flag=True, help="Acknowledge publishing publicly (required with --execute).")
+@click.option("--repo", "hf_repo", default=None, help="HF dataset repo (default: <you>/opentraces-capsules).")
+@click.option("--publish", is_flag=True, help="Upload the capsule to HF (capsule.json + capsule.md only).")
 @click.option("--private", is_flag=True, help="Create the HF dataset repo as private.")
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the shareable URL to the clipboard.")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, execute, public_ack, private, do_copy, token):
-    """Mint a shareable capsule URL (and optionally publish it)."""
+def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, publish, private, do_copy, token):
+    """Mint a shareable capsule URL (add --publish to upload it)."""
 
-    from ..core.capsule.share import copy_to_clipboard, write_capsule_dir
+    from ..core.capsule.share import (
+        human_capsule_url,
+        mint_capsule_url,
+        write_capsule_dir,
+    )
 
     capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir)
     arts = write_capsule_dir(capsule, project / ".opentraces" / "capsules")
-    url, human, info = _mint_and_maybe_publish(
-        capsule, hf_repo=hf_repo, execute=execute, private=private,
-        public_ack=public_ack, token=token,
-    )
-    if url is None:
-        click.echo(
-            f"Local capsule written: {arts['json']}\n"
-            "Pass --repo <owner/name> to mint a shareable HF URL, and --execute to publish it.",
-            err=True,
-        )
+    cid = capsule["capsule_id"]
+    repo = hf_repo or _default_hf_repo(token)
+
+    if publish:
+        if not repo:
+            click.echo("could not determine an HF repo; pass --repo <owner/name>.", err=True)
+            sys.exit(2)
+        url, human, info = _publish_and_url(capsule, hf_repo=repo, token=token, private=private)
+        click.echo(f"published {cid} (rev {info['revision'][:12]}) · {human}", err=True)
+    elif repo:
+        url = mint_capsule_url(repo, cid)
+        click.echo(f"URL form (add --publish to upload) · {human_capsule_url(repo, cid)}", err=True)
+    else:
+        click.echo(f"Local capsule: {arts['json']} (pass --repo / --publish to share)", err=True)
         click.echo(f"file://{arts['json']}")
         return
-    if info is not None:
-        click.echo(f"Published capsule {capsule['capsule_id']} (rev {info['revision'][:12]}). Human page: {human}", err=True)
-    else:
-        click.echo(f"URL form (not yet published; add --execute): human {human}", err=True)
-    if do_copy:
-        ok, how = copy_to_clipboard(url)
-        click.echo(f"clipboard: {'copied via ' + how if ok else how}", err=True)
+    _clip(do_copy, url)
     click.echo(url)  # primary stdout = the shareable URL
 
 
-@capsule_group.group("issue")
-def issue_group() -> None:
-    """Render or file a GitHub issue carrying a capsule."""
+@capsule_group.command("issue")
+@click.argument("trace_id")
+@_export_options
+@click.option("--repo", "hf_repo", default=None, help="HF dataset repo (default: <you>/opentraces-capsules).")
+@click.option("--issue-repo", default=None, help="GitHub repo (default: inferred from the capsule's repo pin).")
+@click.option("--title", default=None, help="Issue title (default: derived from the summary).")
+@click.option("--publish", is_flag=True, help="Publish to HF and file/update the issue via gh.")
+@click.option("--copy", "do_copy", is_flag=True, help="Copy the capsule URL to the clipboard.")
+@click.option("--yes", "assume_yes", is_flag=True, help="Skip the publish confirmation (for scripts/agents).")
+@click.option("--token", default=None, help="HF token (default: env / config / live token file).")
+def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, issue_repo, title, publish, do_copy, assume_yes, token):
+    """Render the GitHub issue body for a capsule, or file it with --publish.
 
+    The HF repo defaults to ``<you>/opentraces-capsules`` and the issue repo is
+    inferred from the capsule's repo pin (the repo the bug happened in), so the
+    common case is just ``opentraces capsule issue <trace> --publish``.
+    """
 
-def _issue_options(fn):
-    fn = click.argument("trace_id")(fn)
-    fn = _export_options(fn)
-    fn = click.option("--repo", "hf_repo", default=None, help="HF dataset repo to publish the capsule to.")(fn)
-    fn = click.option("--issue-repo", default=None, help="GitHub repo (owner/name) to file the issue on.")(fn)
-    fn = click.option("--title", default=None, help="Issue title (default: derived from intent).")(fn)
-    fn = click.option("--execute", is_flag=True, help="Publish to HF and file/update the issue via gh.")(fn)
-    fn = click.option("--public", "public_ack", is_flag=True, help="Acknowledge publishing publicly (required with --execute).")(fn)
-    fn = click.option("--copy", "do_copy", is_flag=True, help="Copy the capsule URL to the clipboard.")(fn)
-    fn = click.option("--token", default=None, help="HF token (default: env / config / live token file).")(fn)
-    return fn
-
-
-def _build_issue(trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, execute, public_ack, token):
     from ..core.capsule.render import render_issue_body
-    from ..core.capsule.share import write_capsule_dir
-
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir)
-    write_capsule_dir(capsule, project / ".opentraces" / "capsules")
-    url, human, info = _mint_and_maybe_publish(
-        capsule, hf_repo=hf_repo, execute=execute, private=False,
-        public_ack=public_ack, token=token,
-    )
-    body = render_issue_body(capsule, capsule_url=url, human_url=human)
-    return capsule, body, url, info
-
-
-@issue_group.command("render")
-@_issue_options
-def issue_render_cmd(trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, issue_repo, title, execute, public_ack, do_copy, token):
-    """Render the GitHub issue body to stdout (no outward action)."""
-
-    _capsule, body, _url, _info = _build_issue(
-        trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, False, public_ack, token,
-    )
-    click.echo(body)
-
-
-@issue_group.command("create")
-@_issue_options
-def issue_create_cmd(trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, issue_repo, title, execute, public_ack, do_copy, token):
-    """Create (or idempotently update) a GitHub issue carrying the capsule."""
-
     from ..core.capsule.share import (
         GhError,
         GhUnavailableError,
-        copy_to_clipboard,
         create_or_update_issue,
         gh_available,
+        human_capsule_url,
+        mint_capsule_url,
+        write_capsule_dir,
     )
 
-    capsule, body, url, _info = _build_issue(
-        trace_id, step, node_id, radius, repo_url, project_dir, hf_repo, execute, public_ack, token,
-    )
-    if do_copy and url:
-        ok, how = copy_to_clipboard(url)
-        click.echo(f"clipboard: {'copied via ' + how if ok else how}", err=True)
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir)
+    write_capsule_dir(capsule, project / ".opentraces" / "capsules")
+    cid = capsule["capsule_id"]
+    repo = hf_repo or _default_hf_repo(token)
+    target_repo = issue_repo or _infer_issue_repo(capsule)
 
-    if not execute:
+    if not publish:
+        url = mint_capsule_url(repo, cid) if repo else None
+        human = human_capsule_url(repo, cid) if repo else None
+        body = render_issue_body(capsule, capsule_url=url, human_url=human)
+        _clip(do_copy, url)
         click.echo(body)
         click.echo(
-            "\n(dry run: pass --execute --issue-repo <owner/name> --repo <hf-repo> "
-            "--public to publish + file the issue.)",
+            f"\n(dry run · HF repo: {repo or '<unset, pass --repo>'} · "
+            f"issue repo: {target_repo or '<unset, pass --issue-repo>'} · "
+            "add --publish to file it.)",
             err=True,
         )
         return
 
-    if not issue_repo:
-        click.echo("--execute requires --issue-repo <owner/name>.", err=True)
+    if not repo:
+        click.echo("could not determine an HF repo; pass --repo <owner/name>.", err=True)
+        sys.exit(2)
+    if not target_repo:
+        click.echo(
+            "could not infer the GitHub repo from the capsule's repo pin; "
+            "pass --issue-repo <owner/name>.",
+            err=True,
+        )
         sys.exit(2)
     if not gh_available():
         click.echo("GitHub CLI (`gh`) not found. Install via `brew install gh`.", err=True)
         sys.exit(2)
-    derived_title = title or f"[agent capsule] {(capsule.get('intent') or {}).get('headline','bug')[:80]}"
+
+    # Explicit public-destination consent (replaces the old --public flag): a
+    # confirm that names both destinations. --yes bypasses for scripts/agents.
+    if not assume_yes:
+        click.echo(
+            f"This will PUBLISH a redacted capsule publicly to HF `{repo}` and "
+            f"file/update a GitHub issue on `{target_repo}`.",
+            err=True,
+        )
+        if not click.confirm("Proceed?", default=False):
+            click.echo("aborted.", err=True)
+            sys.exit(1)
+
+    url, human, _info = _publish_and_url(capsule, hf_repo=repo, token=token, private=False)
+    body = render_issue_body(capsule, capsule_url=url, human_url=human)
+    _clip(do_copy, url)
+    summary_title = (capsule.get("summary") or {}).get("title") or "session"
+    derived_title = title or f"[agent capsule] {summary_title}"[:90]
     try:
-        info = create_or_update_issue(
-            repo=issue_repo, capsule_id=capsule["capsule_id"], title=derived_title, body=body,
+        issue = create_or_update_issue(
+            repo=target_repo, capsule_id=cid, title=derived_title, body=body,
         )
     except GhUnavailableError as exc:
         click.echo(str(exc), err=True)
@@ -338,8 +354,8 @@ def issue_create_cmd(trace_id, step, node_id, radius, repo_url, project_dir, hf_
     except GhError as exc:
         click.echo(f"gh issue failed: {exc}", err=True)
         sys.exit(3)
-    click.echo(f"{info['action']} issue: {info['url']}", err=True)
-    click.echo(info["url"])  # primary stdout = the issue URL
+    click.echo(f"{issue['action']} issue · capsule {cid} · {human}", err=True)
+    click.echo(issue["url"])  # primary stdout = the issue URL
 
 
 __all__ = ["capsule_group"]

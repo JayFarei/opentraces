@@ -64,9 +64,17 @@ def _closure_note(capsule: dict[str, Any]) -> str | None:
     return None
 
 
-def _intent_headline(capsule: dict[str, Any]) -> str:
-    headline = (capsule.get("intent") or {}).get("headline") or "(no intent captured)"
-    return redact_intent(headline, max_chars=300)
+def _summary(capsule: dict[str, Any]) -> dict[str, Any]:
+    # Back-compat: capsules written before the summary block fall back to intent.
+    summ = capsule.get("summary")
+    if isinstance(summ, dict) and summ.get("title"):
+        return summ
+    headline = (capsule.get("intent") or {}).get("headline") or "agent session"
+    return {"title": headline, "what_happened": "", "failure": None, "is_failure": False, "scope": ""}
+
+
+def _title(capsule: dict[str, Any]) -> str:
+    return redact_intent(_summary(capsule).get("title") or "agent session", max_chars=200)
 
 
 def render_issue_body(
@@ -86,20 +94,29 @@ def render_issue_body(
     cid = capsule.get("capsule_id", "")
     repo_pin = capsule.get("repo_pin") or {}
     failing = capsule.get("failing_step") or {}
+    summ = _summary(capsule)
     open_ref = capsule_url or "<capsule-url>"
+    label = "🐛 Agent bug capsule" if summ.get("is_failure") else "🔁 Agent session capsule"
 
     lines: list[str] = []
     lines.append(f"<!-- opentraces-capsule: {cid} -->")
-    lines.append(f"## 🐛 Agent bug capsule: {_intent_headline(capsule)}")
+    lines.append(f"## {label}: {_title(capsule)}")
     lines.append("")
     sha = _short(repo_pin.get("commit_sha"))
     remote = repo_pin.get("remote_url") or "(repo)"
+    what = redact_intent(summ.get("what_happened") or "", max_chars=400)
     lines.append(
-        f"A coding agent hit this while working against `{remote}`"
+        f"A coding agent ran this against `{remote}`"
         + (f" @ `{sha}`" if sha else "")
         + ". This issue carries a **replayable capsule**: the captured intent, the "
         "failing step, and the full context the model saw, redacted and pinned."
     )
+    if what:
+        lines.append("")
+        lines.append(f"**What happened:** {what}")
+    if summ.get("scope"):
+        lines.append("")
+        lines.append(f"_Scope: {summ['scope']}._")
     lines.append("")
     lines.append("### Maintainer agent: resolve it")
     lines.append("```bash")
@@ -117,7 +134,7 @@ def render_issue_body(
         lines.append(note)
         lines.append("")
 
-    lines.append("### Failing step")
+    lines.append("### Failing step" if summ.get("is_failure") else "### Anchor step (session pinned here)")
     excerpt = redact_intent(failing.get("error_excerpt") or "", max_chars=600)
     step_desc = f"step #{failing.get('index')}"
     if failing.get("type"):
