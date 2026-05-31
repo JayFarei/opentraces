@@ -188,3 +188,24 @@ Hard constraints (from plan 087 + the Goal):
 - **Next:** U6b — push the concept filter into SQL (`doc_concepts(doc_id, concept_id)` index table
   + `concepts_indexed` meta flag + JOIN in `_select_docs_by_semantic_ids`) so the `--semantic`
   concept cliff (rows_scanned ~corpus) becomes bounded; flips facet/cliff bounded_expected→True.
+
+## 2026-05-31 — U6b: index-bounded concept scorer ✅ (qmd invariant restored for --semantic)
+
+- **Diff (production, projection build path):** new `doc_concepts(doc_id, concept_id)` table +
+  indexes in the build schema; `_insert_doc` populates it (guarded for old projections),
+  `_delete_doc` maintains it on refresh; a full build sets `projection_meta.concepts_indexed=1`;
+  `_select_docs_by_semantic_ids` uses a bounded JOIN when that flag is set, else falls back to the
+  pre-U6 full scan (backward-compatible — old projections still correct, just unbounded until
+  rebuilt). No doc-schema bump (the index is derived; the flag gates the bounded path).
+- **Result:** `--semantic mongodb` scans **12 rows (was 20,279)** — `total=12 rows_scanned=12`,
+  path=projection_concept. The concept O(corpus) cliff is now bounded (cost ∝ matches). cliff row
+  flips bounded_expected→True; dev eval **24/24 green, O(corpus)=2** (only the facet rows remain).
+- **Regression:** projection/refresh/query suites **103 passed**.
+- **Scope note (facet bounding deferred):** the `--files` facet still scans all trace units (the
+  index path `_select_unit_rows` no-terms branch). The Goal's S8 requirement is **time-orderability**
+  (satisfied by U4 `--sort time` on the index path), not facet boundedness; the facet O(corpus) is a
+  *gated, documented* cliff (bounded_expected=False) so the qmd counter-assertion still holds. Full
+  facet bounding (a `unit_files` index + LIKE prefilter, mirroring doc_concepts but in the index's
+  incremental-refresh lifecycle) is a deferred follow-on — secondary value, higher index-lifecycle risk.
+- **Next:** U7 — real-scale + xl(~10k) tiers + scaling-slope gate (p95(xl) ≤ 2.5× p95(real-scale)
+  for a fixed result size; the qmd invariant proven at scale).

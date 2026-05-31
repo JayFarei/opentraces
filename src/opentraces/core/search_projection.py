@@ -75,6 +75,7 @@ _META_BUILT_FROM_DIGEST = "built_from_digest"
 _META_BUILT_FROM_CHEAP_SIGNAL = "built_from_cheap_signal"
 _META_BUILD_ID = "build_id"
 _META_DOC_SCHEMA_VERSION = "doc_schema_version"
+_META_CONCEPTS_INDEXED = "concepts_indexed"
 
 # Default provenance tag for docs sourced from the local bucket (R7). Remote
 # pulls feed ``refresh_search_projection`` with ``source="remote:<owner/repo>"``.
@@ -217,6 +218,9 @@ def build_search_projection(
             _META_BUILT_FROM_CHEAP_SIGNAL: built_from_cheap_signal,
             _META_BUILD_ID: build_id,
             _META_DOC_SCHEMA_VERSION: SEARCH_DOC_SCHEMA_VERSION,
+            # A full build inserts every doc's concepts into doc_concepts, so the
+            # index is complete and the bounded JOIN scorer is authoritative (U6).
+            _META_CONCEPTS_INDEXED: "1",
         },
     )
 
@@ -905,6 +909,12 @@ def _create_search_schema(conn: sqlite3.Connection) -> None:
             key text primary key,
             value text
         );
+        create table doc_concepts (
+            doc_id text not null,
+            concept_id text not null
+        );
+        create index if not exists idx_doc_concepts_concept on doc_concepts(concept_id);
+        create index if not exists idx_doc_concepts_doc on doc_concepts(doc_id);
         """
     )
 
@@ -948,6 +958,27 @@ def _insert_doc(conn: sqlite3.Connection, doc: dict[str, Any]) -> None:
             fts_rowid,
         ),
     )
+    _insert_doc_concepts(conn, doc)
+
+
+def _insert_doc_concepts(conn: sqlite3.Connection, doc: dict[str, Any]) -> None:
+    """Index this doc's semantic concept_ids for the bounded concept scorer (U6).
+
+    Tolerates an old projection that predates the ``doc_concepts`` table: the
+    insert is skipped and the ``concepts_indexed`` meta flag stays unset, so the
+    query path keeps its O(corpus) full-scan fallback (correct, just unbounded).
+    """
+
+    concept_ids = (doc.get("semantic") or {}).get("concept_ids") or []
+    if not concept_ids:
+        return
+    try:
+        conn.executemany(
+            "insert into doc_concepts(doc_id, concept_id) values (?, ?)",
+            [(doc["doc_id"], str(cid)) for cid in concept_ids],
+        )
+    except sqlite3.OperationalError:
+        pass
 
 
 def _delete_doc(conn: sqlite3.Connection, doc_id: str) -> None:
@@ -959,6 +990,10 @@ def _delete_doc(conn: sqlite3.Connection, doc_id: str) -> None:
     # the unindexed doc_id column, the very blocker this fix removes; on the real
     # 339k-doc bucket that is ~0.5s per call, so the idempotent re-key delete in
     # the reinsert loop would re-introduce a multi-minute stall per trace).
+    try:
+        conn.execute("delete from doc_concepts where doc_id = ?", (doc_id,))
+    except sqlite3.OperationalError:
+        pass  # old projection without the doc_concepts table (U6)
     row = conn.execute(
         "select fts_rowid from docs where doc_id = ?", (doc_id,)
     ).fetchone()
@@ -1644,6 +1679,22 @@ def _select_docs(sqlite_path: Path, terms: list[str]) -> list[dict[str, Any]]:
     return [json.loads(row["payload_json"]) for row in rows]
 
 
+def _concepts_indexed(conn: sqlite3.Connection) -> bool:
+    """True iff this build carries a complete doc_concepts index (U6 flag)."""
+
+    try:
+        row = conn.execute(
+            "select value from projection_meta where key = ?",
+            (_META_CONCEPTS_INDEXED,),
+        ).fetchone()
+    except sqlite3.DatabaseError:
+        return False
+    if row is None:
+        return False
+    value = row["value"] if isinstance(row, sqlite3.Row) else row[0]
+    return str(value) == "1"
+
+
 def _select_docs_by_semantic_ids(
     sqlite_path: Path,
     semantic_ids: set[str],
@@ -1652,6 +1703,24 @@ def _select_docs_by_semantic_ids(
         return []
     with sqlite3.connect(sqlite_path) as conn:
         conn.row_factory = sqlite3.Row
+        if _concepts_indexed(conn):
+            # Bounded path (U6): the concept filter is pushed into SQL via the
+            # indexed doc_concepts table, so we materialise only docs carrying a
+            # requested concept — cost tracks #matches, not #corpus (the qmd
+            # invariant), instead of the historical full-table scan.
+            placeholders = ",".join("?" for _ in semantic_ids)
+            rows = conn.execute(
+                f"""
+                select distinct docs.payload_json from docs
+                join doc_concepts on doc_concepts.doc_id = docs.doc_id
+                where doc_concepts.concept_id in ({placeholders})
+                order by docs.trace_id, docs.unit_id
+                """,
+                tuple(sorted(semantic_ids)),
+            ).fetchall()
+            search_diag.record(rows_scanned=len(rows))
+            return [json.loads(row["payload_json"]) for row in rows]
+        # Fallback for pre-U6 projections without a complete concept index.
         rows = conn.execute(
             "select payload_json from docs order by trace_id, unit_id"
         ).fetchall()

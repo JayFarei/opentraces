@@ -504,8 +504,8 @@ def plan_corpus(profile: dict[str, Any], seed: int, tier: str) -> CorpusPlan:
             mode="semantic", query="mongodb",
             gold_trace_ids=list(members), gold_kind="set",
             targets={"recall_at": 10, "recall_min": 0.95},
-            expected_phase_a="green", bounded_expected=False,
-            note="concept query -> _select_docs_by_semantic_ids scans every doc (boundedness RED, U6)",
+            expected_phase_a="green", bounded_expected=True,
+            note="U6: concept filter pushed into SQL via doc_concepts -> bounded (scans matches)",
         ))
 
     planted = len(traces)

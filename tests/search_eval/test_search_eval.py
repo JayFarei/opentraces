@@ -147,13 +147,13 @@ def test_boundedness_invariant(dev_report):
     lex = by_id["refbare-00"].boundedness
     assert lex["bounded"] and lex["rows_scanned"] <= lex["corpus_docs"] // 2
 
-    # the concept --semantic cliff scans (nearly) the whole corpus -> O(corpus)
+    # U6: the concept --semantic filter is pushed into SQL (doc_concepts) -> bounded
     cliff = by_id["cliff-00"].boundedness
-    assert not cliff["bounded"]
-    assert cliff["rows_scanned"] >= cliff["corpus_docs"] * 0.9
-    assert cliff["matched"] < cliff["rows_scanned"]  # scans many, returns few
+    assert cliff["bounded"]
+    assert cliff["rows_scanned"] < cliff["corpus_docs"]      # not the whole corpus
+    assert cliff["rows_scanned"] <= cliff["matched"] * 4 + 50
 
-    # --files has no FTS -> scans all trace units (the facet cliff)
+    # --files still has no FTS index -> scans all trace units (facet cliff, U6c)
     facet = by_id["facet-00"].boundedness
     assert not facet["bounded"]
 
