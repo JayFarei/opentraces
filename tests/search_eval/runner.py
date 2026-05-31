@@ -192,14 +192,38 @@ def run_eval(
     profile: dict[str, Any] | None = None,
     base_dir: Path | None = None,
     keep: bool = False,
+    cache: bool = False,
 ) -> EvalReport:
     profile = profile or load_profile()
     plan: CorpusPlan = plan_corpus(profile, seed, tier)
 
+    cache_hit = False
+    if cache:
+        from tests.search_eval.snapshot_cache import cache_path, is_cached
+        base_dir = cache_path(plan.snapshot_key)
+        cache_hit = is_cached(plan.snapshot_key)
+        keep = True  # never delete a content-addressed cache directory
+
     base_dir = base_dir or Path(tempfile.mkdtemp(prefix=f"seval-{tier}-"))
     home_dir = base_dir / "home"
     home_dir.mkdir(parents=True, exist_ok=True)
-    mat = materialize_corpus(plan, base_dir / "work", home_dir)
+
+    if cache_hit:
+        # Restore: the corpus + warm index/projection are already on disk at a
+        # stable path, so we just repoint the process globals + HOME at them.
+        from tests.perf.harness.fixtures import _configure_opentraces_home
+        from opentraces.core.config import get_project_traces_dir
+        from tests.search_eval.generator import MaterializedCorpus
+        _configure_opentraces_home(home_dir)
+        project_dir = base_dir / "work" / "proj"
+        mat = MaterializedCorpus(
+            home_dir=home_dir, project_dir=project_dir,
+            project_slug=project_dir.name,
+            staging_dir=get_project_traces_dir(project_dir), plan=plan,
+        )
+    else:
+        mat = materialize_corpus(plan, base_dir / "work", home_dir)
+
     env = dict(os.environ)
     env["HOME"] = str(mat.home_dir)
     project_dir = mat.project_dir
@@ -207,13 +231,19 @@ def run_eval(
     reps, warmups = _TIER_REPS.get(tier, (2, 1))
 
     # --- warm the index + projection once (cold build happens here) --------- #
-    for warm in (["trace", "query", "--json", "--limit", "5", "--lex", "init"],
-                 ["trace", "query", "--json", "--limit", "5", "--semantic", "init"],
-                 ["trace", "query", "--json", "--limit", "5", "--files", "*.py"]):
-        try:
-            _run_query_json(warm, project_dir, env)
-        except Exception:
-            pass
+    # On a cache hit the projection is already built + WAL-checkpointed, so the
+    # warm step is skipped and the run is a pure restore-and-measure.
+    if not cache_hit:
+        for warm in (["trace", "query", "--json", "--limit", "5", "--lex", "init"],
+                     ["trace", "query", "--json", "--limit", "5", "--semantic", "init"],
+                     ["trace", "query", "--json", "--limit", "5", "--files", "*.py"]):
+            try:
+                _run_query_json(warm, project_dir, env)
+            except Exception:
+                pass
+        if cache:
+            from tests.search_eval.snapshot_cache import mark_ready
+            mark_ready(plan.snapshot_key, home_dir)
 
     rows: list[RowResult] = []
     for row in plan.queries:
@@ -284,7 +314,8 @@ def run_eval(
         invariants_ok=invariants_ok,
         meta={"generator_version": plan.generator_version, "code_version": plan.code_version,
               "outcome_limit": OUTCOME_LIMIT, "perf_limit": PERF_LIMIT,
-              "reps": reps, "warmups": warmups, "base_dir": str(base_dir)},
+              "reps": reps, "warmups": warmups, "base_dir": str(base_dir),
+              "cache_hit": cache_hit},
     )
     _write_artifacts(report)
     if not keep:
@@ -351,14 +382,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--keep", action="store_true", help="keep the temp corpus dir")
     parser.add_argument("--no-report", action="store_true", help="skip SEARCH-EVAL.md render")
+    parser.add_argument("--cache", action="store_true",
+                        help="snapshot-cache the corpus by snapshot_key (restore-and-measure)")
     args = parser.parse_args(argv)
 
-    report = run_eval(args.tier, args.seed, keep=args.keep)
+    report = run_eval(args.tier, args.seed, keep=args.keep, cache=args.cache)
     greens = sum(1 for r in report.rows if r.status == "green")
     reds = len(report.rows) - greens
     unbounded = sum(1 for r in report.rows if not r.boundedness.get("bounded"))
+    cache_state = ("cache-hit" if report.meta.get("cache_hit")
+                   else ("cache-miss(built)" if args.cache else "no-cache"))
     print(f"tier={report.tier} corpus={report.corpus_size} rows={len(report.rows)} "
-          f"green={greens} red={reds} O(corpus)={unbounded} invariants_ok={report.invariants_ok}")
+          f"green={greens} red={reds} O(corpus)={unbounded} invariants_ok={report.invariants_ok} "
+          f"[{cache_state}]")
     print(f"outcome_digest={report.outcome_digest[:27]}… snapshot_key={report.snapshot_key[:27]}…")
 
     if not args.no_report:

@@ -57,3 +57,5 @@ tests/otbox/captures/*/metadata.json
 
 # search-eval raw run artifacts (machine-specific perf; SEARCH-EVAL.md is the committed deliverable)
 tests/search_eval/artifacts/
+
+tests/search_eval/.cache/

@@ -14,6 +14,7 @@ counters in U3, never absolute ms).
 from __future__ import annotations
 
 import hashlib
+import os
 import tempfile
 from pathlib import Path
 
@@ -190,3 +191,30 @@ def test_slope_gate_logic():
 def test_outcome_digest_is_stable(dev_report):
     second = run_eval("dev", seed=1)
     assert second.outcome_digest == dev_report.outcome_digest
+
+
+@pytest.mark.skipif(
+    not os.environ.get("OT_SEARCH_EVAL_CACHE"),
+    reason="opt-in snapshot-cache lane (U9); set OT_SEARCH_EVAL_CACHE=1",
+)
+def test_snapshot_cache_restore_and_measure():
+    """U9 standing-gate proof: a snapshot-cached corpus restores and runs green,
+    deterministically (same outcome as a fresh build)."""
+
+    from tests.search_eval.generator import load_profile, plan_corpus
+    from tests.search_eval.snapshot_cache import clear, is_cached
+
+    plan = plan_corpus(load_profile(), seed=7, tier="dev")
+    clear(plan.snapshot_key)
+    try:
+        assert not is_cached(plan.snapshot_key)
+        built = run_eval("dev", seed=7, cache=True)
+        assert built.invariants_ok and not built.meta["cache_hit"]
+        assert is_cached(plan.snapshot_key)
+
+        restored = run_eval("dev", seed=7, cache=True)
+        assert restored.meta["cache_hit"]            # restored, not rebuilt
+        assert restored.invariants_ok
+        assert restored.outcome_digest == built.outcome_digest
+    finally:
+        clear(plan.snapshot_key)

@@ -226,3 +226,23 @@ Hard constraints (from plan 087 + the Goal):
 - **xl (10k) tier:** running in background as the definitive 10k confirmation; the dev→real-scale
   slope already demonstrates the invariant. `make search-eval-xl` is the nightly lane.
 - **Next:** U9 — wire the eval as a standing otbox checkpoint + journeys (snapshot-cached gate).
+
+## 2026-05-31 — U9: content-addressed snapshot cache (standing gate) ✅
+
+- **Diff:** new `tests/search_eval/snapshot_cache.py` — a content-addressed corpus cache keyed by
+  the plan's `snapshot_key`. `run_eval(cache=True)` builds the corpus + warm index/projection once
+  into `tests/search_eval/.cache/<key>/`, WAL-checkpoints the sqlites (sidecar-free, Decision Audit
+  #8), and marks it ready; a later run with the same key skips materialize+warm and points HOME at
+  the cached dir — a pure restore-and-measure (read-only: the 087 hot path never rebuilds and
+  cheap-sync no-ops on an unchanged corpus). CLI `--cache`; `make search-eval-real` now uses it.
+- **Verified (opt-in lane, `make search-eval-cache`):** build (cache-miss) → 24/24 green; restore
+  (cache-hit) → 24/24 green with **byte-identical outcome_digest** (`sha256:ed84949a…`). 1 passed in 55s.
+- **Design note (vs full otbox-native checkpoint):** same-machine reuse needs no path-rewrite (the
+  cache path is stable, so baked-in abs paths stay valid), sidestepping the slug=hash(abs-path)
+  portability problem. A cross-machine tar export would reuse otbox's `_rewrite_sqlite_absolute_paths`;
+  full otbox-native checkpoint (Box wrapping) + journey-TOML wiring is a documented deferred refinement.
+- gitignored `.cache/`; cache lane test is env-gated (`OT_SEARCH_EVAL_CACHE=1`) so the fast gate stays fast.
+- **Status:** Goal units U0–U7 + U9 delivered. SEARCH-EVAL.md proves every seed-case target at the
+  real-scale tier; qmd invariant proven (slope) + boundedness gated; deterministic; pytest green.
+  Deferred/secondary (documented): U6c `--files` facet bounding (S8 needs orderability, met by U4),
+  U8 `--live` ad-hoc mode (not in the Goal's unit list), xl(10k) one-shot (nightly lane wired).
