@@ -71,8 +71,10 @@ SCENARIOS = {
     "descriptive": 4,
     "superseded": 2,      # 3-generation session each
     "semantic_precedent": 2,   # S1 weak-lex / S2 semantic-right-but-slow
+    "boundedness_cliff": 1,    # concept --semantic that scans the whole corpus
 }
 _PRECEDENT_DECOYS = 6
+_CLIFF_K = 3
 CHRONO_K = 4
 RECENCY_K = 4
 FACET_K = 4
@@ -164,7 +166,8 @@ class QueryRow:
     gold_kind: str = "single"   # "single" | "set" | "ordered"
     gold_latest: str | None = None
     targets: dict[str, Any] = field(default_factory=dict)
-    expected_phase_a: str = "green"   # "green" | "red"
+    expected_phase_a: str = "green"   # outcome expectation: "green" | "red"
+    bounded_expected: bool = True     # qmd invariant: rows_scanned ~ matches, not corpus
     seed_case: str | None = None
     note: str = ""
 
@@ -367,9 +370,9 @@ def plan_corpus(profile: dict[str, Any], seed: int, tier: str) -> CorpusPlan:
             gold_trace_ids=list(members), gold_kind="set",
             gold_latest=members[-1],
             targets={"recall_at": 20, "recall_min": 0.95, "orderable": True},
-            expected_phase_a="green",
+            expected_phase_a="green", bounded_expected=False,
             seed_case="S8" if f_idx == 0 else None,
-            note="recall green; time-ordering of the set is RED (facets unordered)",
+            note="recall green; --files has no FTS -> scans all trace units (boundedness RED, U6)",
         ))
 
     # ---- descriptive natural-language phrase (S6/S7) -> GREEN --------------- #
@@ -475,6 +478,34 @@ def plan_corpus(profile: dict[str, Any], seed: int, tier: str) -> CorpusPlan:
                 expected_phase_a="green", seed_case="S1",
                 note="S1: gold findable but may rank low; first_rank documents lex ranking quality",
             ))
+
+    # ---- boundedness cliff: a concept --semantic that scans the whole corpus  #
+    # 'mongodb' is a real concept alias (core/semantic.py CONCEPTS), so the
+    # query expands to concept_ids and takes the O(corpus) _select_docs_by_
+    # semantic_ids path: it scans EVERY doc to return the few mongodb traces.
+    # Recall is GREEN (it finds them) but boundedness is RED (rows_scanned ~
+    # corpus) until U6 pushes the concept filter into SQL.
+    for cl in range(SCENARIOS["boundedness_cliff"]):
+        members = []
+        for k in range(_CLIFF_K):
+            o = _next_ordinal()
+            tid = f"eval-{tier}-cliff-{cl:02d}-{k:02d}"
+            traces.append(TraceSpec(
+                trace_id=tid, session_id=f"sess-cliff-{cl:02d}-{k:02d}",
+                generation_index=0, preceded_by=None, ordinal=o,
+                description=f"migrate the store to mongodb, pass {k}",
+                body_tokens=["mongodb pymongo migration"], files=[], step_count=10,
+            ))
+            members.append(tid)
+        queries.append(QueryRow(
+            id=f"cliff-{cl:02d}", archetype="boundedness_cliff",
+            intent="concept semantic recall (scans the whole corpus today)",
+            mode="semantic", query="mongodb",
+            gold_trace_ids=list(members), gold_kind="set",
+            targets={"recall_at": 10, "recall_min": 0.95},
+            expected_phase_a="green", bounded_expected=False,
+            note="concept query -> _select_docs_by_semantic_ids scans every doc (boundedness RED, U6)",
+        ))
 
     planted = len(traces)
 

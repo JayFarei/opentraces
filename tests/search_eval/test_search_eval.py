@@ -133,6 +133,30 @@ def test_seed_cases_reproduce_baseline(dev_report):
     assert by_id["facet-00"].outcome["recall_at_k"] >= 0.95
 
 
+def test_boundedness_invariant(dev_report):
+    by_id = {r.id: r for r in dev_report.rows}
+
+    # every row's bounded/unbounded matches its documented qmd expectation,
+    # and every page is <= the limit (R3 bounded payload)
+    bad = [r.id for r in dev_report.rows if not r.bounded_ok]
+    assert not bad, f"boundedness mismatches: {bad}"
+    assert all(r.boundedness["page_le_limit"] for r in dev_report.rows)
+
+    # FTS lex queries are bounded: scan ~ matches, not corpus
+    lex = by_id["refbare-00"].boundedness
+    assert lex["bounded"] and lex["rows_scanned"] <= lex["corpus_docs"] // 2
+
+    # the concept --semantic cliff scans (nearly) the whole corpus -> O(corpus)
+    cliff = by_id["cliff-00"].boundedness
+    assert not cliff["bounded"]
+    assert cliff["rows_scanned"] >= cliff["corpus_docs"] * 0.9
+    assert cliff["matched"] < cliff["rows_scanned"]  # scans many, returns few
+
+    # --files has no FTS -> scans all trace units (the facet cliff)
+    facet = by_id["facet-00"].boundedness
+    assert not facet["bounded"]
+
+
 def test_outcome_digest_is_stable(dev_report):
     second = run_eval("dev", seed=1)
     assert second.outcome_digest == dev_report.outcome_digest

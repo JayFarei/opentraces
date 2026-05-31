@@ -108,3 +108,28 @@ Hard constraints (from plan 087 + the Goal):
 - pytest tests/search_eval green (10 passed). No production code touched yet.
 - **Next:** U3 — boundedness counter (docs_scored ∝ matches, instrument search_projection.py:751 +
   index path; env-gated, surfaced in --json) + cliff p95 budgets (catch 10×, exempt known S2 cliff).
+
+## 2026-05-31 — U3: boundedness counter + cliff budgets ✅  → Phase A COMPLETE
+
+- **Diff (production read path, additive + env-gated, zero overhead when off):**
+  new `core/search_diag.py` (OT_SEARCH_DIAG counter); instrumented
+  `query_search_projection_page` + `_select_docs` + `_select_docs_by_semantic_ids`
+  (search_projection.py) and `query_index_page` + `_select_unit_rows` (trace_index.py)
+  to record `rows_scanned` / `corpus_docs` / `docs_scored`. Harness: `bounded_expected`
+  on QueryRow, a `boundedness_cliff` scenario (`--semantic mongodb` → concept O(corpus)),
+  runner in-process diag capture + `bounded_ok` + generous latency `cliff_ok`
+  (exempt documented O(corpus) rows), report boundedness table, +1 gate test.
+- **The qmd invariant is now deterministically gated** (machine-stable, any tier):
+  FTS lex/semantic → `rows_scanned ≈ matches` (bounded); `--files` → scans all 150
+  trace units (facet cliff); `--semantic mongodb` → scans **20,279/20,279 docs** to
+  return 12 (the S2/U6 concept cliff). All `bounded_ok` (observed == documented).
+- **Regression:** existing search/index/projection suites **102 passed, 10 skipped**
+  with the instrumentation (gated → no-op when OT_SEARCH_DIAG unset).
+- **Phase A gate green: 11 passed.** `make search-eval` end-to-end on dev; SEARCH-EVAL.md
+  reproduces S1–S8 (S3/S4/S5 RED, S2 outcome-green/latency-future-red), invariants_ok=yes,
+  outcome digest byte-stable, discovery loop ok. **Phase A (U0–U3) DONE.**
+- **Phase B next (capabilities, red→green vs this report):** U4 `trace query --sort
+  time|recency|relevance` (flips S4 τ −1→+1), U5 recency weighting (flips S5 rec@1 0→1),
+  U6 index-bounded scorer (concept/facet O(corpus)→bounded) + URL/identifier tokenization
+  (flips S3 total=0→recall). Each lands by updating the affected rows' expected_phase_a /
+  bounded_expected red→green and proving it against the harness.

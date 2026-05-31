@@ -31,6 +31,7 @@ from opentraces_schema import (
 )
 
 from . import paths
+from . import search_diag
 from .bucket_store import (
     bucket_manifest,
     iter_trace_record_objects,
@@ -1177,6 +1178,7 @@ def query_index_page(
     """Return one stable page of bounded candidate packets."""
 
     db_path = index_path or default_index_path()
+    search_diag.reset()
     # Plan 087 U1: the query hot path never auto-refreshes the warm cache.
     # Only the cold-start bootstrap (no DB file yet) builds the index; a forced
     # refresh/rebuild is reachable solely via explicit maintenance
@@ -1204,6 +1206,14 @@ def query_index_page(
         _heal_corrupt_index(db_path)
         rows = _read_unit_rows()
 
+    if search_diag.enabled():
+        search_diag.record(
+            path="index_fts" if terms else "index_scan",
+            rows_scanned=len(rows),
+            docs_selected=len(rows),
+            docs_scored=len(rows),
+            corpus_docs=_count_index_units(db_path, unit_type_filter or "trace"),
+        )
     candidates = [_unit_from_row(row) for row in rows]
     if latest_generation:
         candidates = _latest_units(candidates)
@@ -3314,6 +3324,20 @@ def _requested_unit_type(
     if candidate_kind in _M1_UNIT_TYPES:
         return candidate_kind
     return None
+
+
+def _count_index_units(db_path: Path, unit_type: str) -> int:
+    """Total indexed units of a type - only called under OT_SEARCH_DIAG (U3)."""
+
+    try:
+        with _connect(db_path) as conn:
+            return int(
+                conn.execute(
+                    "select count(*) from units where unit_type = ?", (unit_type,)
+                ).fetchone()[0]
+            )
+    except sqlite3.DatabaseError:
+        return 0
 
 
 def _select_unit_rows(

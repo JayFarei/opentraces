@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover - non-POSIX fallback.
 from opentraces_schema import TraceFacet, TraceSignal, TraceUnit
 
 from . import paths
+from . import search_diag
 from .bucket_store import bucket_manifest, trace_record_snapshot
 from .semantic import expand_semantic_query, semantic_profile_from_facets
 from .trace_index import (
@@ -658,6 +659,7 @@ def query_search_projection_page(
     """Query the immutable local search projection and return CandidatePackets."""
 
     db_path = index_path or default_index_path()
+    search_diag.reset()
     status = search_projection_status(root_path)
     if status.get("state") != "ok":
         if not build_if_missing:
@@ -694,6 +696,12 @@ def query_search_projection_page(
         if semantic_ids
         else _select_docs(sqlite_path, terms)
     )
+    if search_diag.enabled():
+        search_diag.record(
+            path="projection_concept" if semantic_ids else "projection_fts",
+            docs_selected=len(docs),
+            corpus_docs=_count_projection_docs(sqlite_path),
+        )
     scored: list[tuple[float, dict[str, float], dict[str, list[str]], TraceUnit]] = []
     for doc in docs:
         if since_dt and _doc_timestamp(doc) < since_dt:
@@ -748,6 +756,7 @@ def query_search_projection_page(
             continue
         if not terms and metadata_score <= 0 and semantic_score <= 0:
             continue
+        search_diag.incr("docs_scored")
         unit = get_unit(str(doc["unit_id"]), index_path=db_path)
         if unit is None:
             continue
@@ -1590,6 +1599,16 @@ def _short_token() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def _count_projection_docs(sqlite_path: Path) -> int:
+    """Total docs in the projection - only called under OT_SEARCH_DIAG (U3)."""
+
+    try:
+        with sqlite3.connect(sqlite_path) as conn:
+            return int(conn.execute("select count(*) from docs").fetchone()[0])
+    except sqlite3.DatabaseError:
+        return 0
+
+
 def _select_docs(sqlite_path: Path, terms: list[str]) -> list[dict[str, Any]]:
     with sqlite3.connect(sqlite_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -1607,6 +1626,7 @@ def _select_docs(sqlite_path: Path, terms: list[str]) -> list[dict[str, Any]]:
             rows = conn.execute(
                 "select payload_json from docs order by trace_id, unit_id"
             ).fetchall()
+    search_diag.record(rows_scanned=len(rows))
     return [json.loads(row["payload_json"]) for row in rows]
 
 
@@ -1621,6 +1641,7 @@ def _select_docs_by_semantic_ids(
         rows = conn.execute(
             "select payload_json from docs order by trace_id, unit_id"
         ).fetchall()
+    search_diag.record(rows_scanned=len(rows))
     docs = [json.loads(row["payload_json"]) for row in rows]
     return [
         doc

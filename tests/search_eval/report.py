@@ -88,17 +88,41 @@ def _seed_table(rows: list[dict[str, Any]]) -> list[str]:
 
 def _rows_table(rows: list[dict[str, Any]]) -> list[str]:
     lines = [
-        "| Row | Archetype | Mode | Total | Outcome | p50 | p95 | cold | Status | Exp | OK |",
-        "|-----|-----------|------|------:|---------|----:|----:|-----:|--------|-----|----|",
+        "| Row | Archetype | Mode | Total | Outcome | p95 | Status | Bounded | OK |",
+        "|-----|-----------|------|------:|---------|----:|--------|---------|----|",
     ]
     for r in rows:
         perf = r["perf"]
+        bnd = r.get("boundedness") or {}
+        bmark = "bounded" if bnd.get("bounded") else "O(corpus)"
+        ok = "ok" if (r["invariant_ok"] and r.get("bounded_ok", True)) else "MISMATCH"
         lines.append(
             f"| {r['id']} | {r['archetype']} | {r['mode']} | {r['total']} | "
-            f"{_outcome_cell(r['outcome'])} | {_fmt(perf.get('p50_ms'))} | "
-            f"{_fmt(perf.get('p95_ms'))} | {_fmt(perf.get('cold_ms'))} | "
-            f"{_status_mark(r['status'])} | {r['expected_phase_a']} | "
-            f"{'ok' if r['invariant_ok'] else 'MISMATCH'} |"
+            f"{_outcome_cell(r['outcome'])} | {_fmt(perf.get('p95_ms'))} | "
+            f"{_status_mark(r['status'])}/{r['expected_phase_a']} | "
+            f"{bmark} ({bnd.get('rows_scanned')}/{bnd.get('corpus_docs')}) | {ok} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _boundedness_table(rows: list[dict[str, Any]]) -> list[str]:
+    lines = [
+        "The qmd invariant (R3): a query may scan ~its matches, not the whole "
+        "corpus. `rows_scanned ~ corpus` with few matches = the O(corpus) cliff "
+        "(U6 target). Deterministic, so it gates at any tier regardless of ms.",
+        "",
+        "| Row | Path | matched | rows_scanned | corpus | bounded | expected | OK |",
+        "|-----|------|--------:|-------------:|-------:|---------|----------|----|",
+    ]
+    for r in rows:
+        bnd = r.get("boundedness") or {}
+        lines.append(
+            f"| {r['id']} | {bnd.get('path')} | {bnd.get('matched')} | "
+            f"{bnd.get('rows_scanned')} | {bnd.get('corpus_docs')} | "
+            f"{'bounded' if bnd.get('bounded') else 'O(corpus)'} | "
+            f"{'bounded' if r.get('bounded_expected') else 'O(corpus)'} | "
+            f"{'ok' if r.get('bounded_ok') else 'MISMATCH'} |"
         )
     lines.append("")
     return lines
@@ -179,6 +203,9 @@ def render_markdown(reports: list[dict[str, Any]]) -> str:
         out.append("### By archetype")
         out.append("")
         out.extend(_archetype_table(rows))
+        out.append("### Boundedness (qmd invariant, R3)")
+        out.append("")
+        out.extend(_boundedness_table(rows))
         out.append("### All query rows")
         out.append("")
         out.extend(_rows_table(rows))

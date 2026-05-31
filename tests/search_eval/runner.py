@@ -33,6 +33,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from opentraces.core import search_diag  # noqa: E402
+from opentraces.core.search_projection import query_search_projection_page  # noqa: E402
+from opentraces.core.trace_index import query_index_page  # noqa: E402
 from tests.perf.harness.measure import CommandPlan, measure_command_factory  # noqa: E402
 from tests.perf.harness.models import PerfBudget, PerfScenario  # noqa: E402
 from tests.search_eval import score_outcome  # noqa: E402
@@ -47,6 +50,15 @@ from tests.search_eval.generator import (  # noqa: E402
 OTD = str(REPO_ROOT / "otd")
 OUTCOME_LIMIT = 100        # generous fetch so >=k distinct traces surface
 PERF_LIMIT = 20           # the natural agent-facing page size
+# qmd boundedness (R3): a query may scan up to BOUND_FACTOR x its matches
+# (plus a small floor); scanning ~corpus to return few = the O(corpus) cliff.
+BOUND_FLOOR = 50
+BOUND_FACTOR = 4
+# Latency cliff budgets (R1): generous ceilings that catch >=10x regressions,
+# never jitter (Decision Audit #4 - absolute ms flake, so these are loose). A
+# row expected to be BOUNDED must also be within its cliff; the documented
+# O(corpus) rows (facet/concept) are exempt until U6.
+CLIFF_MS = {"lex": 3000.0, "files": 5000.0, "semantic": 10000.0}
 ARTIFACTS_DIR = REPO_ROOT / "tests" / "search_eval" / "artifacts"
 
 # reps/warmups per tier (real-scale queries are heavier -> fewer reps)
@@ -64,6 +76,10 @@ class RowResult:
     total: int
     perf: dict[str, Any]
     outcome: dict[str, Any]
+    boundedness: dict[str, Any]
+    bounded_expected: bool
+    bounded_ok: bool
+    cliff_ok: bool            # within latency cliff, OR a documented O(corpus) row
     status: str               # "green" if all targets met else "red"
     invariant_ok: bool        # status matches expected_phase_a
     note: str
@@ -115,6 +131,43 @@ def _run_query_json(args: list[str], project_dir: Path, env: dict[str, str]) -> 
 def _ranked_traces(payload: dict[str, Any]) -> list[str]:
     cands = payload.get("candidates") or []
     return score_outcome.distinct_traces(c.get("trace_id") for c in cands)
+
+
+def _capture_boundedness(row: QueryRow) -> dict[str, Any]:
+    """Run the query in-process with OT_SEARCH_DIAG to read the rows-scanned
+    counter (R3, the qmd invariant). Deterministic - the corpus is fixed."""
+
+    kwargs: dict[str, Any] = {
+        "limit": OUTCOME_LIMIT,
+        "latest_generation": not row.extra_flags.get("include_superseded", False),
+    }
+    os.environ["OT_SEARCH_DIAG"] = "1"
+    try:
+        if row.mode == "semantic":
+            page = query_search_projection_page(semantic=row.query, **kwargs)
+        elif row.mode == "files":
+            page = query_index_page(files=row.query, **kwargs)
+        else:
+            page = query_index_page(lex=row.query, **kwargs)
+        diag = search_diag.snapshot()
+    finally:
+        os.environ.pop("OT_SEARCH_DIAG", None)
+
+    matched = int(page.total)
+    rows_scanned = int(diag.get("rows_scanned", 0))
+    corpus = int(diag.get("corpus_docs", 0))
+    bound_limit = max(BOUND_FLOOR, BOUND_FACTOR * matched)
+    bounded = rows_scanned <= bound_limit
+    return {
+        "path": diag.get("path"),
+        "rows_scanned": rows_scanned,
+        "corpus_docs": corpus,
+        "matched": matched,
+        "page_size": len(page.candidates),
+        "page_le_limit": len(page.candidates) <= OUTCOME_LIMIT,
+        "bound_limit": bound_limit,
+        "bounded": bounded,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -174,13 +227,23 @@ def run_eval(
                                metadata={"scenario": scenario.name})
 
         perf = measure_command_factory(scenario, factory)
+        cliff_ms = CLIFF_MS.get(row.mode, 5000.0)
+        within_cliff = perf.p95_ms <= cliff_ms
         perf_summary = {
             "cold_ms": round(perf.cold_ms, 2),
             "p50_ms": round(perf.p50_ms, 2),
             "p95_ms": round(perf.p95_ms, 2),
             "mean_ms": round(perf.mean_ms, 2),
             "peak_rss_mb": round(perf.peak_rss_mb, 2) if perf.peak_rss_mb else None,
+            "cliff_ms": cliff_ms,
+            "within_cliff": within_cliff,
         }
+
+        boundedness = _capture_boundedness(row)
+        bounded_ok = (boundedness["bounded"] == row.bounded_expected) and boundedness["page_le_limit"]
+        # a row expected to be bounded must also be within its latency cliff;
+        # documented O(corpus) rows are exempt (their latency is the U6 gap).
+        cliff_ok = within_cliff or not row.bounded_expected
 
         status = "green" if outcome["all_targets_met"] else "red"
         invariant_ok = (status == "green") == (row.expected_phase_a == "green")
@@ -188,12 +251,19 @@ def run_eval(
             id=row.id, archetype=row.archetype, seed_case=row.seed_case,
             mode=row.mode, query=row.query, expected_phase_a=row.expected_phase_a,
             total=total, perf=perf_summary, outcome=outcome,
+            boundedness=boundedness, bounded_expected=row.bounded_expected,
+            bounded_ok=bounded_ok, cliff_ok=cliff_ok,
             status=status, invariant_ok=invariant_ok, note=row.note,
         ))
 
     loop_smoke = _discovery_loop_smoke(plan, project_dir, env)
     outcome_digest = _outcome_digest(rows)
-    invariants_ok = all(r.invariant_ok for r in rows) and loop_smoke.get("ok", False)
+    invariants_ok = (
+        all(r.invariant_ok for r in rows)
+        and all(r.bounded_ok for r in rows)
+        and all(r.cliff_ok for r in rows)
+        and loop_smoke.get("ok", False)
+    )
 
     report = EvalReport(
         tier=tier, seed=seed, snapshot_key=plan.snapshot_key,
@@ -247,6 +317,8 @@ def _outcome_digest(rows: list[RowResult]) -> str:
             "ndcg_at_k": oc.get("ndcg_at_k"), "first_rank": oc.get("first_rank"),
             "kendall_tau": oc.get("kendall_tau"), "recency_hit": oc.get("recency_hit"),
             "passes": oc.get("passes"),
+            "bounded": r.boundedness.get("bounded"), "bounded_ok": r.bounded_ok,
+            "path": r.boundedness.get("path"),
         })
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
@@ -272,8 +344,9 @@ def main(argv: list[str] | None = None) -> int:
     report = run_eval(args.tier, args.seed, keep=args.keep)
     greens = sum(1 for r in report.rows if r.status == "green")
     reds = len(report.rows) - greens
+    unbounded = sum(1 for r in report.rows if not r.boundedness.get("bounded"))
     print(f"tier={report.tier} corpus={report.corpus_size} rows={len(report.rows)} "
-          f"green={greens} red={reds} invariants_ok={report.invariants_ok}")
+          f"green={greens} red={reds} O(corpus)={unbounded} invariants_ok={report.invariants_ok}")
     print(f"outcome_digest={report.outcome_digest[:27]}… snapshot_key={report.snapshot_key[:27]}…")
 
     if not args.no_report:
