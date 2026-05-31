@@ -113,9 +113,10 @@ def test_discovery_loop_runs(dev_report):
 def test_seed_cases_reproduce_baseline(dev_report):
     by_id = {r.id: r for r in dev_report.rows}
 
-    # S3: URL/identifier needle is unreachable -> total=0 (RED)
-    assert by_id["refid-00"].total == 0
-    assert by_id["refid-00"].outcome["recall_at_k"] == 0.0
+    # S3: U6 URL sub-tokenization reaches the needle inside the URL (GREEN, was total=0)
+    assert by_id["refid-00"].total >= 1
+    assert by_id["refid-00"].outcome["recall_at_k"] >= 0.95
+    assert by_id["refid-00"].outcome["first_rank"] == 1
 
     # S4: chronological order correct after U4 --sort time (GREEN, was tau=-1)
     assert by_id["chrono-00"].outcome["recall_at_k"] >= 0.95

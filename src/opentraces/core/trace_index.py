@@ -3496,7 +3496,24 @@ def _unit_timestamp(unit: TraceUnit) -> datetime:
 
 
 def _terms(text: str) -> list[str]:
-    return [term.lower() for term in re.findall(r"[a-zA-Z0-9_./-]+", text) if len(term) > 1]
+    # Additive URL/identifier sub-tokenization (plan 088 U6): keep each compound
+    # token, but also emit the pieces split on URL/path separators so a bare
+    # identifier query reaches a needle that only appears inside a URL
+    # (e.g. "nicobailon" inside ".../nicobailon/pi-subagents"). Hyphens/
+    # underscores stay intact, so hyphenated identifiers match as a whole too.
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in re.findall(r"[a-zA-Z0-9_./-]+", text):
+        tok = raw.lower()
+        if len(tok) > 1 and tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+        if "/" in tok or "." in tok:
+            for sub in re.split(r"[/.@:]+", tok):
+                if len(sub) > 1 and sub not in seen:
+                    seen.add(sub)
+                    out.append(sub)
+    return out
 
 
 def _trace_files(trace_map: TraceMap) -> list[str]:

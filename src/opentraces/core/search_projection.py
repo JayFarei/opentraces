@@ -2021,7 +2021,20 @@ def _doc_candidate_kind(doc: dict[str, Any]) -> str:
 
 
 def _terms(text: str) -> list[str]:
-    return [token.lower() for token in re.findall(r"[A-Za-z0-9_@./-]+", text)]
+    # Additive URL/identifier sub-tokenization (plan 088 U6); see trace_index._terms.
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in re.findall(r"[A-Za-z0-9_@./-]+", text):
+        tok = raw.lower()
+        if tok not in seen:
+            seen.add(tok)
+            out.append(tok)
+        if "/" in tok or "." in tok or "@" in tok:
+            for sub in re.split(r"[/.@:]+", tok):
+                if len(sub) > 1 and sub not in seen:
+                    seen.add(sub)
+                    out.append(sub)
+    return out
 
 
 def _fts_query(terms: list[str]) -> str:

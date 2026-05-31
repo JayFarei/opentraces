@@ -173,3 +173,18 @@ Hard constraints (from plan 087 + the Goal):
   via `_terms` which keeps URLs as one compound token, so the bare query token scores 0 and the
   unit is dropped (line 1329). Fix = expand `_terms` to also emit URL/path sub-tokens (additive;
   `_terms` is the scorer's tokenizer, not the FTS content builder → no index rebuild).
+
+## 2026-05-31 — U6a: URL/identifier sub-tokenization ✅ (S3 RED→GREEN; ALL outcome cases green)
+
+- **Diff (production):** both `_terms` (trace_index.py + search_projection.py) now additively emit
+  URL/path sub-tokens — keep each compound, also split on `/.@:` (hyphens/underscores intact, so
+  hyphenated identifiers still match whole). Recall can only increase; `_terms` is the scorer's
+  tokenizer, not the FTS content builder → no index rebuild.
+- **Real-bucket proof:** `--lex nicobailon` 0→10, `--lex pi-subagents` 0→6 (S3 gold c4e5dee0 now
+  rank 3); `--lex install` still 354 (normal queries unaffected).
+- **Synthetic:** refid (S3) flips total=0→1, recall 1.0, **rank 1**. Dev tier now **green 24/24,
+  red 0, invariants_ok=True** — every OUTCOME seed case (S1–S8) is GREEN. The only remaining gap is
+  the boundedness O(corpus)=3 (facet×2 + concept-cliff×1) → U6b index-bounded scorer.
+- **Next:** U6b — push the concept filter into SQL (`doc_concepts(doc_id, concept_id)` index table
+  + `concepts_indexed` meta flag + JOIN in `_select_docs_by_semantic_ids`) so the `--semantic`
+  concept cliff (rows_scanned ~corpus) becomes bounded; flips facet/cliff bounded_expected→True.

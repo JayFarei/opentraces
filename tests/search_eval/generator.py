@@ -345,9 +345,9 @@ def plan_corpus(profile: dict[str, Any], seed: int, tier: str) -> CorpusPlan:
             mode="lex", query=owner,             # bare segment -> unreachable today
             gold_trace_ids=[tid], gold_kind="single",
             targets={"recall_at": 10, "recall_min": 0.95, "mrr_min": 0.8},
-            expected_phase_a="red",
+            expected_phase_a="green",
             seed_case="S3" if n == 0 else None,
-            note="needle only inside a URL compound; bare query unreachable -> total=0",
+            note="U6: URL sub-tokenization makes the bare identifier reach the needle in the URL",
         ))
 
     # ---- facet (file-touch set, S8) ----------------------------------------- #
