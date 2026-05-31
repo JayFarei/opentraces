@@ -86,3 +86,25 @@ Hard constraints (from plan 087 + the Goal):
      traces surface (per-unit packets crowd out distinct traces, e.g. recency 0.75 @limit30).
 - **Next:** U2 runner (discovery loop per row via `measure_command_factory`) + outcome scorers
   (recall@k/MRR/NDCG/τ/recency-hit over distinct traces) + `report.py` → SEARCH-EVAL.md.
+
+## 2026-05-31 — U2: runner + outcome scorers + report ✅
+
+- **Diff:** `score_outcome.py` (recall@k/MRR/NDCG/Kendall-τ/recency-hit, trace-deduped),
+  `runner.py` (materialize-once → warm → per-row outcome[generous limit] + perf[constant plan via
+  `measure_command_factory`] → loop smoke → EvalReport + deterministic outcome_digest),
+  `report.py` (→ SEARCH-EVAL.md: seed-case table + per-row + archetype + invariants),
+  `test_search_eval.py` (10 tests), Makefile targets, `.gitignore` artifacts.
+- **`make search-eval` runs end-to-end on dev in ~32s.** SEARCH-EVAL.md committed.
+  150 traces / 23 rows / 14 green / 9 red, **invariants_ok=True** (every row's observed
+  RED/GREEN matches its documented `expected_phase_a`), discovery-loop smoke ok (query→map→slice→get).
+- **Seed cases reproduced (dev):** S2 GREEN recall=1.0 rank=1 (latency is the future RED at scale);
+  S3 total=0 recall=0 (RED, URL needle); S4 recall=1.0 **τ=−1.0** (RED, reverse order);
+  S5 recall=1.0 **rec@1=0.0** (RED, latest not first); S1 recall=1.0 **rank=9** (weak-lex quality);
+  S6/S7 rank=1, S8 recall=1.0 (GREEN).
+- **Determinism (R7):** outcome_digest + snapshot_key byte-identical across two full runs.
+- **Two scorer corrections the harness forced (logged in U1):** trace-level dedup; chrono time-order
+  must be DECORRELATED from trace_id order (equal-score rows fall back to the trace_id tiebreaker, so
+  identity order would false-GREEN chronological without `--sort time`) → reversed → τ=−1 RED.
+- pytest tests/search_eval green (10 passed). No production code touched yet.
+- **Next:** U3 — boundedness counter (docs_scored ∝ matches, instrument search_projection.py:751 +
+  index path; env-gated, surfaced in --json) + cliff p95 budgets (catch 10×, exempt known S2 cliff).

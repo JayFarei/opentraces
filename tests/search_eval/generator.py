@@ -70,7 +70,9 @@ SCENARIOS = {
     "facet": 2,           # K=4 traces each touch the file
     "descriptive": 4,
     "superseded": 2,      # 3-generation session each
+    "semantic_precedent": 2,   # S1 weak-lex / S2 semantic-right-but-slow
 }
+_PRECEDENT_DECOYS = 6
 CHRONO_K = 4
 RECENCY_K = 4
 FACET_K = 4
@@ -235,29 +237,37 @@ def plan_corpus(profile: dict[str, Any], seed: int, tier: str) -> CorpusPlan:
         ordinal += 1
         return ordinal
 
-    # ---- chronological: K distinct traces sharing a topic at rising times --- #
+    # ---- chronological: K distinct traces sharing a topic ------------------ #
+    # CRITICAL: decorrelate planted time-order from trace_id lexical order.
+    # The gold traces have equal lexical scores, so the score-only sort falls
+    # back to the trace_id tiebreaker; if time-order == trace_id-order the
+    # chronological answer would be *accidentally* correct without --sort time.
+    # We assign timestamps in REVERSE of trace_id order, so Phase A yields
+    # tau=-1 (RED) and U4's --sort time flips it to +1 (GREEN).
     for c in range(SCENARIOS["chronological"]):
         token = f"chronotopic{seed}{c:02d}"
-        members: list[str] = []
+        block = [_next_ordinal() for _ in range(CHRONO_K)]   # ascending ordinals
+        members: list[tuple[str, int]] = []
         for k in range(CHRONO_K):
-            o = _next_ordinal()
+            time_ord = block[CHRONO_K - 1 - k]               # reverse: k=0 latest
             tid = f"eval-{tier}-chrono-{c:02d}-{k:02d}"
             traces.append(TraceSpec(
                 trace_id=tid, session_id=f"sess-chrono-{c:02d}-{k:02d}",
-                generation_index=0, preceded_by=None, ordinal=o,
+                generation_index=0, preceded_by=None, ordinal=time_ord,
                 description=f"work on {token} milestone {k}",
                 body_tokens=[token, f"milestone {k}"], files=[], step_count=10,
             ))
-            members.append(tid)
+            members.append((tid, time_ord))
+        gold_order = [tid for tid, _ in sorted(members, key=lambda m: m[1])]  # ascending time
         queries.append(QueryRow(
             id=f"chrono-{c:02d}", archetype="chronological",
             intent="what happened around this topic, in time order",
             mode="lex", query=token,
-            gold_trace_ids=list(members), gold_kind="ordered",
+            gold_trace_ids=gold_order, gold_kind="ordered",
             targets={"recall_at": 10, "recall_min": 0.95, "tau_min": 0.9},
             expected_phase_a="red",
             seed_case="S4" if c == 0 else None,
-            note="time order requires --sort time (U4); score-only today",
+            note="time order requires --sort time (U4); score-only sort returns the reverse today",
         ))
 
     # ---- recency: K distinct traces on a topic; gold = the latest ----------- #
@@ -420,6 +430,51 @@ def plan_corpus(profile: dict[str, Any], seed: int, tier: str) -> CorpusPlan:
             expected_phase_a="green",
             note="needle lives in the oldest gen; requires --include-superseded",
         ))
+
+    # ---- semantic precedent (S1 weak-lex / S2 semantic-right-but-slow) ----- #
+    _prec_phrase = "break a trajectory into per intent slices"
+    _prec_vocab = ["trajectory", "intent", "slices", "split", "per", "trace"]
+    for sp in range(SCENARIOS["semantic_precedent"]):
+        # decoys share subsets of the vocabulary, blunting lex precision
+        for dcy in range(_PRECEDENT_DECOYS):
+            o = _next_ordinal()
+            words = " ".join(_prec_vocab[k] for k in range((dcy % 4) + 2))
+            traces.append(TraceSpec(
+                trace_id=f"eval-{tier}-precdecoy-{sp:02d}-{dcy:02d}",
+                session_id=f"sess-precdecoy-{sp:02d}-{dcy:02d}",
+                generation_index=0, preceded_by=None, ordinal=o,
+                description=f"work involving {words} for case {dcy}",
+                body_tokens=[words], files=[], step_count=8,
+            ))
+        marker = f"precedentmarker{seed}{sp:02d}"
+        o = _next_ordinal()
+        gold = f"eval-{tier}-precedent-{sp:02d}"
+        traces.append(TraceSpec(
+            trace_id=gold, session_id=f"sess-precedent-{sp:02d}",
+            generation_index=0, preceded_by=None, ordinal=o,
+            description=f"do we know how to {_prec_phrase} per intent ({marker})",
+            body_tokens=[_prec_phrase, marker], files=[], step_count=10,
+        ))
+        queries.append(QueryRow(
+            id=f"precedent-sem-{sp:02d}", archetype="semantic_precedent",
+            intent="semantic precedent recall (right answer; latency is the gap at scale)",
+            mode="semantic", query="break a trajectory into per-intent slices",
+            gold_trace_ids=[gold], gold_kind="single",
+            targets={"recall_at": 5, "recall_min": 1.0},
+            expected_phase_a="green",
+            seed_case="S2" if sp == 0 else None,
+            note="semantic outcome OK; --semantic latency is the RED dimension at real-scale (U6)",
+        ))
+        if sp == 0:
+            queries.append(QueryRow(
+                id="precedent-lex-00", archetype="semantic_precedent",
+                intent="lex precedent recall (lex underweights the task field; rank quality)",
+                mode="lex", query="trajectory intent slices",
+                gold_trace_ids=[gold], gold_kind="single",
+                targets={"recall_at": 10, "recall_min": 0.95},
+                expected_phase_a="green", seed_case="S1",
+                note="S1: gold findable but may rank low; first_rank documents lex ranking quality",
+            ))
 
     planted = len(traces)
 
