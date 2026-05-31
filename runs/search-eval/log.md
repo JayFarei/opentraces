@@ -133,3 +133,25 @@ Hard constraints (from plan 087 + the Goal):
   U6 index-bounded scorer (concept/facet O(corpus)→bounded) + URL/identifier tokenization
   (flips S3 total=0→recall). Each lands by updating the affected rows' expected_phase_a /
   bounded_expected red→green and proving it against the harness.
+
+### Phase A regression note (load-flaky timer, triaged)
+- Broader smoke (`-k bucket/doctor/trace_query/cli/ingest`) under concurrent load: 395 passed,
+  **1 failed = `test_bench_capture_hot_path`** (32ms/event > 25ms budget). CLAUDE.md names this
+  as load-flaky; **passes in isolation (2.19s)**. Not a regression — instrumentation is gated +
+  off the capture path. Phase A committed clean: U0+U1 `a5a1f17`, U2 `e008218`, U3 `839a919`.
+
+## 2026-05-31 — U4: `trace query --sort time|recency|relevance` + `--min-score` ✅ (S4 RED→GREEN)
+
+- **Diff (production):** `query_index_page` + `query_search_projection_page` gain `sort` +
+  `min_score` params; sort dispatch (time = `_unit_timestamp` asc, recency = desc, relevance =
+  score) with the prior relevance tiebreak preserved as default; new `_unit_ts` helper in the
+  projection. CLI `trace query` gains `--sort {relevance,time,recency}` + `--min-score`,
+  threaded through + surfaced in `--json` (`"sort"`). Harness: chrono rows use
+  `extra_flags={"sort":"time"}`, expected_phase_a red→green; runner threads `--sort`/`--min-score`.
+- **Result:** chrono (S4) flips **τ −1.0 → +1.0 GREEN** (recall stays 1.0). Dev: 18 green / 6 red
+  (remaining: refid×3 S3/U6, recency×3 S5/U5). invariants_ok=True.
+- **Verified:** `--sort recency` orders newest-first; `--min-score 999999` → 0 returned;
+  search/index/projection suites **103 passed**; search-eval gate **11 passed**. Default
+  (relevance, no min_score) byte-unchanged → no behavior change for existing callers.
+- **Next:** U5 recency-weighted scoring (small always-on recency term breaks ties toward latest)
+  to flip S5 recency rows (rec@1 0→1) via the DEFAULT relevance ranking, no explicit --sort.

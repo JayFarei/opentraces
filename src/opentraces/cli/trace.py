@@ -168,6 +168,20 @@ def trace_group() -> None:
     help="Embed a bounded Trace Map slice in each candidate.",
 )
 @click.option("--max-slice-nodes", type=int, default=40, show_default=True, help="Maximum nodes for --include-slice.")
+@click.option(
+    "--sort",
+    "sort_order",
+    type=click.Choice(["relevance", "time", "recency"]),
+    default="relevance",
+    show_default=True,
+    help="Result order: relevance (score), time (oldest first), or recency (newest first).",
+)
+@click.option(
+    "--min-score",
+    type=float,
+    default=None,
+    help="Drop candidates scoring below this threshold.",
+)
 @click.option("--force-rebuild", is_flag=True, help="Rebuild the local Trace Index before querying.")
 @click.option(
     "--remote-bucket",
@@ -224,6 +238,8 @@ def trace_query(
     latest_generation: bool,
     include_slice: str | None,
     max_slice_nodes: int,
+    sort_order: str,
+    min_score: float | None,
     force_rebuild: bool,
     remote_bucket: bool,
     force_remote_bucket: bool,
@@ -382,6 +398,8 @@ def trace_query(
             page_token=page_token,
             include_slice=include_slice,
             max_slice_nodes=max_slice_nodes,
+            sort=sort_order,
+            min_score=min_score,
         )
     except ValueError as exc:
         click.echo(str(exc), err=True)
@@ -389,6 +407,7 @@ def trace_query(
     payload = {
         "status": "ok",
         "source": query_source,
+        "sort": sort_order,
         "semantic_query": None,
         "total": page.total,
         "total_returned": len(page.candidates),

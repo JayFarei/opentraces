@@ -652,6 +652,8 @@ def query_search_projection_page(
     page_token: str | None = None,
     include_slice: str | None = None,
     max_slice_nodes: int = 40,
+    sort: str = "relevance",
+    min_score: float | None = None,
     index_path: Path | None = None,
     root_path: Path | None = None,
     build_if_missing: bool = True,
@@ -776,7 +778,16 @@ def query_search_projection_page(
     if latest_generation:
         latest_ids = {unit.unit_id for unit in latest_units([item[3] for item in scored])}
         scored = [item for item in scored if item[3].unit_id in latest_ids]
-    scored.sort(key=lambda item: (-item[0], item[3].trace_id, item[3].unit_id))
+    if min_score is not None:
+        scored = [item for item in scored if item[0] >= min_score]
+    if sort == "time":
+        scored.sort(key=lambda item: (_unit_ts(item[3]), -item[0], item[3].trace_id, item[3].unit_id))
+    elif sort == "recency":
+        scored.sort(
+            key=lambda item: (-_unit_ts(item[3]).timestamp(), -item[0], item[3].trace_id, item[3].unit_id)
+        )
+    else:  # relevance (default)
+        scored.sort(key=lambda item: (-item[0], item[3].trace_id, item[3].unit_id))
     offset = _page_offset(page_token)
     page_size = max(1, limit)
     selected = scored[offset : offset + page_size]
@@ -2046,6 +2057,22 @@ def _parse_since(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _unit_ts(unit: TraceUnit) -> datetime:
+    """Sort key timestamp for a unit (U4 --sort time/recency)."""
+
+    metadata = unit.metadata or {}
+    raw = metadata.get("timestamp_end") or metadata.get("timestamp_start")
+    if isinstance(raw, str) and raw:
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            pass
+    return datetime.min.replace(tzinfo=timezone.utc)
 
 
 def _doc_timestamp(doc: dict[str, Any]) -> datetime:

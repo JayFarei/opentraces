@@ -265,12 +265,12 @@ def plan_corpus(profile: dict[str, Any], seed: int, tier: str) -> CorpusPlan:
         queries.append(QueryRow(
             id=f"chrono-{c:02d}", archetype="chronological",
             intent="what happened around this topic, in time order",
-            mode="lex", query=token,
+            mode="lex", query=token, extra_flags={"sort": "time"},
             gold_trace_ids=gold_order, gold_kind="ordered",
             targets={"recall_at": 10, "recall_min": 0.95, "tau_min": 0.9},
-            expected_phase_a="red",
+            expected_phase_a="green",
             seed_case="S4" if c == 0 else None,
-            note="time order requires --sort time (U4); score-only sort returns the reverse today",
+            note="U4: --sort time orders the gold set chronologically (tau +1)",
         ))
 
     # ---- recency: K distinct traces on a topic; gold = the latest ----------- #

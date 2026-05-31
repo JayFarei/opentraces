@@ -117,11 +117,11 @@ def test_seed_cases_reproduce_baseline(dev_report):
     assert by_id["refid-00"].total == 0
     assert by_id["refid-00"].outcome["recall_at_k"] == 0.0
 
-    # S4: chronological order wrong without --sort time (RED)
-    assert by_id["chrono-00"].outcome["recall_at_k"] >= 0.95  # recall fine
-    assert by_id["chrono-00"].outcome["kendall_tau"] < 0.9    # order broken
+    # S4: chronological order correct after U4 --sort time (GREEN, was tau=-1)
+    assert by_id["chrono-00"].outcome["recall_at_k"] >= 0.95
+    assert by_id["chrono-00"].outcome["kendall_tau"] >= 0.9
 
-    # S5: latest generation not rank-1 without recency weighting (RED)
+    # S5: latest generation not rank-1 yet (recency weighting is U5) (RED)
     assert by_id["recency-00"].outcome["recency_hit"]["among_gold"] < 1.0
 
     # S2/S6/S7: descriptive + semantic recall preserved (GREEN)

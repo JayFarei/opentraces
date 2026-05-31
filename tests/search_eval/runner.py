@@ -115,6 +115,10 @@ def _query_args(row: QueryRow, limit: int) -> list[str]:
         raise ValueError(f"unknown query mode {row.mode!r}")
     if row.extra_flags.get("include_superseded"):
         args.append("--include-superseded")
+    if row.extra_flags.get("sort"):
+        args += ["--sort", row.extra_flags["sort"]]
+    if row.extra_flags.get("min_score") is not None:
+        args += ["--min-score", str(row.extra_flags["min_score"])]
     return args
 
 
@@ -141,6 +145,10 @@ def _capture_boundedness(row: QueryRow) -> dict[str, Any]:
         "limit": OUTCOME_LIMIT,
         "latest_generation": not row.extra_flags.get("include_superseded", False),
     }
+    if row.extra_flags.get("sort"):
+        kwargs["sort"] = row.extra_flags["sort"]
+    if row.extra_flags.get("min_score") is not None:
+        kwargs["min_score"] = row.extra_flags["min_score"]
     os.environ["OT_SEARCH_DIAG"] = "1"
     try:
         if row.mode == "semantic":

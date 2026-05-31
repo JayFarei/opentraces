@@ -1173,6 +1173,8 @@ def query_index_page(
     page_token: str | None = None,
     include_slice: str | None = None,
     max_slice_nodes: int = 40,
+    sort: str = "relevance",
+    min_score: float | None = None,
     index_path: Path | None = None,
 ) -> QueryPage:
     """Return one stable page of bounded candidate packets."""
@@ -1361,7 +1363,16 @@ def query_index_page(
             )
         )
 
-    scored.sort(key=lambda item: (-item[0], item[3].trace_id))
+    if min_score is not None:
+        scored = [item for item in scored if item[0] >= min_score]
+    if sort == "time":
+        scored.sort(key=lambda item: (_unit_timestamp(item[3]), -item[0], item[3].trace_id))
+    elif sort == "recency":
+        scored.sort(
+            key=lambda item: (-_unit_timestamp(item[3]).timestamp(), -item[0], item[3].trace_id)
+        )
+    else:  # relevance (default)
+        scored.sort(key=lambda item: (-item[0], item[3].trace_id))
     offset = _page_offset(page_token)
     page_size = max(1, limit)
     selected = scored[offset : offset + page_size]
