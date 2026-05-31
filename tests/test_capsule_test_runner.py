@@ -135,6 +135,86 @@ def test_validate_rejects_bad_test_shape():
         validate_capsule(bad)
 
 
+def _capsule_pytest():
+    return {
+        "schema_version": "opentraces.capsule.v1", "capsule_id": "fixturepytest01",
+        "repo_pin": {"commit_sha": "buggy"}, "environment": {"setup": []},
+        "test": declared_test(f"{sys.executable} -m pytest -q test_calc.py", None),
+    }
+
+
+def test_pytest_framework_verdict(fixture_repo):
+    # The test_calc.py in the fixture is a pytest-style test; the pytest adapter
+    # should give a structured verdict from exit codes, not a substring guess.
+    cap = _capsule_pytest()
+    r_bug = run_capsule_test(cap, repo_dir=fixture_repo["repo"], target_ref=fixture_repo["buggy"])
+    assert r_bug["framework"] == "pytest", r_bug
+    assert r_bug["verdict"] == "reproduces", r_bug
+    r_fix = run_capsule_test(cap, repo_dir=fixture_repo["repo"], target_ref=fixture_repo["fixed"])
+    assert r_fix["verdict"] == "fixed", r_fix
+
+
+def test_run_from_bundle_reproduces_without_any_git(fixture_repo, tmp_path):
+    # Hermetic: build the bundle from the buggy commit, then run with NO repo_dir
+    # at all — proving the capsule reproduces even if the commit is gone.
+    from opentraces.core.capsule.share import build_capsule_bundle
+
+    meta, data = build_capsule_bundle(fixture_repo["repo"], fixture_repo["buggy"])
+    bundle = tmp_path / "capsule.bundle.tar.gz"
+    bundle.write_bytes(data)
+    cap = _capsule_with_test()
+    cap["bundle"] = meta
+    res = run_capsule_test(cap, bundle_path=bundle)
+    assert res["run_source"] == "bundle", res
+    assert res["verdict"] == "reproduces", res
+
+
+def test_run_from_bundle_fixed(fixture_repo, tmp_path):
+    from opentraces.core.capsule.share import build_capsule_bundle
+
+    meta, data = build_capsule_bundle(fixture_repo["repo"], fixture_repo["fixed"])
+    bundle = tmp_path / "capsule.bundle.tar.gz"
+    bundle.write_bytes(data)
+    cap = _capsule_with_test()
+    cap["bundle"] = meta
+    res = run_capsule_test(cap, bundle_path=bundle)
+    assert res["verdict"] == "fixed", res
+
+
+def test_bundle_is_byte_identical_across_builds(fixture_repo):
+    from opentraces.core.capsule.share import build_capsule_bundle
+
+    m1, d1 = build_capsule_bundle(fixture_repo["repo"], fixture_repo["fixed"])
+    m2, d2 = build_capsule_bundle(fixture_repo["repo"], fixture_repo["fixed"])
+    assert m1["sha256"] == m2["sha256"]  # mtime=0 -> reproducible
+
+
+def test_env_allowlist_keeps_host_secrets_out(fixture_repo, monkeypatch):
+    # A secret in the host env must NOT reach the untrusted captured command.
+    monkeypatch.setenv("MY_SECRET_TOKEN", "supersecret-xyz")
+    cap = _capsule_with_test()
+    cap["test"]["command"] = f'{sys.executable} -c "import os,sys; sys.exit(1 if os.environ.get(\'MY_SECRET_TOKEN\') else 0)"'
+    cap["test"]["expected"] = {"kind": "nonzero_exit"}
+    res = run_capsule_test(cap, repo_dir=fixture_repo["repo"], target_ref=fixture_repo["fixed"])
+    assert res["verdict"] == "fixed", res  # exit 0 == secret absent from the command's env
+
+
+def test_setup_step_runs_before_the_test(fixture_repo, tmp_path):
+    from opentraces.core.capsule.share import build_capsule_bundle
+
+    meta, data = build_capsule_bundle(fixture_repo["repo"], fixture_repo["fixed"])
+    bundle = tmp_path / "capsule.bundle.tar.gz"
+    bundle.write_bytes(data)
+    cap = _capsule_with_test()
+    cap["bundle"] = meta
+    # Setup writes a marker file; the test command asserts it exists.
+    cap["environment"] = {"setup": ["echo ready > _setup_marker"]}
+    cap["test"]["command"] = f'{sys.executable} -c "import os; assert os.path.exists(\'_setup_marker\')"'
+    cap["test"]["expected"] = {"kind": "nonzero_exit"}
+    res = run_capsule_test(cap, bundle_path=bundle)
+    assert res["verdict"] == "fixed", res
+
+
 def test_declared_test_shapes():
     assert declared_test(None, None) is None
     t = declared_test("pytest x", "AssertionError")

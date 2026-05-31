@@ -21,6 +21,7 @@ from .render import render_capsule_markdown, render_issue_body
 
 HF_HOST = "https://huggingface.co"
 CAPSULE_PREFIX = "capsules/v1"
+BUNDLE_FILENAME = "capsule.bundle.tar.gz"
 
 
 # --------------------------------------------------------------------------- #
@@ -57,8 +58,56 @@ def human_capsule_url(repo_id: str, capsule_id: str, *, revision: str = "main") 
     return f"{HF_HOST}/datasets/{rid}/blob/{revision}/{CAPSULE_PREFIX}/{capsule_id}/capsule.md"
 
 
-def write_capsule_dir(capsule: dict[str, Any], dest_root: Path) -> dict[str, Path]:
-    """Write capsule.json + capsule.md under ``dest_root/capsules/v1/<id>/``."""
+def build_capsule_bundle(project_dir: Path, sha: str) -> tuple[dict[str, Any], bytes]:
+    """git archive the repo at ``sha`` into a deterministic tar.gz.
+
+    Returns ``(bundle_metadata, tar_gz_bytes)``. The bundle makes the capsule
+    hermetic: the test runs even when the commit is private / force-pushed away.
+    """
+
+    import gzip
+    import hashlib
+
+    raw = subprocess.run(
+        ["git", "-C", str(project_dir), "archive", "--format=tar", sha],
+        capture_output=True, check=False,
+    )
+    if raw.returncode != 0:
+        raise RuntimeError(
+            f"git archive failed for {sha} in {project_dir}: "
+            f"{raw.stderr.decode('utf-8', 'replace').strip()}"
+        )
+    # mtime=0 for byte-identity across machines (matches the bucket convention).
+    gz = gzip.compress(raw.stdout, mtime=0)
+    meta = {
+        "kind": "git_archive",
+        "filename": BUNDLE_FILENAME,
+        "source_sha": sha,
+        "sha256": hashlib.sha256(gz).hexdigest(),
+        "size_bytes": len(gz),
+    }
+    return meta, gz
+
+
+def sibling_bundle_path(capsule_file: Path) -> Path | None:
+    """The bundle next to a local capsule.json, if present."""
+
+    cand = Path(capsule_file).parent / BUNDLE_FILENAME
+    return cand if cand.exists() else None
+
+
+def verify_bundle(bundle_path: Path, expected_sha256: str | None) -> bool:
+    if not expected_sha256:
+        return True
+    import hashlib
+
+    return hashlib.sha256(Path(bundle_path).read_bytes()).hexdigest() == expected_sha256
+
+
+def write_capsule_dir(
+    capsule: dict[str, Any], dest_root: Path, *, bundle_bytes: bytes | None = None,
+) -> dict[str, Path]:
+    """Write capsule.json + capsule.md (+ the bundle when present) under the dir."""
 
     cid = capsule["capsule_id"]
     out_dir = Path(dest_root) / CAPSULE_PREFIX / cid
@@ -72,7 +121,12 @@ def write_capsule_dir(capsule: dict[str, Any], dest_root: Path) -> dict[str, Pat
         encoding="utf-8",
     )
     md_path.write_text(render_capsule_markdown(capsule), encoding="utf-8")
-    return {"dir": out_dir, "json": json_path, "md": md_path}
+    result = {"dir": out_dir, "json": json_path, "md": md_path}
+    if bundle_bytes is not None and (capsule.get("bundle") or {}).get("filename"):
+        bundle_path = out_dir / capsule["bundle"]["filename"]
+        bundle_path.write_bytes(bundle_bytes)
+        result["bundle"] = bundle_path
+    return result
 
 
 # --------------------------------------------------------------------------- #
@@ -154,8 +208,9 @@ def publish_capsule(
     repo_id: str,
     token: str | None,
     private: bool = False,
+    bundle_bytes: bytes | None = None,
 ) -> dict[str, Any]:
-    """Upload ONLY capsule.json + capsule.md to ``capsules/v1/<id>/`` on HF.
+    """Upload ONLY capsule.json + capsule.md (+ the bundle when present) to ``capsules/v1/<id>/`` on HF.
 
     Returns ``{repo_id, revision, capsule_url, human_url}`` with the URL pinned
     to the publish commit sha when the hub returns one.
@@ -184,7 +239,7 @@ def publish_capsule(
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
-        artifacts = write_capsule_dir(capsule, Path(tmp))
+        artifacts = write_capsule_dir(capsule, Path(tmp), bundle_bytes=bundle_bytes)
         base = f"{CAPSULE_PREFIX}/{cid}"
         commit = api.upload_folder(
             repo_id=rid,
@@ -380,12 +435,16 @@ def close_issue(repo: str, number: int, *, reason: str = "completed") -> None:
 
 
 __all__ = [
+    "BUNDLE_FILENAME",
     "CapsuleResolveError",
     "GhError",
     "GhUnavailableError",
+    "build_capsule_bundle",
     "close_issue",
     "comment_issue",
     "copy_to_clipboard",
+    "sibling_bundle_path",
+    "verify_bundle",
     "create_or_update_issue",
     "find_capsule_issue",
     "gh_available",

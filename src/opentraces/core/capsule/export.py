@@ -253,6 +253,7 @@ def export_capsule(
     remote_url: str | None = None,
     test_command: str | None = None,
     expect_error: str | None = None,
+    setup_command: str | None = None,
 ) -> dict[str, Any]:
     """Build a frozen ``opentraces.capsule.v1`` envelope for one failing session.
 
@@ -343,6 +344,15 @@ def export_capsule(
     if test is None:
         limitations.append("no_executable_test")
 
+    # Environment manifest: what's needed to run the test reproducibly (not host-coupled).
+    env_obj = getattr(record, "environment", None)
+    eco = getattr(env_obj, "language_ecosystem", None)
+    environment = {
+        "dependencies": list(getattr(record, "dependencies", []) or [])[:200],
+        "language_ecosystem": eco if isinstance(eco, str) else (getattr(eco, "name", None) if eco else None),
+        "setup": [setup_command] if setup_command else [],
+    }
+
     anchors = _trail_anchors(project_dir, trace_id)
     if not anchors:
         limitations.append("trail_anchors_unavailable")
@@ -386,6 +396,8 @@ def export_capsule(
         source=source,
         summary=summary,
         test=test,
+        environment=environment,
+        bundle=None,  # attached at write time when --bundle is requested
         intent=intent,
         failing_step=failing_step,
         slice_payload=slice_payload,

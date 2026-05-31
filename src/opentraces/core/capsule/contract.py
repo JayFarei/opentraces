@@ -91,6 +91,8 @@ def freeze_capsule(
     source: dict[str, Any],
     summary: dict[str, Any],
     test: dict[str, Any] | None,
+    environment: dict[str, Any] | None,
+    bundle: dict[str, Any] | None,
     intent: dict[str, Any],
     failing_step: dict[str, Any],
     slice_payload: dict[str, Any],
@@ -117,6 +119,12 @@ def freeze_capsule(
         # Runnable repro: command + expected failure signal, or None when the
         # session had no failing command (then the capsule replays by intent).
         "test": test,
+        # How to set up the env to run the test (deps + setup commands), so the
+        # verdict is reproducible, not host-coupled.
+        "environment": environment or {},
+        # Hermetic source bundle (sibling capsule.bundle.tar.gz) so the test runs
+        # even when the pinned commit is unreachable. None = pin-only (git ref).
+        "bundle": bundle,
         "intent": intent,
         "failing_step": failing_step,
         "slice": slice_payload,

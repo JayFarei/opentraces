@@ -77,10 +77,15 @@ def _export_options(fn):
         "--expect-error", "expect_error", default=None,
         help="Expected error string for the repro (omit = expect a non-zero exit).",
     )(fn)
+    fn = click.option(
+        "--setup-command", "setup_command", default=None,
+        help="A setup/build/install step to run before the repro (e.g. 'pip install -e .').",
+    )(fn)
     return fn
 
 
-def _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command=None, expect_error=None):
+def _do_export(trace_id, step, node_id, radius, repo_url, project_dir,
+               test_command=None, expect_error=None, setup_command=None):
     from ..core.capsule.export import CapsuleExportError, export_capsule
 
     project = _resolve_project(project_dir)
@@ -94,6 +99,7 @@ def _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_comm
             remote_url=repo_url,
             test_command=test_command,
             expect_error=expect_error,
+            setup_command=setup_command,
         ), project
     except CapsuleExportError as exc:
         click.echo(f"capsule export failed: {exc}", err=True)
@@ -136,8 +142,28 @@ def _default_hf_repo(token) -> str | None:
         return None
 
 
-def _publish_and_url(capsule, *, hf_repo, token, private):
-    """Publish to HF (capsule.json + capsule.md only). Exits on error."""
+def _maybe_build_bundle(capsule, project, make_bundle):
+    """Build the hermetic source bundle (git archive at the pin); mutate capsule['bundle']."""
+
+    if not make_bundle:
+        return None
+    sha = (capsule.get("repo_pin") or {}).get("commit_sha")
+    if not sha:
+        click.echo("--bundle needs a resolvable commit sha in the repo pin; skipping bundle.", err=True)
+        return None
+    from ..core.capsule.share import build_capsule_bundle
+
+    try:
+        meta, data = build_capsule_bundle(project, sha)
+    except Exception as exc:
+        click.echo(f"--bundle: git archive failed ({exc}); skipping bundle.", err=True)
+        return None
+    capsule["bundle"] = meta
+    return data
+
+
+def _publish_and_url(capsule, *, hf_repo, token, private, bundle_bytes=None):
+    """Publish to HF (capsule.json + capsule.md + bundle when present). Exits on error."""
 
     from ..core.capsule.share import publish_capsule
 
@@ -150,7 +176,7 @@ def _publish_and_url(capsule, *, hf_repo, token, private):
         )
         sys.exit(2)
     try:
-        info = publish_capsule(capsule, repo_id=hf_repo, token=tok, private=private)
+        info = publish_capsule(capsule, repo_id=hf_repo, token=tok, private=private, bundle_bytes=bundle_bytes)
     except Exception as exc:
         click.echo(f"capsule publish failed: {exc}", err=True)
         sys.exit(3)
@@ -167,15 +193,18 @@ def capsule_group() -> None:
 @_export_options
 @click.option("--out", type=click.Path(file_okay=False, path_type=Path), default=None,
               help="Output dir (default: <project>/.opentraces/capsules).")
+@click.option("--bundle", "make_bundle", is_flag=True,
+              help="Embed a hermetic source bundle (git archive at the pin) so the test runs even if the commit is gone.")
 @click.option("--json", "as_json", is_flag=True, help="Print the capsule envelope JSON to stdout.")
-def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, out, as_json):
+def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, out, make_bundle, as_json):
     """Build a local, redacted, self-contained capsule for one failing session."""
 
     from ..core.capsule.share import write_capsule_dir
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error)
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command)
+    bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
     dest = out or (project / ".opentraces" / "capsules")
-    arts = write_capsule_dir(capsule, dest)
+    arts = write_capsule_dir(capsule, dest, bundle_bytes=bundle_bytes)
     if as_json:
         click.echo(json.dumps(capsule, indent=2, ensure_ascii=False))
         return
@@ -186,8 +215,9 @@ def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comm
         f"{manifest.get('redactions_applied',0)} redactions · "
         f"{manifest.get('home_paths_scrubbed',0)} paths scrubbed\n"
         f"  closure: {(capsule.get('render_state') or {}).get('closure')} · "
-        f"limitations: {capsule.get('limitations')}\n"
-        f"  md: {arts['md']}",
+        f"test: {(capsule.get('test') or {}).get('command', '(none → intent-replay)')}\n"
+        + (f"  bundle: {capsule['bundle']['filename']} ({capsule['bundle']['size_bytes']} bytes @ {capsule['bundle']['source_sha'][:12]})\n" if capsule.get("bundle") else "")
+        + f"  md: {arts['md']}",
         err=True,
     )
     click.echo(str(arts["json"]))  # primary stdout = the capsule path
@@ -239,11 +269,12 @@ def _clip(do_copy, url):
 @click.argument("trace_id")
 @_export_options
 @click.option("--repo", "hf_repo", default=None, help="HF dataset repo (default: <you>/opentraces-capsules).")
-@click.option("--publish", is_flag=True, help="Upload the capsule to HF (capsule.json + capsule.md only).")
+@click.option("--publish", is_flag=True, help="Upload the capsule to HF (capsule.json + capsule.md + bundle).")
 @click.option("--private", is_flag=True, help="Create the HF dataset repo as private.")
+@click.option("--bundle", "make_bundle", is_flag=True, help="Embed + publish a hermetic source bundle.")
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the shareable URL to the clipboard.")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, hf_repo, publish, private, do_copy, token):
+def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, hf_repo, publish, private, make_bundle, do_copy, token):
     """Mint a shareable capsule URL (add --publish to upload it)."""
 
     from ..core.capsule.share import (
@@ -252,8 +283,9 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         write_capsule_dir,
     )
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error)
-    arts = write_capsule_dir(capsule, project / ".opentraces" / "capsules")
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command)
+    bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
+    arts = write_capsule_dir(capsule, project / ".opentraces" / "capsules", bundle_bytes=bundle_bytes)
     cid = capsule["capsule_id"]
     repo = hf_repo or _default_hf_repo(token)
 
@@ -261,7 +293,7 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         if not repo:
             click.echo("could not determine an HF repo; pass --repo <owner/name>.", err=True)
             sys.exit(2)
-        url, human, info = _publish_and_url(capsule, hf_repo=repo, token=token, private=private)
+        url, human, info = _publish_and_url(capsule, hf_repo=repo, token=token, private=private, bundle_bytes=bundle_bytes)
         click.echo(f"published {cid} (rev {info['revision'][:12]}) · {human}", err=True)
     elif repo:
         url = mint_capsule_url(repo, cid)
@@ -281,10 +313,11 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
 @click.option("--issue-repo", default=None, help="GitHub repo (default: inferred from the capsule's repo pin).")
 @click.option("--title", default=None, help="Issue title (default: derived from the summary).")
 @click.option("--publish", is_flag=True, help="Publish to HF and file/update the issue via gh.")
+@click.option("--bundle", "make_bundle", is_flag=True, help="Embed + publish a hermetic source bundle.")
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the capsule URL to the clipboard.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the publish confirmation (for scripts/agents).")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, hf_repo, issue_repo, title, publish, do_copy, assume_yes, token):
+def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, hf_repo, issue_repo, title, publish, make_bundle, do_copy, assume_yes, token):
     """Render the GitHub issue body for a capsule, or file it with --publish.
 
     The HF repo defaults to ``<you>/opentraces-capsules`` and the issue repo is
@@ -303,8 +336,9 @@ def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         write_capsule_dir,
     )
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error)
-    write_capsule_dir(capsule, project / ".opentraces" / "capsules")
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command)
+    bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
+    write_capsule_dir(capsule, project / ".opentraces" / "capsules", bundle_bytes=bundle_bytes)
     cid = capsule["capsule_id"]
     repo = hf_repo or _default_hf_repo(token)
     target_repo = issue_repo or _infer_issue_repo(capsule)
@@ -349,7 +383,7 @@ def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
             click.echo("aborted.", err=True)
             sys.exit(1)
 
-    url, human, _info = _publish_and_url(capsule, hf_repo=repo, token=token, private=False)
+    url, human, _info = _publish_and_url(capsule, hf_repo=repo, token=token, private=False, bundle_bytes=bundle_bytes)
     body = render_issue_body(capsule, capsule_url=url, human_url=human)
     _clip(do_copy, url)
     summary_title = (capsule.get("summary") or {}).get("title") or "session"
@@ -366,6 +400,50 @@ def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         sys.exit(3)
     click.echo(f"{issue['action']} issue · capsule {cid} · {human}", err=True)
     click.echo(issue["url"])  # primary stdout = the issue URL
+
+
+def _resolve_bundle_path(ref, capsule):
+    """Locate the capsule's hermetic bundle: local sibling, else download the sibling URL."""
+
+    from ..core.capsule.share import BUNDLE_FILENAME, sibling_bundle_path, verify_bundle
+
+    bmeta = capsule.get("bundle") or {}
+    if not bmeta.get("filename"):
+        click.echo("this capsule has no bundle (re-export it with --bundle).", err=True)
+        sys.exit(2)
+
+    local = Path(ref)
+    if local.exists():
+        sib = sibling_bundle_path(local)
+        if sib:
+            if not verify_bundle(sib, bmeta.get("sha256")):
+                click.echo("bundle sha256 mismatch next to the capsule; refusing to use it.", err=True)
+                sys.exit(2)
+            return sib
+
+    # Remote: derive the sibling bundle URL from the capsule's own URL.
+    url = (capsule.get("share") or {}).get("capsule_url")
+    if not url and ref.startswith(("http://", "https://")):
+        url = ref
+    if url and url.endswith("capsule.json"):
+        import tempfile
+        import urllib.request
+
+        bundle_url = url.rsplit("/", 1)[0] + "/" + BUNDLE_FILENAME
+        dest = Path(tempfile.mkdtemp(prefix="capsule-dl-")) / BUNDLE_FILENAME
+        try:
+            with urllib.request.urlopen(bundle_url, timeout=60) as resp:  # noqa: S310 - trusted HF host
+                dest.write_bytes(resp.read())
+        except Exception as exc:
+            click.echo(f"could not download the bundle from {bundle_url}: {exc}", err=True)
+            sys.exit(2)
+        if not verify_bundle(dest, bmeta.get("sha256")):
+            click.echo("downloaded bundle sha256 mismatch; refusing to use it.", err=True)
+            sys.exit(2)
+        return dest
+
+    click.echo("could not locate the capsule bundle (no local sibling, no resolvable URL).", err=True)
+    sys.exit(2)
 
 
 def _resolve_issue(issue_ref, repo_opt):
@@ -433,18 +511,23 @@ def replay_cmd(ref, target_ref, as_json):
 @click.option("--against", "target_ref", default="HEAD", show_default=True,
               help="Git ref to run the repro against (a buggy sha to troubleshoot, HEAD to re-test).")
 @click.option("--repo-dir", type=click.Path(exists=True, file_okay=False, path_type=Path),
-              default=None, help="Local git repo to run in (default: CWD).")
+              default=None, help="Local git repo to run in (default: CWD). Ignored with --from-bundle.")
+@click.option("--from-bundle", "from_bundle", is_flag=True,
+              help="Run against the capsule's hermetic source bundle (no git/commit access needed).")
+@click.option("--inherit-env", is_flag=True,
+              help="Inherit the full host env (default: minimal allowlist + throwaway HOME).")
 @click.option("--timeout", type=int, default=180, show_default=True, help="Command timeout (seconds).")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the untrusted-command confirmation.")
 @click.option("--verdict-to", "verdict_issue", default=None, help="Post the verdict to this issue (ref/URL).")
 @click.option("--close/--no-close", default=False, help="Close the issue on a `fixed` verdict.")
 @click.option("--json", "as_json", is_flag=True, help="Emit the full test result as JSON.")
-def test_cmd(ref, target_ref, repo_dir, timeout, assume_yes, verdict_issue, close, as_json):
-    """Run the capsule AS A TEST against a ref: reproduce the failure or confirm the fix.
+def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assume_yes, verdict_issue, close, as_json):
+    """Run the capsule AS A TEST: reproduce the failure or confirm the fix.
 
-    The capsule's repro command runs in an isolated git worktree of the target
-    ref. SECURITY: that command is captured, untrusted input — you are confirming
-    you trust it before it executes.
+    The repro runs in an isolated checkout (a git worktree of the target ref, or
+    the capsule's hermetic bundle with --from-bundle) under a minimal env
+    allowlist. SECURITY: the command is captured, untrusted input — you are
+    confirming you trust it before it executes.
     """
 
     from ..core.capsule.contract import CapsuleSchemaAheadError
@@ -469,11 +552,15 @@ def test_cmd(ref, target_ref, repo_dir, timeout, assume_yes, verdict_issue, clos
         )
         sys.exit(2)
 
+    bundle_path = _resolve_bundle_path(ref, capsule) if from_bundle else None
     repo = Path(repo_dir or Path.cwd()).resolve()
+    where = (
+        f"the capsule's source bundle ({(capsule.get('bundle') or {}).get('source_sha','')[:12]})"
+        if bundle_path else f"an isolated checkout of `{target_ref}` in {repo}"
+    )
     if not assume_yes:
         click.echo(
-            f"About to RUN this captured (untrusted) command in an isolated checkout "
-            f"of `{target_ref}` in {repo}:\n  $ {test['command']}",
+            f"About to RUN this captured (untrusted) command in {where}:\n  $ {test['command']}",
             err=True,
         )
         if not click.confirm("Trust and run it?", default=False):
@@ -481,7 +568,10 @@ def test_cmd(ref, target_ref, repo_dir, timeout, assume_yes, verdict_issue, clos
             sys.exit(1)
 
     try:
-        result = run_capsule_test(capsule, repo_dir=repo, target_ref=target_ref, timeout=timeout)
+        result = run_capsule_test(
+            capsule, repo_dir=(None if bundle_path else repo), target_ref=target_ref,
+            bundle_path=bundle_path, timeout=timeout, inherit_env=inherit_env,
+        )
     except CapsuleTestError as exc:
         click.echo(f"capsule test could not run: {exc}", err=True)
         sys.exit(2)
@@ -490,9 +580,13 @@ def test_cmd(ref, target_ref, repo_dir, timeout, assume_yes, verdict_issue, clos
         click.echo(json.dumps(result, indent=2, ensure_ascii=False))
     else:
         icon = {"fixed": "🟢", "reproduces": "🔴", "inconclusive": "🟡"}.get(result["verdict"], "•")
+        where = result.get("run_source", "git")
+        ref_shown = result.get("target_ref") or target_ref
         click.echo(
-            f"{icon} {result['verdict']} @ {target_ref} · exit={result.get('exit_code')} · "
-            f"$ {result['command']}",
+            f"{icon} {result['verdict']} @ {ref_shown} [{where}] · "
+            f"framework={result.get('framework','?')} · exit={result.get('exit_code')}\n"
+            f"  reason: {result.get('reason')}\n"
+            f"  $ {result['command']}",
             err=True,
         )
         click.echo(result["verdict"])
