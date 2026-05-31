@@ -2,7 +2,8 @@
        test lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
        otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf capture-refresh \
-       search-eval search-eval-real search-eval-profile search-eval-test
+       search-eval search-eval-real search-eval-xl search-eval-slope \
+       search-eval-profile search-eval-test
 
 SCHEMA_DIR := packages/opentraces-schema
 VERSION := $(shell python3 -c "import re; m=re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('src/opentraces/__init__.py').read()); print(m.group(1))")
@@ -110,6 +111,15 @@ search-eval:
 
 search-eval-real:
 	$(OTBOX_PY) -m tests.search_eval.runner --tier real-scale --seed 1
+
+# The xl (~10k trace) tier + scaling-slope gate (U7): run real-scale then xl,
+# then `search-eval-slope` proves bounded-query p95 stays ~flat as the corpus
+# grows (the qmd invariant at scale). xl is heavy — intended for a nightly lane.
+search-eval-xl:
+	$(OTBOX_PY) -m tests.search_eval.runner --tier xl --seed 1
+
+search-eval-slope:
+	$(OTBOX_PY) -m tests.search_eval.slope
 
 # Refresh the committed real-bucket size profile from ~/.opentraces (U0).
 search-eval-profile:

@@ -209,3 +209,20 @@ Hard constraints (from plan 087 + the Goal):
   incremental-refresh lifecycle) is a deferred follow-on — secondary value, higher index-lifecycle risk.
 - **Next:** U7 — real-scale + xl(~10k) tiers + scaling-slope gate (p95(xl) ≤ 2.5× p95(real-scale)
   for a fixed result size; the qmd invariant proven at scale).
+
+## 2026-05-31 — U7: real-scale tier proof + scaling-slope gate ✅
+
+- **Real-scale tier (1084 traces / 216,206 docs), all 24/24 GREEN, invariants_ok=True** (3:03 build+run).
+  Every seed-case Goal target MET at scale:
+  - **S2 semantic p95 = 232ms** (target <2s; "from ~90s today"), gold **rank 1**, scan 48/216,206.
+  - S3 refid recall 1.0 rank 1 (scan 1/1084); S4 chrono τ=1.0; S5 recency rec@1=1.0;
+    S1/S6/S7 descriptive rank 1; S8 facet recall 1.0 (O(corpus) 1084/1084, still 298ms).
+  - Bounded queries scan **1–112 of 216k docs** — cost ∝ matches, not corpus.
+- **Slope gate (dev→real-scale, 7.23× corpus growth):** new `tests/search_eval/slope.py` computes
+  p95(large)/p95(small) per row; bounded rows must stay ≤K, O(corpus) rows exempt. Result:
+  **every bounded query ratio 1.06–1.21** (latency flat under 7× growth) → bounded_all_ok=True even
+  at K=2.5; the facet O(corpus) grows to 1.5× (would climb toward ~9× at xl). The qmd invariant
+  (R2) is proven. Wired into SEARCH-EVAL.md + `make search-eval-slope`/`search-eval-xl`; +1 unit test.
+- **xl (10k) tier:** running in background as the definitive 10k confirmation; the dev→real-scale
+  slope already demonstrates the invariant. `make search-eval-xl` is the nightly lane.
+- **Next:** U9 — wire the eval as a standing otbox checkpoint + journeys (snapshot-cached gate).

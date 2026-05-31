@@ -158,6 +158,35 @@ def test_boundedness_invariant(dev_report):
     assert not facet["bounded"]
 
 
+def test_slope_gate_logic():
+    """The scaling-slope gate (U7): bounded queries must stay ~flat across a
+    corpus-size step; O(corpus) rows are exempt. Synthetic, deterministic."""
+
+    from tests.search_eval import slope as sl
+
+    def _report(tier, corpus, a_p95, b_p95):
+        return {
+            "tier": tier, "corpus_size": corpus,
+            "rows": [
+                {"id": "a", "archetype": "x", "perf": {"p95_ms": a_p95},
+                 "boundedness": {"bounded": True}},
+                {"id": "b", "archetype": "y", "perf": {"p95_ms": b_p95},
+                 "boundedness": {"bounded": False}},
+            ],
+        }
+
+    # bounded 'a' flat (1.1x), O(corpus) 'b' grows 9x but is exempt
+    reports = {"s": _report("s", 100, 200, 200), "l": _report("l", 1000, 220, 1800)}
+    s = sl.compute_slope(reports, slope_k=2.5)
+    assert s["corpus_growth"] == 10.0
+    assert s["bounded_all_ok"] and s["all_ok"]
+
+    # a bounded query that regresses to O(corpus) (4x) must be caught
+    reports["l"]["rows"][0]["perf"]["p95_ms"] = 800
+    s2 = sl.compute_slope(reports, slope_k=2.5)
+    assert not s2["bounded_all_ok"]
+
+
 def test_outcome_digest_is_stable(dev_report):
     second = run_eval("dev", seed=1)
     assert second.outcome_digest == dev_report.outcome_digest

@@ -210,6 +210,11 @@ def render_markdown(reports: list[dict[str, Any]]) -> str:
         out.append("")
         out.extend(_rows_table(rows))
 
+    from tests.search_eval import slope as slope_mod
+
+    slope = slope_mod.compute_slope({rep["tier"]: rep for rep in reports})
+    out.extend(slope_mod.render_slope_section(slope))
+
     out.append("---")
     out.append(
         "_Outcome metrics are deterministic (recall/MRR/NDCG/tau/recency-hit over distinct "
