@@ -3,7 +3,7 @@
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
        otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf capture-refresh \
        search-eval search-eval-real search-eval-xl search-eval-slope \
-       search-eval-cache search-eval-profile search-eval-test
+       search-eval-cache search-eval-live search-eval-profile search-eval-test
 
 SCHEMA_DIR := packages/opentraces-schema
 VERSION := $(shell python3 -c "import re; m=re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('src/opentraces/__init__.py').read()); print(m.group(1))")
@@ -126,6 +126,11 @@ search-eval-xl:
 
 search-eval-slope:
 	$(OTBOX_PY) -m tests.search_eval.slope
+
+# Ungated --live mode (U8): run the real Seed Evaluation Dataset queries against
+# the operator's actual ~/.opentraces bucket -> tests/search_eval/LIVE-EVAL.md.
+search-eval-live:
+	$(OTBOX_PY) -m tests.search_eval.live
 
 # Refresh the committed real-bucket size profile from ~/.opentraces (U0).
 search-eval-profile:

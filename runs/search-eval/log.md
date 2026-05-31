@@ -246,3 +246,24 @@ Hard constraints (from plan 087 + the Goal):
   real-scale tier; qmd invariant proven (slope) + boundedness gated; deterministic; pytest green.
   Deferred/secondary (documented): U6c `--files` facet bounding (S8 needs orderability, met by U4),
   U8 `--live` ad-hoc mode (not in the Goal's unit list), xl(10k) one-shot (nightly lane wired).
+
+## 2026-05-31 — U8: `--live` mode + an honest S2-paraphrase finding
+
+- **Diff:** new `tests/search_eval/live.py` (runs the real Seed Evaluation Dataset queries against
+  `~/.opentraces`, ungated → `LIVE-EVAL.md`) + `make search-eval-live`. LIVE-EVAL.md gitignored (ad-hoc).
+- **Real-bucket validation (7/8 seed golds found):** S1 rank **27→4** (tokenization+scoring), S3
+  nicobailon **0→found rank 7**, S3b pi-subagents **0→rank 3**, S4 `--sort time` rank 3, S5 recency
+  rank 2, S6 rank 3, S7 rank 2 — all <2.2s. The U4/U5/U6 capabilities land on REAL traces, not just
+  planted ones.
+- **`--live` earned its keep — it caught a real gap the synthetic eval hid (S2 paraphrase):**
+  `--semantic "break a trajectory into per-intent slices"` → **total=0** on the real bucket. Root
+  cause: `--semantic` is concept-expansion + lexical FTS-**AND** (precise + bounded, **pre-existing**,
+  not a regression), so a re-worded query whose words don't overlap the gold finds nothing. The
+  synthetic S2 was green only because its planted gold contained the exact query phrase (too easy).
+- **Tried + measured + reverted (integrity):** bounded-OR + `bm25 LIMIT` DID surface the real gold at
+  **rank 4** (matching the plan), but `ORDER BY bm25` ranks the entire OR-match set (huge for common
+  terms) → **18.5s**, violating S2's <2s budget — bm25-LIMIT bounds returned rows, not the work.
+  Reverted to the fast bounded AND-semantic (git diff clean = back to U6b); documented the limitation
+  honestly in LIVE-EVAL.md + here. True paraphrase-at-speed needs embedding-semantic (out of the
+  stdlib-only scope) or TF-IDF term pruning (tracked enhancement). The gated S2 (word-aligned) proves
+  the **fast bounded** semantic path (the plan's S2 emphasis: latency 90s→<2s), which holds (232ms real-scale).
