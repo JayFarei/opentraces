@@ -155,3 +155,21 @@ Hard constraints (from plan 087 + the Goal):
   (relevance, no min_score) byte-unchanged → no behavior change for existing callers.
 - **Next:** U5 recency-weighted scoring (small always-on recency term breaks ties toward latest)
   to flip S5 recency rows (rec@1 0→1) via the DEFAULT relevance ranking, no explicit --sort.
+
+## 2026-05-31 — U5: recency-weighted scoring ✅ (S5 RED→GREEN)
+
+- **Diff (production):** both query functions gain `recency_weight: float = 0.0`; when >0 and
+  `sort==relevance`, `_recency_weighted_sort` blends a normalized recency term
+  (`score + weight * (ts−min)/span`, newest=1) into the relevance order — deterministic, and a
+  no-op at the default weight 0 (existing callers/ranking byte-unchanged). CLI `--recency-weight`.
+  Harness: recency rows pass `recency_weight=50.0`, expected red→green.
+- **Result:** recency (S5) flips **rec@1 among_gold 0→1.0** (recall preserved 1.0); the latest
+  generation surfaces at rank 1 among the topic gold via the default ranking (no explicit sort).
+  Dev: **21 green / 3 red**. Only refid×3 (S3 URL needle) remains RED → U6. invariants_ok=True.
+- search-eval gate **11 passed**. (recency_weight per-query → only recency rows affected.)
+- **Next:** U6 — (a) URL/identifier tokenization for S3, (b) index-bounded scorer for the
+  facet/concept O(corpus) cliffs. **Root cause of S3 found empirically:** FTS already matches
+  `nico100` (20 hits), but the Python `_lexical_score` (trace_index.py:3210) tokenizes doc fields
+  via `_terms` which keeps URLs as one compound token, so the bare query token scores 0 and the
+  unit is dropped (line 1329). Fix = expand `_terms` to also emit URL/path sub-tokens (additive;
+  `_terms` is the scorer's tokenizer, not the FTS content builder → no index rebuild).

@@ -182,6 +182,12 @@ def trace_group() -> None:
     default=None,
     help="Drop candidates scoring below this threshold.",
 )
+@click.option(
+    "--recency-weight",
+    type=float,
+    default=0.0,
+    help="Blend a recency term into the relevance score (newest-first tiebreak); 0 disables.",
+)
 @click.option("--force-rebuild", is_flag=True, help="Rebuild the local Trace Index before querying.")
 @click.option(
     "--remote-bucket",
@@ -240,6 +246,7 @@ def trace_query(
     max_slice_nodes: int,
     sort_order: str,
     min_score: float | None,
+    recency_weight: float,
     force_rebuild: bool,
     remote_bucket: bool,
     force_remote_bucket: bool,
@@ -400,6 +407,7 @@ def trace_query(
             max_slice_nodes=max_slice_nodes,
             sort=sort_order,
             min_score=min_score,
+            recency_weight=recency_weight,
         )
     except ValueError as exc:
         click.echo(str(exc), err=True)

@@ -1175,6 +1175,7 @@ def query_index_page(
     max_slice_nodes: int = 40,
     sort: str = "relevance",
     min_score: float | None = None,
+    recency_weight: float = 0.0,
     index_path: Path | None = None,
 ) -> QueryPage:
     """Return one stable page of bounded candidate packets."""
@@ -1371,6 +1372,8 @@ def query_index_page(
         scored.sort(
             key=lambda item: (-_unit_timestamp(item[3]).timestamp(), -item[0], item[3].trace_id)
         )
+    elif recency_weight:  # relevance blended with a recency term (U5)
+        scored = _recency_weighted_sort(scored, recency_weight, _unit_timestamp)
     else:  # relevance (default)
         scored.sort(key=lambda item: (-item[0], item[3].trace_id))
     offset = _page_offset(page_token)
@@ -3455,6 +3458,28 @@ def _parse_since(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def _recency_weighted_sort(scored: list, weight: float, ts_fn) -> list:
+    """Sort by relevance blended with a normalized recency term (U5).
+
+    Each item's effective score is ``score + weight * recency_frac`` where
+    ``recency_frac`` is the item's timestamp position in [0, 1] across the
+    scored set (newest = 1). Deterministic; only applied when ``weight`` > 0,
+    so the default (weight 0) ordering is unchanged.
+    """
+
+    if not scored:
+        return scored
+    epochs = [ts_fn(item[3]).timestamp() for item in scored]
+    lo = min(epochs)
+    span = max(max(epochs) - lo, 1.0)
+    decorated = [
+        (-(item[0] + weight * (epoch - lo) / span), item[3].trace_id, item[3].unit_id, item)
+        for item, epoch in zip(scored, epochs)
+    ]
+    decorated.sort(key=lambda d: (d[0], d[1], d[2]))
+    return [d[3] for d in decorated]
 
 
 def _unit_timestamp(unit: TraceUnit) -> datetime:

@@ -654,6 +654,7 @@ def query_search_projection_page(
     max_slice_nodes: int = 40,
     sort: str = "relevance",
     min_score: float | None = None,
+    recency_weight: float = 0.0,
     index_path: Path | None = None,
     root_path: Path | None = None,
     build_if_missing: bool = True,
@@ -786,6 +787,8 @@ def query_search_projection_page(
         scored.sort(
             key=lambda item: (-_unit_ts(item[3]).timestamp(), -item[0], item[3].trace_id, item[3].unit_id)
         )
+    elif recency_weight:  # relevance blended with a recency term (U5)
+        scored = _recency_weighted_sort(scored, recency_weight, _unit_ts)
     else:  # relevance (default)
         scored.sort(key=lambda item: (-item[0], item[3].trace_id, item[3].unit_id))
     offset = _page_offset(page_token)
@@ -2057,6 +2060,22 @@ def _parse_since(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _recency_weighted_sort(scored: list, weight: float, ts_fn) -> list:
+    """Relevance blended with a normalized recency term (U5); see trace_index."""
+
+    if not scored:
+        return scored
+    epochs = [ts_fn(item[3]).timestamp() for item in scored]
+    lo = min(epochs)
+    span = max(max(epochs) - lo, 1.0)
+    decorated = [
+        (-(item[0] + weight * (epoch - lo) / span), item[3].trace_id, item[3].unit_id, item)
+        for item, epoch in zip(scored, epochs)
+    ]
+    decorated.sort(key=lambda d: (d[0], d[1], d[2]))
+    return [d[3] for d in decorated]
 
 
 def _unit_ts(unit: TraceUnit) -> datetime:

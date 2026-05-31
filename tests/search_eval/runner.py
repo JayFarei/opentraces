@@ -119,6 +119,8 @@ def _query_args(row: QueryRow, limit: int) -> list[str]:
         args += ["--sort", row.extra_flags["sort"]]
     if row.extra_flags.get("min_score") is not None:
         args += ["--min-score", str(row.extra_flags["min_score"])]
+    if row.extra_flags.get("recency_weight"):
+        args += ["--recency-weight", str(row.extra_flags["recency_weight"])]
     return args
 
 
@@ -149,6 +151,8 @@ def _capture_boundedness(row: QueryRow) -> dict[str, Any]:
         kwargs["sort"] = row.extra_flags["sort"]
     if row.extra_flags.get("min_score") is not None:
         kwargs["min_score"] = row.extra_flags["min_score"]
+    if row.extra_flags.get("recency_weight"):
+        kwargs["recency_weight"] = row.extra_flags["recency_weight"]
     os.environ["OT_SEARCH_DIAG"] = "1"
     try:
         if row.mode == "semantic":

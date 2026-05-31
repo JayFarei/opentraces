@@ -292,11 +292,12 @@ def plan_corpus(profile: dict[str, Any], seed: int, tier: str) -> CorpusPlan:
             id=f"recency-{r:02d}", archetype="recency",
             intent="the latest work on this topic, reload its context",
             mode="semantic", query=f"latest work on the {token} stack",
+            extra_flags={"recency_weight": 50.0},
             gold_trace_ids=list(members), gold_kind="set", gold_latest=latest,
             targets={"recall_at": 10, "recall_min": 0.95, "recency_hit_at": 1},
-            expected_phase_a="red",
+            expected_phase_a="green",
             seed_case="S5" if r == 0 else None,
-            note="latest-at-rank-1 requires recency weighting (U5)",
+            note="U5: recency weighting surfaces the latest generation at rank 1",
         ))
 
     # ---- reference (bare, indexable needle) -> GREEN ------------------------ #

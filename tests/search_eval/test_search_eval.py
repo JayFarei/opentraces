@@ -121,8 +121,8 @@ def test_seed_cases_reproduce_baseline(dev_report):
     assert by_id["chrono-00"].outcome["recall_at_k"] >= 0.95
     assert by_id["chrono-00"].outcome["kendall_tau"] >= 0.9
 
-    # S5: latest generation not rank-1 yet (recency weighting is U5) (RED)
-    assert by_id["recency-00"].outcome["recency_hit"]["among_gold"] < 1.0
+    # S5: recency weighting (U5) surfaces the latest at rank 1 among gold (GREEN)
+    assert by_id["recency-00"].outcome["recency_hit"]["among_gold"] >= 1.0
 
     # S2/S6/S7: descriptive + semantic recall preserved (GREEN)
     assert by_id["precedent-sem-00"].outcome["recall_at_k"] == 1.0
