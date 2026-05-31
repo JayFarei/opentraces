@@ -1,0 +1,74 @@
+{
+  "profile": {
+    "context_tree": {
+      "sum_layer_refs": 144,
+      "trace_coverage": 30,
+      "unique_blobs": 70
+    },
+    "distinct_files_per_trace": {
+      "count": 1084,
+      "max": 159,
+      "mean": 5.9234,
+      "min": 0,
+      "p25": 0.0,
+      "p50": 0.0,
+      "p75": 0.0,
+      "p90": 16.0,
+      "p99": 120.0,
+      "total": 6421
+    },
+    "events": {
+      "batch_count": 3085,
+      "event_count": 460312,
+      "repository_count": 1
+    },
+    "fraction_with_patches": 0.0037,
+    "fraction_with_timestamps": 0.9788,
+    "generation_index": {
+      "count": 1084,
+      "max": 21,
+      "mean": 2.297,
+      "min": 0,
+      "p25": 1.0,
+      "p50": 2.0,
+      "p75": 3.0,
+      "p90": 3.0,
+      "p99": 14.0,
+      "superseded_fraction": 0.9788,
+      "total": 2490
+    },
+    "multi_generation_session_count": 334,
+    "project_count": 5,
+    "projects": {
+      "2026-03-27-community-traces-hf-24eb286b": 1059,
+      "calibre-3165988a": 1,
+      "community-traces-capsule-64726388": 1,
+      "demo-abcdef12": 4,
+      "project-aaaaaaaa": 19
+    },
+    "raw_sources": 1059,
+    "session_count": 363,
+    "steps_per_trace": {
+      "count": 1084,
+      "max": 2529,
+      "mean": 99.0849,
+      "min": 1,
+      "p25": 12.0,
+      "p50": 24.0,
+      "p75": 74.0,
+      "p90": 252.0,
+      "p99": 972.0,
+      "total": 107408
+    },
+    "trace_count": 1084
+  },
+  "provenance": {
+    "bucket_root": "/Users/jayfarei/.opentraces/bucket",
+    "manifest_digest": "sha256:84322d9609a6907f82707a2b191b8a5cb1144372f915675d1308dcd03298b86f",
+    "manifest_object_count": 1082,
+    "pointers_seen": 1084,
+    "pointers_skipped": 0,
+    "profile_digest": "sha256:754dc8669c68dbc82b5f9cf39f31ab2c7dd4fd9efce933f33d87f0fb3800111e"
+  },
+  "schema_version": "opentraces.search_eval.profile.v1"
+}
