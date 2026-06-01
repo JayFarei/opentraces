@@ -160,6 +160,67 @@ def test_no_cache_collision_between_same_version_sources(world, tmp_path):
                             with_overrides={"humanduration": fixed})["verdict"] == "fixed"
 
 
+def _service_client_repo(dest: Path) -> Path:
+    import subprocess
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "app.py").write_text(
+        "import os, json, urllib.request\n"
+        "def delay_seconds(spec):\n"
+        "    base = os.environ['CONVERT_API_URL']\n"
+        "    with urllib.request.urlopen(f'{base}?d={spec}') as r:\n"
+        "        return json.load(r)['seconds']\n", encoding="utf-8")
+    g = lambda *a: subprocess.run(["git", "-C", str(dest), *a], check=True, capture_output=True)
+    g("init", "-q"); g("config", "user.email", "t@t"); g("config", "user.name", "t")
+    g("add", "-A"); g("commit", "-q", "-m", "service client")
+    return dest
+
+
+def test_service_axis_reproduce_then_fixed_via_redeploy(world, tmp_path):
+    # Axis B: the consumed dependency is an API the client doesn't control. The
+    # client source is fixed; a server-side "redeploy" (v1 buggy -> v2 fixed) flips
+    # the verdict. Same shape as the library axis, endpoint instead of a version.
+    from convert_api import LocalConvertAPI  # noqa: E402
+
+    client = _service_client_repo(tmp_path / "svc_client")
+    bmeta, bdata = build_capsule_bundle(client, client_head(client))
+    bundle = _bundle_file(tmp_path, bdata)
+    cmd = (f"{sys.executable} -c \"import app,sys; "
+           "sys.exit(0 if app.delay_seconds('1h30m')==5400 else 1)\"")
+
+    with LocalConvertAPI(fixed=False) as v1, LocalConvertAPI(fixed=True) as v2:
+        consumes = [{"kind": "service", "name": "convert-api",
+                     "env": "CONVERT_API_URL", "endpoint": v1.url, "deploy": "deploy-v1"}]
+        # Build the capsule against the real client bundle + the v1 endpoint pin.
+        cap = freeze_capsule(
+            capsule_id="svcaxis00000001",
+            source={"project_slug": "svc", "trace_id": "t", "step_index": 1, "agent": "demo"},
+            summary={"title": "delay via convert-api != 5400", "what_happened": "api returns 3600",
+                     "failure": "AssertionError", "is_failure": True, "scope": "api"},
+            test=declared_test(cmd, None),
+            environment={"dependencies": [], "language_ecosystem": "python", "setup": [],
+                         "consumes": consumes},
+            bundle=bmeta,
+            intent={"headline": "schedule via convert-api", "most_substantive_spec": None, "trigger": None},
+            failing_step={"index": 1, "type": "agent", "error_excerpt": "3600 != 5400",
+                          "had_error_marker": True},
+            slice_payload={"slice_id": "s", "trace_id": "t", "steps": [], "limitations": []},
+            context_resume_packet={"schema_version": "opentraces.context_resume.v1", "node_id": "n",
+                                   "system_layer": {"content": {}}},
+            trail_anchors=[],
+            repo_pin={"remote_url": None, "commit_sha": client_head(client), "changed_files": []},
+            redaction={"manifest": {"floor": list(REDACTION_FLOOR), "floor_satisfied": True,
+                                    "redactions_applied": 0}},
+            render_state={"redaction": "redacted_ok", "closure": "closure_full", "replay": "x"},
+            limitations=[], created_with="svc-axis test",
+        )
+        # Default: pinned at deploy-v1 (buggy) -> the client hits the buggy API -> reproduces.
+        assert run_capsule_test(cap, bundle_path=bundle)["verdict"] == "reproduces"
+        # Server-side redeploy: point the same capsule at v2 (no client change) -> fixed.
+        res = run_capsule_test(cap, bundle_path=bundle, with_overrides={"convert-api": v2.url})
+        assert res["verdict"] == "fixed", res
+        assert res["consumes_used"] == {"convert-api": v2.url}
+
+
 def test_service_consume_injects_endpoint_env(world, tmp_path):
     # A `service` consume injects its endpoint as the client's env var; an override
     # changes what the client reads. Test passes (fixed) only when the env == v2 url.
