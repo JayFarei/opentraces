@@ -27,9 +27,11 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import venv as _venv
 from pathlib import Path
 from typing import Any, Iterator
 
+from .consumes import consumes_used, resolve_consumes
 from .oracle import classify_result
 
 DEFAULT_TIMEOUT = 180
@@ -46,14 +48,75 @@ class CapsuleTestError(RuntimeError):
     pass
 
 
-def _safe_env(home: Path, inherit: bool) -> dict[str, str]:
+def _safe_env(home: Path, inherit: bool, extra: dict[str, str] | None = None) -> dict[str, str]:
     if inherit:
         env = dict(os.environ)
     else:
         env = {k: os.environ[k] for k in _ENV_ALLOW if k in os.environ}
     env["HOME"] = str(home)
     env.setdefault("PATH", os.environ.get("PATH", ""))
+    # Consumed-dependency wiring (venv PATH / service endpoints) overrides the base.
+    if extra:
+        env.update(extra)
     return env
+
+
+def _venv_bin(venv_dir: Path) -> Path:
+    scripts = venv_dir / "Scripts"
+    return scripts if scripts.is_dir() else venv_dir / "bin"
+
+
+@contextlib.contextmanager
+def _consumes_setup(
+    capsule: dict[str, Any], with_overrides: dict[str, str] | None, timeout: int,
+) -> Iterator[tuple[dict[str, str], dict[str, str], str | None]]:
+    """Stand up the consumed dependencies; yield ``(extra_env, used_label, error)``.
+
+    ``package`` consumes -> an isolated venv with the pinned/overridden specs
+    installed (its bin prepended to PATH). ``service`` consumes -> the endpoint
+    injected as the client's env var. ``error`` non-None means setup failed and
+    the caller should return an ``inconclusive`` verdict (an install/env problem
+    is never a reproduction).
+    """
+
+    consumes = (capsule.get("environment") or {}).get("consumes") or []
+    resolved = resolve_consumes(consumes, with_overrides)
+    used = consumes_used(resolved)
+    extra_env: dict[str, str] = {}
+    for svc in (e for e in resolved if e["kind"] == "service"):
+        if svc["endpoint"]:
+            extra_env[svc["env"]] = svc["endpoint"]
+
+    packages = [e for e in resolved if e["kind"] == "package"]
+    venv_dir: Path | None = None
+    error: str | None = None
+    if packages:
+        venv_dir = Path(tempfile.mkdtemp(prefix="capsule-venv-"))
+        try:
+            _venv.create(venv_dir, with_pip=True)
+            py = _venv_bin(venv_dir) / "python"
+            specs = ["pytest", *[p["spec"] for p in packages]]
+            proc = subprocess.run(
+                [str(py), "-m", "pip", "install", "-q", *specs],
+                capture_output=True, text=True, timeout=max(timeout, 300),
+            )
+            if proc.returncode != 0:
+                error = (
+                    "consumed-dependency install failed: "
+                    + (proc.stderr or proc.stdout).strip()[-500:]
+                )
+            else:
+                extra_env["PATH"] = f"{_venv_bin(venv_dir)}{os.pathsep}{os.environ.get('PATH', '')}"
+                extra_env["VIRTUAL_ENV"] = str(venv_dir)
+        except subprocess.TimeoutExpired:
+            error = "consumed-dependency install timed out"
+        except Exception as exc:  # noqa: BLE001 - report, never crash the run
+            error = f"consumed-dependency setup error: {exc}"
+    try:
+        yield extra_env, used, error
+    finally:
+        if venv_dir:
+            shutil.rmtree(venv_dir, ignore_errors=True)
 
 
 @contextlib.contextmanager
@@ -119,10 +182,13 @@ def _confined_cwd(root: Path, sub: str | None) -> Path:
     return candidate if candidate.is_dir() else root
 
 
-def _run_in(run_dir: Path, capsule: dict[str, Any], *, timeout: int, inherit_env: bool) -> dict[str, Any]:
+def _run_in(
+    run_dir: Path, capsule: dict[str, Any], *, timeout: int, inherit_env: bool,
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, Any]:
     test = capsule.get("test") or {}
     command = test["command"]
-    env = _safe_env(run_dir, inherit_env)
+    env = _safe_env(run_dir, inherit_env, extra_env)
     cwd = _confined_cwd(run_dir, test.get("cwd"))
 
     setup_log = ""
@@ -183,11 +249,17 @@ def run_capsule_test(
     bundle_path: Path | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     inherit_env: bool = False,
+    with_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Execute the capsule's repro and return a deterministic verdict.
 
     Run source: ``bundle_path`` (hermetic source bundle) takes priority; else a
     ``git worktree`` of ``target_ref`` in ``repo_dir``.
+
+    ``with_overrides`` ({consumed-dep name -> version/spec/url}) varies the
+    CONSUMED dependency for this run — the dependency-unblock axis (plan 089).
+    Each ``package`` consume is installed in an isolated venv; each ``service``
+    consume's endpoint is injected as the client's env var.
     """
 
     test = capsule.get("test") or {}
@@ -198,20 +270,29 @@ def run_capsule_test(
             "target_ref": target_ref,
         }
 
-    if bundle_path is not None:
-        with _bundle_extracted(Path(bundle_path)) as run_dir:
-            result = _run_in(run_dir, capsule, timeout=timeout, inherit_env=inherit_env)
-        result["run_source"] = "bundle"
-        result.setdefault("target_ref", (capsule.get("bundle") or {}).get("source_sha"))
+    with _consumes_setup(capsule, with_overrides, timeout) as (extra_env, used, cerr):
+        if cerr:
+            return {
+                "runnable": True, "verdict": "inconclusive", "reason": cerr,
+                "command": test["command"], "consumes_used": used, "target_ref": target_ref,
+            }
+        if bundle_path is not None:
+            with _bundle_extracted(Path(bundle_path)) as run_dir:
+                result = _run_in(run_dir, capsule, timeout=timeout,
+                                 inherit_env=inherit_env, extra_env=extra_env)
+            result["run_source"] = "bundle"
+            result.setdefault("target_ref", (capsule.get("bundle") or {}).get("source_sha"))
+        elif repo_dir is None:
+            raise CapsuleTestError("need either bundle_path or repo_dir to run a capsule test")
+        else:
+            with _worktree_at(Path(repo_dir).resolve(), target_ref) as run_dir:
+                result = _run_in(run_dir, capsule, timeout=timeout,
+                                 inherit_env=inherit_env, extra_env=extra_env)
+            result["run_source"] = "git"
+            result["target_ref"] = target_ref
+        if used:
+            result["consumes_used"] = used
         return result
-
-    if repo_dir is None:
-        raise CapsuleTestError("need either bundle_path or repo_dir to run a capsule test")
-    with _worktree_at(Path(repo_dir).resolve(), target_ref) as run_dir:
-        result = _run_in(run_dir, capsule, timeout=timeout, inherit_env=inherit_env)
-    result["run_source"] = "git"
-    result["target_ref"] = target_ref
-    return result
 
 
 __all__ = ["CapsuleTestError", "run_capsule_test"]

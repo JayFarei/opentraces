@@ -35,3 +35,16 @@ parse('1h30m')=5400 → pytest rc=0 (🟢 fixed). Client source byte-identical a
 Decision: U0 complete; the dependency-version axis is real. Next U1+U2 — add `environment.consumes`
 to the capsule envelope and teach `run.py` to install the pinned/overridden consumed dep in an
 isolated venv before the test (the `--with`/`--matrix` machinery).
+
+## Attempt 3 — 2026-06-01 (U1+U2 done)
+Change: Added `core/capsule/consumes.py` (pure override/version logic: parse_with, parse_matrix,
+apply_override, resolve_consumes, consumes_used). Extended `run.py`: `_consumes_setup` ctx mgr
+stands up an isolated venv per `package` consume (installs pinned/overridden spec, prepends bin to
+PATH) and injects each `service` consume's endpoint as the client env var; `run_capsule_test` gains
+`with_overrides`; install/setup failure → inconclusive (never a false reproduce). Result carries
+`consumes_used`. Added `tests/test_capsule_dependency_unblock.py` (5 tests).
+Evidence: `pytest tests/test_capsule_dependency_unblock.py -q` → 5 passed. Same client bundle bytes
+across runs; humanduration v0.1.0→reproduces / v0.2.0→fixed via real venv git-tag install; matrix
+loop yields resolved_in=v0.2.0; service consume injects CONVERT_API_URL and an override flips it.
+Full capsule suite: 61 passed, 2 skipped (no regression).
+Decision: U1+U2 complete. Next U3 (CLI `capsule test --with`/`--matrix`) + U4 (redaction publish guard).

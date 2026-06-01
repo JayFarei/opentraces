@@ -152,7 +152,17 @@ def build_client(dest: Path, *, humanduration_repo: Path, ref: str = "v0.1.0") -
     (client / "requirements.txt").write_text(
         f"humanduration @ git+file://{humanduration_repo}@{ref}\n", encoding="utf-8"
     )
+    # The client is a real git repo so it bundles exactly like a real export.
+    _git(client, "init", "-q")
+    _git(client, "config", "user.email", "fixtures@opentraces.test")
+    _git(client, "config", "user.name", "opentraces fixtures")
+    _git(client, "add", "-A")
+    _git(client, "commit", "-q", "-m", "client: schedule a task after a human delay")
     return client
+
+
+def client_head(client: Path) -> str:
+    return _git(Path(client), "rev-parse", "HEAD")
 
 
 def build_world(root: Path) -> dict:
