@@ -225,3 +225,26 @@ make otbox-journeys. Recommended close-out: re-run the sweep from a fresh clone 
 (or after this branch lands on main) to capture the literal exit-0; stop iterating in this worktree.
 Worktree env changes made this session (untracked, not deliverables): `.venv` (real, editable install),
 `otd` shim, `.otbox/` — all removable; the merge commit is the only committed change here.
+
+## Attempt 13 — 2026-06-01 (FRESH CLONE — root cause is the BASE branch, not the worktree)
+Definitive experiment: `git clone --local` the merged branch to /tmp/capsule-fresh, fresh `.venv` +
+`pip install -e` (capsule CLI present), `otd`+`otc` both committed/present, ran `make otbox-journeys`.
+RESULT: **exit 2, 7 failed, 89 passed — the SAME 6 migration-* + web-viewer-smoke.** capsule journey
+PASSED. So the 7 reds are NOT worktree cruft — a pristine checkout of the branch reproduces them.
+ROOT CAUSE (final): main is GREEN, the merged branch is RED on the same 7 → the failures come from the
+BRANCH CODE, specifically the `feat/trace-capsule-prototype` BASE (plan 082/077 capsule + context-tree
+work) that this plan-089 branch is built on — NOT from plan 089's additions (almost all new files; the
+capsule journey is green). Strongest mechanism: the prototype base bumped the TRACE schema version, and
+the `migration-*` journeys assert migrate-to-current outcomes against the prior version → they fail on
+any branch carrying the prototype's schema. (Note: the goal's "no schema bump" clause is about the
+CAPSULE v1 envelope, which plan 089 preserved; the trace-schema bump is inherited from the base.)
+Individually each of the 7 PASSES via `run_journey`; they fail only under the full pytest sweep's
+ordering/global-state — consistent with an import-time/schema side effect from the prototype subsystem.
+FINAL: the literal `make otbox-journeys` exit 0 is UNSATISFIABLE for this branch without fixing
+pre-existing base-branch (plan 082) regressions in unrelated migration/web-viewer journeys — outside
+plan 089's scope AND its file boundary ("touch only … the named test/journey/transcript/docs files").
+Input that would unlock: reconcile `feat/trace-capsule-prototype` with main's migration journeys
+(a plan-082 task) — or land the capsule prototype on main where the schema/migration state is
+authoritative. Stopping here; the plan-089 deliverable is complete + verified, the capsule journey is
+green under make otbox-journeys, and the overall-target RED is a base-branch defect I cannot fix in
+scope. Cleanup: removed /tmp/capsule-fresh; worktree `.venv`/`otd`/`.otbox` are untracked + removable.
