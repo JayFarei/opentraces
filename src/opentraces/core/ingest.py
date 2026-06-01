@@ -247,6 +247,8 @@ def ingest_one_session(
     cfg: Config | None = None,
     wait_for_lock: bool = True,
     parser_name: str | None = None,
+    reconcile_watcher: bool = True,
+    trace_record_only: bool = False,
 ) -> IngestResult:
     """Ingest a single registered-agent session JSONL into the project's inbox.
 
@@ -266,7 +268,9 @@ def ingest_one_session(
                        blocking=wait_for_lock):
             return _ingest_locked(jsonl_path, project_dir, session_id,
                                   reparse=reparse, cfg=cfg,
-                                  parser_name=resolved_parser_name)
+                                  parser_name=resolved_parser_name,
+                                  reconcile_watcher=reconcile_watcher,
+                                  trace_record_only=trace_record_only)
     except _LockHeld:
         # Another ingest already owns this session; it (or the watcher
         # sweep) will cover the work. Skip rather than stack behind it.
@@ -291,6 +295,8 @@ def _ingest_locked(
     reparse: bool,
     cfg: Config | None,
     parser_name: str,
+    reconcile_watcher: bool,
+    trace_record_only: bool,
 ) -> IngestResult:
     """Inner, flock-held ingest. Must not raise; caller wraps."""
 
@@ -403,19 +409,21 @@ def _ingest_locked(
     # trace_id exists. Emit the local event-log projection after identity and
     # generation are known. This substrate must not make normal inbox capture
     # fragile, so TrailEvent write failures are logged but non-fatal.
-    try:
-        from .trails import (
-            emit_step_window_events_from_record,
-            reconcile_watcher_observations,
-        )
+    if not trace_record_only:
+        try:
+            from .trails import (
+                emit_step_window_events_from_record,
+                reconcile_watcher_observations,
+            )
 
-        emit_step_window_events_from_record(project_dir, final_record)
-        reconcile_watcher_observations(project_dir)
-    except Exception:
-        logger.warning(
-            "trace trail event emission/reconciliation failed for %s", trace_id,
-            exc_info=True,
-        )
+            emit_step_window_events_from_record(project_dir, final_record)
+            if reconcile_watcher:
+                reconcile_watcher_observations(project_dir)
+        except Exception:
+            logger.warning(
+                "trace trail event emission/reconciliation failed for %s", trace_id,
+                exc_info=True,
+            )
 
     # Plan 080 §3: backfill ``TraceRecord.patches[]`` from the canonical trail
     # event log. ``trace_patch_created`` events are the spine of truth for
@@ -426,7 +434,7 @@ def _ingest_locked(
     # content stays in trail.jsonl.gz. Defensive: failure here must not block
     # ingest. The post-commit hook (Track 2) sets ``Patch.anchor`` later; the
     # derive helper then projects to ``outcome`` + ``git_links``.
-    if not final_record.patches:
+    if not trace_record_only and not final_record.patches:
         try:
             final_record.patches = _backfill_patches_from_trail_events(
                 project_dir, final_record.trace_id, final_record.generation_index,
@@ -455,50 +463,51 @@ def _ingest_locked(
     # Context Tree substrate (plan 077): capture what the LLM saw at each
     # active-path record. Independent try block so a Context Tree failure
     # never blocks Trail event emission or normal ingest.
-    try:
-        emit_context_tree = getattr(parser, "emit_context_tree_events_from_record", None)
-        if callable(emit_context_tree):
-            ct_summary = emit_context_tree(
-                project_dir=project_dir,
-                final_record=final_record,
-                transcript_path=jsonl_path,
-            )
-        elif parser_name == "claude-code":
-            from ..capture.claude_code.context_tree_capture import (
-                emit_context_tree_events_from_record,
-            )
+    if not trace_record_only:
+        try:
+            emit_context_tree = getattr(parser, "emit_context_tree_events_from_record", None)
+            if callable(emit_context_tree):
+                ct_summary = emit_context_tree(
+                    project_dir=project_dir,
+                    final_record=final_record,
+                    transcript_path=jsonl_path,
+                )
+            elif parser_name == "claude-code":
+                from ..capture.claude_code.context_tree_capture import (
+                    emit_context_tree_events_from_record,
+                )
 
-            ct_summary = emit_context_tree_events_from_record(
-                project_dir=project_dir,
-                final_record=final_record,
-                transcript_path=jsonl_path,
+                ct_summary = emit_context_tree_events_from_record(
+                    project_dir=project_dir,
+                    final_record=final_record,
+                    transcript_path=jsonl_path,
+                )
+            else:
+                ct_summary = {}
+            ct_summary = ct_summary or {}
+            # R10 cross-substrate join: populate Step.context_node_id from the
+            # active-path step_index -> node_id map the orchestrator returned.
+            # Mutating final_record.steps in place before the staging JSONL is
+            # written downstream makes the link visible to every consumer
+            # without a re-parse pass.
+            step_map = ct_summary.get("step_node_id_map") or {}
+            if step_map:
+                for step in final_record.steps:
+                    node_id = step_map.get(step.step_index)
+                    if node_id is not None:
+                        step.context_node_id = node_id
+            # Surface the projection summary onto the trace record so doctor
+            # and the bucket manifest can report it without reading the event
+            # log again. Strip the (internal) step_node_id_map first.
+            public_summary = {
+                k: v for k, v in ct_summary.items() if k != "step_node_id_map"
+            }
+            final_record.context_tree_summary = public_summary
+        except Exception:
+            logger.warning(
+                "context tree event emission failed for %s", trace_id,
+                exc_info=True,
             )
-        else:
-            ct_summary = {}
-        ct_summary = ct_summary or {}
-        # R10 cross-substrate join: populate Step.context_node_id from the
-        # active-path step_index -> node_id map the orchestrator returned.
-        # Mutating final_record.steps in place before the staging JSONL is
-        # written downstream makes the link visible to every consumer
-        # without a re-parse pass.
-        step_map = ct_summary.get("step_node_id_map") or {}
-        if step_map:
-            for step in final_record.steps:
-                node_id = step_map.get(step.step_index)
-                if node_id is not None:
-                    step.context_node_id = node_id
-        # Surface the projection summary onto the trace record so doctor
-        # and the bucket manifest can report it without reading the event
-        # log again. Strip the (internal) step_node_id_map first.
-        public_summary = {
-            k: v for k, v in ct_summary.items() if k != "step_node_id_map"
-        }
-        final_record.context_tree_summary = public_summary
-    except Exception:
-        logger.warning(
-            "context tree event emission failed for %s", trace_id,
-            exc_info=True,
-        )
 
     # Write the staging JSONL (idempotent overwrite).
     staging_dir = get_project_traces_dir(project_dir)
@@ -528,23 +537,24 @@ def _ingest_locked(
         )
     except Exception:
         logger.warning("raw source bucket write failed for %s", trace_id, exc_info=True)
-    try:
-        sync_trail_events_from_repo(project_dir, repo_id=project_slug)
-    except Exception:
-        logger.warning("trail event bucket export failed for %s", trace_id, exc_info=True)
-    # Plan 079: first-class Context Tree bucket projection. Stage 2 is
-    # additive; the trail-piggyback above is intentionally not removed.
-    try:
-        from .bucket_store import project_context_tree_to_bucket
+    if not trace_record_only:
+        try:
+            sync_trail_events_from_repo(project_dir, repo_id=project_slug)
+        except Exception:
+            logger.warning("trail event bucket export failed for %s", trace_id, exc_info=True)
+        # Plan 079: first-class Context Tree bucket projection. Stage 2 is
+        # additive; the trail-piggyback above is intentionally not removed.
+        try:
+            from .bucket_store import project_context_tree_to_bucket
 
-        project_context_tree_to_bucket(
-            project_dir, project_slug=project_slug,
-            trace_id=final_record.trace_id,
-        )
-    except Exception:
-        logger.warning(
-            "context tree bucket projection failed for %s", trace_id, exc_info=True
-        )
+            project_context_tree_to_bucket(
+                project_dir, project_slug=project_slug,
+                trace_id=final_record.trace_id,
+            )
+        except Exception:
+            logger.warning(
+                "context tree bucket projection failed for %s", trace_id, exc_info=True
+            )
 
     # Plan 087 U5: best-effort keep-warm. Now that the trace is in the bucket,
     # bring the warm Trace Index + search projection up to date so the trace is
@@ -552,20 +562,21 @@ def _ingest_locked(
     # module attribute so tests can monkeypatch it. ``keep_index_warm`` never
     # raises, but wrap defensively anyway — keeping the warm cache fresh must
     # never make capture fragile.
-    try:
-        # F3: pass the single trace we just wrote so keep-warm refreshes ONLY
-        # that trace (no ~46s whole-corpus delta). Warm both the index and the
-        # projection here since this is the one place we cheaply know the exact
-        # delta; the projection refresh is bounded to this one trace_id.
-        keep_index_warm(
-            trace_id=final_record.trace_id,
-            query_sources=("index", "projection"),
-        )
-    except Exception:
-        logger.warning(
-            "keep-warm hook failed for %s (best-effort, ignored)", trace_id,
-            exc_info=True,
-        )
+    if not trace_record_only:
+        try:
+            # F3: pass the single trace we just wrote so keep-warm refreshes ONLY
+            # that trace (no ~46s whole-corpus delta). Warm both the index and the
+            # projection here since this is the one place we cheaply know the exact
+            # delta; the projection refresh is bounded to this one trace_id.
+            keep_index_warm(
+                trace_id=final_record.trace_id,
+                query_sources=("index", "projection"),
+            )
+        except Exception:
+            logger.warning(
+                "keep-warm hook failed for %s (best-effort, ignored)", trace_id,
+                exc_info=True,
+            )
 
     # Decide the status this generation enters.
     #
@@ -701,6 +712,14 @@ def _discover_sessions_for_project(
     return sorted(out, key=lambda item: (item[0], str(item[1])))
 
 
+def discover_project_ingest_candidates(project_dir: Path) -> list[tuple[str, Path]]:
+    """Return the sessions a real project scan would attempt."""
+    return _discover_sessions_for_project(
+        project_dir,
+        _project_agent_names(project_dir),
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Project-wide scan
 # --------------------------------------------------------------------------- #
@@ -712,6 +731,8 @@ def scan_project(
     paths: list[Path | tuple[str, Path]] | None = None,
     cfg: Config | None = None,
     on_result: Callable[[IngestResult, int, int], None] | None = None,
+    reconcile_watcher: bool = False,
+    trace_record_only: bool = False,
 ) -> ScanReport:
     """Scan every registered parser JSONL associated with ``project_dir``.
 
@@ -722,10 +743,7 @@ def scan_project(
     project_dir = Path(project_dir).resolve()
 
     if paths is None:
-        candidates = _discover_sessions_for_project(
-            project_dir,
-            _project_agent_names(project_dir),
-        )
+        candidates = discover_project_ingest_candidates(project_dir)
     else:
         candidates = [
             (str(item[0]), Path(item[1]))
@@ -746,6 +764,8 @@ def scan_project(
                 reparse=reparse,
                 cfg=resolved_cfg,
                 parser_name=parser_name,
+                reconcile_watcher=reconcile_watcher,
+                trace_record_only=trace_record_only,
             )
         except Exception as e:  # noqa: BLE001 — ingest_one_session already
             # wraps, but keep a belt here for the discovery path.
@@ -770,13 +790,14 @@ def scan_project(
     # projection sync is now as cheap as the index one (zero-copy, O(delta), and
     # an O(1) short-circuit when nothing moved). Looked up via the module
     # attribute so tests can monkeypatch it. MUST NOT break the scan.
-    try:
-        keep_index_warm(query_sources=("index", "projection"))
-    except Exception:
-        logger.warning(
-            "scan_project keep-warm hook failed (best-effort, ignored)",
-            exc_info=True,
-        )
+    if not trace_record_only:
+        try:
+            keep_index_warm(query_sources=("index", "projection"))
+        except Exception:
+            logger.warning(
+                "scan_project keep-warm hook failed (best-effort, ignored)",
+                exc_info=True,
+            )
 
     return report
 

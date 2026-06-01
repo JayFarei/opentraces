@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from opentraces.capture.fs_watcher import append_filesystem_mutation_observed
+from opentraces.core.trails import reconciler as reconciler_mod
 from opentraces.core.trails import (
     GitObjectID,
     TrailEventDraft,
@@ -42,6 +43,27 @@ def _hash_object(repo: Path, content: str) -> str:
         check=True,
     )
     return proc.stdout.strip()
+
+
+def _hash_object_bytes(repo: Path, content: bytes) -> str:
+    proc = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=repo,
+        input=content,
+        capture_output=True,
+        check=True,
+    )
+    return proc.stdout.decode("utf-8").strip()
+
+
+def test_blob_text_ignores_binary_blob(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    blob = _hash_object_bytes(tmp_path, b"\x1f\x8b\x08\x00binary-gzip-ish")
+
+    assert reconciler_mod._blob_text(  # noqa: SLF001 - regression coverage
+        tmp_path,
+        {"algo": "sha1", "hex": blob},
+    ) == ""
 
 
 def _emit_hook_patch(

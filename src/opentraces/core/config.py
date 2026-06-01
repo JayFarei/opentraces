@@ -902,8 +902,26 @@ def register_project(config: Config, project_dir: Path) -> bool:
     slug = _make_slug(project_dir.name, project_id)
     new_reg = ProjectRegistration(project_id=project_id, slug=slug)
 
-    # Ensure global per-project dirs exist.
-    (PROJECTS_DIR / slug / "traces").mkdir(parents=True, exist_ok=True)
+    # Ensure global per-project dirs exist and carry the project identity
+    # sidecar used by watcher/project discovery. This is part of enrollment,
+    # not only explicit ``opentraces init``: global auto-enroll needs the same
+    # manifest so the project can be swept and backfilled later.
+    slug_dir = PROJECTS_DIR / slug
+    (slug_dir / "traces").mkdir(parents=True, exist_ok=True)
+    try:
+        from .repo_identity import root_commit_sha, write_project_identity
+
+        write_project_identity(
+            slug_dir,
+            project_dir=project_dir,
+            root_sha=root_commit_sha(project_dir),
+        )
+    except Exception:
+        logger.debug(
+            "opentraces: could not write project identity for %s",
+            project_dir,
+            exc_info=True,
+        )
 
     existing = config.projects.get(key)
     if existing == new_reg:
@@ -912,28 +930,69 @@ def register_project(config: Config, project_dir: Path) -> bool:
     return True
 
 
+def _global_capture_agents() -> list[str]:
+    """Agents enabled by default for global capture enrollment."""
+    return normalize_agents([DEFAULT_AGENT, "codex-cli"])
+
+
+def _merge_agent_lists(*agent_lists: list[str]) -> list[str]:
+    merged: list[str] = []
+    for agent in normalize_agents([
+        agent
+        for agents in agent_lists
+        for agent in agents
+    ]):
+        if agent not in merged:
+            merged.append(agent)
+    return merged or [DEFAULT_AGENT]
+
+
+def _ensure_global_capture_agents(project_dir: Path) -> bool:
+    """Backfill legacy global markers so scans see every built-in agent."""
+    data = load_project_config(project_dir)
+    current = normalize_agents(data.get("agents"))
+    desired = _global_capture_agents()
+    merged = _merge_agent_lists(current, desired)
+    if merged == current:
+        return False
+    data["agents"] = merged
+    save_project_config(project_dir, data)
+    return True
+
+
 def auto_enroll_if_global(project_dir: Path) -> bool:
     """Enroll ``project_dir`` if global tracking mode is active (plan 081).
 
-    No-op (returns False) when the project is already enrolled, when
-    ``capture.tracking_mode`` is ``"manual"``, or on any unexpected error.
-    Enrollment goes through ``register_project``, so the project inherits
-    the standard private + review-required marker policy. Returns True
-    only when a fresh enrollment was written.
+    Also repairs marker/registry drift for projects that already have a
+    ``.opentraces.json`` marker. That repair is safe in manual mode because it
+    does not enroll an unmarked project; it restores the machine-local registry
+    and watcher manifest for a project that has already opted in.
+
+    No-op (returns False) when the unmarked project is in manual mode or on any
+    unexpected error. Enrollment goes through ``register_project``, so new
+    projects inherit the standard private + review-required marker policy.
+    Returns True when registry/manifest state changed.
 
     Best-effort by contract: this runs on the capture-hook hot path and
     must never raise into the agent, so all failures are swallowed.
     """
     try:
-        if project_is_opted_in(project_dir):
-            return False
         config = load_config()
+        if project_is_opted_in(project_dir):
+            changed = False
+            if config.capture.tracking_mode == "global":
+                changed = _ensure_global_capture_agents(project_dir)
+            if register_project(config, project_dir):
+                save_config(config)
+                changed = True
+            return changed
         if config.capture.tracking_mode != "global":
             return False
+        changed = _ensure_global_capture_agents(project_dir)
         if register_project(config, project_dir):
             save_config(config)
-            return True
-        return False
+            changed = True
+        return changed
     except Exception:
         logger.debug(
             "auto_enroll_if_global failed for %s", project_dir, exc_info=True

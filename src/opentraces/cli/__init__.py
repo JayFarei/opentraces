@@ -3584,6 +3584,22 @@ def parse(auto: bool, limit: int) -> None:
     sys.exit(2)
 
 
+def _capture_project_root(path: Path) -> Path:
+    """Resolve an agent cwd to the project root used for capture."""
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).strip()
+        if out:
+            return Path(out).resolve()
+    except Exception:
+        pass
+    return path.resolve()
+
+
 @main.command("_ingest-session", hidden=True)
 @click.argument("transcript_path", type=click.Path())
 @click.option("--project", "project_override", type=click.Path(),
@@ -3627,9 +3643,14 @@ def _ingest_session(
             return  # vanished transcript — nothing to do
 
         if project_override:
-            project_dir = Path(project_override).resolve()
+            project_dir = _capture_project_root(Path(project_override))
         else:
-            project_dir = Path.cwd().resolve()
+            project_dir = _capture_project_root(Path.cwd())
+
+        if not (project_dir / ".opentraces.json").exists():
+            from ..core.config import auto_enroll_if_global
+
+            auto_enroll_if_global(project_dir)
 
         if not (project_dir / ".opentraces.json").exists():
             return  # not enlisted — watcher on other projects will catch it
@@ -3662,22 +3683,30 @@ def _ingest_session(
               help="Limit to a single session_id (JSONL basename).")
 @click.option("--dry-run", is_flag=True,
               help="Report what would change without writing state.")
+@click.option("--trace-record-only", is_flag=True,
+              help="Backfill TraceRecords/raw source only; skip Trail/Context projections.")
 @click.option("--project", "project_override", type=click.Path(),
               default=None,
               help="Run against an opted-in project other than the cwd.")
 def _scan(reparse: bool, session_filter: str | None,
-          dry_run: bool, project_override: str | None) -> None:
+          dry_run: bool, trace_record_only: bool,
+          project_override: str | None) -> None:
     """Manually re-sync the current project's inbox from its JSONL corpus.
 
     Hidden because the Stop hook + watcher sweep keep the inbox live
     without user intervention. Kept available for testing, post-upgrade
     reparse, and recovering from a missed hook fire.
     """
-    from ..capture import discover_project_sessions, session_id_from_path
-    from ..core.ingest import scan_project
+    from ..capture import session_id_from_path
+    from ..core.ingest import discover_project_ingest_candidates, scan_project
 
     project_dir = (Path(project_override) if project_override
                    else Path.cwd()).resolve()
+
+    if not dry_run:
+        from ..core.config import auto_enroll_if_global
+
+        auto_enroll_if_global(project_dir)
 
     if not (project_dir / ".opentraces.json").exists():
         click.echo(
@@ -3691,7 +3720,7 @@ def _scan(reparse: bool, session_filter: str | None,
         # Narrow the corpus to the requested session. We still go through
         # scan_project so the per-session rules (locks, state, etc.) are
         # applied uniformly.
-        all_paths = discover_project_sessions(project_dir)
+        all_paths = discover_project_ingest_candidates(project_dir)
         paths = [
             (agent_name, p)
             for agent_name, p in all_paths
@@ -3700,7 +3729,10 @@ def _scan(reparse: bool, session_filter: str | None,
         if not paths:
             click.echo(
                 f"No JSONL found for session_id={session_filter} "
-                f"under this project's corpus.",
+                f"under this project's raw agent corpus. Raw Claude/Codex "
+                "session files are machine-local and may be absent even when "
+                "the retained TraceRecord exists in the bucket; try `trace get` "
+                "or rerun backfill on the source machine.",
                 err=True,
             )
             sys.exit(3)
@@ -3713,7 +3745,12 @@ def _scan(reparse: bool, session_filter: str | None,
         _emit_dry_run(project_dir, paths=paths)
         return
 
-    report = scan_project(project_dir, reparse=reparse, paths=paths)
+    report = scan_project(
+        project_dir,
+        reparse=reparse,
+        paths=paths,
+        trace_record_only=trace_record_only,
+    )
 
     payload = {
         "project": str(project_dir),
@@ -3754,9 +3791,12 @@ def _emit_dry_run(
     paths: list[Path | tuple[str, Path]] | None,
 ) -> None:
     """Dry-run report: what would `_scan` do, given current state?"""
-    from ..capture import discover_project_sessions, session_id_from_path
+    from ..capture import session_id_from_path
     from ..core.config import get_project_state_path
-    from ..core.ingest import _has_grown  # noqa: SLF001 — shared helper
+    from ..core.ingest import (  # noqa: SLF001 — shared helper
+        _has_grown,
+        discover_project_ingest_candidates,
+    )
     from ..core.state import StateManager, TraceStatus
 
     terminal = {
@@ -3772,7 +3812,7 @@ def _emit_dry_run(
             for item in paths
         ]
     else:
-        candidates = discover_project_sessions(project_dir)
+        candidates = discover_project_ingest_candidates(project_dir)
     state = StateManager(state_path=get_project_state_path(project_dir))
 
     would: list[dict] = []

@@ -4,6 +4,7 @@ Exercise the private helpers directly so rendering / config wiring stays
 testable without going through Click."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest import mock
 
@@ -105,3 +106,23 @@ def test_report_includes_new_panels(tmp_path: Path) -> None:
     assert "entity_parser" in rpt  # pre-existing panel still present
     assert rpt["attribution"]["health"] == "no-project"
     assert rpt["watcher"]["health"] == "not-installed"
+
+
+def test_report_counts_project_identity_sidecars(tmp_path: Path) -> None:
+    """doctor.report() includes projects known only via watcher sidecars."""
+    from opentraces.core import paths
+    from opentraces.core.config import load_config
+
+    project = tmp_path / "project"
+    project.mkdir()
+    slug_dir = paths.PROJECTS_DIR / "project-abc"
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "project.json").write_text(json.dumps({"path": str(project)}))
+
+    cfg = load_config()
+    assert getattr(cfg, "projects", {}) == {}
+    with mock.patch("opentraces.watcher.installer.status",
+                    return_value=_fake_status(installed=False, running=False)):
+        rpt = doctor.report(cfg, tmp_path)
+
+    assert str(project.resolve()) in rpt["opted_in_projects"]["paths"]

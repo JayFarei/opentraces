@@ -104,7 +104,13 @@ class TestIngestSessionCommand:
     def test_no_opted_in_project_exits_cleanly(
         self, runner, tmp_path, monkeypatch
     ):
-        """Session under a non-enlisted project: quiet no-op, exit 0."""
+        """Manual tracking preserves the quiet no-op for non-enlisted projects."""
+        from opentraces.core.config import load_config, save_config
+
+        cfg = load_config()
+        cfg.capture.tracking_mode = "manual"
+        save_config(cfg)
+
         non_opted = tmp_path / "unrelated"
         non_opted.mkdir()
         session = _write_session(tmp_path / "corpus", "orphan", turns=3)
@@ -115,3 +121,23 @@ class TestIngestSessionCommand:
         assert result.exit_code == 0, (
             "hook path must not fail on non-enlisted projects"
         )
+        assert not (non_opted / ".opentraces.json").exists()
+
+    def test_global_mode_auto_enrolls_and_ingests_unmarked_project(
+        self, runner, tmp_path
+    ):
+        project = tmp_path / "global-project"
+        project.mkdir()
+        session = _write_session(tmp_path / "corpus", "global-auto", turns=3)
+
+        result = runner.invoke(
+            main, ["_ingest-session", str(session), "--project", str(project)]
+        )
+        assert result.exit_code == 0, result.output
+        assert (project / ".opentraces.json").is_file()
+
+        from opentraces.core.config import get_project_state_path
+        from opentraces.core.state import StateManager
+
+        state = StateManager(state_path=get_project_state_path(project))
+        assert state.get_session("global-auto") is not None

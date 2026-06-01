@@ -1,6 +1,7 @@
 """Opt-in guarantees for current project-scoped local commands."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,13 @@ class TestRegistry:
         assert register_project(cfg, tmp_path) is True
         assert register_project(cfg, tmp_path) is False
         assert str(tmp_path.resolve()) in opted_in_projects(cfg)
+        slug = cfg.projects[str(tmp_path.resolve())].slug
+        # Autouse tests monkeypatch PROJECTS_DIR per test; import it lazily so
+        # this assertion follows the patched location.
+        from opentraces.core.config import PROJECTS_DIR
+
+        manifest = PROJECTS_DIR / slug / "project.json"
+        assert json.loads(manifest.read_text())["path"] == str(tmp_path.resolve())
 
     def test_unregister_removes(self, tmp_path) -> None:
         cfg = Config()

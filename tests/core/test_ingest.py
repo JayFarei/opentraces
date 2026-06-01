@@ -740,6 +740,69 @@ class TestScanProject:
         assert session_ids == {"sess-A", "sess-B"}
         assert all(r.action == "new" for r in report.results)
 
+    def test_scan_defers_watcher_reconciliation_by_default(
+        self, project_dir, monkeypatch
+    ) -> None:
+        from opentraces.core.ingest import scan_project
+
+        path = _write_jsonl(project_dir, "sess-no-reconcile", turns=3)
+        monkeypatch.setattr(
+            "opentraces.core.ingest.discover_claude_jsonl_corpus",
+            lambda repo: [path],
+        )
+
+        calls: list[Path] = []
+
+        def _reconcile(repo):
+            calls.append(Path(repo))
+            return {
+                "observations_processed": 0,
+                "patches_created": 0,
+                "patches_upgraded": 0,
+            }
+
+        monkeypatch.setattr(
+            "opentraces.core.trails.reconcile_watcher_observations",
+            _reconcile,
+        )
+
+        report = scan_project(project_dir)
+
+        assert report.created == 1
+        assert calls == []
+
+    def test_scan_trace_record_only_skips_substrate_hot_path(
+        self, project_dir, monkeypatch
+    ) -> None:
+        from opentraces.core import ingest as ingest_mod
+
+        path = _write_jsonl(project_dir, "sess-trace-record-only", turns=3)
+        monkeypatch.setattr(
+            "opentraces.core.ingest.discover_claude_jsonl_corpus",
+            lambda repo: [path],
+        )
+
+        trail_calls = {"n": 0}
+        warm_calls = {"n": 0}
+
+        def _emit(*args, **kwargs):
+            trail_calls["n"] += 1
+
+        def _warm(*args, **kwargs):
+            warm_calls["n"] += 1
+
+        monkeypatch.setattr(
+            "opentraces.core.trails.emit_step_window_events_from_record",
+            _emit,
+        )
+        monkeypatch.setattr(ingest_mod, "keep_index_warm", _warm)
+
+        report = ingest_mod.scan_project(project_dir, trace_record_only=True)
+
+        assert report.created == 1
+        assert trail_calls["n"] == 0
+        assert warm_calls["n"] == 0
+
     def test_scan_isolates_per_session_failures(
         self, project_dir, monkeypatch, caplog
     ) -> None:

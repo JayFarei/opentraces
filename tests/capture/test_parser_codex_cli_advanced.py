@@ -235,6 +235,25 @@ def test_subagent_source_is_preserved_as_metadata_only(tmp_path: Path) -> None:
             "output": "passed",
         },
     })
+    rows.append({
+        "timestamp": "2026-05-21T09:00:06Z",
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_child",
+            "arguments": json.dumps({"cmd": "pytest -q", "workdir": str(project)}),
+        },
+    })
+    rows.append({
+        "timestamp": "2026-05-21T09:00:07Z",
+        "type": "response_item",
+        "payload": {
+            "type": "function_call_output",
+            "call_id": "call_child",
+            "output": "passed",
+        },
+    })
     _write_jsonl(session, rows)
 
     record = CodexCliParser().parse_session(session)
@@ -253,3 +272,68 @@ def test_subagent_source_is_preserved_as_metadata_only(tmp_path: Path) -> None:
     )
     limitation_codes = {item["code"] for item in record.metadata["capture_limitations"]}
     assert "codex_cli_subagent_linkage_metadata_only" in limitation_codes
+
+
+def test_subagent_rollout_keeps_first_session_meta_identity(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    session = tmp_path / "rollout-child.jsonl"
+    rows = _base_rows(session_id="codex-child", cwd=project, user_text="Handle child task.")
+    rows[0]["payload"]["source"] = {
+        "subagent": {
+            "thread_spawn": {
+                "parent_thread_id": "codex-parent",
+                "depth": 1,
+                "agent_nickname": "ParserWorker",
+                "agent_role": "worker",
+            }
+        }
+    }
+    rows.insert(1, {
+        "timestamp": "2026-05-21T09:00:00Z",
+        "type": "session_meta",
+        "payload": {
+            "id": "codex-parent",
+            "timestamp": "2026-05-21T08:59:00Z",
+            "cwd": str(project),
+            "originator": "codex-tui",
+            "source": "tui",
+        },
+    })
+    rows.append({
+        "timestamp": "2026-05-21T09:00:05Z",
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Child done."}],
+        },
+    })
+    rows.append({
+        "timestamp": "2026-05-21T09:00:06Z",
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "call_child",
+            "arguments": json.dumps({"cmd": "pytest -q", "workdir": str(project)}),
+        },
+    })
+    rows.append({
+        "timestamp": "2026-05-21T09:00:07Z",
+        "type": "response_item",
+        "payload": {
+            "type": "function_call_output",
+            "call_id": "call_child",
+            "output": "passed",
+        },
+    })
+    _write_jsonl(session, rows)
+
+    parser = CodexCliParser()
+    record = parser.parse_session(session)
+
+    assert parser.session_id_from_path(session) == "codex-child"
+    assert record is not None
+    assert record.session_id == "codex-child"
+    assert record.metadata["subagent_session"]["parent_thread_id"] == "codex-parent"

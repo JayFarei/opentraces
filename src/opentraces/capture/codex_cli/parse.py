@@ -239,7 +239,7 @@ class CodexCliParser:
             if ts:
                 last_timestamp = ts
 
-            if event_type == "session_meta" and isinstance(payload, dict):
+            if event_type == "session_meta" and isinstance(payload, dict) and not session_meta:
                 session_meta = payload
             elif event_type == "turn_context" and isinstance(payload, dict):
                 turn_context = payload
@@ -496,7 +496,7 @@ def _read_session_header(path: Path, *, max_lines: int = 64) -> tuple[dict[str, 
                 if not isinstance(row, dict):
                     continue
                 event_type, payload = _unwrap(row)
-                if event_type == "session_meta" and isinstance(payload, dict):
+                if event_type == "session_meta" and isinstance(payload, dict) and not session_meta:
                     session_meta = payload
                 elif event_type == "turn_context" and isinstance(payload, dict):
                     turn_context = payload
