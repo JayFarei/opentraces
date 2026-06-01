@@ -1,0 +1,69 @@
+name = "capsule-dependency-unblock"
+description = """
+Plan 089 — a CONSUMED-dependency upgrade unblocks a trace capsule with zero
+change to the client's source. The load-bearing claim: the SAME capsule, run
+against two versions of a consumed library, flips reproduces→fixed.
+
+Against a capsule that pins a consumed package (humanduration) and carries a
+hermetic bundle of the client, asserts:
+  (a) `capsule test --from-bundle` reproduces at the pinned buggy version.
+  (b) `capsule test --from-bundle --with <dep>=<fixed>` reports fixed.
+  (c) `capsule test --from-bundle --matrix <dep>=v0.1.0,v0.2.0` reports
+      `resolved_in: <dep>=v0.2.0` (the version that resolves the story).
+
+tier = 1 (opt-in) pending, like the plan 077/078 journeys:
+  - the `capsule` command group in the box CLI (it ships on the
+    feat/capsule-dependency-unblock branch, not yet merged), and
+  - a `c-capsule-dependency-unblock` checkpoint that seeds a published
+    capsule + the consumed-dependency repo reachable from the box.
+The committed hermetic proof today is
+`tests/test_capsule_dependency_unblock_integration.py` and the live conviction
+artifact is `tests/otbox/captures/capsule-dependency-unblock/transcript.md`
+(github.com/JayFarei/humanduration + HF + issue #1).
+"""
+lane = "core"
+tier = 1
+tier_label = "gold"
+seed = "smoke"
+trajectories = ["capsule-dependency-unblock"]
+persona = "agent"
+requires = ["cli"]
+
+[preconditions]
+capsule_published = true
+consumed_dependency_reachable = true
+
+[[steps]]
+type = "cli"
+id = "reproduce"
+argv = ["capsule", "test", "{capsule_ref}", "--from-bundle", "--yes"]
+
+[[steps]]
+type = "cli"
+id = "upgrade"
+argv = ["capsule", "test", "{capsule_ref}", "--from-bundle", "--with", "humanduration=v0.2.0", "--yes"]
+
+[[steps]]
+type = "cli"
+id = "matrix"
+argv = ["capsule", "test", "{capsule_ref}", "--from-bundle", "--matrix", "humanduration=v0.1.0,v0.2.0", "--yes"]
+
+[[assertions]]
+kind = "returncode"
+step = "reproduce"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "reproduce"
+value = "reproduces"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "upgrade"
+value = "fixed"
+
+[[assertions]]
+kind = "stdout_contains"
+step = "matrix"
+value = "humanduration=v0.2.0"
