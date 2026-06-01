@@ -75,9 +75,51 @@ UNBLOCKED: re-pose your original intent against the new HEAD to pick up the fix.
 Issue **[JayFarei/humanduration#1](https://github.com/JayFarei/humanduration/issues/1)** carries
 the executed `🟢 fixed` verdict for capsule `b24bdb49629c51a4` and is CLOSED.
 
-## Committed regression
+## Axis B — consumed SERVICE (a deployed API the client never sees)
 
-`tests/test_capsule_dependency_unblock_integration.py` runs the same chain hermetically (a
-file:// humanduration repo, isolated bucket): real capture → export → the consumed-dependency
-upgrade flips reproduces→fixed, `resolved_in=v0.2.0`. Runner + CLI + redaction coverage in
-`tests/test_capsule_dependency_unblock.py` and `tests/test_capsule_publish_redaction.py`.
+Same story, same bug, now behind an HTTP API the client only reads via `CONVERT_API_URL`.
+Two public Vercel deploys of **github.com/JayFarei/convert-api**:
+
+- deploy-v1 (buggy): `https://convert-api-hazel.vercel.app/api/convert?d=1h30m` → `{"seconds": 3600}`
+- deploy-v2 (fixed): `https://convert-api-v2.vercel.app/api/convert?d=1h30m`   → `{"seconds": 5400}`
+
+```
+# real captured client session (consumes the live v1 API) -> bucket trace 3ffc1b88
+$ opentraces capsule issue 3ffc1b88 --project <client> \
+    --test-command "python3 check.py" \
+    --consume "service:convert-api=https://convert-api-hazel.vercel.app/api/convert" \
+    --bundle --publish --issue-repo JayFarei/convert-api --yes
+created issue · capsule 48789fcc33c3a127 · https://github.com/JayFarei/convert-api/issues/1
+
+# maintainer agent, anonymously:
+$ opentraces capsule open <URL> --json          # (severed HOME) OK
+$ opentraces capsule test <URL> --from-bundle --yes
+🔴 reproduces  · consumed: {'convert-api': '…convert-api-hazel.vercel.app/api/convert'}  (live v1 → 3600)
+
+# the SERVER-SIDE REDEPLOY (v1 → v2) the client never sees:
+$ opentraces capsule test <URL> --from-bundle --with convert-api=https://convert-api-v2.vercel.app/api/convert \
+    --verdict-to https://github.com/JayFarei/convert-api/issues/1 --close --yes
+🟢 fixed  · consumed: {'convert-api': '…convert-api-v2.vercel.app/api/convert'}  (live v2 → 5400)
+verdict posted to JayFarei/convert-api#1
+
+$ opentraces capsule watch https://github.com/JayFarei/convert-api/issues/1
+✅ resolved — JayFarei/convert-api#1 · CLOSED · verdict=fixed   → UNBLOCKED
+```
+
+The client source never changed. A server-side redeploy of the consumed API unblocked it.
+
+## Both axes, live, in the open
+
+| axis | dependency | repo / issue (CLOSED, fixed) | the fix |
+|------|------------|------------------------------|---------|
+| A — library | `humanduration` | [JayFarei/humanduration#1](https://github.com/JayFarei/humanduration/issues/1) | version bump v0.1.0 → v0.2.0 |
+| B — service | `convert-api`   | [JayFarei/convert-api#1](https://github.com/JayFarei/convert-api/issues/1)     | redeploy deploy-v1 → deploy-v2 |
+
+## Committed regressions
+
+- `tests/test_capsule_dependency_unblock_integration.py` — library axis: real capture → export →
+  upgrade flips reproduces→fixed (hermetic, file:// dep, isolated bucket).
+- `tests/test_capsule_dependency_unblock.py::test_service_axis_reproduce_then_fixed_via_redeploy` —
+  service axis against two real local convert-api "deploys".
+- Runner / CLI / redaction coverage in `tests/test_capsule_dependency_unblock.py` and
+  `tests/test_capsule_publish_redaction.py`.

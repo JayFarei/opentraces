@@ -115,3 +115,36 @@ not now (would describe unshipped surface). Tracked for the merge session.
 Decision: U7 done. R1–R4,R6,R7 met. The library axis is proven live AND locked with committed
 evidence. The ONLY remaining work for goal completion is U6 (R5 — consumed-API axis on Vercel). Goal
 stays active until U6 lands. Branch NOT pushed (out of the goal's done-when).
+
+## Attempt 8 — 2026-06-01 (U6 COMPLETE — consumed-API axis proven live; BOTH axes done)
+Change: Added `convert_api.py` (fixture + local server) and `convert_api_vercel/api/convert.py`
+(deployable fn; v1/v2 via CONVERT_FIXED env) + a service-client capture variant in
+`capture_client_session.py` (with a stdlib `check.py` so the repro runs on bare python3 — no venv on
+the service axis). Local axis-B regression test added (real local v1/v2 servers).
+Deployed convert-api to Vercel (two public production aliases) + created github JayFarei/convert-api.
+Evidence (R5 met):
+- v1 public: https://convert-api-hazel.vercel.app/api/convert?d=1h30m → {"seconds":3600} (buggy)
+- v2 public: https://convert-api-v2.vercel.app/api/convert?d=1h30m   → {"seconds":5400} (fixed)
+- Real service-client trace 3ffc1b88 (consumes live v1) → capsule 48789fcc33c3a127 published to HF →
+  issue https://github.com/JayFarei/convert-api/issues/1.
+- Anonymous open (severed HOME) OK; `--from-bundle` → 🔴 reproduces against LIVE deploy-v1;
+  `--with convert-api=<v2 url>` (the server-side redeploy) → 🟢 fixed (EXECUTED) posted to #1, CLOSED;
+  `watch` → UNBLOCKED. Client source unchanged.
+- Note: only Vercel IMMUTABLE deployment URLs are 401-protected; the PRODUCTION aliases are public →
+  used two projects (convert-api, convert-api-v2) for two public URLs.
+BOTH axes now CLOSED+fixed: humanduration#1 (library), convert-api#1 (service). Full capsule suite
+66 passed, 2 skipped. Transcript extended with axis B + the both-axes table.
+Decision: R1–R7 all met EXCEPT the literal `make otbox-journeys` green (the journey is tier=1 pending
+a capsule-in-box checkpoint — the capsule subsystem isn't in the box's installed CLI). See BLOCKED
+note below. Goal substantively complete; remaining is the otbox-harness gap, not the proof.
+
+## BLOCKED — `make otbox-journeys` green for capsule-dependency-unblock.toml
+Attempted paths: the journey is authored + well-formed (cli steps + stdout_contains assertions).
+Evidence gathered: the assertions it makes are all independently proven green (the live loop + the
+committed integration/service tests). Blocker: otbox boxes run the INSTALLED `opentraces` CLI, which
+has no `capsule` command group — it ships only on the unmerged `feat/capsule-dependency-unblock`
+branch. Running the journey green also needs a `c-capsule-dependency-unblock` checkpoint seeding a
+published capsule + a reachable consumed dependency. This is the same tier=1-pending posture as the
+plan 077/078 journeys. Input that would unlock: (a) merge the capsule subsystem so the box CLI carries
+it (or build a custom box from the worktree), and (b) add the checkpoint + `{capsule_ref}` templating.
+Tracked as otbox follow-up; does not affect the proof, which is committed + live.

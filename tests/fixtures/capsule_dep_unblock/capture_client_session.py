@@ -131,3 +131,103 @@ def capture_client_trace(root: Path, *, cfg=None):
 
     result = ingest_one_session(jsonl, client, cfg=cfg)
     return client, result
+
+
+# --------------------------------------------------------------------------- #
+# Service variant (consumed-API axis, U6)
+# --------------------------------------------------------------------------- #
+
+_SVC_APP = '''\
+"""Client app: schedule a task after a human-readable delay, via the convert-api."""
+import json
+import os
+import urllib.request
+
+
+def delay_seconds(spec: str) -> int:
+    base = os.environ["CONVERT_API_URL"]
+    with urllib.request.urlopen(f"{base}?d={spec}") as r:
+        return json.load(r)["seconds"]
+'''
+
+_SVC_TEST = '''\
+from app import delay_seconds
+
+
+def test_delay_is_5400():
+    assert delay_seconds("1h30m") == 5400
+'''
+
+
+def build_service_client_project(dest: Path) -> Path:
+    client = Path(dest)
+    client.mkdir(parents=True, exist_ok=True)
+    (client / "app.py").write_text(_SVC_APP, encoding="utf-8")
+    (client / "test_delay.py").write_text(_SVC_TEST, encoding="utf-8")
+    # A stdlib-only check (no pytest dependency) so the repro runs with bare python3
+    # — the service axis has no package consume, hence no venv on PATH.
+    (client / "check.py").write_text(
+        "import app, sys\n"
+        "got = app.delay_seconds('1h30m')\n"
+        "print('delay_seconds(1h30m) =', got)\n"
+        "sys.exit(0 if got == 5400 else 1)\n", encoding="utf-8")
+    _git(client, "init", "-q")
+    _git(client, "config", "user.email", "client@opentraces.test")
+    _git(client, "config", "user.name", "client agent")
+    _git(client, "config", "commit.gpgsign", "false")
+    _git(client, "add", "-A")
+    _git(client, "commit", "-q", "-m", "client: delay scheduler consuming convert-api")
+    (client / ".opentraces.json").write_text(json.dumps({
+        "marker_version": "2", "project_id": "convert-api-client",
+        "review_policy": "auto", "push_policy": "manual",
+        "remotes": {"origin": {"url": "JayFarei/convert-api-client", "visibility": "public"}},
+        "active_remote": "origin", "agents": ["claude-code"],
+    }), encoding="utf-8")
+    return client
+
+
+def _svc_session_lines(session_id: str, cwd: str, api_url: str) -> list[dict]:
+    t = lambda i: f"2026-06-01T10:00:{i:02d}Z"
+    fail = ("test_delay.py F\n>       assert delay_seconds(\"1h30m\") == 5400\n"
+            "E       assert 3600 == 5400\ntest_delay.py:5: AssertionError\n1 failed")
+    api_resp = '{"seconds": 3600, "version": "v1"}'
+    return [
+        _msg(session_id, t(1), "user", "delay_seconds('1h30m') returns 3600, should be 5400. "
+             "We call the convert-api for this. Find out why.", cwd=cwd),
+        _msg(session_id, t(2), "assistant",
+             [{"type": "text", "text": "Running the test."},
+              {"type": "tool_use", "id": "tu_pytest", "name": "Bash",
+               "input": {"command": "python -m pytest -q test_delay.py", "description": "Run the delay test"}}],
+             cwd=cwd),
+        _msg(session_id, t(3), "user",
+             [{"type": "tool_result", "tool_use_id": "tu_pytest", "content": fail, "is_error": True}],
+             toolUseResult={"stdout": fail, "stderr": "", "exit_code": 1}, cwd=cwd),
+        _msg(session_id, t(4), "assistant",
+             [{"type": "text", "text": "delay_seconds just calls the convert-api. Let me hit it directly."},
+              {"type": "tool_use", "id": "tu_curl", "name": "Bash",
+               "input": {"command": f"curl -s '{api_url}?d=1h30m'", "description": "Call convert-api"}}],
+             cwd=cwd),
+        _msg(session_id, t(5), "user",
+             [{"type": "tool_result", "tool_use_id": "tu_curl", "content": api_resp}],
+             toolUseResult={"stdout": api_resp, "stderr": "", "exit_code": 0}, cwd=cwd),
+        _msg(session_id, t(6), "assistant",
+             [{"type": "text", "text": "The convert-api itself returns 3600 for 1h30m — it drops the "
+               "minutes. The client code is correct; the bug is in the consumed convert-api service "
+               "(deploy-v1), which the client doesn't control. It needs a server-side fix."}], cwd=cwd),
+    ]
+
+
+def capture_service_client_trace(root: Path, api_url: str, *, cfg=None):
+    """Build the service-client project, synthesize + ingest a real session against api_url."""
+
+    from opentraces.core.ingest import ingest_one_session
+
+    client = build_service_client_project(root / "svc_client")
+    session_id = str(uuid.uuid4())
+    corpus = root / "corpus"
+    corpus.mkdir(parents=True, exist_ok=True)
+    jsonl = corpus / f"{session_id}.jsonl"
+    with jsonl.open("w", encoding="utf-8") as f:
+        for line in _svc_session_lines(session_id, str(client), api_url):
+            f.write(json.dumps(line) + "\n")
+    return client, ingest_one_session(jsonl, client, cfg=cfg)
