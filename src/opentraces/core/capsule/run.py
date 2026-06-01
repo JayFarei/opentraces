@@ -96,8 +96,12 @@ def _consumes_setup(
             _venv.create(venv_dir, with_pip=True)
             py = _venv_bin(venv_dir) / "python"
             specs = ["pytest", *[p["spec"] for p in packages]]
+            # --no-cache-dir is REQUIRED for a correct verdict: pip's wheel cache is
+            # keyed by (name, version), so two different sources sharing a version
+            # string (a fork, a moved tag) would otherwise serve a stale wheel and
+            # flip reproduces<->fixed wrongly. Build the pinned source every time.
             proc = subprocess.run(
-                [str(py), "-m", "pip", "install", "-q", *specs],
+                [str(py), "-m", "pip", "install", "-q", "--no-cache-dir", *specs],
                 capture_output=True, text=True, timeout=max(timeout, 300),
             )
             if proc.returncode != 0:

@@ -63,3 +63,16 @@ Decision: U1–U4 complete; the local mechanism is proven end to end through the
 library proof: push JayFarei/humanduration, export real-trace capsule, publish to HF, issue+verdict+
 close+watch) then U6 (live convert-api) then U7 (evidence/journey/docs). U5/U6 are outward —
 confirm exact repos/deploys before firing.
+
+## Attempt 5 — 2026-06-01 (U5: github repo + cache-correctness fix)
+Change: User-approved outward decisions: create public JayFarei/humanduration, capture a REAL client
+session (R1), library axis first. Built + pushed https://github.com/JayFarei/humanduration (main +
+tags v0.1.0 buggy / v0.2.0 fixed, README). FOUND + FIXED a real correctness bug: the runner's
+consumed-dep `pip install` lacked `--no-cache-dir`, so pip's (name,version)-keyed wheel cache served
+a stale wheel when two sources share a version string → WRONG verdict (first github matrix returned
+🟢/🟢). Added `--no-cache-dir`; added hermetic regression test (two 0.1.0 sources, buggy vs fixed).
+Evidence: public install verified `parse('1h30m')` = 3600 @v0.1.0 / 5400 @v0.2.0 (no-cache). CLI
+`--matrix` against PUBLIC github with a WARM cache now → 🔴v0.1.0 / 🟢v0.2.0, resolved_in v0.2.0.
+Regression test passes.
+Decision: github + runner correctness solid. Next: capture a real client session into the bucket and
+`capsule export` it (the R1 real-trace leg), then the HF publish + issue + verdict + close + watch.

@@ -121,6 +121,45 @@ def test_client_source_is_unchanged_across_versions(world, tmp_path):
     assert (r1["verdict"], r2["verdict"]) == ("reproduces", "fixed")
 
 
+def _versioned_lib(dest: Path, *, fixed: bool) -> str:
+    """A humanduration repo whose v0.1.0 tag holds either buggy or fixed code, both
+    declaring version 0.1.0 — to reproduce pip's (name, version) cache collision."""
+
+    import subprocess
+
+    dest.mkdir(parents=True, exist_ok=True)
+    g = lambda *a: subprocess.run(["git", "-C", str(dest), *a], check=True, capture_output=True)
+    g("init", "-q"); g("config", "user.email", "t@t"); g("config", "user.name", "t")
+    (dest / "pyproject.toml").write_text(
+        '[build-system]\nrequires=["setuptools>=61"]\nbuild-backend="setuptools.build_meta"\n'
+        '[project]\nname="humanduration"\nversion="0.1.0"\n[tool.setuptools]\npackages=["humanduration"]\n')
+    pkg = dest / "humanduration"; pkg.mkdir()
+    rx = r"(\d+)([hms])" if fixed else r"(\d+)(h)"
+    (pkg / "__init__.py").write_text(
+        "import re\n_U={'h':3600,'m':60,'s':1}\n"
+        f'def parse(t):\n    return sum(int(v)*_U[u] for v,u in re.findall(r"{rx}", t))\n')
+    g("add", "-A"); g("commit", "-q", "-m", "v0.1.0"); g("tag", "v0.1.0")
+    return f"git+file://{dest}@v0.1.0"
+
+
+def test_no_cache_collision_between_same_version_sources(world, tmp_path):
+    # Two different sources both versioned 0.1.0 (a fork / moved tag). pip caches
+    # wheels by (name, version); without --no-cache-dir the second install would
+    # serve the first's wheel and flip the verdict wrongly. The runner must build
+    # the pinned source every time.
+    buggy = _versioned_lib(tmp_path / "libA", fixed=False)   # 0.1.0 -> 3600
+    fixed = _versioned_lib(tmp_path / "libB", fixed=True)    # 0.1.0 -> 5400 (same version!)
+    consumes = [{"kind": "package", "name": "humanduration", "pin": buggy}]
+    cap, bdata = _client_capsule(world, consumes=consumes,
+                                 command="python -m pytest -q test_delay.py")
+    bundle = _bundle_file(tmp_path, bdata)
+    assert run_capsule_test(cap, bundle_path=bundle,
+                            with_overrides={"humanduration": buggy})["verdict"] == "reproduces"
+    # Same version string, fixed source: must be FIXED, not a cached 'reproduces'.
+    assert run_capsule_test(cap, bundle_path=bundle,
+                            with_overrides={"humanduration": fixed})["verdict"] == "fixed"
+
+
 def test_service_consume_injects_endpoint_env(world, tmp_path):
     # A `service` consume injects its endpoint as the client's env var; an override
     # changes what the client reads. Test passes (fixed) only when the env == v2 url.
