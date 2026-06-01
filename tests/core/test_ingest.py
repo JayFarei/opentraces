@@ -783,13 +783,13 @@ class TestScanProject:
         )
 
         trail_calls = {"n": 0}
-        warm_calls = {"n": 0}
+        warm_calls: list[dict] = []
 
         def _emit(*args, **kwargs):
             trail_calls["n"] += 1
 
         def _warm(*args, **kwargs):
-            warm_calls["n"] += 1
+            warm_calls.append(dict(kwargs))
 
         monkeypatch.setattr(
             "opentraces.core.trails.emit_step_window_events_from_record",
@@ -800,8 +800,13 @@ class TestScanProject:
         report = ingest_mod.scan_project(project_dir, trace_record_only=True)
 
         assert report.created == 1
+        # Record-only still skips the Trail substrate hot path...
         assert trail_calls["n"] == 0
-        assert warm_calls["n"] == 0
+        # ...but MUST still warm the INDEX marker (index only, not the heavier
+        # projection) so the next ``trace query`` short-circuits warm instead of
+        # paying the whole-corpus cold sync (Bug A). See the cold-state guards in
+        # tests/core/test_index_keep_warm.py.
+        assert [c.get("query_sources") for c in warm_calls] == [("index",)]
 
     def test_scan_isolates_per_session_failures(
         self, project_dir, monkeypatch, caplog

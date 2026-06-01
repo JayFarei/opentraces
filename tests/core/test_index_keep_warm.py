@@ -317,3 +317,126 @@ def test_scan_project_keep_warm_failure_does_not_break_scan(tmp_path, monkeypatc
     report = ingest_mod.scan_project(project)
     assert report is not None
     assert report.errored == 0
+
+
+# --------------------------------------------------------------------------- #
+# Bug A regression guard: --trace-record-only must keep the INDEX marker warm
+#
+# The shipped enrollment-backfill fix wrapped keep_index_warm in
+# ``if not trace_record_only:``, so a record-only backfill wrote new trace files
+# (flipping the stat-only bucket signal) WITHOUT advancing
+# ``synced_cheap_signal:index``. The next ``trace query`` then saw a marker
+# mismatch and fell into the whole-corpus ``_current_bucket_trace_digests``
+# materialisation (every TraceRecord parsed at once, ~4GB RSS, >1min). These
+# guards pin the cold-state contract the existing warm-marker tests never
+# exercised: record-only ingest still advances the INDEX marker (index-only,
+# bounded single-trace path) so the next query stays cheap.
+# --------------------------------------------------------------------------- #
+
+def _write_claude_session_jsonl(path: Path, session_id: str, turns: int = 2) -> None:
+    """A minimal but real Claude Code session JSONL that ingest can parse."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines: list[dict] = []
+    for i in range(1, turns + 1):
+        ts = f"2026-04-15T07:00:{i:02d}Z"
+        lines.append({
+            "type": "user", "sessionId": session_id, "timestamp": ts,
+            "message": {"role": "user", "content": f"prompt {i}"},
+        })
+        lines.append({
+            "type": "assistant", "sessionId": session_id, "timestamp": ts,
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": f"tu_{i}", "name": "Read",
+                             "input": {"file_path": "x.py"}}],
+                "usage": {"input_tokens": 10, "output_tokens": 10},
+            },
+        })
+        lines.append({
+            "type": "user", "sessionId": session_id, "timestamp": ts,
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": f"tu_{i}", "content": "ok"}]},
+        })
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+
+
+def _opt_in_project(project_dir: Path) -> None:
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / ".opentraces.json").write_text(json.dumps({
+        "marker_version": "2",
+        "project_id": "recordonlyproject00000000000000",
+        "review_policy": "review",
+        "push_policy": "manual",
+        "agents": ["claude-code"],
+    }))
+
+
+def test_record_only_ingest_warms_index_marker_only(tmp_path, monkeypatch):
+    """Record-only ingest calls keep_index_warm for the just-written trace with
+    ``query_sources=("index",)`` (index only — projection/trail stay deferred)."""
+    from opentraces.core import ingest as ingest_mod
+
+    project = tmp_path / "demo"
+    _opt_in_project(project)
+    _warm(project)  # an existing warm index, as in the real backfill scenario
+
+    warm_calls: list[dict] = []
+    real_warm = ti.keep_index_warm
+
+    def spy_warm(*args, **kwargs):
+        warm_calls.append(dict(kwargs))
+        return real_warm(*args, **kwargs)
+
+    monkeypatch.setattr(ingest_mod, "keep_index_warm", spy_warm, raising=False)
+
+    session = tmp_path / "corpus" / "sess-recordonly.jsonl"
+    _write_claude_session_jsonl(session, "sess-recordonly")
+    result = ingest_mod.ingest_one_session(
+        session, project, trace_record_only=True, reconcile_watcher=False,
+    )
+    assert result.action in {"new", "new_generation", "refreshed"}
+
+    index_only = [c for c in warm_calls if c.get("query_sources") == ("index",)]
+    assert index_only, (
+        "record-only ingest must warm the INDEX marker for the new trace "
+        f"(observed keep_index_warm calls: {warm_calls})"
+    )
+
+
+def test_record_only_ingest_keeps_next_query_off_the_whole_corpus_scan(
+    tmp_path, monkeypatch
+):
+    """After a record-only ingest, the next cheap sync must short-circuit warm:
+    ZERO calls to the whole-corpus ``_current_bucket_trace_digests`` (the ~4GB
+    materialisation). This is the regression that blew up ``trace query``."""
+    from opentraces.core import ingest as ingest_mod
+
+    project = tmp_path / "demo"
+    _opt_in_project(project)
+    _warm(project)
+
+    session = tmp_path / "corpus" / "sess-recordonly2.jsonl"
+    _write_claude_session_jsonl(session, "sess-recordonly2")
+    ingest_mod.ingest_one_session(
+        session, project, trace_record_only=True, reconcile_watcher=False,
+    )
+
+    digest_calls = {"n": 0}
+    real_digests = ti._current_bucket_trace_digests
+
+    def spy_digests(*args, **kwargs):
+        digest_calls["n"] += 1
+        return real_digests(*args, **kwargs)
+
+    monkeypatch.setattr(ti, "_current_bucket_trace_digests", spy_digests)
+
+    result = ti.cheap_sync_query_state(query_source="index")
+
+    assert result.synced is False, (
+        "record-only ingest must leave the index marker in sync so the next "
+        "query short-circuits instead of paying a cold whole-corpus sync"
+    )
+    assert digest_calls["n"] == 0, (
+        "the next query after a record-only backfill must NOT run the "
+        "whole-corpus _current_bucket_trace_digests materialisation (~4GB RSS)"
+    )

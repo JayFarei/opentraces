@@ -577,6 +577,31 @@ def _ingest_locked(
                 "keep-warm hook failed for %s (best-effort, ignored)", trace_id,
                 exc_info=True,
             )
+    else:
+        # --trace-record-only deliberately skips the heavy projection / trail /
+        # context warm-up so a broad retained-record backfill stays bounded, but
+        # it must still keep the INDEX cheap-sync marker in step with the bucket.
+        # Skipping this entirely (the prior behaviour) left
+        # `synced_cheap_signal:index` stale while the just-written record flipped
+        # the stat-only bucket signal, so the NEXT `trace query` saw a marker
+        # mismatch and fell into the whole-corpus `_current_bucket_trace_digests`
+        # materialisation (every TraceRecord parsed at once, ~4GB RSS, >1min).
+        # The F3 single-trace path is bounded: it runs only the mtime-gated
+        # `refresh_index` for this one trace (the trail projection early-returns
+        # because record-only never appends trail events) and re-stamps the
+        # marker. Projection / trail / context stay deferred, preserving the
+        # bounded-backfill intent, while the next query short-circuits warm.
+        try:
+            keep_index_warm(
+                trace_id=final_record.trace_id,
+                query_sources=("index",),
+            )
+        except Exception:
+            logger.warning(
+                "record-only index keep-warm failed for %s (best-effort, ignored)",
+                trace_id,
+                exc_info=True,
+            )
 
     # Decide the status this generation enters.
     #
