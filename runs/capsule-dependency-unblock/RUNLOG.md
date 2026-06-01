@@ -179,3 +179,24 @@ Input that would unlock the literal overall-green: merge `feat/capsule-dependenc
 base so the box's installed CLI has `capsule` (then `make otbox-journeys` runs all journeys + this one
 under one CLI). Until then: this journey is GREEN under make otbox-journeys (proven), and the overall
 target's RED is unrelated worktree-env breakage. Surfaced to the user for the merge decision.
+
+## Attempt 11 — 2026-06-01 (INVESTIGATION of the 23 — user-requested; fully diagnosed)
+Question: are the 23 `make otbox-journeys` failures pre-existing breakage or worktree-env artifacts?
+Method + evidence:
+1. Failure reason under otc for representatives: `FileNotFoundError: <worktree>/.venv/bin/python` — the
+   worktree has no `.venv`, and journeys (web-viewer-smoke, install-from-source, doctor, …) exec it.
+2. Fix: symlinked `<worktree>/.venv -> <main>/.venv`. Re-ran `make otbox-journeys` (OT_CLI_BIN=otc):
+   **23 failed → 7 failed, 89 passed.** The 16 fixed were all the `.venv`-missing artifacts.
+3. The 7 remaining are ALL unrelated: migration-s1-read-compat, -s11-non-destructive, -u-config-2,
+   -u-config-5, -u-setup-3, -u-trail-3, and pr-blame-on-captured-branch.
+4. BASELINE: those same journeys **PASS on the MAIN repo** (installed CLI) — `3 passed` for a
+   representative trio. So they are NOT pre-existing breakage.
+5. ROOT CAUSE of the 7: the worktree branch is **12 commits behind main** (merge-base eebc2ce2bc;
+   main HEAD 5cbb2e7fef). The migration/pr-blame journeys were updated in those 12 commits; running the
+   worktree's STALE opentraces via otc fails them. Pure branch-staleness, unrelated to capsule/plan 089.
+CONCLUSION: 0 of the 23 are pre-existing breakage; 0 are capsule-related. 16 = missing worktree `.venv`
+(fixed). 7 = worktree 12 commits behind main on unrelated migration/pr-blame code (pass on main). The
+`capsule-dependency-unblock` journey PASSES under `make otbox-journeys` (among the 89). Literal
+overall-green unlock: rebase the branch on current main (brings the 12 commits' fixes) OR run the
+verification from a checkout at main's HEAD with the capsule CLI — both restore all-green; both are
+git/base operations for the user to authorize (the goal pinned the branch off feat/trace-capsule-prototype).
