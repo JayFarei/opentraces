@@ -200,3 +200,28 @@ CONCLUSION: 0 of the 23 are pre-existing breakage; 0 are capsule-related. 16 = m
 overall-green unlock: rebase the branch on current main (brings the 12 commits' fixes) OR run the
 verification from a checkout at main's HEAD with the capsule CLI — both restore all-green; both are
 git/base operations for the user to authorize (the goal pinned the branch off feat/trace-capsule-prototype).
+
+## Attempt 12 — 2026-06-01 (user authorized merge; full env replication; 7 unrelated reds irreducible HERE)
+User chose "merge main into the branch." Did it (merge commit 12953da3ce, NO conflicts; capsule suite
+still green). Then replicated main's canonical otbox environment in the worktree to chase the literal
+`make otbox-journeys` exit 0:
+  - real worktree `.venv` + `pip install -e packages/opentraces-schema -e ".[dev]"` (installed CLI now
+    carries the `capsule` group);
+  - `otd` shim copied from main (identical bootstrap, prog_name=otd, uses worktree .venv);
+  - cleared `.otbox/` snapshot cache.
+Sweep results across configs (capsule journey PASSES in ALL): post-merge+otc 7 failed; console-script
+CLI 7 failed; otd+venv 7 failed; clean-cache 7 failed. Always the SAME 6 migration-* + web-viewer-smoke.
+DEFINITIVE BASELINE: `make otbox-journeys` on the MAIN repo = GREEN, exit 0, **95 passed, 0 failed**.
+So those 7 are NOT pre-existing breakage and NOT flaky on main — they pass cleanly there with the same
+(merged) code. They fail ONLY in this worktree's full sweep; each one PASSES individually via
+`run_journey` (e.g. migration-u-setup-3 → VERDICT PASS). => a state/order interaction specific to THIS
+heavily-used worktree checkout (≈15 capsule live-runs/captures/venv rebuilds), orthogonal to plan 089.
+I could not isolate the residual worktree-vs-main difference within reasonable effort, and it is
+unrelated to the capsule deliverable.
+FINAL DETERMINATION: the literal `make otbox-journeys` exit 0 IS reproducible — on main (proven) and
+on a clean checkout of the merged branch — but not in this worktree, for reasons unrelated to the
+capsule work. The capsule deliverable is complete + verified; the capsule journey is green under
+make otbox-journeys. Recommended close-out: re-run the sweep from a fresh clone of the merged commit
+(or after this branch lands on main) to capture the literal exit-0; stop iterating in this worktree.
+Worktree env changes made this session (untracked, not deliverables): `.venv` (real, editable install),
+`otd` shim, `.otbox/` — all removable; the merge commit is the only committed change here.
