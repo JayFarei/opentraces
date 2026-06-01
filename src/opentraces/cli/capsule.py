@@ -81,14 +81,39 @@ def _export_options(fn):
         "--setup-command", "setup_command", default=None,
         help="A setup/build/install step to run before the repro (e.g. 'pip install -e .').",
     )(fn)
+    fn = click.option(
+        "--consume", "consume_specs", multiple=True, metavar="[package|service:]NAME=PIN|URL",
+        help="Record a CONSUMED dependency the verdict can be re-posed against "
+             "(e.g. package:humanduration=git+https://github.com/o/r@v0.1.0). Repeatable.",
+    )(fn)
     return fn
 
 
+def _parse_consume(spec: str) -> dict:
+    """``[package|service:]NAME=PIN|ENDPOINT`` -> a consumes entry (default kind: package)."""
+
+    kind = "package"
+    body = spec
+    head = spec.split(":", 1)[0]
+    if ":" in spec and head in ("package", "service"):
+        kind, body = spec.split(":", 1)
+    if "=" not in body:
+        raise click.BadParameter(f"--consume expects NAME=VALUE, got {spec!r}")
+    name, value = body.split("=", 1)
+    name, value = name.strip(), value.strip()
+    if not name or not value:
+        raise click.BadParameter(f"--consume needs a non-empty NAME and VALUE, got {spec!r}")
+    if kind == "service":
+        return {"kind": "service", "name": name, "endpoint": value}
+    return {"kind": "package", "name": name, "pin": value}
+
+
 def _do_export(trace_id, step, node_id, radius, repo_url, project_dir,
-               test_command=None, expect_error=None, setup_command=None):
+               test_command=None, expect_error=None, setup_command=None, consume_specs=()):
     from ..core.capsule.export import CapsuleExportError, export_capsule
 
     project = _resolve_project(project_dir)
+    consumes = [_parse_consume(s) for s in (consume_specs or ())]
     try:
         return export_capsule(
             project_dir=project,
@@ -100,6 +125,7 @@ def _do_export(trace_id, step, node_id, radius, repo_url, project_dir,
             test_command=test_command,
             expect_error=expect_error,
             setup_command=setup_command,
+            consumes=consumes,
         ), project
     except CapsuleExportError as exc:
         click.echo(f"capsule export failed: {exc}", err=True)
@@ -196,12 +222,12 @@ def capsule_group() -> None:
 @click.option("--bundle", "make_bundle", is_flag=True,
               help="Embed a hermetic source bundle (git archive at the pin) so the test runs even if the commit is gone.")
 @click.option("--json", "as_json", is_flag=True, help="Print the capsule envelope JSON to stdout.")
-def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, out, make_bundle, as_json):
+def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, out, make_bundle, as_json):
     """Build a local, redacted, self-contained capsule for one failing session."""
 
     from ..core.capsule.share import write_capsule_dir
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command)
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs)
     bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
     dest = out or (project / ".opentraces" / "capsules")
     arts = write_capsule_dir(capsule, dest, bundle_bytes=bundle_bytes)
@@ -274,7 +300,7 @@ def _clip(do_copy, url):
 @click.option("--bundle", "make_bundle", is_flag=True, help="Embed + publish a hermetic source bundle.")
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the shareable URL to the clipboard.")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, hf_repo, publish, private, make_bundle, do_copy, token):
+def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, hf_repo, publish, private, make_bundle, do_copy, token):
     """Mint a shareable capsule URL (add --publish to upload it)."""
 
     from ..core.capsule.share import (
@@ -283,7 +309,7 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         write_capsule_dir,
     )
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command)
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs)
     bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
     arts = write_capsule_dir(capsule, project / ".opentraces" / "capsules", bundle_bytes=bundle_bytes)
     cid = capsule["capsule_id"]
@@ -317,7 +343,7 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the capsule URL to the clipboard.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the publish confirmation (for scripts/agents).")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, hf_repo, issue_repo, title, publish, make_bundle, do_copy, assume_yes, token):
+def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, hf_repo, issue_repo, title, publish, make_bundle, do_copy, assume_yes, token):
     """Render the GitHub issue body for a capsule, or file it with --publish.
 
     The HF repo defaults to ``<you>/opentraces-capsules`` and the issue repo is
@@ -336,7 +362,7 @@ def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         write_capsule_dir,
     )
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command)
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs)
     bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
     write_capsule_dir(capsule, project / ".opentraces" / "capsules", bundle_bytes=bundle_bytes)
     cid = capsule["capsule_id"]

@@ -254,6 +254,7 @@ def export_capsule(
     test_command: str | None = None,
     expect_error: str | None = None,
     setup_command: str | None = None,
+    consumes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a frozen ``opentraces.capsule.v1`` envelope for one failing session.
 
@@ -351,6 +352,9 @@ def export_capsule(
         "dependencies": list(getattr(record, "dependencies", []) or [])[:200],
         "language_ecosystem": eco if isinstance(eco, str) else (getattr(eco, "name", None) if eco else None),
         "setup": [setup_command] if setup_command else [],
+        # Consumed dependencies the verdict can be re-posed against (plan 089):
+        # the library version / API endpoint the client doesn't control.
+        "consumes": list(consumes or []),
     }
 
     anchors = _trail_anchors(project_dir, trace_id)
