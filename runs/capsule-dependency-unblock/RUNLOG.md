@@ -248,3 +248,27 @@ Input that would unlock: reconcile `feat/trace-capsule-prototype` with main's mi
 authoritative. Stopping here; the plan-089 deliverable is complete + verified, the capsule journey is
 green under make otbox-journeys, and the overall-target RED is a base-branch defect I cannot fix in
 scope. Cleanup: removed /tmp/capsule-fresh; worktree `.venv`/`otd`/`.otbox` are untracked + removable.
+
+## Attempt 14 — 2026-06-01 (SOLVED — make otbox-journeys exit 0; root-caused + fixed + re-proven)
+User authorized leaving the file boundary to solve it. Bisected the 7 failures to TWO causes, both
+unrelated to the capsule subsystem:
+  1. **6 migration-\* journeys** (all fork from c-legacy-v033). Real cause: with the checkpoint set up
+     correctly, the restored legacy world was MISSING `.opentraces.json` → `opentraces status` →
+     "Not an opentraces project" rc=3 → journey aborts (later steps "unknown step id"). The marker is
+     git-IGNORED (`.gitignore:35 .opentraces.json`) and was NEVER TRACKED (`git ls-files` → none); it
+     only existed in main's working tree by luck. A fresh checkout of MAIN would fail the same way —
+     a latent pre-existing fixture bug. FIX: force-track
+     `tests/migration/fixtures/legacy_world_v033/project/.opentraces.json` + targeted `.gitignore`
+     negation (commit 964d196622). Diagnostic detour: an early isolated loop that skipped
+     `resolve_checkpoint` mis-pointed at `{legacy_trace_id}` templating — false lead; the real failing
+     step is `status`.
+  2. **web-viewer-smoke**. Cause: the run venv lacked Flask — the `web` optional-dependency
+     (`pyproject [project.optional-dependencies] web = ["flask>=3.0"]`). Not a repo bug; the otbox run
+     venv must install `.[web]`. FIX: install `.[dev,web]` (environment, not committed).
+EVIDENCE (exit 0):
+  - worktree sweep after both fixes: `MAKE EXIT CODE: 0`, **96 passed**, NONE failed, capsule journey PASSED.
+  - RE-PROOF on a FRESH `git clone` of the fixed branch (the exact clean-checkout scenario that failed
+    before) + `python -m venv` + `pip install -e .[dev,web]`: `FRESH-CLONE MAKE EXIT CODE: 0`,
+    **96 passed**, NONE failed, capsule-dependency-unblock PASSED.
+GOAL SURFACE NOW FULLY MET: `make otbox-journeys` exits 0 with the journey green, alongside the
+already-proven both-axes live loop + all other surfaces. Cleanup: removed /tmp/capsule-reproof.
