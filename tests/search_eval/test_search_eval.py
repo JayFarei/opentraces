@@ -21,6 +21,8 @@ from pathlib import Path
 import pytest
 
 from tests.search_eval import score_outcome as so
+from tests.search_eval import live as live_eval
+from tests.search_eval import runner as runner_mod
 from tests.search_eval.generator import (
     load_profile,
     materialize_corpus,
@@ -191,6 +193,61 @@ def test_slope_gate_logic():
 def test_outcome_digest_is_stable(dev_report):
     second = run_eval("dev", seed=1)
     assert second.outcome_digest == dev_report.outcome_digest
+
+
+def test_live_eval_surfaces_cli_failures(tmp_path, monkeypatch):
+    fake = tmp_path / "fake-otd.sh"
+    fake.write_text("#!/bin/sh\necho 'forced live failure' >&2\nexit 7\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("OT_CLI_BIN", str(fake))
+    monkeypatch.setattr(live_eval, "LIVE_SEED_CASES", [live_eval.LIVE_SEED_CASES[0]])
+
+    rows = live_eval.run_live(limit=1)
+
+    assert rows[0]["seed"] == "S1"
+    assert "error" in rows[0]
+    assert "query failed (7)" in rows[0]["error"]
+
+
+def test_discovery_loop_requires_get_success(tmp_path, monkeypatch):
+    fake = tmp_path / "fake-otd.sh"
+    fake.write_text(
+        "\n".join(
+            [
+                "#!/bin/sh",
+                "cmd=\"$1\"",
+                "sub=\"$2\"",
+                "if [ \"$cmd\" = \"trace\" ] && [ \"$sub\" = \"query\" ]; then",
+                "  printf '{\"candidates\":[{\"trace_id\":\"trace-1\"}]}'",
+                "  exit 0",
+                "fi",
+                "if [ \"$cmd\" = \"trace\" ] && [ \"$sub\" = \"map\" ]; then",
+                "  printf '{}'",
+                "  exit 0",
+                "fi",
+                "if [ \"$cmd\" = \"trace\" ] && [ \"$sub\" = \"slice\" ]; then",
+                "  printf '{}'",
+                "  exit 0",
+                "fi",
+                "if [ \"$cmd\" = \"trace\" ] && [ \"$sub\" = \"get\" ]; then",
+                "  echo 'forced get failure' >&2",
+                "  exit 9",
+                "fi",
+                "exit 1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("OT_CLI_BIN", str(fake))
+
+    plan = plan_corpus(load_profile(), seed=1, tier="dev")
+    result = runner_mod._discovery_loop_smoke(plan, tmp_path, dict(os.environ))
+
+    assert result["ok"] is False
+    assert result["failed_stage"] == "get"
+    assert result["stages"] == ["query", "map", "slice"]
 
 
 @pytest.mark.skipif(

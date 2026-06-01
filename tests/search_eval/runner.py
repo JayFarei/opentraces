@@ -342,7 +342,15 @@ def _discovery_loop_smoke(plan: CorpusPlan, project_dir: Path, env: dict[str, st
                                   capture_output=True, text=True, timeout=300)
             if proc.returncode == 0:
                 steps.append(verb)
-        return {"ok": len(steps) >= 3, "trace_id": trace_id, "stages": steps}
+                continue
+            return {
+                "ok": False,
+                "trace_id": trace_id,
+                "stages": steps,
+                "failed_stage": verb,
+                "reason": (proc.stderr or proc.stdout or f"{verb} failed").strip()[:160],
+            }
+        return {"ok": len(steps) == 4, "trace_id": trace_id, "stages": steps}
     except Exception as exc:  # pragma: no cover - smoke only
         return {"ok": False, "reason": str(exc)}
 
