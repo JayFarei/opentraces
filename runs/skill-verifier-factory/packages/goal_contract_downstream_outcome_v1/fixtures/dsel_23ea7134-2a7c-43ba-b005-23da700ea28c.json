@@ -1,0 +1,13 @@
+{
+  "prompt": "Use the goal-forge skill so its output satisfies the Goal contract + downstream outcome contract.",
+  "required_markers": [
+    "rl.goal-forge.constraint_preservation",
+    "rl.goal-forge.honest_stop"
+  ],
+  "source_trace_id": "23ea7134-2a7c-43ba-b005-23da700ea28c",
+  "task_id": "dsel:23ea7134-2a7c-43ba-b005-23da700ea28c",
+  "verify": {
+    "kind": "marker_coverage",
+    "scorer": "scorer.py"
+  }
+}

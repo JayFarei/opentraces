@@ -1,0 +1,12 @@
+{
+  "prompt": "Use the tdd skill so its output satisfies the TDD red-green-refactor trace contract.",
+  "required_markers": [
+    "rl.tdd.refactor"
+  ],
+  "source_trace_id": "e49a884d-aad6-453e-9c50-33df9dcc71ba",
+  "task_id": "dtest:e49a884d-aad6-453e-9c50-33df9dcc71ba",
+  "verify": {
+    "kind": "marker_coverage",
+    "scorer": "scorer.py"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "prompt": "Use the docs-update skill so its output satisfies the Docs update reflects the change contract.",
+  "required_markers": [
+    "rl.docs-update.changelog",
+    "rl.docs-update.no_stale"
+  ],
+  "source_trace_id": "433a2967-a981-424f-8d2a-41b7f12900bb",
+  "task_id": "dsel:433a2967-a981-424f-8d2a-41b7f12900bb",
+  "verify": {
+    "kind": "marker_coverage",
+    "scorer": "scorer.py"
+  }
+}

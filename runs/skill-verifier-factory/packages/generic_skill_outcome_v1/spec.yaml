@@ -1,0 +1,315 @@
+addressable_markers:
+- rl.architecture-patterns.generic.produced_changes
+- rl.architecture-patterns.generic.verification_run
+approval_state: manual_required_default_off
+archetype_id: generic_skill_outcome_v1
+archetype_spec:
+  archetype_id: generic_skill_outcome_v1
+  baseline_skill: '# architecture-patterns (baseline)
+
+
+    Follow the architecture-patterns skill.
+
+    '
+  contract_elements:
+  - detectors:
+      command_families:
+      - search_read
+      has_commands: true
+      tool_any:
+      - read
+      - grep
+      - glob
+      - exec
+    element_id: context_read
+    label: Read / inspected context before acting
+    marker: rl.architecture-patterns.generic.context_read
+    weight: 1.0
+  - detectors:
+      command_families:
+      - edit_write
+      - git_commit
+      has_files: true
+    element_id: produced_changes
+    label: Produced concrete changes (files / patches / commit)
+    marker: rl.architecture-patterns.generic.produced_changes
+    weight: 1.0
+  - detectors:
+      command_families:
+      - verification
+    element_id: verification_run
+    label: Ran a verification command (tests / lint / build)
+    marker: rl.architecture-patterns.generic.verification_run
+    weight: 1.5
+  - detectors:
+      command_families:
+      - git_commit
+      committed: true
+      outcome_label_in:
+      - success
+      outcome_reward_min: 0.5
+    element_id: landed_outcome
+    label: Landed / verified downstream outcome
+    marker: rl.architecture-patterns.generic.landed_outcome
+    weight: 1.5
+  - detectors:
+      outcome_label_in:
+      - success
+      - failure
+    element_id: honest_completion
+    label: Terminal, non-abandoned outcome
+    marker: rl.architecture-patterns.generic.honest_completion
+    weight: 1.0
+  creator_questions:
+  - inferred_default: Read context + produced changes that ran verification and landed.
+    key: outcome_floor
+    options:
+    - changes_landed
+    - verified_and_landed
+    - context_only
+    question: What is the minimum for a successful invocation of this skill?
+    rationale: Universal trace signal families; refine per skill after human review.
+  - inferred_default: "Yes \u2014 verification_run is high-weight; partial credit\
+      \ without it."
+    key: verification_required
+    options:
+    - required
+    - bonus
+    question: Is running a verification command required for full reward?
+    rationale: 'br/51: executable verification is the strongest outcome signal.'
+  - inferred_default: "Pending human review \u2014 generic drafts are advisory until\
+      \ approved."
+    key: promote_to_curated
+    options:
+    - specialize
+    - keep_generic
+    - discard
+    question: Should this draft be hand-specialized into a curated archetype?
+    rationale: 'br/56: generic, text-adjacent markers are the highest reward-hacking
+      risk.'
+  description: 'A trace-derived baseline verifier for the architecture-patterns skill:
+    did the invocation read context, produce concrete changes, run verification, and
+    land an honest outcome? Proposed from universal trace signal families; intended
+    as a human-reviewed DRAFT, not a curated semantic verifier.'
+  live_legs:
+  - description: Re-roll the agent on the task and score whether it read context,
+      ran verification, and landed. Opt-in, real agent.
+    kind: agent_rerollout
+    leg_id: generic_agent_rerollout
+    requires:
+    - real_agent
+    - OT_REAL_REPL
+  min_traces_for_split: 6
+  schema_version: opentraces.skill_verifier_archetype.v1
+  semantic_target: did the skill invocation read context, produce verified changes,
+    and land an honest (non-abandoned) outcome?
+  skill: architecture-patterns
+  title: Generic skill outcome (architecture-patterns)
+automatic_promotion: false
+best_skill: best_skill.md
+contract_elements:
+- detectors:
+    command_families:
+    - search_read
+    has_commands: true
+    tool_any:
+    - read
+    - grep
+    - glob
+    - exec
+  element_id: context_read
+  label: Read / inspected context before acting
+  marker: rl.architecture-patterns.generic.context_read
+  weight: 1.0
+- detectors:
+    command_families:
+    - edit_write
+    - git_commit
+    has_files: true
+  element_id: produced_changes
+  label: Produced concrete changes (files / patches / commit)
+  marker: rl.architecture-patterns.generic.produced_changes
+  weight: 1.0
+- detectors:
+    command_families:
+    - verification
+  element_id: verification_run
+  label: Ran a verification command (tests / lint / build)
+  marker: rl.architecture-patterns.generic.verification_run
+  weight: 1.5
+- detectors:
+    command_families:
+    - git_commit
+    committed: true
+    outcome_label_in:
+    - success
+    outcome_reward_min: 0.5
+  element_id: landed_outcome
+  label: Landed / verified downstream outcome
+  marker: rl.architecture-patterns.generic.landed_outcome
+  weight: 1.5
+- detectors:
+    outcome_label_in:
+    - success
+    - failure
+  element_id: honest_completion
+  label: Terminal, non-abandoned outcome
+  marker: rl.architecture-patterns.generic.honest_completion
+  weight: 1.0
+creator_decisions:
+- decision: Read context + produced changes that ran verification and landed.
+  key: outcome_floor
+  options:
+  - changes_landed
+  - verified_and_landed
+  - context_only
+  question: What is the minimum for a successful invocation of this skill?
+  rationale: Universal trace signal families; refine per skill after human review.
+  source: inferred_default
+- decision: "Yes \u2014 verification_run is high-weight; partial credit without it."
+  key: verification_required
+  options:
+  - required
+  - bonus
+  question: Is running a verification command required for full reward?
+  rationale: 'br/51: executable verification is the strongest outcome signal.'
+  source: inferred_default
+- decision: "Pending human review \u2014 generic drafts are advisory until approved."
+  key: promote_to_curated
+  options:
+  - specialize
+  - keep_generic
+  - discard
+  question: Should this draft be hand-specialized into a curated archetype?
+  rationale: 'br/56: generic, text-adjacent markers are the highest reward-hacking
+    risk.'
+  source: inferred_default
+description: 'A trace-derived baseline verifier for the architecture-patterns skill:
+  did the invocation read context, produce concrete changes, run verification, and
+  land an honest outcome? Proposed from universal trace signal families; intended
+  as a human-reviewed DRAFT, not a curated semantic verifier.'
+fixtures:
+- fixtures/dsel_195e7374-4b47-485e-96e4-0903f8bef702.json
+- fixtures/dsel_268549ee-5bab-4b56-816f-6020646424e9.json
+- fixtures/dsel_3bd5869c-5cec-43de-a4b1-b8b355aab4f4.json
+- fixtures/dsel_3bd5869c-5cec-43de-a4b1-b8b355aab4f4.json
+- fixtures/dsel_517d773d-7eac-4755-a8a8-94a85761deb9.json
+- fixtures/dsel_7a3fd660-d816-4c0f-82c7-34f51e5c0bff.json
+- fixtures/dsel_cd65f817-01f6-4d30-9857-f4bbece3c030.json
+- fixtures/dsel_d0d77b05-daee-4a7c-9386-009376679555.json
+- fixtures/dsel_de8b2660-633b-4033-bb80-085f8b4759d7.json
+- fixtures/dtest_05d40e85-8603-40c2-8c78-0cfbb49c277b.json
+- fixtures/dtest_0c6b486c-eeb3-4ec8-8580-829b9d54bac5.json
+- fixtures/dtest_14c453d1-ce3e-4c1f-85fe-33956458cec0.json
+- fixtures/dtest_4ca1480f-7a1b-4244-ad07-e17f75a590ad.json
+- fixtures/dtest_66b5e249-18d5-4026-9f83-e95167f04a10.json
+- fixtures/dtest_66b5e249-18d5-4026-9f83-e95167f04a10.json
+- fixtures/dtest_6ccded12-2991-41ff-9f70-5b1e9f697e6d.json
+- fixtures/dtest_791acff4-7e88-4edf-8150-d8b2b67e75e5.json
+- fixtures/dtest_7c2ba7d9-2b0b-410c-846e-1b80a809a108.json
+- fixtures/dtest_811ec8a5-7cdb-4063-83cd-18d92f22594d.json
+- fixtures/dtest_88970cfa-7e82-4bb3-89ab-5a832d4c9608.json
+- fixtures/dtest_8e0fc3e6-205a-41a3-a4ce-9e01034b056f.json
+- fixtures/dtest_97c98ad6-2016-4e48-b15d-81876a6b6880.json
+- fixtures/dtest_be12798d-01c5-4e46-9674-3b4f2cffc50b.json
+- fixtures/dtest_c093941c-63ff-4f41-85b8-ea43d6b9b096.json
+- fixtures/dtest_d3dc7afa-cd9b-4686-8524-e9058882af70.json
+- fixtures/dtest_dd53261d-cbbc-4cf7-9e69-d273ccc66bd1.json
+gate_basis: train_failure_minibatch
+generated_at: '2026-05-29T11:39:10.944045Z'
+graders:
+- default_enabled: true
+  description: 'CI-safe: fraction of trace-grounded contract markers the skill addresses.'
+  gate_basis: train_failure_minibatch
+  id: deterministic_marker_coverage
+  kind: deterministic
+  required_markers:
+  - rl.architecture-patterns.generic.produced_changes
+  - rl.architecture-patterns.generic.verification_run
+  scorer: scorer.py
+  semantics: "CI-safe proxy: fraction of trace-grounded contract markers the skill\
+    \ addresses. Proves coverage + gating plumbing, NOT semantic behavior change \u2014\
+    \ that requires the opt-in live legs."
+  weight: 1.0
+- default_enabled: false
+  description: Re-roll the agent on the task and score whether it read context, ran
+    verification, and landed. Opt-in, real agent.
+  id: generic_agent_rerollout
+  kind: agent_rerollout
+  requires:
+  - real_agent
+  - OT_REAL_REPL
+  weight: 0.0
+is_generic: true
+limitations: []
+markers:
+- rl.architecture-patterns.generic.context_read
+- rl.architecture-patterns.generic.produced_changes
+- rl.architecture-patterns.generic.verification_run
+- rl.architecture-patterns.generic.landed_outcome
+- rl.architecture-patterns.generic.honest_completion
+recommended: false
+report: report.json
+rows:
+  Dsel: rows/dsel.jsonl
+  Dtest: rows/dtest.jsonl
+  Dtrain: rows/dtrain.jsonl
+schema_version: opentraces.skill_verifier_package.v1
+scorer: scorer.py
+semantic_target: did the skill invocation read context, produce verified changes,
+  and land an honest (non-abandoned) outcome?
+skill_id: architecture-patterns
+source_refs:
+- episode_id: episode:1dff52a4f35ef0a7
+  split: Dtest
+  trace_id: 05d40e85-8603-40c2-8c78-0cfbb49c277b
+  unit_id: tu:05d40e85-8603-40c2-8c78-0cfbb49c277b:skill:call_7E9tqhKkecQ3Bvc9xStEthWU
+- episode_id: episode:a84737f7e08c437e
+  split: Dtest
+  trace_id: 0c6b486c-eeb3-4ec8-8580-829b9d54bac5
+  unit_id: tu:0c6b486c-eeb3-4ec8-8580-829b9d54bac5:skill:call_JomT7HtGd8hIVJ5S9JnxCrjw
+- episode_id: episode:a9fbea887c87d2fb
+  split: Dtrain
+  trace_id: 0dbd27d3-e21c-4d25-9cc2-d1e3586f6e6c
+  unit_id: tu:0dbd27d3-e21c-4d25-9cc2-d1e3586f6e6c:skill:call_uR5AzGD24tU1UpAHXetYdbRo
+- episode_id: episode:c4432d5414fa206f
+  split: Dtrain
+  trace_id: 1088b5dd-d4ef-4875-a357-547790e153ce
+  unit_id: tu:1088b5dd-d4ef-4875-a357-547790e153ce:skill:call_EUHPzlyH1k62oaehytyTYKFY
+- episode_id: episode:2df66a0f1ec1517a
+  split: Dtest
+  trace_id: 14c453d1-ce3e-4c1f-85fe-33956458cec0
+  unit_id: tu:14c453d1-ce3e-4c1f-85fe-33956458cec0:skill:call_7E9tqhKkecQ3Bvc9xStEthWU
+- episode_id: episode:b70000bc0a12a42b
+  split: Dtrain
+  trace_id: 156dbcd3-480c-41c7-a0ac-cb0604f08f7e
+  unit_id: tu:156dbcd3-480c-41c7-a0ac-cb0604f08f7e:skill:call_hr28AhkigOMcQPPEFueiaAHv
+- episode_id: episode:e5b41d4fe23e5dc4
+  split: Dsel
+  trace_id: 195e7374-4b47-485e-96e4-0903f8bef702
+  unit_id: tu:195e7374-4b47-485e-96e4-0903f8bef702:skill:call_J6qDBxFkDulbpga5S8eY1Z5T
+- episode_id: episode:7790d8001bda0eeb
+  split: Dtrain
+  trace_id: 1bd30ff5-bae7-422e-87d7-94425587eaa5
+  unit_id: tu:1bd30ff5-bae7-422e-87d7-94425587eaa5:skill:call_kQTkyBBnqtHD3Z1Hm4BwZFIe
+- episode_id: episode:6e338a98b24838b5
+  split: Dtrain
+  trace_id: 1db7c2b3-e21f-484c-8ab8-858a5f3f6879
+  unit_id: tu:1db7c2b3-e21f-484c-8ab8-858a5f3f6879:skill:call_7E9tqhKkecQ3Bvc9xStEthWU
+- episode_id: episode:b65bbc86284f0414
+  split: Dsel
+  trace_id: 268549ee-5bab-4b56-816f-6020646424e9
+  unit_id: tu:268549ee-5bab-4b56-816f-6020646424e9:skill:call_uR5AzGD24tU1UpAHXetYdbRo
+- episode_id: episode:2d6f8068d3f1370a
+  split: Dtrain
+  trace_id: 2c83147d-87c2-4710-813e-c5eb40a16224
+  unit_id: tu:2c83147d-87c2-4710-813e-c5eb40a16224:skill:call_hr28AhkigOMcQPPEFueiaAHv
+- episode_id: episode:3fe2b24e655e7d7d
+  split: Dtrain
+  trace_id: 39efb70c-205f-4862-8d99-a402477e01a5
+  unit_id: tu:39efb70c-205f-4862-8d99-a402477e01a5:skill:call_kQTkyBBnqtHD3Z1Hm4BwZFIe
+split:
+  Dsel: 9
+  Dtest: 17
+  Dtrain: 23
+title: Generic skill outcome (architecture-patterns)

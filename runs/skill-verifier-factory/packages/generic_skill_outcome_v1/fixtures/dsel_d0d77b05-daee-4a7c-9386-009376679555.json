@@ -1,0 +1,13 @@
+{
+  "prompt": "Use the architecture-patterns skill so its output satisfies the Generic skill outcome (architecture-patterns) contract.",
+  "required_markers": [
+    "rl.architecture-patterns.generic.produced_changes",
+    "rl.architecture-patterns.generic.verification_run"
+  ],
+  "source_trace_id": "d0d77b05-daee-4a7c-9386-009376679555",
+  "task_id": "dsel:d0d77b05-daee-4a7c-9386-009376679555",
+  "verify": {
+    "kind": "marker_coverage",
+    "scorer": "scorer.py"
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "approval_state": "manual_required_default_off",
+  "automatic_promotion": false,
+  "candidates": "skill-verifier-candidates-v1.json",
+  "generated_at": "2026-05-29T11:39:11.170958Z",
+  "packages": [
+    {
+      "accepted": true,
+      "archetype_id": "goal_contract_downstream_outcome_v1",
+      "dsel_after": 1.0,
+      "dsel_before": 0.0,
+      "dtest_score": 1.0,
+      "gate_basis": "train_failure_minibatch",
+      "is_generic": false,
+      "limitations": [],
+      "recommended": true,
+      "report": "packages/goal_contract_downstream_outcome_v1/report.json",
+      "skill_id": "goal-forge",
+      "spec": "packages/goal_contract_downstream_outcome_v1/spec.yaml",
+      "split": {
+        "Dsel": 23,
+        "Dtest": 16,
+        "Dtrain": 28
+      }
+    },
+    {
+      "accepted": true,
+      "archetype_id": "tdd_red_green_refactor_v1",
+      "dsel_after": 1.0,
+      "dsel_before": 0.0,
+      "dtest_score": 1.0,
+      "gate_basis": "train_failure_minibatch",
+      "is_generic": false,
+      "limitations": [],
+      "recommended": true,
+      "report": "packages/tdd_red_green_refactor_v1/report.json",
+      "skill_id": "tdd",
+      "spec": "packages/tdd_red_green_refactor_v1/spec.yaml",
+      "split": {
+        "Dsel": 12,
+        "Dtest": 11,
+        "Dtrain": 25
+      }
+    },
+    {
+      "accepted": true,
+      "archetype_id": "review_grounded_findings_v1",
+      "dsel_after": 1.0,
+      "dsel_before": 0.0,
+      "dtest_score": 1.0,
+      "gate_basis": "train_failure_minibatch",
+      "is_generic": false,
+      "limitations": [],
+      "recommended": true,
+      "report": "packages/review_grounded_findings_v1/report.json",
+      "skill_id": "review",
+      "spec": "packages/review_grounded_findings_v1/spec.yaml",
+      "split": {
+        "Dsel": 5,
+        "Dtest": 1,
+        "Dtrain": 10
+      }
+    },
+    {
+      "accepted": true,
+      "archetype_id": "docs_update_reflects_change_v1",
+      "dsel_after": 1.0,
+      "dsel_before": 0.0,
+      "dtest_score": 1.0,
+      "gate_basis": "train_failure_minibatch",
+      "is_generic": false,
+      "limitations": [],
+      "recommended": true,
+      "report": "packages/docs_update_reflects_change_v1/report.json",
+      "skill_id": "docs-update",
+      "spec": "packages/docs_update_reflects_change_v1/spec.yaml",
+      "split": {
+        "Dsel": 9,
+        "Dtest": 10,
+        "Dtrain": 24
+      }
+    },
+    {
+      "accepted": true,
+      "archetype_id": "generic_skill_outcome_v1",
+      "dsel_after": 1.0,
+      "dsel_before": 0.0,
+      "dtest_score": 1.0,
+      "gate_basis": "train_failure_minibatch",
+      "is_generic": true,
+      "limitations": [],
+      "recommended": false,
+      "report": "packages/generic_skill_outcome_v1/report.json",
+      "skill_id": "architecture-patterns",
+      "spec": "packages/generic_skill_outcome_v1/spec.yaml",
+      "split": {
+        "Dsel": 9,
+        "Dtest": 17,
+        "Dtrain": 23
+      }
+    }
+  ],
+  "project": null,
+  "schema_version": "opentraces.skill_verifier_index.v1"
+}
