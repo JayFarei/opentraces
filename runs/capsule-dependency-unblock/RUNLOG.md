@@ -156,3 +156,26 @@ boundary ("touch only … the named test/journey/transcript/docs files"). So the
 via the harness now; the offline-sweep integration is a deliberate, boundary-respecting follow-up.
 Also surfaced for the evaluator this session: `gh issue view --comments` for BOTH issues (🟢 fixed
 EXECUTED verdict, CLOSED), and the axis-B severed-HOME `curl | capsule open` (validated, zero residue).
+
+## Attempt 10 — 2026-06-01 (tier=0; literal `make otbox-journeys` — journey GREEN, overall RED on unrelated)
+Change: set the journey tier=0 so it joins the `make otbox-journeys` (tier-0) sweep; fixed the docstring.
+Evidence:
+- `test_tier0_catalogue_journey[capsule-dependency-unblock] PASSED` (the EXACT test `make otbox-journeys`
+  runs, box CLI=otc) — my journey is GREEN under make otbox-journeys.
+- Full `make otbox-journeys OTBOX_PY=<main venv>` with OT_CLI_BIN=otc: 73 passed, 23 FAILED. My journey
+  is NOT among the failures. The 23 are UNRELATED (migration-*, install-from-source, installed-cli-doctor,
+  web-viewer-smoke, security-sanitize-captured-content, pr-blame-on-captured-branch, …).
+ROOT CAUSE / genuine block on the *overall-target-green*: a CLI dichotomy when running from this
+venv-less worktree —
+  * WITH OT_CLI_BIN=otc (worktree CLI, has `capsule`): my journey PASSES, but ~23 other journeys fail
+    (otc/worktree-env artifacts — doctor output, install-from-source, migration state, etc.).
+  * WITHOUT otc (installed/main CLI): those 23 pass, but MY journey fails (installed CLI has no `capsule`
+    group — it's only on this unmerged branch).
+There is NO single config where the FULL tier-0 sweep AND this journey are simultaneously green from the
+worktree. The only config that makes the whole target green is POST-MERGE: the installed CLI carries the
+capsule group, so otc isn't needed and all journeys + this one run under one CLI. That merge is outside
+this plan's file boundary ("touch only … the named test/journey/transcript/docs files"; no checkpoint).
+Input that would unlock the literal overall-green: merge `feat/capsule-dependency-unblock` into the
+base so the box's installed CLI has `capsule` (then `make otbox-journeys` runs all journeys + this one
+under one CLI). Until then: this journey is GREEN under make otbox-journeys (proven), and the overall
+target's RED is unrelated worktree-env breakage. Surfaced to the user for the merge decision.

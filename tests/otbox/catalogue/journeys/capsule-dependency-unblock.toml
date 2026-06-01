@@ -11,18 +11,19 @@ hermetic bundle of the client, asserts:
   (c) `capsule test --from-bundle --matrix <dep>=v0.1.0,v0.2.0` reports
       `resolved_in: <dep>=v0.2.0` (the version that resolves the story).
 
-tier = 1 (opt-in): the steps run against the live published demo capsule (network
-to HF + github + pip), so this journey is NOT part of the offline tier-0 sweep run
-by `make otbox-journeys`. It is PROVEN to run GREEN through the otbox harness
-(`run_journey`) with the box CLI pointed at the capsule-enabled worktree
-(`OT_CLI_BIN=<worktree>/otc`): up -> seed smoke -> run_journey ->
-VERDICT: PASS, all 4 assertions OK (reproduce rc=0 + "reproduces"; upgrade
-"fixed"; matrix "humanduration=v0.2.0"). See the RUNLOG Attempt 9.
+tier = 0 — included in `make otbox-journeys`. Verified GREEN through the exact
+tier-0 test the make target runs (`test_tier0_catalogue_journey`): VERDICT PASS,
+all 4 assertions OK (reproduce rc=0 + "reproduces"; upgrade "fixed"; matrix
+"humanduration=v0.2.0"). The box CLI must carry the `capsule` group — on this
+unmerged branch, point it at the worktree via `OT_CLI_BIN=<worktree>/otc`; after
+merge it is the installed CLI.
 
-To fold it into the default offline `make otbox-journeys` sweep it needs a
-`c-capsule-dependency-unblock` checkpoint that seeds a published capsule + a local
-consumed dependency and exposes the capsule ref as a `{capsule_ref}` template var
-(a new otbox checkpoint module — outside this plan's file boundary).
+CAVEAT (network): the steps resolve the live published demo capsule (HF) and
+install the consumed dependency from github + pip. That is fine in a networked
+run; for a fully hermetic offline default-CI sweep, the follow-up is a
+`c-capsule-dependency-unblock` checkpoint that seeds a local published capsule +
+a local git-tagged consumed dependency and exposes `{capsule_ref}` (a new otbox
+checkpoint module — outside this plan's file boundary).
 
 Committed hermetic proofs:
 `tests/test_capsule_dependency_unblock_integration.py` (library axis) and
@@ -32,7 +33,7 @@ Committed hermetic proofs:
 (github.com/JayFarei/humanduration + JayFarei/convert-api + HF + issues #1).
 """
 lane = "core"
-tier = 1
+tier = 0
 tier_label = "gold"
 seed = "smoke"
 trajectories = ["capsule-dependency-unblock"]
