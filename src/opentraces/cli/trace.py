@@ -168,6 +168,26 @@ def trace_group() -> None:
     help="Embed a bounded Trace Map slice in each candidate.",
 )
 @click.option("--max-slice-nodes", type=int, default=40, show_default=True, help="Maximum nodes for --include-slice.")
+@click.option(
+    "--sort",
+    "sort_order",
+    type=click.Choice(["relevance", "time", "recency"]),
+    default="relevance",
+    show_default=True,
+    help="Result order: relevance (score), time (oldest first), or recency (newest first).",
+)
+@click.option(
+    "--min-score",
+    type=float,
+    default=None,
+    help="Drop candidates scoring below this threshold.",
+)
+@click.option(
+    "--recency-weight",
+    type=float,
+    default=0.0,
+    help="Blend a recency term into the relevance score (newest-first tiebreak); 0 disables.",
+)
 @click.option("--force-rebuild", is_flag=True, help="Rebuild the local Trace Index before querying.")
 @click.option(
     "--remote-bucket",
@@ -224,6 +244,9 @@ def trace_query(
     latest_generation: bool,
     include_slice: str | None,
     max_slice_nodes: int,
+    sort_order: str,
+    min_score: float | None,
+    recency_weight: float,
     force_rebuild: bool,
     remote_bucket: bool,
     force_remote_bucket: bool,
@@ -233,7 +256,11 @@ def trace_query(
     as_json: bool,
 ) -> None:
     """Search local retained traces and return bounded candidate packets."""
-    from ..core.trace_index import query_index_page, rebuild_index
+    from ..core.trace_index import (
+        cheap_sync_query_state,
+        query_index_page,
+        rebuild_index,
+    )
 
     if lex_terms:
         if lex:
@@ -332,6 +359,13 @@ def trace_query(
             from ..core.search_projection import build_search_projection
 
             build_search_projection(index_path=summary.index_path)
+    else:
+        # Plan 087 U4 — cheap-sync-then-serve. Closes the Phase-1 stale-query
+        # window for the local bucket: a digest probe short-circuits in steady
+        # state, and a changed bucket triggers a BOUNDED incremental refresh
+        # (never the ~105s full rebuild) so the query below reflects freshly
+        # captured/altered traces. Best-effort by contract; never raises.
+        cheap_sync_query_state(query_source=query_source)
 
     try:
         query_page = query_index_page
@@ -371,6 +405,9 @@ def trace_query(
             page_token=page_token,
             include_slice=include_slice,
             max_slice_nodes=max_slice_nodes,
+            sort=sort_order,
+            min_score=min_score,
+            recency_weight=recency_weight,
         )
     except ValueError as exc:
         click.echo(str(exc), err=True)
@@ -378,6 +415,7 @@ def trace_query(
     payload = {
         "status": "ok",
         "source": query_source,
+        "sort": sort_order,
         "semantic_query": None,
         "total": page.total,
         "total_returned": len(page.candidates),
@@ -446,6 +484,52 @@ def trace_index_rebuild_cmd(as_json: bool) -> None:
     click.echo(f"Search projection: {search_summary.build_id}")
     click.echo(f"  docs:      {search_summary.doc_count}")
     click.echo(f"  path:      {search_summary.build_path}")
+
+
+@trace_index_group.command("refresh", cls=OpentracesCommand)
+@click.option(
+    "--source",
+    "query_source",
+    type=click.Choice(["index", "projection", "both"]),
+    default="both",
+    show_default=True,
+    help="Which warm cache to keep up to date.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_index_refresh_cmd(query_source: str, as_json: bool) -> None:
+    """Keep the warm Trace Index + search projection up to date (cheap sync).
+
+    The explicit companion to the best-effort keep-warm hooks: runs the
+    digest-gated incremental sync so freshly captured traces become queryable
+    WITHOUT a full ``trace index rebuild``. Steady state (no bucket change since
+    the last sync) is a sub-2s no-op.
+    """
+    from ..core.trace_index import keep_index_warm
+
+    sources = ("index", "projection") if query_source == "both" else (query_source,)
+    result = keep_index_warm(query_sources=sources)
+    payload = {
+        "status": "ok" if result.ok else "error",
+        "synced": result.synced,
+        "changed_trace_ids": result.changed_trace_ids,
+        "deleted_trace_ids": result.deleted_trace_ids,
+        "sources": list(sources),
+    }
+    if result.error:
+        payload["error"] = result.error
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if not result.ok:
+        click.echo(f"Keep-warm failed (best-effort): {result.error}")
+        return
+    if result.synced:
+        click.echo("Search caches refreshed (incremental sync):")
+        click.echo(f"  changed: {len(result.changed_trace_ids)}")
+        click.echo(f"  deleted: {len(result.deleted_trace_ids)}")
+    else:
+        click.echo("Search caches already fresh (no change since last sync).")
 
 
 @trace_index_group.command("status", cls=OpentracesCommand)

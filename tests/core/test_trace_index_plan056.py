@@ -634,7 +634,12 @@ def test_rebuild_index_adds_remaining_m1_trace_unit_types(tmp_path):
 def test_query_refreshes_incrementally_when_trace_store_changes(tmp_path):
     import os
 
-    from opentraces.core.trace_index import default_index_path, query_index, rebuild_index
+    from opentraces.core.trace_index import (
+        default_index_path,
+        query_index,
+        rebuild_index,
+        refresh_index,
+    )
 
     project = tmp_path / "demo"
     _enroll_project(project, "1234567890abcdef1234567890abcdef")
@@ -655,6 +660,12 @@ def test_query_refreshes_incrementally_when_trace_store_changes(tmp_path):
         _bug_fix_trace("trace-plan056-second", session_id="session-plan056-second"),
     )
 
+    # Plan 087 U1: the query hot path no longer auto-refreshes. Incremental
+    # source tracking still works, but it is now driven by an explicit
+    # refresh_index() (what the keep-warm hooks / U4-U5 will perform), not by
+    # query_index() itself. refresh_index() updates in place, preserving inode.
+    refresh_index()
+
     packets = query_index(skill="grill-me")
 
     assert {packet.trace_id for packet in packets} == {
@@ -668,7 +679,12 @@ def test_query_refresh_updates_modified_and_deleted_trace_sources(tmp_path):
     import os
 
     from opentraces.core.config import get_project_traces_dir
-    from opentraces.core.trace_index import default_index_path, query_index, rebuild_index
+    from opentraces.core.trace_index import (
+        default_index_path,
+        query_index,
+        rebuild_index,
+        refresh_index,
+    )
 
     project = tmp_path / "demo"
     _enroll_project(project, "1234567890abcdef1234567890abcdef")
@@ -688,12 +704,17 @@ def test_query_refresh_updates_modified_and_deleted_trace_sources(tmp_path):
     stat = trace_path.stat()
     os.utime(trace_path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
 
+    # Plan 087 U1: an explicit refresh now drives incremental source tracking
+    # (query_index no longer auto-refreshes on the hot path).
+    refresh_index()
+
     packets = query_index(skill="grill-me")
     assert [packet.trace_id for packet in packets] == ["trace-plan056-stale"]
     assert packets[0].files == ["src/changed.py"]
 
     trace_path.unlink()
 
+    refresh_index()
     assert query_index(skill="grill-me") == []
     assert os.stat(index_path).st_ino == inode_before
 

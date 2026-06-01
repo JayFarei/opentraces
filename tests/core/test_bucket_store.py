@@ -140,7 +140,7 @@ def test_bucket_trace_records_are_versioned_and_current_points_to_latest():
 
 def test_trace_index_prefers_bucket_and_tracks_legacy_updates(tmp_path):
     from opentraces.core.bucket_store import iter_trace_record_objects
-    from opentraces.core.trace_index import query_index, rebuild_index
+    from opentraces.core.trace_index import query_index, rebuild_index, refresh_index
 
     project = tmp_path / "demo"
     _enroll_project(project, "abcdef1234567890abcdef1234567890")
@@ -151,6 +151,9 @@ def test_trace_index_prefers_bucket_and_tracks_legacy_updates(tmp_path):
     assert [packet.trace_id for packet in query_index(lex="parser")] == ["trace-bucket-query"]
 
     _write_project_trace(project, _trace("trace-bucket-query", "Patch renderer logic"))
+    # Plan 087 U1: query_index no longer auto-refreshes; an explicit refresh
+    # drives incremental tracking of the rewritten legacy trace.
+    refresh_index()
     assert query_index(lex="parser") == []
     assert [packet.trace_id for packet in query_index(lex="renderer")] == ["trace-bucket-query"]
 

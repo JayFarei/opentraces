@@ -59,6 +59,7 @@ from .config import (
 )
 from .pipeline import process_trace
 from .repo_identity import discover_claude_jsonl_corpus as _discover_claude_jsonl_corpus
+from .trace_index import keep_index_warm
 from .state import (
     GenerationRecord,
     StateManager,
@@ -545,6 +546,27 @@ def _ingest_locked(
             "context tree bucket projection failed for %s", trace_id, exc_info=True
         )
 
+    # Plan 087 U5: best-effort keep-warm. Now that the trace is in the bucket,
+    # bring the warm Trace Index + search projection up to date so the trace is
+    # queryable without a manual ``trace index refresh``. Looked up via the
+    # module attribute so tests can monkeypatch it. ``keep_index_warm`` never
+    # raises, but wrap defensively anyway — keeping the warm cache fresh must
+    # never make capture fragile.
+    try:
+        # F3: pass the single trace we just wrote so keep-warm refreshes ONLY
+        # that trace (no ~46s whole-corpus delta). Warm both the index and the
+        # projection here since this is the one place we cheaply know the exact
+        # delta; the projection refresh is bounded to this one trace_id.
+        keep_index_warm(
+            trace_id=final_record.trace_id,
+            query_sources=("index", "projection"),
+        )
+    except Exception:
+        logger.warning(
+            "keep-warm hook failed for %s (best-effort, ignored)", trace_id,
+            exc_info=True,
+        )
+
     # Decide the status this generation enters.
     #
     # Delegating to ``decide_post_parse_status`` keeps the auto vs review
@@ -739,6 +761,22 @@ def scan_project(
                 on_result(result, idx, total)
             except Exception:  # pragma: no cover - callback is best-effort.
                 logger.exception("scan_project progress callback failed")
+
+    # Plan 087 U5/G2: best-effort keep-warm once per scan (the per-session
+    # ingest already warms, but a sweep that refreshed several sessions gets one
+    # final cheap digest-gated sync here — steady state is a no-op). Warm the
+    # projection source too (not index-only) so a sweep leaves ``trace query
+    # --semantic`` fresh; with G1's in-place delta + G2's marker bootstrap the
+    # projection sync is now as cheap as the index one (zero-copy, O(delta), and
+    # an O(1) short-circuit when nothing moved). Looked up via the module
+    # attribute so tests can monkeypatch it. MUST NOT break the scan.
+    try:
+        keep_index_warm(query_sources=("index", "projection"))
+    except Exception:
+        logger.warning(
+            "scan_project keep-warm hook failed (best-effort, ignored)",
+            exc_info=True,
+        )
 
     return report
 

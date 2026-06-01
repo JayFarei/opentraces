@@ -1,7 +1,9 @@
 .PHONY: version-check dirty-check clean build-viewer build-schema build-cli build \
        test lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
-       otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf capture-refresh
+       otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf capture-refresh \
+       search-eval search-eval-real search-eval-xl search-eval-slope \
+       search-eval-cache search-eval-live search-eval-profile search-eval-test
 
 SCHEMA_DIR := packages/opentraces-schema
 VERSION := $(shell python3 -c "import re; m=re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('src/opentraces/__init__.py').read()); print(m.group(1))")
@@ -98,6 +100,45 @@ otbox-live-hf:
 SCENARIO ?= echo-meta
 capture-refresh:
 	$(OTBOX_PY) -m tests.otbox capture-refresh --scenario $(SCENARIO) --json
+
+# ---------- search-eval harness (plan 088) ----------
+# Runs the progressive-discovery loop over a deterministic, real-bucket-sized
+# planted corpus and emits perf + outcome metrics to
+# tests/search_eval/SEARCH-EVAL.md. `search-eval` is the fast inner-loop (dev
+# tier ~150 traces); `search-eval-real` is the real-scale tier (~profile size).
+search-eval:
+	$(OTBOX_PY) -m tests.search_eval.runner --tier dev --seed 1
+
+search-eval-real:
+	$(OTBOX_PY) -m tests.search_eval.runner --tier real-scale --seed 1 --cache
+
+# The opt-in snapshot-cache lane (U9): build the corpus once into a content-
+# addressed cache, then prove a restore-and-measure run is byte-identical + green.
+search-eval-cache:
+	OT_SEARCH_EVAL_CACHE=1 $(OTBOX_PY) -m pytest \
+		tests/search_eval/test_search_eval.py::test_snapshot_cache_restore_and_measure -v
+
+# The xl (~10k trace) tier + scaling-slope gate (U7): run real-scale then xl,
+# then `search-eval-slope` proves bounded-query p95 stays ~flat as the corpus
+# grows (the qmd invariant at scale). xl is heavy — intended for a nightly lane.
+search-eval-xl:
+	$(OTBOX_PY) -m tests.search_eval.runner --tier xl --seed 1
+
+search-eval-slope:
+	$(OTBOX_PY) -m tests.search_eval.slope
+
+# Ungated --live mode (U8): run the real Seed Evaluation Dataset queries against
+# the operator's actual ~/.opentraces bucket -> tests/search_eval/LIVE-EVAL.md.
+search-eval-live:
+	$(OTBOX_PY) -m tests.search_eval.live
+
+# Refresh the committed real-bucket size profile from ~/.opentraces (U0).
+search-eval-profile:
+	$(OTBOX_PY) tests/search_eval/profiler.py --out tests/search_eval/real-bucket-profile.json
+
+# The CI gate: scorer units, determinism, and the dev-tier invariant checks.
+search-eval-test:
+	$(OTBOX_PY) -m pytest tests/search_eval/test_search_eval.py -v
 
 # ---------- Publish ----------
 

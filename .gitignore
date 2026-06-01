@@ -54,3 +54,11 @@ snapshot_report.html
 # Regenerate on demand via `make capture-refresh SCENARIO=<name>`.
 tests/otbox/captures/*/snapshot.tar.gz
 tests/otbox/captures/*/metadata.json
+
+# search-eval raw run artifacts (machine-specific perf; SEARCH-EVAL.md is the committed deliverable)
+tests/search_eval/artifacts/
+
+tests/search_eval/.cache/
+
+# --live ad-hoc report (machine/bucket-specific; regenerate with make search-eval-live)
+tests/search_eval/LIVE-EVAL.md
