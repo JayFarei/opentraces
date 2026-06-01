@@ -76,3 +76,23 @@ Evidence: public install verified `parse('1h30m')` = 3600 @v0.1.0 / 5400 @v0.2.0
 Regression test passes.
 Decision: github + runner correctness solid. Next: capture a real client session into the bucket and
 `capsule export` it (the R1 real-trace leg), then the HF publish + issue + verdict + close + watch.
+
+## Attempt 6 — 2026-06-01 (U5 COMPLETE — library axis proven live with a real trace)
+Change: Added `capture_client_session.py` (synthesizes + ingests a real Claude Code client session →
+bucket trace ea9e17db). Added `export --consume` flag + `export_capsule(consumes=...)`. Ran the full
+live loop on the library axis.
+Evidence (R1–R4, R7 all met):
+- Real bucket trace ea9e17db captured (intent + failing pytest step) via the real ingest pipeline.
+- `capsule export` → capsule b24bdb49629c51a4 with environment.consumes=[humanduration@v0.1.0 github
+  pin] + 445B bundle of the real client.
+- Published to HF Jayfarei/opentraces-capsules (sha-pinned rev a955208e…); filed issue
+  https://github.com/JayFarei/humanduration/issues/1.
+- Anonymous: `curl` + `capsule open <url>` from a severed HOME → validated, zero residue (R1).
+- `capsule test --from-bundle` → 🔴 reproduces (consumed v0.1.0, github install, no git) (R1).
+- `--matrix humanduration=v0.1.0,v0.2.0` → 🔴/🟢, resolved_in=v0.2.0 (R3).
+- `--with humanduration=v0.2.0 --verdict-to #1 --close` → 🟢 fixed (EXECUTED) posted to issue #1,
+  CLOSED; `capsule watch` → UNBLOCKED (R2, R4). Client source unchanged throughout.
+- R7 publish redaction guard active on the live publish.
+Decision: U5 DONE — the consumed-LIBRARY upgrade unblocks the capsule, end to end in the open with a
+real trace. Remaining: U6 (consumed-API axis on Vercel — user deferred to "library first, then U6")
+and U7 (committed integration test + otbox journey + transcript.md + docs-update).
