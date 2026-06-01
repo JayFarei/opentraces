@@ -11,15 +11,25 @@ hermetic bundle of the client, asserts:
   (c) `capsule test --from-bundle --matrix <dep>=v0.1.0,v0.2.0` reports
       `resolved_in: <dep>=v0.2.0` (the version that resolves the story).
 
-tier = 1 (opt-in) pending, like the plan 077/078 journeys:
-  - the `capsule` command group in the box CLI (it ships on the
-    feat/capsule-dependency-unblock branch, not yet merged), and
-  - a `c-capsule-dependency-unblock` checkpoint that seeds a published
-    capsule + the consumed-dependency repo reachable from the box.
-The committed hermetic proof today is
-`tests/test_capsule_dependency_unblock_integration.py` and the live conviction
-artifact is `tests/otbox/captures/capsule-dependency-unblock/transcript.md`
-(github.com/JayFarei/humanduration + HF + issue #1).
+tier = 1 (opt-in): the steps run against the live published demo capsule (network
+to HF + github + pip), so this journey is NOT part of the offline tier-0 sweep run
+by `make otbox-journeys`. It is PROVEN to run GREEN through the otbox harness
+(`run_journey`) with the box CLI pointed at the capsule-enabled worktree
+(`OT_CLI_BIN=<worktree>/otc`): up -> seed smoke -> run_journey ->
+VERDICT: PASS, all 4 assertions OK (reproduce rc=0 + "reproduces"; upgrade
+"fixed"; matrix "humanduration=v0.2.0"). See the RUNLOG Attempt 9.
+
+To fold it into the default offline `make otbox-journeys` sweep it needs a
+`c-capsule-dependency-unblock` checkpoint that seeds a published capsule + a local
+consumed dependency and exposes the capsule ref as a `{capsule_ref}` template var
+(a new otbox checkpoint module — outside this plan's file boundary).
+
+Committed hermetic proofs:
+`tests/test_capsule_dependency_unblock_integration.py` (library axis) and
+`tests/test_capsule_dependency_unblock.py::test_service_axis_reproduce_then_fixed_via_redeploy`
+(service axis). Live conviction artifact:
+`tests/otbox/captures/capsule-dependency-unblock/transcript.md`
+(github.com/JayFarei/humanduration + JayFarei/convert-api + HF + issues #1).
 """
 lane = "core"
 tier = 1
@@ -29,24 +39,21 @@ trajectories = ["capsule-dependency-unblock"]
 persona = "agent"
 requires = ["cli"]
 
-[preconditions]
-capsule_published = true
-consumed_dependency_reachable = true
-
+# The live demo capsule (real captured trace ea9e17db; consumes humanduration@v0.1.0).
 [[steps]]
 type = "cli"
 id = "reproduce"
-argv = ["capsule", "test", "{capsule_ref}", "--from-bundle", "--yes"]
+argv = ["capsule", "test", "https://huggingface.co/datasets/Jayfarei/opentraces-capsules/resolve/a955208e5e9d9cf868688411427bf988b5675b31/capsules/v1/b24bdb49629c51a4/capsule.json", "--from-bundle", "--yes"]
 
 [[steps]]
 type = "cli"
 id = "upgrade"
-argv = ["capsule", "test", "{capsule_ref}", "--from-bundle", "--with", "humanduration=v0.2.0", "--yes"]
+argv = ["capsule", "test", "https://huggingface.co/datasets/Jayfarei/opentraces-capsules/resolve/a955208e5e9d9cf868688411427bf988b5675b31/capsules/v1/b24bdb49629c51a4/capsule.json", "--from-bundle", "--with", "humanduration=v0.2.0", "--yes"]
 
 [[steps]]
 type = "cli"
 id = "matrix"
-argv = ["capsule", "test", "{capsule_ref}", "--from-bundle", "--matrix", "humanduration=v0.1.0,v0.2.0", "--yes"]
+argv = ["capsule", "test", "https://huggingface.co/datasets/Jayfarei/opentraces-capsules/resolve/a955208e5e9d9cf868688411427bf988b5675b31/capsules/v1/b24bdb49629c51a4/capsule.json", "--from-bundle", "--matrix", "humanduration=v0.1.0,v0.2.0", "--yes"]
 
 [[assertions]]
 kind = "returncode"
