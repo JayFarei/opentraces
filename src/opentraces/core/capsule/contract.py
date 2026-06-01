@@ -103,6 +103,13 @@ def freeze_capsule(
     render_state: dict[str, Any],
     limitations: list[str],
     created_with: str,
+    # Plan 090 (usage episode): additive, null-tolerant. ``product`` is the
+    # optional grouping anchor (one consumed product/dependency); ``privacy_scope``
+    # is the structural egress declaration. Both are OPTIONAL (defaulted) and are
+    # NOT in REQUIRED_KEYS — older capsules omit them and still validate. They are
+    # threaded through here because this builder has no ``**extra`` passthrough.
+    product: dict[str, Any] | None = None,
+    privacy_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the frozen ``opentraces.capsule.v1`` envelope dict."""
 
@@ -116,6 +123,8 @@ def freeze_capsule(
         "content_is_untrusted": True,
         "source": source,
         "summary": summary,
+        # Usage-episode grouping anchor (one consumed product/dependency) or None.
+        "product": product,
         # Runnable repro: command + expected failure signal, or None when the
         # session had no failing command (then the capsule replays by intent).
         "test": test,
@@ -132,6 +141,9 @@ def freeze_capsule(
         "trail_anchors": trail_anchors,
         "repo_pin": repo_pin,
         "redaction": redaction,
+        # Structural egress declaration (what is included + redaction floor). Never
+        # carries a classifier verdict; reflects the developer's include/exclude choices.
+        "privacy_scope": privacy_scope or {},
         "render_state": render_state,
         "limitations": sorted(set(limitations)),
         "embedded": dict(EMBEDDED_SCHEMAS),

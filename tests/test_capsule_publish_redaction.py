@@ -77,6 +77,16 @@ def test_publish_capsule_cannot_emit_unredacted(monkeypatch):
             captured["capsule_json"] = (Path(folder_path) / "capsule.json").read_text(encoding="utf-8")
             return types.SimpleNamespace(oid="deadbeefrevision")
 
+        def upload_file(self, *, path_or_fileobj, path_in_repo, repo_id, repo_type=None,
+                        commit_message=None, **kw):
+            data = path_or_fileobj
+            if isinstance(data, (bytes, bytearray)):
+                data = bytes(data).decode("utf-8")
+            elif not isinstance(data, str):
+                data = Path(data).read_text(encoding="utf-8")
+            captured["pinned_path"] = path_in_repo
+            captured["pinned_json"] = data
+
     import huggingface_hub
 
     monkeypatch.setattr(huggingface_hub, "HfApi", _FakeApi)
@@ -95,3 +105,56 @@ def test_publish_capsule_cannot_emit_unredacted(monkeypatch):
     assert manifest["floor_satisfied"] is True
     assert list(REDACTION_FLOOR) == manifest["floor"]
     assert info["revision"] == "deadbeefrevision"
+
+
+def test_published_capsule_json_is_sha_pinned(monkeypatch):
+    """Plan 090 U0: the PUBLISHED capsule.json (re-uploaded after the folder commit)
+    carries the immutable commit sha in its share block — not "main"/None — so a
+    third party holding only the capsule.json resolves to a stable revision."""
+
+    captured: dict[str, str] = {}
+
+    class _FakeApi:
+        def __init__(self, token=None):
+            pass
+
+        def create_repo(self, **kw):
+            return None
+
+        def upload_folder(self, *, repo_id, repo_type, folder_path, path_in_repo, commit_message):
+            captured["folder_json"] = (Path(folder_path) / "capsule.json").read_text(encoding="utf-8")
+            return types.SimpleNamespace(oid="deadbeefrevision")
+
+        def upload_file(self, *, path_or_fileobj, path_in_repo, repo_id, repo_type=None,
+                        commit_message=None, **kw):
+            data = path_or_fileobj
+            if isinstance(data, (bytes, bytearray)):
+                data = bytes(data).decode("utf-8")
+            elif not isinstance(data, str):
+                data = Path(data).read_text(encoding="utf-8")
+            captured["pinned_path"] = path_in_repo
+            captured["pinned_json"] = data
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", _FakeApi)
+
+    from opentraces.core.capsule.share import publish_capsule
+
+    info = publish_capsule(
+        _unredacted_capsule_with_secret(),
+        repo_id="someone/opentraces-capsules", token="fake-token",
+    )
+
+    # The folder upload (oid not yet known) still carries the stale main/None share.
+    folder_share = json.loads(captured["folder_json"])["share"]
+    assert folder_share["published_revision"] is None
+
+    # The re-uploaded capsule.json IS sha-pinned and is the final on-hub state.
+    assert captured.get("pinned_path") == "capsules/v1/unredactedcap001/capsule.json"
+    pinned = json.loads(captured["pinned_json"])
+    assert pinned["share"]["revision"] == "deadbeefrevision"
+    assert pinned["share"]["published_revision"] == "deadbeefrevision"
+    assert "deadbeefrevision" in pinned["share"]["capsule_url"]
+    assert SENTINEL_SECRET not in captured["pinned_json"]
+    assert info["published_revision"] == "deadbeefrevision"

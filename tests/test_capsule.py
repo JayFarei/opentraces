@@ -227,7 +227,8 @@ def test_issue_h2_uses_distilled_summary_title_not_raw_dump():
         "failure": "TypeError: NoneType", "is_failure": True, "scope": "5 steps",
     })
     body = render_issue_body(cap, capsule_url="https://hf.co/x")
-    assert "## 🐛 Agent bug capsule: fix the flaky parser" in body
+    # is_failure=True + test=None (the _make_capsule default) → blocked-episode banner.
+    assert "## 🧭 Agent Experience Report (blocked episode): fix the flaky parser" in body
     assert "**What happened:** hit a TypeError on empty input" in body
 
 
@@ -277,7 +278,7 @@ def test_non_failure_summary_uses_session_label():
         "failure": None, "is_failure": False, "scope": "10 steps",
     })
     body = render_issue_body(cap, capsule_url=None)
-    assert "🔁 Agent session capsule: design a caching layer" in body
+    assert "🧭 Agent Experience Report (usage episode): design a caching layer" in body
 
 
 # --------------------------------------------------------------------------- #

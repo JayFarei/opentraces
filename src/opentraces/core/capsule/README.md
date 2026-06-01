@@ -78,6 +78,53 @@ present, else from the trace's OWN bucket companion
 resolves with zero access to the originating machine. Degraded captures produce a
 valid `closure_intent_only` capsule (recorded in `limitations`), never a crash.
 
+## Usage episode (plan 090) — privacy-bounded "Agent Experience Report"
+
+A capsule is now framed as a **privacy-bounded usage episode**: the asset is how an
+agent used ONE consumed product, with a runnable test as **optional evidence, not the
+point**. `test=null` is first-class — every path (export / preview / open / render /
+publish) works with no test. The change is additive: `REQUIRED_KEYS` and
+`CAPSULE_SCHEMA_VERSION` are unchanged; `SECURITY_VERSION` bumped to `0.6.0`.
+
+```bash
+# Inspect egress BEFORE anything leaves the machine (writes/publishes NOTHING):
+opentraces capsule preview <trace-id> --project <repo> --product <name> [--json]
+#   -> redaction by field-path · business_logic findings · privacy_scope · destinations
+
+# Export/share/issue accept the new options:
+#   --product <name>     bind to one consumed product (grouping anchor + product-episode slice)
+#   --include-prompts    OPT IN to prompt-bearing fields (system prompt + per-step reasoning),
+#                        which are EXCLUDED by default.
+```
+
+Additive envelope keys (all null-tolerant, absent on older capsules without error):
+`product` (grouping anchor), `summary.outcome_taxonomy`
+(`completed`/`abandoned`/`unclear` derived; `workaround_found`/`blocked_by_*` reserved),
+and a structural `privacy_scope` (bools/ints only — never a classifier verdict).
+
+Layered redaction: the floor is now `("regex", "entropy", "business_logic")` — the
+`business_logic` Detector redacts internal hostnames, collab-tool URLs, DB connection
+strings, and AWS account ids as **spans**. The `capsule_scope` Transformer applies
+**field-path exclusion** (the only true "this never leaves" guarantee); excluded paths
+are recorded as counts in the manifest (`fields_excluded` / `excluded_field_paths`).
+
+The naming reframe is **presentation only**: the render banner is 3-way (Agent Support
+Packet when a failure has a test / Agent Experience Report blocked-episode / usage-episode),
+but the `capsule` command noun and the `<!-- opentraces-capsule: <id> -->` /
+`opentraces-capsule-verdict:` wire markers are unchanged (issue idempotency preserved).
+
+### Honest capture gaps (do not imply these exist)
+
+- **URL docs consulted are NOT captured.** `_extract_snippets` (`capture/claude_code/parse.py`)
+  handles `Read`/`Edit`/`Write`/`Grep` only — `WebFetch` is absent. Local-file docs are
+  derivable; URL/docs consultation is a capture gap, not a projection.
+- **Runtime-resolved dependency versions are NOT captured.** `TraceRecord.dependencies`
+  is name-only (no pins). `suggest_consumes` therefore emits stderr `package:<name>=`
+  hints only and never auto-populates `environment.consumes` / `product`.
+- **Product→step binding is heuristic.** There is no captured per-step product label;
+  the `product_episode` slice matches the product string against tool-call/observation
+  text, so capsules carry a `product_inferred_not_captured` limitation.
+
 ## Module map
 
 | File | Responsibility |

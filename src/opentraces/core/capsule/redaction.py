@@ -27,7 +27,12 @@ from .contract import REDACTION_MANIFEST_SCHEMA_VERSION
 
 # The zero-dependency, in-tree detector floor. Always available regardless of
 # whether the project opted into trufflehog / llm_pii / privacy_filter extras.
-REDACTION_FLOOR: tuple[str, ...] = ("regex", "entropy")
+# Plan 090 adds ``business_logic`` (internal hostnames / collab-tool URLs / DB
+# connection strings / AWS account ids) to the mandatory floor for capsules: a
+# usage episode that shares a real session must scrub business-logic signals, not
+# just generic secrets. It runs via an explicit ``tools=`` list, so it is on for
+# every capsule regardless of per-tool opt-in.
+REDACTION_FLOOR: tuple[str, ...] = ("regex", "entropy", "business_logic")
 
 try:  # SECURITY_VERSION is informative provenance, not load-bearing.
     from ...security import SECURITY_VERSION as _SECURITY_VERSION
@@ -102,8 +107,16 @@ def build_redaction_manifest(
     *,
     tools_applied: list[str],
     home_paths_scrubbed: int,
+    fields_excluded: int = 0,
+    excluded_field_paths: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Counts + types ONLY. Never serializes ``Finding.matched_text``."""
+    """Counts + types ONLY. Never serializes ``Finding.matched_text``.
+
+    ``fields_excluded`` / ``excluded_field_paths`` (plan 090) record where the
+    capsule_scope EXCLUSION zeroed whole prompt-bearing subtrees — field PATHS
+    only (content-free, like ``by_field_path``), so a reviewer sees what was
+    withheld without seeing it. Additive within ``opentraces.capsule.redaction.v1``.
+    """
 
     by_tool: dict[str, int] = {}
     by_severity: dict[str, int] = {}
@@ -126,26 +139,51 @@ def build_redaction_manifest(
         "redactions_applied": int(getattr(report, "redactions_applied", 0)),
         "findings_total": len(getattr(report, "findings", []) or []),
         "home_paths_scrubbed": int(home_paths_scrubbed),
+        "fields_excluded": int(fields_excluded),
+        "excluded_field_paths": sorted(set(excluded_field_paths or [])),
         "by_tool": by_tool,
         "by_severity": by_severity,
         "by_field_path": by_field_path,
     }
 
 
-def redact_envelope(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def redact_envelope(
+    payload: dict[str, Any],
+    *,
+    exclude_paths: list[str] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run the always-on floor over every string leaf of ``payload``.
 
-    Returns ``(redacted_payload, manifest)``. The manifest is counts+types only.
+    When ``exclude_paths`` is given, matching subtrees are EXCLUDED (zeroed to a
+    ``[EXCLUDED:<path>]`` marker) BEFORE the detector floor runs — exclusion is
+    unbounded, redaction is detection-bounded. Returns ``(redacted_payload,
+    manifest)``; the manifest is counts+types only.
+
+    The excluded-field count/paths are recovered by SCANNING the result for
+    markers, so the manifest is correct on the export path (where exclusion is
+    applied) and idempotent on the publish path (``ensure_redacted`` re-runs
+    without re-applying exclusion, but the markers are already present).
     """
+
+    from ...security.tools.capsule_scope_tool import (
+        apply_field_exclusion,
+        scan_excluded_paths,
+    )
+
+    if exclude_paths:
+        payload, _ = apply_field_exclusion(payload, exclude_paths)
 
     redacted, report = sanitize_dict(payload, tools=list(REDACTION_FLOOR))
     home = str(Path.home())
     token_res = [re.compile(r"\b" + re.escape(t) + r"\b") for t in _identity_tokens()]
     redacted, scrub_count = _scrub_identity(redacted, home, token_res)
+    excluded = scan_excluded_paths(redacted)
     manifest = build_redaction_manifest(
         report,
         tools_applied=list(report.tools_applied),
         home_paths_scrubbed=scrub_count,
+        fields_excluded=len(excluded),
+        excluded_field_paths=excluded,
     )
     return redacted, manifest
 

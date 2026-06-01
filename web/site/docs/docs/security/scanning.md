@@ -14,8 +14,8 @@ only tools whose `cfg.security.<tool>.enabled` flag is true.
 
 | Kind | Examples | Behavior |
 |------|----------|----------|
-| Detector | `regex`, `entropy`, `trufflehog`, `privacy_filter`, `llm_pii` | Emits redactable spans |
-| Transformer | `path_anonymizer` | Rewrites the record without span findings |
+| Detector | `regex`, `entropy`, `trufflehog`, `privacy_filter`, `llm_pii`, `business_logic` | Emits redactable spans |
+| Transformer | `path_anonymizer`, `capsule_scope` | Rewrites the record without span findings |
 | Judge | `classifier` | Emits a verdict without mutating content |
 
 ## Field Context

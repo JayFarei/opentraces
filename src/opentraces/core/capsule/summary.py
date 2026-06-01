@@ -126,8 +126,44 @@ def build_summary(
         "failure": error_line,
         "is_failure": is_failure,
         "outcome": {"success": success, "terminal_state": terminal_state},
+        "outcome_taxonomy": _derive_outcome_taxonomy(success, terminal_state, is_failure),
         "scope": scope,
     }
 
 
-__all__ = ["build_summary", "distill_title"]
+# Plan 090 (usage episode): the full vocabulary of the additive
+# ``summary.outcome_taxonomy`` field. v1 confidently derives only the subset that
+# the three coarse signals (success / terminal_state / is_failure) can support
+# honestly: ``completed`` / ``abandoned`` / ``unclear``. ``workaround_found`` and the
+# ``blocked_by_*`` causes need per-step signals we do not capture cheaply yet, so we
+# do NOT fabricate them — they remain reserved in the vocabulary for richer
+# derivation (or downstream annotation) without a schema change.
+OUTCOME_TAXONOMY_VALUES = (
+    "completed",
+    "workaround_found",
+    "abandoned",
+    "blocked_by_dependency",
+    "blocked_by_docs",
+    "unclear",
+)
+
+
+def _derive_outcome_taxonomy(
+    success: bool | None, terminal_state: Any, is_failure: bool
+) -> str:
+    """Coarse, honest outcome bucket from the three signals the design declares.
+
+    Deliberately conservative: a captured failure whose cause the coarse signals
+    cannot identify maps to ``unclear`` rather than guessing dependency-vs-docs.
+    """
+
+    ts = (terminal_state or "").lower() if isinstance(terminal_state, str) else ""
+    if success is True or ts in {"goal_reached", "completed", "success"}:
+        return "completed"
+    if ts in {"abandoned", "interrupted"}:
+        return "abandoned"
+    # success is False / terminal error / or a captured failure of unknown cause.
+    return "unclear"
+
+
+__all__ = ["build_summary", "distill_title", "OUTCOME_TAXONOMY_VALUES"]

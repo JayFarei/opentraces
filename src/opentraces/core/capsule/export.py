@@ -22,7 +22,7 @@ from typing import Any
 from ..bucket_store import read_trace_record_object, trace_record_path
 from ..config import get_project_dir
 from .contract import build_capsule_id, freeze_capsule
-from .redaction import assert_redaction_gate, redact_envelope
+from .redaction import REDACTION_FLOOR, assert_redaction_gate, redact_envelope
 
 _ERROR_MARKERS = re.compile(
     r"\b(traceback|exception|error:|errno|assertion|failed|fatal|"
@@ -255,6 +255,8 @@ def export_capsule(
     expect_error: str | None = None,
     setup_command: str | None = None,
     consumes: list[dict[str, Any]] | None = None,
+    product: str | None = None,
+    include_prompts: bool = False,
 ) -> dict[str, Any]:
     """Build a frozen ``opentraces.capsule.v1`` envelope for one failing session.
 
@@ -279,12 +281,24 @@ def export_capsule(
     )
 
     from ..trace_map import build_trace_map
-    from ..trace_slices import slice_around_step
+    from ..trace_slices import slice_around_step, slice_for_product
 
     trace_map = build_trace_map(record)
-    slice_payload = slice_around_step(
-        trace_map, record, step_index=resolved_step, radius=radius
-    )
+    product_episode_no_match = False
+    if product:
+        # Plan 090 — bound the episode to the steps that reference the consumed
+        # product. Heuristic (no captured per-step product label); fall back to a
+        # radius slice when nothing references it (and record that honestly).
+        slice_payload = slice_for_product(trace_map, record, product_match=product)
+        if slice_payload is None:
+            product_episode_no_match = True
+            slice_payload = slice_around_step(
+                trace_map, record, step_index=resolved_step, radius=radius
+            )
+    else:
+        slice_payload = slice_around_step(
+            trace_map, record, step_index=resolved_step, radius=radius
+        )
     if not slice_payload.get("steps") and not slice_payload.get("map_node_refs"):
         raise CapsuleExportError(
             "the slice around the failing step is empty; widen --radius or "
@@ -292,6 +306,10 @@ def export_capsule(
         )
 
     limitations: list[str] = list(slice_payload.get("limitations") or [])
+    if product:
+        limitations.append("product_inferred_not_captured")
+        if product_episode_no_match:
+            limitations.append("product_episode_no_match")
 
     # Context resume packet (the machine reproduction unit). The function never
     # raises: an unresolved node returns an error envelope we record as a
@@ -394,6 +412,33 @@ def export_capsule(
         "replay": "replay_unverified",
     }
 
+    # Plan 090 — usage-episode grouping anchor (one consumed product/dependency).
+    # ``product`` is the caller-supplied name; binding is "inferred" because there
+    # is no captured per-step product label (it is heuristic string-matching over
+    # tool calls — see the product_episode slice). Null-tolerant: None when absent.
+    product_anchor = {"name": product, "binding": "inferred"} if product else None
+
+    # Plan 090 — structural egress declaration. Fields are bools/ints/strings only
+    # (NEVER a classifier verdict). ``system_prompt_included`` / reasoning reflect the
+    # developer's --include-prompts choice; the capsule_scope exclusion (default-off
+    # for prompts) is what physically enforces it before redaction runs.
+    sys_layer = packet.get("system_layer") if isinstance(packet, dict) else None
+    msgs_layer = packet.get("messages_layer") if isinstance(packet, dict) else None
+    system_has_content = isinstance(sys_layer, dict) and bool(sys_layer.get("content"))
+    messages_present = isinstance(msgs_layer, dict) and bool(msgs_layer.get("content"))
+    slice_steps_n = len(slice_payload.get("steps") or [])
+    privacy_scope = {
+        "system_prompt_included": bool(include_prompts and system_has_content),
+        "reasoning_included": bool(include_prompts),
+        "messages_included": bool(slice_steps_n > 0 or messages_present),
+        "messages_completeness": (
+            msgs_layer.get("completeness") if isinstance(msgs_layer, dict) else _completeness(packet)
+        ),
+        "steps_included": slice_steps_n,
+        "redaction_floor": list(REDACTION_FLOOR),
+        "developer_approved": False,
+    }
+
     # Assemble the RAW envelope, then redact the whole thing in one pass.
     raw = freeze_capsule(
         capsule_id=capsule_id,
@@ -412,12 +457,18 @@ def export_capsule(
         render_state=render_state,
         limitations=limitations,
         created_with=_opentraces_version(),
+        product=product_anchor,
+        privacy_scope=privacy_scope,
     )
 
     # Pull the manifest placeholder out so the redactor never has to reason
-    # about redacting its own manifest; redact everything else; reattach.
+    # about redacting its own manifest; exclude prompt-bearing fields by default
+    # (opt back in with --include-prompts); redact everything else; reattach.
     raw_redaction = raw.pop("redaction")
-    redacted, manifest = redact_envelope(raw)
+    from ...security.tools.capsule_scope_tool import DEFAULT_PROMPT_EXCLUDE
+
+    exclude_paths = None if include_prompts else list(DEFAULT_PROMPT_EXCLUDE)
+    redacted, manifest = redact_envelope(raw, exclude_paths=exclude_paths)
     assert_redaction_gate(manifest)
     redacted["redaction"] = {"manifest": manifest}
     return redacted

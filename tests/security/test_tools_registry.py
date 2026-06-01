@@ -32,7 +32,9 @@ EXPECTED_TOOL_ORDER = (
     "trufflehog",
     "privacy_filter",
     "llm_pii",
+    "business_logic",
     "path_anonymizer",
+    "capsule_scope",
     "classifier",
 )
 
@@ -132,7 +134,9 @@ class TestDescribe:
         assert infos["trufflehog"].state == "disabled"
         assert infos["privacy_filter"].state == "disabled"
         assert infos["llm_pii"].state == "disabled"
+        assert infos["business_logic"].state == "disabled"
         assert infos["path_anonymizer"].state == "disabled"
+        assert infos["capsule_scope"].state == "disabled"
         assert infos["classifier"].state == "disabled"
 
     def test_describe_includes_setup_commands_for_optin_tools(self) -> None:

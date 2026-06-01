@@ -244,9 +244,9 @@ def publish_capsule(
 
     import tempfile
 
+    base = f"{CAPSULE_PREFIX}/{cid}"
     with tempfile.TemporaryDirectory() as tmp:
         artifacts = write_capsule_dir(capsule, Path(tmp), bundle_bytes=bundle_bytes)
-        base = f"{CAPSULE_PREFIX}/{cid}"
         commit = api.upload_folder(
             repo_id=rid,
             repo_type="dataset",
@@ -256,11 +256,47 @@ def publish_capsule(
         )
 
     revision = getattr(commit, "oid", None) or "main"
+
+    # Pin the PUBLISHED capsule.json to an immutable commit sha (plan 090 U0).
+    # The folder upload wrote share.revision="main"/published_revision=None because
+    # the oid is only known after the commit returns. Re-upload just capsule.json,
+    # byte-stamped with the sha, in a SECOND commit, and hand out the SECOND
+    # commit's revision: a HF `/resolve/<oid>/` URL serves the blob AS IT EXISTED AT
+    # THAT COMMIT, so the pinned capsule.json is only served at the re-upload commit
+    # — resolving at the first commit would still return the stale main/None folder
+    # version. The embedded share self-references the first (data) commit, whose
+    # bundle is byte-identical; a blob cannot contain its own commit's oid, so
+    # ``published_revision`` (non-null, immutable) is the load-bearing marker rather
+    # than a perfectly-circular self-URL.
+    pin_revision = revision
+    if revision != "main":
+        pinned = dict(capsule)
+        pinned["share"] = {
+            "capsule_url": mint_capsule_url(rid, cid, revision=revision),
+            "human_url": human_capsule_url(rid, cid, revision=revision),
+            "revision": revision,
+            "published_revision": revision,
+        }
+        payload = (
+            json.dumps(pinned, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        pin_commit = api.upload_file(
+            path_or_fileobj=payload,
+            path_in_repo=f"{base}/capsule.json",
+            repo_id=rid,
+            repo_type="dataset",
+            commit_message=f"capsule {cid} (pin share to {revision[:12]})",
+        )
+        pin_revision = getattr(pin_commit, "oid", None) or revision
+
     return {
         "repo_id": rid,
-        "revision": revision,
-        "capsule_url": mint_capsule_url(rid, cid, revision=revision),
-        "human_url": human_capsule_url(rid, cid, revision=revision),
+        # The commit the handed URLs resolve at — serves the SHA-pinned capsule.json.
+        "revision": pin_revision,
+        # The immutable data/content commit embedded in the capsule (non-null marker).
+        "published_revision": revision if revision != "main" else None,
+        "capsule_url": mint_capsule_url(rid, cid, revision=pin_revision),
+        "human_url": human_capsule_url(rid, cid, revision=pin_revision),
     }
 
 

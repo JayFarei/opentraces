@@ -1,6 +1,10 @@
-"""``opentraces capsule`` — export, share, open, and file trace capsules.
+"""``opentraces capsule`` — capture, redact, share, and open agent usage episodes.
 
-v1 share-first surface (plan 082):
+A capsule is a privacy-bounded record of how one agent used one consumed product
+(an "Agent Experience Report"); a runnable repro/test is optional evidence. The
+underlying object stays ``opentraces.capsule.v1`` — the naming is presentation only.
+
+v1 share-first surface (plan 082; usage-episode generalisation plan 090):
 
 * ``capsule export <trace>``        — build a local self-contained capsule (zero
                                       remote config). stdout = the capsule.json path.
@@ -86,6 +90,16 @@ def _export_options(fn):
         help="Record a CONSUMED dependency the verdict can be re-posed against "
              "(e.g. package:humanduration=git+https://github.com/o/r@v0.1.0). Repeatable.",
     )(fn)
+    fn = click.option(
+        "--product", default=None, metavar="NAME",
+        help="Bind the capsule to ONE consumed product/dependency (the usage-episode "
+             "grouping anchor); also scopes the slice to the steps that reference it.",
+    )(fn)
+    fn = click.option(
+        "--include-prompts", "include_prompts", is_flag=True, default=False,
+        help="Include prompt-bearing fields (system prompt + per-step reasoning) in the "
+             "capsule. These are EXCLUDED by default; this opts them IN.",
+    )(fn)
     return fn
 
 
@@ -109,13 +123,14 @@ def _parse_consume(spec: str) -> dict:
 
 
 def _do_export(trace_id, step, node_id, radius, repo_url, project_dir,
-               test_command=None, expect_error=None, setup_command=None, consume_specs=()):
+               test_command=None, expect_error=None, setup_command=None, consume_specs=(),
+               product=None, include_prompts=False):
     from ..core.capsule.export import CapsuleExportError, export_capsule
 
     project = _resolve_project(project_dir)
     consumes = [_parse_consume(s) for s in (consume_specs or ())]
     try:
-        return export_capsule(
+        capsule = export_capsule(
             project_dir=project,
             trace_id=trace_id,
             step_index=step,
@@ -126,13 +141,75 @@ def _do_export(trace_id, step, node_id, radius, repo_url, project_dir,
             expect_error=expect_error,
             setup_command=setup_command,
             consumes=consumes,
-        ), project
+            product=product,
+            include_prompts=include_prompts,
+        )
     except CapsuleExportError as exc:
         click.echo(f"capsule export failed: {exc}", err=True)
         sys.exit(2)
     except Exception as exc:  # redaction gate, etc.
         click.echo(f"capsule export failed: {exc}", err=True)
         sys.exit(2)
+    _hint_consumes(capsule, consumes, product)
+    return capsule, project
+
+
+def _hint_consumes(capsule, declared_consumes, product) -> None:
+    """STDERR-ONLY suggestion (plan 090): if the episode is not bound to a product
+    and none was declared, suggest candidate ``--consume`` specs from the captured
+    deps. NEVER auto-writes ``environment.consumes`` — the developer must confirm."""
+
+    if product or declared_consumes:
+        return
+    deps = list((capsule.get("environment") or {}).get("dependencies") or [])
+    if not deps:
+        return
+    from ..enrichment import suggest_consumes
+
+    hints = suggest_consumes(deps)
+    if not hints:
+        return
+    click.echo(
+        "hint: this episode is not bound to a product. Add --product <name> or "
+        "--consume to anchor it. Candidates from captured dependencies:",
+        err=True,
+    )
+    for h in hints[:8]:
+        click.echo(f"  --consume {h}", err=True)
+
+
+def _egress_destinations(hf_repo, gh_repo) -> list[str]:
+    """Human-readable list of the public destinations a publish WOULD reach."""
+
+    dests: list[str] = []
+    if hf_repo:
+        dests.append(f"HF dataset (public): {hf_repo}")
+    if gh_repo:
+        dests.append(f"GitHub issue: {gh_repo}")
+    return dests
+
+
+def _confirm_egress(destinations, manifest, business_logic_findings, assume_yes) -> None:
+    """Shared developer-approval gate before any public egress (plan 090). Names the
+    destinations and summarizes redaction/exclusion. ``--yes`` bypasses for
+    scripts/agents; a 'no' aborts with exit 1. Applied to BOTH share --publish and
+    issue --publish (previously only issue confirmed)."""
+
+    if assume_yes:
+        return
+    manifest = manifest or {}
+    dest_str = "; ".join(destinations) if destinations else "(no destination configured)"
+    click.echo(
+        f"This will PUBLISH a redacted capsule to: {dest_str}.\n"
+        f"  redaction floor {manifest.get('floor')} ran · "
+        f"{manifest.get('redactions_applied', 0)} redactions · "
+        f"{business_logic_findings} business-logic findings · "
+        f"{manifest.get('fields_excluded', 0)} prompt fields excluded.",
+        err=True,
+    )
+    if not click.confirm("Proceed?", default=False):
+        click.echo("aborted.", err=True)
+        sys.exit(1)
 
 
 def _infer_issue_repo(capsule) -> str | None:
@@ -211,7 +288,13 @@ def _publish_and_url(capsule, *, hf_repo, token, private, bundle_bytes=None):
 
 @click.group("capsule")
 def capsule_group() -> None:
-    """Export, share, and open trace capsules (agent-to-agent bug reports)."""
+    """Capture, redact, and share a privacy-bounded agent usage episode — an
+    "Agent Experience Report". The asset is how an agent actually used one product;
+    a reproducible test is OPTIONAL evidence, not the point.
+
+    (Presentation reframe only: the ``capsule`` command noun and the issue wire
+    markers are unchanged, so issue idempotency is preserved.)
+    """
 
 
 @capsule_group.command("export")
@@ -222,12 +305,12 @@ def capsule_group() -> None:
 @click.option("--bundle", "make_bundle", is_flag=True,
               help="Embed a hermetic source bundle (git archive at the pin) so the test runs even if the commit is gone.")
 @click.option("--json", "as_json", is_flag=True, help="Print the capsule envelope JSON to stdout.")
-def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, out, make_bundle, as_json):
-    """Build a local, redacted, self-contained capsule for one failing session."""
+def export_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, out, make_bundle, as_json):
+    """Build a local, redacted, self-contained capsule for one agent usage episode."""
 
     from ..core.capsule.share import write_capsule_dir
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs)
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts)
     bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
     dest = out or (project / ".opentraces" / "capsules")
     arts = write_capsule_dir(capsule, dest, bundle_bytes=bundle_bytes)
@@ -283,6 +366,75 @@ def open_cmd(ref, as_json, summary):
     click.echo(json.dumps(capsule, indent=2, ensure_ascii=False))
 
 
+@capsule_group.command("preview")
+@click.argument("trace_id")
+@_export_options
+@click.option("--json", "as_json", is_flag=True, help="Emit the preview as JSON.")
+def preview_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command,
+                expect_error, setup_command, consume_specs, product, include_prompts, as_json):
+    """Preview egress BEFORE anything leaves the machine — writes/publishes NOTHING.
+
+    Runs the full redaction pipeline, then prints the redaction manifest by field
+    path, the business-logic findings, the privacy scope, and the destinations a
+    publish WOULD reach. The developer-approval checkpoint.
+    """
+
+    capsule, _project = _do_export(
+        trace_id, step, node_id, radius, repo_url, project_dir,
+        test_command, expect_error, setup_command, consume_specs, product, include_prompts,
+    )
+    manifest = (capsule.get("redaction") or {}).get("manifest") or {}
+    privacy_scope = capsule.get("privacy_scope") or {}
+    by_field_path = manifest.get("by_field_path") or {}
+    by_tool = manifest.get("by_tool") or {}
+    excluded = manifest.get("excluded_field_paths") or []
+    # Destinations that WOULD receive it (display-only; nothing is contacted here).
+    destinations = _egress_destinations(_default_hf_repo(None), _infer_issue_repo(capsule))
+
+    if as_json:
+        click.echo(json.dumps({
+            "capsule_id": capsule["capsule_id"],
+            "writes_anything": False,
+            "redaction": {
+                "floor": manifest.get("floor"),
+                "floor_satisfied": manifest.get("floor_satisfied"),
+                "redactions_applied": manifest.get("redactions_applied", 0),
+                "by_field_path": by_field_path,
+                "by_tool": by_tool,
+                "by_severity": manifest.get("by_severity") or {},
+                "fields_excluded": manifest.get("fields_excluded", 0),
+                "excluded_field_paths": excluded,
+            },
+            "business_logic": {"findings": by_tool.get("business_logic", 0)},
+            "privacy_scope": privacy_scope,
+            "destinations": destinations,
+        }, indent=2, ensure_ascii=False))
+        return
+
+    click.echo(f"capsule {capsule['capsule_id']} — PREVIEW (nothing written or published)")
+    product_anchor = capsule.get("product") or {}
+    click.echo(f"  product: {product_anchor.get('name') or '(none — not product-bound)'}")
+    click.echo(
+        f"  redaction floor {manifest.get('floor')} · satisfied={manifest.get('floor_satisfied')} · "
+        f"{manifest.get('redactions_applied', 0)} redactions"
+    )
+    if by_field_path:
+        click.echo("  redactions by field path:")
+        for path, n in sorted(by_field_path.items()):
+            click.echo(f"    {path}: {n}")
+    click.echo(f"  business_logic findings: {by_tool.get('business_logic', 0)}")
+    click.echo(
+        f"  prompt fields excluded: {manifest.get('fields_excluded', 0)}"
+        + (f" → {', '.join(excluded)}" if excluded else "")
+    )
+    click.echo("  privacy scope:")
+    for k, v in privacy_scope.items():
+        click.echo(f"    {k}: {v}")
+    click.echo("  destinations that WOULD receive it (not contacted):")
+    for d in destinations or ["(none configured)"]:
+        click.echo(f"    {d}")
+
+
 def _clip(do_copy, url):
     if do_copy and url:
         from ..core.capsule.share import copy_to_clipboard
@@ -299,8 +451,9 @@ def _clip(do_copy, url):
 @click.option("--private", is_flag=True, help="Create the HF dataset repo as private.")
 @click.option("--bundle", "make_bundle", is_flag=True, help="Embed + publish a hermetic source bundle.")
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the shareable URL to the clipboard.")
+@click.option("--yes", "assume_yes", is_flag=True, help="Skip the publish confirmation (for scripts/agents).")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, hf_repo, publish, private, make_bundle, do_copy, token):
+def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, hf_repo, publish, private, make_bundle, do_copy, assume_yes, token):
     """Mint a shareable capsule URL (add --publish to upload it)."""
 
     from ..core.capsule.share import (
@@ -309,7 +462,7 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         write_capsule_dir,
     )
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs)
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts)
     bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
     arts = write_capsule_dir(capsule, project / ".opentraces" / "capsules", bundle_bytes=bundle_bytes)
     cid = capsule["capsule_id"]
@@ -319,6 +472,10 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         if not repo:
             click.echo("could not determine an HF repo; pass --repo <owner/name>.", err=True)
             sys.exit(2)
+        # Plan 090: share --publish now shares the consent gate (was issue-only).
+        _manifest = (capsule.get("redaction") or {}).get("manifest") or {}
+        _bl = (_manifest.get("by_tool") or {}).get("business_logic", 0)
+        _confirm_egress(_egress_destinations(repo, None), _manifest, _bl, assume_yes)
         url, human, info = _publish_and_url(capsule, hf_repo=repo, token=token, private=private, bundle_bytes=bundle_bytes)
         click.echo(f"published {cid} (rev {info['revision'][:12]}) · {human}", err=True)
     elif repo:
@@ -343,7 +500,7 @@ def share_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
 @click.option("--copy", "do_copy", is_flag=True, help="Copy the capsule URL to the clipboard.")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the publish confirmation (for scripts/agents).")
 @click.option("--token", default=None, help="HF token (default: env / config / live token file).")
-def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, hf_repo, issue_repo, title, publish, make_bundle, do_copy, assume_yes, token):
+def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts, hf_repo, issue_repo, title, publish, make_bundle, do_copy, assume_yes, token):
     """Render the GitHub issue body for a capsule, or file it with --publish.
 
     The HF repo defaults to ``<you>/opentraces-capsules`` and the issue repo is
@@ -362,7 +519,7 @@ def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         write_capsule_dir,
     )
 
-    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs)
+    capsule, project = _do_export(trace_id, step, node_id, radius, repo_url, project_dir, test_command, expect_error, setup_command, consume_specs, product, include_prompts)
     bundle_bytes = _maybe_build_bundle(capsule, project, make_bundle)
     write_capsule_dir(capsule, project / ".opentraces" / "capsules", bundle_bytes=bundle_bytes)
     cid = capsule["capsule_id"]
@@ -397,17 +554,11 @@ def issue_cmd(trace_id, step, node_id, radius, repo_url, project_dir, test_comma
         click.echo("GitHub CLI (`gh`) not found. Install via `brew install gh`.", err=True)
         sys.exit(2)
 
-    # Explicit public-destination consent (replaces the old --public flag): a
-    # confirm that names both destinations. --yes bypasses for scripts/agents.
-    if not assume_yes:
-        click.echo(
-            f"This will PUBLISH a redacted capsule publicly to HF `{repo}` and "
-            f"file/update a GitHub issue on `{target_repo}`.",
-            err=True,
-        )
-        if not click.confirm("Proceed?", default=False):
-            click.echo("aborted.", err=True)
-            sys.exit(1)
+    # Explicit public-destination consent — shared with share --publish (plan 090).
+    # Names both destinations + the redaction summary. --yes bypasses for agents.
+    _manifest = (capsule.get("redaction") or {}).get("manifest") or {}
+    _bl = (_manifest.get("by_tool") or {}).get("business_logic", 0)
+    _confirm_egress(_egress_destinations(repo, target_repo), _manifest, _bl, assume_yes)
 
     url, human, _info = _publish_and_url(capsule, hf_repo=repo, token=token, private=False, bundle_bytes=bundle_bytes)
     body = render_issue_body(capsule, capsule_url=url, human_url=human)

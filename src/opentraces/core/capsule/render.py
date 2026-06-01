@@ -96,7 +96,14 @@ def render_issue_body(
     failing = capsule.get("failing_step") or {}
     summ = _summary(capsule)
     open_ref = capsule_url or "<capsule-url>"
-    label = "🐛 Agent bug capsule" if summ.get("is_failure") else "🔁 Agent session capsule"
+    # Plan 090 — 3-way presentation banner (the underlying object is unchanged).
+    # A test is optional evidence: it only upgrades a failure to a reproducible
+    # "Support Packet"; otherwise this is an "Agent Experience Report".
+    test = capsule.get("test")
+    if summ.get("is_failure"):
+        label = "🛠️ Agent Support Packet" if test else "🧭 Agent Experience Report (blocked episode)"
+    else:
+        label = "🧭 Agent Experience Report (usage episode)"
 
     lines: list[str] = []
     lines.append(f"<!-- opentraces-capsule: {cid} -->")
