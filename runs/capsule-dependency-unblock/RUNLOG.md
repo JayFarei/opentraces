@@ -96,3 +96,22 @@ Evidence (R1–R4, R7 all met):
 Decision: U5 DONE — the consumed-LIBRARY upgrade unblocks the capsule, end to end in the open with a
 real trace. Remaining: U6 (consumed-API axis on Vercel — user deferred to "library first, then U6")
 and U7 (committed integration test + otbox journey + transcript.md + docs-update).
+
+## Attempt 7 — 2026-06-01 (U7 done — library axis locked with committed evidence)
+Change (user chose "U7 first"): added the committed regression
+`tests/test_capsule_dependency_unblock_integration.py` (real capture → export → consumed-dep upgrade
+flips reproduces→fixed, resolved_in=v0.2.0; hermetic file:// dep + isolated bucket); the conviction
+artifact `tests/otbox/captures/capsule-dependency-unblock/transcript.md` (the live JayFarei/
+humanduration + HF + #1 proof); and the gold journey
+`tests/otbox/catalogue/journeys/capsule-dependency-unblock.toml` (tier=1 pending the capsule-in-box
+checkpoint, per plan 077/078 convention).
+Evidence: full capsule suite 65 passed, 2 skipped. Integration test exercises the real ingest →
+export → matrix chain. Found + fixed a redaction interaction: a file:// consume pin's username is
+identity-scrubbed (correct); overrides carry the full spec at run time so the hermetic test is
+unaffected (github URLs have no username → no scrub).
+Note: /docs-update DEFERRED — the entire capsule subsystem is an unmerged prototype branch and the
+docs page is still "planned"; documenting the consumes/--with/--matrix surface belongs with the merge,
+not now (would describe unshipped surface). Tracked for the merge session.
+Decision: U7 done. R1–R4,R6,R7 met. The library axis is proven live AND locked with committed
+evidence. The ONLY remaining work for goal completion is U6 (R5 — consumed-API axis on Vercel). Goal
+stays active until U6 lands. Branch NOT pushed (out of the goal's done-when).
