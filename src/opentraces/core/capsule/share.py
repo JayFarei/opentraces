@@ -221,6 +221,12 @@ def publish_capsule(
     except Exception as exc:  # pragma: no cover - dep present in env
         raise RuntimeError("huggingface_hub is required to publish a capsule") from exc
 
+    # R7: never emit an un-redacted envelope, regardless of how it was built
+    # (export redacts; a hand-assembled freeze_capsule does not).
+    from .redaction import ensure_redacted
+
+    capsule = ensure_redacted(capsule)
+
     rid = _hf_repo_id(repo_id)
     cid = capsule["capsule_id"]
     api = HfApi(token=token)

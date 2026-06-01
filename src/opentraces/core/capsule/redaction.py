@@ -162,10 +162,28 @@ def assert_redaction_gate(manifest: dict[str, Any]) -> None:
         )
 
 
+def ensure_redacted(capsule: dict[str, Any]) -> dict[str, Any]:
+    """Idempotently guarantee the floor ran over the whole envelope before share.
+
+    ``export_capsule`` already redacts, but a capsule assembled directly via
+    ``freeze_capsule`` does NOT — that gap leaked a home path on 2026-05-31. Every
+    publish path runs this so an un-redacted envelope can never leave the machine,
+    regardless of how it was built. Re-running on already-clean text is a no-op
+    (the floor finds nothing new); it then asserts the gate (plan 089 R7).
+    """
+
+    redacted, manifest = redact_envelope(capsule)
+    redacted = dict(redacted)
+    redacted["redaction"] = {**(capsule.get("redaction") or {}), "manifest": manifest}
+    assert_redaction_gate(manifest)
+    return redacted
+
+
 __all__ = [
     "REDACTION_FLOOR",
     "RedactionGateError",
     "assert_redaction_gate",
     "build_redaction_manifest",
+    "ensure_redacted",
     "redact_envelope",
 ]

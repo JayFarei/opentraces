@@ -518,18 +518,27 @@ def replay_cmd(ref, target_ref, as_json):
               help="Inherit the full host env (default: minimal allowlist + throwaway HOME).")
 @click.option("--timeout", type=int, default=180, show_default=True, help="Command timeout (seconds).")
 @click.option("--yes", "assume_yes", is_flag=True, help="Skip the untrusted-command confirmation.")
+@click.option("--with", "with_specs", multiple=True, metavar="NAME=VER|SPEC|URL",
+              help="Override a CONSUMED dependency (repeatable): library upgrade or API endpoint.")
+@click.option("--matrix", "matrix", default=None, metavar="NAME=v1,v2,…",
+              help="Sweep one consumed dependency across versions; report which one resolves the story.")
 @click.option("--verdict-to", "verdict_issue", default=None, help="Post the verdict to this issue (ref/URL).")
 @click.option("--close/--no-close", default=False, help="Close the issue on a `fixed` verdict.")
 @click.option("--json", "as_json", is_flag=True, help="Emit the full test result as JSON.")
-def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assume_yes, verdict_issue, close, as_json):
+def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assume_yes,
+             with_specs, matrix, verdict_issue, close, as_json):
     """Run the capsule AS A TEST: reproduce the failure or confirm the fix.
 
     The repro runs in an isolated checkout (a git worktree of the target ref, or
     the capsule's hermetic bundle with --from-bundle) under a minimal env
-    allowlist. SECURITY: the command is captured, untrusted input — you are
-    confirming you trust it before it executes.
+    allowlist. ``--with name=ver`` upgrades a CONSUMED dependency (a library
+    version or an API endpoint the client doesn't control); ``--matrix
+    name=v1,v2`` sweeps versions and reports which one flips the verdict to
+    ``fixed`` (resolved_in). SECURITY: the command is captured, untrusted input —
+    you are confirming you trust it before it executes.
     """
 
+    from ..core.capsule.consumes import ConsumeError, parse_matrix, parse_with
     from ..core.capsule.contract import CapsuleSchemaAheadError
     from ..core.capsule.run import CapsuleTestError, run_capsule_test
     from ..core.capsule.share import CapsuleResolveError, resolve_capsule
@@ -552,6 +561,13 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
         )
         sys.exit(2)
 
+    try:
+        overrides = parse_with(with_specs)
+        matrix_name, matrix_versions = parse_matrix(matrix) if matrix else (None, [])
+    except ConsumeError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+
     bundle_path = _resolve_bundle_path(ref, capsule) if from_bundle else None
     repo = Path(repo_dir or Path.cwd()).resolve()
     where = (
@@ -559,19 +575,56 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
         if bundle_path else f"an isolated checkout of `{target_ref}` in {repo}"
     )
     if not assume_yes:
+        sweep = f" across {matrix_name}={','.join(matrix_versions)}" if matrix else ""
         click.echo(
-            f"About to RUN this captured (untrusted) command in {where}:\n  $ {test['command']}",
+            f"About to RUN this captured (untrusted) command in {where}{sweep}:\n  $ {test['command']}",
             err=True,
         )
         if not click.confirm("Trust and run it?", default=False):
             click.echo("aborted.", err=True)
             sys.exit(1)
 
-    try:
-        result = run_capsule_test(
+    def _run(extra_overrides=None):
+        merged = {**overrides, **(extra_overrides or {})}
+        return run_capsule_test(
             capsule, repo_dir=(None if bundle_path else repo), target_ref=target_ref,
             bundle_path=bundle_path, timeout=timeout, inherit_env=inherit_env,
+            with_overrides=(merged or None),
         )
+
+    icons = {"fixed": "🟢", "reproduces": "🔴", "inconclusive": "🟡"}
+
+    # --- Matrix sweep: which consumed-dep version resolves the story? ----------
+    if matrix:
+        rows, resolved_in = [], None
+        try:
+            for ver in matrix_versions:
+                r = _run({matrix_name: ver})
+                rows.append({"version": ver, "verdict": r["verdict"],
+                             "exit_code": r.get("exit_code"), "reason": r.get("reason")})
+                if r["verdict"] == "fixed" and resolved_in is None:
+                    resolved_in = ver
+        except CapsuleTestError as exc:
+            click.echo(f"capsule test could not run: {exc}", err=True)
+            sys.exit(2)
+        payload = {"matrix": matrix_name, "rows": rows, "resolved_in": resolved_in}
+        if as_json:
+            click.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            for row in rows:
+                click.echo(f"{icons.get(row['verdict'], '•')} {matrix_name}={row['version']} · "
+                           f"{row['verdict']}", err=True)
+            click.echo(
+                (f"resolved_in: {matrix_name}={resolved_in}" if resolved_in
+                 else "resolved_in: (none — no version flipped the story to fixed)"),
+                err=True,
+            )
+            click.echo(f"{matrix_name}={resolved_in}" if resolved_in else "unresolved")
+        return
+
+    # --- Single run (optionally with --with overrides) ------------------------
+    try:
+        result = _run()
     except CapsuleTestError as exc:
         click.echo(f"capsule test could not run: {exc}", err=True)
         sys.exit(2)
@@ -579,13 +632,15 @@ def test_cmd(ref, target_ref, repo_dir, from_bundle, inherit_env, timeout, assum
     if as_json:
         click.echo(json.dumps(result, indent=2, ensure_ascii=False))
     else:
-        icon = {"fixed": "🟢", "reproduces": "🔴", "inconclusive": "🟡"}.get(result["verdict"], "•")
+        icon = icons.get(result["verdict"], "•")
         where = result.get("run_source", "git")
         ref_shown = result.get("target_ref") or target_ref
+        used = result.get("consumes_used")
+        used_line = f"\n  consumed: {used}" if used else ""
         click.echo(
             f"{icon} {result['verdict']} @ {ref_shown} [{where}] · "
             f"framework={result.get('framework','?')} · exit={result.get('exit_code')}\n"
-            f"  reason: {result.get('reason')}\n"
+            f"  reason: {result.get('reason')}{used_line}\n"
             f"  $ {result['command']}",
             err=True,
         )

@@ -48,3 +48,18 @@ across runs; humanduration v0.1.0→reproduces / v0.2.0→fixed via real venv gi
 loop yields resolved_in=v0.2.0; service consume injects CONVERT_API_URL and an override flips it.
 Full capsule suite: 61 passed, 2 skipped (no regression).
 Decision: U1+U2 complete. Next U3 (CLI `capsule test --with`/`--matrix`) + U4 (redaction publish guard).
+
+## Attempt 4 — 2026-06-01 (U3+U4 done)
+Change: U3 — `capsule test` gained `--with NAME=VER|SPEC|URL` (repeatable) and `--matrix
+NAME=v1,v2` (sweep + resolved_in). U4 — added `redaction.ensure_redacted()` (idempotent floor +
+gate) and called it inside `publish_capsule` so no build path can emit un-redacted (closes the
+freeze_capsule gap). Tests: `tests/test_capsule_publish_redaction.py` (2).
+Evidence: CLI on the fixture capsule — default(v0.1.0) 🔴 reproduces; `--with humanduration=v0.2.0`
+🟢 fixed; `--matrix humanduration=v0.1.0,v0.2.0` → 🔴v0.1.0/🟢v0.2.0, `resolved_in: humanduration=
+v0.2.0` (R3 met). R7: planted 48-hex secret in an un-redacted freeze_capsule envelope is scrubbed
+before any upload byte (HfApi monkeypatched); ensure_redacted idempotent. Full capsule suite: 63
+passed, 2 skipped.
+Decision: U1–U4 complete; the local mechanism is proven end to end through the CLI. Next U5 (live
+library proof: push JayFarei/humanduration, export real-trace capsule, publish to HF, issue+verdict+
+close+watch) then U6 (live convert-api) then U7 (evidence/journey/docs). U5/U6 are outward —
+confirm exact repos/deploys before firing.
