@@ -1,0 +1,14 @@
+{
+  "evidence_refs_json": "{\"source_episode_id\": \"episode:ci-opentraces-0000\", \"source_trace_id\": \"ci-seed-opentraces-0000\", \"source_unit_id\": \"tu:ci-seed-opentraces-0000:skill:metadata:0\"}",
+  "family_id": "skill-intelligence/opentraces",
+  "leakage_key": "a leakage key",
+  "prompt": "Use the opentraces skill to complete task 0. The verifier expects the OPENTRACES_OK sentinel.",
+  "reward_spec_json": "{\"kind\": \"required_skill_markers\", \"required_markers\": [\"rl.opentraces.ci_echo\"], \"reward\": \"fraction_of_required_markers_present\"}",
+  "skill_id": "opentraces",
+  "source_agent_mix_json": "{\"synthetic-ci\": 1}",
+  "source_episode_ids_json": "[\"episode:ci-opentraces-0000\"]",
+  "split": "Dsel",
+  "task_id": "task:example",
+  "verifier": "contains:OPENTRACES_OK",
+  "workspace_template": "synthetic-ci-echo"
+}

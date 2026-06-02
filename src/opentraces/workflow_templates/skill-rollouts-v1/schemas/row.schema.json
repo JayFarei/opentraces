@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "required": [
+    "rollout_id",
+    "task_id",
+    "skill_id",
+    "skill_digest",
+    "split",
+    "harness",
+    "agent_binary",
+    "reward",
+    "failure_tags_json",
+    "success_tags_json",
+    "transcript_ref",
+    "artifact_refs_json",
+    "source_eval_task_id"
+  ],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "rollout_id": {"type": "string"},
+    "task_id": {"type": "string"},
+    "skill_id": {"type": "string"},
+    "skill_digest": {"type": "string"},
+    "split": {"type": "string", "enum": ["Dtrain", "Dsel", "Dtest"]},
+    "harness": {"type": "string"},
+    "agent_binary": {"type": "string"},
+    "reward": {"type": "number"},
+    "failure_tags_json": {"type": "string"},
+    "success_tags_json": {"type": "string"},
+    "transcript_ref": {"type": "string"},
+    "artifact_refs_json": {"type": "string"},
+    "source_eval_task_id": {"type": "string"}
+  },
+  "additionalProperties": false
+}

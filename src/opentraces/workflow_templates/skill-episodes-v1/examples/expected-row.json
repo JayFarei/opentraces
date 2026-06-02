@@ -1,0 +1,21 @@
+{
+  "agent": "synthetic-ci",
+  "confidence": "high",
+  "episode_id": "episode:ci-opentraces-0000",
+  "evidence_refs_json": "{\"ordinal\": 0, \"seed\": \"skill-intelligence-ci\"}",
+  "files_touched_json": "[\"src/app.py\"]",
+  "limitations_json": "[\"seeded_ci_corpus\"]",
+  "outcome_label": "success",
+  "outcome_reward": 1.0,
+  "review_status": "approved",
+  "skill_id": "opentraces",
+  "skill_source": "seeded_ci_corpus",
+  "skill_version_digest": "sha256:ci-seeded-baseline",
+  "source_trace_id": "ci-seed-opentraces-0000",
+  "source_unit_id": "tu:ci-seed-opentraces-0000:skill:metadata:0",
+  "task_summary": "Seeded Skill Intelligence CI task 0",
+  "tools_used_json": "[\"synthetic-echo\"]",
+  "trajectory_end_step": 2,
+  "trajectory_start_step": 1,
+  "user_intent": "Use opentraces to produce the deterministic CI echo sentinel."
+}

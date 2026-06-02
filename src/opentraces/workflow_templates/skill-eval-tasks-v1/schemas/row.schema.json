@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "required": [
+    "task_id",
+    "skill_id",
+    "family_id",
+    "source_episode_ids_json",
+    "prompt",
+    "workspace_template",
+    "verifier",
+    "reward_spec_json",
+    "split",
+    "leakage_key",
+    "source_agent_mix_json",
+    "evidence_refs_json"
+  ],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "task_id": {"type": "string"},
+    "skill_id": {"type": "string"},
+    "family_id": {"type": "string"},
+    "source_episode_ids_json": {"type": "string"},
+    "prompt": {"type": "string"},
+    "workspace_template": {"type": "string"},
+    "verifier": {"type": "string"},
+    "reward_spec_json": {"type": "string"},
+    "split": {"type": "string", "enum": ["Dtrain", "Dsel", "Dtest"]},
+    "leakage_key": {"type": "string"},
+    "source_agent_mix_json": {"type": "string"},
+    "evidence_refs_json": {"type": "string"}
+  },
+  "additionalProperties": false
+}
