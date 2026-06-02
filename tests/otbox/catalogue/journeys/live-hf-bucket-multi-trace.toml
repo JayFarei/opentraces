@@ -1,0 +1,107 @@
+name = "live-hf-bucket-multi-trace"
+description = """
+LIVE HuggingFace whole-bucket sync with MULTIPLE traces. Forks
+c-captured-multi-skill (3 captured traces) so the sync exercises more than
+one per-trace envelope and a larger, multi-batch event-log mirror, then
+proves a full wipe + eager pull restores all three byte/digest-identically.
+
+The single-trace round-trip journey can't catch per-trace iteration bugs in
+the push passes or the pull reconstruction; this one does. Repo-side, the
+live runner asserts >=3 trace.json spines and >1 event batch landed.
+
+Requires the opt-in `live_hf` capability, so it SKIPs in default CI.
+"""
+lane = "core"
+tier = 1
+persona = "agent"
+requires = ["cli", "git", "live_hf"]
+from_checkpoints = ["c-captured-multi-skill"]
+
+[preconditions]
+min_captured_traces = 3
+
+# --- configure a REAL private HF bucket remote ----------------------------
+[[steps]]
+type = "cli"
+id = "setup-bucket"
+argv = ["setup", "bucket", "--remote", "--provider", "huggingface", "--repo", "{live_bucket_repo}", "--sync-policy", "manual", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-bucket"
+equals = 0
+
+# --- project ALL THREE captured traces into the v2 bucket layout ----------
+[[steps]]
+type = "cli"
+id = "repair"
+argv = ["bucket", "repair", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "repair"
+path = "repair.traces_projected"
+equals = 3
+
+# --- push the whole multi-trace bucket to the real remote -----------------
+[[steps]]
+type = "cli"
+id = "push"
+argv = ["bucket", "remote", "push", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "push"
+path = "remote.state"
+equals = "pushed"
+
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["bucket", "remote", "status", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "status"
+path = "remote.state"
+equals = "current"
+
+# --- wipe local, restore the whole multi-trace bucket from the remote -----
+[[steps]]
+type = "shell"
+id = "wipe-local-bucket"
+argv = ["rm", "-rf", "{opentraces_dir}/bucket"]
+
+[[steps]]
+type = "cli"
+id = "pull"
+argv = ["bucket", "remote", "pull", "--force", "--eager", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "pull"
+equals = 0
+
+# --- byte/digest-identical restore of the full multi-trace bucket ---------
+[[steps]]
+type = "cli"
+id = "status-after-pull"
+argv = ["bucket", "remote", "status", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-after-pull"
+path = "remote.state"
+equals = "current"
+
+# --- all three traces are present locally after the round-trip ------------
+[[steps]]
+type = "cli"
+id = "ctx-list"
+argv = ["ctx", "list", "--json"]
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "ctx-list"
+path = "traces"
+equals = 3

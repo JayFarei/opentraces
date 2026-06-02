@@ -77,6 +77,7 @@ def test_auto_enroll_global_git(tmp_path):
     assert project_is_opted_in(proj)
     # Marker written into the repo (R4 "always write marker" decision).
     assert (proj / ".opentraces.json").is_file()
+    assert load_project_config(proj)["agents"] == ["claude-code", "codex-cli"]
     # Registered in the global registry.
     assert str(proj.resolve()) in opted_in_projects(load_config())
 
@@ -99,6 +100,40 @@ def test_auto_enroll_is_idempotent(tmp_path):
     assert auto_enroll_if_global(proj) is True
     # Second call: already enrolled, no change.
     assert auto_enroll_if_global(proj) is False
+
+
+def test_auto_enroll_repairs_marker_registry_drift(tmp_path):
+    _set_mode("manual")
+    proj = tmp_path / "repo"
+    proj.mkdir()
+    (proj / ".opentraces.json").write_text(json.dumps({
+        "marker_version": "2",
+        "project_id": "already-opted-in",
+    }))
+
+    assert project_is_opted_in(proj)
+    assert str(proj.resolve()) not in opted_in_projects(load_config())
+    assert auto_enroll_if_global(proj) is True
+    assert str(proj.resolve()) in opted_in_projects(load_config())
+
+    slug = load_config().projects[str(proj.resolve())].slug
+    project_json = cfgmod.PROJECTS_DIR / slug / "project.json"
+    assert project_json.is_file()
+    assert json.loads(project_json.read_text())["path"] == str(proj.resolve())
+
+
+def test_auto_enroll_global_repairs_legacy_agent_list(tmp_path):
+    _set_mode("global")
+    proj = tmp_path / "repo"
+    proj.mkdir()
+    (proj / ".opentraces.json").write_text(json.dumps({
+        "marker_version": "2",
+        "project_id": "legacy-global-project",
+        "agents": ["claude-code"],
+    }))
+
+    assert auto_enroll_if_global(proj) is True
+    assert load_project_config(proj)["agents"] == ["claude-code", "codex-cli"]
 
 
 # --------------------------------------------------------------------------- #

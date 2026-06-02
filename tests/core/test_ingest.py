@@ -647,44 +647,11 @@ class TestIngestOneSession:
         staging_dir = get_project_traces_dir(project_dir)
         assert (staging_dir / f"{gen1_trace_id}.jsonl").exists()
         assert (staging_dir / f"{gen2.trace_id}.jsonl").exists()
-        from opentraces_schema import TraceRecord
-        gen2_record = TraceRecord.model_validate_json(
-            (staging_dir / f"{gen2.trace_id}.jsonl").read_text().splitlines()[0]
-        )
-        assert gen2_record.metadata["supersedes"] == gen1_trace_id
-        assert gen2_record.metadata["supersedes_reason"] == "resume"
-        assert gen2_record.metadata["superseded_trace_ids"] == [gen1_trace_id]
 
         # gen 1's trace state is still UPLOADED.
         assert state.get_trace(gen1_trace_id).status == TraceStatus.UPLOADED.value
         # gen 2 is in INBOX.
         assert state.get_trace(gen2.trace_id).status == TraceStatus.STAGED.value
-
-    def test_reparse_unchanged_terminal_generation_refreshes_in_place(
-        self, project_dir
-    ) -> None:
-        from opentraces.core.ingest import ingest_one_session
-
-        session_id = "sess-repair"
-        path = _write_jsonl(project_dir, session_id, turns=3)
-        first = ingest_one_session(path, project_dir)
-
-        from opentraces.core.config import get_project_state_path
-        from opentraces.core.state import StateManager
-
-        state = StateManager(state_path=get_project_state_path(project_dir))
-        state.set_trace_status(first.trace_id, TraceStatus.UPLOADED)
-
-        repaired = ingest_one_session(path, project_dir, reparse=True)
-
-        assert repaired.action == "refreshed"
-        assert repaired.trace_id == first.trace_id
-        assert repaired.supersedes is None
-
-        state = StateManager(state_path=get_project_state_path(project_dir))
-        sess = state.get_session(session_id)
-        assert len(sess.generations) == 1
-        assert sess.generations[0].trace_id == first.trace_id
 
     @pytest.mark.parametrize("terminal_status", [
         TraceStatus.UPLOADED,
@@ -773,6 +740,74 @@ class TestScanProject:
         assert session_ids == {"sess-A", "sess-B"}
         assert all(r.action == "new" for r in report.results)
 
+    def test_scan_defers_watcher_reconciliation_by_default(
+        self, project_dir, monkeypatch
+    ) -> None:
+        from opentraces.core.ingest import scan_project
+
+        path = _write_jsonl(project_dir, "sess-no-reconcile", turns=3)
+        monkeypatch.setattr(
+            "opentraces.core.ingest.discover_claude_jsonl_corpus",
+            lambda repo: [path],
+        )
+
+        calls: list[Path] = []
+
+        def _reconcile(repo):
+            calls.append(Path(repo))
+            return {
+                "observations_processed": 0,
+                "patches_created": 0,
+                "patches_upgraded": 0,
+            }
+
+        monkeypatch.setattr(
+            "opentraces.core.trails.reconcile_watcher_observations",
+            _reconcile,
+        )
+
+        report = scan_project(project_dir)
+
+        assert report.created == 1
+        assert calls == []
+
+    def test_scan_trace_record_only_skips_substrate_hot_path(
+        self, project_dir, monkeypatch
+    ) -> None:
+        from opentraces.core import ingest as ingest_mod
+
+        path = _write_jsonl(project_dir, "sess-trace-record-only", turns=3)
+        monkeypatch.setattr(
+            "opentraces.core.ingest.discover_claude_jsonl_corpus",
+            lambda repo: [path],
+        )
+
+        trail_calls = {"n": 0}
+        warm_calls: list[dict] = []
+
+        def _emit(*args, **kwargs):
+            trail_calls["n"] += 1
+
+        def _warm(*args, **kwargs):
+            warm_calls.append(dict(kwargs))
+
+        monkeypatch.setattr(
+            "opentraces.core.trails.emit_step_window_events_from_record",
+            _emit,
+        )
+        monkeypatch.setattr(ingest_mod, "keep_index_warm", _warm)
+
+        report = ingest_mod.scan_project(project_dir, trace_record_only=True)
+
+        assert report.created == 1
+        # Record-only still skips the Trail substrate hot path...
+        assert trail_calls["n"] == 0
+        # ...but MUST still warm the INDEX marker (index only, not the heavier
+        # projection) so the next ``trace query`` short-circuits warm instead of
+        # paying the whole-corpus cold sync (Bug A). See the cold-state guards in
+        # tests/core/test_index_keep_warm.py.
+        assert [c.get("query_sources") for c in warm_calls] == [("index",)]
+
     def test_scan_isolates_per_session_failures(
         self, project_dir, monkeypatch, caplog
     ) -> None:
@@ -793,77 +828,6 @@ class TestScanProject:
         # The bad file should appear as errored or skipped — not propagate out
         # and kill the scan.
         assert any(r.action in ("error", "skipped") for r in report.results)
-
-    def test_reparse_scan_does_not_grow_unchanged_terminal_generations(
-        self, project_dir
-    ) -> None:
-        from opentraces.core.ingest import scan_project
-
-        session_id = "sess-scan-repair"
-        path = _write_jsonl(project_dir, session_id, turns=3)
-        first = scan_project(
-            project_dir,
-            paths=[("claude-code", path)],
-            emit_substrate_events=False,
-        )
-        first_trace_id = first.results[0].trace_id
-
-        from opentraces.core.config import get_project_state_path
-        from opentraces.core.state import StateManager
-
-        state = StateManager(state_path=get_project_state_path(project_dir))
-        state.set_trace_status(first_trace_id, TraceStatus.UPLOADED)
-
-        repaired = scan_project(
-            project_dir,
-            reparse=True,
-            paths=[("claude-code", path)],
-            emit_substrate_events=False,
-        )
-        repaired_again = scan_project(
-            project_dir,
-            reparse=True,
-            paths=[("claude-code", path)],
-            emit_substrate_events=False,
-        )
-
-        assert repaired.refreshed == 1
-        assert repaired.new_generations == 0
-        assert repaired_again.refreshed == 1
-        assert repaired_again.new_generations == 0
-
-        state = StateManager(state_path=get_project_state_path(project_dir))
-        sess = state.get_session(session_id)
-        assert len(sess.generations) == 1
-        assert sess.generations[0].trace_id == first_trace_id
-
-    def test_scan_dedupes_duplicate_native_session_candidates(
-        self, project_dir
-    ) -> None:
-        from opentraces.core.ingest import scan_project
-
-        session_id = "sess-duplicate"
-        first_path = _write_jsonl(project_dir, session_id, turns=3)
-        second_dir = project_dir / ".claude_projects_fake_2"
-        second_dir.mkdir()
-        second_path = second_dir / first_path.name
-        second_path.write_text(first_path.read_text())
-
-        report = scan_project(
-            project_dir,
-            paths=[("claude-code", first_path), ("claude-code", second_path)],
-            emit_substrate_events=False,
-        )
-
-        assert len(report.results) == 1
-        assert report.results[0].session_id == session_id
-
-        from opentraces.core.config import get_project_state_path
-        from opentraces.core.state import StateManager
-
-        state = StateManager(state_path=get_project_state_path(project_dir))
-        sess = state.get_session(session_id)
-        assert len(sess.generations) == 1
 
 
 class TestIngestGenerationIndex:

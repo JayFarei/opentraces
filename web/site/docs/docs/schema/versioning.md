@@ -71,7 +71,7 @@ The security pipeline is versioned independently under
 `src/opentraces/security/version.py`.
 
 ```text
-SECURITY_VERSION = 0.5.0
+SECURITY_VERSION = 0.6.0
 ```
 
 `opentraces doctor --security` reports the active value and the enabled state

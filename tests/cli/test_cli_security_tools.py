@@ -88,7 +88,7 @@ class TestToolsList:
         assert code == 0, out
         payload = json.loads(out)
         assert isinstance(payload, list)
-        assert len(payload) == 7
+        assert len(payload) == 9  # +business_logic +capsule_scope (plan 090)
         for entry in payload:
             assert set(entry.keys()) >= {"name", "display_name", "kind", "enabled", "state"}
 

@@ -22,6 +22,7 @@ from huggingface_hub import HfApi
 
 logger = logging.getLogger(__name__)
 
+from opentraces_schema.migrations import migrate_record
 from opentraces_schema.models import TraceRecord
 from opentraces_schema.version import SCHEMA_VERSION as LOCAL_SCHEMA_VERSION
 
@@ -601,7 +602,9 @@ class HFUploader:
                         migrated_lines.append(line)
                         continue
                     try:
-                        record = TraceRecord.model_validate(raw)
+                        record = TraceRecord.model_validate(
+                            migrate_record(raw, target_version)
+                        )
                     except Exception as e:
                         # Unparseable record: keep the original line verbatim
                         # so we never destroy data we don't understand.

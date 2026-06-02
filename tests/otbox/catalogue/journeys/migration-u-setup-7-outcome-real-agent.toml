@@ -1,0 +1,73 @@
+name = "migration-u-setup-7-outcome-real-agent"
+description = """
+Upgrade-UAT U-setup-7 (P0, OUTCOME gate). Drives a REAL Claude Code session via
+the pty_runner step inside a restored 0.3.3 world, then proves the upgraded box
+captures the fresh session without disturbing the legacy 0.3.0 trace.
+
+This is the real-agent counterpart to the deterministic OTLP-mechanism coverage
+(the c-legacy-v033-otel-upgraded checkpoint + journey and the pytest
+test_u_setup_7_otel_context_capture_on_upgraded_legacy_world). It is tier=1 and
+requires the `real_repl` capability, so it SKIPs cleanly in default CI and only
+runs under `OT_REAL_REPL=1` with a real `claude` binary on the box (v2.1.156 is
+present in this environment). Pair with `setup capture-otlp start` beforehand to
+also populate the Context Tree via OTel; see MANUAL-UAT-TWO-VENV.md section 5.
+
+Assertions stay robust to a non-deterministic agent run: the pty_runner session
+completes (PASS), the project still reads cleanly afterward, and the legacy 0.3.0
+trace is still queryable. Deep substrate-fidelity checks (a real context_* event,
+patches[] across all four substrates) are the documented manual-UAT follow-up.
+"""
+lane = "extended"
+tier = 1
+persona = "agent"
+requires = ["cli", "git", "tmux", "real_repl"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+# Drive a real Claude Code session that makes one small edit, then ends.
+[[steps]]
+type = "pty_runner"
+id = "real-claude"
+binary = "claude"
+agent = "claude"
+
+[[steps.turns]]
+prompt = "Add a one-line comment to the top of app.py saying '# upgraded to 0.4', then stop."
+expect_regex = ".*"
+timeout_s = 120.0
+
+# After the real session, the 0.4 box still reads cleanly over the legacy world.
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "query-legacy"
+argv = ["trace", "query", "farewell", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "real-claude"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "index-rebuild"
+equals = 0
+
+# The legacy 0.3.0 trace is still queryable after the real-agent session.
+[[assertions]]
+kind = "returncode"
+step = "query-legacy"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "query-legacy"
+path = "candidates.0.candidate_kind"
+equals = "trace"

@@ -221,3 +221,5 @@ from . import _captured_codex_pending  # noqa: E402,F401  (registers pending pla
 # Plan 078 OTLP receiver capture-source checkpoints.
 from . import _context_tree_otel_linear  # noqa: E402,F401  (registers c-context-tree-otel-linear)
 from . import _context_tree_otel_with_mcp  # noqa: E402,F401  (registers c-context-tree-otel-with-mcp)
+# Plan 085 legacy-world (otbox's first previous-version world).
+from . import _legacy_v033  # noqa: E402,F401  (registers c-legacy-v033 + c-legacy-v033-upgraded)

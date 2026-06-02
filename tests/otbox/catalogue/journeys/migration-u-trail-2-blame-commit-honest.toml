@@ -1,0 +1,73 @@
+name = "migration-u-trail-2-blame-commit-honest"
+description = """
+Upgrade-UAT U-trail-2 (P0). `trail blame commit` degrades HONESTLY across the
+upgrade boundary: a pre-upgrade commit (the legacy-world restore commit, which
+predates any 0.4 anchor) returns an empty-but-valid attribution envelope with
+zero coverage and zero traces, NEVER a fabricated trace id; the new 0.4-capture
+commit resolves to full coverage with its real anchor.
+
+Forks from `c-legacy-v033-upgraded` (the existing checkpoint that ran a real 0.4
+capture inside the restored 0.3.3 repo). Uses {head_before_capture} (pre-upgrade)
+and {new_commit_sha} (the 0.4 capture).
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033-upgraded"]
+
+[preconditions]
+migration_applied = true
+
+[[steps]]
+type = "cli"
+id = "blame-old"
+argv = ["--json", "trail", "blame", "commit", "{head_before_capture}"]
+
+[[steps]]
+type = "cli"
+id = "blame-new"
+argv = ["--json", "trail", "blame", "commit", "{new_commit_sha}"]
+
+# Pre-upgrade commit: honest empty, no fabricated attribution.
+[[assertions]]
+kind = "returncode"
+step = "blame-old"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "blame-old"
+path = "coverage.attributed"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "blame-old"
+path = "coverage.total"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "blame-old"
+path = "traces"
+equals = 0
+
+# 0.4-capture commit: resolves to a real, fully-attributed anchor.
+[[assertions]]
+kind = "returncode"
+step = "blame-new"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "blame-new"
+path = "coverage.ratio"
+equals = 1.0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "blame-new"
+path = "traces"
+equals = 1

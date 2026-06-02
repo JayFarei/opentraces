@@ -1,0 +1,83 @@
+name = "migration-s10-idempotency"
+description = """
+Plan 085 S10 — migration idempotency. Running the 0.4 first-touch path
+twice over a restored 0.3.3 world is a no-op the second time: the bucket
+stays empty (no accidental adoption on re-touch) and the legacy trace
+stays deterministically queryable.
+
+Forks from `c-legacy-v033`. The byte-identical idempotency of the
+record-level migration (`migrate_record`) is pytest-covered in
+`tests/test_migration_0_3_3_to_0_4.py::test_s3_idempotent_byte_identical`;
+this journey proves the on-disk first-touch surfaces are idempotent.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+
+# --- first touch ---------------------------------------------------------
+[[steps]]
+type = "cli"
+id = "rebuild-1"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "ctx-list-1"
+argv = ["ctx", "list", "--json"]
+
+# --- second touch — must change nothing observable ----------------------
+[[steps]]
+type = "cli"
+id = "rebuild-2"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "ctx-list-2"
+argv = ["ctx", "list", "--json"]
+
+[[steps]]
+type = "cli"
+id = "query"
+argv = ["trace", "query", "farewell", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "rebuild-1"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "ctx-list-1"
+path = "traces"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "rebuild-2"
+equals = 0
+
+# Bucket still empty after the second touch — no adoption crept in.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "ctx-list-2"
+path = "traces"
+equals = 0
+
+# Legacy trace still deterministically queryable.
+[[assertions]]
+kind = "returncode"
+step = "query"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "query"
+path = "candidates.0.candidate_kind"
+equals = "trace"

@@ -19,7 +19,9 @@ from .entropy_tool import EntropyDetector
 from .trufflehog_tool import TruffleHogDetector
 from .privacy_filter_tool import PrivacyFilterDetector
 from .llm_pii_tool import LLMPIIDetectorTool
+from .business_logic_tool import BusinessLogicDetector
 from .path_anonymizer_tool import PathAnonymizerTransformer
+from .capsule_scope_tool import CapsuleScopeTransformer
 from .classifier_tool import ClassifierJudge
 
 
@@ -29,7 +31,9 @@ _TOOLS: tuple[Any, ...] = (
     TruffleHogDetector(),
     PrivacyFilterDetector(),
     LLMPIIDetectorTool(),
+    BusinessLogicDetector(),     # detector — runs before transformers/judge
     PathAnonymizerTransformer(),
+    CapsuleScopeTransformer(),   # transformer — field-path exclusion
     ClassifierJudge(),
 )
 

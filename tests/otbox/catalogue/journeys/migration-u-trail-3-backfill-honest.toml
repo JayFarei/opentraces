@@ -1,0 +1,53 @@
+name = "migration-u-trail-3-backfill-honest"
+description = """
+Upgrade-UAT U-trail-3 (P0). `git-backfill` on an upgraded legacy repo with no
+prior notes ref and no real anchors tolerates the empty state: rc=0, zero
+errors, and zero fabricated correlations for the reconstruction-only legacy
+trace (it does NOT invent anchors where no evidence exists).
+
+Forks from `c-legacy-v033`. Runs `setup git` then `git-backfill`.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+[[steps]]
+type = "cli"
+id = "setup-git"
+argv = ["--json", "setup", "git"]
+
+[[steps]]
+type = "cli"
+id = "backfill"
+argv = ["--json", "git-backfill", "--max-commits", "50", "--window-hours", "48"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-git"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "backfill"
+equals = 0
+
+# Tolerates the no-prior-notes-ref state without error.
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "backfill"
+path = "errors"
+equals = 0
+
+# No fabricated correlations for a reconstruction-only legacy trace.
+[[assertions]]
+kind = "stdout_json"
+step = "backfill"
+path = "commits_correlated"
+equals = 0

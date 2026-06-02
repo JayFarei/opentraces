@@ -66,6 +66,7 @@ class Driver:
         cwd: Path | str | None = None,
         env_extra: dict | None = None,
         timeout: float | None = None,
+        live_hf: bool = False,
     ) -> ExecResult:
         raise NotImplementedError
 

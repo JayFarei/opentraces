@@ -1,7 +1,11 @@
 """Enrichment pipeline: git signals, attribution, dependencies, metrics."""
 
 from .attribution import build_attribution
-from .dependencies import extract_dependencies, extract_dependencies_from_steps
+from .dependencies import (
+    extract_dependencies,
+    extract_dependencies_from_steps,
+    suggest_consumes,
+)
 from .git_signals import check_committed, detect_vcs, extract_git_signals
 from .metrics import compute_metrics
 from .snippets import detect_language, estimate_line_range, extract_edited_lines
@@ -17,4 +21,5 @@ __all__ = [
     "extract_dependencies_from_steps",
     "extract_edited_lines",
     "extract_git_signals",
+    "suggest_consumes",
 ]

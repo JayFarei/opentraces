@@ -1,0 +1,87 @@
+name = "migration-s8-config-forward-compat"
+description = """
+Plan 085 S8 — config forward-compat. The 0.4 CLI reads a 0.3.3-shaped
+`config.json` (config_version 0.2.0, only `trufflehog` + `llm_review`
+under `security`), fills defaults for every new key the 0.4 security
+pipeline adds (`regex`, `entropy`, `llm_pii`, `privacy_filter`, ...),
+and clobbers none of the existing keys. No opt-in subsystem is silently
+enabled.
+
+Forks from `c-legacy-v033`. `config show` emits the merged config; the
+assertions prove existing keys survive verbatim and every newly-defaulted
+security tool is present-but-disabled.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+[[steps]]
+type = "cli"
+id = "config-show"
+argv = ["config", "show"]
+
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["doctor"]
+
+[[steps]]
+type = "cli"
+id = "tools-list"
+argv = ["security", "tools", "list", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "config-show"
+equals = 0
+
+# Existing 0.3.3 keys survive verbatim (no clobber).
+[[assertions]]
+kind = "stdout_json"
+step = "config-show"
+path = "dataset_visibility"
+equals = "private"
+
+[[assertions]]
+kind = "stdout_json"
+step = "config-show"
+path = "classifier_sensitivity"
+equals = "medium"
+
+# The 0.3.3 security key is preserved.
+[[assertions]]
+kind = "stdout_json"
+step = "config-show"
+path = "security.trufflehog.enabled"
+equals = false
+
+# New 0.4 security-tool keys are filled with disabled defaults — present
+# but NOT silently enabled.
+[[assertions]]
+kind = "stdout_json"
+step = "config-show"
+path = "security.regex.enabled"
+equals = false
+
+[[assertions]]
+kind = "stdout_json"
+step = "config-show"
+path = "security.privacy_filter.enabled"
+equals = false
+
+[[assertions]]
+kind = "returncode"
+step = "doctor"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "tools-list"
+equals = 0

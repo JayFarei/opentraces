@@ -1,0 +1,74 @@
+name = "migration-u-trail-1-honest-unknown"
+description = """
+Upgrade-UAT U-trail-1 (P0). A migrated legacy trace has reconstructed
+patches[] but ZERO Git anchors and zero TrailEvents (read-in-place migration
+emits none). `trail track` must honestly degrade to an empty/unknown evidence
+chain, NEVER a fabricated alive/reverted/lost verdict or firm/provisional
+confidence that would corrupt a reviewer's survival decision.
+
+Forks from `c-legacy-v033`. `trail track {legacy_trace_id} --json` returns
+event_count 0, an empty timeline, the canonical event-log ref, and an explicit
+`missing_trace_events` limitation.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "track"
+argv = ["trail", "track", "{legacy_trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "index-rebuild"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "track"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "track"
+path = "trace_id"
+equals = "{legacy_trace_id}"
+
+# Zero events / empty timeline — no fabricated survival evidence.
+[[assertions]]
+kind = "stdout_json"
+step = "track"
+path = "event_count"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "track"
+path = "timeline"
+equals = 0
+
+# The canonical ref is named, and the absence is labeled honestly.
+[[assertions]]
+kind = "stdout_json"
+step = "track"
+path = "event_log_ref"
+equals = "refs/opentraces/local/events/v1"
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "track"
+path = "limitations"
+equals = ["missing_trace_events"]

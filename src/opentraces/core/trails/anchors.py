@@ -9,7 +9,7 @@ from typing import Any
 
 from ...enrichment._shared import path_matches
 from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
-from .event_log import append_event_batch, read_events
+from .event_log import append_event_batch, read_events_scoped
 from .ids import (
     GIT_ANCHOR_CANONICALIZATION,
     content_ref,
@@ -160,7 +160,23 @@ def reconcile_commit_anchors(
     commit_id = {"algo": "sha1", "hex": commit}
     diff = _git(repo, "show", "--format=", "--no-color", "-U3", commit)
     hunks = _parse_diff_hunks_with_content(diff)
-    events = read_events(repo)
+    # Bug B: this reconciler needs only 3 event types, and the anchor/search
+    # dedup only consults events referencing THIS commit. Read that scoped slice
+    # (streamed per-commit, no whole-log materialisation, no verify) instead of
+    # the full ~N-event history that drove the post-commit hook to ~7.5GB RSS.
+    events = read_events_scoped(
+        repo,
+        event_types={
+            "trace_patch_created",
+            "git_anchor_created",
+            "git_anchor_search_completed",
+        },
+        commit_filter={
+            "git_anchor_created": "commit_id",
+            "git_anchor_search_completed": "search_head",
+        },
+        commit_sha=commit,
+    )
     existing_anchor_keys = {
         (id_from_payload(event.payload, "trace_patch"), (event.payload.get("commit_id") or {}).get("hex"))
         for event in events

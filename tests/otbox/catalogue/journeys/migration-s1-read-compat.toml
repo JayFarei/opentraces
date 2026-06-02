@@ -1,0 +1,105 @@
+name = "migration-s1-read-compat"
+description = """
+Plan 085 S1 — read-compat / no-crash. The 0.4 CLI reads a real restored
+opentraces 0.3.3 world (schema 0.3.0 JSONL trace, 0.3.3 config/state,
+.opentraces.json marker; NO bucket / trails / context tree / datasets)
+without crashing.
+
+Forks from `c-legacy-v033`. The 0.4 first-touch is `trace index rebuild`
+(builds the local projection over the legacy trace); after it every
+read surface resolves the restored 0.3.0 trace:
+
+  * `status` / `doctor` return rc=0 against the legacy state.
+  * `trace query` finds the legacy trace via the rebuilt index.
+  * `trace get` / `trace map` resolve the legacy trace by id.
+
+Pairs with the schema-level S2/S3 pytest coverage in
+`tests/test_migration_0_3_3_to_0_4.py` (field-loss audit + patch
+reconstruction). This journey is the on-disk read-path proof.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+# --- 0.4 first-touch: build the projection over the legacy trace ----------
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+# --- core read surfaces all return rc=0 over the legacy world -------------
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["status"]
+
+[[steps]]
+type = "cli"
+id = "doctor"
+argv = ["doctor"]
+
+[[steps]]
+type = "cli"
+id = "query"
+argv = ["trace", "query", "farewell", "--json"]
+
+[[steps]]
+type = "cli"
+id = "get"
+argv = ["trace", "get", "{legacy_trace_id}", "--json"]
+
+[[steps]]
+type = "cli"
+id = "map"
+argv = ["trace", "map", "{legacy_trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "index-rebuild"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "status"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "doctor"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "query"
+equals = 0
+
+# The legacy 0.3.0 trace surfaces as a queryable candidate.
+[[assertions]]
+kind = "stdout_json"
+step = "query"
+path = "candidates.0.candidate_kind"
+equals = "trace"
+
+[[assertions]]
+kind = "returncode"
+step = "get"
+equals = 0
+
+# `trace get` resolves the legacy trace by id — read without crash.
+[[assertions]]
+kind = "stdout_json"
+step = "get"
+path = "trace.trace_id"
+equals = "{legacy_trace_id}"
+
+[[assertions]]
+kind = "returncode"
+step = "map"
+equals = 0

@@ -1,0 +1,29 @@
+{
+  "config_version": "0.2.0",
+  "projects": {
+    "/private$LEGACY_PROJECT": {
+      "project_id": "27e5e3e0e56a4d6fbd6857c9d9a048e3",
+      "slug": "project-27e5e3e0"
+    }
+  },
+  "excluded_projects": [],
+  "custom_redact_strings": [],
+  "projects_path": null,
+  "classifier_sensitivity": "medium",
+  "dataset_visibility": "private",
+  "security": {
+    "trufflehog": {
+      "enabled": false,
+      "verify_secrets": false
+    },
+    "llm_review": {
+      "enabled": false,
+      "api_format": "openai-compat",
+      "base_url": "http://localhost:11434/v1",
+      "model": "gemma3n:e4b",
+      "api_key_env": "",
+      "timeout": 120.0,
+      "prompt_version": "1"
+    }
+  }
+}

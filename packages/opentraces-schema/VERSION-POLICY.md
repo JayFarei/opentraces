@@ -47,11 +47,27 @@ strictly additive:
 - New enum values in existing Literal types
 
 A MINOR or PATCH bump that renames, moves, removes, narrows, or restructures
-an existing field will silently drop data during migration and is therefore
-forbidden. Changes of that shape must bump MAJOR and ship with an explicit
-migration function registered in `opentraces_schema.migrations` (module
-reserved for that purpose; no implementation needed until a breaking change
-actually lands).
+an existing field will silently drop data during migration unless an explicit
+forward-migration recovers it. Such a change must ship with a migration
+function registered in `opentraces_schema.migrations` that is additive,
+idempotent, non-mutating, and provably non-lossy (every dropped value is
+either reconstructed into a new field or preserved verbatim under
+`metadata.legacy.*`).
+
+The reserved `opentraces_schema.migrations` module is now implemented. The
+`0.5.0 -> 0.6.0` bump removed `Outcome.patch` (the session unified diff) in
+favour of the `TraceRecord.patches[]` spine; this is the breaking change the
+module was reserved for. `migrate_record` reconstructs `patches[]` from the
+legacy diff and preserves the raw diff under `metadata.legacy.patch`, so the
+removal is non-lossy through both the HuggingFace shard migration and the
+bucket path. The `0.3.3 -> 0.4` upgrade acceptance suite (kb/plans/085,
+`tests/test_migration_0_3_3_to_0_4.py`, and the otbox `c-legacy-v033`
+journeys) is the standing proof that the only field a 0.3.0 record loses is
+`Outcome.patch` and that `migrate_record` recovers it. See
+[MIGRATION-0.3.3-to-0.4.md](MIGRATION-0.3.3-to-0.4.md).
+
+Future breaking changes that cannot be made non-lossy by a registered
+migration must instead bump MAJOR (`0.x -> 1.0`, future `1.x -> 2.0`).
 
 The reciprocal CLI behavior: when a client encounters a remote whose
 declared schema is newer than the client's local version, the push is

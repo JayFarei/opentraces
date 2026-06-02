@@ -50,23 +50,61 @@ def load_traces(staging_dir: Path, *, limit: int | None = None) -> list[dict[str
 def load_trace_records(staging_dir: Path, since_iso: str | None = None) -> list:
     """Load staged traces as validated TraceRecords, skipping malformed rows.
 
-    `since_iso` optionally prunes by `timestamp_end` *before* the Pydantic
-    validate step — useful on hot paths (e.g. the post-commit hook) where
-    a staging dir of hundreds of historical rows would otherwise be
-    validated on every commit.
+    `since_iso` prunes to traces whose `timestamp_end` is at/after the cutoff.
+    This streams file-by-file (never materialising the whole staging dir at
+    once) and, when `since_iso` is set, skips files whose mtime is clearly older
+    than the window via a cheap stat — without it the post-commit hot path
+    loaded a 1000+ row inbox (~GBs of dicts) into memory on every commit just to
+    return the handful inside a 2h window. `timestamp_end` remains the
+    authoritative filter; the mtime gate is a conservative (1-day-margin)
+    optimisation that can only skip files too old to qualify.
     """
     from opentraces_schema import TraceRecord
 
+    if not staging_dir.exists():
+        return []
+
+    mtime_floor: float | None = None
+    if since_iso is not None:
+        from datetime import datetime, timedelta
+
+        try:
+            # A trace's file is written at ~timestamp_end, so a file modified
+            # more than a day before the window cannot hold a qualifying record.
+            mtime_floor = (datetime.fromisoformat(since_iso) - timedelta(days=1)).timestamp()
+        except ValueError:
+            mtime_floor = None
+
     records: list = []
-    for raw in load_traces(staging_dir):
-        if since_iso is not None:
-            ts = raw.get("timestamp_end")
-            if not ts or ts < since_iso:
+    for jsonl_file in sorted(staging_dir.glob("*.jsonl")):
+        if mtime_floor is not None:
+            try:
+                if jsonl_file.stat().st_mtime < mtime_floor:
+                    continue
+            except OSError:
                 continue
         try:
-            records.append(TraceRecord.model_validate(raw))
-        except Exception as e:
-            logger.debug("Skipping invalid trace record: %s", e)
+            text = jsonl_file.read_text().strip()
+        except OSError as e:
+            logger.debug("Skipping unreadable trace file %s: %s", jsonl_file, e)
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError as e:
+                logger.debug("Skipping malformed trace line in %s: %s", jsonl_file, e)
+                continue
+            if since_iso is not None:
+                ts = raw.get("timestamp_end")
+                if not ts or ts < since_iso:
+                    continue
+            try:
+                records.append(TraceRecord.model_validate(raw))
+            except Exception as e:
+                logger.debug("Skipping invalid trace record: %s", e)
     return records
 
 

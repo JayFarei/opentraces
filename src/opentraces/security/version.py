@@ -18,6 +18,15 @@ refactors that change the on-record metadata shape.
     ``scanner`` back-compat shims (``apply_redactions``, ``scan_trace_record``,
     ``two_pass_scan``, ``apply_trufflehog_redactions``) and the
     ``scanner_trufflehog`` module are gone.
+
+0.5.0 → 0.6.0
+    Plan 090 (usage-episode capsules) adds two registry tools:
+    ``business_logic`` (a Detector promoting the classifier's internal-hostname /
+    internal-url / db-connection-string / aws-account-id heuristics to redactable
+    spans — joins the capsule REDACTION_FLOOR) and ``capsule_scope`` (a Transformer
+    applying field-path EXCLUSION, the "this never leaves" guarantee for
+    prompt-bearing fields). The classifier verdict ``flags`` payload no longer
+    carries ``matched_text``/``reason`` — only ``{pattern, severity}``.
 """
 
-SECURITY_VERSION = "0.5.0"
+SECURITY_VERSION = "0.6.0"

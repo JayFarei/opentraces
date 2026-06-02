@@ -1,0 +1,53 @@
+name = "migration-u-trace-8-bursts-degrade"
+description = """
+Upgrade-UAT U-trace-8 (P0). `trace map --bursts` over a legacy 0.3.0 trace
+(reconstructed patches[], no hook trail, no Git anchors) must degrade cleanly:
+rc=0 with a deterministic TraceMap, never a traceback. The change-burst
+projection works off the migrated patches[] and reports absent commit/intent
+honestly rather than crashing.
+
+Forks from `c-legacy-v033`. `--no-commit-lookup` keeps it offline/hot-path safe.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "map-bursts"
+argv = ["trace", "map", "{legacy_trace_id}", "--bursts", "--no-commit-lookup", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "index-rebuild"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "map-bursts"
+equals = 0
+
+# A deterministic burst map is produced (no crash) over the migrated trace.
+[[assertions]]
+kind = "stdout_json"
+step = "map-bursts"
+path = "map.nodes.0.action_type"
+equals = "change_burst"
+
+[[assertions]]
+kind = "stdout_json"
+step = "map-bursts"
+path = "map.nodes.0.confidence"
+equals = "deterministic"

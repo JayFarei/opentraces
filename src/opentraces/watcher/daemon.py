@@ -426,7 +426,7 @@ def run_once(project_cwd: Path, *, verbose: bool = False) -> TickReport:
         # commit-attribution tick. The daemon looks up ``scan_project``
         # via module-level attribute so tests can monkeypatch it.
         try:
-            sr = scan_project(project_cwd)
+            sr = scan_project(project_cwd, reconcile_watcher=True)
             report.sessions_created = int(getattr(sr, "created", 0) or 0)
             report.sessions_refreshed = int(getattr(sr, "refreshed", 0) or 0)
             report.sessions_new_generations = int(

@@ -1,0 +1,137 @@
+name = "live-hf-bucket-daemon-sync"
+description = """
+LIVE HuggingFace CONTINUOUS bucket sync — the headline behavior. No explicit
+`bucket remote push` appears anywhere in this journey. Instead the watcher
+reconciles: `setup bucket --sync-policy daemon` then `setup watcher tick`
+drives watcher/daemon.run_once -> _run_bucket_remote_sync ->
+bucket_remote.reconcile_once() -> remote_push() to the real private repo
+{live_bucket_repo}.
+
+Models the real continuous-sync trigger: a new commit lands, so the next
+watcher tick is an *active* tick (daemon.run_once only reconciles the HF
+remote on active ticks / changed local state — idle projects pay no network
+cost). After that single tick (no manual push), the real remote reports
+`current` (local digest == remote digest). A second tick with no new commit
+is idempotent and stays `current`, proving the daemon loop converges and does
+not thrash. This exercises reconcile_once's policy/state gating and the
+watcher wiring against real HF, which the discrete-verb journey cannot.
+
+Requires the opt-in `live_hf` capability, so it SKIPs in default CI.
+"""
+lane = "core"
+tier = 1
+persona = "agent"
+requires = ["cli", "git", "live_hf"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# --- configure a REAL private HF bucket remote with DAEMON policy ---------
+[[steps]]
+type = "cli"
+id = "setup-bucket-daemon"
+argv = ["setup", "bucket", "--remote", "--provider", "huggingface", "--repo", "{live_bucket_repo}", "--sync-policy", "daemon", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-bucket-daemon"
+equals = 0
+
+# --- project the captured trace into the v2 bucket layout -----------------
+[[steps]]
+type = "cli"
+id = "repair"
+argv = ["bucket", "repair", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "repair"
+path = "repair.traces_projected"
+equals = 1
+
+# --- before any sync: remote is missing -----------------------------------
+[[steps]]
+type = "cli"
+id = "status-before"
+argv = ["bucket", "remote", "status", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-before"
+path = "remote.state"
+equals = "missing"
+
+# --- a new commit lands (a "trace" arrives) -------------------------------
+[[steps]]
+type = "write_file"
+id = "write-change"
+path = "live_daemon_change.txt"
+content = "live daemon sync: a new change lands, the watcher should auto-push\n"
+
+[[steps]]
+type = "shell"
+id = "git-add"
+argv = ["git", "add", "-A"]
+
+[[steps]]
+type = "shell"
+id = "git-commit"
+argv = ["git", "commit", "-m", "live daemon sync change"]
+
+# --- ONE watcher tick reconciles + auto-pushes (NO `bucket remote push`) --
+[[steps]]
+type = "cli"
+id = "tick-1"
+argv = ["setup", "watcher", "tick", "--project", "{project}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tick-1"
+equals = 0
+
+# --- the tick alone made the real remote current --------------------------
+[[steps]]
+type = "cli"
+id = "status-after-1"
+argv = ["bucket", "remote", "status", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-after-1"
+path = "remote.state"
+equals = "current"
+
+# --- a second tick is idempotent and stays converged ----------------------
+[[steps]]
+type = "cli"
+id = "tick-2"
+argv = ["setup", "watcher", "tick", "--project", "{project}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "tick-2"
+equals = 0
+
+[[steps]]
+type = "cli"
+id = "status-after-2"
+argv = ["bucket", "remote", "status", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-after-2"
+path = "remote.state"
+equals = "current"
+
+# diff confirms zero divergence after convergence
+[[steps]]
+type = "cli"
+id = "diff-after-2"
+argv = ["bucket", "remote", "diff", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "diff-after-2"
+path = "remote.different"
+equals = false

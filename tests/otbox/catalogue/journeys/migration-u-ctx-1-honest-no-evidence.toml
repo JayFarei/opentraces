@@ -1,0 +1,95 @@
+name = "migration-u-ctx-1-honest-no-evidence"
+description = """
+Upgrade-UAT U-ctx-1 (P0). The brand-new Context Tree read verbs are the
+dominant first-touch surprise for a curious upgrader: a 0.3.3 trace has no
+context tree at all. They must degrade to an HONEST no-evidence envelope
+(rc=0, empty nodes, an explicit `context_tree_not_captured` limitation),
+never a Python traceback and never a fabricated node graph.
+
+Forks from `c-legacy-v033`. After the 0.4 first-touch (`trace index rebuild`):
+
+  * `ctx list --json` is an empty manifest (opentraces.ctx.list.v2, traces []).
+  * `ctx tree {legacy_trace_id} --json` resolves the legacy trace id but reports
+    zero nodes + the `context_tree_not_captured` limitation.
+
+Pairs with the schema-level guard
+`tests/test_migration_upgrade_uat.py::test_u_ctx_2_migrated_record_has_no_fabricated_context_tree`.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+[[steps]]
+type = "cli"
+id = "index-rebuild"
+argv = ["trace", "index", "rebuild"]
+
+[[steps]]
+type = "cli"
+id = "ctx-list"
+argv = ["ctx", "list", "--json"]
+
+[[steps]]
+type = "cli"
+id = "ctx-tree"
+argv = ["ctx", "tree", "{legacy_trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "index-rebuild"
+equals = 0
+
+# ctx list: honest empty manifest, no blob loads.
+[[assertions]]
+kind = "returncode"
+step = "ctx-list"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-list"
+path = "schema_version"
+equals = "opentraces.ctx.list.v2"
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "ctx-list"
+path = "traces"
+equals = 0
+
+# ctx tree: resolves the legacy id but reports honest no-evidence.
+[[assertions]]
+kind = "returncode"
+step = "ctx-tree"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-tree"
+path = "schema_version"
+equals = "opentraces.context_tree.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "ctx-tree"
+path = "trace_id"
+equals = "{legacy_trace_id}"
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "ctx-tree"
+path = "nodes"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "ctx-tree"
+path = "limitations"
+equals = ["context_tree_not_captured"]

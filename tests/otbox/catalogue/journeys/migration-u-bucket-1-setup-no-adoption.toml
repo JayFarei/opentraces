@@ -1,0 +1,58 @@
+name = "migration-u-bucket-1-setup-no-adoption"
+description = """
+Upgrade-UAT U-bucket-1 (P0). First-run bucket opt-in on a restored 0.3.3 world
+does not auto-adopt the legacy traces and does not force a remote: `setup bucket
+--local-only` returns rc=0 with the remote disabled, the bucket reports zero
+adopted traces, and the legacy 0.3.0 JSONL is byte-present and untouched.
+
+Forks from `c-legacy-v033`.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+[[steps]]
+type = "cli"
+id = "setup-bucket"
+argv = ["--json", "setup", "bucket", "--local-only"]
+
+[[steps]]
+type = "cli"
+id = "bucket-status"
+argv = ["--json", "bucket", "status"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-bucket"
+equals = 0
+
+# --local-only leaves the remote disabled (no forced egress target).
+[[assertions]]
+kind = "stdout_json"
+step = "setup-bucket"
+path = "bucket.remote.enabled"
+equals = false
+
+# The bucket adopts zero legacy traces (read-in-place, no auto-adoption).
+[[assertions]]
+kind = "returncode"
+step = "bucket-status"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "bucket-status"
+path = "bucket.traces"
+equals = 0
+
+# The legacy 0.3.0 shard is still on disk after the bucket opt-in.
+[[assertions]]
+kind = "path_exists"
+path = "{opentraces_dir}/projects/project-27e5e3e0/traces/6961102e-e930-4c67-aeff-6335858fcdea.jsonl"

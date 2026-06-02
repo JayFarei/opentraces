@@ -1,0 +1,50 @@
+name = "migration-u-config-5-remove-reports-deletion"
+description = """
+Upgrade-UAT U-config-5 (P0). `remove` on an upgraded legacy project cleans the
+project marker + local trace state and REPORTS exactly what it removed (the
+projects/<slug> path that holds the legacy 0.3.0 JSONL), never destroying the
+upgrader's devtime data silently. Remote datasets are explicitly left untouched.
+
+Forks from `c-legacy-v033`. HONEST FINDING: `remove` DOES delete the legacy
+local trace state (including traces/*.jsonl), but the deletion is named in the
+output, so it is intentional + reported, not silent. Whether legacy raw traces
+should survive a `remove` is a product question logged for follow-up.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+[[steps]]
+type = "cli"
+id = "remove"
+argv = ["--json", "remove"]
+
+[[assertions]]
+kind = "returncode"
+step = "remove"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "remove"
+path = "status"
+equals = "ok"
+
+# The deletion of local trace state is REPORTED (not silent).
+[[assertions]]
+kind = "stdout_contains"
+step = "remove"
+value = "Removed local trace state"
+
+# Remote datasets are explicitly left untouched.
+[[assertions]]
+kind = "stdout_contains"
+step = "remove"
+value = "Remote datasets were not changed"

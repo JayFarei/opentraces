@@ -1,0 +1,15 @@
+{
+  "schema_version": "0.3.0",
+  "trace_id": "11111111-1111-4111-8111-111111111111",
+  "session_id": "legacy-session-abc",
+  "agent": {"name": "claude-code", "version": "1.0.0"},
+  "task": {"description": "add a helper and fix a bug"},
+  "outcome": {
+    "success": true,
+    "description": "implemented helper, fixed off-by-one",
+    "committed": true,
+    "commit_sha": "deadbeefcafe0000deadbeefcafe0000deadbeef",
+    "patch": "--- a/foo.py\n+++ b/foo.py\n@@ -1,3 +1,4 @@\n import os\n+import sys\n \n def main():\n--- a/bar.py\n+++ b/bar.py\n@@ -10,2 +10,2 @@\n-    return n + 1\n+    return n\n"
+  },
+  "metadata": {"origin": "v0.3.3 legacy capture"}
+}

@@ -1,0 +1,11 @@
+{
+  "opentraces_cli_version": "0.3.3",
+  "opentraces_schema_version": "0.3.0",
+  "source_tag": "v0.3.3",
+  "session_id": "sess-legacy-v033-refactor",
+  "schema_versions_observed": [
+    "0.3.0"
+  ],
+  "build_command": "python tests/migration/build_legacy_world.py",
+  "note": "Real v0.3.3 init + _scan; outcome.patch guaranteed populated."
+}

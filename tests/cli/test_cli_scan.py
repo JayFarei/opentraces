@@ -91,6 +91,7 @@ class TestScanCommand:
         assert result.exit_code == 0
         assert "--dry-run" in result.output
         assert "--reparse" in result.output
+        assert "--trace-record-only" in result.output
 
     def test_scan_stages_pre_existing_sessions(
         self, runner, opted_in_project
@@ -110,6 +111,70 @@ class TestScanCommand:
         sess = state.get_session("sess-test")
         assert sess is not None
         assert len(sess.generations) == 1
+
+    def test_scan_auto_enrolls_unmarked_project_in_global_mode(
+        self, runner, tmp_path, monkeypatch
+    ) -> None:
+        project = tmp_path / "project"
+        project.mkdir()
+        session_path = tmp_path / "synthetic" / "sess-auto.jsonl"
+        _write_session(session_path, "sess-auto", turns=3)
+        monkeypatch.setattr(
+            "opentraces.core.ingest.discover_claude_jsonl_corpus",
+            lambda _repo: [session_path],
+        )
+        monkeypatch.setattr(
+            "opentraces.capture.codex_cli.parse.CodexCliParser.discover_project_sessions",
+            lambda _self, _repo: iter(()),
+        )
+
+        result = runner.invoke(
+            main,
+            ["--json", "_scan", "--project", str(project)],
+        )
+        assert result.exit_code == 0, result.output
+        assert (project / ".opentraces.json").is_file()
+
+        payload = _extract_json(result.output)
+        assert payload["created"] == 1
+
+        from opentraces.core.config import (
+            get_project_state_path,
+            load_config,
+            opted_in_projects,
+        )
+        from opentraces.core.state import StateManager
+
+        assert str(project.resolve()) in opted_in_projects(load_config())
+        state = StateManager(state_path=get_project_state_path(project))
+        assert state.get_session("sess-auto") is not None
+
+    def test_scan_dry_run_respects_project_agents(
+        self, runner, opted_in_project, monkeypatch
+    ) -> None:
+        def _unexpected_codex(_self, _repo):
+            raise AssertionError("dry-run should honor project agent selection")
+
+        monkeypatch.setattr(
+            "opentraces.capture.codex_cli.parse.CodexCliParser.discover_project_sessions",
+            _unexpected_codex,
+        )
+
+        result = runner.invoke(main, ["--json", "_scan", "--dry-run"])
+        assert result.exit_code == 0, result.output
+        payload = _extract_json(result.output)
+        assert payload["sessions_seen"] == 1
+        assert payload["would"][0]["agent"] == "claude-code"
+
+    def test_scan_missing_session_explains_raw_logs_are_local(
+        self, runner, opted_in_project
+    ) -> None:
+        result = runner.invoke(main, ["_scan", "--session", "missing-session"])
+
+        assert result.exit_code == 3
+        assert "raw agent corpus" in result.output
+        assert "machine-local" in result.output
+        assert "trace get" in result.output
 
     def test_scan_dry_run_does_not_write_state(
         self, runner, opted_in_project

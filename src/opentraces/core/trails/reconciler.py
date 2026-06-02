@@ -104,6 +104,7 @@ def _git(repo: Path, *args: str, check: bool = True) -> str:
         cwd=repo,
         capture_output=True,
         text=True,
+        errors="replace",
         check=False,
     )
     if check and proc.returncode != 0:
@@ -163,7 +164,18 @@ def _blob_text(repo: Path, blob_id: Any) -> str:
     blob_hex = _object_hex(blob_id)
     if not blob_hex:
         return ""
-    return _git(repo, "show", blob_hex, check=False)
+    proc = subprocess.run(
+        ["git", "show", blob_hex],
+        cwd=repo,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0 or b"\x00" in proc.stdout:
+        return ""
+    try:
+        return proc.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
 
 
 def _watcher_added_text(repo: Path, observation: TrailEvent) -> tuple[str, dict[str, int | None]]:

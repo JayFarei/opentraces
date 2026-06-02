@@ -30,8 +30,6 @@ ingestion plan):
         ``supersedes = prev.trace_id``.
       - BLOCKED → no-op (a secret in the transcript is still there).
       - FAILED → treated as terminal for safety; avoids spamming retries.
-      - Forced reparse with an unchanged source refreshes the latest
-        generation in place; repair must not grow retained state forever.
 """
 
 from __future__ import annotations
@@ -61,6 +59,7 @@ from .config import (
 )
 from .pipeline import process_trace
 from .repo_identity import discover_claude_jsonl_corpus as _discover_claude_jsonl_corpus
+from .trace_index import keep_index_warm
 from .state import (
     GenerationRecord,
     StateManager,
@@ -248,8 +247,8 @@ def ingest_one_session(
     cfg: Config | None = None,
     wait_for_lock: bool = True,
     parser_name: str | None = None,
-    reconcile_trails: bool = True,
-    emit_substrate_events: bool = True,
+    reconcile_watcher: bool = True,
+    trace_record_only: bool = False,
 ) -> IngestResult:
     """Ingest a single registered-agent session JSONL into the project's inbox.
 
@@ -258,9 +257,8 @@ def ingest_one_session(
     new_generation / noop / skipped / error).
 
     ``reparse=True`` forces a re-derivation even if the file hasn't
-    grown. It does not by itself imply a resumed terminal session: unchanged
-    sources refresh the latest generation in place, while changed sources
-    still open a superseding generation when the prior status is terminal.
+    grown. Used by the ``_scan --reparse`` CLI path and by the schema-
+    bump auto-upgrade (Phase 3) — not by the default watcher tick.
     """
     resolved_parser_name = parser_name or "claude-code"
     session_id = _session_id_from(jsonl_path, resolved_parser_name)
@@ -271,8 +269,8 @@ def ingest_one_session(
             return _ingest_locked(jsonl_path, project_dir, session_id,
                                   reparse=reparse, cfg=cfg,
                                   parser_name=resolved_parser_name,
-                                  reconcile_trails=reconcile_trails,
-                                  emit_substrate_events=emit_substrate_events)
+                                  reconcile_watcher=reconcile_watcher,
+                                  trace_record_only=trace_record_only)
     except _LockHeld:
         # Another ingest already owns this session; it (or the watcher
         # sweep) will cover the work. Skip rather than stack behind it.
@@ -297,8 +295,8 @@ def _ingest_locked(
     reparse: bool,
     cfg: Config | None,
     parser_name: str,
-    reconcile_trails: bool,
-    emit_substrate_events: bool,
+    reconcile_watcher: bool,
+    trace_record_only: bool,
 ) -> IngestResult:
     """Inner, flock-held ingest. Must not raise; caller wraps."""
 
@@ -324,18 +322,16 @@ def _ingest_locked(
                 error="trace is blocked",
             )
 
-    # Has it changed since the last successful observation? A forced reparse
-    # still needs this signal so repair runs can distinguish unchanged terminal
-    # captures from genuinely resumed sessions.
+    # Has it grown? (Or are we forcing a reparse?)
     prior_sess = state.get_session(session_id)
-    source_changed = True
-    if prior_sess is not None:
-        source_changed = _has_grown(
+    grew = True
+    if prior_sess is not None and not reparse:
+        grew = _has_grown(
             jsonl_path,
             observed_size=prior_sess.observed_size,
             observed_mtime=prior_sess.observed_mtime,
         )
-    if not source_changed and latest_gen is not None and not reparse:
+    if not grew and latest_gen is not None:
         return IngestResult(
             session_id=session_id, action="noop",
             trace_id=latest_gen.trace_id,
@@ -352,7 +348,7 @@ def _ingest_locked(
         trace_id = _trace_id_for(session_id, next_generation)
     else:
         current_status = _current_trace_status(state, latest_gen.trace_id)
-        if current_status in _TERMINAL_STATUSES and source_changed:
+        if current_status in _TERMINAL_STATUSES:
             open_new_gen = True
             next_generation = latest_gen.generation + 1
             supersedes = latest_gen.trace_id
@@ -408,26 +404,12 @@ def _ingest_locked(
     # single ``max(generation_index)`` pass. Source of truth is the state
     # record we are about to write below (``next_generation``).
     final_record.generation_index = next_generation
-    if supersedes:
-        superseded_trace_ids = [supersedes]
-        if prior_sess is not None:
-            superseded_trace_ids = [
-                generation.trace_id
-                for generation in prior_sess.generations
-                if generation.trace_id != trace_id
-            ] or superseded_trace_ids
-        final_record.metadata = {
-            **final_record.metadata,
-            "supersedes": supersedes,
-            "supersedes_reason": supersedes_reason,
-            "superseded_trace_ids": superseded_trace_ids,
-        }
 
     # Trace Trails Phase 2: hook metadata is parsed before the canonical
     # trace_id exists. Emit the local event-log projection after identity and
     # generation are known. This substrate must not make normal inbox capture
     # fragile, so TrailEvent write failures are logged but non-fatal.
-    if emit_substrate_events:
+    if not trace_record_only:
         try:
             from .trails import (
                 emit_step_window_events_from_record,
@@ -435,7 +417,7 @@ def _ingest_locked(
             )
 
             emit_step_window_events_from_record(project_dir, final_record)
-            if reconcile_trails:
+            if reconcile_watcher:
                 reconcile_watcher_observations(project_dir)
         except Exception:
             logger.warning(
@@ -452,7 +434,7 @@ def _ingest_locked(
     # content stays in trail.jsonl.gz. Defensive: failure here must not block
     # ingest. The post-commit hook (Track 2) sets ``Patch.anchor`` later; the
     # derive helper then projects to ``outcome`` + ``git_links``.
-    if emit_substrate_events and not final_record.patches:
+    if not trace_record_only and not final_record.patches:
         try:
             final_record.patches = _backfill_patches_from_trail_events(
                 project_dir, final_record.trace_id, final_record.generation_index,
@@ -481,7 +463,7 @@ def _ingest_locked(
     # Context Tree substrate (plan 077): capture what the LLM saw at each
     # active-path record. Independent try block so a Context Tree failure
     # never blocks Trail event emission or normal ingest.
-    if emit_substrate_events:
+    if not trace_record_only:
         try:
             emit_context_tree = getattr(parser, "emit_context_tree_events_from_record", None)
             if callable(emit_context_tree):
@@ -555,7 +537,7 @@ def _ingest_locked(
         )
     except Exception:
         logger.warning("raw source bucket write failed for %s", trace_id, exc_info=True)
-    if emit_substrate_events:
+    if not trace_record_only:
         try:
             sync_trail_events_from_repo(project_dir, repo_id=project_slug)
         except Exception:
@@ -572,6 +554,53 @@ def _ingest_locked(
         except Exception:
             logger.warning(
                 "context tree bucket projection failed for %s", trace_id, exc_info=True
+            )
+
+    # Plan 087 U5: best-effort keep-warm. Now that the trace is in the bucket,
+    # bring the warm Trace Index + search projection up to date so the trace is
+    # queryable without a manual ``trace index refresh``. Looked up via the
+    # module attribute so tests can monkeypatch it. ``keep_index_warm`` never
+    # raises, but wrap defensively anyway — keeping the warm cache fresh must
+    # never make capture fragile.
+    if not trace_record_only:
+        try:
+            # F3: pass the single trace we just wrote so keep-warm refreshes ONLY
+            # that trace (no ~46s whole-corpus delta). Warm both the index and the
+            # projection here since this is the one place we cheaply know the exact
+            # delta; the projection refresh is bounded to this one trace_id.
+            keep_index_warm(
+                trace_id=final_record.trace_id,
+                query_sources=("index", "projection"),
+            )
+        except Exception:
+            logger.warning(
+                "keep-warm hook failed for %s (best-effort, ignored)", trace_id,
+                exc_info=True,
+            )
+    else:
+        # --trace-record-only deliberately skips the heavy projection / trail /
+        # context warm-up so a broad retained-record backfill stays bounded, but
+        # it must still keep the INDEX cheap-sync marker in step with the bucket.
+        # Skipping this entirely (the prior behaviour) left
+        # `synced_cheap_signal:index` stale while the just-written record flipped
+        # the stat-only bucket signal, so the NEXT `trace query` saw a marker
+        # mismatch and fell into the whole-corpus `_current_bucket_trace_digests`
+        # materialisation (every TraceRecord parsed at once, ~4GB RSS, >1min).
+        # The F3 single-trace path is bounded: it runs only the mtime-gated
+        # `refresh_index` for this one trace (the trail projection early-returns
+        # because record-only never appends trail events) and re-stamps the
+        # marker. Projection / trail / context stay deferred, preserving the
+        # bounded-backfill intent, while the next query short-circuits warm.
+        try:
+            keep_index_warm(
+                trace_id=final_record.trace_id,
+                query_sources=("index",),
+            )
+        except Exception:
+            logger.warning(
+                "record-only index keep-warm failed for %s (best-effort, ignored)",
+                trace_id,
+                exc_info=True,
             )
 
     # Decide the status this generation enters.
@@ -708,6 +737,14 @@ def _discover_sessions_for_project(
     return sorted(out, key=lambda item: (item[0], str(item[1])))
 
 
+def discover_project_ingest_candidates(project_dir: Path) -> list[tuple[str, Path]]:
+    """Return the sessions a real project scan would attempt."""
+    return _discover_sessions_for_project(
+        project_dir,
+        _project_agent_names(project_dir),
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Project-wide scan
 # --------------------------------------------------------------------------- #
@@ -719,8 +756,8 @@ def scan_project(
     paths: list[Path | tuple[str, Path]] | None = None,
     cfg: Config | None = None,
     on_result: Callable[[IngestResult, int, int], None] | None = None,
-    reconcile_trails: bool = True,
-    emit_substrate_events: bool = True,
+    reconcile_watcher: bool = False,
+    trace_record_only: bool = False,
 ) -> ScanReport:
     """Scan every registered parser JSONL associated with ``project_dir``.
 
@@ -731,10 +768,7 @@ def scan_project(
     project_dir = Path(project_dir).resolve()
 
     if paths is None:
-        candidates = _discover_sessions_for_project(
-            project_dir,
-            _project_agent_names(project_dir),
-        )
+        candidates = discover_project_ingest_candidates(project_dir)
     else:
         candidates = [
             (str(item[0]), Path(item[1]))
@@ -742,7 +776,6 @@ def scan_project(
             else ("claude-code", Path(item))
             for item in paths
         ]
-    candidates = _dedupe_session_candidates(candidates)
 
     resolved_cfg = cfg or load_config()
     report = ScanReport(project_dir=project_dir)
@@ -756,8 +789,8 @@ def scan_project(
                 reparse=reparse,
                 cfg=resolved_cfg,
                 parser_name=parser_name,
-                reconcile_trails=reconcile_trails,
-                emit_substrate_events=emit_substrate_events,
+                reconcile_watcher=reconcile_watcher,
+                trace_record_only=trace_record_only,
             )
         except Exception as e:  # noqa: BLE001 — ingest_one_session already
             # wraps, but keep a belt here for the discovery path.
@@ -774,38 +807,24 @@ def scan_project(
             except Exception:  # pragma: no cover - callback is best-effort.
                 logger.exception("scan_project progress callback failed")
 
-    return report
-
-
-def _dedupe_session_candidates(
-    candidates: list[tuple[str, Path]],
-) -> list[tuple[str, Path]]:
-    """Keep one source path per parser-native session id.
-
-    Some adapters can expose multiple rollout files with the same native thread
-    id. The ingest state key is that native id, so attempting every duplicate in
-    one scan makes repair runs churn a single logical session repeatedly.
-    """
-
-    selected: dict[tuple[str, str], tuple[str, Path]] = {}
-    for parser_name, path in candidates:
+    # Plan 087 U5/G2: best-effort keep-warm once per scan (the per-session
+    # ingest already warms, but a sweep that refreshed several sessions gets one
+    # final cheap digest-gated sync here — steady state is a no-op). Warm the
+    # projection source too (not index-only) so a sweep leaves ``trace query
+    # --semantic`` fresh; with G1's in-place delta + G2's marker bootstrap the
+    # projection sync is now as cheap as the index one (zero-copy, O(delta), and
+    # an O(1) short-circuit when nothing moved). Looked up via the module
+    # attribute so tests can monkeypatch it. MUST NOT break the scan.
+    if not trace_record_only:
         try:
-            session_id = _session_id_from(path, parser_name)
-        except Exception:  # noqa: BLE001
-            session_id = str(path)
-        key = (parser_name, session_id)
-        existing = selected.get(key)
-        if existing is None or _candidate_preference_key(path) > _candidate_preference_key(existing[1]):
-            selected[key] = (parser_name, path)
-    return list(selected.values())
+            keep_index_warm(query_sources=("index", "projection"))
+        except Exception:
+            logger.warning(
+                "scan_project keep-warm hook failed (best-effort, ignored)",
+                exc_info=True,
+            )
 
-
-def _candidate_preference_key(path: Path) -> tuple[float, int, str]:
-    try:
-        stat = path.stat()
-        return (stat.st_mtime, stat.st_size, str(path))
-    except OSError:
-        return (0.0, 0, str(path))
+    return report
 
 
 # --------------------------------------------------------------------------- #

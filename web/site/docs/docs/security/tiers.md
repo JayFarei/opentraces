@@ -5,7 +5,7 @@ by default for per-record sanitization. A bucket flow or workflow opts in to
 the tools it wants, either explicitly with `--tools` or by enabling tools in
 config and running with `--use-config`.
 
-Current pipeline version: `SECURITY_VERSION = 0.5.0`.
+Current pipeline version: `SECURITY_VERSION = 0.6.0`.
 
 ```bash
 opentraces security tools list
@@ -22,13 +22,15 @@ opentraces doctor --security
 | `trufflehog` | detector | off | Optional deep secret detector, configured by `opentraces setup trufflehog` |
 | `privacy_filter` | detector | off | Optional `openai/privacy-filter` NER detector, configured by `opentraces setup privacy-filter` |
 | `llm_pii` | detector | off | Advanced per-field LLM PII detector; configure `security.llm_pii` directly before enabling |
+| `business_logic` | detector | off | Promotes internal-hostname / internal-url / db-connection-string / aws-account-id heuristics to redactable spans; always-on inside the capsule REDACTION_FLOOR |
 | `path_anonymizer` | transformer | off | Rewrites usernames in filesystem paths |
+| `capsule_scope` | transformer | off | Applies field-path exclusion of prompt-bearing fields (the "this never leaves" guarantee); default-disabled in normal ingest |
 | `classifier` | judge | off | Heuristic sensitivity verdict without mutating the record |
 
 Canonical order is deterministic:
 
 ```text
-regex -> entropy -> trufflehog -> privacy_filter -> llm_pii -> path_anonymizer -> classifier
+regex -> entropy -> trufflehog -> privacy_filter -> llm_pii -> business_logic -> path_anonymizer -> capsule_scope -> classifier
 ```
 
 Explicit `--tools` requests are sorted into that order so a judge never sees

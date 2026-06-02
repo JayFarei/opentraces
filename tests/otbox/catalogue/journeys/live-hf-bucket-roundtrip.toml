@@ -1,0 +1,133 @@
+name = "live-hf-bucket-roundtrip"
+description = """
+LIVE HuggingFace bucket round-trip against a real private dataset repo
+({live_bucket_repo}, provisioned per box under the Jayfarei namespace).
+
+Discrete-verb path (sibling of the daemon-sync journey): configure a real
+HF bucket remote (manual policy), push the captured trace's bucket, confirm
+the remote reports `current`, then wipe the local bucket and pull it back,
+proving the bucket is a self-sufficient remote unit. The fake-lane
+`bucket-remote-push`/`bucket-remote-pull` journeys only assert help text;
+this one does the real upload/download against huggingface.co.
+
+Requires the opt-in `live_hf` capability (OT_OTBOX_LIVE_HF=1 + token), so it
+SKIPs in default CI. Forks from c-captured-real-session for a real trace.
+"""
+lane = "core"
+tier = 1
+persona = "agent"
+requires = ["cli", "git", "live_hf"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# --- configure a REAL private HF bucket remote (manual policy) ------------
+[[steps]]
+type = "cli"
+id = "setup-bucket"
+argv = ["setup", "bucket", "--remote", "--provider", "huggingface", "--repo", "{live_bucket_repo}", "--sync-policy", "manual", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-bucket"
+equals = 0
+
+# --- project the captured trace into the plan-080 v2 bucket layout --------
+# (the checkpoint stores it in the old layout; repair rebuilds v2 + manifest)
+[[steps]]
+type = "cli"
+id = "repair"
+argv = ["bucket", "repair", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "repair"
+path = "repair.traces_projected"
+equals = 1
+
+# --- push the local bucket to the real remote -----------------------------
+[[steps]]
+type = "cli"
+id = "push"
+argv = ["bucket", "remote", "push", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "push"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "push"
+path = "remote.state"
+equals = "pushed"
+
+# --- remote now matches local --------------------------------------------
+[[steps]]
+type = "cli"
+id = "status"
+argv = ["bucket", "remote", "status", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "status"
+path = "remote.state"
+equals = "current"
+
+[[steps]]
+type = "cli"
+id = "diff"
+argv = ["bucket", "remote", "diff", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "diff"
+path = "remote.different"
+equals = false
+
+# --- wipe the local bucket, then restore it from the real remote ----------
+[[steps]]
+type = "shell"
+id = "wipe-local-bucket"
+argv = ["rm", "-rf", "{opentraces_dir}/bucket"]
+
+[[steps]]
+type = "cli"
+id = "pull"
+argv = ["bucket", "remote", "pull", "--force", "--eager", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "pull"
+equals = 0
+
+# --- byte/digest-identical restore: the rebuilt local bucket's whole-bucket
+# digest must match the remote again (state==current proves the eager pull
+# reconstructed every substrate, not just the spine) ----------------------
+[[steps]]
+type = "cli"
+id = "status-after-pull"
+argv = ["bucket", "remote", "status", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "status-after-pull"
+path = "remote.state"
+equals = "current"
+
+# --- the captured trace survived the remote round-trip --------------------
+[[steps]]
+type = "cli"
+id = "trace-get"
+argv = ["trace", "get", "{trace_id}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-get"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-get"
+value = "{trace_id}"

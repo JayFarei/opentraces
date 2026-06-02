@@ -1,0 +1,40 @@
+name = "migration-u-ds-3-pull-removed"
+description = """
+Upgrade-UAT U-ds-3 (P1). A 0.3.3 user invoking the removed `opentraces pull`
+verb on 0.4 gets a deterministic non-zero failure, not a silent no-op or a
+traceback.
+
+Forks from `c-legacy-v033`. HONEST FINDING (logged as a UX gap): the failure is
+the generic Click "No such command 'pull'" with NO replacement hint pointing at
+`dataset new --rows-file`. The audit's "replacement hint" premise does not hold;
+this journey pins the real behavior so the gap is tracked.
+"""
+lane = "core"
+tier = 0
+tier_label = "bronze"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-legacy-v033"]
+
+[preconditions]
+legacy_world_restored = true
+pre_migration_schema = "0.3.0"
+
+[[steps]]
+type = "cli"
+id = "pull"
+argv = ["pull"]
+# The removed verb is EXPECTED to exit non-zero; tell the runner so the
+# intentional failure is not counted as a step failure.
+expect_returncode = 2
+
+# Deterministic non-zero exit (Click unknown-command), never rc=0 or a crash.
+[[assertions]]
+kind = "returncode"
+step = "pull"
+equals = 2
+
+[[assertions]]
+kind = "stderr_contains"
+step = "pull"
+value = "No such command 'pull'"

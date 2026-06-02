@@ -34,6 +34,15 @@ def _trace_index_status() -> dict[str, Any]:
     index_path = default_index_path()
     rebuild_advice = "opentraces trace index rebuild"
     legacy_artifacts = _legacy_trace_index_artifacts()
+    # Plan 087 U5: report search-projection freshness cheaply (no heavy repair).
+    # ``search_projection_freshness`` is a read-only digest comparison; the
+    # remedy when stale is ``trace index refresh`` (cheap sync).
+    try:
+        from .search_projection import search_projection_freshness
+
+        search_freshness = search_projection_freshness()
+    except Exception as exc:  # noqa: BLE001 — doctor must never crash.
+        search_freshness = {"state": "error", "error": str(exc)}
     source_files = sorted(paths.PROJECTS_DIR.glob("*/traces/*.jsonl")) if paths.PROJECTS_DIR.exists() else []
     source_latest_mtime = max((p.stat().st_mtime for p in source_files), default=None)
     base = {
@@ -44,6 +53,7 @@ def _trace_index_status() -> dict[str, Any]:
         "rebuild_advice": rebuild_advice,
         "legacy_artifacts": legacy_artifacts,
         "legacy_warning": bool(legacy_artifacts),
+        "search_projection_freshness": search_freshness,
     }
     if not index_path.exists():
         return {
@@ -746,6 +756,39 @@ def _hook_installers() -> list[dict[str, Any]]:
     return out
 
 
+def _registered_project_paths(cfg, cwd: Path | None = None) -> list[str]:
+    """Return project paths visible through config, sidecars, or cwd marker."""
+    project_paths = set(getattr(cfg, "projects", {}).keys())
+
+    try:
+        from . import paths
+
+        if paths.PROJECTS_DIR.is_dir():
+            for project_json in sorted(paths.PROJECTS_DIR.glob("*/project.json")):
+                try:
+                    data = json.loads(project_json.read_text())
+                except (OSError, json.JSONDecodeError):
+                    continue
+                raw_path = data.get("path") or data.get("project_dir")
+                if not isinstance(raw_path, str) or not raw_path.strip():
+                    continue
+                try:
+                    project_paths.add(str(Path(raw_path).expanduser().resolve()))
+                except OSError:
+                    project_paths.add(str(Path(raw_path).expanduser()))
+    except Exception:
+        pass
+
+    if cwd is not None:
+        try:
+            if project_is_opted_in(cwd):
+                project_paths.add(str(cwd.resolve()))
+        except Exception:
+            pass
+
+    return sorted(project_paths)
+
+
 def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
     """Build the doctor payload.
 
@@ -759,7 +802,7 @@ def report(cfg, cwd: Path | None = None) -> dict[str, Any]:
     llm_review = _review_llm_status(cfg.security.llm_review)
     review_policy = _project_review_policy(cwd)
 
-    opted_in = sorted(getattr(cfg, "projects", {}).keys())
+    opted_in = _registered_project_paths(cfg, cwd)
 
     return {
         "security_version": SECURITY_VERSION,

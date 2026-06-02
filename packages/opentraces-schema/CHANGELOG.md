@@ -41,6 +41,21 @@ See [RATIONALE-0.6.0.md](RATIONALE-0.6.0.md) for design notes.
   for the structured output spine and use the trace's Trail companion for full
   patch history/diff content.
 
+### Migration
+
+- `opentraces_schema.migrations.migrate_record` (the previously-reserved
+  migrations module, now implemented) upgrades a pre-0.6.0 raw record before
+  validation: it reconstructs `patches[]` from the legacy `Outcome.patch`
+  unified diff (one `Patch` per file, content-addressed `patch_id`) and
+  preserves the raw diff verbatim under `metadata.legacy.patch`. Both the
+  HuggingFace shard migration (`HFUploader.migrate_outdated_shards`) and the
+  bucket path call it, so the `Outcome.patch` removal is non-lossy on upgrade.
+  A bare `TraceRecord.model_validate` of a 0.3.0 record still drops the field
+  (Pydantic `extra="ignore"`); always route legacy records through
+  `migrate_record` first. See
+  [MIGRATION-0.3.3-to-0.4.md](MIGRATION-0.3.3-to-0.4.md) for the full upgrade
+  contract.
+
 ## [0.5.0] - 2026-05-18
 
 Adds two Context Tree cross-reference fields (plan 077). Strictly additive

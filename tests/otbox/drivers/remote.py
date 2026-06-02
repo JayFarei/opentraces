@@ -255,6 +255,7 @@ class RemoteDriver(Driver):
         cwd: Path | str | None = None,
         env_extra: dict | None = None,
         timeout: float | None = None,
+        live_hf: bool = False,
     ) -> ExecResult:
         target = box.notes.get("remote_target") or self._require()
         argv = [str(a) for a in argv]
@@ -263,7 +264,7 @@ class RemoteDriver(Driver):
         run_cwd = str(cwd) if cwd is not None else f"{remote}/project"
 
         # Translate isolated env to remote paths.
-        host_env = isolated_env(box, env_extra)
+        host_env = isolated_env(box, env_extra, live_hf=live_hf)
         host_root = str(box.root)
         remote_env: dict[str, str] = {}
         for key in ("HOME", "OPENTRACES_PLAN058_FAKE_REMOTE_ROOT",
@@ -271,8 +272,10 @@ class RemoteDriver(Driver):
             val = host_env.get(key, "")
             if val.startswith(host_root):
                 remote_env[key] = val.replace(host_root, remote, 1)
-        for key in ("HF_HUB_DISABLE_IMPLICIT_TOKEN", "GIT_PAGER", "PAGER",
-                    "OTBOX_BOX_ID"):
+        # HF_TOKEN forwarded for parity so a future tier-1-over-SSH live run
+        # reaches the remote (v1 runs live on the local driver only).
+        for key in ("HF_HUB_DISABLE_IMPLICIT_TOKEN", "HF_TOKEN", "GIT_PAGER",
+                    "PAGER", "OTBOX_BOX_ID"):
             if key in host_env:
                 remote_env[key] = host_env[key]
         env_prefix = " ".join(
@@ -368,20 +371,21 @@ class RemoteDriver(Driver):
         *,
         cwd: Path | str | None = None,
         env_extra: dict | None = None,
+        live_hf: bool = False,
     ) -> subprocess.Popen:
         """Long-running remote command via ssh (used by `service` step)."""
         target = box.notes.get("remote_target") or self._require()
         argv = [str(a) for a in argv]
         remote = self._remote_root(box)
         run_cwd = str(cwd) if cwd is not None else f"{remote}/project"
-        host_env = isolated_env(box, env_extra)
+        host_env = isolated_env(box, env_extra, live_hf=live_hf)
         host_root = str(box.root)
         remote_env = {}
         for k, v in host_env.items():
             if k in ("HOME", "OPENTRACES_PLAN058_FAKE_REMOTE_ROOT",
                      "GIT_CONFIG_GLOBAL", "GIT_CEILING_DIRECTORIES") and v.startswith(host_root):
                 remote_env[k] = v.replace(host_root, remote, 1)
-            elif k in ("HF_HUB_DISABLE_IMPLICIT_TOKEN", "GIT_PAGER",
+            elif k in ("HF_HUB_DISABLE_IMPLICIT_TOKEN", "HF_TOKEN", "GIT_PAGER",
                        "PAGER", "OTBOX_BOX_ID"):
                 remote_env[k] = v
         env_prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in sorted(remote_env.items()))

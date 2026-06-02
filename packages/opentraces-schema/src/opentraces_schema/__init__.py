@@ -47,6 +47,7 @@ from .trace_index import (
     TraceSignal,
     TraceUnit,
 )
+from .migrations import load_record_dict, load_record_json, migrate_record
 from .version import SCHEMA_VERSION
 
 __all__ = [
@@ -73,6 +74,9 @@ __all__ = [
     "GitAnchor",
     "GitLink",
     "Metrics",
+    "load_record_dict",
+    "load_record_json",
+    "migrate_record",
     "Observation",
     "Outcome",
     "Patch",

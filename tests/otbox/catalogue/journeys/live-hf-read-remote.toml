@@ -1,0 +1,120 @@
+name = "live-hf-read-remote"
+description = """
+LIVE HuggingFace read-from-remote — the bucket as a self-sufficient unit.
+Push the captured trace's bucket to a real private repo {live_bucket_repo},
+WIPE the local bucket, then read it back over the network with the `--remote`
+read verbs (no local bucket present): `trace get --remote`, `ctx list
+--remote`, and `bucket prefetch --remote`. This exercises the D1
+RemoteHubBackend (hf_hub_download) against huggingface.co.
+
+Requires the opt-in `live_hf` capability, so it SKIPs in default CI.
+Forks from c-captured-real-session for a real captured trace.
+"""
+lane = "core"
+tier = 1
+persona = "agent"
+requires = ["cli", "git", "live_hf"]
+from_checkpoints = ["c-captured-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+
+# --- push the captured bucket to the real remote --------------------------
+[[steps]]
+type = "cli"
+id = "setup-bucket"
+argv = ["setup", "bucket", "--remote", "--provider", "huggingface", "--repo", "{live_bucket_repo}", "--sync-policy", "manual", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-bucket"
+equals = 0
+
+# project the captured trace into the v2 bucket layout before pushing
+[[steps]]
+type = "cli"
+id = "repair"
+argv = ["bucket", "repair", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "repair"
+path = "repair.traces_projected"
+equals = 1
+
+[[steps]]
+type = "cli"
+id = "push"
+argv = ["bucket", "remote", "push", "--json"]
+
+[[assertions]]
+kind = "stdout_json"
+step = "push"
+path = "remote.state"
+equals = "pushed"
+
+# --- wipe the local bucket so reads MUST hit the remote -------------------
+[[steps]]
+type = "shell"
+id = "wipe-local-bucket"
+argv = ["rm", "-rf", "{opentraces_dir}/bucket"]
+
+# --- read the trace.json directly from the remote -------------------------
+[[steps]]
+type = "cli"
+id = "trace-get-remote"
+argv = ["trace", "get", "{trace_id}", "--remote", "{live_bucket_repo}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-get-remote"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-get-remote"
+value = "{trace_id}"
+
+# --- list the remote bucket's traces (manifest-only, no blob loads) -------
+[[steps]]
+type = "cli"
+id = "ctx-list-remote"
+argv = ["ctx", "list", "--remote", "{live_bucket_repo}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-list-remote"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "ctx-list-remote"
+value = "{trace_id}"
+
+# --- read the per-trace context substrate from the remote (fetches the
+# context.jsonl.gz companion, not just the manifest) -----------------------
+[[steps]]
+type = "cli"
+id = "ctx-info-remote"
+argv = ["ctx", "info", "{trace_id}", "--remote", "{live_bucket_repo}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "ctx-info-remote"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "ctx-info-remote"
+value = "{trace_id}"
+
+# --- warm the local bucket from the remote (eager blob pull) --------------
+[[steps]]
+type = "cli"
+id = "prefetch-remote"
+argv = ["bucket", "prefetch", "{trace_id}", "--remote", "{live_bucket_repo}", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "prefetch-remote"
+equals = 0

@@ -152,6 +152,12 @@ COMMAND_SECTIONS = [
         ],
     ),
     (
+        "Capsule",
+        [
+            "capsule",
+        ],
+    ),
+    (
         "Security",
         [
             "security",
@@ -1713,18 +1719,6 @@ def init(
     if marker_file.exists() or legacy_config_json.exists() or legacy_config_yml.exists():
         proj_config = load_project_config(project_dir)
         current_remote = proj_config.get("remote", "not set")
-        selected_agents = normalize_agents(list(agents))
-        current_agents = normalize_agents(proj_config.get("agents") or [])
-        agents_updated = False
-        if selected_agents:
-            merged_agents = normalize_agents([*current_agents, *selected_agents])
-            if merged_agents != current_agents:
-                proj_config["agents"] = merged_agents
-                save_project_config(project_dir, proj_config)
-                agents_updated = True
-                current_agents = merged_agents
-            _install_capture_hook(project_dir, selected_agents)
-            _install_skill(project_dir, selected_agents)
         # Plan-043 phase 6: on every init (even repeated), refresh root
         # commit identity + optionally prompt for first-run backfill.
         _plan043_finalize_identity(project_dir)
@@ -1740,24 +1734,6 @@ def init(
             "Already initialized "
             f"(mode: {proj_config.get('review_policy', 'review')}, remote: {current_remote})"
         )
-        if agents_updated:
-            click.echo(f"Agents updated: {', '.join(current_agents)}")
-        imported_existing = 0
-        import_errors = 0
-        scanned_existing = 0
-        if import_existing:
-            from ..core.ingest import scan_project
-
-            report = scan_project(project_dir, reparse=True, reconcile_trails=False)
-            scanned_existing = len(report.results)
-            imported_existing = report.created + report.refreshed + report.new_generations
-            import_errors = report.errored
-            click.echo(
-                "Re-imported existing traces: "
-                f"{imported_existing} ({import_errors} errors, {report.noops} unchanged)"
-            )
-        elif import_existing is False:
-            click.echo("Existing traces were left untouched.")
         click.echo("Run 'opentraces status' to inspect this inbox.")
         emit_json(
             {
@@ -1766,11 +1742,6 @@ def init(
                 "review_policy": proj_config["review_policy"],
                 "push_policy": proj_config["push_policy"],
                 "agents": proj_config["agents"],
-                "agents_updated": agents_updated,
-                "import_existing": import_existing,
-                "existing_session_count": scanned_existing,
-                "imported_existing": imported_existing,
-                "import_errors": import_errors,
             }
         )
         return
@@ -1874,7 +1845,7 @@ def init(
             length=existing_session_count,
             label="Importing Claude Code traces",
         ) as bar:
-            report = scan_project(project_dir, reconcile_trails=False)
+            report = scan_project(project_dir)
             # scan_project doesn't offer a per-session callback (one call
             # per tick of the outer watcher loop is enough), so we fill
             # the bar at the end. A future version could wire a callback
@@ -2892,12 +2863,16 @@ from .security import security_group as _security_group  # noqa: E402
 # Plan-077 — Context Tree substrate: ``opentraces ctx`` navigation surface.
 from .ctx import ctx_group as _ctx_group  # noqa: E402
 
+# Plan-082 — Agent-to-agent bug capsule: ``opentraces capsule`` share surface.
+from .capsule import capsule_group as _capsule_group  # noqa: E402
+
 main.add_command(_bucket_group, name="bucket")
 main.add_command(_dataset_group, name="dataset")
 main.add_command(_workflow_group, name="workflow")
 main.add_command(_skill_verifier_group, name="skill-verifier")
 main.add_command(_security_group, name="security")
 main.add_command(_ctx_group, name="ctx")
+main.add_command(_capsule_group, name="capsule")
 
 # Plan 078: OTLP receiver capture source (third sibling of JSONL + proxy).
 from .capture_otlp import (  # noqa: E402
@@ -3622,6 +3597,22 @@ def parse(auto: bool, limit: int) -> None:
     sys.exit(2)
 
 
+def _capture_project_root(path: Path) -> Path:
+    """Resolve an agent cwd to the project root used for capture."""
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).strip()
+        if out:
+            return Path(out).resolve()
+    except Exception:
+        pass
+    return path.resolve()
+
+
 @main.command("_ingest-session", hidden=True)
 @click.argument("transcript_path", type=click.Path())
 @click.option("--project", "project_override", type=click.Path(),
@@ -3665,9 +3656,14 @@ def _ingest_session(
             return  # vanished transcript — nothing to do
 
         if project_override:
-            project_dir = Path(project_override).resolve()
+            project_dir = _capture_project_root(Path(project_override))
         else:
-            project_dir = Path.cwd().resolve()
+            project_dir = _capture_project_root(Path.cwd())
+
+        if not (project_dir / ".opentraces.json").exists():
+            from ..core.config import auto_enroll_if_global
+
+            auto_enroll_if_global(project_dir)
 
         if not (project_dir / ".opentraces.json").exists():
             return  # not enlisted — watcher on other projects will catch it
@@ -3700,11 +3696,8 @@ def _ingest_session(
               help="Limit to a single session_id (JSONL basename).")
 @click.option("--dry-run", is_flag=True,
               help="Report what would change without writing state.")
-@click.option(
-    "--trace-record-only",
-    is_flag=True,
-    help="Skip Trail/Context Tree side projections during bulk trace repair.",
-)
+@click.option("--trace-record-only", is_flag=True,
+              help="Backfill TraceRecords/raw source only; skip Trail/Context projections.")
 @click.option("--project", "project_override", type=click.Path(),
               default=None,
               help="Run against an opted-in project other than the cwd.")
@@ -3717,11 +3710,16 @@ def _scan(reparse: bool, session_filter: str | None,
     without user intervention. Kept available for testing, post-upgrade
     reparse, and recovering from a missed hook fire.
     """
-    from ..capture import discover_project_sessions, session_id_from_path
-    from ..core.ingest import scan_project
+    from ..capture import session_id_from_path
+    from ..core.ingest import discover_project_ingest_candidates, scan_project
 
     project_dir = (Path(project_override) if project_override
                    else Path.cwd()).resolve()
+
+    if not dry_run:
+        from ..core.config import auto_enroll_if_global
+
+        auto_enroll_if_global(project_dir)
 
     if not (project_dir / ".opentraces.json").exists():
         click.echo(
@@ -3735,7 +3733,7 @@ def _scan(reparse: bool, session_filter: str | None,
         # Narrow the corpus to the requested session. We still go through
         # scan_project so the per-session rules (locks, state, etc.) are
         # applied uniformly.
-        all_paths = discover_project_sessions(project_dir)
+        all_paths = discover_project_ingest_candidates(project_dir)
         paths = [
             (agent_name, p)
             for agent_name, p in all_paths
@@ -3744,7 +3742,10 @@ def _scan(reparse: bool, session_filter: str | None,
         if not paths:
             click.echo(
                 f"No JSONL found for session_id={session_filter} "
-                f"under this project's corpus.",
+                f"under this project's raw agent corpus. Raw Claude/Codex "
+                "session files are machine-local and may be absent even when "
+                "the retained TraceRecord exists in the bucket; try `trace get` "
+                "or rerun backfill on the source machine.",
                 err=True,
             )
             sys.exit(3)
@@ -3761,8 +3762,7 @@ def _scan(reparse: bool, session_filter: str | None,
         project_dir,
         reparse=reparse,
         paths=paths,
-        reconcile_trails=not reparse and not trace_record_only,
-        emit_substrate_events=not trace_record_only,
+        trace_record_only=trace_record_only,
     )
 
     payload = {
@@ -3773,7 +3773,6 @@ def _scan(reparse: bool, session_filter: str | None,
         "new_generations": report.new_generations,
         "noops": report.noops,
         "errored": report.errored,
-        "trace_record_only": trace_record_only,
         "results": [
             {
                 "session_id": r.session_id,
@@ -3805,9 +3804,12 @@ def _emit_dry_run(
     paths: list[Path | tuple[str, Path]] | None,
 ) -> None:
     """Dry-run report: what would `_scan` do, given current state?"""
-    from ..capture import discover_project_sessions, session_id_from_path
+    from ..capture import session_id_from_path
     from ..core.config import get_project_state_path
-    from ..core.ingest import _has_grown  # noqa: SLF001 — shared helper
+    from ..core.ingest import (  # noqa: SLF001 — shared helper
+        _has_grown,
+        discover_project_ingest_candidates,
+    )
     from ..core.state import StateManager, TraceStatus
 
     terminal = {
@@ -3823,7 +3825,7 @@ def _emit_dry_run(
             for item in paths
         ]
     else:
-        candidates = discover_project_sessions(project_dir)
+        candidates = discover_project_ingest_candidates(project_dir)
     state = StateManager(state_path=get_project_state_path(project_dir))
 
     would: list[dict] = []

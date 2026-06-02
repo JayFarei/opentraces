@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlparse
 
 from pydantic import ValidationError
 
-from opentraces_schema import TraceRecord
+from opentraces_schema import TraceRecord, load_record_json
 
 from ..security.version import SECURITY_VERSION
 from ..security.privacy import (
@@ -3021,7 +3021,7 @@ def _read_jsonl_trace_records(path: Path) -> list[TraceRecord]:
         if not line.strip():
             continue
         try:
-            out.append(TraceRecord.model_validate_json(line))
+            out.append(load_record_json(line))
         except (ValueError, json.JSONDecodeError, ValidationError):
             continue
     return out

@@ -16,7 +16,7 @@ from .bursts import DEFAULT_BURST_GAP, detect_bursts
 from .trails.slices import trace_slice_id_for
 
 
-SLICE_TEMPLATES: tuple[str, ...] = ("bursts",)
+SLICE_TEMPLATES: tuple[str, ...] = ("bursts", "product_episode")
 
 
 def slice_by_steps(
@@ -107,6 +107,75 @@ def slices_from_bursts(
             )
         )
     return out
+
+
+def slice_for_product(
+    trace_map: TraceMap,
+    record: Any | None,
+    *,
+    product_match: str,
+) -> dict[str, Any] | None:
+    """Bound a slice to the steps whose tool calls / observations reference ONE
+    consumed product (package name / endpoint host / path fragment).
+
+    Honest limit: there is no captured per-step product label, so this is a
+    heuristic substring match against each Trace Map node's tool name, text
+    preview, and touched files. Returns ``None`` when nothing references the
+    product so the caller can fall back to a radius slice (and say so) rather than
+    emit a misleading empty/degenerate product episode. Delegates to
+    :func:`slice_by_steps`, so the payload key set (``opentraces.trace_slice.v1``)
+    is identical to every other template.
+    """
+
+    needle = (product_match or "").strip().lower()
+    if not needle:
+        return None
+    matched_steps: list[int] = []
+    for node in trace_map.nodes:
+        step = getattr(node, "step_index", None)
+        if step is None:
+            continue
+        if _node_references_product(node, needle):
+            matched_steps.append(int(step))
+    if not matched_steps:
+        return None
+    first_match, last_match = min(matched_steps), max(matched_steps)
+    return slice_by_steps(
+        trace_map,
+        record,
+        start_step_index=first_match,
+        end_step_index=last_match,
+        source="template:product_episode",
+        template="product_episode",
+        metadata={
+            "template": "product_episode",
+            "product_match": product_match,
+            "matched_step_count": len(matched_steps),
+        },
+    )
+
+
+def _node_references_product(node: TraceMapNode, needle: str) -> bool:
+    """True when a Trace Map node mentions the (lowercased) product string in its
+    tool name, text preview, touched files, or sub-agent dispatch prompt."""
+
+    haystacks: list[str] = []
+    for attr in ("tool_name", "text_preview"):
+        val = getattr(node, attr, None)
+        if isinstance(val, str):
+            haystacks.append(val)
+    for attr in ("files_read", "files_modified"):
+        for v in getattr(node, attr, None) or []:
+            haystacks.append(str(v))
+    meta = getattr(node, "metadata", None)
+    if isinstance(meta, dict):
+        disp = meta.get("subagent_dispatch")
+        if isinstance(disp, dict):
+            for key in ("prompt", "description"):
+                v = disp.get(key)
+                if isinstance(v, str):
+                    haystacks.append(v)
+    return any(needle in h.lower() for h in haystacks)
 
 
 def slice_around_step(
