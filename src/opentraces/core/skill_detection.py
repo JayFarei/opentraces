@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
@@ -201,9 +202,16 @@ def _normalize_skill_name(value: Any, *, reject_reserved: bool = False) -> str |
         return None
     if reject_reserved and name == "skills":
         return None
+    if name in {".", ".."}:  # path-traversal segments are not skill names
+        return None
     if "/" in name or "\\" in name:
         return None
     if any(char in name for char in _INVALID_SKILL_NAME_CHARS):
+        return None
+    # Reject control/format chars (Unicode category C*), which covers C0/C1 control
+    # codes and bidi/zero-width overrides (e.g. U+202E) that would corrupt the name
+    # as it flows into TraceUnit facets and the index text.
+    if any(unicodedata.category(char).startswith("C") for char in name):
         return None
     return name
 

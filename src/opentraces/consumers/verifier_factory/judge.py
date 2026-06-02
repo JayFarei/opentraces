@@ -41,7 +41,12 @@ def _strip_markers(text: str) -> str:
 
 
 def _evidence_values_text(payload: Any) -> str:
-    """Collect the string/scalar VALUES of an evidence bundle (not its JSON structure) (M8)."""
+    """Collect the STRING-typed VALUES of an evidence bundle (not its JSON structure) (M8).
+
+    Stringified scalars (bool/int/float) are deliberately excluded: ``"True"`` / ``"None"`` /
+    a bare ``"0.8"`` are ubiquitous tokens that would let a rationale "ground" itself in a
+    boolean flag. Groundedness must cite a verbatim span of actual evidence TEXT.
+    """
     out: list[str] = []
 
     def walk(node: Any) -> None:
@@ -53,8 +58,6 @@ def _evidence_values_text(payload: Any) -> str:
                 walk(v)
         elif isinstance(node, str):
             out.append(node)
-        elif isinstance(node, (int, float, bool)):
-            out.append(str(node))
 
     walk(payload)
     return "\n".join(out)

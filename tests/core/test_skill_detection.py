@@ -181,6 +181,19 @@ def test_skill_md_path_requires_boundary_after_match() -> None:
     assert _skill_md_path(f"{base}EXTRA") is None
 
 
+def test_normalize_skill_name_rejects_unsafe_names() -> None:
+    """Regression: skill names flow into TraceUnit facets and index text, so control/
+    format chars (incl. bidi overrides) and path-traversal segments must be rejected."""
+    from opentraces.core.skill_detection import _normalize_skill_name
+
+    assert _normalize_skill_name("opentraces") == "opentraces"
+    assert _normalize_skill_name("code-review") == "code-review"
+    assert _normalize_skill_name("a‮evil") is None   # bidi override
+    assert _normalize_skill_name("bad\x00name") is None    # NUL / control
+    assert _normalize_skill_name("..") is None             # traversal segment
+    assert _normalize_skill_name(".") is None
+
+
 def test_skill_body_read_scanner_skips_long_non_skill_paths() -> None:
     bad_path = "/tmp/home/" + ("nested/" * 4000) + "NOT_A_SKILL.md"
     record = _trace(

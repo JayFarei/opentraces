@@ -274,8 +274,13 @@ def calibrate_rubric(
                 continue
             y, w = truth[tid]
             is_human = w is not None
-            if is_agent and not is_human:
-                continue  # self-judged criterion: only human gold counts toward its trust
+            # M2: an `agent` (self-judged) criterion earns trust ONLY from INDEPENDENT
+            # human gold — never from the weak label it aligned to, and never from
+            # emulated stand-in labels (a demo, not independent gold). Deterministic
+            # criteria are tamper-resistant, so they still use the (capped) emulated signal.
+            human_independent = is_human and not gold_is_emulated
+            if is_agent and not human_independent:
+                continue  # self-judged criterion: only independent human gold counts toward its trust
             weight = 1.0 if is_human else W
             fired, _ = _criterion_prediction(c, ep, records.get(tid), agent_verdicts, tid)
             if fired is None:

@@ -21,6 +21,7 @@ from opentraces.consumers.verifier_factory import (
     autoverify,
     autoverify_draft_rubric,
     build_judge_packet,
+    calibrate_rubric,
     post_verdict,
     read_human_labels,
     record_human_label,
@@ -161,6 +162,42 @@ def test_packet_carries_trace_id_so_calibration_join_matches(tmp_path):
                      evidence_quote="do the thing", judge_id="agent:claude@s1")
     assert v.trace_id == "t0"
     assert agent_verdict_map(tmp_path)[("effective_outcome", "t0")] == 1.0
+
+
+def test_emulated_labels_do_not_earn_agent_criterion_trust():
+    """Regression (M2): an agent (self-judged) criterion may earn effective_weight ONLY
+    from INDEPENDENT human gold — never from emulated stand-in labels. With agent verdicts
+    posted (as autoverify does), emulated labels must leave the agent criterion demoted
+    (n_labels=0); the same labels as REAL gold promote it and reach `calibrated`."""
+    eps, recs = _world("review")
+    rub = autoverify_draft_rubric("review", episodes=eps, records=recs)
+    labels = {f"t{i}": 1 for i in range(10)}
+    labels.update({f"t{100 + i}": 0 for i in range(10)})
+    av = {("effective_outcome", f"t{i}"): 1.0 for i in range(10)}
+    av.update({("effective_outcome", f"t{100 + i}"): 0.0 for i in range(10)})
+
+    def _agent_pc(rep):
+        return next(pc for pc in rep.per_criterion if pc["judge_method"] != "deterministic")
+
+    emu = calibrate_rubric(rub, episodes=eps, records=recs, human_labels=labels,
+                           agent_verdicts=av, policy=_POLICY, gold_is_emulated=True)
+    real = calibrate_rubric(rub, episodes=eps, records=recs, human_labels=labels,
+                            agent_verdicts=av, policy=_POLICY, gold_is_emulated=False)
+    assert _agent_pc(emu)["n_labels"] == 0 and _agent_pc(emu)["demoted"] is True
+    assert emu.status == "provisional_weak_only"          # never calibrated on emulated
+    assert _agent_pc(real)["n_labels"] > 0 and _agent_pc(real)["demoted"] is False
+    assert real.status == "calibrated"                    # real independent gold promotes
+
+
+def test_groundedness_rejects_stringified_scalar_quote(tmp_path):
+    """Regression (M8): groundedness must cite a verbatim span of evidence TEXT, not a
+    stringified bool/int (e.g. "True"), which is a ubiquitous token an agent could quote
+    to fake groundedness."""
+    from opentraces.consumers.verifier_factory.judge import _evidence_values_text
+
+    text = _evidence_values_text({"committed": True, "files": 3, "intent": "do the thing"})
+    assert "True" not in text and "3" not in text   # scalars excluded
+    assert "do the thing" in text                    # string values kept
 
 
 def test_agent_cannot_write_gold_and_human_label_needs_confirm(tmp_path):
