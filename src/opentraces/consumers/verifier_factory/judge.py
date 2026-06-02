@@ -86,6 +86,11 @@ def build_judge_packet(
     request_id = _verdict_id(rubric.rubric_id, criterion_id, trace_id, "agent", bundle["digest"])
     return {
         "judge_request_id": request_id,
+        # The trace this verdict is about. post_verdict reads it back so the stored
+        # verdict carries a real trace_id; without it the (criterion_id, trace_id)
+        # calibration join keys on "" and agent verdicts never match a trace. An opaque
+        # id, not skill text: it carries no marker/reward signal (M7 stays intact).
+        "trace_id": trace_id,
         "criterion": {
             "criterion_id": criterion_id,
             # marker tokens are stripped so the packet can never carry a SkillOpt reward token (M7)

@@ -164,6 +164,23 @@ def test_ignores_glob_skill_body_read_tool_call() -> None:
     assert detect_skill_invocations(record) == []
 
 
+def test_skill_md_path_requires_boundary_after_match() -> None:
+    """Regression: the SKILL.md match must terminate at a path boundary (or
+    end-of-string). Otherwise SKILL.mdx / SKILL.md.bak / SKILL.mdEXTRA get truncated
+    to a phantom SKILL.md and yield false-positive skill invocations."""
+    from opentraces.core.skill_detection import _skill_md_path
+
+    base = "/tmp/home/.codex/skills/opentraces/SKILL.md"
+    # valid terminations: end-of-string, whitespace, quote
+    assert _skill_md_path(base) == base
+    assert _skill_md_path(f"{base} && cat foo") == base
+    assert _skill_md_path(f'"{base}"') == base
+    # false positives: a non-boundary char immediately follows SKILL.md
+    assert _skill_md_path(f"{base}x") is None
+    assert _skill_md_path(f"{base}.bak") is None
+    assert _skill_md_path(f"{base}EXTRA") is None
+
+
 def test_skill_body_read_scanner_skips_long_non_skill_paths() -> None:
     bad_path = "/tmp/home/" + ("nested/" * 4000) + "NOT_A_SKILL.md"
     record = _trace(

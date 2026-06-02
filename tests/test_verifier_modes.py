@@ -148,6 +148,21 @@ def test_post_verdict_requires_grounded_quote(tmp_path):
     assert agent_verdict_map(tmp_path)[("effective_outcome", "t0")] == 1.0
 
 
+def test_packet_carries_trace_id_so_calibration_join_matches(tmp_path):
+    """Regression: build_judge_packet must embed trace_id so post_verdict records a
+    real trace_id. Without it the (criterion_id, trace_id) calibration join keys on ""
+    and agent verdicts silently never match a trace. NB: no manual packet["refs"] patch
+    here — the public API path must work on its own."""
+    eps, recs = _world("review")
+    rub = autoverify_draft_rubric("review", episodes=eps, records=recs)
+    packet = build_judge_packet(rub, "effective_outcome", "t0", episode=eps[0], record=recs["t0"])
+    assert packet.get("trace_id") == "t0"
+    v = post_verdict(tmp_path, packet, value=1.0, rationale="grounded",
+                     evidence_quote="do the thing", judge_id="agent:claude@s1")
+    assert v.trace_id == "t0"
+    assert agent_verdict_map(tmp_path)[("effective_outcome", "t0")] == 1.0
+
+
 def test_agent_cannot_write_gold_and_human_label_needs_confirm(tmp_path):
     eps, recs = _world("review")
     rub = autoverify_draft_rubric("review", episodes=eps, records=recs)

@@ -881,6 +881,12 @@ def _skill_md_path(value: str) -> str | None:
         ):
             path_start -= 1
         path_end = marker_start + len(_SKILL_MD)
+        # The match must terminate at a path boundary (or end-of-string); otherwise
+        # "SKILL.mdx", "SKILL.md.bak", "SKILL.mdEXTRA" would be truncated to a phantom
+        # "SKILL.md" and yield a false-positive skill invocation.
+        if path_end < len(value) and value[path_end] not in _SKILL_PATH_BOUNDARY_CHARS:
+            start_at = path_end
+            continue
         path = value[path_start:path_end]
         if path.startswith("/") and path.endswith(f"/{_SKILL_MD}") and "..." not in path:
             return path
