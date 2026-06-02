@@ -1,0 +1,9 @@
+# Generated outputs embed real content from the live bucket (including personal
+# sessions: addresses, contacts, etc.). Keep them local — commit only code + prompt.
+packet-*.json
+packet-*.md
+narrative-source-*.md
+standup-20*.md
+standup-20*.html
+standup-report-*.html
+standup-notes-*.md
