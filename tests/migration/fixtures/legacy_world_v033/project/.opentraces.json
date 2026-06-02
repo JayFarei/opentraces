@@ -1,0 +1,13 @@
+{
+  "marker_version": "2",
+  "project_id": "27e5e3e0e56a4d6fbd6857c9d9a048e3",
+  "review_policy": "review",
+  "push_policy": "manual",
+  "remotes": {},
+  "active_remote": null,
+  "default_visibility": "private",
+  "agents": [
+    "claude-code"
+  ],
+  "root_commit_sha": "5b82b010c867b44dad310732b2080758199f5959"
+}

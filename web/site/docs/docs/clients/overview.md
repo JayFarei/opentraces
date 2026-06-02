@@ -9,7 +9,7 @@ trace environment.
 | Dataset consumers | Published dataset rows | [Dataset Consumers](/docs/clients/dataset-consumers) |
 | Private bucket clients | Remote bucket evidence | [Private Bucket Clients](/docs/clients/private-bucket) |
 | Agent workflows | Trace discovery + context + Trail evidence | [Agent Workflows](/docs/clients/agent-workflows) |
-| Trace capsule | Dataset-of-1 projection over one trace slice | [Trace Capsule](/docs/clients/trace-capsule) |
+| Trace capsule | Privacy-bounded agent usage episode ("Agent Experience Report") | [Trace Capsule](/docs/clients/trace-capsule) |
 
 Published rows are for evaluation jobs, training loops, analytics, dashboards,
 and sharing. Bucket evidence is for agents or teammates that need to inspect a
@@ -18,4 +18,5 @@ source blobs.
 
 The same captured trace can feed multiple clients. One workflow can publish
 small eval rows, another can warm an agent with relevant prior context, and a
-third can create a manual trace capsule for a bug report.
+third can package a capsule — a privacy-bounded usage episode — for sharing or
+filing as a GitHub issue.

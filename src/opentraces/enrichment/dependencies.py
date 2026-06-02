@@ -16,6 +16,35 @@ from .known_packages import (
 )
 
 
+def suggest_consumes(
+    dependencies: list[str],
+    *,
+    already_declared: set[str] | None = None,
+) -> list[str]:
+    """Suggest candidate ``--consume`` specs from a trace's dependency names.
+
+    Plan 090: STDERR-HINT ONLY. This NEVER auto-populates ``environment.consumes`` —
+    that axis stays explicit (``--consume`` / ``--product``), so a product is never
+    silently tagged onto a capsule. Returns human-facing hint lines like
+    ``package:<name>=``; ``TraceRecord.dependencies`` is name-only (no captured
+    versions), so the pin is intentionally left blank for the developer to fill.
+    """
+
+    declared = {str(d).strip().lower() for d in (already_declared or set())}
+    seen: set[str] = set()
+    hints: list[str] = []
+    for dep in dependencies or []:
+        name = str(dep).strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in declared or key in seen:
+            continue
+        seen.add(key)
+        hints.append(f"package:{name}=")
+    return hints
+
+
 def _parse_package_json(path: Path) -> list[str]:
     """Extract dependency names from package.json."""
     try:

@@ -33,6 +33,9 @@ tests/integration/parity_report.json
 !.claude/skills/
 .opentraces
 .opentraces.json
+# Committed test fixtures need their markers tracked (the migration legacy-world
+# checkpoint restores this on-disk and `status`/`doctor` require it to exist).
+!tests/migration/fixtures/legacy_world_v033/project/.opentraces.json
 skills-lock.json
 .coverage
 .context/

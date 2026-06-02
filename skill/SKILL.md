@@ -302,9 +302,10 @@ opentraces setup llm-review
 ```
 
 Registered inline tools are `regex`, `entropy`, `trufflehog`,
-`privacy_filter`, `llm_pii`, `path_anonymizer`, and `classifier`. Session-level
-LLM review is configured by `setup llm-review` but is a dataset publication
-reviewer, not part of the per-record sanitize registry.
+`privacy_filter`, `llm_pii`, `business_logic`, `path_anonymizer`,
+`capsule_scope`, and `classifier`. Session-level LLM review is configured by
+`setup llm-review` but is a dataset publication reviewer, not part of the
+per-record sanitize registry.
 
 ## JSON Mode
 

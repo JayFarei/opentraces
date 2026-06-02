@@ -30,11 +30,16 @@ class ClassifierJudge:
     def judge(self, record: TraceRecord, ctx: ToolContext) -> Verdict:
         sensitivity = self._sensitivity(ctx.cfg)
         result = classify_trace_record(record, sensitivity)
+        # Artifact safety (plan 090 U0): never surface the literal hit. ``matched_text``
+        # IS the sensitive value, and ``reason`` can echo matched content for some
+        # patterns — keep only the non-sensitive {pattern, severity}. No consumer reads
+        # the dropped fields: flag counts are taken via ``len`` only (core/pipeline.py
+        # ``_classifier_flag_count``, security/pipeline.py ``flags_reviewed``, and this
+        # tool's own ``apply``), and the web review UI reads a separate
+        # ``_security_flags`` structure, not this verdict payload.
         flag_payload = [
             {
                 "pattern": f.pattern_name,
-                "matched_text": f.matched_text,
-                "reason": f.reason,
                 "severity": f.severity,
             }
             for f in result.flags

@@ -27,7 +27,9 @@ Every per-record security tool defaults off in a fresh config:
     "trufflehog": { "enabled": false, "verify_secrets": false },
     "privacy_filter": { "enabled": false, "model_name": "openai/privacy-filter" },
     "llm_pii": { "enabled": false },
+    "business_logic": { "enabled": false },
     "path_anonymizer": { "enabled": false },
+    "capsule_scope": { "enabled": false },
     "classifier": { "enabled": false, "sensitivity": "medium" },
     "llm_review": { "enabled": false }
   }
