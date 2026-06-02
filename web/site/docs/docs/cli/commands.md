@@ -36,6 +36,7 @@ opentraces [--json] <command> ...
 | `trace map` | Show a deterministic Trace Map or burst projection |
 | `trace slice` | Extract bounded Trace Slices for workflows |
 | `trace get` | Resolve a trace, trace unit, map node, or `ot://` resource |
+| `trace compare` | Compare two traces: metrics, quality, burst/error, and security deltas |
 | `trace teleport` | Move a trace and retained Git evidence between workspaces |
 | `trail blame commit` | Resolve commit-to-trace or trace-to-commit attribution |
 | `trail blame pr` | Render/create/update PR bodies from branch lineage |
@@ -138,6 +139,23 @@ opentraces trace teleport export <trace-id> --output <dir>
 Common `trace query` filters include `--lex`, `--semantic`, `--skill`,
 `--tool`, `--files`, `--signal`, `--survival`, `--since`, `--candidate-kind`,
 `--project`, `--cwd`, `--remote-bucket`, and `--source index|projection`.
+
+## Trace Intelligence
+
+Deterministic, derive-on-demand signals about how a run went, layered on top of the Trace surface. No LLM, no schema change, nothing persisted; each is a frozen JSON envelope. Three capabilities: context waste, run signals, run compare.
+
+```bash
+opentraces trace map <trace-id> --waste --json       # also: trace get <id> --waste
+opentraces trace get <trace-id> --run-intel --json   # also: trace map <id> --run-intel
+opentraces trace compare <trace-a> <trace-b> --json
+opentraces trace compare <trace-a> <trace-b> --no-quality --json
+```
+
+- **Context waste** — `--waste` emits `opentraces.context_waste.v1`: `large_output` (>= 12000 chars), `repeated_file_read` (same file 3+ times in 20 min), and `repeated_search` (`rg|grep|find|ag|ack` 5+ times in 10 min) findings plus a `summary` count block. Override thresholds with `--large-output-chars`, `--file-read-window-min`, `--search-window-min`.
+- **Run signals** — `--run-intel` emits `opentraces.run_intel.v1` with deterministic `resteer` / `recovery` / `loop` / `failure` annotations. Recovery only fires after an uncleared prior failure; failure prefers structured tool errors over substring matches; a repeated command is one `loop` signal carrying `evidence.repeat_count`.
+- **Run compare** — `trace compare <a> <b>` emits `opentraces.trace_compare.v1` with top-level `{schema_version, status, trace_a, trace_b, fidelity: {a, b}, burst_gap, quality_included, delta}`. `delta` holds `{a, b, delta}` triples over `metrics`, deterministic quality persona scores under `quality` (skip with `--no-quality`, which sets `quality_included: false`), burst/signal counts under `bursts` and `signals`, and `security`. Both traces are pinned to the same burst gap (`--burst-gap`, default 35).
+
+`--waste` and `--run-intel` are mutually exclusive with `--bursts` and with each other; on `trace get` they are also mutually exclusive with `--resume`. The `trace get` and `trace map` surfaces emit byte-identical payloads for matching flags. Each detector reports a `fidelity` of `record` or `otel`, preferring full wire fidelity when the trace was captured via the OTLP receiver. An unresolved trace ref exits with code 6.
 
 ## Trace Trails
 

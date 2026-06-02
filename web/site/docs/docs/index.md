@@ -25,6 +25,7 @@ opentraces init                           # explicitly enroll this project, if n
 opentraces bucket status                  # inspect private retained trace evidence
 opentraces trace query --since 7d         # search retained traces
 opentraces trace map <trace-id> --bursts  # deterministic edit/intent map
+opentraces trace get <trace-id> --run-intel    # resteer/recovery/loop signals
 opentraces trace slice <trace-id> --template bursts
 opentraces trail blame commit <sha>       # which traces contributed to a commit
 opentraces ctx tree <trace-id>            # what the agent saw across the trace
@@ -59,7 +60,7 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Quick Start](/docs/getting-started/quickstart)** | Capture into a bucket, search traces, build and publish a dataset |
 | **[Commands](/docs/cli/commands)** | Current `opentraces` command reference |
 | **[Portable Bucket](/docs/workflow/bucket)** | Raw trace envelopes, companions, manifests, sync, replay |
-| **[Trace Discovery](/docs/workflow/trace-discovery)** | `trace query`, `trace map`, `trace slice`, `trace get`, `trace index` |
+| **[Trace Discovery](/docs/workflow/trace-discovery)** | `trace query`, `trace map`, `trace slice`, `trace get`, `trace index`, plus `--waste` / `--run-intel` and `trace compare` |
 | **[Trace Trails](/docs/workflow/blame)** | Git anchors, survival states, blame, graph, PR body generation |
 | **[Context Tree](/docs/workflow/context-tree)** | `ctx` commands and OTLP capture for what the agent saw |
 | **[Dataset Workflows](/docs/workflow/workflow-templates)** | Build deterministic row projections from bucket traces |

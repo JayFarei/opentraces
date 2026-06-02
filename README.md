@@ -41,6 +41,7 @@ opentraces is organized around a small set of subsystems. Knowing the boundaries
 | **Capture** | Inbound boundary: agent hooks, the attribution watcher, optional OTLP receiver | `setup`, `init`, `capture-otlp` |
 | **Bucket** | Private, local-first store of raw captured evidence (one self-sufficient unit per trace) | `bucket`, `ctx list/info` |
 | **Trace** | Search, map, and slice projections over retained traces | `trace query/map/slice/get` |
+| **Trace Intelligence** | Deterministic signals about how a run went: context waste, run signals, run compare | `trace --waste/--run-intel`, `trace compare` |
 | **Trail** | VCS-anchored lineage from a trace patch to the commit that accepted it | `trail blame/graph/track` |
 | **Context Tree** | What the LLM saw at each step (system, messages, tools, runtime state) | `ctx tree/show/reads/writes/...` |
 | **Workflows + Datasets** | Workflow skills that project bucket traces into reviewable HF dataset rows | `workflow`, `dataset` |
@@ -218,6 +219,16 @@ The trace surface returns bounded projections over a local BM25 + semantic Trace
 - `trace index rebuild` rebuilds the local Trace Index after capture changes; `trace teleport` moves a trace and its retained Git evidence between workspaces.
 
 A *trace patch* is one Edit/Write tool call (roughly one hunk on one file). A *change burst* clusters nearby patches by step proximity.
+
+## Trace Intelligence
+
+Deterministic, derive-on-demand signals about how a run actually went, sitting on top of the Trace surface. No LLM, no schema change, nothing persisted: each is computed on read and emitted as a frozen JSON envelope. Three capabilities:
+
+- **Context waste** — `trace map <trace-id> --waste` (or `trace get <trace-id> --waste`) emits `opentraces.context_waste.v1`: oversized tool outputs (>= 12000 chars), the same file read 3+ times in 20 minutes, and search commands repeated 5+ times in 10 minutes.
+- **Run signals** — `trace map <trace-id> --run-intel` (or `trace get <trace-id> --run-intel`) emits `opentraces.run_intel.v1`: deterministic `resteer` / `recovery` / `loop` / `failure` annotations. Recovery only fires after an uncleared failure; failure prefers structured tool errors over substring guesses; a repeated command is one `loop` signal carrying `evidence.repeat_count`; a one-word approval never reads as a correction.
+- **Run compare** — `trace compare <trace-a> <trace-b>` emits `opentraces.trace_compare.v1`: per-side fidelity plus `{a, b, delta}` triples over token/cost metrics, deterministic quality persona scores, and burst/error/security signals, with both traces pinned to the same burst gap so the deltas are comparable.
+
+Each detector derives from the `TraceRecord` and reports a `fidelity` of `record` or `otel`, preferring full wire fidelity when the trace was captured via the OTLP receiver.
 
 ## Trail
 

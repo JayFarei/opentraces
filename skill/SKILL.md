@@ -17,6 +17,7 @@ publishes reviewed dataset rows to HuggingFace remotes.
 - Global setup: `opentraces setup`, `opentraces setup auth`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces auth`
 - Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`, `opentraces remove`
 - Trace retrieval and search: `opentraces trace query`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
+- Trace Intelligence: `opentraces trace map|get --waste`, `opentraces trace map|get --run-intel`, `opentraces trace compare`
 - Trace Trails (visible surface): `opentraces trail blame commit <sha>`, `opentraces trail blame pr render|create|update`, `opentraces trail graph`, `opentraces trail track`
 - Context Tree: `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `ctx list/info`
 - Bucket (portable capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket rebuild`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
@@ -87,6 +88,9 @@ opentraces trace map <trace_id> --candidate <unit_id> --json
 opentraces trace slice <trace_id> --template bursts --json
 opentraces trace get <trace_id> --json
 opentraces trace get <trace_id> --remote-bucket --json
+opentraces trace map <trace_id> --waste --json
+opentraces trace get <trace_id> --run-intel --json
+opentraces trace compare <trace_a> <trace_b> --json
 opentraces trace teleport export <trace_id> --output <dir>
 ```
 
@@ -120,6 +124,39 @@ Pass `--no-commit-lookup` to skip the per-burst `git log` lookup when running
 offline or in a hot CLI path. The burst commit's SHA is a separate concept
 from the trace's `outcome.commit_sha` (which is the *last* commit of the
 session).
+
+### Trace Intelligence
+
+Deterministic, derive-on-demand signals about how a run went, layered on top
+of the Trace surface. No LLM, no schema change, nothing persisted; each is a
+frozen JSON envelope. Three capabilities: context waste, run signals, run compare.
+
+```bash
+opentraces trace map <trace_id> --waste --json       # also: trace get --waste
+opentraces trace get <trace_id> --run-intel --json   # also: trace map --run-intel
+opentraces trace compare <trace_a> <trace_b> --json  # add --no-quality to skip persona scores
+```
+
+- **Context waste** — `--waste` emits `opentraces.context_waste.v1`: `large_output`
+  (>= 12000 chars), `repeated_file_read` (same file 3+ times in 20 min), and
+  `repeated_search` (rg|grep|find|ag|ack 5+ times in 10 min) findings, with a
+  `summary` count block.
+- **Run signals** — `--run-intel` emits `opentraces.run_intel.v1` with
+  deterministic `resteer` / `recovery` / `loop` / `failure` annotations. Recovery
+  only fires after an uncleared prior failure; failure prefers structured tool
+  errors over substring matches; a repeated command is ONE `loop` signal carrying
+  `evidence.repeat_count`; a one-word approval never reads as a resteer.
+- **Run compare** — `trace compare <a> <b>` emits `opentraces.trace_compare.v1`:
+  per-side fidelity plus `{a, b, delta}` triples over Metrics, deterministic
+  quality persona scores, and burst/error/security signals (both traces pinned
+  to the same burst gap).
+
+`--waste` and `--run-intel` are mutually exclusive with `--bursts` (and with
+each other); on `trace get` they are also mutually exclusive with `--resume`.
+The `trace get` and `trace map` surfaces emit byte-identical payloads for
+`--waste` and `--run-intel`. Each detector reports a `fidelity` of `record` or
+`otel`, preferring full wire fidelity when the trace was captured via the OTLP
+receiver.
 
 ## Trace Trails
 

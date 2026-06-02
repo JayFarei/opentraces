@@ -95,6 +95,14 @@ opentraces trace get <trace-id>
 deterministic evidence graph and edit bursts. `trace slice` creates bounded
 packets that workflows can turn into rows.
 
+For deterministic signals about how a run went (no LLM, nothing persisted):
+
+```bash
+opentraces trace get <trace-id> --waste --json       # where context burned
+opentraces trace get <trace-id> --run-intel --json   # resteer/recovery/loop signals
+opentraces trace compare <trace-a> <trace-b> --json  # compare two runs
+```
+
 For commit-level provenance:
 
 ```bash

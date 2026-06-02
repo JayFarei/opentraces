@@ -32,6 +32,8 @@ to the search hit.
 ```bash
 opentraces trace map <trace-id> --json
 opentraces trace map <trace-id> --bursts --json
+opentraces trace map <trace-id> --waste --json
+opentraces trace map <trace-id> --run-intel --json
 opentraces trace map <trace-id> --around s42 --depth 2
 ```
 
@@ -67,6 +69,8 @@ themselves; workflow templates decide how to project them.
 ```bash
 opentraces trace get <trace-id> --json
 opentraces trace get <trace-id> --bursts --json
+opentraces trace get <trace-id> --waste --json
+opentraces trace get <trace-id> --run-intel --json
 opentraces trace get <trace-id> --remote-bucket
 opentraces trace get <trace-id> --remote owner/private-bucket
 opentraces trace get ot://trace/<id>/patches/<patch-id>/trail --json
@@ -74,3 +78,42 @@ opentraces trace get ot://trace/<id>/patches/<patch-id>/trail --json
 
 `trace get` is the full retrieval and resolver surface. Use it after `query`,
 `map`, or `slice` points to the exact trace/unit/resource a workflow needs.
+
+## Intelligence
+
+Deterministic, derive-on-demand signals about how a run actually went, layered
+on the same trace surface. Nothing is persisted; each is computed on read and
+emitted as a frozen JSON envelope. `--waste` and `--run-intel` are accepted on
+both `trace map` and `trace get` (byte-identical payloads), and are mutually
+exclusive with `--bursts` and each other.
+
+```bash
+opentraces trace get <trace-id> --waste --json       # context-waste findings
+opentraces trace get <trace-id> --run-intel --json   # resteer/recovery/loop/failure
+opentraces trace compare <trace-a> <trace-b> --json  # two-run delta
+```
+
+- `--waste` emits `opentraces.context_waste.v1`: oversized tool outputs
+  (>= 12000 chars), the same file read 3+ times in 20 minutes, and search
+  commands repeated 5+ times in 10 minutes, with a `summary` count block.
+  Override the thresholds with `--large-output-chars`, `--file-read-window-min`,
+  and `--search-window-min`.
+- `--run-intel` emits `opentraces.run_intel.v1`: deterministic `resteer` /
+  `recovery` / `loop` / `failure` signals plus `counts`. Recovery only fires
+  after an uncleared failure; a repeated command is one `loop` signal carrying
+  `evidence.repeat_count`.
+
+## Compare
+
+```bash
+opentraces trace compare <trace-a> <trace-b> --json
+opentraces trace compare <trace-a> <trace-b> --no-quality --json
+opentraces trace compare <trace-a> <trace-b> --burst-gap 50 --json
+```
+
+`trace compare` emits `opentraces.trace_compare.v1`: per-side `fidelity` plus
+`{a, b, delta}` triples over token/cost metrics, deterministic quality persona
+scores (skip with `--no-quality`), and burst/error/security signals. Both
+traces are pinned to the same burst gap (`--burst-gap`, default 35) so the
+deltas are comparable. See [Commands](/docs/cli/commands) for the full
+envelope shapes.
