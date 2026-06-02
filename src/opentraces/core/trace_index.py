@@ -34,6 +34,7 @@ from .bucket_store import (
     sync_trace_records_from_local_stores,
 )
 from .semantic import semantic_facets_for_trace
+from .skill_detection import SkillInvocation, detect_skill_invocations, trace_skill_names
 from .text_redaction import redact_index_text
 from .trace_map import build_trace_map
 from .trace_map import slice_trace_map_for_candidate
@@ -912,10 +913,45 @@ def list_units(
     return [_unit_from_row(row) for row in rows]
 
 
+def list_skill_invocation_units_from_records(
+    *, project_slug: str | None = None
+) -> list[TraceUnit]:
+    """Project latest ``skill_invocation`` TraceUnits without a full map rebuild."""
+
+    units: list[TraceUnit] = []
+    for obj in iter_trace_record_objects(project_slug=project_slug):
+        record = obj.record
+        slug = obj.project_slug
+        facets = _skill_invocation_trace_facets(record, slug)
+        title = _index_text(record.task.description or _first_user_text(record) or record.trace_id)
+        units.extend(
+            _propagate_supersession(
+                _skill_invocation_units(record, slug, title, facets),
+                record,
+            )
+        )
+    return _latest_units(units)
+
+
 def latest_units(units: list[TraceUnit]) -> list[TraceUnit]:
     """Return the latest non-superseded Trace Units using index semantics."""
 
     return _latest_units(units)
+
+
+def _skill_invocation_trace_facets(record: TraceRecord, project_slug: str) -> list[TraceFacet]:
+    """Return only the trace facets retained by ``_skill_invocation_units``."""
+
+    facets = [
+        TraceFacet(name="project_slug", value=project_slug, source="exact_schema"),
+        TraceFacet(name="agent.name", value=record.agent.name, source="exact_schema"),
+    ]
+    provider = _provider_kind(record)
+    if provider:
+        facets.append(TraceFacet(name="provider.kind", value=provider, source="exact_schema"))
+    if record.agent.model:
+        facets.append(TraceFacet(name="model", value=record.agent.model, source="exact_schema"))
+    return facets
 
 
 def candidate_packet_for_unit(
@@ -1843,81 +1879,48 @@ def _skill_invocation_units(
     trace_facets: list[TraceFacet],
 ) -> list[TraceUnit]:
     units: list[TraceUnit] = []
-    seen_invocations: set[tuple[str, str]] = set()
-    for step in record.steps:
-        for call in step.tool_calls:
-            if "skill" not in call.tool_name.lower():
-                continue
-            skill = call.input.get("name") or call.input.get("skill")
-            if not skill:
-                continue
-            skill_name = str(skill)
-            args = str(call.input.get("args") or "")
-            seen_invocations.add((skill_name, args))
-            facets = [
-                facet
-                for facet in trace_facets
-                if facet.name in {"project_slug", "agent.name", "model", "provider.kind"}
-            ]
-            facets.append(TraceFacet(name="skill.name", value=skill_name, source="exact_schema"))
-            units.append(
-                TraceUnit(
-                    unit_id=f"tu:{record.trace_id}:skill:{call.tool_call_id}",
-                    unit_type="skill_invocation",
-                    trace_id=record.trace_id,
-                    project_slug=project_slug,
-                    skills=[skill_name],
-                    title_text=f"Skill invocation {skill_name}",
-                    intent_text=_index_text(record.task.description or _first_user_text(record) or ""),
-                    action_text=f"{call.tool_name} {skill_name}",
-                    evidence_text=f"skill.name={skill_name}",
-                    facets=facets,
-                    signals=[
-                        TraceSignal(
-                            name="skill_invoked",
-                            value=[skill_name],
-                            confidence="high",
-                            evidence_refs=[f"tu:{record.trace_id}:tool:{call.tool_call_id}"],
-                        )
-                    ],
-                    metadata={
-                        "session_id": record.session_id,
-                        "generation_index": record.generation_index,
-                        "timestamp_start": record.timestamp_start,
-                        "timestamp_end": record.timestamp_end,
-                        "step_index": step.step_index,
-                        "tool_call_id": call.tool_call_id,
-                    },
-                )
-            )
-    for idx, invocation in enumerate(_metadata_skill_invocations(record)):
-        skill_name = _metadata_skill_name(invocation)
-        if not skill_name:
+    seen_invocations: set[tuple[str, str | None, int | None, str]] = set()
+    for invocation in detect_skill_invocations(record):
+        dedupe_key = (
+            invocation.skill_name,
+            invocation.tool_call_id,
+            invocation.metadata_index,
+            invocation.args,
+        )
+        if dedupe_key in seen_invocations:
             continue
+        seen_invocations.add(dedupe_key)
+        skill_name = invocation.skill_name
         facets = [
             facet
             for facet in trace_facets
             if facet.name in {"project_slug", "agent.name", "model", "provider.kind"}
         ]
         facets.append(TraceFacet(name="skill.name", value=skill_name, source="exact_schema"))
-        command_name = str(invocation.get("command_name") or f"/{skill_name}")
-        command_args = str(invocation.get("args") or "")
-        invocation_key = (skill_name, command_args)
-        if invocation_key in seen_invocations:
-            continue
-        seen_invocations.add(invocation_key)
+        unit_id = _skill_invocation_unit_id(record, invocation)
+        command_name = invocation.command_name or f"/{skill_name}"
+        command_args = invocation.args
+        evidence_refs = (
+            [f"tu:{record.trace_id}:tool:{invocation.tool_call_id}"]
+            if invocation.tool_call_id
+            else []
+        )
+        action_text = _skill_invocation_action_text(invocation)
+        intent_source = (
+            record.task.description or _first_user_text(record) or ""
+            if invocation.tool_call_id
+            else command_args or record.task.description or _first_user_text(record) or ""
+        )
         units.append(
             TraceUnit(
-                unit_id=f"tu:{record.trace_id}:skill:metadata:{idx}",
+                unit_id=unit_id,
                 unit_type="skill_invocation",
                 trace_id=record.trace_id,
                 project_slug=project_slug,
                 skills=[skill_name],
                 title_text=f"Skill invocation {skill_name}",
-                intent_text=_index_text(
-                    command_args or record.task.description or _first_user_text(record) or ""
-                ),
-                action_text=" ".join(part for part in [command_name, command_args] if part),
+                intent_text=_index_text(intent_source),
+                action_text=action_text,
                 evidence_text=f"skill.name={skill_name}",
                 facets=facets,
                 signals=[
@@ -1925,23 +1928,65 @@ def _skill_invocation_units(
                         name="skill_invoked",
                         value=[skill_name],
                         confidence="high",
-                        evidence_refs=[],
+                        evidence_refs=evidence_refs,
                     )
                 ],
-                metadata={
-                    "session_id": record.session_id,
-                    "generation_index": record.generation_index,
-                    "timestamp_start": record.timestamp_start,
-                    "timestamp_end": record.timestamp_end,
-                    "source": invocation.get("source") or "metadata",
-                    "command_name": command_name,
-                    "command_args": command_args,
-                    "command_line_no": invocation.get("command_line_no"),
-                    "body_line_no": invocation.get("body_line_no"),
-                },
+                metadata=_skill_invocation_metadata(
+                    record,
+                    invocation,
+                    command_name=command_name,
+                    command_args=command_args,
+                ),
             )
         )
     return units
+
+
+def _skill_invocation_unit_id(record: TraceRecord, invocation: SkillInvocation) -> str:
+    if invocation.tool_call_id:
+        return f"tu:{record.trace_id}:skill:{invocation.tool_call_id}"
+    idx = invocation.metadata_index if invocation.metadata_index is not None else 0
+    return f"tu:{record.trace_id}:skill:metadata:{idx}"
+
+
+def _skill_invocation_action_text(invocation: SkillInvocation) -> str:
+    if invocation.tool_call_id:
+        return " ".join(
+            part for part in [invocation.tool_name or "Skill", invocation.skill_name] if part
+        )
+    command_name = invocation.command_name or f"/{invocation.skill_name}"
+    return " ".join(part for part in [command_name, invocation.args] if part)
+
+
+def _skill_invocation_metadata(
+    record: TraceRecord,
+    invocation: SkillInvocation,
+    *,
+    command_name: str,
+    command_args: str,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "session_id": record.session_id,
+        "generation_index": record.generation_index,
+        "timestamp_start": record.timestamp_start,
+        "timestamp_end": record.timestamp_end,
+        "source": invocation.source,
+        "skill_name": invocation.skill_name,
+    }
+    if invocation.step_index is not None:
+        metadata["step_index"] = invocation.step_index
+    if invocation.tool_call_id:
+        metadata["tool_call_id"] = invocation.tool_call_id
+    if not invocation.tool_call_id:
+        metadata.update(
+            {
+                "command_name": command_name,
+                "command_args": command_args,
+                "command_line_no": invocation.evidence.get("command_line_no"),
+                "body_line_no": invocation.evidence.get("body_line_no"),
+            }
+        )
+    return metadata
 
 
 def _tool_sequence_unit(
@@ -2638,39 +2683,8 @@ def _trace_files(trace_map: TraceMap) -> list[str]:
     return sorted(dict.fromkeys(files))
 
 
-def _metadata_skill_invocations(record: TraceRecord) -> list[dict[str, Any]]:
-    raw = record.metadata.get("skill_invocations")
-    if not isinstance(raw, list):
-        return []
-    return [
-        item
-        for item in raw
-        if isinstance(item, dict) and item.get("source") == "claude_slash_command"
-    ]
-
-
-def _metadata_skill_name(invocation: dict[str, Any]) -> str | None:
-    value = invocation.get("name") or invocation.get("skill")
-    if value is None:
-        return None
-    skill_name = str(value).strip().lstrip("/")
-    return skill_name or None
-
-
 def _trace_skills(record: TraceRecord) -> list[str]:
-    skills: list[str] = []
-    for step in record.steps:
-        for call in step.tool_calls:
-            normalized = call.tool_name.lower()
-            if "skill" in normalized:
-                value = call.input.get("name") or call.input.get("skill")
-                if value:
-                    skills.append(str(value))
-    for invocation in _metadata_skill_invocations(record):
-        value = _metadata_skill_name(invocation)
-        if value:
-            skills.append(value)
-    return sorted(dict.fromkeys(skills))
+    return trace_skill_names(record)
 
 
 def _trace_tools(record: TraceRecord) -> list[str]:

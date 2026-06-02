@@ -30,6 +30,8 @@ ingestion plan):
         ``supersedes = prev.trace_id``.
       - BLOCKED → no-op (a secret in the transcript is still there).
       - FAILED → treated as terminal for safety; avoids spamming retries.
+      - Forced reparse with an unchanged source refreshes the latest
+        generation in place; repair must not grow retained state forever.
 """
 
 from __future__ import annotations
@@ -246,6 +248,8 @@ def ingest_one_session(
     cfg: Config | None = None,
     wait_for_lock: bool = True,
     parser_name: str | None = None,
+    reconcile_trails: bool = True,
+    emit_substrate_events: bool = True,
 ) -> IngestResult:
     """Ingest a single registered-agent session JSONL into the project's inbox.
 
@@ -254,8 +258,9 @@ def ingest_one_session(
     new_generation / noop / skipped / error).
 
     ``reparse=True`` forces a re-derivation even if the file hasn't
-    grown. Used by the ``_scan --reparse`` CLI path and by the schema-
-    bump auto-upgrade (Phase 3) — not by the default watcher tick.
+    grown. It does not by itself imply a resumed terminal session: unchanged
+    sources refresh the latest generation in place, while changed sources
+    still open a superseding generation when the prior status is terminal.
     """
     resolved_parser_name = parser_name or "claude-code"
     session_id = _session_id_from(jsonl_path, resolved_parser_name)
@@ -265,7 +270,9 @@ def ingest_one_session(
                        blocking=wait_for_lock):
             return _ingest_locked(jsonl_path, project_dir, session_id,
                                   reparse=reparse, cfg=cfg,
-                                  parser_name=resolved_parser_name)
+                                  parser_name=resolved_parser_name,
+                                  reconcile_trails=reconcile_trails,
+                                  emit_substrate_events=emit_substrate_events)
     except _LockHeld:
         # Another ingest already owns this session; it (or the watcher
         # sweep) will cover the work. Skip rather than stack behind it.
@@ -290,6 +297,8 @@ def _ingest_locked(
     reparse: bool,
     cfg: Config | None,
     parser_name: str,
+    reconcile_trails: bool,
+    emit_substrate_events: bool,
 ) -> IngestResult:
     """Inner, flock-held ingest. Must not raise; caller wraps."""
 
@@ -315,16 +324,18 @@ def _ingest_locked(
                 error="trace is blocked",
             )
 
-    # Has it grown? (Or are we forcing a reparse?)
+    # Has it changed since the last successful observation? A forced reparse
+    # still needs this signal so repair runs can distinguish unchanged terminal
+    # captures from genuinely resumed sessions.
     prior_sess = state.get_session(session_id)
-    grew = True
-    if prior_sess is not None and not reparse:
-        grew = _has_grown(
+    source_changed = True
+    if prior_sess is not None:
+        source_changed = _has_grown(
             jsonl_path,
             observed_size=prior_sess.observed_size,
             observed_mtime=prior_sess.observed_mtime,
         )
-    if not grew and latest_gen is not None:
+    if not source_changed and latest_gen is not None and not reparse:
         return IngestResult(
             session_id=session_id, action="noop",
             trace_id=latest_gen.trace_id,
@@ -341,7 +352,7 @@ def _ingest_locked(
         trace_id = _trace_id_for(session_id, next_generation)
     else:
         current_status = _current_trace_status(state, latest_gen.trace_id)
-        if current_status in _TERMINAL_STATUSES:
+        if current_status in _TERMINAL_STATUSES and source_changed:
             open_new_gen = True
             next_generation = latest_gen.generation + 1
             supersedes = latest_gen.trace_id
@@ -397,24 +408,40 @@ def _ingest_locked(
     # single ``max(generation_index)`` pass. Source of truth is the state
     # record we are about to write below (``next_generation``).
     final_record.generation_index = next_generation
+    if supersedes:
+        superseded_trace_ids = [supersedes]
+        if prior_sess is not None:
+            superseded_trace_ids = [
+                generation.trace_id
+                for generation in prior_sess.generations
+                if generation.trace_id != trace_id
+            ] or superseded_trace_ids
+        final_record.metadata = {
+            **final_record.metadata,
+            "supersedes": supersedes,
+            "supersedes_reason": supersedes_reason,
+            "superseded_trace_ids": superseded_trace_ids,
+        }
 
     # Trace Trails Phase 2: hook metadata is parsed before the canonical
     # trace_id exists. Emit the local event-log projection after identity and
     # generation are known. This substrate must not make normal inbox capture
     # fragile, so TrailEvent write failures are logged but non-fatal.
-    try:
-        from .trails import (
-            emit_step_window_events_from_record,
-            reconcile_watcher_observations,
-        )
+    if emit_substrate_events:
+        try:
+            from .trails import (
+                emit_step_window_events_from_record,
+                reconcile_watcher_observations,
+            )
 
-        emit_step_window_events_from_record(project_dir, final_record)
-        reconcile_watcher_observations(project_dir)
-    except Exception:
-        logger.warning(
-            "trace trail event emission/reconciliation failed for %s", trace_id,
-            exc_info=True,
-        )
+            emit_step_window_events_from_record(project_dir, final_record)
+            if reconcile_trails:
+                reconcile_watcher_observations(project_dir)
+        except Exception:
+            logger.warning(
+                "trace trail event emission/reconciliation failed for %s", trace_id,
+                exc_info=True,
+            )
 
     # Plan 080 §3: backfill ``TraceRecord.patches[]`` from the canonical trail
     # event log. ``trace_patch_created`` events are the spine of truth for
@@ -425,7 +452,7 @@ def _ingest_locked(
     # content stays in trail.jsonl.gz. Defensive: failure here must not block
     # ingest. The post-commit hook (Track 2) sets ``Patch.anchor`` later; the
     # derive helper then projects to ``outcome`` + ``git_links``.
-    if not final_record.patches:
+    if emit_substrate_events and not final_record.patches:
         try:
             final_record.patches = _backfill_patches_from_trail_events(
                 project_dir, final_record.trace_id, final_record.generation_index,
@@ -454,50 +481,51 @@ def _ingest_locked(
     # Context Tree substrate (plan 077): capture what the LLM saw at each
     # active-path record. Independent try block so a Context Tree failure
     # never blocks Trail event emission or normal ingest.
-    try:
-        emit_context_tree = getattr(parser, "emit_context_tree_events_from_record", None)
-        if callable(emit_context_tree):
-            ct_summary = emit_context_tree(
-                project_dir=project_dir,
-                final_record=final_record,
-                transcript_path=jsonl_path,
-            )
-        elif parser_name == "claude-code":
-            from ..capture.claude_code.context_tree_capture import (
-                emit_context_tree_events_from_record,
-            )
+    if emit_substrate_events:
+        try:
+            emit_context_tree = getattr(parser, "emit_context_tree_events_from_record", None)
+            if callable(emit_context_tree):
+                ct_summary = emit_context_tree(
+                    project_dir=project_dir,
+                    final_record=final_record,
+                    transcript_path=jsonl_path,
+                )
+            elif parser_name == "claude-code":
+                from ..capture.claude_code.context_tree_capture import (
+                    emit_context_tree_events_from_record,
+                )
 
-            ct_summary = emit_context_tree_events_from_record(
-                project_dir=project_dir,
-                final_record=final_record,
-                transcript_path=jsonl_path,
+                ct_summary = emit_context_tree_events_from_record(
+                    project_dir=project_dir,
+                    final_record=final_record,
+                    transcript_path=jsonl_path,
+                )
+            else:
+                ct_summary = {}
+            ct_summary = ct_summary or {}
+            # R10 cross-substrate join: populate Step.context_node_id from the
+            # active-path step_index -> node_id map the orchestrator returned.
+            # Mutating final_record.steps in place before the staging JSONL is
+            # written downstream makes the link visible to every consumer
+            # without a re-parse pass.
+            step_map = ct_summary.get("step_node_id_map") or {}
+            if step_map:
+                for step in final_record.steps:
+                    node_id = step_map.get(step.step_index)
+                    if node_id is not None:
+                        step.context_node_id = node_id
+            # Surface the projection summary onto the trace record so doctor
+            # and the bucket manifest can report it without reading the event
+            # log again. Strip the (internal) step_node_id_map first.
+            public_summary = {
+                k: v for k, v in ct_summary.items() if k != "step_node_id_map"
+            }
+            final_record.context_tree_summary = public_summary
+        except Exception:
+            logger.warning(
+                "context tree event emission failed for %s", trace_id,
+                exc_info=True,
             )
-        else:
-            ct_summary = {}
-        ct_summary = ct_summary or {}
-        # R10 cross-substrate join: populate Step.context_node_id from the
-        # active-path step_index -> node_id map the orchestrator returned.
-        # Mutating final_record.steps in place before the staging JSONL is
-        # written downstream makes the link visible to every consumer
-        # without a re-parse pass.
-        step_map = ct_summary.get("step_node_id_map") or {}
-        if step_map:
-            for step in final_record.steps:
-                node_id = step_map.get(step.step_index)
-                if node_id is not None:
-                    step.context_node_id = node_id
-        # Surface the projection summary onto the trace record so doctor
-        # and the bucket manifest can report it without reading the event
-        # log again. Strip the (internal) step_node_id_map first.
-        public_summary = {
-            k: v for k, v in ct_summary.items() if k != "step_node_id_map"
-        }
-        final_record.context_tree_summary = public_summary
-    except Exception:
-        logger.warning(
-            "context tree event emission failed for %s", trace_id,
-            exc_info=True,
-        )
 
     # Write the staging JSONL (idempotent overwrite).
     staging_dir = get_project_traces_dir(project_dir)
@@ -527,23 +555,24 @@ def _ingest_locked(
         )
     except Exception:
         logger.warning("raw source bucket write failed for %s", trace_id, exc_info=True)
-    try:
-        sync_trail_events_from_repo(project_dir, repo_id=project_slug)
-    except Exception:
-        logger.warning("trail event bucket export failed for %s", trace_id, exc_info=True)
-    # Plan 079: first-class Context Tree bucket projection. Stage 2 is
-    # additive; the trail-piggyback above is intentionally not removed.
-    try:
-        from .bucket_store import project_context_tree_to_bucket
+    if emit_substrate_events:
+        try:
+            sync_trail_events_from_repo(project_dir, repo_id=project_slug)
+        except Exception:
+            logger.warning("trail event bucket export failed for %s", trace_id, exc_info=True)
+        # Plan 079: first-class Context Tree bucket projection. Stage 2 is
+        # additive; the trail-piggyback above is intentionally not removed.
+        try:
+            from .bucket_store import project_context_tree_to_bucket
 
-        project_context_tree_to_bucket(
-            project_dir, project_slug=project_slug,
-            trace_id=final_record.trace_id,
-        )
-    except Exception:
-        logger.warning(
-            "context tree bucket projection failed for %s", trace_id, exc_info=True
-        )
+            project_context_tree_to_bucket(
+                project_dir, project_slug=project_slug,
+                trace_id=final_record.trace_id,
+            )
+        except Exception:
+            logger.warning(
+                "context tree bucket projection failed for %s", trace_id, exc_info=True
+            )
 
     # Decide the status this generation enters.
     #
@@ -690,6 +719,8 @@ def scan_project(
     paths: list[Path | tuple[str, Path]] | None = None,
     cfg: Config | None = None,
     on_result: Callable[[IngestResult, int, int], None] | None = None,
+    reconcile_trails: bool = True,
+    emit_substrate_events: bool = True,
 ) -> ScanReport:
     """Scan every registered parser JSONL associated with ``project_dir``.
 
@@ -711,6 +742,7 @@ def scan_project(
             else ("claude-code", Path(item))
             for item in paths
         ]
+    candidates = _dedupe_session_candidates(candidates)
 
     resolved_cfg = cfg or load_config()
     report = ScanReport(project_dir=project_dir)
@@ -724,6 +756,8 @@ def scan_project(
                 reparse=reparse,
                 cfg=resolved_cfg,
                 parser_name=parser_name,
+                reconcile_trails=reconcile_trails,
+                emit_substrate_events=emit_substrate_events,
             )
         except Exception as e:  # noqa: BLE001 — ingest_one_session already
             # wraps, but keep a belt here for the discovery path.
@@ -741,6 +775,37 @@ def scan_project(
                 logger.exception("scan_project progress callback failed")
 
     return report
+
+
+def _dedupe_session_candidates(
+    candidates: list[tuple[str, Path]],
+) -> list[tuple[str, Path]]:
+    """Keep one source path per parser-native session id.
+
+    Some adapters can expose multiple rollout files with the same native thread
+    id. The ingest state key is that native id, so attempting every duplicate in
+    one scan makes repair runs churn a single logical session repeatedly.
+    """
+
+    selected: dict[tuple[str, str], tuple[str, Path]] = {}
+    for parser_name, path in candidates:
+        try:
+            session_id = _session_id_from(path, parser_name)
+        except Exception:  # noqa: BLE001
+            session_id = str(path)
+        key = (parser_name, session_id)
+        existing = selected.get(key)
+        if existing is None or _candidate_preference_key(path) > _candidate_preference_key(existing[1]):
+            selected[key] = (parser_name, path)
+    return list(selected.values())
+
+
+def _candidate_preference_key(path: Path) -> tuple[float, int, str]:
+    try:
+        stat = path.stat()
+        return (stat.st_mtime, stat.st_size, str(path))
+    except OSError:
+        return (0.0, 0, str(path))
 
 
 # --------------------------------------------------------------------------- #

@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 CORRUPTED_LINE_THRESHOLD = 0.05
 MAX_CONTENT_CHARS = 10000
 MAX_SUMMARY_CHARS = 500
+_SKILL_MD = "SKILL.md"
+_SKILL_PATH_BOUNDARY_CHARS = frozenset(" \t\r\n\"'`$<>|")
+_INVALID_SKILL_NAME_CHARS = frozenset("*?[]{}")
 
 
 class CodexCliParser:
@@ -804,20 +807,112 @@ def _shell_metadata(tool_input: dict[str, Any] | None) -> dict[str, Any]:
 
 def _skill_invocations(steps: list[Step]) -> list[dict[str, Any]]:
     invocations: list[dict[str, Any]] = []
+    seen: set[tuple[int | None, str, str]] = set()
     for step in steps:
         for call in step.tool_calls or []:
-            if _tool_kind(call.tool_name, call.input) != "skill":
+            payload: dict[str, Any] | None = None
+            if _tool_kind(call.tool_name, call.input) == "skill":
+                skill_name = call.input.get("skill_name") or call.input.get("name")
+                if isinstance(skill_name, str) and skill_name.strip():
+                    payload = {
+                        "step_index": step.step_index,
+                        "tool_call_id": call.tool_call_id,
+                        "skill_name": skill_name.strip(),
+                        "source": "codex_cli_tool_call",
+                    }
+            if payload is None:
+                payload = _skill_invocation_from_skill_body_read(step, call)
+            if payload is None:
                 continue
-            skill_name = call.input.get("skill_name") or call.input.get("name")
-            if not isinstance(skill_name, str) or not skill_name.strip():
+            key = (
+                payload.get("step_index"),
+                str(payload.get("tool_call_id") or ""),
+                str(payload.get("skill_name") or ""),
+            )
+            if key in seen:
                 continue
-            invocations.append({
-                "step_index": step.step_index,
-                "tool_call_id": call.tool_call_id,
-                "skill_name": skill_name.strip(),
-                "source": "codex_cli_tool_call",
-            })
+            seen.add(key)
+            invocations.append(payload)
     return invocations
+
+
+def _skill_invocation_from_skill_body_read(step: Step, call: ToolCall) -> dict[str, Any] | None:
+    """Detect Codex's current skill-use shape: reading ``.../skills/<name>/SKILL.md``."""
+
+    for value in _walk_string_values(call.input):
+        skill_path = _skill_md_path(value)
+        if skill_path is None:
+            continue
+        skill_name = _skill_name_from_skill_md_path(skill_path)
+        if skill_name is None:
+            continue
+        return {
+            "step_index": step.step_index,
+            "tool_call_id": call.tool_call_id,
+            "skill_name": skill_name,
+            "source": "codex_cli_skill_body_read",
+            "skill_path": skill_path,
+        }
+    return None
+
+
+def _walk_string_values(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _walk_string_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_string_values(item)
+
+
+def _skill_md_path(value: str) -> str | None:
+    start_at = 0
+    while True:
+        marker_start = value.find(_SKILL_MD, start_at)
+        if marker_start == -1:
+            return None
+
+        path_start = marker_start
+        while (
+            path_start > 0
+            and value[path_start - 1] not in _SKILL_PATH_BOUNDARY_CHARS
+        ):
+            path_start -= 1
+        path_end = marker_start + len(_SKILL_MD)
+        path = value[path_start:path_end]
+        if path.startswith("/") and path.endswith(f"/{_SKILL_MD}") and "..." not in path:
+            return path
+        start_at = path_end
+
+
+def _skill_name_from_skill_md_path(value: str) -> str | None:
+    try:
+        path = Path(value)
+    except (OSError, ValueError):
+        return None
+    parts = path.parts
+    if not parts or path.name != "SKILL.md":
+        return None
+    try:
+        skills_index = parts.index("skills")
+    except ValueError:
+        return None
+    if not any(part in {".agents", ".claude", ".codex"} for part in parts[:skills_index]):
+        return None
+    return _normalize_skill_name(path.parent.name)
+
+
+def _normalize_skill_name(value: Any) -> str | None:
+    name = str(value).strip().lstrip("/")
+    if not name or name == "skills":
+        return None
+    if "/" in name or "\\" in name:
+        return None
+    if any(char in name for char in _INVALID_SKILL_NAME_CHARS):
+        return None
+    return name
 
 
 def _subagent_session_ref(metadata: dict[str, Any]) -> dict[str, Any] | None:
