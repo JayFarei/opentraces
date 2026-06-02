@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 from click.testing import CliRunner
@@ -165,6 +166,68 @@ class TestScanCommand:
         payload = _extract_json(result.output)
         assert payload["sessions_seen"] == 1
         assert payload["would"][0]["agent"] == "claude-code"
+
+    def test_scan_dry_run_uses_repo_root_from_nested_cwd(
+        self, runner, tmp_path, monkeypatch
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+        (repo / ".opentraces.json").write_text(json.dumps({
+            "marker_version": "2",
+            "project_id": "scan-nested-cwd",
+            "review_policy": "review",
+            "push_policy": "manual",
+            "agents": ["claude-code"],
+        }))
+        nested = repo / "pkg" / "nested"
+        nested.mkdir(parents=True)
+        session_path = tmp_path / "synthetic" / "sess-nested-cwd.jsonl"
+        _write_session(session_path, "sess-nested-cwd", turns=3)
+
+        monkeypatch.setattr(
+            "opentraces.core.ingest.discover_claude_jsonl_corpus",
+            lambda _repo: [session_path],
+        )
+        monkeypatch.chdir(nested)
+
+        result = runner.invoke(main, ["--json", "_scan", "--dry-run"])
+
+        assert result.exit_code == 0, result.output
+        payload = _extract_json(result.output)
+        assert payload["project"] == str(repo.resolve())
+        assert payload["sessions_seen"] == 1
+
+    def test_scan_project_flag_normalizes_nested_repo_path_before_auto_enroll(
+        self, runner, tmp_path, monkeypatch
+    ) -> None:
+        repo = tmp_path / "project"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+        nested = repo / "pkg" / "nested"
+        nested.mkdir(parents=True)
+        session_path = tmp_path / "synthetic" / "sess-auto-root.jsonl"
+        _write_session(session_path, "sess-auto-root", turns=3)
+
+        monkeypatch.setattr(
+            "opentraces.core.ingest.discover_claude_jsonl_corpus",
+            lambda _repo: [session_path],
+        )
+        monkeypatch.setattr(
+            "opentraces.capture.codex_cli.parse.CodexCliParser.discover_project_sessions",
+            lambda _self, _repo: iter(()),
+        )
+
+        result = runner.invoke(
+            main,
+            ["--json", "_scan", "--project", str(nested)],
+        )
+
+        assert result.exit_code == 0, result.output
+        payload = _extract_json(result.output)
+        assert payload["project"] == str(repo.resolve())
+        assert (repo / ".opentraces.json").is_file()
+        assert not (nested / ".opentraces.json").exists()
 
     def test_scan_missing_session_explains_raw_logs_are_local(
         self, runner, opted_in_project

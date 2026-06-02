@@ -3713,8 +3713,9 @@ def _scan(reparse: bool, session_filter: str | None,
     from ..capture import session_id_from_path
     from ..core.ingest import discover_project_ingest_candidates, scan_project
 
-    project_dir = (Path(project_override) if project_override
-                   else Path.cwd()).resolve()
+    project_dir = _capture_project_root(
+        Path(project_override) if project_override else Path.cwd()
+    )
 
     if not dry_run:
         from ..core.config import auto_enroll_if_global
