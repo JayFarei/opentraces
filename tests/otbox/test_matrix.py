@@ -33,6 +33,7 @@ def test_tier1_matrix_skips_before_checkpoint_resolution_without_opt_in(monkeypa
         raise AssertionError("Tier 1 matrix resolved a checkpoint without opt-in")
 
     monkeypatch.setattr(matrix, "resolve_checkpoint", _should_not_resolve)
+    monkeypatch.setattr(matrix, "_check_journey_trajectories", lambda _journeys: [])
 
     report = matrix.run_matrix(_DummyDriver(), tier=1)
 

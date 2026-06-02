@@ -87,11 +87,12 @@ def normalize_agents(agents: list[str] | None) -> list[str]:
         "claude": "claude-code",
         "codex": "codex-cli",
     }
-    cleaned = [
-        aliases.get(agent, agent)
-        for agent in (agents or [])
-        if aliases.get(agent, agent) in SUPPORTED_AGENTS
-    ]
+    cleaned: list[str] = []
+    for agent in agents or []:
+        normalized = aliases.get(agent, agent)
+        if normalized not in SUPPORTED_AGENTS or normalized in cleaned:
+            continue
+        cleaned.append(normalized)
     return cleaned or [DEFAULT_AGENT]
 
 

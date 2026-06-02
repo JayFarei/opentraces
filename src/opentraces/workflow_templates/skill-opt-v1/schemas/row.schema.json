@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "skill-opt-v1 scored-rollout row",
+  "type": "object",
+  "required": [
+    "trace_id",
+    "project_slug",
+    "session_id",
+    "reward",
+    "outcome_success",
+    "outcome_committed",
+    "survival_state",
+    "score",
+    "overall_utility",
+    "failure_tags",
+    "success_tags",
+    "summary",
+    "skill_digest"
+  ],
+  "properties": {
+    "trace_id": {"type": "string"},
+    "project_slug": {"type": "string"},
+    "session_id": {"type": "string"},
+    "reward": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    "outcome_success": {"type": ["boolean", "null"]},
+    "outcome_committed": {"type": "boolean"},
+    "survival_state": {"type": ["string", "null"]},
+    "score": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+    "overall_utility": {"type": "number"},
+    "failure_tags": {"type": "array", "items": {"type": "string"}},
+    "success_tags": {"type": "array", "items": {"type": "string"}},
+    "summary": {"type": "string"},
+    "skill_digest": {"type": ["string", "null"]}
+  },
+  "additionalProperties": false
+}

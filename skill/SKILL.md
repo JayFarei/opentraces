@@ -20,8 +20,9 @@ publishes reviewed dataset rows to HuggingFace remotes.
 - Trace Trails (visible surface): `opentraces trail blame commit <sha>`, `opentraces trail blame pr render|create|update`, `opentraces trail graph`, `opentraces trail track`
 - Context Tree: `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `ctx list/info`
 - Bucket (portable capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket rebuild`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
-- Dataset workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`
+- Dataset workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`, plus the internal `opentraces workflow skill-intelligence` eval over skill episodes
 - Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`.
+- Skill verifier (trace-grounded reward for SkillOpt): `opentraces skill-verifier status/autoverify/align/score`
 - Security tools: `opentraces security tools list/info`, `opentraces security sanitize --tools <names>` or `--use-config`
 - OTLP capture source: `opentraces setup capture-otlp`, `opentraces capture-otlp start|stop|status|restart|flush`
 
@@ -249,6 +250,33 @@ opentraces dataset new <name> --workflow ./workflows/<workflow>/
 
 The bundled `skill-command-trajectory-eval-v1` template materialises a ready
 workflow that emits command-trajectory evaluation rows.
+
+## Skill Verifier
+
+The skill verifier turns "was this agent *skill* used *effectively*?" into a
+reward signal SkillOpt can optimize against. It rests on the skill-intelligence
+consumer (skill episodes / rollouts / eval-tasks mined from bucket traces) and
+a per-skill **rubric** of weighted criteria, each judged against bounded,
+read-only evidence.
+
+```bash
+opentraces skill-verifier status <skill>            # feasibility triage: status + episode count + blockers
+opentraces skill-verifier autoverify <skill> --json # self-align a rubric to the skill goal + calibrate (fast path)
+opentraces skill-verifier align <skill> --json      # scaffold a manual alignment session (human gold labels)
+opentraces skill-verifier score <skill> --out <dir> # drive SkillOpt with the rubric; emit a package
+```
+
+The trust boundary is **the agent PROPOSES** a rubric, **the factory SCORES**
+it mechanically against evidence + calibration, **a human APPROVES** promotion
+(`manual_required_default_off`). Status is derived mechanically, never
+author-set: `blocked_<reason>` (cannot feed reward; the reason names the
+remedy), `provisional_weak_only` (a deterministic non-outcome signal separates
+the weak git signal but no human gold), or `calibrated` (the only fully-trusted
+status; always human-gated). Self-judgment can never exceed
+`provisional_weak_only`. On the current near-one-class bucket every seed skill
+honestly returns `blocked_*` — that is the correct answer, not an unfinished
+feature; the bottleneck is trustworthy human/deterministic labels, not the
+framework.
 
 ## Datasets
 

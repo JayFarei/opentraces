@@ -114,6 +114,146 @@ def test_skill_invocation_metadata_does_not_pollute_task_intent(tmp_path: Path) 
     assert record.metadata["normalized_tool_calls"][0]["tool_kind"] == "skill"
 
 
+def test_skill_body_file_read_records_skill_invocation(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    session = tmp_path / "rollout-skill-body-read.jsonl"
+    rows = _base_rows(
+        session_id="codex-skill-body-read",
+        cwd=project,
+        user_text="Use the opentraces skill to inspect capture status.",
+    )
+    skill_path = tmp_path / ".codex" / "skills" / "opentraces" / "SKILL.md"
+    rows.extend([
+        {
+            "timestamp": "2026-05-21T09:00:03Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Using the opentraces skill to inspect capture.",
+                    }
+                ],
+            },
+        },
+        {
+            "timestamp": "2026-05-21T09:00:04Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "call_read_skill",
+                "arguments": json.dumps({
+                    "cmd": f"sed -n '1,120p' {skill_path}",
+                    "workdir": str(project),
+                }),
+            },
+        },
+        {
+            "timestamp": "2026-05-21T09:00:05Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call_read_skill",
+                "output": "name: opentraces\n",
+            },
+        },
+    ])
+    _write_jsonl(session, rows)
+
+    record = CodexCliParser().parse_session(session)
+
+    assert record is not None
+    assert record.metadata["skill_invocations"] == [
+        {
+            "step_index": 2,
+            "tool_call_id": "call_read_skill",
+            "skill_name": "opentraces",
+            "source": "codex_cli_skill_body_read",
+            "skill_path": str(skill_path),
+        }
+    ]
+    assert record.metadata["normalized_tool_calls"][0]["tool_kind"] == "shell"
+
+
+def test_skill_body_glob_read_is_not_a_skill_invocation(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    session = tmp_path / "rollout-skill-body-glob.jsonl"
+    rows = _base_rows(
+        session_id="codex-skill-body-glob",
+        cwd=project,
+        user_text="List installed skills.",
+    )
+    skill_path = tmp_path / ".codex" / "skills" / "*" / "SKILL.md"
+    rows.append(
+        {
+            "timestamp": "2026-05-21T09:00:03Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "call_glob_skill",
+                "arguments": json.dumps({
+                    "cmd": f"ls {skill_path}",
+                    "workdir": str(project),
+                }),
+            },
+        },
+    )
+    _write_jsonl(session, rows)
+
+    record = CodexCliParser().parse_session(session)
+
+    assert record is not None
+    assert "skill_invocations" not in record.metadata
+
+
+def test_skill_body_read_scanner_skips_long_non_skill_paths(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    session = tmp_path / "rollout-skill-body-long-path.jsonl"
+    rows = _base_rows(
+        session_id="codex-skill-body-long-path",
+        cwd=project,
+        user_text="Use the opentraces skill to inspect capture status.",
+    )
+    bad_path = "/tmp/home/" + ("nested/" * 4000) + "NOT_A_SKILL.md"
+    skill_path = tmp_path / ".codex" / "skills" / "opentraces" / "SKILL.md"
+    rows.append(
+        {
+            "timestamp": "2026-05-21T09:00:03Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "call_long_path",
+                "arguments": json.dumps({
+                    "cmd": f"cat {bad_path} && sed -n '1,40p' {skill_path}",
+                    "workdir": str(project),
+                }),
+            },
+        },
+    )
+    _write_jsonl(session, rows)
+
+    record = CodexCliParser().parse_session(session)
+
+    assert record is not None
+    assert record.metadata["skill_invocations"] == [
+        {
+            "step_index": 2,
+            "tool_call_id": "call_long_path",
+            "skill_name": "opentraces",
+            "source": "codex_cli_skill_body_read",
+            "skill_path": str(skill_path),
+        }
+    ]
+
+
 def test_sidecar_permission_and_compaction_metadata(tmp_path: Path) -> None:
     project = tmp_path / "project"
     project.mkdir()

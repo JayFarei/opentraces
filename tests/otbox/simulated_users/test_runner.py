@@ -460,6 +460,7 @@ def test_install_hooks_dispatches_codex_cli(tmp_path, monkeypatch):
     assert err is None
     assert [call[1:] for call in calls] == [
         ["setup", "codex-cli"],
+        ["setup", "skill", "--harness", "codex-cli"],
         ["init", "--start-fresh", "--agent", "codex-cli"],
         ["setup", "git"],
     ]
@@ -494,6 +495,7 @@ def test_install_hooks_dispatches_claude_and_noops_echo(tmp_path, monkeypatch):
     assert err is None
     assert [call[1:] for call in calls] == [
         ["setup", "claude-code"],
+        ["setup", "skill", "--harness", "claude-code"],
         ["init", "--start-fresh", "--agent", "claude-code"],
         ["setup", "git"],
     ]

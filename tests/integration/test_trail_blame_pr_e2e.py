@@ -431,7 +431,7 @@ def test_cli_trail_blame_pr_create_invokes_gh_pr_create_when_no_pr_exists(
     """No existing PR → create_pr invoked with our body on stdin."""
 
     from opentraces.cli import main as cli_main
-    from opentraces.core import branch_context as bc_module
+    from opentraces.consumers import branch_pr as bc_module
     from opentraces.core.workflows import create_workflow, load_workflow
 
     try:
@@ -602,7 +602,7 @@ def test_cli_trail_blame_pr_create_falls_through_to_update_when_pr_exists(
             description="e2e gh-update",
         )
 
-    from opentraces.core import branch_context as bc_module
+    from opentraces.consumers import branch_pr as bc_module
     existing_pr = {
         "number": 42, "url": "https://github.com/x/y/pull/42",
         "headRefName": "feat/test", "state": "OPEN",

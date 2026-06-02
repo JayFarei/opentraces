@@ -1,0 +1,13 @@
+{
+  "agent_binary": "synthetic-echo",
+  "detail": "1/1 markers",
+  "prompt": "Use the opentraces skill to complete task 10. The verifier expects the OPENTRACES_OK sentinel.",
+  "required_markers": [
+    "rl.opentraces.ci_echo"
+  ],
+  "reward": 1.0,
+  "rollout_id": "rollout:4c597e94643afc54",
+  "schema_version": "opentraces.skill_rollout_transcript.v1",
+  "skill_digest": "sha256:c23693f17d31c1a6e5b5f45c26666e70b5aa083cfa86be83cdc28cdd7148a51b",
+  "task_id": "task:fb65d2a30f26db9b"
+}

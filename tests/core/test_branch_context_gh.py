@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 
-from opentraces.core import branch_context
+from opentraces.consumers import branch_pr as branch_context
 
 
 class _FakeCompleted:
@@ -32,9 +32,9 @@ def test_find_pr_for_branch_returns_none_when_gh_exits_one():
     """`gh pr view` exits 1 when there is no PR for the branch."""
 
     with (
-        patch("opentraces.core.branch_context.shutil.which", return_value="/usr/bin/gh"),
+        patch("opentraces.consumers.branch_pr.shutil.which", return_value="/usr/bin/gh"),
         patch(
-            "opentraces.core.branch_context.subprocess.run",
+            "opentraces.consumers.branch_pr.subprocess.run",
             return_value=_FakeCompleted(returncode=1, stderr="no pull requests found"),
         ),
     ):
@@ -47,9 +47,9 @@ def test_find_pr_for_branch_parses_gh_json_payload():
         "headRefName": "feat/x", "state": "OPEN",
     })
     with (
-        patch("opentraces.core.branch_context.shutil.which", return_value="/usr/bin/gh"),
+        patch("opentraces.consumers.branch_pr.shutil.which", return_value="/usr/bin/gh"),
         patch(
-            "opentraces.core.branch_context.subprocess.run",
+            "opentraces.consumers.branch_pr.subprocess.run",
             return_value=_FakeCompleted(stdout=payload),
         ),
     ):
@@ -62,7 +62,7 @@ def test_find_pr_for_branch_parses_gh_json_payload():
 
 
 def test_find_pr_for_branch_raises_when_gh_missing():
-    with patch("opentraces.core.branch_context.shutil.which", return_value=None):
+    with patch("opentraces.consumers.branch_pr.shutil.which", return_value=None):
         with pytest.raises(branch_context.GhUnavailableError):
             branch_context.find_pr_for_branch(Path("."))
 
@@ -91,8 +91,8 @@ def test_create_pr_passes_body_via_stdin_with_correct_argv():
         raise AssertionError(f"unexpected gh argv: {args}")
 
     with (
-        patch("opentraces.core.branch_context.shutil.which", return_value="/usr/bin/gh"),
-        patch("opentraces.core.branch_context.subprocess.run", side_effect=_spy),
+        patch("opentraces.consumers.branch_pr.shutil.which", return_value="/usr/bin/gh"),
+        patch("opentraces.consumers.branch_pr.subprocess.run", side_effect=_spy),
     ):
         info = branch_context.create_pr(
             project_dir=Path("."),
@@ -114,9 +114,9 @@ def test_create_pr_passes_body_via_stdin_with_correct_argv():
 
 def test_create_pr_raises_on_gh_failure():
     with (
-        patch("opentraces.core.branch_context.shutil.which", return_value="/usr/bin/gh"),
+        patch("opentraces.consumers.branch_pr.shutil.which", return_value="/usr/bin/gh"),
         patch(
-            "opentraces.core.branch_context.subprocess.run",
+            "opentraces.consumers.branch_pr.subprocess.run",
             return_value=_FakeCompleted(returncode=1, stderr="rate limit exceeded"),
         ),
     ):
@@ -150,8 +150,8 @@ def test_update_pr_passes_body_via_stdin_to_pr_edit():
         raise AssertionError(f"unexpected gh argv: {args}")
 
     with (
-        patch("opentraces.core.branch_context.shutil.which", return_value="/usr/bin/gh"),
-        patch("opentraces.core.branch_context.subprocess.run", side_effect=_spy),
+        patch("opentraces.consumers.branch_pr.shutil.which", return_value="/usr/bin/gh"),
+        patch("opentraces.consumers.branch_pr.subprocess.run", side_effect=_spy),
     ):
         info = branch_context.update_pr(
             project_dir=Path("."),

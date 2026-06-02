@@ -287,6 +287,158 @@ def test_rebuild_index_uses_metadata_skill_invocations(tmp_path):
     assert unit.metadata["source"] == "claude_slash_command"
 
 
+def test_rebuild_index_uses_codex_skill_name_invocations(tmp_path):
+    from opentraces.core.trace_index import get_unit, query_index, rebuild_index
+
+    project = tmp_path / "demo"
+    _register_project(project, "1234567890abcdef1234567890abcdef")
+    _write_project_trace(
+        project,
+        TraceRecord(
+            trace_id="trace-plan056-codex-skill",
+            session_id="session-plan056-codex-skill",
+            agent=Agent(name="codex-cli", model="openai/gpt-5-codex"),
+            task={"description": "Use the opentraces skill to inspect capture status."},
+            steps=[
+                Step(step_index=1, role="user", content="Inspect capture status."),
+                Step(
+                    step_index=2,
+                    role="agent",
+                    tool_calls=[
+                        ToolCall(
+                            tool_call_id="call_skill",
+                            tool_name="skill_invoke",
+                            input={"skill_name": "opentraces"},
+                        )
+                    ],
+                ),
+            ],
+            metadata={
+                "skill_invocations": [
+                    {
+                        "step_index": 2,
+                        "tool_call_id": "call_skill",
+                        "skill_name": "opentraces",
+                        "source": "codex_cli_tool_call",
+                    }
+                ]
+            },
+        ),
+    )
+
+    rebuild_index()
+    packets = query_index(skill="opentraces", candidate_kind="skill_invocation")
+
+    assert [packet.trace_id for packet in packets] == ["trace-plan056-codex-skill"]
+    assert packets[0].unit_type == "skill_invocation"
+    assert packets[0].skills == ["opentraces"]
+    assert packets[0].unit_id == "tu:trace-plan056-codex-skill:skill:call_skill"
+    unit = get_unit("tu:trace-plan056-codex-skill:skill:call_skill")
+    assert unit is not None
+    assert unit.metadata["source"] == "codex_cli_tool_call"
+    assert unit.metadata["step_index"] == 2
+    assert unit.metadata["tool_call_id"] == "call_skill"
+
+
+def test_rebuild_index_uses_codex_skill_body_read_invocations(tmp_path):
+    from opentraces.core.trace_index import get_unit, query_index, rebuild_index
+
+    project = tmp_path / "demo"
+    _register_project(project, "1234567890abcdef1234567890abcdef")
+    _write_project_trace(
+        project,
+        TraceRecord(
+            trace_id="trace-plan056-codex-skill-body",
+            session_id="session-plan056-codex-skill-body",
+            agent=Agent(name="codex-cli", model="openai/gpt-5-codex"),
+            task={"description": "Use the opentraces skill to inspect capture status."},
+            steps=[
+                Step(step_index=1, role="user", content="Inspect capture status."),
+                Step(
+                    step_index=2,
+                    role="agent",
+                    tool_calls=[
+                        ToolCall(
+                            tool_call_id="call_read_skill",
+                            tool_name="exec_command",
+                            input={
+                                "cmd": (
+                                    "sed -n '1,120p' "
+                                    "/tmp/home/.codex/skills/opentraces/SKILL.md"
+                                ),
+                                "workdir": str(project),
+                            },
+                        )
+                    ],
+                ),
+            ],
+        ),
+    )
+
+    rebuild_index()
+    packets = query_index(skill="opentraces", candidate_kind="skill_invocation")
+
+    assert [packet.trace_id for packet in packets] == ["trace-plan056-codex-skill-body"]
+    assert packets[0].unit_type == "skill_invocation"
+    assert packets[0].skills == ["opentraces"]
+    assert packets[0].unit_id == "tu:trace-plan056-codex-skill-body:skill:call_read_skill"
+    unit = get_unit("tu:trace-plan056-codex-skill-body:skill:call_read_skill")
+    assert unit is not None
+    assert unit.metadata["source"] == "codex_cli_skill_body_read"
+    assert unit.metadata["step_index"] == 2
+    assert unit.metadata["tool_call_id"] == "call_read_skill"
+
+
+def test_direct_skill_invocation_reader_skips_full_trace_facets(monkeypatch):
+    from opentraces.core import trace_index
+
+    record = TraceRecord(
+        trace_id="trace-plan056-direct-skill",
+        session_id="session-plan056-direct-skill",
+        agent=Agent(name="codex-cli", model="openai/gpt-5-codex"),
+        task={"description": "Use goal-forge to shape the next run."},
+        steps=[
+            Step(step_index=1, role="user", content="Use goal-forge."),
+            Step(
+                step_index=2,
+                role="agent",
+                tool_calls=[
+                    ToolCall(
+                        tool_call_id="call_goal_forge",
+                        tool_name="skill_invoke",
+                        input={"skill_name": "goal-forge"},
+                    )
+                ],
+            ),
+        ],
+    )
+    bucket_object = type("BucketObject", (), {"record": record, "project_slug": "demo"})()
+
+    def fail_semantic_facets(*args, **kwargs):
+        raise AssertionError("direct skill reader should not build semantic facets")
+
+    monkeypatch.setattr(trace_index, "semantic_facets_for_trace", fail_semantic_facets)
+    monkeypatch.setattr(
+        trace_index,
+        "iter_trace_record_objects",
+        lambda project_slug=None: [bucket_object],
+    )
+
+    units = trace_index.list_skill_invocation_units_from_records(project_slug="demo")
+
+    assert [unit.unit_id for unit in units] == [
+        "tu:trace-plan056-direct-skill:skill:call_goal_forge"
+    ]
+    assert units[0].skills == ["goal-forge"]
+    assert {facet.name for facet in units[0].facets} == {
+        "agent.name",
+        "model",
+        "project_slug",
+        "provider.kind",
+        "skill.name",
+    }
+
+
 def test_metadata_filters_and_pagination_narrow_candidate_packets(tmp_path):
     from opentraces.core.trace_index import query_index, query_index_page, rebuild_index
 

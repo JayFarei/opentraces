@@ -1,0 +1,17 @@
+{
+  "schema_version": "opentraces.skill_verifier_candidates_row.v1",
+  "skill_id": "goal-forge",
+  "archetype_id": "goal_contract_downstream_outcome_v1",
+  "title": "Goal contract + downstream outcome",
+  "semantic_target": "messy request -> generated goal -> downstream agent rollout: did the agent preserve constraints, verify correctly, avoid drift, and stop honestly?",
+  "usable_episodes": 67,
+  "distinct_source_traces": 34,
+  "leakage_safe_split": true,
+  "evidence_strength": 0.568521,
+  "recommended": true,
+  "markers_json": "[\"rl.goal-forge.outcome_contract\", \"rl.goal-forge.verification_surface\", \"rl.goal-forge.constraint_preservation\", \"rl.goal-forge.honest_stop\", \"rl.goal-forge.downstream_outcome\"]",
+  "deficient_marker_frequency_json": "{\"rl.goal-forge.constraint_preservation\": 55, \"rl.goal-forge.downstream_outcome\": 0, \"rl.goal-forge.honest_stop\": 55, \"rl.goal-forge.outcome_contract\": 0, \"rl.goal-forge.verification_surface\": 49}",
+  "creator_questions_json": "[{\"key\": \"success_definition\", \"question\": \"What counts as a successful goal-forge outcome?\"}]",
+  "live_legs_json": "[{\"leg_id\": \"downstream_agent_rerollout\", \"kind\": \"agent_rerollout\", \"default_enabled\": false}]",
+  "source_refs_json": "[{\"trace_id\": \"037ad551-a3f5-4b3e-b82c-a584957d7066\", \"unit_id\": \"tu:037ad551:skill:call_X\", \"episode_id\": \"episode:2e55acab6c12215e\"}]"
+}

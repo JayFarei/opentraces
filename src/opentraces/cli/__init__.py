@@ -142,6 +142,7 @@ COMMAND_SECTIONS = [
         "Workflow",
         [
             "workflow",
+            "skill-verifier",
         ],
     ),
     (
@@ -2855,6 +2856,7 @@ _trail_group.add_command(_trace_resume_cmd, name="resume")
 
 from .dataset import dataset_group as _dataset_group  # noqa: E402
 from .workflow import workflow_group as _workflow_group  # noqa: E402
+from .skill_verifier import skill_verifier_group as _skill_verifier_group  # noqa: E402
 from .bucket import bucket_group as _bucket_group  # noqa: E402
 from .security import security_group as _security_group  # noqa: E402
 
@@ -2867,6 +2869,7 @@ from .capsule import capsule_group as _capsule_group  # noqa: E402
 main.add_command(_bucket_group, name="bucket")
 main.add_command(_dataset_group, name="dataset")
 main.add_command(_workflow_group, name="workflow")
+main.add_command(_skill_verifier_group, name="skill-verifier")
 main.add_command(_security_group, name="security")
 main.add_command(_ctx_group, name="ctx")
 main.add_command(_capsule_group, name="capsule")

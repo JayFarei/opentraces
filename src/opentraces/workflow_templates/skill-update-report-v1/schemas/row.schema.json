@@ -1,0 +1,40 @@
+{
+  "type": "object",
+  "required": [
+    "run_id",
+    "skill_id",
+    "baseline_digest",
+    "candidate_digest",
+    "dtrain_count",
+    "dsel_count",
+    "dtest_count",
+    "dsel_before",
+    "dsel_after",
+    "dtest_score",
+    "accepted",
+    "candidate_diff",
+    "edit_audit_ref",
+    "rollout_refs_json",
+    "limitations_json",
+    "approval_state"
+  ],
+  "properties": {
+    "run_id": {"type": "string"},
+    "skill_id": {"type": "string"},
+    "baseline_digest": {"type": "string"},
+    "candidate_digest": {"type": "string"},
+    "dtrain_count": {"type": "integer"},
+    "dsel_count": {"type": "integer"},
+    "dtest_count": {"type": "integer"},
+    "dsel_before": {"type": "number"},
+    "dsel_after": {"type": "number"},
+    "dtest_score": {"type": "number"},
+    "accepted": {"type": "boolean"},
+    "candidate_diff": {"type": "string"},
+    "edit_audit_ref": {"type": "string"},
+    "rollout_refs_json": {"type": "string"},
+    "limitations_json": {"type": "string"},
+    "approval_state": {"type": "string"}
+  },
+  "additionalProperties": true
+}

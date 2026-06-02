@@ -1,0 +1,12 @@
+{
+  "prompt": "Use the review skill so its output satisfies the Review with grounded findings contract.",
+  "required_markers": [
+    "rl.review.cite_file_line"
+  ],
+  "source_trace_id": "439a4033-1ab2-46b7-831a-32b359107ec6",
+  "task_id": "dtest:439a4033-1ab2-46b7-831a-32b359107ec6",
+  "verify": {
+    "kind": "marker_coverage",
+    "scorer": "scorer.py"
+  }
+}

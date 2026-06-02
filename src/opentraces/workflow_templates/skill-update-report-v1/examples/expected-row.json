@@ -1,0 +1,18 @@
+{
+  "accepted": true,
+  "approval_state": "manual_required_default_off",
+  "baseline_digest": "sha256:baseline",
+  "candidate_diff": "--- baseline_skill.md\n+++ candidate_skill.md\n",
+  "candidate_digest": "sha256:candidate",
+  "dsel_after": 1.0,
+  "dsel_before": 0.0,
+  "dsel_count": 1,
+  "dtest_count": 1,
+  "dtest_score": 1.0,
+  "dtrain_count": 3,
+  "edit_audit_ref": "edit_apply_report.json",
+  "limitations_json": "[]",
+  "rollout_refs_json": "{\"baseline\": [], \"candidate\": []}",
+  "run_id": "skill-intelligence-example",
+  "skill_id": "opentraces"
+}

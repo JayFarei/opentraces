@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "skill-verifier-candidates-v1 row",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "skill_id",
+    "archetype_id",
+    "title",
+    "usable_episodes",
+    "distinct_source_traces",
+    "leakage_safe_split",
+    "evidence_strength",
+    "recommended",
+    "markers_json",
+    "deficient_marker_frequency_json",
+    "creator_questions_json",
+    "source_refs_json"
+  ],
+  "properties": {
+    "schema_version": {"const": "opentraces.skill_verifier_candidates_row.v1"},
+    "skill_id": {"type": "string"},
+    "archetype_id": {"type": "string"},
+    "title": {"type": "string"},
+    "semantic_target": {"type": "string"},
+    "usable_episodes": {"type": "integer", "minimum": 0},
+    "distinct_source_traces": {"type": "integer", "minimum": 0},
+    "leakage_safe_split": {"type": "boolean"},
+    "evidence_strength": {"type": "number", "minimum": 0, "maximum": 1},
+    "recommended": {"type": "boolean"},
+    "markers_json": {"type": "string"},
+    "deficient_marker_frequency_json": {"type": "string"},
+    "creator_questions_json": {"type": "string"},
+    "live_legs_json": {"type": "string"},
+    "source_refs_json": {"type": "string"}
+  }
+}

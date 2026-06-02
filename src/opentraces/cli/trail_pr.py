@@ -65,7 +65,7 @@ def _render_for_branch(
     """Run the workflow and render the markdown body. Returns (body, meta)."""
 
     from opentraces import __version__
-    from ..core.branch_context import (
+    from ..consumers.branch_pr import (
         bucket_remote_url,
         render_pr_markdown,
         run_branch_workflow,
@@ -261,7 +261,7 @@ def attach(parent_group: click.Group) -> None:
     ) -> None:
         """Create (or update) a GitHub PR with this branch's lineage body."""
 
-        from ..core.branch_context import (
+        from ..consumers.branch_pr import (
             GhError,
             GhUnavailableError,
             create_pr,
@@ -373,7 +373,7 @@ def attach(parent_group: click.Group) -> None:
     ) -> None:
         """Update an existing GitHub PR's body with this branch's lineage body."""
 
-        from ..core.branch_context import (
+        from ..consumers.branch_pr import (
             GhError,
             GhUnavailableError,
             find_pr_for_branch,

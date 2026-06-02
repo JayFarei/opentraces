@@ -1,0 +1,15 @@
+{
+  "agent_binary": "synthetic-echo",
+  "artifact_refs_json": "[]",
+  "failure_tags_json": "[\"rl.opentraces.ci_echo\"]",
+  "harness": "synthetic-otbox",
+  "reward": 0.0,
+  "rollout_id": "rollout:example",
+  "skill_digest": "sha256:baseline",
+  "skill_id": "opentraces",
+  "source_eval_task_id": "task:example",
+  "split": "Dsel",
+  "success_tags_json": "[]",
+  "task_id": "task:example",
+  "transcript_ref": "transcripts/rollout-example.json"
+}

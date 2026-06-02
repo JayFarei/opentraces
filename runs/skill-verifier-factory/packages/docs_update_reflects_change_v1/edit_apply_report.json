@@ -1,0 +1,54 @@
+{
+  "accepted_edits": 1,
+  "best_score": 1.0,
+  "epoch_feedback_buffer": [],
+  "optimizer_meta_skill": "",
+  "rejected_buffer": [],
+  "rejected_edits": 0,
+  "schema_version": "opentraces.skill_opt.report.v1",
+  "split_counts": {
+    "selection": 24,
+    "selection_effective": 24,
+    "test": 24,
+    "test_effective": 24,
+    "train": 24,
+    "train_effective": 24
+  },
+  "steps": [
+    {
+      "accepted": true,
+      "budget": 2,
+      "candidate_score": 1.0,
+      "edit_results": [
+        {
+          "applied": true,
+          "op": "append",
+          "reason": "",
+          "target": null
+        },
+        {
+          "applied": true,
+          "op": "append",
+          "reason": "",
+          "target": null
+        }
+      ],
+      "edits": [
+        {
+          "content": "- rule[rl.docs-update.changelog]: address recurring failure `rl.docs-update.changelog` observed across 7 low-reward rollout(s).",
+          "op": "append",
+          "source_type": "failure",
+          "support_count": 7
+        },
+        {
+          "content": "- rule[rl.docs-update.no_stale]: address recurring failure `rl.docs-update.no_stale` observed across 6 low-reward rollout(s).",
+          "op": "append",
+          "source_type": "failure",
+          "support_count": 12
+        }
+      ],
+      "step": 0
+    }
+  ],
+  "test_score": 1.0
+}
