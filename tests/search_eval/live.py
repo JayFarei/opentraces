@@ -62,6 +62,12 @@ def run_live(home: str | None = None, limit: int = 20) -> list[dict]:
                 capture_output=True, text=True, timeout=600,
             )
             ms = (time.perf_counter() - start) * 1000.0
+            if proc.returncode != 0:
+                detail = (proc.stderr or proc.stdout or "").strip()
+                raise RuntimeError(
+                    f"query failed ({proc.returncode}): {' '.join(args)}"
+                    + (f" :: {detail[:120]}" if detail else "")
+                )
             payload = json.loads(proc.stdout) if proc.stdout else {}
             ranked = distinct_traces(
                 c.get("trace_id") for c in (payload.get("candidates") or [])
