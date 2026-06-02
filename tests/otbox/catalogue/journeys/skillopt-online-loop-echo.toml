@@ -1,0 +1,35 @@
+name = "skillopt-online-loop-echo"
+description = """
+CI-safe SkillOpt online loop: fork c-installed-source, inject candidate
+skills as CLAUDE.md through the test-side otbox harness, drive the synthetic
+echo binary, and accept only on the re-rolled held-out reward.
+"""
+lane = "core"
+tier = 0
+tier_label = "gold"
+requires = ["cli", "tmux"]
+from_checkpoints = ["c-installed-source"]
+
+[preconditions]
+
+[[steps]]
+type = "shell"
+id = "skillopt-online-loop"
+argv = [
+  "{repo_root}/.venv/bin/python",
+  "-m",
+  "pytest",
+  "{repo_root}/tests/otbox/test_skillopt_online_harness.py::test_otbox_harness_drives_online_loop_with_echo",
+  "-q",
+]
+timeout = 180
+
+[[assertions]]
+kind = "returncode"
+step = "skillopt-online-loop"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "skillopt-online-loop"
+value = "passed"

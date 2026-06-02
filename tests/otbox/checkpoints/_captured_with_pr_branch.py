@@ -90,6 +90,26 @@ def _check(result, label: str) -> None:
     _check_helper(result, checkpoint=_CAPTURE_NAME, label=label)
 
 
+def _clear_trace_index(driver: Driver, box: Box) -> None:
+    """Drop the restored Trace Index before the final full rebuild.
+
+    The parent checkpoint can carry SQLite WAL sidecars from the archived box.
+    A restored derived index can occasionally report "database disk image is
+    malformed" before ``trace index rebuild`` gets far enough to replace it.
+    Clearing only the derived projection preserves the trace source data while
+    keeping this PR-blame checkpoint deterministic.
+    """
+    code = (
+        "from pathlib import Path; import sys; "
+        "p=Path(sys.argv[1]); p.mkdir(parents=True, exist_ok=True); "
+        "[child.unlink() for child in p.glob('index.db*') if child.is_file()]"
+    )
+    _check(
+        driver.exec(box, ["python3", "-c", code, str(Path(box.opentraces_dir) / "index")]),
+        "clear trace index before rebuild",
+    )
+
+
 def _git(driver: Driver, box: Box, *args: str):
     return _git_helper(driver, box, *args, checkpoint=_CAPTURE_NAME)
 
@@ -356,6 +376,7 @@ def _captured_with_pr_branch_delta(driver: Driver, box: Box) -> None:
 
     # 10. Trace Index rebuild — same final step the parent does, so
     #     `trace query` returns the new branch traces too.
+    _clear_trace_index(driver, box)
     _check(
         driver.exec(box, [*cli, "trace", "index", "rebuild"]),
         "trace index rebuild",

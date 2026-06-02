@@ -1,0 +1,37 @@
+name = "skill-verifier-factory-echo"
+description = """
+CI-safe Skill Verifier Factory journey: mine synthetic skill_invocation evidence,
+emit a trace-grounded verifier package, and prove its deterministic verifier drives
+the SkillOpt strict-Dsel gate to accept a candidate on a held-out split, with the
+held-out Dtest reported. Pure deterministic FakeReRollout path, no tmux / agent /
+network, so it runs in default CI. The real-agent re-rollout fidelity leg lives in
+the opt-in skillopt-online-loop-echo gold journey + real-gold suite.
+"""
+lane = "core"
+tier = 0
+tier_label = "silver"
+requires = ["cli"]
+
+[preconditions]
+
+[[steps]]
+type = "shell"
+id = "verifier-factory-loop"
+argv = [
+  "{repo_root}/.venv/bin/python",
+  "-m",
+  "pytest",
+  "{repo_root}/tests/otbox/test_verifier_factory_journey.py::test_verifier_package_feeds_skillopt_gate_default_ci",
+  "-q",
+]
+timeout = 180
+
+[[assertions]]
+kind = "returncode"
+step = "verifier-factory-loop"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "verifier-factory-loop"
+value = "passed"

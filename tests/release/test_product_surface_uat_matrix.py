@@ -4,6 +4,7 @@ import re
 import tomllib
 from pathlib import Path
 
+import pytest
 import yaml
 
 from tests.otbox.checkpoints import REGISTRY as OTBOX_CHECKPOINTS
@@ -72,6 +73,8 @@ def _assert_evidence_exists(ref: str) -> None:
     elif kind == "otbox":
         _assert_otbox_journey_exists(target)
     elif kind in {"doc", "log", "kb"}:
+        if target.startswith("kb/") and not (REPO_ROOT / "kb").exists():
+            pytest.skip(f"kb checkout not present for evidence target: {target}")
         assert (REPO_ROOT / target).is_file(), f"{kind} evidence missing file: {target}"
     elif kind == "command":
         assert target.strip(), "command evidence must include a command string"

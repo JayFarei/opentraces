@@ -1,0 +1,28 @@
+{
+  "accepted": 1,
+  "best_selection_score": 1.0,
+  "best_skill": "tests/otbox/captures/skillopt-real-gold/best_skill.md",
+  "binary": "claude",
+  "held_out_test_score": 1.0,
+  "initial_selection_score": 0.0,
+  "rejected": 0,
+  "report": "tests/otbox/captures/skillopt-real-gold/edit_apply_report.json",
+  "rerollout_logs": [
+    "tests/otbox/captures/skillopt-real-gold/rerollouts/01-sel-health/pane.log",
+    "tests/otbox/captures/skillopt-real-gold/rerollouts/02-train-status/pane.log",
+    "tests/otbox/captures/skillopt-real-gold/rerollouts/03-sel-health/pane.log",
+    "tests/otbox/captures/skillopt-real-gold/rerollouts/04-test-ready/pane.log"
+  ],
+  "schema_version": "opentraces.skill_opt.real_gold.v1",
+  "tasks": {
+    "selection": [
+      "sel-health"
+    ],
+    "test": [
+      "test-ready"
+    ],
+    "train": [
+      "train-status"
+    ]
+  }
+}

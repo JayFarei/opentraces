@@ -609,7 +609,22 @@ def _install_opentraces_hooks_in_box(box: Box, agent: str | None = "claude") -> 
             f"opentraces setup {setup_agent} failed (rc={setup_hooks.returncode}): "
             f"{(setup_hooks.stderr or setup_hooks.stdout).strip()[:200]}"
         )
-    # 2. Register the project so traces have somewhere to land.
+    # 2. Install the skill into the harness namespace the real agent reads.
+    setup_skill = subprocess.run(
+        [str(testvenv_cli), "setup", "skill", "--harness", setup_agent],
+        cwd=str(box.project),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if setup_skill.returncode != 0:
+        return (
+            f"opentraces setup skill --harness {setup_agent} failed "
+            f"(rc={setup_skill.returncode}): "
+            f"{(setup_skill.stderr or setup_skill.stdout).strip()[:200]}"
+        )
+    # 3. Register the project so traces have somewhere to land.
     init = subprocess.run(
         [str(testvenv_cli), "init", "--start-fresh", "--agent", init_agent],
         cwd=str(box.project),
@@ -623,7 +638,7 @@ def _install_opentraces_hooks_in_box(box: Box, agent: str | None = "claude") -> 
             f"opentraces init --agent {init_agent} failed (rc={init.returncode}): "
             f"{(init.stderr or init.stdout).strip()[:200]}"
         )
-    # 3. Install the post-commit hook so trail-blame anchors mature.
+    # 4. Install the post-commit hook so trail-blame anchors mature.
     setup_git = subprocess.run(
         [str(testvenv_cli), "setup", "git"],
         cwd=str(box.project),

@@ -23,6 +23,7 @@ from __future__ import annotations
 import pytest
 
 from tests.otbox.inventory import build_inventory
+from tests.otbox.jtbd import JTBD_PATH
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +36,9 @@ def test_jtbd_drift_check_passes_strict():
     """The Click ↔ 063 ↔ journey-TOML triple-SSoT check must be clean."""
     import tempfile
     from pathlib import Path
+
+    if not JTBD_PATH.exists():
+        pytest.skip(f"kb checkout not present: {JTBD_PATH}")
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as tf:
         out = Path(tf.name)

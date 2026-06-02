@@ -1,0 +1,13 @@
+{
+  "agent_binary": "synthetic-echo",
+  "detail": "0/1 markers",
+  "prompt": "Use the goal-forge skill to complete task 27. The verifier expects the OPENTRACES_OK sentinel.",
+  "required_markers": [
+    "rl.goal-forge.ci_echo"
+  ],
+  "reward": 0.0,
+  "rollout_id": "rollout:18dfdbb374445064",
+  "schema_version": "opentraces.skill_rollout_transcript.v1",
+  "skill_digest": "sha256:c0f1002d1e4113e85cf8c7f1e2034687657c1e831cd3e191373e18cd4758dbf9",
+  "task_id": "task:23758fe0b8aa2d93"
+}
