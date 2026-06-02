@@ -86,6 +86,37 @@ opentraces <pipeline> · traces become datasets
                                                      └─ eval / training / scoring ─┘
 ```
 
+## Consumers
+
+Traces are not only logs. Once capture keeps nothing lost and the pipeline makes that evidence searchable, secure, and shareable, *consumers* are what you build on top. A consumer is a small workflow that filters and projects bucket traces, plus a renderer that puts the result somewhere useful. Training data is one destination, not the only one.
+
+```text
+opentraces <consumers> · traces become more than logs
+
+  retained evidence                       proof-of-value clients
+  ┌──────────────────┐                    ┌──────────────────────────────┐
+  │ Trace  ▮ ● ● ◍   │ Skills · CLI · SDK │ Capsule    usage episodes    │
+  │ Ctx    ▤ ▤ ▤     │──── read ────────► │ Skill Eval verifier factory  │
+  │ Trail  ◌─◌─◌     │─── render ───────► │ Standup    yesterday rebuilt │
+  │ Bucket  ▢        │                    │ Spotlight  search traces     │
+  └──────────────────┘                    │ Alerts     standing reports  │
+                                          │ Intent PR  why + the how     │
+                                          └──────────────────────────────┘
+```
+
+Six examples, from shipped commands to prototypes:
+
+| Consumer | What it is | Built on |
+|----------|------------|----------|
+| **Trace Capsule** | Share a usage episode with a third party, attaching the real agent experience to a GitHub issue rather than just a summary of the bug | security + sharing infra |
+| **Skill Evaluation** | A versioned dataset of skill usage plus a verifier per skill, scoring whether a skill change actually improves downstream outcomes | workflows + SDK |
+| **Standup** | A daily report reconstructed from yesterday's sessions: what was attempted, what landed, what failed, and what is still open | bucket traces, narrative render |
+| **Spotlight** | Fast search across your traces for relevant context mid-session, outside the active loop, or for a handoff | `trace query` |
+| **Alerts** | Standing alerts and reports over trace usage: failure rate, context waste, third-party tools, secrets, policy violations | workflows |
+| **Intent Pull Request** | Walk a PR's commits back to the originating sessions and compile a context pack of the "why" alongside the "how" | `trail blame pr` |
+
+The pattern is always the same: filter and project retained evidence with a workflow, then render to one destination. New consumers (Slack, dashboards, CI gates) are a new workflow plus a new renderer, not a new subsystem.
+
 ## Install
 
 Preferred end-user install:

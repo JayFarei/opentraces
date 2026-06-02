@@ -10,6 +10,7 @@ from .anchors import reconcile_commit_anchors
 from .event_log import read_events
 from .ids import id_from_payload
 from .models import ATTRIBUTION_VERSION
+from .search_records import iter_search_records
 
 DEFAULT_RECENT_COMMITS = 50
 MATURATION_CAPTURE_METHOD = ["trail_maturation"]
@@ -114,12 +115,13 @@ def has_unsearched_recent_patches(
         return False
     searched = {
         (
-            id_from_payload(event.payload, "trace_patch"),
-            (event.payload.get("search_head") or {}).get("hex"),
-            event.ATTRIBUTION_VERSION,
+            record["trace_patch_id"],
+            record["search_head_sha"],
+            record["attribution_version"],
         )
         for event in events
         if event.event_type == "git_anchor_search_completed"
+        for record in iter_search_records(event)
     }
     return any(
         (trace_patch_id, commit, effective_version) not in searched
@@ -191,6 +193,11 @@ def _rev_parse(repo: Path, ref: str) -> str | None:
 
 
 def _event_counts(repo: Path) -> dict[str, int]:
+    # plan 090: count per-patch search RECORDS, not raw events. One v2 summary
+    # event covers N patch-searches, so counting events would collapse
+    # ``searches_completed`` to ~run-count. Expanding through iter_search_records
+    # keeps the metric meaning "number of patch-searches" across both the legacy
+    # per-patch shape and the new summary shape.
     counts = {
         "git_anchor_search_completed": 0,
     }
@@ -199,6 +206,8 @@ def _event_counts(repo: Path) -> dict[str, int]:
     except Exception:
         return counts
     for event in events:
-        if event.event_type in counts:
-            counts[event.event_type] += 1
+        if event.event_type == "git_anchor_search_completed":
+            counts["git_anchor_search_completed"] += sum(
+                1 for _ in iter_search_records(event)
+            )
     return counts

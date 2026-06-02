@@ -19,6 +19,14 @@ from .ids import (
 )
 
 SEARCH_SCHEMA_VERSION = "opentraces.trail.search.v1"
+# Event-payload envelope for the anchor-search SUMMARY event written by
+# reconcile_commit_anchors (plan 090). v2 collapses the per-patch
+# git_anchor_search_completed events (one per patch, ~N/commit) into ONE
+# summary event per (commit, reconcile-run) carrying a per-patch ``results``
+# list. This is the EVENT payload schema_version and is intentionally distinct
+# from SEARCH_SCHEMA_VERSION above (the unrelated ``trail search`` projection
+# envelope). Bump only when the summary payload shape changes.
+ANCHOR_SEARCH_SCHEMA_VERSION = "opentraces.trail.anchor_search.v2"
 RESOLVE_SCHEMA_VERSION = "opentraces.trail.resolve.v1"
 TRACE_TRAILS_METADATA_SCHEMA_VERSION = "opentraces.trace_trails.v1"
 SNAPSHOT_RESUME_SCHEMA_VERSION = "opentraces.snapshot_resume.v1"

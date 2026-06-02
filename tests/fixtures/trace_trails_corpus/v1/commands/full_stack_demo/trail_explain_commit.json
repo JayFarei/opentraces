@@ -8,6 +8,7 @@
       ],
       "event_id": "<trail-event:16>",
       "event_sequence": 16,
+      "event_time": "<timestamp>",
       "event_type": "git_anchor_search_completed",
       "result": "anchored",
       "trace_patch_id": "<trace-patch:01>"

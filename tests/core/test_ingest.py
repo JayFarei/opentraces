@@ -381,12 +381,16 @@ class TestIngestOneSession:
         )
         assert hook.exit_code == 0, hook.output
 
+        all_events = read_events(project_dir)
         refreshed_events = [
-            event for event in read_events(project_dir)
+            event for event in all_events
             if event.trace_id == result.trace_id
         ]
+        # plan 090: the v2 anchor-search summary spans traces (top-level
+        # trace_id None), so select it from the full log and assert this trace's
+        # patch is recorded in its results[].
         search_events = [
-            event for event in refreshed_events
+            event for event in all_events
             if event.event_type == "git_anchor_search_completed"
         ]
         anchor_events = [
@@ -395,10 +399,12 @@ class TestIngestOneSession:
         ]
         assert len(search_events) == 1
         assert search_events[0].capture_method == ["post_commit_correlator"]
-        assert search_events[0].payload["result"] == "anchored"
-        assert search_events[0].payload["trace_patch_id"] == (
-            patch_events[0].payload["trace_patch_id"]
+        result_for_patch = next(
+            r for r in search_events[0].payload["results"]
+            if r["trace_patch_id"] == patch_events[0].payload["trace_patch_id"]
         )
+        assert result_for_patch["result"] == "anchored"
+        assert result_for_patch["trace_id"] == result.trace_id
         assert len(anchor_events) == 1
         assert anchor_events[0].capture_method == ["post_commit_correlator"]
         assert anchor_events[0].payload["trace_patch_id"] == (

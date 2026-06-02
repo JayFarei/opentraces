@@ -1367,6 +1367,15 @@ def project_per_trace_exports(
         CONTEXT_TREE_RECONCILED,
     }
 
+    # plan 090: a v2 anchor-search summary event has top-level trace_id=None (it
+    # spans the traces it searched). The shared helper fans it into this trace's
+    # companion when one of its per-patch results belongs here, so per-trace
+    # consumers (which read via iter_search_records) still see their searches.
+    # The whole summary event is kept verbatim (not split) so the companion
+    # stays faithful to the canonical log. Legacy per-patch events keep a real
+    # trace_id and route via the normal trace_id match below.
+    from .trails.search_records import summary_search_touches_trace
+
     # 1. Filter events by trace_id (sequence order preserved).
     trail_events: list[Any] = []
     context_events: list[Any] = []
@@ -1378,7 +1387,7 @@ def project_per_trace_exports(
         ev_trace_id = event.trace_id
         if not ev_trace_id and isinstance(event.payload, dict):
             ev_trace_id = event.payload.get("trace_id")
-        if ev_trace_id != trace_id:
+        if ev_trace_id != trace_id and not summary_search_touches_trace(event, trace_id):
             continue
         if event.event_type in _CONTEXT_EVENT_TYPES:
             context_events.append(event)
@@ -1606,6 +1615,12 @@ def _trace_ids_for_project(repo: Path) -> list[str]:
 
     Pulled from the canonical Git event log (the source of truth). Returns a
     sorted, deduplicated list so the projection order is deterministic.
+
+    plan 090: the v2 anchor-search summary event carries top-level trace_id=None,
+    so it contributes no id here. That is safe and intentional: a search only
+    ever runs for an existing patch, so every trace_id inside a summary's
+    results[] necessarily also appears on that patch's ``trace_patch_created``
+    event, which IS counted. No trace is ever missed by skipping the summary.
     """
 
     try:

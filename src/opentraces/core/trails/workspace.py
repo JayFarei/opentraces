@@ -24,6 +24,7 @@ from ...core.state import StateManager
 from .event_log import EVENT_LOG_REF, read_events
 from .ids import normalize_id
 from .models import TrailEvent
+from .search_records import summary_search_touches_trace
 from .contract import (
     SNAPSHOT_RESUME_SCHEMA_VERSION,
     has_snapshot_resume_contract,
@@ -325,10 +326,15 @@ def _find_trace_file(repo: Path, trace_id: str) -> Path | None:
 
 
 def _trace_events(repo: Path, trace_id: str) -> list[TrailEvent]:
+    # plan 090: the v2 anchor-search summary event spans traces (top-level
+    # trace_id None), so fan it into this trace's view when one of its per-patch
+    # results belongs here, matching the legacy per-patch behavior.
     return [
         event
         for event in read_events(repo)
-        if event.trace_id == trace_id or event.payload.get("trace_id") == trace_id
+        if event.trace_id == trace_id
+        or event.payload.get("trace_id") == trace_id
+        or summary_search_touches_trace(event, trace_id)
     ]
 
 

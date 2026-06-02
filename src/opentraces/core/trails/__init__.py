@@ -33,6 +33,12 @@ from .query import (
     trail_query_summary,
 )
 from .reconciler import reconcile_watcher_observations
+from .search_records import (
+    ANCHOR_SEARCH_EVENT_TYPE,
+    is_summary_search_event,
+    iter_search_records,
+    summary_search_touches_trace,
+)
 from .rebuild import rebuild_projections
 from .resources import resolve_resource
 from .slices import (
@@ -65,6 +71,7 @@ from .snapshots import (
 )
 
 __all__ = [
+    "ANCHOR_SEARCH_EVENT_TYPE",
     "CACHED_SURVIVAL_EVENT_TYPE",
     "CAPTURE_LIMITATIONS",
     "EVENT_LOG_REF",
@@ -98,6 +105,9 @@ __all__ = [
     "explain_commit",
     "explain_file_line",
     "invalidate_read_events_cache",
+    "is_summary_search_event",
+    "iter_search_records",
+    "summary_search_touches_trace",
     "open_step_window",
     "explain_trace_step",
     "sync_anchor",
