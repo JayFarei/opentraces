@@ -25,6 +25,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -34,6 +36,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from opentraces.core import search_diag  # noqa: E402
+from opentraces.core.boilerplate import looks_injected_boilerplate  # noqa: E402
 from opentraces.core.search_projection import query_search_projection_page  # noqa: E402
 from opentraces.core.trace_index import query_index_page  # noqa: E402
 from tests.perf.harness.measure import CommandPlan, measure_command_factory  # noqa: E402
@@ -63,6 +66,9 @@ ARTIFACTS_DIR = REPO_ROOT / "tests" / "search_eval" / "artifacts"
 
 # reps/warmups per tier (real-scale queries are heavier -> fewer reps)
 _TIER_REPS = {"dev": (3, 1), "real-scale": (2, 1), "xl": (1, 1)}
+RELIABILITY_SEQUENTIAL = 20
+RELIABILITY_PARALLEL = 8
+RELIABILITY_CLIFF_MS = 60_000.0
 
 
 @dataclass
@@ -79,6 +85,8 @@ class RowResult:
     boundedness: dict[str, Any]
     bounded_expected: bool
     bounded_ok: bool
+    summary_non_boilerplate_rate: float
+    summary_ok: bool
     cliff_ok: bool            # within latency cliff, OR a documented O(corpus) row
     status: str               # "green" if all targets met else "red"
     invariant_ok: bool        # status matches expected_phase_a
@@ -137,6 +145,21 @@ def _run_query_json(args: list[str], project_dir: Path, env: dict[str, str]) -> 
 def _ranked_traces(payload: dict[str, Any]) -> list[str]:
     cands = payload.get("candidates") or []
     return score_outcome.distinct_traces(c.get("trace_id") for c in cands)
+
+
+def _summary_quality(payload: dict[str, Any]) -> dict[str, Any]:
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        return {"rate": 1.0, "checked": 0, "bad": 0}
+    checked = 0
+    bad = 0
+    for candidate in candidates:
+        summary = candidate.get("summary") or candidate.get("headline") or ""
+        checked += 1
+        if looks_injected_boilerplate(str(summary)):
+            bad += 1
+    rate = (checked - bad) / checked if checked else 1.0
+    return {"rate": rate, "checked": checked, "bad": bad}
 
 
 def _capture_boundedness(row: QueryRow) -> dict[str, Any]:
@@ -251,6 +274,7 @@ def run_eval(
         payload = _run_query_json(_query_args(row, OUTCOME_LIMIT), project_dir, env)
         ranked = _ranked_traces(payload)
         total = int(payload.get("total") or 0)
+        summary_quality = _summary_quality(payload)
         outcome = score_outcome.score_row(
             ranked, row.gold_trace_ids, row.gold_kind, row.gold_latest, row.targets
         )
@@ -283,6 +307,8 @@ def run_eval(
 
         boundedness = _capture_boundedness(row)
         bounded_ok = (boundedness["bounded"] == row.bounded_expected) and boundedness["page_le_limit"]
+        summary_rate = float(summary_quality["rate"])
+        summary_ok = summary_rate >= 0.95
         # a row expected to be bounded must also be within its latency cliff;
         # documented O(corpus) rows are exempt (their latency is the U6 gap).
         cliff_ok = within_cliff or not row.bounded_expected
@@ -294,17 +320,29 @@ def run_eval(
             mode=row.mode, query=row.query, expected_phase_a=row.expected_phase_a,
             total=total, perf=perf_summary, outcome=outcome,
             boundedness=boundedness, bounded_expected=row.bounded_expected,
-            bounded_ok=bounded_ok, cliff_ok=cliff_ok,
+            bounded_ok=bounded_ok,
+            summary_non_boilerplate_rate=summary_rate,
+            summary_ok=summary_ok,
+            cliff_ok=cliff_ok,
             status=status, invariant_ok=invariant_ok, note=row.note,
         ))
 
     loop_smoke = _discovery_loop_smoke(plan, project_dir, env)
+    reliability = _repeated_query_reliability(plan, project_dir, env)
     outcome_digest = _outcome_digest(rows)
     invariants_ok = (
         all(r.invariant_ok for r in rows)
         and all(r.bounded_ok for r in rows)
+        and all(r.summary_ok for r in rows)
         and all(r.cliff_ok for r in rows)
         and loop_smoke.get("ok", False)
+        and reliability.get("ok", False)
+    )
+    checked_summaries = len(rows)
+    summary_non_boilerplate_rate = (
+        sum(r.summary_non_boilerplate_rate for r in rows) / checked_summaries
+        if checked_summaries
+        else 1.0
     )
 
     report = EvalReport(
@@ -315,7 +353,9 @@ def run_eval(
         meta={"generator_version": plan.generator_version, "code_version": plan.code_version,
               "outcome_limit": OUTCOME_LIMIT, "perf_limit": PERF_LIMIT,
               "reps": reps, "warmups": warmups, "base_dir": str(base_dir),
-              "cache_hit": cache_hit},
+              "cache_hit": cache_hit,
+              "summary_non_boilerplate_rate": round(summary_non_boilerplate_rate, 4),
+              "repeated_query_reliability": reliability},
     )
     _write_artifacts(report)
     if not keep:
@@ -336,15 +376,116 @@ def _discovery_loop_smoke(plan: CorpusPlan, project_dir: Path, env: dict[str, st
             return {"ok": False, "reason": "no candidates for loop seed"}
         trace_id = cands[0].get("trace_id")
         steps = ["query"]
-        for verb, extra in (("map", []), ("slice", ["--template", "bursts"]), ("get", [])):
+        for verb, extra in (
+            ("map", []),
+            ("slice", ["--template", "bursts"]),
+            ("get", ["--card"]),
+            ("get", []),
+        ):
             args = ["trace", verb, trace_id, "--json", *extra]
             proc = subprocess.run([OTD, *args], cwd=str(project_dir), env=env,
                                   capture_output=True, text=True, timeout=300)
             if proc.returncode == 0:
-                steps.append(verb)
-        return {"ok": len(steps) >= 3, "trace_id": trace_id, "stages": steps}
+                if extra == ["--card"]:
+                    card_payload = json.loads(proc.stdout)
+                    card = card_payload.get("card") or {}
+                    if not card.get("headline") or not card.get("provenance_color"):
+                        return {"ok": False, "reason": "card missing headline/color"}
+                steps.append("card" if extra == ["--card"] else verb)
+        discovery = _discover_smoke(plan, project_dir, env)
+        if discovery.get("ok"):
+            steps.append("discover")
+        return {
+            "ok": len(steps) >= 3 and discovery.get("ok", False),
+            "trace_id": trace_id,
+            "stages": steps,
+            "discovery": discovery,
+        }
     except Exception as exc:  # pragma: no cover - smoke only
         return {"ok": False, "reason": str(exc)}
+
+
+def _discover_smoke(plan: CorpusPlan, project_dir: Path, env: dict[str, str]) -> dict[str, Any]:
+    row = next((q for q in plan.queries if q.archetype == "discovery"), None)
+    if row is None:
+        return {"ok": False, "reason": "missing discovery query row"}
+    args = [
+        "trace", "discover", *row.query.split(), "--by", "day", "--json",
+        "--limit", "6", "--per-group", "3",
+    ]
+    proc = subprocess.run(
+        [OTD, *args], cwd=str(project_dir), env=env,
+        capture_output=True, text=True, timeout=300,
+    )
+    if proc.returncode != 0:
+        return {"ok": False, "reason": proc.stderr[-400:]}
+    payload = json.loads(proc.stdout)
+    packet = payload.get("discovery") or {}
+    groups = packet.get("groups") or []
+    cards = [card for group in groups for card in (group.get("cards") or [])]
+    group_keys = [group.get("key") for group in groups]
+    cards_have_links = all(
+        card.get("headline")
+        and card.get("provenance_color")
+        and (card.get("refs") or {}).get("card")
+        and (card.get("refs") or {}).get("map")
+        for card in cards
+    )
+    ok = (
+        payload.get("status") == "ok"
+        and packet.get("by") == "day"
+        and packet.get("total_cards", 0) >= 6
+        and len(groups) >= 3
+        and cards_have_links
+    )
+    return {
+        "ok": ok,
+        "topic": packet.get("topic"),
+        "group_count": len(groups),
+        "group_keys": group_keys,
+        "total_cards": packet.get("total_cards", 0),
+        "cards_have_links": cards_have_links,
+    }
+
+
+def _repeated_query_reliability(
+    plan: CorpusPlan, project_dir: Path, env: dict[str, str]
+) -> dict[str, Any]:
+    row = next((q for q in plan.queries if q.archetype == "descriptive"), plan.queries[0])
+    args = _query_args(row, 5)
+    diag_env = dict(env)
+    diag_env["OT_SEARCH_DIAG"] = "1"
+    started = time.perf_counter()
+    payloads: list[dict[str, Any]] = []
+    try:
+        for _ in range(RELIABILITY_SEQUENTIAL):
+            payloads.append(_run_query_json(args, project_dir, diag_env))
+        with ThreadPoolExecutor(max_workers=RELIABILITY_PARALLEL) as pool:
+            payloads.extend(
+                pool.map(
+                    lambda _i: _run_query_json(args, project_dir, diag_env),
+                    range(RELIABILITY_PARALLEL),
+                )
+            )
+    except Exception as exc:
+        return {"ok": False, "reason": str(exc)}
+
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    sync_count = sum(1 for payload in payloads if (payload.get("cheap_sync") or {}).get("synced"))
+    ok = (
+        len(payloads) == RELIABILITY_SEQUENTIAL + RELIABILITY_PARALLEL
+        and sync_count <= 1
+        and elapsed_ms <= RELIABILITY_CLIFF_MS
+        and all(payload.get("status") == "ok" for payload in payloads)
+    )
+    return {
+        "ok": ok,
+        "sequential": RELIABILITY_SEQUENTIAL,
+        "parallel": RELIABILITY_PARALLEL,
+        "sync_count": sync_count,
+        "elapsed_ms": round(elapsed_ms, 2),
+        "cliff_ms": RELIABILITY_CLIFF_MS,
+    }
 
 
 def _outcome_digest(rows: list[RowResult]) -> str:
@@ -361,6 +502,8 @@ def _outcome_digest(rows: list[RowResult]) -> str:
             "kendall_tau": oc.get("kendall_tau"), "recency_hit": oc.get("recency_hit"),
             "passes": oc.get("passes"),
             "bounded": r.boundedness.get("bounded"), "bounded_ok": r.bounded_ok,
+            "summary_non_boilerplate_rate": r.summary_non_boilerplate_rate,
+            "summary_ok": r.summary_ok,
             "path": r.boundedness.get("path"),
         })
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))

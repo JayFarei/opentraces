@@ -157,18 +157,17 @@ def render_markdown(reports: list[dict[str, Any]]) -> str:
     out.append("")
     out.append(
         "Performance **and** outcome metrics for Trace Spotlight's progressive-discovery "
-        "loop (`trace query -> map -> slice -> get`), measured over a deterministic, "
-        "real-bucket-sized planted corpus. Regenerate with `make search-eval` "
+        "loop (`trace query -> map -> slice -> get --card -> get -> discover`), "
+        "measured over a deterministic, real-bucket-sized planted corpus. "
+        "Regenerate with `make search-eval` "
         "(dev tier) or `make search-eval-real` (real-scale)."
     )
     out.append("")
     out.append(
-        "> **RED is expected in Phase A.** The harness is the executable spec: "
-        "S2 (semantic latency), S3/S4 (identifier-needle recall + time order), and S5 "
-        "(recency) are designed to fail until the ranking capabilities (U4 `--sort`, "
-        "U5 recency weighting, U6 index-bounded scorer + URL/identifier tokenization) "
-        "land red -> green against this report. `OK` checks that observed RED/GREEN "
-        "matches each row's documented expectation."
+        "> The harness is the executable spec: seed rows S1-S8 plus the discovery "
+        "archetype document the progressive-discovery capabilities and checked "
+        "boundedness. `OK` checks that observed RED/GREEN matches each row's "
+        "documented expectation."
     )
     out.append("")
 
@@ -194,6 +193,26 @@ def render_markdown(reports: list[dict[str, Any]]) -> str:
             f"- discovery-loop smoke: {'ok' if loop.get('ok') else 'FAILED'} "
             f"(stages: {', '.join(loop.get('stages', [])) or loop.get('reason', 'n/a')})"
         )
+        discovery = loop.get("discovery") or {}
+        if discovery:
+            out.append(
+                "- trace discover grouping: "
+                f"{'ok' if discovery.get('ok') else 'FAILED'} "
+                f"({discovery.get('group_count', 0)} day groups, "
+                f"{discovery.get('total_cards', 0)} cards)"
+            )
+        summary_rate = (rep.get("meta") or {}).get("summary_non_boilerplate_rate", 1.0)
+        out.append(f"- summary_non_boilerplate_rate: **{summary_rate:.2f}**")
+        reliability = (rep.get("meta") or {}).get("repeated_query_reliability") or {}
+        if reliability:
+            out.append(
+                "- repeated/parallel query reliability: "
+                f"{'ok' if reliability.get('ok') else 'FAILED'} "
+                f"({reliability.get('sequential', 0)} sequential + "
+                f"{reliability.get('parallel', 0)} parallel, "
+                f"sync_count={reliability.get('sync_count', 'n/a')}, "
+                f"elapsed={reliability.get('elapsed_ms', 'n/a')}ms)"
+            )
         inv = rep.get("invariants_ok")
         out.append(f"- **invariants_ok: {'yes' if inv else 'NO — see MISMATCH rows'}**")
         out.append("")

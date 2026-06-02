@@ -69,6 +69,7 @@ SCENARIOS = {
     "reference_id": 3,
     "facet": 2,           # K=4 traces each touch the file
     "descriptive": 4,
+    "discovery": 1,       # multi-day trace capsule grouping target
     "superseded": 2,      # 3-generation session each
     "semantic_precedent": 2,   # S1 weak-lex / S2 semantic-right-but-slow
     "boundedness_cliff": 1,    # concept --semantic that scans the whole corpus
@@ -79,6 +80,8 @@ CHRONO_K = 4
 RECENCY_K = 4
 FACET_K = 4
 SUPERSEDE_GENS = 3
+DISCOVERY_DAYS = 3
+DISCOVERY_PER_DAY = 2
 
 TIER_TRACE_COUNT = {
     "dev": 150,
@@ -97,6 +100,12 @@ _FILLER_TOPICS = [
     "clean up dead code", "validate the schema", "instrument the hot path",
 ]
 _FILE_DIRS = ["src/core", "src/cli", "pkg/util", "lib/io", "app/handlers"]
+_BOILERPLATE_PREFIXES = [
+    "IMPORTANT: Do NOT read SKILL.md before using the activated skill.",
+    "$tdd",
+    "<goal_context>\n<objective>Continue working toward the active thread goal.</objective>\n</goal_context>",
+    "<system-reminder>This is injected runtime context, not the user task.</system-reminder>",
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -112,6 +121,10 @@ def _u(*parts: Any) -> float:
 
 def _pick(seq: list[Any], *parts: Any) -> Any:
     return seq[int(_u(*parts) * len(seq)) % len(seq)]
+
+
+def _boilerplate_prefix(index: int) -> str:
+    return _BOILERPLATE_PREFIXES[index % len(_BOILERPLATE_PREFIXES)]
 
 
 def _inverse_cdf(dist: dict[str, Any], u: float) -> int:
@@ -152,6 +165,7 @@ class TraceSpec:
     body_tokens: list[str]      # extra tokens woven into step content
     files: list[str]            # file paths touched via tool calls
     step_count: int
+    first_user_prefix: str | None = None
 
 
 @dataclass
@@ -393,6 +407,7 @@ def plan_corpus(profile: dict[str, Any], seed: int, tier: str) -> CorpusPlan:
             generation_index=0, preceded_by=None, ordinal=o,
             description=f"{phrase} ({marker})",
             body_tokens=[marker], files=[], step_count=8,
+            first_user_prefix=_boilerplate_prefix(d),
         ))
         queries.append(QueryRow(
             id=f"desc-{d:02d}", archetype="descriptive",
@@ -402,6 +417,48 @@ def plan_corpus(profile: dict[str, Any], seed: int, tier: str) -> CorpusPlan:
             targets={"recall_at": 10, "recall_min": 0.95, "top_k_rank": 3},
             expected_phase_a="green", seed_case=sc,
             note="descriptive lexical recall must be preserved",
+        ))
+
+    # ---- discovery capsule: topic traces deliberately spread across days ---- #
+    # Dev-tier corpora do not naturally span multiple days, so this plants a
+    # tiny cross-day topic set for `trace discover "trace capsule" --by day`.
+    for dc in range(SCENARIOS["discovery"]):
+        token = f"capsuletopic{seed}{dc:02d}"
+        members: list[str] = []
+        base_ordinal = ordinal + 1
+        max_ordinal = ordinal
+        for day in range(DISCOVERY_DAYS):
+            for k in range(DISCOVERY_PER_DAY):
+                o = base_ordinal + day * 240 + k
+                max_ordinal = max(max_ordinal, o)
+                tid = f"eval-{tier}-capsule-{dc:02d}-{day:02d}-{k:02d}"
+                traces.append(TraceSpec(
+                    trace_id=tid,
+                    session_id=f"sess-capsule-{dc:02d}-{day:02d}-{k:02d}",
+                    generation_index=0,
+                    preceded_by=None,
+                    ordinal=o,
+                    description=(
+                        f"trace capsule discovery packet for {token} "
+                        f"day {day} part {k}"
+                    ),
+                    body_tokens=["trace capsule", token, f"day {day}"],
+                    files=[f"src/discovery/capsule_{day}.py"],
+                    step_count=8,
+                ))
+                members.append(tid)
+        ordinal = max_ordinal
+        queries.append(QueryRow(
+            id=f"discover-{dc:02d}",
+            archetype="discovery",
+            intent="group a topic capsule by day with forward links",
+            mode="lex",
+            query="trace capsule",
+            gold_trace_ids=list(members),
+            gold_kind="set",
+            targets={"recall_at": 10, "recall_min": 0.95},
+            expected_phase_a="green",
+            note="U5: `trace discover` groups these trace-capsule results by day",
         ))
 
     # ---- superseded needle (R4 tail): older generation, --include-superseded  #
@@ -550,9 +607,12 @@ def build_trace_record(spec: TraceSpec) -> dict[str, Any]:
     for i in range(spec.step_count):
         ts = _ts(base) if i == 0 else _ts_step(base, i)
         if i % 2 == 0:
+            content = f"{spec.description}. {woven} step {i}"
+            if i == 0 and spec.first_user_prefix:
+                content = f"{spec.first_user_prefix}\n\n{content}"
             steps.append({
                 "step_index": i + 1, "role": "user",
-                "content": f"{spec.description}. {woven} step {i}",
+                "content": content,
                 "timestamp": ts,
             })
             continue

@@ -161,6 +161,12 @@ class CandidatePacket(BaseModel):
     trace_id: str
     project_slug: str
     title: str
+    headline: str | None = None
+    summary: str | None = None
+    provenance_color: str | None = None
+    committed: bool | None = None
+    commit_sha: str | None = None
+    commit_subject: str | None = None
     intent_preview: str | None = None
     candidate_kind: str | None = None
     match_explanation: str

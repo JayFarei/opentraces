@@ -13,7 +13,8 @@ the harness, ingested via `_ingest-session`, fired the post-commit
 hook, and matured a Git Anchor. From there:
 
   1. `trace query` resolves the captured trace via the BM25 + semantic
-     Trace Index. (Real consumer-API entry point.)
+     Trace Index. `trace discover` groups the same retained evidence into
+     cards for exploratory orientation. (Real consumer-API entry points.)
   2. `dataset new --rows-file` seeds a row referencing the captured
      `source_trace_id` so the dataset's published shard carries the
      real captured trace's lineage.
@@ -50,6 +51,23 @@ equals = 0
 [[assertions]]
 kind = "stdout_contains"
 step = "trace-query"
+value = "{trace_id}"
+
+# `trace discover` should surface the same captured trace in bounded
+# card/group form without loading the full transcript.
+[[steps]]
+type = "cli"
+id = "trace-discover"
+argv = ["trace", "discover", "farewell", "--json", "--limit", "5"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-discover"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "trace-discover"
 value = "{trace_id}"
 
 # --- 2. Seed a row file referencing the captured trace_id ----------------
