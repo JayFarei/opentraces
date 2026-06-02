@@ -4,6 +4,16 @@
   ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀  ▀  ▀  ▀ ▀  ▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
 ```
 
+<p align="center">
+  <a href="https://x.com/jayfarei">
+    <img src="assets/opentraces-hub.gif" alt="opentraces hub" width="720">
+  </a>
+</p>
+
+<p align="center">
+  <strong>opentraces hub</strong> — <a href="https://x.com/jayfarei">reach out for early access</a>
+</p>
+
 Open schema + CLI for capturing agent traces into a private bucket, linking them to Git and context evidence, building workflow-projected datasets, and publishing reviewed dataset rows to Hugging Face Hub.
 
 Every coding session leaves behind the data you actually want: prompts, tool calls, reasoning, edits, outcome signals, and eventually the code that shipped. opentraces captures that locally as raw bucket evidence, links each change to the Git history that accepted it, reconstructs what the agent saw at each step, and lets workflows turn selected evidence into datasets.
