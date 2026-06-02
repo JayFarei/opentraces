@@ -20,6 +20,13 @@ from pathlib import Path
 
 import pytest
 
+from opentraces.core.boilerplate import (
+    headline_from_summary,
+    looks_injected_boilerplate,
+    strip_injected,
+    summary_for_record,
+)
+from opentraces_schema import Agent, Step, TraceRecord
 from tests.search_eval import score_outcome as so
 from tests.search_eval import live as live_eval
 from tests.search_eval import runner as runner_mod
@@ -65,6 +72,85 @@ def test_recency_hit_among_gold_vs_global():
     assert rh2["among_gold"] == 1.0
 
 
+def test_boilerplate_stripping_prefers_task_description():
+    record = TraceRecord(
+        trace_id="summary-task",
+        session_id="summary-task-session",
+        agent=Agent(name="claude-code"),
+        task={"description": "Fix the parser regression and add coverage"},
+        steps=[
+            Step(
+                step_index=1,
+                role="user",
+                content="IMPORTANT: Do NOT read SKILL.md before using the activated skill.",
+            )
+        ],
+    )
+    assert summary_for_record(record) == "Fix the parser regression and add coverage"
+    assert not looks_injected_boilerplate(summary_for_record(record))
+
+
+def test_boilerplate_stripping_handles_skill_definition_guard_variant():
+    guard = (
+        'IMPORTANT: Do NOT read or execute any SKILL.md files or files in '
+        'skill definition directories (paths containing skills/gstack).'
+    )
+    record = TraceRecord(
+        trace_id="summary-guard-variant",
+        session_id="summary-guard-variant-session",
+        agent=Agent(name="claude-code"),
+        task={"description": f"{guard}\n\nShip the trace capsule discovery packet"},
+        steps=[
+            Step(step_index=1, role="user", content=guard),
+            Step(step_index=2, role="user", content="Ship the trace capsule discovery packet"),
+        ],
+    )
+    assert strip_injected(guard) == ""
+    assert summary_for_record(record) == "Ship the trace capsule discovery packet"
+    assert not looks_injected_boilerplate(summary_for_record(record))
+
+
+def test_boilerplate_stripping_skips_prompt_template_task_description():
+    record = TraceRecord(
+        trace_id="summary-template",
+        session_id="summary-template-session",
+        agent=Agent(name="claude-code"),
+        task={
+            "description": (
+                "You are acting as BOTH a software architect and a senior code reviewer. "
+                "Review the proposed feature plan."
+            )
+        },
+        steps=[
+            Step(
+                step_index=1,
+                role="user",
+                content="Review plan 089 and implement trace capsule discovery",
+            )
+        ],
+    )
+    assert looks_injected_boilerplate(record.task.description)
+    assert summary_for_record(record) == "Review plan 089 and implement trace capsule discovery"
+
+
+def test_boilerplate_stripping_extracts_goal_objective_and_skips_skill_trigger():
+    assert (
+        strip_injected("<goal_context><objective>Build the trace capsule timeline</objective></goal_context>")
+        == "Build the trace capsule timeline"
+    )
+    record = TraceRecord(
+        trace_id="summary-user",
+        session_id="summary-user-session",
+        agent=Agent(name="codex"),
+        steps=[
+            Step(step_index=1, role="user", content="$tdd"),
+            Step(step_index=2, role="user", content="Implement the bounded discovery card"),
+        ],
+    )
+    assert summary_for_record(record) == "Implement the bounded discovery card"
+    assert headline_from_summary(summary_for_record(record)) == "Implement the bounded discovery card"
+
+
 # --------------------------------------------------------------------------- #
 # determinism (R7)
 # --------------------------------------------------------------------------- #
@@ -107,10 +193,23 @@ def test_dev_eval_invariants_hold(dev_report):
     bad = [r.id for r in dev_report.rows if not r.invariant_ok]
     assert not bad, f"rows whose observed RED/GREEN != expected_phase_a: {bad}"
     assert dev_report.invariants_ok
+    assert dev_report.meta["summary_non_boilerplate_rate"] >= 0.95
+    reliability = dev_report.meta["repeated_query_reliability"]
+    assert reliability["ok"], reliability
+    assert reliability["sequential"] == 20
+    assert reliability["parallel"] == 8
+    assert reliability["sync_count"] <= 1
 
 
 def test_discovery_loop_runs(dev_report):
     assert dev_report.loop_smoke.get("ok"), dev_report.loop_smoke
+    assert "card" in dev_report.loop_smoke.get("stages", [])
+    assert "discover" in dev_report.loop_smoke.get("stages", [])
+    discovery = dev_report.loop_smoke.get("discovery") or {}
+    assert discovery.get("ok"), discovery
+    assert discovery.get("group_count", 0) >= 3
+    assert discovery.get("total_cards", 0) >= 6
+    assert discovery.get("cards_have_links"), discovery
 
 
 def test_seed_cases_reproduce_baseline(dev_report):
@@ -230,6 +329,12 @@ def test_discovery_loop_requires_get_success(tmp_path, monkeypatch):
                 "  exit 0",
                 "fi",
                 "if [ \"$cmd\" = \"trace\" ] && [ \"$sub\" = \"get\" ]; then",
+                "  case \"$*\" in",
+                "    *--card*)",
+                "      printf '{\"card\":{\"headline\":\"h\",\"provenance_color\":\"committed\"}}'",
+                "      exit 0",
+                "      ;;",
+                "  esac",
                 "  echo 'forced get failure' >&2",
                 "  exit 9",
                 "fi",
@@ -247,7 +352,7 @@ def test_discovery_loop_requires_get_success(tmp_path, monkeypatch):
 
     assert result["ok"] is False
     assert result["failed_stage"] == "get"
-    assert result["stages"] == ["query", "map", "slice"]
+    assert result["stages"] == ["query", "map", "slice", "card"]
 
 
 @pytest.mark.skipif(

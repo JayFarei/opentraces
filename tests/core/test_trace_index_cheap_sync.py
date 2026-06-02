@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from opentraces_schema import Agent, Step, ToolCall, TraceRecord
@@ -169,6 +170,76 @@ def test_cheap_sync_steady_state_does_zero_refresh_work(tmp_path, monkeypatch):
     assert elapsed < 2.0, f"steady-state probe took {elapsed:.2f}s (> 2s budget)"
 
 
+def test_repeated_projection_cheap_sync_stays_warm(tmp_path, monkeypatch):
+    """U1 — many sequential discovery-loop queries must not re-enter the
+    corpus-digest delta path after the warm marker is set."""
+
+    project = tmp_path / "demo"
+    _enroll_project(project, "1234567890abcdef1234567890abcdef")
+    _write_project_trace(project, _trace_with("trace-alpha", "alpha"))
+    _warm(project)
+
+    digest_calls = {"n": 0}
+
+    def spy_digests(*args, **kwargs):
+        digest_calls["n"] += 1
+        raise AssertionError("steady-state repeated queries must not scan the corpus")
+
+    monkeypatch.setattr(ti, "_current_bucket_trace_digests", spy_digests)
+
+    results = [ti.cheap_sync_query_state(query_source="projection") for _ in range(20)]
+
+    assert all(result.synced is False for result in results)
+    assert digest_calls["n"] == 0
+
+
+def test_parallel_projection_cheap_sync_pays_delta_once(tmp_path, monkeypatch):
+    """U1 — concurrent callers seeing the same stale bucket serialize behind
+    one delta sync, then re-check the marker and serve warm."""
+
+    project = tmp_path / "demo"
+    _enroll_project(project, "1234567890abcdef1234567890abcdef")
+    _write_project_trace(project, _trace_with("trace-alpha", "alpha"))
+    _warm(project)
+    _write_project_trace(project, _trace_with("trace-gamma", "gamma"))
+
+    digest_calls = {"n": 0}
+    refresh_index_calls = {"n": 0}
+    refresh_projection_calls = {"n": 0}
+    real_digests = ti._current_bucket_trace_digests
+    real_refresh_index = ti.refresh_index
+    real_refresh_projection = sp.refresh_search_projection
+
+    def spy_digests(*args, **kwargs):
+        digest_calls["n"] += 1
+        return real_digests(*args, **kwargs)
+
+    def spy_refresh_index(*args, **kwargs):
+        refresh_index_calls["n"] += 1
+        return real_refresh_index(*args, **kwargs)
+
+    def spy_refresh_projection(*args, **kwargs):
+        refresh_projection_calls["n"] += 1
+        return real_refresh_projection(*args, **kwargs)
+
+    monkeypatch.setattr(ti, "_current_bucket_trace_digests", spy_digests)
+    monkeypatch.setattr(ti, "refresh_index", spy_refresh_index)
+    monkeypatch.setattr(sp, "refresh_search_projection", spy_refresh_projection)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(
+            pool.map(
+                lambda _i: ti.cheap_sync_query_state(query_source="projection"),
+                range(8),
+            )
+        )
+
+    assert sum(1 for result in results if result.synced) == 1
+    assert digest_calls["n"] == 1
+    assert refresh_index_calls["n"] == 1
+    assert refresh_projection_calls["n"] == 1
+
+
 def test_cheap_sync_steady_state_does_zero_heavy_corpus_scan(tmp_path, monkeypatch):
     """F1 — the steady-state freshness probe is O(1): zero corpus scans.
 
@@ -245,6 +316,48 @@ def test_cheap_sync_touch_flips_cheap_signal_into_delta_path(tmp_path, monkeypat
 
     ti.cheap_sync_query_state(query_source="index")
     assert sync_calls["n"] == 1, "changed cheap signal must engage the delta sync"
+
+
+def test_cheap_sync_unchanged_digest_records_post_sync_signal(tmp_path, monkeypatch):
+    """When the heavy digest proves no logical data changed, record the cheap
+    signal *after* local-store mirroring.
+
+    The live real-bucket failure was: cheap signal changed, the digest path ran,
+    ``sync_trace_records_from_local_stores`` touched mirror files but the digest
+    stayed equal, and we stored the pre-sync signal. The next query immediately
+    saw a different post-sync signal and paid the heavy path again.
+    """
+
+    project = tmp_path / "demo"
+    _enroll_project(project, "1234567890abcdef1234567890abcdef")
+    _write_project_trace(project, _trace_with("trace-alpha", "alpha"))
+    _warm(project)
+
+    db_path = ti.default_index_path()
+    with ti._connect(db_path) as conn:
+        prev_digest = ti._meta_get(conn, ti._synced_digest_key("index"))
+        ti._meta_set(conn, ti._synced_cheap_signal_key("index"), "old-signal")
+        conn.commit()
+    assert prev_digest is not None
+
+    digest_calls = {"n": 0}
+
+    def same_digest_after_sync(*args, **kwargs):
+        digest_calls["n"] += 1
+        return prev_digest, {}
+
+    monkeypatch.setattr(ti, "_current_bucket_trace_digests", same_digest_after_sync)
+    monkeypatch.setattr(ti, "_cheap_bucket_signal", lambda: "post-sync-signal")
+
+    result = ti.cheap_sync_query_state(query_source="index", cheap_signal="pre-sync-signal")
+
+    assert result.synced is False
+    assert digest_calls["n"] == 1
+    with ti._connect(db_path) as conn:
+        assert (
+            ti._meta_get(conn, ti._synced_cheap_signal_key("index"))
+            == "post-sync-signal"
+        )
 
 
 def test_cheap_sync_projection_source_uses_bounded_delta(tmp_path, monkeypatch):

@@ -9,11 +9,13 @@ import re
 import sqlite3
 import subprocess
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime, timedelta, timezone
 from fnmatch import fnmatch
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Iterator, TypeVar
 from urllib.parse import urlparse
 
 from pydantic import ValidationError
@@ -32,12 +34,20 @@ from opentraces_schema import (
 
 from . import paths
 from . import search_diag
+from .boilerplate import (
+    headline_from_summary,
+    intent_text_for_record,
+    strip_injected,
+    summary_for_record,
+    summary_from_parts,
+)
 from .bucket_store import (
     bucket_manifest,
     iter_trace_record_objects,
     read_trace_record_object,
     sync_trace_records_from_local_stores,
 )
+from .provenance import provenance_from_record, provenance_from_unit
 from .semantic import semantic_facets_for_trace
 from .skill_detection import SkillInvocation, detect_skill_invocations, trace_skill_names
 from .text_redaction import redact_index_text
@@ -46,6 +56,11 @@ from .trace_map import slice_trace_map_for_candidate
 from .trails.query import TrailQueryProjection, build_trail_query_projection
 
 logger = logging.getLogger(__name__)
+
+try:  # POSIX advisory locking; available on macOS/Linux.
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback.
+    _fcntl = None
 
 
 # Cluster A — A2/A5 schema bump: ``trail_sources.limitations_json`` carries
@@ -156,6 +171,31 @@ def _retry_on_lock(action: Callable[[], T]) -> T:
     raise IndexLockedError(
         f"trace index DB stayed locked after {INDEX_WRITE_RETRY_LIMIT} retries: {last_exc}"
     )
+
+
+@contextmanager
+def _cheap_sync_lock(db_path: Path) -> Iterator[None]:
+    """Serialize expensive cheap-sync delta work across processes.
+
+    Steady-state readers take no lock. The lock is only acquired after the
+    stat-only signal indicates the bucket may have changed; once acquired, the
+    caller re-checks the marker so only one process pays the delta sync.
+    """
+
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if _fcntl is None:  # pragma: no cover - POSIX-only targets.
+        yield
+        return
+    lock_path = db_path.parent / ".cheap-sync.lock"
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        _fcntl.flock(fd, _fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            _fcntl.flock(fd, _fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 _M1_UNIT_TYPES = {
     "trace",
     "trace_map_node",
@@ -627,63 +667,89 @@ def cheap_sync_query_state(
     the query path.
     """
 
+    return _cheap_sync_query_state_guarded(
+        query_source=query_source,
+        index_path=index_path,
+        cheap_signal=cheap_signal,
+        trace_id=trace_id,
+    )
+
+
+def _cheap_sync_query_state_guarded(
+    *,
+    query_source: str,
+    index_path: Path | None,
+    cheap_signal: str | None,
+    trace_id: str | None,
+) -> CheapSyncResult:
+    search_diag.incr("cheap_sync_calls")
     db_path = index_path or default_index_path()
     if not db_path.exists():
-        # No warm cache yet; the query path's own cold-bootstrap will build it.
         return CheapSyncResult(synced=False, query_source=query_source)
 
-    # --- O(1) cheap freshness probe (F1) --------------------------------
-    # Read the last-synced cheap signal + digest from the index meta and
-    # compare against a freshly-recomputed stat-only signal. If they match,
-    # NOTHING has changed in any trace-source root since the last sync, so we
-    # short-circuit WITHOUT touching ``sync_trace_records_from_local_stores`` /
-    # ``iter_trace_record_objects`` / ``bucket_manifest`` (the ~46s path).
-    try:
-        with _connect(db_path) as conn:
-            prev_digest = _meta_get(conn, _synced_digest_key(query_source))
-            prev_cheap_signal = _meta_get(conn, _synced_cheap_signal_key(query_source))
-            prev_per_trace_raw = _meta_get(
-                conn, _synced_trace_digests_key(query_source)
-            )
-    except sqlite3.Error:
-        prev_digest = None
-        prev_cheap_signal = None
-        prev_per_trace_raw = None
-
-    current_cheap_signal = (
-        cheap_signal if cheap_signal is not None else _cheap_bucket_signal()
+    prev_digest, prev_cheap_signal, prev_per_trace_raw = _sync_marker_snapshot(
+        db_path, query_source
     )
-    if (
-        prev_cheap_signal is not None
-        and current_cheap_signal != ""
-        and prev_cheap_signal == current_cheap_signal
-    ):
-        # Steady state — no trace-source file changed since the last sync.
-        # O(1): zero corpus scan, zero manifest recompute.
+    current_cheap_signal = cheap_signal if cheap_signal is not None else _cheap_bucket_signal()
+    if _cheap_signal_matches(prev_cheap_signal, current_cheap_signal):
         return CheapSyncResult(
             synced=False, query_source=query_source, bucket_digest=prev_digest
         )
 
-    # --- G2: projection cheap-signal BOOTSTRAP (zero heavy scan) ------------
-    # The projection source's per-source markers are seeded the same way the
-    # index source seeds its own: from the freshness signal the serving artifact
-    # was built from. The index source records ``synced_cheap_signal:index`` at
-    # the end of every sync; the projection's analogue is the
-    # ``built_from_cheap_signal`` the serving search build stamped at build time
-    # (build_search_projection / refresh_search_projection both stamp it).
-    #
-    # Before G2 the projection markers were NEVER seeded until a query had
-    # already paid the full ~46s whole-corpus ``_current_bucket_trace_digests``
-    # scan once — so a steady-state ``trace query --semantic`` re-paid that heavy
-    # scan on every call (verified empty on the real bucket). When the projection
-    # markers are unseeded BUT a serving build exists whose stamped
-    # ``built_from_cheap_signal`` equals the current cheap signal, the projection
-    # is already fresh: seed all three projection markers (cheap signal from the
-    # build's stamp; digest + per-trace snapshot copied from the ``:index`` source
-    # since the index and projection are built from the same bucket) and
-    # short-circuit O(1) — NO corpus scan, NO manifest recompute. This is the
-    # only path that reaches the cheap short-circuit on a cold-projection-marker
-    # warm bucket.
+    with _cheap_sync_lock(db_path):
+        prev_digest, prev_cheap_signal, prev_per_trace_raw = _sync_marker_snapshot(
+            db_path, query_source
+        )
+        current_cheap_signal = (
+            cheap_signal if cheap_signal is not None else _cheap_bucket_signal()
+        )
+        if _cheap_signal_matches(prev_cheap_signal, current_cheap_signal):
+            return CheapSyncResult(
+                synced=False, query_source=query_source, bucket_digest=prev_digest
+            )
+        return _cheap_sync_query_state_locked(
+            db_path=db_path,
+            query_source=query_source,
+            current_cheap_signal=current_cheap_signal,
+            prev_digest=prev_digest,
+            prev_cheap_signal=prev_cheap_signal,
+            prev_per_trace_raw=prev_per_trace_raw,
+            trace_id=trace_id,
+        )
+
+
+def _sync_marker_snapshot(
+    db_path: Path, query_source: str
+) -> tuple[str | None, str | None, str | None]:
+    try:
+        with _connect(db_path) as conn:
+            return (
+                _meta_get(conn, _synced_digest_key(query_source)),
+                _meta_get(conn, _synced_cheap_signal_key(query_source)),
+                _meta_get(conn, _synced_trace_digests_key(query_source)),
+            )
+    except sqlite3.Error:
+        return None, None, None
+
+
+def _cheap_signal_matches(prev_cheap_signal: str | None, current_cheap_signal: str) -> bool:
+    return (
+        prev_cheap_signal is not None
+        and current_cheap_signal != ""
+        and prev_cheap_signal == current_cheap_signal
+    )
+
+
+def _cheap_sync_query_state_locked(
+    *,
+    db_path: Path,
+    query_source: str,
+    current_cheap_signal: str,
+    prev_digest: str | None,
+    prev_cheap_signal: str | None,
+    prev_per_trace_raw: str | None,
+    trace_id: str | None,
+) -> CheapSyncResult:
     if (
         query_source == "projection"
         and prev_cheap_signal is None
@@ -704,10 +770,6 @@ def cheap_sync_query_state(
                 bucket_digest=seeded,
             )
 
-    # --- Cheap signal moved + the caller knows the single written trace -----
-    # F3 post-INGEST fast path: refresh ONLY that one trace. Avoids the ~46s
-    # whole-corpus ``_current_bucket_trace_digests`` scan; the capture pipeline
-    # already told us exactly which trace changed.
     if trace_id is not None:
         try:
             refresh_index(db_path)
@@ -723,19 +785,37 @@ def cheap_sync_query_state(
                     index_path=db_path,
                 )
             except Exception:
-                # Index advanced; projection delta failed. Leave the cheap
-                # marker UNADVANCED so the next call retries this trace.
+                search_diag.incr("cheap_sync_delta_syncs")
                 return CheapSyncResult(
                     synced=True,
                     query_source=query_source,
                     changed_trace_ids=[trace_id],
                     bucket_digest=prev_digest,
                 )
-        # Advance ONLY the cheap signal — not the per-trace digest snapshot.
-        # The targeted refresh did not recompute the authoritative digest map,
-        # so a later whole-corpus ``cheap_sync_query_state`` (no ``trace_id``)
-        # still reconciles. Recording the cheap signal here keeps the next
-        # steady-state probe O(1).
+        try:
+            with _connect(db_path) as conn:
+                _meta_set(
+                    conn,
+                    _synced_cheap_signal_key(query_source),
+                    _cheap_bucket_signal(),
+                )
+                conn.commit()
+        except sqlite3.Error:
+            pass
+        search_diag.incr("cheap_sync_delta_syncs")
+        return CheapSyncResult(
+            synced=True,
+            query_source=query_source,
+            changed_trace_ids=[trace_id],
+            bucket_digest=prev_digest,
+        )
+
+    try:
+        top_digest, current_per_trace = _current_bucket_trace_digests()
+    except Exception:
+        return CheapSyncResult(synced=False, query_source=query_source)
+
+    if top_digest is not None and prev_digest == top_digest:
         try:
             with _connect(db_path) as conn:
                 _meta_set(
@@ -747,41 +827,11 @@ def cheap_sync_query_state(
         except sqlite3.Error:
             pass
         return CheapSyncResult(
-            synced=True,
-            query_source=query_source,
-            changed_trace_ids=[trace_id],
-            bucket_digest=prev_digest,
-        )
-
-    # --- Cheap signal moved (or never recorded): pay for the real digest -
-    try:
-        top_digest, current_per_trace = _current_bucket_trace_digests()
-    except Exception:
-        return CheapSyncResult(synced=False, query_source=query_source)
-
-    if top_digest is not None and prev_digest == top_digest:
-        # The cheap signal moved but the authoritative bucket digest is
-        # unchanged (e.g. an mtime touch with byte-identical content). No
-        # delta to apply — just record the new cheap signal so the next
-        # query short-circuits again, then short-circuit now.
-        try:
-            with _connect(db_path) as conn:
-                _meta_set(
-                    conn,
-                    _synced_cheap_signal_key(query_source),
-                    current_cheap_signal,
-                )
-                conn.commit()
-        except sqlite3.Error:
-            pass
-        return CheapSyncResult(
             synced=False, query_source=query_source, bucket_digest=top_digest
         )
 
     try:
-        previous_per_trace = (
-            json.loads(prev_per_trace_raw) if prev_per_trace_raw else {}
-        )
+        previous_per_trace = json.loads(prev_per_trace_raw) if prev_per_trace_raw else {}
         if not isinstance(previous_per_trace, dict):
             previous_per_trace = {}
     except (ValueError, json.JSONDecodeError):
@@ -789,7 +839,6 @@ def cheap_sync_query_state(
 
     changed, deleted = _compute_trace_delta(current_per_trace, previous_per_trace)
 
-    # Bounded index refresh — incremental + R3-cheap, never a full rebuild.
     try:
         refresh_index(db_path)
     except Exception:
@@ -809,8 +858,7 @@ def cheap_sync_query_state(
                 index_path=db_path,
             )
         except Exception:
-            # Index advanced; projection refresh failed. Leave the marker
-            # unadvanced so the next query retries the projection delta.
+            search_diag.incr("cheap_sync_delta_syncs")
             return CheapSyncResult(
                 synced=True,
                 query_source=query_source,
@@ -819,8 +867,6 @@ def cheap_sync_query_state(
                 bucket_digest=top_digest,
             )
 
-    # Advance the synced-digest marker LAST — anything that failed above
-    # leaves the prior marker so the next call retries the delta.
     try:
         with _connect(db_path) as conn:
             if top_digest is not None:
@@ -830,11 +876,6 @@ def cheap_sync_query_state(
                 _synced_trace_digests_key(query_source),
                 json.dumps(current_per_trace, sort_keys=True),
             )
-            # Record the cheap signal recomputed AFTER the delta sync mirrored
-            # legacy stores into the bucket, so the next steady-state probe
-            # short-circuits. Recompute (rather than reuse ``current_cheap_signal``)
-            # because the sync may have written new mirror files that must be
-            # reflected in the persisted fingerprint.
             _meta_set(
                 conn,
                 _synced_cheap_signal_key(query_source),
@@ -844,6 +885,7 @@ def cheap_sync_query_state(
     except sqlite3.Error:
         pass
 
+    search_diag.incr("cheap_sync_delta_syncs")
     return CheapSyncResult(
         synced=True,
         query_source=query_source,
@@ -2024,6 +2066,7 @@ def _rebuild_trail_projection(
         # Build failed — leave trail_sources untouched so the next refresh
         # retries instead of marking a stale-but-empty cache as fresh.
         return
+    trail_units = _disambiguate_trail_unit_collisions(conn, project_slug, trail_units)
 
     for trail_map in _trail_maps_from_units(trail_units):
         _insert_trail_map(conn, trail_map)
@@ -2332,7 +2375,7 @@ def _insert_trace(
     trace_path: Path,
     trace_map: TraceMap,
 ) -> None:
-    title = _index_text(record.task.description or _first_user_text(record) or record.trace_id)
+    title = _index_text(summary_for_record(record, fallback=_first_user_text(record)) or record.trace_id)
     conn.execute(
         """
         insert into traces(trace_id, project_slug, session_id, generation_index, trace_path, title)
@@ -2483,7 +2526,18 @@ def _build_units(
     signals = _trace_signals(record, trace_map)
     facets = _trace_facets(record, project_slug, skills, tools, files)
     facets.append(TraceFacet(name="source_layer", value=layer, source="exact_schema"))
-    title = _index_text(record.task.description or _first_user_text(record) or record.trace_id)
+    display_summary = summary_for_record(record, fallback=_first_user_text(record))
+    display_headline = headline_from_summary(display_summary)
+    intent_text = _index_text(intent_text_for_record(record) or display_summary)
+    provenance = provenance_from_record(record)
+    title = _index_text(display_headline or record.task.description or _first_user_text(record) or record.trace_id)
+    summary_metadata = {
+        "summary": display_summary,
+        "headline": display_headline,
+        "provenance_color": provenance.get("provenance_color"),
+        "outcome_commit_sha": provenance.get("commit_sha"),
+        "commit_subject": provenance.get("commit_subject"),
+    }
     unit = TraceUnit(
         unit_id=f"tu:{record.trace_id}:trace",
         unit_type="trace",
@@ -2492,7 +2546,7 @@ def _build_units(
         files=files,
         skills=skills,
         title_text=title,
-        intent_text=_index_text(" ".join(filter(None, [record.task.description, _first_user_text(record)]))),
+        intent_text=intent_text,
         action_text=" ".join(_tool_texts(record)),
         evidence_text=" ".join(_observation_summaries(record)),
         artifact_text=" ".join([*files, *record.dependencies]),
@@ -2504,6 +2558,7 @@ def _build_units(
             "timestamp_start": record.timestamp_start,
             "timestamp_end": record.timestamp_end,
             "test_commands": test_commands,
+            **summary_metadata,
             "map_node_refs": [
                 node.node_id
                 for node in trace_map.nodes
@@ -2529,6 +2584,7 @@ def _build_units(
                 files=[*node.files_read, *node.files_modified],
                 skills=skills if node.action_type == "skill_invocation" else [],
                 title_text=title,
+                intent_text=intent_text,
                 action_text=node.text_preview or "",
                 evidence_text=node.text_preview or "",
                 artifact_text=" ".join([*node.files_read, *node.files_modified]),
@@ -2540,6 +2596,7 @@ def _build_units(
                     "generation_index": record.generation_index,
                     "timestamp_start": record.timestamp_start,
                     "timestamp_end": record.timestamp_end,
+                    **summary_metadata,
                 },
             )
         )
@@ -2553,7 +2610,7 @@ def _build_units(
                 files=files,
                 skills=skills,
                 title_text=title,
-                intent_text=_first_user_text(record) or "",
+                intent_text=intent_text,
                 action_text=" ".join(test_commands),
                 evidence_text="test failed then passed after edit",
                 artifact_text=" ".join(files),
@@ -2565,6 +2622,7 @@ def _build_units(
                     "timestamp_start": record.timestamp_start,
                     "timestamp_end": record.timestamp_end,
                     "test_commands": test_commands,
+                    **summary_metadata,
                     "map_node_refs": unit.metadata["map_node_refs"],
                 },
             )
@@ -2636,6 +2694,7 @@ def _trace_intent_unit(
     facets: list[TraceFacet],
     signals: list[TraceSignal],
 ) -> TraceUnit:
+    display_summary = summary_for_record(record, fallback=_first_user_text(record))
     return TraceUnit(
         unit_id=f"tu:{record.trace_id}:intent",
         unit_type="trace_intent_candidate",
@@ -2644,7 +2703,7 @@ def _trace_intent_unit(
         files=[],
         skills=_trace_skills(record),
         title_text=title,
-        intent_text=_index_text(" ".join(filter(None, [record.task.description, _first_user_text(record)]))),
+        intent_text=_index_text(intent_text_for_record(record) or display_summary),
         action_text="",
         evidence_text="intent candidate derived from task and first user instruction",
         artifact_text="",
@@ -2655,6 +2714,8 @@ def _trace_intent_unit(
             "generation_index": record.generation_index,
             "timestamp_start": record.timestamp_start,
             "timestamp_end": record.timestamp_end,
+            "summary": display_summary,
+            "headline": headline_from_summary(display_summary),
         },
     )
 
@@ -2667,6 +2728,7 @@ def _trace_slice_unit(
     facets: list[TraceFacet],
     signals: list[TraceSignal],
 ) -> TraceUnit:
+    display_summary = summary_for_record(record, fallback=_first_user_text(record))
     selected_nodes = [
         node
         for node in trace_map.nodes
@@ -2688,7 +2750,7 @@ def _trace_slice_unit(
         files=files,
         skills=_trace_skills(record),
         title_text=title,
-        intent_text=_index_text(_first_user_text(record) or record.task.description or ""),
+        intent_text=_index_text(intent_text_for_record(record) or display_summary),
         action_text=" ".join(node.action_type for node in selected_nodes),
         evidence_text="bounded intent-to-evidence Trace Map slice",
         artifact_text=" ".join(files),
@@ -2700,6 +2762,8 @@ def _trace_slice_unit(
             "timestamp_start": record.timestamp_start,
             "timestamp_end": record.timestamp_end,
             "slice_kind": "intent",
+            "summary": display_summary,
+            "headline": headline_from_summary(display_summary),
             "map_node_refs": [node.node_id for node in selected_nodes],
         },
     )
@@ -2712,6 +2776,11 @@ def _skill_invocation_units(
     trace_facets: list[TraceFacet],
 ) -> list[TraceUnit]:
     units: list[TraceUnit] = []
+    display_summary = summary_for_record(record, fallback=_first_user_text(record))
+    summary_metadata = {
+        "summary": display_summary,
+        "headline": headline_from_summary(display_summary),
+    }
     seen_invocations: set[tuple[str, str | None, int | None, str]] = set()
     for invocation in detect_skill_invocations(record):
         dedupe_key = (
@@ -2764,12 +2833,15 @@ def _skill_invocation_units(
                         evidence_refs=evidence_refs,
                     )
                 ],
-                metadata=_skill_invocation_metadata(
-                    record,
-                    invocation,
-                    command_name=command_name,
-                    command_args=command_args,
-                ),
+                metadata={
+                    **_skill_invocation_metadata(
+                        record,
+                        invocation,
+                        command_name=command_name,
+                        command_args=command_args,
+                    ),
+                    **summary_metadata,
+                },
             )
         )
     return units
@@ -2829,6 +2901,7 @@ def _tool_sequence_unit(
     facets: list[TraceFacet],
 ) -> TraceUnit:
     tools = [call.tool_name for step in record.steps for call in step.tool_calls]
+    display_summary = summary_for_record(record, fallback=_first_user_text(record))
     return TraceUnit(
         unit_id=f"tu:{record.trace_id}:tool-sequence",
         unit_type="tool_sequence",
@@ -2837,7 +2910,7 @@ def _tool_sequence_unit(
         files=[],
         skills=_trace_skills(record),
         title_text=f"Tool sequence for {title}",
-        intent_text=_index_text(record.task.description or _first_user_text(record) or ""),
+        intent_text=_index_text(intent_text_for_record(record) or display_summary),
         action_text=" ".join(tools),
         evidence_text=f"{len(tools)} tool calls",
         artifact_text="",
@@ -2848,6 +2921,8 @@ def _tool_sequence_unit(
             "timestamp_start": record.timestamp_start,
             "timestamp_end": record.timestamp_end,
             "tools": tools,
+            "summary": display_summary,
+            "headline": headline_from_summary(display_summary),
         },
     )
 
@@ -2987,7 +3062,81 @@ def _build_trail_units(repo: Path, project_slug: str) -> list[TraceUnit]:
                 trail_refs=list(_trail_refs(anchor)),
             )
         )
-    return units
+    return _dedupe_units_by_id(units)
+
+
+def _dedupe_units_by_id(units: list[TraceUnit]) -> list[TraceUnit]:
+    """Keep trail projection rebuilds idempotent when event views duplicate ids."""
+
+    seen: set[str] = set()
+    out: list[TraceUnit] = []
+    for unit in units:
+        if unit.unit_id in seen:
+            continue
+        seen.add(unit.unit_id)
+        out.append(unit)
+    return out
+
+
+def _disambiguate_trail_unit_collisions(
+    conn: sqlite3.Connection,
+    project_slug: str,
+    units: list[TraceUnit],
+) -> list[TraceUnit]:
+    """Avoid cross-project primary-key collisions for Trail projection units.
+
+    Historical trail unit ids were trace/patch scoped, not project scoped. Real
+    buckets can contain the same trace id + patch/anchor id in more than one
+    registered project, while ``units.unit_id`` is global. Keep the old ids when
+    they are free (preserving normal refs), and add the project slug only when a
+    different project already owns the id.
+    """
+
+    if not units:
+        return units
+    ids = sorted({unit.unit_id for unit in units})
+    placeholders = ",".join("?" for _ in ids)
+    existing: dict[str, str] = {}
+    for row in conn.execute(
+        f"select unit_id, project_slug from units where unit_id in ({placeholders})",
+        ids,
+    ):
+        unit_id = row["unit_id"] if isinstance(row, sqlite3.Row) else row[0]
+        owner = row["project_slug"] if isinstance(row, sqlite3.Row) else row[1]
+        existing[str(unit_id)] = str(owner)
+    used: set[str] = set()
+    out: list[TraceUnit] = []
+    for unit in units:
+        owner = existing.get(unit.unit_id)
+        if owner is None or owner == project_slug:
+            if unit.unit_id not in used:
+                used.add(unit.unit_id)
+                out.append(unit)
+            continue
+
+        new_id = _project_scoped_trail_unit_id(unit, project_slug)
+        suffix = 2
+        while new_id in used or conn.execute(
+            "select 1 from units where unit_id = ? limit 1", (new_id,)
+        ).fetchone():
+            new_id = f"{_project_scoped_trail_unit_id(unit, project_slug)}:{suffix}"
+            suffix += 1
+        metadata = dict(unit.metadata)
+        metadata.setdefault("canonical_unit_id", unit.unit_id)
+        out.append(unit.model_copy(update={"unit_id": new_id, "metadata": metadata}))
+        used.add(new_id)
+    return out
+
+
+def _project_scoped_trail_unit_id(unit: TraceUnit, project_slug: str) -> str:
+    safe_project = re.sub(r"[^A-Za-z0-9_.-]+", "-", project_slug).strip("-") or "project"
+    if unit.unit_type == "patch":
+        patch_id = unit.metadata.get("trace_patch_id") or unit.unit_id.rsplit(":", 1)[-1]
+        return f"tu:{unit.trace_id}:project:{safe_project}:patch:{patch_id}"
+    if unit.unit_type == "git_anchor":
+        anchor_id = unit.metadata.get("git_anchor_id") or unit.unit_id.rsplit(":", 1)[-1]
+        return f"tu:{unit.trace_id}:project:{safe_project}:git-anchor:{anchor_id}"
+    return f"{unit.unit_id}:project:{safe_project}"
 
 
 def _anchor_with_survival(
@@ -3215,6 +3364,9 @@ def _candidate_packet(
     index_path: Path | None = None,
 ) -> CandidatePacket:
     title = unit.title_text or unit.trace_id
+    summary = _candidate_summary(unit, index_path=index_path)
+    headline = headline_from_summary(summary or title)
+    provenance = _candidate_provenance(unit, index_path=index_path)
     map_node_refs = [str(ref) for ref in unit.metadata.get("map_node_refs", [])]
     slice_preview = _slice_preview_for_unit(unit, max_slice_nodes, index_path) if include_slice else None
     return CandidatePacket(
@@ -3223,6 +3375,12 @@ def _candidate_packet(
         trace_id=unit.trace_id,
         project_slug=unit.project_slug,
         title=title,
+        headline=headline or None,
+        summary=summary or None,
+        provenance_color=provenance.get("provenance_color"),
+        committed=provenance.get("committed"),
+        commit_sha=provenance.get("commit_sha"),
+        commit_subject=provenance.get("commit_subject"),
         intent_preview=_preview(unit.intent_text),
         candidate_kind=_candidate_kind(unit),
         match_explanation=_match_explanation(matched_fields, unit),
@@ -3250,6 +3408,73 @@ def _candidate_packet(
             "include_slice": include_slice,
         },
     )
+
+
+def _candidate_summary(unit: TraceUnit, *, index_path: Path | None = None) -> str:
+    """Return the human-facing discovery summary for a candidate.
+
+    New index builds persist ``metadata.summary``. For older warm indexes, load
+    the bounded trace record for the returned candidate and compose the summary
+    at packet time so users do not need a rebuild to stop seeing boilerplate.
+    """
+
+    metadata_summary = strip_injected(str(unit.metadata.get("summary") or ""))
+    if metadata_summary:
+        return metadata_summary
+
+    trace_path = get_trace_path(unit.trace_id, index_path=index_path)
+    if trace_path is not None:
+        loaded = _record_summary_from_path(unit.trace_id, str(trace_path))
+        if loaded:
+            return loaded
+
+    return summary_from_parts(
+        task_description=unit.title_text,
+        user_texts=[unit.intent_text],
+        fallback=unit.intent_text or unit.title_text or unit.trace_id,
+    )
+
+
+def _candidate_provenance(unit: TraceUnit, *, index_path: Path | None = None) -> dict[str, Any]:
+    provenance = provenance_from_unit(unit)
+    if provenance.get("commit_sha") or provenance.get("provenance_color") == "reverted":
+        return provenance
+    trace_path = get_trace_path(unit.trace_id, index_path=index_path)
+    if trace_path is not None:
+        loaded = _record_provenance_from_path(unit.trace_id, str(trace_path))
+        if loaded:
+            return loaded
+    return provenance
+
+
+@lru_cache(maxsize=1024)
+def _record_summary_from_path(trace_id: str, trace_path: str) -> str:
+    path = Path(trace_path)
+    if not path.exists():
+        return ""
+    try:
+        records = _iter_trace_file_records(path)
+    except (OSError, ValueError, ValidationError):
+        return ""
+    for record in records:
+        if record.trace_id == trace_id:
+            return summary_for_record(record, fallback=_first_user_text(record))
+    return ""
+
+
+@lru_cache(maxsize=1024)
+def _record_provenance_from_path(trace_id: str, trace_path: str) -> dict[str, Any]:
+    path = Path(trace_path)
+    if not path.exists():
+        return {}
+    try:
+        records = _iter_trace_file_records(path)
+    except (OSError, ValueError, ValidationError):
+        return {}
+    for record in records:
+        if record.trace_id == trace_id:
+            return provenance_from_record(record)
+    return {}
 
 
 def _lexical_score(unit: TraceUnit, terms: list[str]) -> tuple[float, dict[str, list[str]]]:

@@ -23,6 +23,7 @@ from opentraces.core.trails import (
     append_event_batch,
 )
 from opentraces.core.trails.models import sha256_text
+from opentraces_schema import TraceUnit
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -156,6 +157,96 @@ def test_build_trail_units_does_not_call_sync_patch(tmp_path: Path) -> None:
             "P1 expected survival_state=unknown at refresh time; "
             f"got {survival_facets[0].value!r}"
         )
+
+
+def test_build_trail_units_dedupes_duplicate_projection_ids(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Duplicate Trail projection rows must not explode index refresh.
+
+    The live bucket had duplicate patch/anchor identities in the projected
+    event view. Since ``units.unit_id`` is the primary key, the projection
+    builder must collapse duplicates before ``_rebuild_trail_projection``
+    inserts them.
+    """
+
+    class Projection:
+        patches_by_id = {
+            "patch-a": {
+                "trace_id": "trace-1",
+                "trace_patch_id": "patch-1",
+                "file_path": "a.py",
+                "relation": "created",
+            },
+            "patch-b": {
+                "trace_id": "trace-1",
+                "trace_patch_id": "patch-1",
+                "file_path": "a.py",
+                "relation": "created",
+            },
+        }
+        anchors_by_id = {
+            "anchor-a": {
+                "trace_id": "trace-1",
+                "trace_patch_id": "patch-1",
+                "git_anchor_id": "anchor-1",
+                "file_path": "a.py",
+                "commit_sha": "abc123",
+            },
+            "anchor-b": {
+                "trace_id": "trace-1",
+                "trace_patch_id": "patch-1",
+                "git_anchor_id": "anchor-1",
+                "file_path": "a.py",
+                "commit_sha": "abc123",
+            },
+        }
+
+    from opentraces.core import trails
+    from opentraces.core.trace_index import _build_trail_units
+
+    monkeypatch.setattr(trails, "build_trail_query_projection", lambda _repo: Projection())
+
+    units = _build_trail_units(tmp_path, project_slug="proj")
+    unit_ids = [unit.unit_id for unit in units]
+
+    assert unit_ids == [
+        "tu:trace-1:patch:patch-1",
+        "tu:trace-1:git-anchor:anchor-1",
+    ]
+    assert len(unit_ids) == len(set(unit_ids))
+
+
+def test_trail_unit_collision_disambiguates_only_cross_project_ids(tmp_path: Path) -> None:
+    """A duplicate trail unit id from another project gets a scoped id."""
+
+    from opentraces.core import trace_index as ti
+
+    db_path = tmp_path / "index.db"
+    with ti._connect(db_path, wal=False) as conn:
+        ti._create_schema(conn)
+        existing = TraceUnit(
+            unit_id="tu:trace-1:patch:patch-1",
+            unit_type="patch",
+            trace_id="trace-1",
+            project_slug="other-project",
+            title_text="existing",
+            metadata={"trace_patch_id": "patch-1"},
+        )
+        ti._insert_unit(conn, existing)
+
+        incoming = existing.model_copy(
+            update={
+                "project_slug": "proj",
+                "title_text": "incoming",
+                "metadata": {"trace_patch_id": "patch-1"},
+            }
+        )
+        scoped = ti._disambiguate_trail_unit_collisions(conn, "proj", [incoming])
+
+    assert len(scoped) == 1
+    assert scoped[0].unit_id == "tu:trace-1:project:proj:patch:patch-1"
+    assert scoped[0].metadata["canonical_unit_id"] == "tu:trace-1:patch:patch-1"
 
 
 def test_refresh_index_fast_for_312_anchor_projection(tmp_path: Path) -> None:

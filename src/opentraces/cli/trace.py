@@ -80,6 +80,29 @@ def _format_trace_query_warning(entry: dict) -> str:
     return message
 
 
+def _trace_query_diag_payload(sync_result, query_source: str) -> dict | None:
+    try:
+        from ..core import search_diag
+
+        if not search_diag.enabled():
+            return None
+        return {
+            "cheap_sync": (
+                {
+                    "synced": bool(sync_result.synced),
+                    "query_source": sync_result.query_source,
+                    "changed_trace_ids": list(sync_result.changed_trace_ids),
+                    "deleted_trace_ids": list(sync_result.deleted_trace_ids),
+                }
+                if sync_result is not None
+                else {"synced": False, "query_source": query_source}
+            ),
+            "search_diag": search_diag.snapshot(),
+        }
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Standalone trace commands (registered at root in cli/__init__).
 # ---------------------------------------------------------------------------
@@ -88,6 +111,91 @@ def _format_trace_query_warning(entry: dict) -> str:
 @click.group("trace", cls=OpentracesGroup)
 def trace_group() -> None:
     """Search, map, slice, and retrieve retained traces."""
+
+
+@trace_group.command("discover", cls=OpentracesCommand)
+@click.argument("topic_terms", nargs=-1, required=True)
+@click.option(
+    "--by",
+    "group_by",
+    type=click.Choice(["day"], case_sensitive=False),
+    default="day",
+    show_default=True,
+    help="Group the discovery packet.",
+)
+@click.option("--limit", type=int, default=50, show_default=True, help="Maximum trace cards.")
+@click.option(
+    "--per-group",
+    type=int,
+    default=5,
+    show_default=True,
+    help="Maximum cards per group.",
+)
+@click.option("--project", default=None, help="Project slug to search.")
+@click.option("--cwd", "current_cwd", is_flag=True, help="Search only the current opted-in project.")
+@click.option("--latest-generation/--include-superseded", default=True, help="Suppress older generations by default.")
+@click.option("--force-rebuild", is_flag=True, help="Rebuild the local Trace Index before discovering.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def trace_discover(
+    topic_terms: tuple[str, ...],
+    group_by: str,
+    limit: int,
+    per_group: int,
+    project: str | None,
+    current_cwd: bool,
+    latest_generation: bool,
+    force_rebuild: bool,
+    as_json: bool,
+) -> None:
+    """Build a deterministic topic capsule from retained traces."""
+    from ..core.discovery import discover
+    from ..core.trace_index import cheap_sync_query_state, rebuild_index
+
+    topic = " ".join(topic_terms)
+    if current_cwd and project:
+        click.echo("Use either --cwd or --project, not both.", err=True)
+        sys.exit(2)
+    if current_cwd:
+        from ..core.config import get_project_dir, project_is_opted_in
+
+        cwd = Path.cwd()
+        if not project_is_opted_in(cwd):
+            click.echo("Not an opentraces project. Run 'opentraces init' first.", err=True)
+            sys.exit(3)
+        project = get_project_dir(cwd).name
+
+    sync_result = None
+    if force_rebuild:
+        rebuild_index()
+    else:
+        sync_result = cheap_sync_query_state(query_source="index")
+
+    try:
+        packet = discover(
+            topic,
+            by=group_by.lower(),
+            limit=limit,
+            per_group=per_group,
+            latest_generation=latest_generation,
+            project=project,
+        )
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+
+    payload = {"status": "ok", "discovery": packet.model_dump(mode="json")}
+    diag = _trace_query_diag_payload(sync_result, "index")
+    if diag:
+        payload.update(diag)
+    if as_json:
+        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    click.echo(f"{packet.topic}  {packet.total_cards} trace cards")
+    for group in packet.groups:
+        click.echo(f"{group.label}: {group.count}")
+        for card in group.cards:
+            click.echo(f"  {card.trace_id}  {card.provenance_color or 'unknown'}  {card.headline}")
 
 
 @trace_group.command("query", cls=OpentracesCommand)
@@ -342,6 +450,7 @@ def trace_query(
         )
         sys.exit(3)
     remote_bucket_payload = None
+    sync_result = None
     if remote_bucket:
         try:
             from ._remote_bucket import pull_remote_bucket_for_trace
@@ -365,7 +474,7 @@ def trace_query(
         # state, and a changed bucket triggers a BOUNDED incremental refresh
         # (never the ~105s full rebuild) so the query below reflects freshly
         # captured/altered traces. Best-effort by contract; never raises.
-        cheap_sync_query_state(query_source=query_source)
+        sync_result = cheap_sync_query_state(query_source=query_source)
 
     try:
         query_page = query_index_page
@@ -424,6 +533,9 @@ def trace_query(
         "has_more": page.next_page_token is not None,
         "candidates": [packet.model_dump(mode="json") for packet in page.candidates],
     }
+    diag = _trace_query_diag_payload(sync_result, query_source)
+    if diag:
+        payload.update(diag)
     if remote_bucket_payload is not None:
         payload["remote_bucket"] = remote_bucket_payload
     if page.warnings:
@@ -956,6 +1068,12 @@ def trace_slice_cmd(
     help="Return only the change-burst summary list for this trace (no map skeleton).",
 )
 @click.option(
+    "--card",
+    "as_card",
+    is_flag=True,
+    help="Return a bounded progressive-discovery card for this trace.",
+)
+@click.option(
     "--burst-gap",
     "burst_gap",
     type=int,
@@ -1027,6 +1145,7 @@ def trace_get(
     at_step: str | None,
     dry_run: bool,
     as_bursts: bool,
+    as_card: bool,
     burst_gap: int | None,
     no_commit_lookup: bool,
     as_waste: bool,
@@ -1045,13 +1164,17 @@ def trace_get(
     runtime instead of printing the trace details. ``--at-step`` currently
     requires a Claude Code trace. Pass
     ``--bursts`` to return the change-burst summary for the trace
-    without re-walking the full Trace Map.
+    without re-walking the full Trace Map. Pass ``--card`` to return a bounded
+    progressive-discovery card.
     """
     if remote_bucket and resume:
         click.echo("--remote-bucket cannot be combined with --resume.", err=True)
         sys.exit(2)
     if remote and resume:
         click.echo("--remote cannot be combined with --resume.", err=True)
+        sys.exit(2)
+    if as_card and remote:
+        click.echo("--card cannot be combined with --remote yet.", err=True)
         sys.exit(2)
 
     remote_bucket_payload = None
@@ -1076,6 +1199,22 @@ def trace_get(
 
     if as_bursts:
         _trace_get_bursts_impl(ref, burst_gap, as_json, commit_lookup=not no_commit_lookup)
+        return
+    if as_card:
+        from ..core.discovery import candidate_card
+
+        try:
+            card = candidate_card(ref)
+        except FileNotFoundError:
+            click.echo(f"Trace not found: {ref}", err=True)
+            sys.exit(6)
+        payload = {"status": "ok", "card": card.model_dump(mode="json")}
+        if remote_bucket_payload is not None:
+            payload["remote_bucket"] = remote_bucket_payload
+        if as_json:
+            click.echo(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        click.echo(f"{card.trace_id}  {card.headline}")
         return
 
     if as_waste:
