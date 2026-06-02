@@ -69,6 +69,8 @@ def default_proposer(
     train_rows: list[RolloutRow],
     _budget_hint: int,
     rejected: Sequence[dict] = (),
+    *,
+    meta_skill: str = "",
 ) -> list[dict]:
     """Deterministic reflection over the failure minibatch.
 
@@ -78,8 +80,11 @@ def default_proposer(
     Skipping covered and rejected tags makes the loop converge and turns the
     buffer into real negative feedback.
     """
+    del meta_skill
     _success, failure = split_success_failure(train_rows)
-    rows = failure or train_rows
+    if not failure:
+        return []
+    rows = failure
     counts: dict[str, int] = {}
     for row in rows:
         for tag in row.failure_tags:
@@ -135,9 +140,15 @@ _STAGE_INSTRUCTIONS = {
 }
 
 
-def _stage_prompt(stage: str, current_skill: str, context: dict) -> str:
+def _stage_prompt(stage: str, current_skill: str, context: dict, *, meta_skill: str = "") -> str:
+    meta_block = (
+        f"OPTIMIZER META-SKILL (teacher-only; do not copy into the deployed skill):\n{meta_skill}\n\n"
+        if meta_skill
+        else ""
+    )
     return (
         f"{_STAGE_INSTRUCTIONS[stage].format(budget=context.get('budget', 0))}\n\n"
+        f"{meta_block}"
         f"CURRENT SKILL:\n{current_skill}\n\n"
         'Respond ONLY with JSON: {"edits": [{"op": "...", "target": "...", '
         '"content": "...", "support_count": <int>, "source_type": "..."}]}\n\n'
@@ -169,6 +180,8 @@ def make_llm_proposer(
         train_rows: list[RolloutRow],
         budget_hint: int,
         rejected: Sequence[dict] = (),
+        *,
+        meta_skill: str = "",
     ) -> list[dict]:
         success_rows, failure_rows = split_success_failure(train_rows)
         weights = tag_deficit_weights(failure_rows or train_rows)
@@ -179,11 +192,12 @@ def make_llm_proposer(
             "budget": budget_hint,
             "tags": failure_tags_of(failure_rows or train_rows),
             "tag_weights": {t: round(w, 6) for t, w in weights.items()},
+            "tag_counts": _tag_counts(failure_rows or train_rows),
             "covered": covered,
             "rejected": sorted(_rejected_tags(rejected)),
         }
         failure_edits = _call_edits(
-            complete, _stage_prompt("failure_analysis", current_skill, failure_ctx)
+            complete, _stage_prompt("failure_analysis", current_skill, failure_ctx, meta_skill=meta_skill)
         )
         success_ctx = {
             "stage": "success_analysis",
@@ -191,14 +205,14 @@ def make_llm_proposer(
             "covered": covered,
         }
         success_edits = _call_edits(
-            complete, _stage_prompt("success_analysis", current_skill, success_ctx)
+            complete, _stage_prompt("success_analysis", current_skill, success_ctx, meta_skill=meta_skill)
         )
 
         merged_failure = _call_edits(
-            complete, _stage_prompt("merge_failure", current_skill, {"edits": failure_edits})
+            complete, _stage_prompt("merge_failure", current_skill, {"edits": failure_edits}, meta_skill=meta_skill)
         )
         merged_success = _call_edits(
-            complete, _stage_prompt("merge_success", current_skill, {"edits": success_edits})
+            complete, _stage_prompt("merge_success", current_skill, {"edits": success_edits}, meta_skill=meta_skill)
         )
         pool = _call_edits(
             complete,
@@ -206,11 +220,12 @@ def make_llm_proposer(
                 "merge_final",
                 current_skill,
                 {"failure_edits": merged_failure, "success_edits": merged_success},
+                meta_skill=meta_skill,
             ),
         )
         ranked = _call_edits(
             complete,
-            _stage_prompt("ranking", current_skill, {"edits": pool, "budget": budget_hint}),
+            _stage_prompt("ranking", current_skill, {"edits": pool, "budget": budget_hint}, meta_skill=meta_skill),
         )
         return ranked
 
@@ -236,8 +251,9 @@ class DeterministicOptimizerClient:
         if stage == "failure_analysis":
             blocked = set(context.get("covered", [])) | set(context.get("rejected", []))
             weights = context.get("tag_weights", {})
+            counts = context.get("tag_counts", {})
             edits = [
-                _rule_edit(tag, support=int(round(weights.get(tag, 1) or 1)))
+                _rule_edit(tag, support=max(1, int(counts.get(tag) or round(weights.get(tag, 1) or 1))))
                 for tag in context.get("tags", [])
                 if tag not in blocked
             ]
@@ -286,3 +302,11 @@ def _dedup(edits: list[dict]) -> list[dict]:
         seen.add(key)
         out.append(edit)
     return out
+
+
+def _tag_counts(rows: list[RolloutRow]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        for tag in row.failure_tags:
+            counts[tag] = counts.get(tag, 0) + 1
+    return counts

@@ -108,9 +108,11 @@ class SkillOptRequest:
     budget_floor: float = 2
     schedule: str = "cosine"
     selection_fraction: float = 0.4
+    test_fraction: float = 0.2
     seed: str = "skillopt"
     max_steps: int = 8
     epochs: int = 1
+    reflection_minibatch_size: int = 8
     initial_skill: str = DEFAULT_INITIAL_SKILL
     dry_run: bool = True
     slow_update: bool = True
@@ -123,6 +125,7 @@ class SkillOptOutcome:
     rollout_rows: int
     initial_score: float
     best_score: float
+    test_score: float
     steps: int
     accepted: int
     rejected: int
@@ -161,9 +164,11 @@ def run(request: SkillOptRequest) -> SkillOptOutcome:
         budget_floor=request.budget_floor,
         schedule=request.schedule,
         selection_fraction=request.selection_fraction,
+        test_fraction=request.test_fraction,
         seed=request.seed,
         max_steps=request.max_steps,
         epochs=request.epochs,
+        reflection_minibatch_size=request.reflection_minibatch_size,
         slow_update=default_slow_update if request.slow_update else None,
     )
     artifacts = opt.state.export(out_dir)
@@ -192,6 +197,8 @@ def run(request: SkillOptRequest) -> SkillOptOutcome:
         "rollout_rows": workflow_rows.row_count,
         "initial_score": opt.initial_score,
         "best_score": opt.best_score,
+        "test_score": opt.test_score,
+        "split_counts": opt.split_counts,
         "steps": opt.steps,
         "accepted_edits": opt.accepted,
         "rejected_edits": opt.rejected,
@@ -206,6 +213,7 @@ def run(request: SkillOptRequest) -> SkillOptOutcome:
         rollout_rows=workflow_rows.row_count,
         initial_score=opt.initial_score,
         best_score=opt.best_score,
+        test_score=opt.test_score,
         steps=opt.steps,
         accepted=opt.accepted,
         rejected=opt.rejected,

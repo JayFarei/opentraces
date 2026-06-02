@@ -35,7 +35,7 @@ import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Protocol, Sequence
 
 # ---------------------------------------------------------------------------
 # Protected slow-update region delimiters (verbatim from the paper)
@@ -140,7 +140,8 @@ def apply_edits(skill: str, edits: list[dict]) -> tuple[str, list[EditResult]]:
             content = edit.get("content", "")
             point = _append_insertion_point(doc)
             sep = "" if (point == 0 or doc[:point].endswith("\n")) else "\n"
-            doc = doc[:point] + sep + content + doc[point:]
+            suffix = "\n" if doc[point:] and content and not content.endswith("\n") else ""
+            doc = doc[:point] + sep + content + suffix + doc[point:]
             results.append(EditResult(op="append", applied=True))
 
         elif op == "insert_after":
@@ -225,8 +226,10 @@ def budget_at(
 
     Schedules: ``constant`` (always ``base_lr``), ``linear`` (decay base_lr ->
     floor across ``total`` steps), ``cosine`` (cosine decay base_lr -> floor,
-    larger early edits, smaller late). Returns an int ``>= 1`` so at least one
-    edit can always apply.
+    larger early edits, smaller late), and ``autonomous`` (a deterministic
+    controller-shaped decay that preserves a larger early budget, then tapers
+    more aggressively as progress accumulates). Returns an int ``>= 1`` so at
+    least one edit can always apply.
     """
     if total <= 0:
         frac = 1.0
@@ -240,6 +243,13 @@ def budget_at(
     elif schedule == "cosine":
         cos = 0.5 * (1.0 + math.cos(math.pi * frac))  # 1 -> 0
         value = floor + (base_lr - floor) * cos
+    elif schedule == "autonomous":
+        # The paper's autonomous scheduler is teacher-controlled. The offline
+        # default keeps that API surface deterministic by using a smooth,
+        # conservative controller curve with the same bounds as the other
+        # schedules; online harnesses can replace the scheduler later without
+        # changing the report contract.
+        value = floor + (base_lr - floor) * (1.0 - math.sqrt(frac))
     else:
         raise ValueError(f"unknown schedule: {schedule}")
 
@@ -313,6 +323,41 @@ def split_rows_by_hash(
     return train, selection
 
 
+def split_rows_three_way(
+    rows: list[RolloutRow],
+    *,
+    selection_fraction: float = 0.25,
+    test_fraction: float = 0.2,
+    seed: str = "skillopt",
+) -> tuple[list[RolloutRow], list[RolloutRow], list[RolloutRow]]:
+    """Deterministically partition rows into ``(Dtrain, Dsel, Dtest)``.
+
+    This is Algorithm 1's split structure (line 2 / line 37). The selection and
+    test fractions are disjoint hash bands; the remaining rows form training.
+    Tiny corpora may leave one split empty, and :func:`run_optimization` applies
+    explicit fallback rules so the optimizer still has a deterministic signal.
+    """
+    selection: list[RolloutRow] = []
+    test: list[RolloutRow] = []
+    train: list[RolloutRow] = []
+    sel = min(max(selection_fraction, 0.0), 1.0)
+    tst = min(max(test_fraction, 0.0), 1.0)
+    if sel + tst > 1.0:
+        scale = 1.0 / (sel + tst)
+        sel *= scale
+        tst *= scale
+    for row in rows:
+        digest = hashlib.sha256(f"{seed}:three:{row.trace_id}".encode("utf-8")).hexdigest()
+        bucket = (int(digest[:8], 16) % 1000) / 1000.0
+        if bucket < sel:
+            selection.append(row)
+        elif bucket < sel + tst:
+            test.append(row)
+        else:
+            train.append(row)
+    return train, selection, test
+
+
 def _skill_addresses_tag(skill: str, tag: str) -> bool:
     return RULE_MARKER.format(tag=tag) in skill
 
@@ -330,6 +375,22 @@ def split_success_failure(
     success = [r for r in rows if r.reward >= threshold]
     failure = [r for r in rows if r.reward < threshold]
     return success, failure
+
+
+def _chunks(rows: list[RolloutRow], size: int) -> list[list[RolloutRow]]:
+    n = max(int(size), 1)
+    return [rows[i:i + n] for i in range(0, len(rows), n)]
+
+
+def reflection_minibatches(rows: list[RolloutRow], *, size: int) -> list[list[RolloutRow]]:
+    """Split rollout evidence into success/failure minibatches of size ``Bm``.
+
+    Algorithm 1 line 8 separates failures and successes before reflection. The
+    returned batches preserve that separation: all failure minibatches first,
+    followed by success minibatches. Empty input yields no batches.
+    """
+    success, failure = split_success_failure(rows)
+    return _chunks(failure, size) + _chunks(success, size)
 
 
 def tag_deficit_weights(rows: list[RolloutRow]) -> dict[str, float]:
@@ -358,6 +419,50 @@ def failure_tags_of(rows: list[RolloutRow]) -> list[str]:
             counts[tag] = counts.get(tag, 0) + 1
     return sorted(
         counts, key=lambda t: (-weights.get(t, 0.0), -counts[t], t)
+    )
+
+
+@dataclass(frozen=True)
+class LongitudinalComparison:
+    """Offline adjacent-epoch comparison for slow/meta updates.
+
+    The online version will re-roll the same tasks under the previous and
+    current skills. Offline mode compares the same rows through the deterministic
+    coverage scorer, which preserves the paper's longitudinal shape without
+    invoking an agent.
+    """
+
+    regressions: tuple[str, ...] = ()
+    persistent_failures: tuple[str, ...] = ()
+    improvements: tuple[str, ...] = ()
+    stable_successes: tuple[str, ...] = ()
+
+
+def longitudinal_comparison(
+    previous_skill: str,
+    current_skill: str,
+    rows: list[RolloutRow],
+) -> LongitudinalComparison:
+    regressions: list[str] = []
+    persistent_failures: list[str] = []
+    improvements: list[str] = []
+    stable_successes: list[str] = []
+    for row in rows:
+        before = score_skill_on_rows(previous_skill, [row])
+        after = score_skill_on_rows(current_skill, [row])
+        if after < before:
+            regressions.append(row.trace_id)
+        elif after > before:
+            improvements.append(row.trace_id)
+        elif after >= 0.999:
+            stable_successes.append(row.trace_id)
+        else:
+            persistent_failures.append(row.trace_id)
+    return LongitudinalComparison(
+        regressions=tuple(regressions),
+        persistent_failures=tuple(persistent_failures),
+        improvements=tuple(improvements),
+        stable_successes=tuple(stable_successes),
     )
 
 
@@ -414,6 +519,67 @@ def score_skill_on_rows(skill: str, rows: list[RolloutRow]) -> float:
     return round(0.5 * base + 0.5 * coverage, 6)
 
 
+class Harness(Protocol):
+    """Execution harness seam for SkillOpt Algorithm 1 line 7.
+
+    Offline mode implements this over already-captured bucket rows. Online mode
+    implements it by executing the target agent against tasks and returning fresh
+    scored rollouts.
+    """
+
+    def collect_rollouts(self, skill_text: str, tasks: Sequence[object]) -> list[RolloutRow]:
+        ...
+
+    def score(self, skill_text: str, tasks: Sequence[object]) -> float:
+        ...
+
+
+@dataclass(frozen=True)
+class BucketHarness:
+    """Harness adapter over retrospective scored-rollout bucket rows."""
+
+    rows: list[RolloutRow]
+    selection_fraction: float = 0.25
+    test_fraction: float = 0.2
+    seed: str = "skillopt"
+
+    def __post_init__(self) -> None:
+        train, selection, test = split_rows_three_way(
+            self.rows,
+            selection_fraction=self.selection_fraction,
+            test_fraction=self.test_fraction,
+            seed=self.seed,
+        )
+        object.__setattr__(self, "train_tasks", train or self.rows)
+        object.__setattr__(self, "selection_tasks", selection or self.rows)
+        object.__setattr__(self, "test_tasks", test or selection or self.rows)
+        object.__setattr__(
+            self,
+            "split_counts",
+            {
+                "train": len(train),
+                "selection": len(selection),
+                "test": len(test),
+                "train_effective": len(train or self.rows),
+                "selection_effective": len(selection or self.rows),
+                "test_effective": len(test or selection or self.rows),
+            },
+        )
+
+    train_tasks: list[RolloutRow] = field(init=False, repr=False)
+    selection_tasks: list[RolloutRow] = field(init=False, repr=False)
+    test_tasks: list[RolloutRow] = field(init=False, repr=False)
+    split_counts: dict[str, int] = field(init=False)
+
+    def collect_rollouts(self, skill_text: str, tasks: Sequence[object]) -> list[RolloutRow]:
+        del skill_text
+        return [task for task in tasks if isinstance(task, RolloutRow)]
+
+    def score(self, skill_text: str, tasks: Sequence[object]) -> float:
+        rows = [task for task in tasks if isinstance(task, RolloutRow)]
+        return score_skill_on_rows(skill_text, rows)
+
+
 # ---------------------------------------------------------------------------
 # 4 & 5. Validation gate + state machine + rejected-edit buffer
 # ---------------------------------------------------------------------------
@@ -450,8 +616,14 @@ class SkillOptState:
     current_score: float = 0.0
     best_score: float = 0.0
     score_cache: dict[str, float] = field(default_factory=dict)
+    # Epoch-local feedback buffer (Algorithm 1 line 5 resets B at each epoch).
     rejected_buffer: list[dict] = field(default_factory=list)
+    # Run-global audit log used for export; unlike B, this never resets.
+    rejected_audit_log: list[dict] = field(default_factory=list)
     step_log: list[StepRecord] = field(default_factory=list)
+    meta_skill: str = ""
+    test_score: float = 0.0
+    split_counts: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.best_skill:
@@ -480,6 +652,7 @@ class SkillOptState:
         edits: list[dict] | None = None,
         edit_results: list[EditResult] | None = None,
         failure_note: str = "",
+        observed_failure_tags: Sequence[str] = (),
     ) -> dict:
         """Score a candidate and apply the strict acceptance gate.
 
@@ -497,14 +670,15 @@ class SkillOptState:
                 self.best_score = candidate_score
                 self.best_skill = candidate_skill
         else:
-            self.rejected_buffer.append(
-                {
-                    "edits": edits or [],
-                    "score_drop": round(self.current_score - candidate_score, 6),
-                    "candidate_score": candidate_score,
-                    "failure_note": failure_note,
-                }
-            )
+            entry = {
+                "edits": edits or [],
+                "score_drop": round(self.current_score - candidate_score, 6),
+                "candidate_score": candidate_score,
+                "failure_note": failure_note,
+                "observed_failure_tags": list(observed_failure_tags),
+            }
+            self.rejected_buffer.append(entry)
+            self.rejected_audit_log.append(entry)
 
         self.step_log.append(
             StepRecord(
@@ -532,8 +706,10 @@ class SkillOptState:
         report = {
             "schema_version": "opentraces.skill_opt.report.v1",
             "best_score": self.best_score,
+            "test_score": self.test_score,
+            "split_counts": self.split_counts,
             "accepted_edits": sum(1 for r in self.step_log if r.accepted),
-            "rejected_edits": len(self.rejected_buffer),
+            "rejected_edits": len(self.rejected_audit_log),
             "steps": [
                 {
                     "step": r.step,
@@ -545,7 +721,9 @@ class SkillOptState:
                 }
                 for r in self.step_log
             ],
-            "rejected_buffer": self.rejected_buffer,
+            "rejected_buffer": self.rejected_audit_log,
+            "epoch_feedback_buffer": self.rejected_buffer,
+            "optimizer_meta_skill": self.meta_skill,
         }
         report_path = out / "edit_apply_report.json"
         report_path.write_text(
@@ -558,19 +736,28 @@ class SkillOptState:
 # Orchestrator: the propose-and-rank loop over scored-rollout rows
 # ---------------------------------------------------------------------------
 
-# A proposer turns (current_skill, train_rows, budget, rejected_buffer) into a
-# *ranked* list of candidate edit dicts. The deterministic default and the LLM
-# chain both live in ``consumers.skill_opt.proposers``. The rejected buffer is
-# the negative-feedback channel (Algorithm 1 line 26).
-Proposer = Callable[[str, list[RolloutRow], int, Sequence[dict]], list[dict]]
+# A proposer turns (current_skill, train_rows, budget, rejected_buffer,
+# meta_skill) into a *ranked* list of candidate edit dicts. The deterministic
+# default and the LLM chain both live in ``consumers.skill_opt.proposers``. The
+# rejected buffer is the epoch-local negative-feedback channel (Algorithm 1 line
+# 26), while meta_skill is optimizer-side only (C.2.8).
+Proposer = Callable[..., list[dict]]
 
 # A slow-update function consolidates durable, cross-epoch guidance from the
 # train rows into a guidance string written to the protected region at an epoch
 # boundary (SkillOpt's slow/meta update). Returns "" when nothing to add.
-SlowUpdate = Callable[[str, list[RolloutRow]], str]
+SlowUpdate = Callable[..., str]
+MetaUpdate = Callable[..., str]
 
 
-def default_slow_update(current_skill: str, train_rows: list[RolloutRow]) -> str:
+def default_slow_update(
+    current_skill: str,
+    train_rows: list[RolloutRow],
+    *,
+    previous_skill: str | None = None,
+    comparison: LongitudinalComparison | None = None,
+    previous_guidance: str = "",
+) -> str:
     """Deterministic epoch-boundary consolidation.
 
     Writes a guidance block addressing failure tags that step-level edits left
@@ -578,8 +765,13 @@ def default_slow_update(current_skill: str, train_rows: list[RolloutRow]) -> str
     so the consolidated guidance is visible to the coverage proxy and can pass
     the held-out gate. Returns "" when the body already covers every tag.
     """
+    del previous_skill, previous_guidance  # kept for custom slow-update parity
+    priority_rows = train_rows
+    if comparison and comparison.persistent_failures:
+        persistent = set(comparison.persistent_failures)
+        priority_rows = [r for r in train_rows if r.trace_id in persistent] or train_rows
     uncovered = [
-        t for t in failure_tags_of(train_rows) if not _skill_addresses_tag(current_skill, t)
+        t for t in failure_tags_of(priority_rows) if not _skill_addresses_tag(current_skill, t)
     ]
     if not uncovered:
         return ""
@@ -590,16 +782,113 @@ def default_slow_update(current_skill: str, train_rows: list[RolloutRow]) -> str
     return "\n".join(lines)
 
 
+def default_meta_update(
+    current_meta_skill: str,
+    *,
+    comparison: LongitudinalComparison,
+    rejected_buffer: Sequence[dict],
+) -> str:
+    """Deterministic teacher-only optimizer memory update (C.2.8)."""
+    del current_meta_skill
+    rejected_tags: list[str] = []
+    for entry in rejected_buffer:
+        rejected_tags.extend(str(t) for t in entry.get("observed_failure_tags", ()))
+    lines = ["Optimizer meta-skill:"]
+    if comparison.improvements:
+        lines.append(
+            f"- Prioritize concrete marker-backed rules; {len(comparison.improvements)} adjacent-epoch task(s) improved."
+        )
+    if comparison.persistent_failures:
+        lines.append(
+            f"- Future edits should target persistent failures before broad rewrites: {', '.join(comparison.persistent_failures[:5])}."
+        )
+    if rejected_tags:
+        unique = sorted(set(rejected_tags))
+        lines.append(
+            f"- Avoid repeating rejected low-signal tags without new evidence: {', '.join(unique[:5])}."
+        )
+    if len(lines) == 1:
+        lines.append("- Keep edits specific, bounded, and easy for the selection gate to validate.")
+    return "\n".join(lines)
+
+
+def _call_proposer(
+    propose: Proposer,
+    current_skill: str,
+    rows: list[RolloutRow],
+    budget_hint: int,
+    rejected: Sequence[dict],
+    *,
+    meta_skill: str,
+) -> list[dict]:
+    try:
+        return propose(
+            current_skill,
+            rows,
+            budget_hint,
+            rejected,
+            meta_skill=meta_skill,
+        )
+    except TypeError:
+        # Backward-compatible path for tests or external callers that still
+        # provide a four-argument proposer.
+        return propose(current_skill, rows, budget_hint, rejected)
+
+
+def propose_from_minibatches(
+    propose: Proposer,
+    current_skill: str,
+    train_rows: list[RolloutRow],
+    budget_hint: int,
+    rejected: Sequence[dict],
+    *,
+    reflection_minibatch_size: int,
+    meta_skill: str,
+) -> list[dict]:
+    """Run reflection over Bm-sized success/failure minibatches and merge.
+
+    The merge here is deterministic and conservative: preserve first ranked
+    occurrence, sum support where available, and keep the resulting list stable.
+    LLM-backed proposers still run their C.2 merge chain inside each minibatch;
+    this helper performs the cross-minibatch merge that Algorithm 1 requires.
+    """
+    batches = reflection_minibatches(train_rows, size=reflection_minibatch_size)
+    if not batches:
+        return []
+    merged: dict[str, dict] = {}
+    order: list[str] = []
+    for batch in batches:
+        for edit in _call_proposer(
+            propose,
+            current_skill,
+            batch,
+            budget_hint,
+            rejected,
+            meta_skill=meta_skill,
+        ):
+            key = str(edit.get("content") or edit)
+            if key not in merged:
+                merged[key] = dict(edit)
+                order.append(key)
+            else:
+                merged[key]["support_count"] = int(merged[key].get("support_count", 0)) + int(
+                    edit.get("support_count", 0)
+                )
+    return [merged[k] for k in order]
+
+
 @dataclass(frozen=True)
 class OptimizationResult:
     initial_skill: str
     best_skill: str
     initial_score: float
     best_score: float
+    test_score: float
     steps: int
     accepted: int
     rejected: int
     state: SkillOptState
+    split_counts: dict[str, int] = field(default_factory=dict)
 
 
 def run_optimization(
@@ -611,42 +900,74 @@ def run_optimization(
     budget_floor: float = 2,
     schedule: str = "cosine",
     selection_fraction: float = 0.4,
+    test_fraction: float = 0.2,
     seed: str = "skillopt",
     max_steps: int = 8,
     epochs: int = 1,
+    reflection_minibatch_size: int = 8,
     slow_update: SlowUpdate | None = None,
+    meta_update: MetaUpdate | None = default_meta_update,
+    harness: Harness | None = None,
+    train_tasks: Sequence[object] | None = None,
+    selection_tasks: Sequence[object] | None = None,
+    test_tasks: Sequence[object] | None = None,
     gate_fn: Callable[[str], float] | None = None,
+    test_fn: Callable[[str], float] | None = None,
 ) -> OptimizationResult:
     """Run the propose-and-rank loop.
 
-    Splits ``rows`` into train / held-out selection, then for each of ``epochs``
-    epochs runs up to ``max_steps`` propose-and-rank steps: ``propose`` returns
-    ranked edits over the train rows, they are clipped to the scheduled budget
-    ``L_t``, applied to the current skill, and the candidate is gated. The gate
-    is ``gate_fn`` when provided (slice 3's live re-rollout: re-roll the candidate
-    skill on held-out tasks and score the fresh outcome), else the offline
-    reward-weighted proxy :func:`score_skill_on_rows` over the selection split.
+    Splits ``rows`` into ``Dtrain`` / ``Dsel`` / ``Dtest``, then for each of
+    ``epochs`` epochs runs up to ``max_steps`` propose-and-rank steps. Each step
+    calls ``harness.collect_rollouts(scur, Dtrain_batch)`` (offline:
+    retrospective bucket rows; online: fresh agent executions), reflects over
+    success/failure minibatches of size ``Bm``, clips merged edits to ``L_t``,
+    applies them, and gates the candidate with ``harness.score(candidate,
+    Dsel)``. After optimization, ``sbest`` is evaluated on held-out ``Dtest``
+    and reported separately.
     Strictly-improving candidates are accepted; others are buffered. At each
     epoch boundary (when ``slow_update`` is given) a consolidated guidance block
     is written to the protected region and passed through the same gate. Stops an
     epoch early when the proposer offers nothing new.
     """
-    train, selection = split_rows_by_hash(
-        rows, selection_fraction=selection_fraction, seed=seed
+    active_harness = harness or BucketHarness(
+        rows,
+        selection_fraction=selection_fraction,
+        test_fraction=test_fraction,
+        seed=seed,
     )
-    # Gate on the held-out selection split, and reflect over the train split;
-    # both fall back to all rows when a split is empty (tiny corpora or an
-    # extreme selection_fraction), so the loop always has a signal.
-    gate_rows = selection or rows
-    train_rows = train or rows
+    if harness is None:
+        assert isinstance(active_harness, BucketHarness)
+        train_task_list = list(active_harness.train_tasks)
+        selection_task_list = list(active_harness.selection_tasks)
+        test_task_list = list(active_harness.test_tasks)
+        split_counts = dict(active_harness.split_counts)
+    else:
+        train_task_list = list(train_tasks if train_tasks is not None else rows)
+        selection_task_list = list(selection_tasks if selection_tasks is not None else rows)
+        test_task_list = list(test_tasks if test_tasks is not None else selection_task_list)
+        split_counts = {
+            "train": len(train_task_list),
+            "selection": len(selection_task_list),
+            "test": len(test_task_list),
+            "train_effective": len(train_task_list),
+            "selection_effective": len(selection_task_list),
+            "test_effective": len(test_task_list),
+        }
 
     if gate_fn is not None:
         evaluate_fn = gate_fn
     else:
         def evaluate_fn(skill: str) -> float:
-            return score_skill_on_rows(skill, gate_rows)
+            return active_harness.score(skill, selection_task_list)
+
+    if test_fn is not None:
+        evaluate_test_fn = test_fn
+    else:
+        def evaluate_test_fn(skill: str) -> float:
+            return active_harness.score(skill, test_task_list)
 
     state = SkillOptState(current_skill=initial_skill)
+    state.split_counts = split_counts
     state.prime(evaluate_fn)
     initial_score = state.current_score
 
@@ -654,12 +975,27 @@ def run_optimization(
     # decaying budget actually reaches its floor on the final step.
     schedule_total = max(epochs * max_steps - 1, 1)
     global_step = 0
+    previous_epoch_end_skill = state.current_skill
+    previous_guidance = ""
     for epoch in range(epochs):
+        epoch_num = epoch + 1
+        state.rejected_buffer = []
+        last_rollout_rows: list[RolloutRow] = []
         for _ in range(max_steps):
-            proposed = propose(state.current_skill, train_rows, max_steps, state.rejected_buffer)
+            lt = budget_at(global_step, schedule_total, budget, budget_floor, schedule)
+            rollout_rows = active_harness.collect_rollouts(state.current_skill, train_task_list)
+            last_rollout_rows = rollout_rows
+            proposed = propose_from_minibatches(
+                propose,
+                state.current_skill,
+                rollout_rows,
+                lt,
+                state.rejected_buffer,
+                reflection_minibatch_size=reflection_minibatch_size,
+                meta_skill=state.meta_skill,
+            )
             if not proposed:
                 break
-            lt = budget_at(global_step, schedule_total, budget, budget_floor, schedule)
             global_step += 1
             clipped = clip_to_budget(proposed, lt)
             if not clipped:
@@ -675,29 +1011,53 @@ def run_optimization(
                 edits=clipped,
                 edit_results=edit_results,
                 failure_note=f"epoch {epoch} step: {len(clipped)} edit(s) under budget {lt}",
+                observed_failure_tags=failure_tags_of(rollout_rows),
             )
         # Epoch-boundary slow/meta update: consolidate durable guidance into the
         # protected region, then gate it like any other candidate.
-        if slow_update is not None:
-            guidance = slow_update(state.current_skill, train)
-            if guidance:
-                candidate = apply_slow_update(state.current_skill, guidance)
-                if candidate != state.current_skill:
-                    state.propose_and_test(
-                        candidate,
-                        evaluate_fn,
-                        budget=0,
-                        edits=[{"op": "slow_update", "content": guidance}],
-                        failure_note=f"epoch {epoch} slow/meta update",
-                    )
+        if epoch_num >= 2 and (slow_update is not None or meta_update is not None):
+            comparison = longitudinal_comparison(
+                previous_epoch_end_skill, state.current_skill, last_rollout_rows
+            )
+            if slow_update is not None:
+                guidance = slow_update(
+                    state.current_skill,
+                    last_rollout_rows,
+                    previous_skill=previous_epoch_end_skill,
+                    comparison=comparison,
+                    previous_guidance=previous_guidance,
+                )
+                if guidance:
+                    candidate = apply_slow_update(state.current_skill, guidance)
+                    if candidate != state.current_skill:
+                        out = state.propose_and_test(
+                            candidate,
+                            evaluate_fn,
+                            budget=0,
+                            edits=[{"op": "slow_update", "content": guidance}],
+                            failure_note=f"epoch {epoch} slow/meta update",
+                            observed_failure_tags=failure_tags_of(last_rollout_rows),
+                        )
+                        if out["accepted"]:
+                            previous_guidance = guidance
+            if meta_update is not None:
+                state.meta_skill = meta_update(
+                    state.meta_skill,
+                    comparison=comparison,
+                    rejected_buffer=state.rejected_buffer,
+                )
+        previous_epoch_end_skill = state.current_skill
 
+    state.test_score = evaluate_test_fn(state.best_skill)
     return OptimizationResult(
         initial_skill=initial_skill,
         best_skill=state.best_skill,
         initial_score=initial_score,
         best_score=state.best_score,
+        test_score=state.test_score,
         steps=len(state.step_log),
         accepted=sum(1 for r in state.step_log if r.accepted),
-        rejected=len(state.rejected_buffer),
+        rejected=len(state.rejected_audit_log),
         state=state,
+        split_counts=split_counts,
     )

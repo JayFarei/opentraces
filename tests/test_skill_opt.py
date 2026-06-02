@@ -29,6 +29,7 @@ def test_append_lands_before_protected_region():
     assert results[0].applied is True
     assert "- rule[a]: x" in doc
     assert doc.index("- rule[a]: x") < doc.index(so.SLOW_START)
+    assert "- rule[a]: x\n" + so.SLOW_START in doc
     assert "PROTECTED" in doc  # untouched
 
 
@@ -111,6 +112,14 @@ def test_constant_and_linear_schedules():
     assert so.budget_at(8, 8, 4, 2, "linear") == 2
 
 
+def test_autonomous_schedule_stays_bounded_and_decays():
+    early = so.budget_at(0, 8, 4, 2, "autonomous")
+    middle = so.budget_at(4, 8, 4, 2, "autonomous")
+    late = so.budget_at(8, 8, 4, 2, "autonomous")
+    assert early == 4
+    assert 2 <= late <= middle <= early
+
+
 def test_clip_to_budget_keeps_top_l():
     assert so.clip_to_budget([1, 2, 3, 4, 5], 3) == [1, 2, 3]
     assert so.clip_to_budget([1, 2], 9) == [1, 2]
@@ -172,6 +181,36 @@ def test_split_is_deterministic_and_stable():
     assert {r.trace_id for r in c_sel} != set() or {r.trace_id for r in a_sel} != set()
 
 
+def test_three_way_split_reports_held_out_dtest_score(tmp_path):
+    rows = [
+        so.RolloutRow(f"t{i:02d}", 0.1, reward=0.1, failure_tags=("rl.A", "rl.B"))
+        for i in range(40)
+    ]
+    train, selection, test = so.split_rows_three_way(
+        rows, selection_fraction=0.25, test_fraction=0.25, seed="three"
+    )
+    assert train and selection and test
+    res = so.run_optimization(
+        "# init\n",
+        rows,
+        propose=opt.default_proposer,
+        budget=1,
+        budget_floor=1,
+        schedule="constant",
+        selection_fraction=0.25,
+        test_fraction=0.25,
+        seed="three",
+        max_steps=4,
+    )
+    assert res.split_counts["test"] == len(test)
+    assert res.test_score == so.score_skill_on_rows(res.best_skill, test)
+    artifacts = res.state.export(tmp_path / "out")
+    report = json.loads((tmp_path / "out" / "edit_apply_report.json").read_text())
+    assert artifacts["report"].endswith("edit_apply_report.json")
+    assert report["test_score"] == res.test_score
+    assert report["split_counts"]["test"] == len(test)
+
+
 def test_proxy_score_rises_with_coverage():
     rows = [so.RolloutRow("t1", 0.5, failure_tags=("rl.A", "tr.B"))]
     low = so.score_skill_on_rows("# nothing\n", rows)
@@ -229,6 +268,71 @@ def test_run_optimization_improves_and_exports(tmp_path):
     assert report["schema_version"] == "opentraces.skill_opt.report.v1"
     assert report["accepted_edits"] == res.accepted
     assert "steps" in report and "rejected_buffer" in report
+
+
+def test_bucket_harness_collects_and_scores_offline_rows():
+    rows = _rows_for_loop()
+    harness = so.BucketHarness(rows, selection_fraction=0.25, test_fraction=0.25, seed="h")
+    collected = harness.collect_rollouts("# init\n", harness.train_tasks)
+    assert collected == harness.train_tasks
+    low = harness.score("# init\n", harness.selection_tasks)
+    high = harness.score(
+        "# init\n- " + so.RULE_MARKER.format(tag="rl.A"),
+        harness.selection_tasks,
+    )
+    assert high > low
+
+
+def test_epoch_local_buffer_resets_but_audit_log_survives(tmp_path):
+    rows = [so.RolloutRow("r1", 0.1, reward=0.1, failure_tags=("rl.A",))]
+
+    def repeated_bad_edit(_skill, _rows, _budget, _rejected, *, meta_skill=""):
+        return [{"op": "append", "content": "- harmless text without a marker"}]
+
+    res = so.run_optimization(
+        "# init\n",
+        rows,
+        propose=repeated_bad_edit,
+        gate_fn=lambda _skill: 0.0,
+        budget=1,
+        budget_floor=1,
+        schedule="constant",
+        max_steps=1,
+        epochs=2,
+        slow_update=None,
+        meta_update=None,
+    )
+    assert res.rejected == 2
+    assert len(res.state.rejected_buffer) == 1
+    assert len(res.state.rejected_audit_log) == 2
+    res.state.export(tmp_path / "out")
+    report = json.loads((tmp_path / "out" / "edit_apply_report.json").read_text())
+    assert len(report["rejected_buffer"]) == 2
+    assert len(report["epoch_feedback_buffer"]) == 1
+
+
+def test_reflection_minibatches_respect_bm_and_success_failure_split():
+    rows = [
+        *(so.RolloutRow(f"f{i}", 0.1, reward=0.1, failure_tags=("rl.A",)) for i in range(5)),
+        *(so.RolloutRow(f"s{i}", 0.9, reward=0.9, success_tags=("ok",)) for i in range(3)),
+    ]
+    calls: list[list[str]] = []
+
+    def spy(_skill, batch, _budget, _rejected, *, meta_skill=""):
+        calls.append([r.trace_id for r in batch])
+        return []
+
+    edits = so.propose_from_minibatches(
+        spy,
+        "# init\n",
+        rows,
+        4,
+        (),
+        reflection_minibatch_size=2,
+        meta_skill="",
+    )
+    assert edits == []
+    assert calls == [["f0", "f1"], ["f2", "f3"], ["f4"], ["s0", "s1"], ["s2"]]
 
 
 # ---------------------------------------------------------------------------
@@ -353,8 +457,86 @@ def test_multi_epoch_slow_update_writes_protected_region():
     span = so._protected_span(res.best_skill)
     assert span is not None
     protected_body = res.best_skill[span[0]:span[1]]
-    assert so.RULE_MARKER.format(tag="rl.B") in protected_body  # consolidated into protected region
+    assert so.RULE_MARKER.format(tag="rl.C") in protected_body  # consolidated into protected region
     assert res.best_score > res.initial_score
+
+
+def test_slow_update_waits_for_epoch_two_and_gets_longitudinal_comparison():
+    rows = [
+        so.RolloutRow(f"r{i}", 0.1, reward=0.1, failure_tags=("rl.A", "rl.B", "rl.C"))
+        for i in range(8)
+    ]
+    calls: list[tuple[str, str, so.LongitudinalComparison]] = []
+
+    def slow(current_skill, _rows, *, previous_skill, comparison, previous_guidance):
+        calls.append((previous_skill, current_skill, comparison))
+        return ""
+
+    so.run_optimization(
+        "# init\n",
+        rows,
+        propose=opt.default_proposer,
+        budget=1,
+        budget_floor=1,
+        schedule="constant",
+        max_steps=1,
+        epochs=1,
+        slow_update=slow,
+        meta_update=None,
+    )
+    assert calls == []
+    so.run_optimization(
+        "# init\n",
+        rows,
+        propose=opt.default_proposer,
+        budget=1,
+        budget_floor=1,
+        schedule="constant",
+        max_steps=1,
+        epochs=2,
+        slow_update=slow,
+        meta_update=None,
+    )
+    assert len(calls) == 1
+    previous_skill, current_skill, comparison = calls[0]
+    assert previous_skill != current_skill
+    assert comparison.improvements
+
+
+def test_optimizer_meta_skill_is_teacher_only_and_reaches_future_proposer():
+    rows = [
+        so.RolloutRow(f"r{i}", 0.1, reward=0.1, failure_tags=("rl.A", "rl.B", "rl.C"))
+        for i in range(8)
+    ]
+    seen_meta: list[str] = []
+
+    def proposer(current_skill, _rows, _budget, _rejected, *, meta_skill=""):
+        seen_meta.append(meta_skill)
+        for tag in ("rl.A", "rl.B", "rl.C"):
+            if so.RULE_MARKER.format(tag=tag) not in current_skill:
+                return [{"op": "append", "content": "- " + so.RULE_MARKER.format(tag=tag)}]
+        return []
+
+    def meta_update(_current, *, comparison, rejected_buffer):
+        assert comparison.improvements or comparison.persistent_failures
+        return "META: prefer precise marker-backed edits"
+
+    res = so.run_optimization(
+        "# init\n",
+        rows,
+        propose=proposer,
+        budget=1,
+        budget_floor=1,
+        schedule="constant",
+        max_steps=1,
+        epochs=3,
+        slow_update=None,
+        meta_update=meta_update,
+    )
+    assert seen_meta[:2] == ["", ""]
+    assert "META: prefer precise" in seen_meta[2]
+    assert "META: prefer precise" in res.state.meta_skill
+    assert "META: prefer precise" not in res.best_skill
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +708,7 @@ def test_llm_chain_runs_all_stages_and_covers_failures():
     ]
     blob = " ".join(e["content"] for e in edits)
     assert "rule[rl.A]" in blob  # highest-deficit failure tag addressed
+    assert all(int(e["support_count"]) >= 1 for e in edits)
 
 
 def test_llm_chain_respects_rejected_buffer():
