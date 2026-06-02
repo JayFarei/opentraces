@@ -258,10 +258,10 @@
       "event_sequence": 16,
       "event_time": "<timestamp>",
       "event_type": "git_anchor_search_completed",
-      "generation_index": 1,
-      "step_id": "s2",
-      "step_index": 2,
-      "trace_id": "<trace:01>"
+      "generation_index": 0,
+      "step_id": null,
+      "step_index": null,
+      "trace_id": null
     },
     {
       "capture_method": [

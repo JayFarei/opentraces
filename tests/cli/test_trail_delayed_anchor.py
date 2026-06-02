@@ -191,7 +191,7 @@ def test_trail_mature_anchors_patch_created_after_commit(tmp_path: Path) -> None
     events = read_events(repo)
     assert any(e.event_type == "git_anchor_created" for e in events)
     search = [e for e in events if e.event_type == "git_anchor_search_completed"][0]
-    assert search.payload["result"] == "anchored"
+    assert search.payload["results"][0]["result"] == "anchored"
 
 
 def test_trail_mature_deduplicates_replayed_trace_patch_events(tmp_path: Path) -> None:
@@ -312,7 +312,7 @@ def test_trail_mature_records_unknowns_and_is_idempotent(tmp_path: Path) -> None
         if e.event_type == "git_anchor_search_completed"
     ]
     assert len(searches) == 1
-    assert searches[0].payload["result"] == "unknown"
+    assert searches[0].payload["results"][0]["result"] == "unknown"
 
 
 def test_trail_mature_fails_for_invalid_explicit_commit(tmp_path: Path) -> None:
@@ -671,10 +671,13 @@ def test_no_match_appends_search_completed_unknown(tmp_path: Path) -> None:
         event
         for event in read_events(repo)
         if event.event_type == "git_anchor_search_completed"
-            and event.payload["trace_patch_id"] == _tp("orphan")
+        and any(
+            r["trace_patch_id"] == _tp("orphan")
+            for r in event.payload.get("results", [])
+        )
     ]
     # Phase 5 expanded the algorithm list to include the structural
-    # fallback; the search event records every tier attempted.
+    # fallback; the summary records every tier attempted (top-level).
     assert stored_search_events[0].payload["algorithms_attempted"] == [
         "exact_range_hash",
         "structural_match",
@@ -729,7 +732,10 @@ def test_unanchored_patch_can_be_researched_under_new_attribution_version(
         event.ATTRIBUTION_VERSION
         for event in read_events(repo)
         if event.event_type == "git_anchor_search_completed"
-            and event.payload["trace_patch_id"] == _tp("research")
+        and any(
+            r["trace_patch_id"] == _tp("research")
+            for r in event.payload.get("results", [])
+        )
     ]
     assert search_versions == ["0.1.0", "0.2.0"]
 
@@ -789,6 +795,30 @@ def test_many_trace_patches_in_one_commit(tmp_path: Path) -> None:
         _tp("alpha"),
         _tp("beta"),
     }
+
+    # plan 090: the two patch-searches collapse into ONE summary event whose
+    # results carry both per-patch outcomes. This is the N>1 meaning-preservation
+    # the single-patch fixtures cannot exercise: one summary, two results.
+    summaries = [
+        e for e in read_events(repo)
+        if e.event_type == "git_anchor_search_completed"
+    ]
+    assert len(summaries) == 1
+    summary = summaries[0].payload
+    assert summary["summary"] is True
+    assert summary["searched"] == 2
+    assert summary["anchored"] == 2
+    assert summary["unknown"] == 0
+    assert len(summary["results"]) == 2
+    assert {r["trace_patch_id"] for r in summary["results"]} == {
+        _tp("alpha"),
+        _tp("beta"),
+    }
+    assert {r["result"] for r in summary["results"]} == {"anchored"}
+    # The summary spans both traces, so its top-level trace_id is None; the
+    # per-patch trace_ids live inside results[].
+    assert summaries[0].trace_id is None
+    assert {r["trace_id"] for r in summary["results"]} == {"tr-alpha", "tr-beta"}
 
     result = CliRunner().invoke(
         main,
@@ -869,9 +899,19 @@ def test_one_trace_patch_can_anchor_in_multiple_commits(tmp_path: Path) -> None:
         event
         for event in read_events(repo)
         if event.event_type == "git_anchor_search_completed"
-        and event.payload["trace_patch_id"] == _tp("repeat")
+        and any(
+            r["trace_patch_id"] == _tp("repeat")
+            for r in event.payload.get("results", [])
+        )
     ]
-    assert [event.payload["result"] for event in search_events] == [
+    assert [
+        next(
+            r["result"]
+            for r in event.payload["results"]
+            if r["trace_patch_id"] == _tp("repeat")
+        )
+        for event in search_events
+    ] == [
         "anchored",
         "unknown",
         "anchored",

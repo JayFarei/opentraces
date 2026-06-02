@@ -526,11 +526,13 @@ def _run_demo_with_isolated_home(paths: DemoPaths, *, verbose: bool) -> dict[str
 
     events_after_mature = _events_by_type(paths.repo)
     search_events = events_after_mature.get("git_anchor_search_completed", [])
+    # plan 090: per-patch outcomes live inside the v2 summary event's results[].
     _assert(
         any(
-            event.payload.get("trace_patch_id") == trace_patch_id
-            and event.payload.get("result") == "anchored"
+            r.get("trace_patch_id") == trace_patch_id
+            and r.get("result") == "anchored"
             for event in search_events
+            for r in event.payload.get("results", [])
         ),
         "mature did not record an anchored search for the Trace Patch",
     )

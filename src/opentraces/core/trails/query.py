@@ -23,8 +23,9 @@ from opentraces.core.config import get_project_traces_dir
 
 from .contract import enrich_trail_row, projection_digest
 from .event_log import EVENT_LOG_REF, read_events
-from .ids import id_from_payload, normalize_id
+from .ids import id_from_payload
 from .models import TrailEvent
+from .search_records import iter_search_records
 from .slices import resource_refs_for_patch, trace_slice_for_event
 from .sync import sync_patch
 
@@ -304,7 +305,11 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
 
     patch_pairs: dict[str, tuple[dict[str, Any], TrailEvent]] = {}
     anchor_pairs: list[tuple[dict[str, Any], TrailEvent]] = []
-    search_pairs_by_patch: dict[str, list[tuple[dict[str, Any], TrailEvent]]] = {}
+    # plan 090: group normalized per-patch search RECORDS (not raw events) so
+    # both legacy per-patch and v2 summary events fold into the same per-patch
+    # anchor_searches rows. id_from_payload would return None for a summary
+    # event, so the per-patch id MUST come from the expanded record.
+    search_records_by_patch: dict[str, list[dict[str, Any]]] = {}
 
     for event in events:
         payload = event.payload
@@ -315,9 +320,10 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
         elif event.event_type == "git_anchor_created":
             anchor_pairs.append((payload, event))
         elif event.event_type == "git_anchor_search_completed":
-            patch_id = id_from_payload(payload, "trace_patch")
-            if patch_id:
-                search_pairs_by_patch.setdefault(patch_id, []).append((payload, event))
+            for record in iter_search_records(event):
+                patch_id = record["trace_patch_id"]
+                if patch_id:
+                    search_records_by_patch.setdefault(patch_id, []).append(record)
 
     anchors_by_patch: dict[str, list[tuple[dict[str, Any], TrailEvent]]] = {}
     for anchor, event in anchor_pairs:
@@ -326,25 +332,21 @@ def build_trail_query_projection(repo: Path) -> TrailQueryProjection:
             anchors_by_patch.setdefault(patch_id, []).append((anchor, event))
     for pairs in anchors_by_patch.values():
         pairs.sort(key=lambda pair: pair[1].event_sequence)
-    for pairs in search_pairs_by_patch.values():
-        pairs.sort(key=lambda pair: pair[1].event_sequence)
+    for records in search_records_by_patch.values():
+        records.sort(key=lambda record: record["source_event"].get("event_sequence") or 0)
 
-    for patch_id, pairs in search_pairs_by_patch.items():
+    for patch_id, records in search_records_by_patch.items():
         projection.search_events_by_patch[patch_id] = [
             {
                 "trace_patch_id": patch_id,
-                "search_head": search.get("search_head"),
-                "search_head_sha": (search.get("search_head") or {}).get("hex"),
-                "algorithms_attempted": search.get("algorithms_attempted") or [],
-                "result": search.get("result"),
-                "created_anchor_ids": [
-                    normalize_id(anchor_id)
-                    for anchor_id in search.get("created_anchor_ids") or []
-                    if anchor_id
-                ],
-                "source_event": _source_event(event),
+                "search_head": record["search_head"],
+                "search_head_sha": record["search_head_sha"],
+                "algorithms_attempted": record["algorithms_attempted"],
+                "result": record["result"],
+                "created_anchor_ids": record["created_anchor_ids"],
+                "source_event": record["source_event"],
             }
-            for search, event in pairs
+            for record in records
         ]
 
     for patch_id, (patch, patch_event) in patch_pairs.items():

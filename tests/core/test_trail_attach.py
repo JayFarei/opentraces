@@ -180,9 +180,9 @@ def test_hook_failure_plus_manual_attach_does_not_rewrite_source_events(
     search_event = next(
         e for e in new_events if e.event_type == "git_anchor_search_completed"
     )
-    assert search_event.payload["result"] == "anchored"
+    assert search_event.payload["results"][0]["result"] == "anchored"
     assert search_event.payload["search_head"]["hex"] == commit_sha
-    assert search_event.payload["trace_patch_id"] == "fixture-tr1-step1-attach"
+    assert search_event.payload["results"][0]["trace_patch_id"] == "fixture-tr1-step1-attach"
 
     # trail explain resolves through the manually-attached anchor.
     explanation = explain_trace_step(tmp_path, "tr1", 1)
@@ -229,7 +229,7 @@ def test_attach_with_no_matching_commit_emits_search_unknown(tmp_path: Path) -> 
         e for e in events if e.event_type == "git_anchor_search_completed"
     ]
     assert len(search_events) == 1
-    assert search_events[0].payload["result"] == "unknown"
+    assert search_events[0].payload["results"][0]["result"] == "unknown"
     assert search_events[0].capture_method == ["manual_attach"]
     assert not any(e.event_type == "git_anchor_created" for e in events)
 
@@ -287,10 +287,12 @@ def test_attach_only_searches_patches_for_specified_trace(tmp_path: Path) -> Non
     new_search_events = [
         e for e in events if e.event_type == "git_anchor_search_completed"
     ]
-    # Exactly one search — tr1's patch — even though tr2 has an
-    # identical-content patch in the log.
+    # Exactly one search summary — covering only tr1's patch — even though tr2
+    # has an identical-content patch in the log. The summary spans traces so its
+    # top-level trace_id is None; the searched patch (tr1's) lives in results[].
     assert len(new_search_events) == 1
-    assert new_search_events[0].trace_id == "tr1"
+    assert new_search_events[0].payload["searched"] == 1
+    assert new_search_events[0].payload["results"][0]["trace_id"] == "tr1"
     new_anchor_events = [
         e for e in events if e.event_type == "git_anchor_created"
     ]

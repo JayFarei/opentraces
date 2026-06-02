@@ -173,7 +173,7 @@ class TestWatcherSweep:
             if event.event_type == "git_anchor_search_completed"
         ]
         assert len(searches) == 1
-        assert searches[0].payload["result"] == "unknown"
+        assert searches[0].payload["results"][0]["result"] == "unknown"
 
     def test_sweep_failure_does_not_break_the_tick(
         self, tmp_path, monkeypatch

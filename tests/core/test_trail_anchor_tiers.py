@@ -255,5 +255,5 @@ def test_unrelated_lines_do_not_anchor_via_structural_match(tmp_path: Path) -> N
         e for e in events if e.event_type == "git_anchor_search_completed"
     ]
     assert len(search_events) == 1
-    assert search_events[0].payload["result"] == "unknown"
+    assert search_events[0].payload["results"][0]["result"] == "unknown"
     assert not any(e.event_type == "git_anchor_created" for e in events)

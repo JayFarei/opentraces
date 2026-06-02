@@ -1,0 +1,9 @@
+{
+  "patches": 5000,
+  "matches": 3,
+  "anchors_created": 3,
+  "events_before": 5000,
+  "events_after": 5004,
+  "events_appended_by_reconcile": 4,
+  "reconcile_seconds": 0.528
+}

@@ -9,6 +9,7 @@ from typing import Any
 
 from ...enrichment._shared import path_matches
 from ...enrichment.attribution import _norm, _parse_diff_hunks_with_content
+from .contract import ANCHOR_SEARCH_SCHEMA_VERSION
 from .event_log import append_event_batch, read_events_scoped
 from .ids import (
     GIT_ANCHOR_CANONICALIZATION,
@@ -18,6 +19,10 @@ from .ids import (
     trace_patch_ref,
 )
 from .models import ATTRIBUTION_VERSION, GitObjectID, TrailEventDraft
+from .search_records import (
+    build_anchor_search_summary_payload,
+    iter_search_records,
+)
 
 ANCHOR_ALGORITHMS_PHASE3 = ["exact_range_hash"]
 ANCHOR_ALGORITHMS_PHASE5 = ["exact_range_hash", "structural_match"]
@@ -182,14 +187,21 @@ def reconcile_commit_anchors(
         for event in events
         if event.event_type == "git_anchor_created"
     }
+    # Dedup is per-(patch, commit, attribution_version). Expand BOTH the legacy
+    # per-patch search events and the new v2 summary events through the shared
+    # reader so the key set is identical across shapes (plan 090, R5). This is
+    # the single load-bearing invariant: an already-searched (patch, commit,
+    # version) must not be re-emitted, and a not-yet-searched patch (e.g. a
+    # late-ingested one) must still be searched.
     existing_search_keys = {
         (
-            id_from_payload(event.payload, "trace_patch"),
-            (event.payload.get("search_head") or {}).get("hex"),
-            event.ATTRIBUTION_VERSION,
+            record["trace_patch_id"],
+            record["search_head_sha"],
+            record["attribution_version"],
         )
         for event in events
         if event.event_type == "git_anchor_search_completed"
+        for record in iter_search_records(event)
     }
     patch_events = [
         event
@@ -198,8 +210,13 @@ def reconcile_commit_anchors(
         and (trace_id is None or event.trace_id == trace_id)
     ]
 
-    drafts: list[TrailEventDraft] = []
+    # plan 090: collect every patch's search outcome into ONE per-commit
+    # summary event (search_results) rather than appending one
+    # git_anchor_search_completed event per patch. The K git_anchor_created
+    # events are still emitted per match, byte-identical (R5).
+    anchor_drafts: list[TrailEventDraft] = []
     created: list[dict[str, Any]] = []
+    search_results: list[dict[str, Any]] = []
     for patch_event in patch_events:
         patch = patch_event.payload
         trace_patch_id = id_from_payload(patch, "trace_patch")
@@ -209,9 +226,9 @@ def reconcile_commit_anchors(
             continue
         if (trace_patch_id, commit, effective_attribution_version) in existing_search_keys:
             # A prior search for this (patch, commit) already recorded a
-            # result under the same attribution version; don't re-emit a
-            # duplicate search event. Newer attribution versions are allowed
-            # to append a new search so periodic re-search remains possible.
+            # result under the same attribution version; don't re-record a
+            # duplicate. Newer attribution versions are allowed to append a new
+            # search so periodic re-search remains possible.
             continue
         match = _find_exact_anchor(patch, hunks)
         evidence_tier = "exact_range_hash"
@@ -263,29 +280,26 @@ def reconcile_commit_anchors(
                 "limitations": anchor_limitations,
             }
 
-        drafts.append(
-            TrailEventDraft(
-                event_type="git_anchor_search_completed",
-                trace_id=patch_event.trace_id,
-                generation_index=patch_event.generation_index,
-                step_index=patch_event.step_index,
-                capture_method=effective_capture_method,
-                ATTRIBUTION_VERSION=effective_attribution_version,
-                payload={
-                    "trace_patch_id": trace_patch_id,
-                    "trace_patch_ref": trace_patch_ref(trace_patch_id),
-                    "search_head": commit_id,
-                    "algorithms_attempted": ANCHOR_ALGORITHMS_PHASE5,
-                    "result": "anchored" if anchor_payload else "unknown",
-                    "created_anchor_ids": created_anchor_ids,
-                },
-            )
+        # Record this patch's search outcome into the per-commit summary. Built
+        # ONLY from the trace_id-filtered patches this loop visited, so the
+        # manual-attach trace scoping (R5 scenario 5) is preserved. Commit
+        # identity lives only in the summary's top-level search_head; no
+        # ``*_sha`` keys here (payload validation rejects bare git shas).
+        search_results.append(
+            {
+                "trace_patch_id": trace_patch_id,
+                "trace_id": patch_event.trace_id,
+                "step_index": patch_event.step_index,
+                "generation_index": patch_event.generation_index,
+                "result": "anchored" if anchor_payload else "unknown",
+                "created_anchor_ids": created_anchor_ids,
+            }
         )
         existing_search_keys.add(
             (trace_patch_id, commit, effective_attribution_version)
         )
         if anchor_payload:
-            drafts.append(
+            anchor_drafts.append(
                 TrailEventDraft(
                     event_type="git_anchor_created",
                     trace_id=patch_event.trace_id,
@@ -298,6 +312,28 @@ def reconcile_commit_anchors(
             )
             existing_anchor_keys.add((trace_patch_id, commit))
             created.append(anchor_payload)
+
+    drafts: list[TrailEventDraft] = []
+    if search_results:
+        # One summary event per (commit, reconcile-run): trace_id/step_index are
+        # None because it spans the searched patches (per-patch trace_id /
+        # step_index live inside results[]).
+        drafts.append(
+            TrailEventDraft(
+                event_type="git_anchor_search_completed",
+                trace_id=None,
+                step_index=None,
+                capture_method=effective_capture_method,
+                ATTRIBUTION_VERSION=effective_attribution_version,
+                payload=build_anchor_search_summary_payload(
+                    schema_version=ANCHOR_SEARCH_SCHEMA_VERSION,
+                    search_head=commit_id,
+                    algorithms_attempted=ANCHOR_ALGORITHMS_PHASE5,
+                    results=search_results,
+                ),
+            )
+        )
+    drafts.extend(anchor_drafts)
 
     if drafts:
         append_event_batch(repo, drafts, writer=writer)

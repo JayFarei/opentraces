@@ -8,6 +8,7 @@ from typing import Any
 from .event_log import EVENT_LOG_REF, read_events
 from .ids import git_anchor_ref, id_from_payload, trace_patch_ref
 from .models import TrailEvent
+from .search_records import iter_search_records
 from .slices import resource_refs_for_patch, trace_slice_for_event
 
 
@@ -253,7 +254,11 @@ def explain_commit(repo: Path, commit_ref: str) -> dict[str, Any]:
         if event.event_type == "git_anchor_search_completed":
             search_head = event.payload.get("search_head") or {}
             if search_head.get("hex") == commit:
-                source_events.append(_source_event(event))
+                # plan 090: one source_event per searched patch (each carrying
+                # its own result/trace_patch_id). For a v2 summary these share
+                # one event_id; for legacy events this yields a single record.
+                for record in iter_search_records(event):
+                    source_events.append(record["source_event"])
         if event.event_type != "git_anchor_created":
             continue
         commit_id = event.payload.get("commit_id") or {}
