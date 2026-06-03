@@ -12,33 +12,15 @@ import click
 
 from opentraces import cli as _cli
 from . import main
-from ..core.config import save_config  # noqa: F401
-
-
-def load_config():
-    return _cli.load_config()
+from ..core.config import load_config, save_config  # noqa: F401
 
 logger = logging.getLogger("opentraces.cli.installers")
 
-
-def emit_json(data):
-    return _cli.emit_json(data)
-
-
-def error_response(*a, **k):
-    return _cli.error_response(*a, **k)
-
-
-def human_echo(*a, **k):
-    return _cli.human_echo(*a, **k)
-
-
-def human_hint(*a, **k):
-    return _cli.human_hint(*a, **k)
-
-
-def print_banner(*a, **k):
-    return _cli.print_banner(*a, **k)
+emit_json = _cli.emit_json
+error_response = _cli.error_response
+human_echo = _cli.human_echo
+human_hint = _cli.human_hint
+print_banner = _cli.print_banner
 
 
 

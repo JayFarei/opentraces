@@ -11,38 +11,17 @@ import click
 from opentraces import cli as _cli
 from . import main
 from .. import __version__  # noqa: F401
+from ..core.config import load_config, load_project_config, auth_identity as _auth_identity
 from ..core.trace_meta import short_trace_id
 from ..core.workflow import resolve_visible_stage
 
 logger = logging.getLogger("opentraces.cli.inspect")
 
 
-def load_config():
-    return _cli.load_config()
-
-
-def load_project_config(*a, **k):
-    return _cli.load_project_config(*a, **k)
-
-
-def emit_json(data):
-    return _cli.emit_json(data)
-
-
-def error_response(*a, **k):
-    return _cli.error_response(*a, **k)
-
-
-def human_echo(*a, **k):
-    return _cli.human_echo(*a, **k)
-
-
-def human_hint(*a, **k):
-    return _cli.human_hint(*a, **k)
-
-
-def _auth_identity(*a, **k):
-    return _cli._auth_identity(*a, **k)
+emit_json = _cli.emit_json
+error_response = _cli.error_response
+human_echo = _cli.human_echo
+human_hint = _cli.human_hint
 
 
 

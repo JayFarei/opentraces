@@ -11,37 +11,17 @@ from pathlib import Path
 import click
 
 from opentraces import cli as _cli
+from ..core.config import load_config
 from . import main
 
 logger = logging.getLogger("opentraces.cli._debug")
 
-
-def load_config():
-    return _cli.load_config()
-
-
-def emit_json(data):
-    return _cli.emit_json(data)
-
-
-def error_response(*a, **k):
-    return _cli.error_response(*a, **k)
-
-
-def human_echo(*a, **k):
-    return _cli.human_echo(*a, **k)
-
-
-def _auth_identity(*a, **k):
-    return _cli._auth_identity(*a, **k)
-
-
-def _capture_sessions_into_project(*a, **k):
-    return _cli._capture_sessions_into_project(*a, **k)
-
-
-def _current_project_session_dir(*a, **k):
-    return _cli._current_project_session_dir(*a, **k)
+emit_json = _cli.emit_json
+error_response = _cli.error_response
+human_echo = _cli.human_echo
+_auth_identity = _cli._auth_identity
+_capture_sessions_into_project = _cli._capture_sessions_into_project
+_current_project_session_dir = _cli._current_project_session_dir
 
 
 
