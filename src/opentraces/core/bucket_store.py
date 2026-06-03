@@ -15,6 +15,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from opentraces.core._time import utc_now_str
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import unquote, urlparse
@@ -139,7 +140,7 @@ def write_bucket_sync_state(
         "last_sync_digest": digest,
         "last_remote_digest": remote_digest or digest,
         "last_direction": direction,
-        "synced_at": _utc_now(),
+        "synced_at": utc_now_str(),
     }
     _atomic_write_json(bucket_sync_state_path(), state)
     return state
@@ -228,7 +229,7 @@ def write_trace_record(
         "record_hash": record_hash,
         "legacy_mirror": legacy_mirror,
         "security": security_state,
-        "written_at": _utc_now(),
+        "written_at": utc_now_str(),
         "record": record_payload,
     }
     _atomic_write_json(object_path, envelope)
@@ -395,7 +396,7 @@ def write_raw_source_artifact(
         "content_length": len(data),
         "blob_path": blob_path.relative_to(paths.bucket_dir()).as_posix(),
         "source_basename": source_path.name,
-        "written_at": _utc_now(),
+        "written_at": utc_now_str(),
         "remote_sync": {
             "eligible": True,
             "scope": "private_bucket_only",
@@ -484,7 +485,7 @@ def sync_events_mirror(
             "last_batch_id": None,
             "latest_event_sequence": 0,
             "state": "missing",
-            "updated_at": _utc_now(),
+            "updated_at": utc_now_str(),
         }
         _atomic_write_json(events_v1_index_path(), index)
         return index
@@ -574,7 +575,7 @@ def sync_events_mirror(
         "last_batch_id": last_batch_id,
         "latest_event_sequence": latest_event_sequence,
         "state": status.get("state"),
-        "updated_at": _utc_now(),
+        "updated_at": utc_now_str(),
         "verification": {
             "batch_count": status.get("batch_count"),
             "batch_parents_linear": status.get("batch_parents_linear"),
@@ -837,7 +838,7 @@ def _build_context_head(
             "blocked_reasons": [CONTEXT_TREE_REMOTE_SYNC_BLOCKER],
         },
         "blob_scope": blob_scope,
-        "last_projection_at": _utc_now(),
+        "last_projection_at": utc_now_str(),
         "event_log_head": event_log_head,
         "events_processed_through_sequence": events_processed_through_sequence,
     }
@@ -1030,7 +1031,7 @@ def project_context_tree_to_bucket(
         "idempotent_noop": blobs_written == 0 and heads_written == 0,
         "event_log_head": event_log_head,
         "blob_scope": blob_scope,
-        "projected_at": _utc_now(),
+        "projected_at": utc_now_str(),
     }
 
 
@@ -1434,7 +1435,7 @@ def project_per_trace_exports(
         "trail_event_count": len(trail_events),
         "context_event_count": len(context_events),
         "has_trace_record": record is not None,
-        "projected_at": _utc_now(),
+        "projected_at": utc_now_str(),
     }
 
 
@@ -2714,8 +2715,8 @@ def bucket_manifest(
         "schema_version": BUCKET_MANIFEST_SCHEMA,
         "bucket_root": bucket_root_slug,
         "root": str(paths.bucket_dir()),
-        "generated_at": _utc_now(),
-        "updated_at": _utc_now(),
+        "generated_at": utc_now_str(),
+        "updated_at": utc_now_str(),
         "security_version": SECURITY_VERSION,
         # Plan 080 v2 fields (canonical):
         "traces": traces_v2_rows,
@@ -3186,8 +3187,6 @@ def _canonical_json(payload: Any, *, pretty: bool = False) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _resolve_trace_record_pointer(path: Path) -> Path:

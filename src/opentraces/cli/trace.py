@@ -17,7 +17,7 @@ import click
 from opentraces import cli as _cli
 from ._help import OpentracesCommand, OpentracesGroup
 from ..core.trace_meta import short_trace_id
-from ..core.workflow import resolve_visible_stage, stage_label  # noqa: F401
+from ..core.workflow import resolve_visible_stage
 
 
 def _resolve_trace_id(trace_id: str) -> str | None:

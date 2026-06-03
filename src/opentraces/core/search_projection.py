@@ -30,6 +30,7 @@ from opentraces_schema import TraceFacet, TraceSignal, TraceUnit
 from . import paths
 from . import search_diag
 from .bucket_store import bucket_manifest, trace_record_snapshot
+from .query_helpers import _fts_query, _page_offset, _recency_weighted_sort, _terms
 from .semantic import expand_semantic_query, semantic_profile_from_facets
 from .trace_index import (
     QueryPage,
@@ -2089,43 +2090,6 @@ def _doc_candidate_kind(doc: dict[str, Any]) -> str:
     return str(doc.get("doc_type") or "trace")
 
 
-def _terms(text: str) -> list[str]:
-    # Additive URL/identifier sub-tokenization (plan 088 U6); see trace_index._terms.
-    out: list[str] = []
-    seen: set[str] = set()
-    for raw in re.findall(r"[A-Za-z0-9_@./-]+", text):
-        tok = raw.lower()
-        if tok not in seen:
-            seen.add(tok)
-            out.append(tok)
-        if "/" in tok or "." in tok or "@" in tok:
-            for sub in re.split(r"[/.@:]+", tok):
-                if len(sub) > 1 and sub not in seen:
-                    seen.add(sub)
-                    out.append(sub)
-    return out
-
-
-def _fts_query(terms: list[str]) -> str:
-    quoted: list[str] = []
-    for term in terms:
-        safe = term.replace('"', "")
-        if safe:
-            quoted.append(f'"{safe}"')
-    return " ".join(quoted)
-
-
-def _page_offset(page_token: str | None) -> int:
-    if not page_token:
-        return 0
-    if not page_token.startswith("offset:"):
-        raise ValueError("page token must have the form offset:<n>")
-    try:
-        return max(0, int(page_token.split(":", 1)[1]))
-    except ValueError as exc:
-        raise ValueError("page token must have the form offset:<n>") from exc
-
-
 def _parse_since(value: str) -> datetime:
     stripped = value.strip()
     now = datetime.now(timezone.utc)
@@ -2142,22 +2106,6 @@ def _parse_since(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
-
-
-def _recency_weighted_sort(scored: list, weight: float, ts_fn) -> list:
-    """Relevance blended with a normalized recency term (U5); see trace_index."""
-
-    if not scored:
-        return scored
-    epochs = [ts_fn(item[3]).timestamp() for item in scored]
-    lo = min(epochs)
-    span = max(max(epochs) - lo, 1.0)
-    decorated = [
-        (-(item[0] + weight * (epoch - lo) / span), item[3].trace_id, item[3].unit_id, item)
-        for item, epoch in zip(scored, epochs)
-    ]
-    decorated.sort(key=lambda d: (d[0], d[1], d[2]))
-    return [d[3] for d in decorated]
 
 
 def _unit_ts(unit: TraceUnit) -> datetime:

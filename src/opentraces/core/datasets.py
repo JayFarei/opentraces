@@ -14,6 +14,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from opentraces.core._time import utc_now_str
 from pathlib import Path
 from typing import Any
 
@@ -513,7 +514,7 @@ def append_rows(
                 data_file="data/train.jsonl",
                 line=current_line,
                 run_id=run_id,
-                appended_at=_utc_now(),
+                appended_at=utc_now_str(),
                 source_trace_id=provenance["source_refs"].get("trace_id"),
                 source_unit_id=provenance["source_refs"].get("unit_id"),
                 source_slice_id=provenance["source_refs"].get("slice_id"),
@@ -634,7 +635,7 @@ def _build_row_provenance(
             "freshness": list(trail_freshness or []),
             "event_count": trail_events.get("event_count"),
             "repository_count": trail_events.get("repository_count"),
-            "sampled_at": _utc_now(),
+            "sampled_at": utc_now_str(),
         },
         "privacy": {
             "privacy_tier": row_security.privacy_tier,
@@ -803,7 +804,7 @@ def evaluate_publication_state(
             privacy_tier=entry_privacy_tier,
             security_stale=security_stale,
             redactions_applied=redactions_applied,
-            updated_at=_utc_now(),
+            updated_at=utc_now_str(),
         )
     write_publication_state(name, state)
     return state
@@ -834,16 +835,16 @@ def set_publication_review_status(
                     else "needs_review",
                     "reviewed_at": None,
                     "reviewed_by": None,
-                    "updated_at": _utc_now(),
+                    "updated_at": utc_now_str(),
                 }
             )
             continue
         state.rows[row_id] = entry.model_copy(
             update={
                 "status": status,
-                "reviewed_at": _utc_now(),
+                "reviewed_at": utc_now_str(),
                 "reviewed_by": reviewer or "cli",
-                "updated_at": _utc_now(),
+                "updated_at": utc_now_str(),
             }
         )
     write_publication_state(name, state)
@@ -1075,7 +1076,7 @@ def publish_dataset(
                     if (staging_path / path).is_file()
                 },
                 "row_ids": [row_id for row_id, _row in selected_rows],
-                "published_at": _utc_now(),
+                "published_at": utc_now_str(),
             },
         )
         return DatasetPublishSummary(
@@ -1115,7 +1116,7 @@ def withdraw_dataset_row(
         target="row",
         target_id=row_id,
         reason=reason,
-        requested_at=_utc_now(),
+        requested_at=utc_now_str(),
     )
     _write_withdrawal_record(name, record)
     if hard:
@@ -1558,7 +1559,7 @@ def _write_fake_remote_meta(remote_root: Path, meta: dict[str, Any]) -> None:
 
 def _mark_rows_uploaded(name: str, row_ids: list[str], remote_name: str) -> None:
     state = read_publication_state(name)
-    now = _utc_now()
+    now = utc_now_str()
     for row_id in row_ids:
         entry = state.rows[row_id]
         uploaded_to = dict(entry.uploaded_to)
@@ -1622,7 +1623,7 @@ def rebuild_row_index(name: str) -> RebuildSummary:
     schema = read_json(dataset.path / dataset.manifest.schema_ref.path)
     schema_digest = dataset.manifest.schema_ref.digest or digest_payload(schema)
     entries: list[DatasetRowIndexEntry] = []
-    rebuild_run_id = f"rebuild_{_utc_now()}"
+    rebuild_run_id = f"rebuild_{utc_now_str()}"
     for data_file in _iter_data_files(dataset.path):
         relative = data_file.relative_to(dataset.path).as_posix()
         for line_no, line in enumerate(
@@ -1642,7 +1643,7 @@ def rebuild_row_index(name: str) -> RebuildSummary:
                     data_file=relative,
                     line=line_no,
                     run_id=rebuild_run_id,
-                    appended_at=_utc_now(),
+                    appended_at=utc_now_str(),
                 )
             )
     row_index = dataset.path / ".opentraces" / "row_index.jsonl"
@@ -1854,5 +1855,3 @@ def _canonical_json(payload: Any) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
