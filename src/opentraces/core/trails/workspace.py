@@ -6,7 +6,7 @@ import os
 import shutil
 import subprocess
 import uuid
-from datetime import datetime, timezone
+from opentraces.core._time import utc_now_str
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +50,7 @@ NON_PORTABLE_DEPENDENCIES = [
 ]
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
 
 
 def _git(
@@ -368,7 +367,7 @@ def export_trace_workspace(repo: Path, trace_id: str, output: Path) -> dict[str,
         "schema_version": TRACE_WORKSPACE_SCHEMA_VERSION,
         "workspace_id": f"trace-workspace-{uuid.uuid4().hex}",
         "trace_id": trace_id,
-        "created_at": _utc_now(),
+        "created_at": utc_now_str(),
         "event_log_ref": EVENT_LOG_REF,
         "git_bundle": bundle_rel,
         "trace_record": trace_record_rel,
@@ -442,7 +441,7 @@ def open_trace_workspace(workspace: Path, project: Path) -> dict[str, Any]:
             "schema_version": TRACE_WORKSPACE_SCHEMA_VERSION,
             "workspace_id": manifest.get("workspace_id"),
             "trace_id": manifest.get("trace_id"),
-            "opened_at": _utc_now(),
+            "opened_at": utc_now_str(),
         }
         (temp_project / WORKSPACE_META_FILENAME).write_text(
             json.dumps(meta, indent=2) + "\n"

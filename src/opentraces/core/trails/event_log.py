@@ -7,7 +7,7 @@ import pickle
 import subprocess
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from opentraces.core._time import utc_now_str
 from pathlib import Path
 from typing import Any
 
@@ -33,8 +33,7 @@ _EVENT_CACHE_FORMAT = 1
 _SNAPSHOT_REFRESH_MIN_DELTA = 2000
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
 
 
 def _git(
@@ -299,7 +298,7 @@ def append_event_batch(
         for draft in raw_drafts:
             data = {
                 "event_sequence": next_sequence,
-                "event_time": draft.event_time or _utc_now(),
+                "event_time": draft.event_time or utc_now_str(),
                 "previous_event_id": previous_event_id,
                 "trace_id": draft.trace_id,
                 "generation_index": draft.generation_index,

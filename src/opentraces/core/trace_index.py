@@ -2493,16 +2493,6 @@ def _insert_unit(conn: sqlite3.Connection, unit: TraceUnit) -> None:
         )
 
 
-def _insert_map_node(conn: sqlite3.Connection, node: TraceMapNode) -> None:
-    # Nodes are inserted by _insert_trace so map rebuild and trace insert stay atomic.
-    return None
-
-
-def _insert_map_edge(conn: sqlite3.Connection, edge: Any) -> None:
-    # Edges are inserted by _insert_trace so map rebuild and trace insert stay atomic.
-    return None
-
-
 def _unit_facets(unit: TraceUnit) -> list[TraceFacet]:
     facets = list(unit.facets)
     if not any(facet.name == "unit.type" for facet in facets):
