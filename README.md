@@ -269,7 +269,7 @@ A dataset is a workflow-driven row projection over one or more bucket traces.
 
 ## Security
 
-The security pipeline is versioned independently from the CLI and schema (currently `SECURITY_VERSION = 0.5.0`). The contract is deliberately simple: all per-record security tools default off, and workflows opt into the named tools they need.
+The security pipeline is versioned independently from the CLI and schema (currently `SECURITY_VERSION = 0.6.0`). The contract is deliberately simple: all per-record security tools default off, and workflows opt into the named tools they need.
 
 | Tool | Kind | Default | What it does |
 |------|------|---------|--------------|
@@ -278,7 +278,9 @@ The security pipeline is versioned independently from the CLI and schema (curren
 | `trufflehog` | detector | off | Optional deep secret detector, configured with `opentraces setup trufflehog` |
 | `privacy_filter` | detector | off | Optional local/HF NER PII detector, configured with `opentraces setup privacy-filter` |
 | `llm_pii` | detector | off | Advanced per-field LLM PII detector, configured directly |
+| `business_logic` | detector | off | Promotes internal-hostname/URL/db/AWS-account heuristics to redactable spans |
 | `path_anonymizer` | transformer | off | Rewrites local usernames in filesystem paths |
+| `capsule_scope` | transformer | off | Field-path exclusion guarantee for prompt-bearing fields |
 | `classifier` | judge | off | Heuristic sensitivity verdict without mutating content |
 
 Run `opentraces security tools list` to see the active config, and pipe JSON through `opentraces security sanitize --tools regex,entropy` when a workflow wants explicit sanitization. `--use-config` runs only tools you have enabled. Session-level LLM review (`opentraces dataset review`) is a separate, on-demand publication gate, not a per-record tool.
