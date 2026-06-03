@@ -77,7 +77,7 @@ def test_auto_enroll_global_git(tmp_path):
     assert project_is_opted_in(proj)
     # Marker written into the repo (R4 "always write marker" decision).
     assert (proj / ".opentraces.json").is_file()
-    assert load_project_config(proj)["agents"] == ["claude-code", "codex-cli"]
+    assert load_project_config(proj)["agents"] == ["claude-code", "codex-cli", "pi"]
     # Registered in the global registry.
     assert str(proj.resolve()) in opted_in_projects(load_config())
 
@@ -133,7 +133,7 @@ def test_auto_enroll_global_repairs_legacy_agent_list(tmp_path):
     }))
 
     assert auto_enroll_if_global(proj) is True
-    assert load_project_config(proj)["agents"] == ["claude-code", "codex-cli"]
+    assert load_project_config(proj)["agents"] == ["claude-code", "codex-cli", "pi"]
 
 
 # --------------------------------------------------------------------------- #

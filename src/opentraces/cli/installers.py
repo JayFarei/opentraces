@@ -470,15 +470,15 @@ def _run_setup_wizard() -> None:
     human_echo("")
 
     # 0. Tracking mode — the headline choice (plan 081). Global (default)
-    #    auto-enrolls Claude/Codex projects; Pi keeps explicit per-project
-    #    `opentraces init --agent pi` consent. Persisted to global config.
+    #    auto-enrolls every agent including Pi; opt out via manual mode or a
+    #    per-project `excluded` marker. Persisted to global config.
     cfg = load_config()
     current_mode = cfg.capture.tracking_mode
     human_echo(f"  {_cli._bold('tracking mode'):<28} {_cli._ok(current_mode)}")
     track_global = _wizard_confirm(
         "track every project automatically?",
         default=(current_mode == "global"),
-        hint="global auto-enrolls Claude/Codex projects; Pi still requires per-project 'opentraces init --agent pi' consent",
+        hint="global auto-enrolls Claude/Codex/Pi projects; manual mode or a per-project 'excluded' marker opts out",
     )
     new_mode = "global" if track_global else "manual"
     if new_mode != current_mode:
@@ -1002,7 +1002,7 @@ def setup_pi(
         "state": inst.status(),
         "next_steps": [
             "Run pi and invoke /ot-setup for guided local capture setup.",
-            "Run opentraces init --agent pi in each project you want to capture.",
+            "Capture is on by default under global tracking; run 'opentraces config tracking-mode manual' or exclude a project to opt out.",
         ],
     })
 

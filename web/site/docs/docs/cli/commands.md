@@ -94,8 +94,10 @@ flag.
 
 `opentraces setup pi --dry-run --json` reports the Pi package/checklist plan
 without writing. Use `pi install npm:opentraces-pi` for the primary package
-install path, then `opentraces init --agent pi` in each repo you want to capture.
-Global tracking does not implicitly enable Pi sidecars.
+install path. Under global tracking (the default) Pi auto-enrolls each repo on
+first capture like Claude/Codex; opt out with `opentraces config tracking-mode
+manual` or a per-project `excluded` marker, or run `opentraces init --agent pi`
+to enroll a repo explicitly.
 
 `opentraces setup pi` supports:
 

@@ -25,9 +25,11 @@ creation or capsule export as user-approved follow-ups, not background work.
 
 ## Setup
 
-Run `/ot-setup` for minimal local capture readiness. It may run
-`opentraces init --agent pi` after user approval. Terminal/auth-heavy follow-ups
-are reported as `needs_terminal`, for example:
+Run `/ot-setup` for minimal local capture readiness. Under global tracking (the
+default) capture is automatic once the `opentraces` CLI is present, so the main
+thing `/ot-setup` checks is that the CLI is installed; `opentraces init --agent
+pi` can still enroll a repo explicitly. Terminal/auth-heavy follow-ups are
+reported as `needs_terminal`, for example:
 
 ```bash
 opentraces setup git

@@ -118,7 +118,7 @@ What each integration does:
 
 - `setup claude-code` installs the `PreToolUse`, `PostToolUse`, `Stop`, and `PostCompact` hooks in `~/.claude/settings.json`
 - `setup codex-cli` installs native Codex CLI hook commands in `~/.codex/hooks.json` and copies hook scripts to `~/.codex/hooks/opentraces/`
-- `setup pi` checks or writes the Pi package entry; `pi install npm:opentraces-pi` is the primary package path. It supports `--project`, `--settings-file`, `--local`, `--dry-run`, `--remove`, and `--json`, but does not enable capture without `opentraces init --agent pi` consent.
+- `setup pi` checks or writes the Pi package entry; `pi install npm:opentraces-pi` is the primary package path. It supports `--project`, `--settings-file`, `--local`, `--dry-run`, `--remove`, and `--json`. Capture itself is opt-out: under global tracking (the default) Pi auto-enrolls each repo on first capture; `opentraces config tracking-mode manual` or a per-project `excluded` marker opts out.
 - `setup git` installs the post-commit correlator that powers `opentraces trail blame`
 - `setup skill` installs the vendor-neutral skill under `~/.agents/skills/opentraces/` and symlinks it into supported harnesses (currently `~/.claude/skills/opentraces`, `~/.codex/skills/opentraces`, and `~/.pi/agent/skills/opentraces`)
 - `setup bucket` configures the private bucket sync target (the workspace state that backs the trace index and Trace Trails)

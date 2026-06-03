@@ -931,13 +931,15 @@ def register_project(config: Config, project_dir: Path) -> bool:
 
 
 def _global_capture_agents() -> list[str]:
-    """Agents enabled by default for global capture enrollment.
+    """Agents enrolled by default under global tracking mode.
 
-    Pi is intentionally excluded: installing the Pi package is separate from
-    per-project capture consent, which is recorded by ``opentraces init --agent
-    pi``. Global auto-enroll should not start writing Pi sidecars implicitly.
+    Pi is included so global tracking (the default) auto-enrolls Pi the same way
+    it does Claude/Codex, the first time a Pi capture event fires in a project.
+    Capture stays opt-out: ``tracking_mode = manual`` or a per-project
+    ``excluded`` marker turns it off, and raw provider bodies remain default-off
+    (the ``OPENTRACES_PI_RETAIN_RAW_PROVIDER_BODIES`` opt-in is separate).
     """
-    return normalize_agents([DEFAULT_AGENT, "codex-cli"])
+    return normalize_agents([DEFAULT_AGENT, "codex-cli", "pi"])
 
 
 def _merge_agent_lists(*agent_lists: list[str]) -> list[str]:

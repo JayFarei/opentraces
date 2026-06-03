@@ -36,8 +36,8 @@ opentraces has four separate surfaces:
 
 ```bash
 opentraces setup                          # install capture hooks and optional integrations
-opentraces init                           # enroll Claude/Codex (or current default agent)
-opentraces init --agent pi                # required explicit consent for Pi
+opentraces init                           # enroll a repo explicitly (optional under global tracking)
+opentraces init --agent pi                # enroll Pi explicitly (optional; auto under global tracking)
 opentraces bucket status                  # inspect private retained trace evidence
 opentraces trace query --since 7d         # search retained traces
 opentraces trace map <trace-id> --bursts  # deterministic edit/intent map
@@ -54,9 +54,10 @@ opentraces dataset publish my-dataset     # upload reviewed rows to the active r
 
 `init` writes the committable project marker at `.opentraces.json`. Captured
 traces, bucket state, and upload bookkeeping stay machine-local under
-`~/.opentraces/`. Global tracking can auto-enroll Claude/Codex projects, but Pi
-is extension-backed and still requires `opentraces init --agent pi` or `/ot-setup`
-per repo before sidecars are written.
+`~/.opentraces/`. Global tracking (the default) auto-enrolls every agent,
+including Pi, the first time a capture hook or the Pi extension fires in a repo,
+private + review-required. Capture is opt-out: `opentraces config tracking-mode
+manual` or a per-project `excluded` marker turns it off.
 
 ## What You Get
 
@@ -301,10 +302,10 @@ checklist.
 
 ## 3. Enroll A Project
 
-Under global tracking this is optional for Claude/Codex projects, but it is
-still useful when you want to import existing sessions or be explicit about the
-connected agent. Pi capture always requires explicit project enrollment before
-sidecars are written.
+Under global tracking (the default) this is optional for every agent, including
+Pi, which auto-enrolls each project on first capture. Running `init` explicitly
+is still useful when you want to import existing sessions, be explicit about the
+connected agent, or are running in `manual` tracking mode.
 
 ```bash
 opentraces init
@@ -530,8 +531,10 @@ flag.
 
 `opentraces setup pi --dry-run --json` reports the Pi package/checklist plan
 without writing. Use `pi install npm:opentraces-pi` for the primary package
-install path, then `opentraces init --agent pi` in each repo you want to capture.
-Global tracking does not implicitly enable Pi sidecars.
+install path. Under global tracking (the default) Pi auto-enrolls each repo on
+first capture like Claude/Codex; opt out with `opentraces config tracking-mode
+manual` or a per-project `excluded` marker, or run `opentraces init --agent pi`
+to enroll a repo explicitly.
 
 `opentraces setup pi` supports:
 
@@ -787,7 +790,7 @@ commands above.
 |------|------------|--------|-------|
 | Live capture | `claude-code` | Supported | Installed via `opentraces init` or `opentraces setup claude-code`; supports snapshot-backed `--at-step` resume |
 | Live capture | `codex-cli` | Supported | Installed via `opentraces setup codex-cli` plus `opentraces init --agent codex-cli` inside each repo |
-| Live capture | `pi` | Supported | Install `opentraces-pi` with `pi install npm:opentraces-pi` or `opentraces setup pi`; enroll repos with `opentraces init --agent pi` |
+| Live capture | `pi` | Supported | Install `opentraces-pi` with `pi install npm:opentraces-pi` or `opentraces setup pi`; auto-enrolled under global tracking (default), opt out via `config tracking-mode manual` or per-project exclusion |
 | Context capture source | `capture-otlp` | Supported for Claude Code | Installed via `opentraces setup capture-otlp`; feeds Context Tree events from OTel/raw API-body capture |
 | Dataset import | `hermes` | Supported | Registered `FormatImporter`. Invoked from dataset workflows or via the schema package's serializers |
 
@@ -852,7 +855,7 @@ marker instead of inventing hidden chain-of-thought content.
 
 ## Pi Details
 
-Pi support is extension-backed. Package install only loads resources; capture is a no-op until the repo has explicitly opted in. Global tracking does not implicitly enable Pi sidecars. The primary package install is:
+Pi support is extension-backed. Under global tracking (the default), an installed Pi extension auto-enrolls each project on first capture, the same way Claude/Codex do, into a private + review-required bucket; capture is opt-out (switch to `opentraces config tracking-mode manual`, or set a per-project `excluded` marker / run `opentraces remove`). Capture still requires the `opentraces` CLI on PATH. The primary package install is:
 
 ```bash
 pi install npm:opentraces-pi
@@ -888,9 +891,11 @@ Raw provider bodies are default-off and local/security-gated when explicitly
 enabled. Opt in with `OPENTRACES_PI_RETAIN_RAW_PROVIDER_BODIES=1` (or
 `true`/`yes`) or an explicit sidecar opt-in; retained blob refs stay local under
 `.opentraces/pi/blobs/` before any bucket/workflow sync. Extension/bridge
-failures are fail-open and must not block Pi; before `opentraces init --agent
-pi` creates the project consent marker, the bridge returns `capture_disabled`
-without writing sidecars.
+failures are fail-open and must not block Pi. Under `manual` tracking mode, or
+for a project with an `excluded` marker, the bridge returns `capture_disabled`
+without writing sidecars; under global tracking (default) it auto-enrolls the
+project and captures. `opentraces init --agent pi` still enrolls a repo
+explicitly.
 
 ## Adapter Contracts
 
@@ -3703,7 +3708,7 @@ What each integration does:
 
 - `setup claude-code` installs the `PreToolUse`, `PostToolUse`, `Stop`, and `PostCompact` hooks in `~/.claude/settings.json`
 - `setup codex-cli` installs native Codex CLI hook commands in `~/.codex/hooks.json` and copies hook scripts to `~/.codex/hooks/opentraces/`
-- `setup pi` checks or writes the Pi package entry; `pi install npm:opentraces-pi` is the primary package path. It supports `--project`, `--settings-file`, `--local`, `--dry-run`, `--remove`, and `--json`, but does not enable capture without `opentraces init --agent pi` consent.
+- `setup pi` checks or writes the Pi package entry; `pi install npm:opentraces-pi` is the primary package path. It supports `--project`, `--settings-file`, `--local`, `--dry-run`, `--remove`, and `--json`. Capture itself is opt-out: under global tracking (the default) Pi auto-enrolls each repo on first capture; `opentraces config tracking-mode manual` or a per-project `excluded` marker opts out.
 - `setup git` installs the post-commit correlator that powers `opentraces trail blame`
 - `setup skill` installs the vendor-neutral skill under `~/.agents/skills/opentraces/` and symlinks it into supported harnesses (currently `~/.claude/skills/opentraces`, `~/.codex/skills/opentraces`, and `~/.pi/agent/skills/opentraces`)
 - `setup bucket` configures the private bucket sync target (the workspace state that backs the trace index and Trace Trails)
@@ -4561,7 +4566,7 @@ Pi is the shipped example for an extension-backed Tier 4 adapter.
 
 3. **Extension bridge**: `packages/opentraces-pi/src/index.ts` registers lifecycle/tool/provider/tree/bash listeners plus model tools (`ot_search`, `ot_trace`, `ot_standup`, `ot_capsule`, `ot_dataset`, `ot_capture_status`) and slash commands (`/ot-search`, `/ot-trace`, `/ot-standup`, `/ot-capsule`, `/ot-dataset`, `/ot-capture-status`, `/ot-setup`). The TypeScript stays thin and calls `opentraces _pi-bridge --payload-file`; persistence and validation stay in Python.
 
-4. **Installer**: `PiHookInstaller` manages Pi package entries in `~/.pi/agent/settings.json` or project `.pi/settings.json`. `opentraces setup pi` supports `--project`, `--settings-file`, `--local`, `--dry-run`, `--remove`, and `--json`. It does not install Python, start services, authenticate, or enable capture. Capture remains no-op until `opentraces init --agent pi` or `/ot-setup` writes project consent.
+4. **Installer**: `PiHookInstaller` manages Pi package entries in `~/.pi/agent/settings.json` or project `.pi/settings.json`. `opentraces setup pi` supports `--project`, `--settings-file`, `--local`, `--dry-run`, `--remove`, and `--json`. It does not install Python, start services, or authenticate. Capture is opt-out: under global tracking (the default) the Pi extension auto-enrolls each repo on first capture, the same way Claude/Codex hooks do, into a private + review-required bucket; `manual` tracking mode or a per-project `excluded` marker turns it off, and raw provider bodies stay default-off.
 
 5. **Trace Trails and Context Tree**: Pi tool sidecars map to existing `hook_pre_tool_use` / `hook_post_tool_use` metadata. Provider/context sidecars use `capture_method = live_capture` when available; transcript fallback is explicit. Raw provider bodies are default-off and only retained on explicit opt-in.
 
