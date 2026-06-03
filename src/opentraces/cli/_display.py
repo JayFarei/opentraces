@@ -125,7 +125,7 @@ def _status_cell(entry, record) -> tuple[str, str]:
     Returns (rich_markup, plain_text) so callers can render or emit JSON
     without re-deriving or stripping markup.
     """
-    from ..core.workflow import resolve_visible_stage
+    from . import resolve_visible_stage  # sourced from the cli package re-export (branch-agnostic across the workflow.py->trace_stage.py rename)
 
     visible = resolve_visible_stage(entry.status if entry else None)
     if visible == "pushed":
