@@ -70,4 +70,4 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.6.0` field semantics |
 | **[Clients](/docs/clients/overview)** | How consumers use rows or bucket evidence |
 | **[Agent Workflows](/docs/clients/agent-workflows)** | Context warmup and progressive session-history discovery |
-| **[Trace Capsule](/docs/clients/trace-capsule)** | Manual dataset-of-1 capsule pattern before the capsule CLI exists |
+| **[Trace Capsule](/docs/clients/trace-capsule)** | Share a single trace as a reproducible capsule; use `opentraces capsule` for the full CLI surface |
