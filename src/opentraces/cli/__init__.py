@@ -515,6 +515,7 @@ from ._auth_impl import (
     _login_with_device_code,
     _login_with_token,
     _validate_and_save,
+    _resolve_username_prefix,
     _choose_remote_interactively,
     _choose_remote_interactively_async,
 )

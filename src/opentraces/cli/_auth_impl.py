@@ -92,6 +92,7 @@ def _auth_status_impl() -> None:
 
 def _login_with_device_code(save_credentials, credentials_path) -> None:
     """OAuth device code flow. User authorizes in browser with a short code."""
+    import opentraces.cli as _cli
     import time as _time
     import logging
 
@@ -101,7 +102,7 @@ def _login_with_device_code(save_credentials, credentials_path) -> None:
         click.echo("'requests' package required for device login. Falling back to token paste.")
         click.echo("Install with: pip install requests")
         click.echo()
-        _login_with_token(save_credentials, credentials_path)
+        _cli._login_with_token(save_credentials, credentials_path)
         return
 
     click.echo("Authenticating with HuggingFace Hub...\n")
@@ -117,7 +118,7 @@ def _login_with_device_code(save_credentials, credentials_path) -> None:
     except Exception as e:
         click.echo(f"Failed to start device login: {e}")
         click.echo("Falling back to token paste.\n")
-        _login_with_token(save_credentials, credentials_path)
+        _cli._login_with_token(save_credentials, credentials_path)
         return
 
     device_code = data["device_code"]
@@ -186,7 +187,7 @@ def _login_with_device_code(save_credentials, credentials_path) -> None:
     click.echo(" done\n")
 
     # Step 4: Validate and save
-    _validate_and_save(access_token, save_credentials, credentials_path)
+    _cli._validate_and_save(access_token, save_credentials, credentials_path)
 
 
 def _login_with_token(save_credentials, credentials_path) -> None:
@@ -202,7 +203,7 @@ def _login_with_token(save_credentials, credentials_path) -> None:
         _cli.emit_json(_cli.error_response("INVALID_TOKEN", "auth", "Token must start with hf_"))
         sys.exit(3)
 
-    _validate_and_save(token_input, save_credentials, credentials_path)
+    _cli._validate_and_save(token_input, save_credentials, credentials_path)
 
 
 def _validate_and_save(token_value: str, save_credentials, credentials_path) -> None:
