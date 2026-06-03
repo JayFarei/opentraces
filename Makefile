@@ -1,4 +1,4 @@
-.PHONY: version-check dirty-check clean build-viewer build-schema build-cli build \
+.PHONY: version-check dirty-check clean build-schema build-cli build \
        test lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
        otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf capture-refresh \
@@ -26,9 +26,6 @@ clean:
 	rm -rf dist/ build/ $(SCHEMA_DIR)/dist/ $(SCHEMA_DIR)/build/
 
 # ---------- Build ----------
-
-build-viewer:
-	cd web/viewer && npm install && npm run build
 
 build-schema:
 	cd $(SCHEMA_DIR) && python3 -m build
