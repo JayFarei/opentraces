@@ -40,7 +40,6 @@ ALLOWED_EVENTS: frozenset[str] = frozenset(
         "tool_pre",
         "tool_post",
         "provider_request",
-        "provider_response",
         "context",
         "model_change",
         "thinking_change",
@@ -232,8 +231,15 @@ def _write_json_blob(cwd: str | Path, payload: Any) -> dict[str, Any]:
     }
 
 
-def _enforce_raw_body_defaults(envelope: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """Drop raw provider body material unless explicitly opted in."""
+def _enforce_raw_body_defaults(
+    envelope: dict[str, Any], *, consented: bool
+) -> tuple[dict[str, Any], bool]:
+    """Drop raw provider body material unless explicitly opted in.
+
+    Retention (a blob write) additionally requires project consent, so events
+    that are processed before consent (e.g. ``setup_status``) can never persist
+    a raw provider body on disk even if a payload sets the opt-in flag.
+    """
 
     data = dict(envelope.get("data") or {})
     retained = False
@@ -247,7 +253,7 @@ def _enforce_raw_body_defaults(envelope: dict[str, Any]) -> tuple[dict[str, Any]
             "retained": False,
             "reason": "raw_provider_bodies_default_off",
         }
-        if _raw_body_opt_in(envelope):
+        if consented and _raw_body_opt_in(envelope):
             body_refs[key] = {
                 **_write_json_blob(envelope["cwd"], value),
                 "retained": True,
@@ -433,14 +439,15 @@ def record_event(payload: dict[str, Any], *, fail_open: bool = True) -> BridgeRe
 
     try:
         envelope = normalize_event(payload)
-        if not capture_enabled_for_project(envelope.get("cwd")) and envelope.get("event") != "setup_status":
+        consented = capture_enabled_for_project(envelope.get("cwd"))
+        if not consented and envelope.get("event") != "setup_status":
             return BridgeResult(
                 ok=True,
                 status="capture_disabled",
                 event_id=str(envelope.get("event_id") or ""),
             )
         envelope = _with_trail_state(envelope)
-        envelope, raw_retained = _enforce_raw_body_defaults(envelope)
+        envelope, raw_retained = _enforce_raw_body_defaults(envelope, consented=consented)
         recovered = recover_unfinalized_sessions(
             envelope.get("cwd"),
             current_session_id=str(envelope.get("session_id") or "") if envelope.get("event") == "session_start" else None,
@@ -470,6 +477,7 @@ def iter_sidecar_events(cwd: str | Path, session_id: str | None = None) -> Itera
         return []
     paths = [sidecar_path_for(cwd, session_id)] if session_id else sorted(base.glob("*.jsonl"))
     out: list[dict[str, Any]] = []
+    seen_event_ids: set[str] = set()
     for path in paths:
         if not path.exists():
             continue
@@ -485,6 +493,11 @@ def iter_sidecar_events(cwd: str | Path, session_id: str | None = None) -> Itera
             except json.JSONDecodeError:
                 continue
             if isinstance(row, dict) and row.get("schema_version") == SIDECAR_SCHEMA_VERSION:
+                event_id = row.get("event_id")
+                if isinstance(event_id, str) and event_id:
+                    if event_id in seen_event_ids:
+                        continue
+                    seen_event_ids.add(event_id)
                 out.append(row)
     return out
 
@@ -553,37 +566,3 @@ def bridge_status(cwd: str | Path | None = None) -> dict[str, Any]:
             {"name": "bucket_remote", "state": "needs_terminal", "optional": True, "command": "opentraces setup bucket"},
         ],
     }
-
-
-# ---------------------------------------------------------------------------
-# CLI entrypoint (``python -m opentraces.capture.pi.bridge``)
-# ---------------------------------------------------------------------------
-
-
-def main(argv: list[str] | None = None) -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="OpenTraces Pi bridge")
-    parser.add_argument("--status", action="store_true", help="print bridge status instead of recording stdin")
-    parser.add_argument("--cwd", default=None, help="project cwd for --status")
-    parser.add_argument("--strict", action="store_true", help="raise validation errors instead of fail-open JSON")
-    args = parser.parse_args(argv)
-
-    if args.status:
-        print(json.dumps(bridge_status(args.cwd), sort_keys=True))
-        return 0
-
-    try:
-        payload = json.load(sys.stdin)
-    except Exception as exc:  # noqa: BLE001
-        if args.strict:
-            raise
-        print(json.dumps(BridgeResult(ok=False, status="error", errors=[str(exc)]).to_json(), sort_keys=True))
-        return 0
-    result = record_event(payload, fail_open=not args.strict)
-    print(json.dumps(result.to_json(), sort_keys=True))
-    return 0
-
-
-if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())

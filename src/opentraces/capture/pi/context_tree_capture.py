@@ -41,7 +41,7 @@ def build_context_tree_projection_from_record(record: TraceRecord) -> PiContextT
     capture_method = CAPTURE_METHOD_LIVE if live else CAPTURE_METHOD_TRANSCRIPT
     completeness = "full" if live else "approximated"
     limitations = _limitations(record, live=live)
-    layers = _build_layers(record, pi_meta, provider_contexts, capture_method, completeness, limitations)
+    layers = _build_layers(record, pi_meta, provider_contexts, limitations)
     by_type = {layer.layer_type: layer for layer in layers}
     nodes = _build_nodes(record, by_type, completeness)
     drafts = _build_event_drafts(record, layers, nodes, limitations, capture_method)
@@ -89,8 +89,6 @@ def _build_layers(
     record: TraceRecord,
     pi_meta: dict[str, Any],
     provider_contexts: list[dict[str, Any]],
-    capture_method: str,
-    completeness: str,
     limitations: list[str],
 ) -> list[ContextLayer]:
     newest_context = provider_contexts[-1] if provider_contexts else {}
@@ -100,6 +98,23 @@ def _build_layers(
         or pi_meta.get("tool_registry")
         or _tool_inventory(record)
     )
+
+    def _fidelity(live_content_present: Any) -> tuple[str, str]:
+        # A layer is only "full"/live_capture when THIS layer's content came off
+        # the provider wire. Otherwise it is a transcript-reconstructed
+        # approximation. The decision is per-layer, never a session-wide boolean,
+        # so e.g. a session with a provider context but no captured system prompt
+        # never claims completeness=full for an empty system layer.
+        live = bool(provider_contexts) and bool(live_content_present)
+        return (
+            "full" if live else "approximated",
+            CAPTURE_METHOD_LIVE if live else CAPTURE_METHOD_TRANSCRIPT,
+        )
+
+    system_completeness, system_method = _fidelity(newest_context.get("system"))
+    messages_completeness, messages_method = _fidelity(newest_context.get("messages"))
+    tools_completeness, tools_method = _fidelity(newest_context.get("tool_registry"))
+    runtime_completeness, runtime_method = _fidelity(newest_context.get("runtime_state"))
     return [
         build_layer(
             layer_type="system",
@@ -107,11 +122,11 @@ def _build_layers(
                 "agent": "pi",
                 "model": record.agent.model,
                 "system": newest_context.get("system"),
-                "capture_source": "pi_provider_context" if provider_contexts else "pi_transcript",
+                "capture_source": "pi_provider_context" if newest_context.get("system") else "pi_transcript",
                 "limitations": limitations,
             },
-            completeness=completeness,
-            capture_method=capture_method,
+            completeness=system_completeness,
+            capture_method=system_method,
         ),
         build_layer(
             layer_type="messages",
@@ -126,18 +141,18 @@ def _build_layers(
                 "branch_summaries": pi_meta.get("branch_summaries") if isinstance(pi_meta.get("branch_summaries"), list) else [],
                 "limitations": limitations,
             },
-            completeness=completeness,
-            capture_method=capture_method,
+            completeness=messages_completeness,
+            capture_method=messages_method,
         ),
         build_layer(
             layer_type="tool_registry",
             content={
                 "tools": tool_registry if isinstance(tool_registry, list) else [],
-                "schemas_available": bool(provider_contexts),
-                "capture_source": "pi_provider_context" if provider_contexts else "parsed_trace_record",
+                "schemas_available": bool(newest_context.get("tool_registry")),
+                "capture_source": "pi_provider_context" if newest_context.get("tool_registry") else "parsed_trace_record",
             },
-            completeness=completeness,
-            capture_method=capture_method,
+            completeness=tools_completeness,
+            capture_method=tools_method,
         ),
         build_layer(
             layer_type="runtime_state",
@@ -152,8 +167,8 @@ def _build_layers(
                 "raw_provider_bodies_default": "off",
                 "raw_provider_body_refs": newest_context.get("raw_provider_body_refs"),
             },
-            completeness=completeness,
-            capture_method=capture_method,
+            completeness=runtime_completeness,
+            capture_method=runtime_method,
         ),
     ]
 
@@ -227,6 +242,7 @@ def _build_event_drafts(
     step_map = {node.step_index: node.node_id for node in nodes}
     for compaction in _compaction_events(record):
         step_index = _compaction_step_index(compaction)
+        pre_node_id, post_node_id = _compaction_boundary(step_map, step_index)
         drafts.append(TrailEventDraft(
             event_type=CONTEXT_COMPACTION_OBSERVED,
             payload={
@@ -235,8 +251,8 @@ def _build_event_drafts(
                 "event": compaction.get("event") or "Compaction",
                 "trigger": compaction.get("trigger"),
                 "timestamp": compaction.get("timestamp"),
-                "pre_node_id": _nearest_node_id(step_map, step_index),
-                "post_node_id": _nearest_node_id(step_map, step_index),
+                "pre_node_id": pre_node_id,
+                "post_node_id": post_node_id,
                 "metadata": {k: v for k, v in compaction.items() if k not in {"source", "event", "trigger", "timestamp"}},
             },
             trace_id=record.trace_id,
@@ -373,3 +389,27 @@ def _nearest_node_id(step_node_id_map: dict[int | None, str], step_index: int | 
     if not candidates:
         candidates = list(numbered)
     return numbered[max(candidates)]
+
+
+def _compaction_boundary(
+    step_node_id_map: dict[int | None, str], step_index: int | None
+) -> tuple[str | None, str | None]:
+    """Resolve a compaction's (pre, post) boundary node ids as a real transition.
+
+    A compaction sits between the node observed just before it and the node that
+    first runs against the compacted context, so pre and post must be distinct
+    whenever the active path has a step on each side (matching the claude_code /
+    codex boundaries instead of emitting a zero-width pre==post edge).
+    """
+    numbered = sorted(idx for idx in step_node_id_map if isinstance(idx, int))
+    if not numbered:
+        return None, None
+    if step_index is None:
+        if len(numbered) >= 2:
+            return step_node_id_map[numbered[-2]], step_node_id_map[numbered[-1]]
+        return step_node_id_map[numbered[-1]], step_node_id_map[numbered[-1]]
+    pre = [idx for idx in numbered if idx < step_index]
+    post = [idx for idx in numbered if idx >= step_index]
+    pre_id = step_node_id_map[pre[-1]] if pre else None
+    post_id = step_node_id_map[post[0]] if post else step_node_id_map[numbered[-1]]
+    return (pre_id if pre_id is not None else post_id), post_id

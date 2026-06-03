@@ -182,3 +182,22 @@ class TestSanitizeRecord:
         assert report.redactions_applied >= 1
         content = rec.metadata["pi"]["provider_contexts"][0]["messages"][0]["content"]
         assert content == "leak [REDACTED]"
+
+    def test_pi_aggregate_metadata_is_redacted(self) -> None:
+        """The parser builds separate metadata.pi.{tool_registry,runtime_state,
+        tree_events} aggregates that Context Tree capture emits into the
+        remote-syncable event log. They must be redacted like the spine."""
+        rec = _trace(description="safe")
+        rec.metadata["pi"] = {
+            "runtime_state": {"session_name": "deploy AKIAIOSFODNN7EXAMPLE"},
+            "tool_registry": [{"name": "Edit", "description": "key AKIAIOSFODNN7EXAMPLE"}],
+            "tree_events": [{"new_leaf_id": "leaf", "note": "ctx AKIAIOSFODNN7EXAMPLE"}],
+        }
+
+        rec, report = sanitize_record(rec, tools=["regex"])
+
+        assert report.redactions_applied >= 3
+        pi = rec.metadata["pi"]
+        assert pi["runtime_state"]["session_name"] == "deploy [REDACTED]"
+        assert pi["tool_registry"][0]["description"] == "key [REDACTED]"
+        assert pi["tree_events"][0]["note"] == "ctx [REDACTED]"

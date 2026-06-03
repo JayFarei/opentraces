@@ -96,7 +96,14 @@ class PiSessionParser:
             for step, anchor in zip(steps, self._step_anchor_rows)
         }
 
-        task_description = next((s.content for s in steps if s.role == "user" and s.content), None)
+        task_description = next(
+            (
+                s.content
+                for s in steps
+                if s.role == "user" and s.content and not s.content.startswith("! ")
+            ),
+            None,
+        )
         model = _normalize_model_id(metadata.get("model"), provider=metadata.get("provider"))
         trace_metadata: dict[str, Any] = {
             "source": "pi_session_jsonl",
@@ -296,7 +303,6 @@ class PiSessionParser:
                     })
             _merge_sidecar_line(
                 {
-                    "hook_git_final": git,
                     "provider_contexts": provider_contexts,
                     "tool_registry": tool_registry,
                     "runtime_state": runtime_state,

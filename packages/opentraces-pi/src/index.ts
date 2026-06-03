@@ -57,7 +57,7 @@ function registerOpenTracesTools(pi: ExtensionAPI) {
   pi.registerTool({
     name: "ot_standup",
     label: "OpenTraces Standup",
-    description: "Build a daily standup packet from recent captured traces.",
+    description: "Query recent captured traces as standup input (a bounded recent-work trace query; narrative synthesis sits above this).",
     parameters: EmptyParams,
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       // v1 stays on stable JSON surfaces: a bounded recent trace query is the
@@ -70,7 +70,7 @@ function registerOpenTracesTools(pi: ExtensionAPI) {
   pi.registerTool({
     name: "ot_capsule",
     label: "OpenTraces Capsule",
-    description: "Preview or export an OpenTraces capsule for the current or selected trace."},{
+    description: "Preview or export an OpenTraces capsule for the current or selected trace.",
     parameters: CapsuleParams,
     async execute(_toolCallId, params: any, _signal, _onUpdate, ctx) {
       const action = String(params.action ?? "preview");
@@ -123,7 +123,7 @@ function registerCommands(pi: ExtensionAPI) {
     handler: async (args, ctx) => showCommandResult(ctx, await runOpenTraces(pi, ["trace", "get", args.trim(), "--json"], ctx)),
   });
   pi.registerCommand("ot-standup", {
-    description: "Build a daily standup packet from local traces.",
+    description: "Query recent local traces as standup input.",
     handler: async (_args, ctx) => showCommandResult(ctx, await runOpenTraces(pi, ["trace", "query", "--lex", "recent work", "--limit", "10", "--json"], ctx, { timeout: 30_000 })),
   });
   pi.registerCommand("ot-capsule", {

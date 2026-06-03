@@ -207,7 +207,12 @@ def walk_string_fields(record: TraceRecord, transform: TransformFn) -> int:
     # payloads receive the same security treatment as normal TraceRecord text.
     pi_meta = record.metadata.get("pi") if isinstance(record.metadata, dict) else None
     if isinstance(pi_meta, dict):
-        for key in ("provider_contexts", "branch_summaries"):
+        # Cover every metadata.pi aggregate that Context Tree capture reads into
+        # emitted (remote-syncable) layers: provider_contexts/branch_summaries
+        # plus the separately-built tool_registry/runtime_state/tree_events
+        # aggregates (runtime_state.session_name is user free-text; tool entries
+        # carry descriptions). All must receive the same redaction as the spine.
+        for key in ("provider_contexts", "branch_summaries", "tool_registry", "runtime_state", "tree_events"):
             if key in pi_meta:
                 new_value, n = walk_dict_strings(
                     pi_meta[key],

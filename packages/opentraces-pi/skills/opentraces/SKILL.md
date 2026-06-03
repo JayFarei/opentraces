@@ -15,7 +15,7 @@ workflow-built datasets.
   assuming capture is working.
 - `ot_search` — search local bucket traces for relevant prior work.
 - `ot_trace` — resolve a trace id or `ot://` reference into compact evidence.
-- `ot_standup` — produce a daily standup packet from recent traces.
+- `ot_standup` — query recent traces as standup input (a bounded recent-work query you then summarize).
 - `ot_capsule` — capsule helper for previewing or explicitly exporting trace packets.
 - `ot_dataset` — list/status/dry-run workflow-built datasets; creation requires an explicit user request.
 

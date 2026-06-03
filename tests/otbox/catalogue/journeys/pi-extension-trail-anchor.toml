@@ -22,12 +22,32 @@ type = "cli"
 id = "trail-explain"
 argv = ["trail", "explain", "--trace", "{trace_id}", "--step", "2", "--json"]
 
+# Verify the Pi tool boundaries actually reached the SHARED Trace Trails
+# surfaces: trail track emits the frozen trail_timeline envelope, and trail
+# explain reads the canonical event log (not a Pi-only path).
 [[assertions]]
 kind = "returncode"
 step = "trail-track"
 equals = 0
 
 [[assertions]]
+kind = "stdout_json"
+step = "trail-track"
+path = "schema_version"
+equals = "opentraces.trail_timeline.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "trail-track"
+path = "timeline.0.trace_id"
+
+[[assertions]]
 kind = "returncode"
 step = "trail-explain"
 equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trail-explain"
+path = "event_log_ref"
+equals = "refs/opentraces/local/events/v1"

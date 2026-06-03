@@ -22,12 +22,36 @@ type = "cli"
 id = "bucket-verify"
 argv = ["bucket", "verify", "--full", "--json"]
 
+# The ot_* readonly recursion guard itself is enforced at the Pi extension
+# boundary (packages/opentraces-pi/src/index.ts early-returns on tool names
+# starting with "ot_", and the bridge sets OPENTRACES_PI_EXTENSION_INTERNAL).
+# The synthetic checkpoint carries no ot_* calls, so this journey verifies the
+# downstream invariant the guard protects: a captured Pi trace stays searchable
+# and leaves no dangling (Pi-only) attribution refs in the shared bucket.
 [[assertions]]
 kind = "returncode"
 step = "trace-query"
 equals = 0
 
 [[assertions]]
+kind = "stdout_json"
+step = "trace-query"
+path = "candidates.0.candidate_kind"
+equals = "trace"
+
+[[assertions]]
 kind = "returncode"
 step = "bucket-verify"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-verify"
+path = "ok"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-verify"
+path = "verify.dangling_count"
 equals = 0

@@ -104,6 +104,29 @@ def test_compaction_metadata_emits_context_compaction_event() -> None:
     assert compaction_events[0].trace_id == record.trace_id
     assert compaction_events[0].payload["source"] == "pi_sidecar"
     assert projection.summary["compaction_count"] == 1
+    # Compaction is a real transition, not a zero-width boundary.
+    pre = compaction_events[0].payload["pre_node_id"]
+    post = compaction_events[0].payload["post_node_id"]
+    assert pre is not None and post is not None and pre != post
+
+
+def test_per_layer_fidelity_is_honest_when_system_prompt_missing() -> None:
+    """A provider context without a captured system prompt must not let the
+    system layer claim completeness=full / live_capture."""
+    record = _record(provider_context=True)
+    record.metadata["pi"]["provider_contexts"] = [{
+        "messages": [{"role": "user", "content": "Fix bug"}],
+    }]
+
+    projection = build_context_tree_projection_from_record(record)
+    by_type = {layer.layer_type: layer for layer in projection.layers}
+
+    assert by_type["system"].content["system"] is None
+    assert by_type["system"].completeness == "approximated"
+    assert by_type["system"].capture_method == "transcript_reconstruction"
+    # The messages layer DID come off the wire, so it stays full/live.
+    assert by_type["messages"].completeness == "full"
+    assert by_type["messages"].capture_method == "live_capture"
 
 
 def test_parser_exposes_context_tree_ingest_hook() -> None:

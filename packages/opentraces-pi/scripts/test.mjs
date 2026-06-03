@@ -17,6 +17,73 @@ for (const command of requiredCommands) {
     throw new Error(`missing command ${command}`);
   }
 }
+
+// Structural validation of every registerTool({...}) call. The Pi runtime loads
+// this extension straight from src/index.ts, so a malformed tool literal (e.g.
+// a stray `"},{` that splits one object into two call arguments) silently ships
+// a tool with no parameters/execute handler. tsc would catch it, but the build
+// stays dependency-free, so we parse the call argument lists here instead.
+function callArgSlices(src, token) {
+  const slices = [];
+  let i = 0;
+  while ((i = src.indexOf(token, i)) !== -1) {
+    let j = i + token.length;
+    const start = j;
+    let depth = 1;
+    let quote = null;
+    for (; j < src.length && depth > 0; j++) {
+      const c = src[j];
+      if (quote) {
+        if (c === quote && src[j - 1] !== '\\') quote = null;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === '`') quote = c;
+      else if (c === '(' || c === '{' || c === '[') depth++;
+      else if (c === ')' || c === '}' || c === ']') depth--;
+    }
+    slices.push(src.slice(start, j - 1));
+    i = j;
+  }
+  return slices;
+}
+
+function firstTopLevelObject(args) {
+  const open = args.indexOf('{');
+  if (open === -1) return null;
+  let depth = 0;
+  let quote = null;
+  for (let j = open; j < args.length; j++) {
+    const c = args[j];
+    if (quote) {
+      if (c === quote && args[j - 1] !== '\\') quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') quote = c;
+    else if (c === '{' || c === '[' || c === '(') depth++;
+    else if (c === '}' || c === ']' || c === ')') {
+      depth--;
+      if (depth === 0) return { body: args.slice(open, j + 1), rest: args.slice(j + 1) };
+    }
+  }
+  return null;
+}
+
+const toolCalls = callArgSlices(index, 'registerTool(');
+if (toolCalls.length !== requiredTools.length) {
+  throw new Error(`expected ${requiredTools.length} registerTool calls, found ${toolCalls.length}`);
+}
+for (const args of toolCalls) {
+  const obj = firstTopLevelObject(args);
+  if (!obj) throw new Error('registerTool called without an object literal argument');
+  if (obj.rest.trim()) {
+    throw new Error(`registerTool received extra arguments after its object literal (malformed literal?): ...${obj.rest.trim().slice(0, 40)}`);
+  }
+  const nameMatch = obj.body.match(/name:\s*["'`]([^"'`]+)["'`]/);
+  const label = nameMatch ? nameMatch[1] : '<unknown>';
+  if (!/\bparameters\s*:/.test(obj.body)) throw new Error(`registerTool ${label} is missing a parameters schema`);
+  if (!/\bexecute\s*\(/.test(obj.body)) throw new Error(`registerTool ${label} is missing an execute handler`);
+}
+
 if (!pkg.pi?.extensions?.includes('./src/index.ts')) throw new Error('pi extension manifest missing');
 if (!pkg.pi?.skills?.includes('./skills')) throw new Error('pi skills manifest missing');
 if (!pkg.pi?.prompts?.includes('./prompts')) throw new Error('pi prompts manifest missing');
