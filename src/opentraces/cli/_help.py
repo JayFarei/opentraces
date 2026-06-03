@@ -88,7 +88,7 @@ def _render_header(ctx: click.Context, formatter: click.HelpFormatter) -> None:
     they're branding. Every subcommand/group gets just the highlighted
     title bar, which is the space-efficient "you are here" anchor.
     """
-    from ..core.workflow import OPENTRACES_ASCII, OPENTRACES_TAGLINE
+    from ..core.trace_stage import OPENTRACES_ASCII, OPENTRACES_TAGLINE
     from .. import __version__
 
     is_root = ctx.parent is None

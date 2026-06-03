@@ -23,7 +23,7 @@ import click
 from .. import __version__
 from ..core.config import auth_identity, load_config, load_project_config, save_config, save_project_config
 from ..core.trace_meta import short_trace_id
-from ..core.workflow import (
+from ..core.trace_stage import (
     DEFAULT_AGENT,
     DEFAULT_REMOTE_NAME,
     DEFAULT_REVIEW_POLICY,
@@ -1240,7 +1240,7 @@ def _capture_sessions_into_project(
             staging_file = staging / f"{result.record.trace_id}.jsonl"
             staging_file.write_text(result.record.to_jsonl_line() + "\n")
 
-            from ..core.workflow import decide_post_parse_status
+            from ..core.trace_stage import decide_post_parse_status
             decided_status, block_reason = decide_post_parse_status(
                 result, review_policy=review_policy
             )

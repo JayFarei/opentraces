@@ -15,7 +15,7 @@ from typing import Any
 from .state import StateManager
 
 logger = logging.getLogger(__name__)
-from .workflow import resolve_visible_stage
+from .trace_stage import resolve_visible_stage
 
 
 def load_traces(staging_dir: Path, *, limit: int | None = None) -> list[dict[str, Any]]:

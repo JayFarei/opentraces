@@ -23,7 +23,7 @@ from opentraces.capture.claude_code.context_tree_capture import (
 from opentraces_schema.models import Agent, TraceRecord
 
 
-FIXTURES_DIR = Path(__file__).parent / "otbox" / "fixtures" / "sessions"
+FIXTURES_DIR = Path(__file__).parent.parent / "otbox" / "fixtures" / "sessions"
 
 
 def _run_fixture(name: str, tmp_path: Path) -> Path:

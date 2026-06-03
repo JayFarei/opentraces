@@ -71,7 +71,7 @@ from opentraces_schema.models import Agent, TraceRecord
 
 
 FIXTURES_DIR = (
-    Path(__file__).parent / "otbox" / "fixtures" / "sessions"
+    Path(__file__).parent.parent / "otbox" / "fixtures" / "sessions"
 )
 
 # --------------------------------------------------------------------------- #

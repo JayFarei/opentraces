@@ -75,7 +75,7 @@ def _resolve_push_target(proj_config: dict, username: str, repo: str | None = No
         repo_id = _remote_repo_id(remote_name, remotes) or remote_name
         return remote_name, repo_id
 
-    from .workflow import DEFAULT_REMOTE_NAME
+    from .trace_stage import DEFAULT_REMOTE_NAME
     fallback_repo = f"{username}/{DEFAULT_REMOTE_NAME}"
     return fallback_repo, fallback_repo
 

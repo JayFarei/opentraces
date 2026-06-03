@@ -30,7 +30,7 @@ from opentraces.capture.claude_code.context_tree_capture import (
 )
 
 
-FIXTURES_DIR = Path(__file__).parent / "otbox" / "fixtures" / "sessions"
+FIXTURES_DIR = Path(__file__).parent.parent / "otbox" / "fixtures" / "sessions"
 
 
 # --------------------------------------------------------------------------- #
