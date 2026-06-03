@@ -43,16 +43,18 @@ except Exception:  # pragma: no cover
     hf_hub_download = None  # type: ignore[assignment]
 
 from . import paths
-from .bucket_remote import BucketRemoteError
-from .bucket_store import (
-    BUCKET_MANIFEST_SCHEMA,
-    BucketLayoutError,
+from .bucket_layout import (
     blobs_v1_context_path,
     bucket_manifest_path,
     events_v1_index_path,
     trace_v1_context_path,
     trace_v1_json_path,
     trace_v1_trail_path,
+)
+from .bucket_remote import BucketRemoteError
+from .bucket_store import (
+    BUCKET_MANIFEST_SCHEMA,
+    BucketLayoutError,
 )
 from .config import load_config
 

@@ -25,7 +25,6 @@ from .state import StateManager, TraceStatus
 from .workflow import (
     SUPPORTED_AGENTS,
     resolve_visible_stage,
-    stage_label,
 )
 
 __all__ = [
@@ -40,5 +39,4 @@ __all__ = [
     "resolve_visible_stage",
     "save_config",
     "save_project_config",
-    "stage_label",
 ]

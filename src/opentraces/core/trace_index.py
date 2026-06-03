@@ -34,6 +34,8 @@ from opentraces_schema import (
 
 from . import paths
 from . import search_diag
+from ._time import utc_now_str as _utc_now
+from .query_helpers import _fts_query, _page_offset, _recency_weighted_sort, _terms
 from .boilerplate import (
     headline_from_summary,
     intent_text_for_record,
@@ -305,10 +307,6 @@ def _rebuild_index_locked(db_path: Path) -> RebuildSummary:
                     _insert_trace(conn, record, project_slug, trace_path, trace_map)
                     for unit in units:
                         _insert_unit(conn, unit)
-                    for node in trace_map.nodes:
-                        _insert_map_node(conn, node)
-                    for edge in trace_map.edges:
-                        _insert_map_edge(conn, edge)
                 _record_source(conn, trace_path, len(records))
             # Rebuild trail projections per canonical project home, regardless
             # of whether the project has any trace JSONL yet — Trail Patch
@@ -3650,15 +3648,6 @@ def _select_unit_rows(
     )
 
 
-def _fts_query(terms: list[str]) -> str:
-    quoted: list[str] = []
-    for term in terms:
-        safe = term.replace('"', "")
-        if safe:
-            quoted.append(f'"{safe}"')
-    return " ".join(quoted)
-
-
 def _metadata_value_matches(actual: Any, expected: str) -> bool:
     if isinstance(actual, bool):
         return str(actual).lower() == expected.lower()
@@ -3682,21 +3671,6 @@ def _bool_facet(unit: TraceUnit, name: str) -> bool | None:
         if isinstance(facet.value, str):
             return facet.value.lower() in {"1", "true", "yes"}
     return None
-
-
-def _page_offset(page_token: str | None) -> int:
-    if not page_token:
-        return 0
-    if not page_token.startswith("offset:"):
-        raise ValueError("page token must have the form offset:<n>")
-    try:
-        return max(0, int(page_token.split(":", 1)[1]))
-    except ValueError as exc:
-        raise ValueError("page token must have the form offset:<n>") from exc
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _json_list(raw: Any) -> list[Any]:
@@ -3730,28 +3704,6 @@ def _parse_since(value: str) -> datetime:
     return parsed
 
 
-def _recency_weighted_sort(scored: list, weight: float, ts_fn) -> list:
-    """Sort by relevance blended with a normalized recency term (U5).
-
-    Each item's effective score is ``score + weight * recency_frac`` where
-    ``recency_frac`` is the item's timestamp position in [0, 1] across the
-    scored set (newest = 1). Deterministic; only applied when ``weight`` > 0,
-    so the default (weight 0) ordering is unchanged.
-    """
-
-    if not scored:
-        return scored
-    epochs = [ts_fn(item[3]).timestamp() for item in scored]
-    lo = min(epochs)
-    span = max(max(epochs) - lo, 1.0)
-    decorated = [
-        (-(item[0] + weight * (epoch - lo) / span), item[3].trace_id, item[3].unit_id, item)
-        for item, epoch in zip(scored, epochs)
-    ]
-    decorated.sort(key=lambda d: (d[0], d[1], d[2]))
-    return [d[3] for d in decorated]
-
-
 def _unit_timestamp(unit: TraceUnit) -> datetime:
     raw = unit.metadata.get("timestamp_end") or unit.metadata.get("timestamp_start")
     if not raw:
@@ -3763,27 +3715,6 @@ def _unit_timestamp(unit: TraceUnit) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
-
-
-def _terms(text: str) -> list[str]:
-    # Additive URL/identifier sub-tokenization (plan 088 U6): keep each compound
-    # token, but also emit the pieces split on URL/path separators so a bare
-    # identifier query reaches a needle that only appears inside a URL
-    # (e.g. "nicobailon" inside ".../nicobailon/pi-subagents"). Hyphens/
-    # underscores stay intact, so hyphenated identifiers match as a whole too.
-    out: list[str] = []
-    seen: set[str] = set()
-    for raw in re.findall(r"[a-zA-Z0-9_./-]+", text):
-        tok = raw.lower()
-        if len(tok) > 1 and tok not in seen:
-            seen.add(tok)
-            out.append(tok)
-        if "/" in tok or "." in tok:
-            for sub in re.split(r"[/.@:]+", tok):
-                if len(sub) > 1 and sub not in seen:
-                    seen.add(sub)
-                    out.append(sub)
-    return out
 
 
 def _trace_files(trace_map: TraceMap) -> list[str]:
