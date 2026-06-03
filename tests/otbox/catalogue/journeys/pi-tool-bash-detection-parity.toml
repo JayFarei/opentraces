@@ -1,0 +1,29 @@
+name = "pi-tool-bash-detection-parity"
+description = "Pi traces normalize real read/write/bash tool calls into the shared tool taxonomy."
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+status = "synthetic-or-artifact-backed"
+from_checkpoints = ["c-captured-pi-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "shell"
+id = "tool-kind-audit"
+argv = [".testvenv/bin/python", "-c", "import json, sys; from pathlib import Path; trace_id=sys.argv[1]; paths=list(Path.home().glob(f'.opentraces/projects/*/traces/{trace_id}.jsonl')); assert paths, f'no trace record for {trace_id}'; data=json.loads(paths[0].read_text().splitlines()[0]); rows=data['metadata']['normalized_tool_calls']; kinds={row['tool_kind'] for row in rows}; missing={'shell','read','write'}-kinds; assert not missing, f'missing tool kinds: {missing}; rows={rows!r}'; assert any(row.get('shell',{}).get('command') for row in rows if row['tool_kind']=='shell'), rows; steps=data['steps']; assert any(step.get('tool_calls') and step.get('observations') for step in steps), 'tool observations missing'; print(json.dumps({'status':'ok','kinds':sorted(kinds),'tool_call_count':len(rows)}))", "{trace_id}"]
+
+[[assertions]]
+kind = "returncode"
+step = "tool-kind-audit"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "tool-kind-audit"
+path = "kinds"
+equals = ["shell", "read", "write"]

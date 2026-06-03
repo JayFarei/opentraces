@@ -1,0 +1,1 @@
+Create or inspect an OpenTraces capsule for the current work. Use `ot_capsule`, then explain what evidence is included and what remains local/private.

@@ -84,7 +84,7 @@ Returns the configured project catalog.
 
 Returns the latest known numbers for PyPI, Homebrew, and GitHub.
 
-The configured Homebrew formula for `opentraces` is `jayfarei/opentraces/opentraces`.
+The configured Homebrew formula for `opentraces` is `JayFarei/opentraces/opentraces`.
 
 `GET /v1/projects/opentraces/timeseries?source=pypi&metric=downloads&window=90d`
 

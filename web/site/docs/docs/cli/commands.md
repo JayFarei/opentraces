@@ -61,6 +61,7 @@ opentraces [--json] <command> ...
 opentraces setup
 opentraces setup claude-code
 opentraces setup codex-cli
+opentraces setup pi
 opentraces setup git
 opentraces setup watcher install
 opentraces setup watcher status
@@ -91,6 +92,27 @@ It registers native Codex hook commands for future Codex CLI sessions. Use
 `opentraces doctor` for install health; there is no `setup codex-cli --status`
 flag.
 
+`opentraces setup pi --dry-run --json` reports the Pi package/checklist plan
+without writing. Use `pi install npm:opentraces-pi` for the primary package
+install path, then `opentraces init --agent pi` in each repo you want to capture.
+Global tracking does not implicitly enable Pi sidecars.
+
+`opentraces setup pi` supports:
+
+| Flag | Meaning |
+|------|---------|
+| `--dry-run` | Report the package/checklist plan without writing |
+| `--project` | Write/check project-local `.pi/settings.json` instead of global Pi settings |
+| `--settings-file TEXT` | Use an explicit Pi `settings.json` path |
+| `--local` | Use the repo-local `packages/opentraces-pi` package path when present |
+| `--remove` | Remove the OpenTraces package entry instead of installing |
+| `--json` | Emit machine-readable JSON, accepted for Pi tool callers |
+
+Inside Pi, the package provides `/ot-capture-status`, `/ot-setup`, `/ot-search
+<query>`, `/ot-trace <trace-id>`, `/ot-standup`, `/ot-capsule [trace-id]`, and
+`/ot-dataset`. The matching model tools are `ot_capture_status`, `ot_search`,
+`ot_trace`, `ot_standup`, `ot_capsule`, and `ot_dataset`.
+
 `opentraces setup skill` installs the shared opentraces skill into
 `~/.agents/skills/opentraces/` and links it into supported harness skill
 directories:
@@ -98,6 +120,7 @@ directories:
 ```bash
 opentraces setup skill --harness claude-code
 opentraces setup skill --harness codex-cli
+opentraces setup skill --harness pi
 ```
 
 Omit `--harness` to refresh every supported harness link. Use
@@ -109,6 +132,7 @@ Omit `--harness` to refresh every supported harness link. Use
 opentraces init
 opentraces init --agent claude-code --import-existing
 opentraces init --agent codex-cli
+opentraces init --agent pi
 opentraces status
 opentraces doctor
 opentraces doctor --security
@@ -116,10 +140,11 @@ opentraces remove
 opentraces remove --all
 ```
 
-`init --agent` accepts `claude`, `claude-code`, `codex`, or `codex-cli`.
+`init --agent` accepts `claude`, `claude-code`, `codex`, `codex-cli`, or `pi`.
 `--import-existing` currently imports existing Claude Code traces for the
-current repo. Codex CLI capture starts with future sessions after
-`opentraces setup codex-cli` and `opentraces init --agent codex-cli`.
+current repo. Codex CLI and Pi capture start with future sessions after their
+runtime setup and project enrollment are in place. Pi project enrollment is an
+explicit consent gate even when tracking mode is global.
 
 ## Trace Discovery
 

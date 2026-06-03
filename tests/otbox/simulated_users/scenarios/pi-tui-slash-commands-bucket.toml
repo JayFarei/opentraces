@@ -1,0 +1,48 @@
+name = "pi-tui-slash-commands-bucket"
+description = "Direct Pi TUI slash-command smoke against a checkpoint that already has a bucket trace."
+agent = "pi"
+binary_name = "pi"
+
+[[turns]]
+prompt = "/ot-capture-status"
+expect_regex = "(?is)(raw_provider_bodies_default|project_capture|opentraces_cli|capture_enabled)"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-search farewell helper"
+expect_regex = "(?is)(\\\"candidates\\\"\\s*:\\s*\\[\\s*\\{|\\\"total_returned\\\"\\s*:\\s*[1-9]|\\\"tool.name\\\"|\\\"unit_type\\\")"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-standup"
+expect_regex = "(?is)(\\\"candidates\\\"|\\\"status\\\"\\s*:\\s*\\\"ok\\\"|recent work)"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-capsule"
+expect_regex = "(?is)(bucket|manifest|trace_count|\\\"status\\\"\\s*:\\s*\\\"ok\\\")"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-dataset"
+expect_regex = "(?is)(OpenTraces dataset|dataset|rows|status|list|\\\"datasets\\\")"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-setup"
+expect_regex = "(?is)(OpenTraces setup|project_capture|opentraces_cli|setup|status)"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-trace {trace_id}"
+expect_regex = "(?is)({trace_id}|\\\"trace_id\\\"|\\\"normalized_tool_calls\\\"|\\\"raw_tool_name\\\"|\\\"tool_kind\\\")"
+timeout_s = 90
+
+[[turns]]
+prompt = "Do not change files. Confirm the OpenTraces slash-command bucket smoke is complete and end with the uppercase marker formed by OPENTRACES, SLASH, BUCKET, and DONE joined by hyphens."
+expect_regex = "OPENTRACES-SLASH-BUCKET-DONE"
+timeout_s = 180
+
+[capture]
+artifact_dir = "pi-tui-slash-commands-bucket"
+expected_paths = ["src/app.py"]

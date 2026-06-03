@@ -1,0 +1,24 @@
+name = "pi-package-gallery-manifest"
+description = "Plan 091 package gallery manifest and pack smoke for opentraces-pi."
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = []
+from_checkpoints = ["c-installed-source"]
+status = "package-smoke"
+
+[[steps]]
+type = "shell"
+id = "package-build-test-pack"
+argv = ["bash", "-lc", "cd {repo_root} && npm --prefix packages/opentraces-pi run build && npm --prefix packages/opentraces-pi run test && (cd packages/opentraces-pi && npm pack --dry-run)"]
+
+[[assertions]]
+kind = "returncode"
+step = "package-build-test-pack"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "package-build-test-pack"
+value = "opentraces-pi"

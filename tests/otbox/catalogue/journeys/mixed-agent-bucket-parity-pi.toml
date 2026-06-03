@@ -1,0 +1,74 @@
+name = "mixed-agent-bucket-parity-pi"
+description = "Plan 091 mixed Claude/Codex/Pi bucket v2 manifest, verify, and replay parity."
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+from_checkpoints = ["c-mixed-agent-pi-bucket"]
+status = "synthetic-or-artifact-backed"
+
+[preconditions]
+min_captured_traces = 3
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "bucket-manifest"
+argv = ["bucket", "manifest", "--json"]
+
+[[steps]]
+type = "cli"
+id = "bucket-verify-full"
+argv = ["bucket", "verify", "--full", "--json"]
+
+[[steps]]
+type = "shell"
+id = "init-replay-repo"
+argv = ["bash", "-lc", "rm -rf {box_root}/bucket-replay && mkdir -p {box_root}/bucket-replay && git -C {box_root}/bucket-replay init"]
+
+[[steps]]
+type = "cli"
+id = "bucket-replay"
+argv = ["bucket", "replay", "--repo", "{box_root}/bucket-replay", "--force", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-manifest"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-verify-full"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "init-replay-repo"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-replay"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_length_equals"
+step = "bucket-manifest"
+path = "manifest.traces"
+equals = 3
+
+[[assertions]]
+kind = "stdout_contains"
+step = "bucket-manifest"
+value = "\"agent_name\": \"claude-code\""
+
+[[assertions]]
+kind = "stdout_contains"
+step = "bucket-manifest"
+value = "\"agent_name\": \"codex-cli\""
+
+[[assertions]]
+kind = "stdout_contains"
+step = "bucket-manifest"
+value = "\"agent_name\": \"pi\""

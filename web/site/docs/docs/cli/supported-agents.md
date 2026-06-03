@@ -8,6 +8,7 @@
 |------|------------|--------|-------|
 | Live capture | `claude-code` | Supported | Installed via `opentraces init` or `opentraces setup claude-code`; supports snapshot-backed `--at-step` resume |
 | Live capture | `codex-cli` | Supported | Installed via `opentraces setup codex-cli` plus `opentraces init --agent codex-cli` inside each repo |
+| Live capture | `pi` | Supported | Install `opentraces-pi` with `pi install npm:opentraces-pi` or `opentraces setup pi`; enroll repos with `opentraces init --agent pi` |
 | Context capture source | `capture-otlp` | Supported for Claude Code | Installed via `opentraces setup capture-otlp`; feeds Context Tree events from OTel/raw API-body capture |
 | Dataset import | `hermes` | Supported | Registered `FormatImporter`. Invoked from dataset workflows or via the schema package's serializers |
 
@@ -25,12 +26,13 @@ That distinction matters in the public CLI:
 ```bash
 opentraces init --agent claude-code
 opentraces init --agent codex-cli
+opentraces init --agent pi
 opentraces setup capture-otlp
 opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 ```
 
-`init --agent` accepts `claude`, `claude-code`, `codex`, and `codex-cli`.
-`codex` is an alias for the canonical `agent.name = codex-cli`.
+`init --agent` accepts `claude`, `claude-code`, `codex`, `codex-cli`, and
+`pi`. `codex` is an alias for the canonical `agent.name = codex-cli`.
 
 ## Codex CLI Details
 
@@ -69,13 +71,57 @@ Codex encrypted reasoning is not decrypted. When a rollout contains encrypted
 reasoning without a plaintext summary, opentraces records an explicit redaction
 marker instead of inventing hidden chain-of-thought content.
 
+## Pi Details
+
+Pi support is extension-backed. Package install only loads resources; capture is a no-op until the repo has explicitly opted in. Global tracking does not implicitly enable Pi sidecars. The primary package install is:
+
+```bash
+pi install npm:opentraces-pi
+opentraces init --agent pi
+```
+
+`opentraces setup pi --dry-run --json` reports the same package/checklist plan
+without writing; use `--project`, `--settings-file`, `--local`, and `--remove`
+for project-local settings, explicit settings files, repo-local packages, and
+uninstall. The package exposes slash commands (`/ot-capture-status`,
+`/ot-setup`, `/ot-search`, `/ot-trace`, `/ot-standup`, `/ot-capsule`,
+`/ot-dataset`) and high-level tools (`ot_capture_status`, `ot_search`,
+`ot_trace`, `ot_standup`, `ot_capsule`, `ot_dataset`) inside Pi.
+
+Pi traces participate in the same shared substrates as Claude/Codex:
+
+- **Trace**: native Pi JSONL under `~/.pi/agent/sessions/--<cwd>--/*.jsonl`
+  plus `.opentraces/pi/events/` sidecars normalize to `TraceRecord` with
+  `agent.name = pi`. The exported TraceRecord follows the active branch; tree
+  transitions and inactive branch summaries remain in `metadata.pi` and Context
+  Tree events in v1.
+- **Trail**: Pi pre/post tool sidecars map to the existing
+  `hook_pre_tool_use` / `hook_post_tool_use` vocabulary.
+- **Context Tree**: provider/context sidecars use `capture_method = live_capture`
+  when available; transcript-only fallback records explicit limitations.
+- **Bucket**: Pi traces write the same private bucket v2 layout and mixed-agent
+  manifest rows as other agents.
+- **Resume**: native handoff uses `pi --session <session-id>` through
+  `opentraces trace get <trace-id> --resume`; snapshot-backed `--at-step`
+  materialization is unsupported for Pi v1.
+
+Raw provider bodies are default-off and local/security-gated when explicitly
+enabled. Opt in with `OPENTRACES_PI_RETAIN_RAW_PROVIDER_BODIES=1` (or
+`true`/`yes`) or an explicit sidecar opt-in; retained blob refs stay local under
+`.opentraces/pi/blobs/` before any bucket/workflow sync. Extension/bridge
+failures are fail-open and must not block Pi; before `opentraces init --agent
+pi` creates the project consent marker, the bridge returns `capture_disabled`
+without writing sidecars.
+
 ## Adapter Contracts
 
 The capture layer exposes small protocols:
 
 - `SessionParser` for live agent session parsing
+- `ProjectSessionDiscoverer` / `SessionPathIdentifier` optional capabilities for repo-scoped discovery and native session ids
+- `AgentResumer` for native resume handoff
 - `FormatImporter` for file or dataset imports
-- `HookInstaller` for external integrations like Claude Code and git
+- `HookInstaller` for external integrations like Claude Code, Codex, Pi, and git
 
 This is why review, optional security tools, bucket storage, and dataset
 publication stay consistent even as new sources are added.

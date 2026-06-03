@@ -62,6 +62,7 @@ The substrate accepts additive capture sources:
 | Source | Status | Notes |
 |--------|--------|-------|
 | JSONL reconstruction | available | Works from agent session logs; some views are session-level approximations |
+| Pi extension sidecars | available for Pi | Provider/context sidecars use `capture_method=live_capture` with fuller messages/tool registry/runtime state when available; transcript fallback records limitations |
 | OTLP receiver | available for Claude Code | Captures fuller API body, tool schema, and sampling parameter evidence |
 | HTTP proxy | reserved/deferred | Historical prototype, not the current path |
 

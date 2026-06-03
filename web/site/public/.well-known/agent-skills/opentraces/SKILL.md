@@ -17,11 +17,13 @@ publishes reviewed dataset rows to HuggingFace remotes.
 - Global setup: `opentraces setup`, `opentraces setup auth`, `opentraces setup bucket`, `opentraces setup skill`, `opentraces setup upgrade`, `opentraces auth`
 - Project setup: `opentraces init`, `opentraces status`, `opentraces doctor`, `opentraces remove`
 - Trace retrieval and search: `opentraces trace query`, `opentraces trace index`, `opentraces trace map`, `opentraces trace slice`, `opentraces trace get`, `opentraces trace teleport`
+- Trace Intelligence: `opentraces trace map|get --waste`, `opentraces trace map|get --run-intel`, `opentraces trace compare`
 - Trace Trails (visible surface): `opentraces trail blame commit <sha>`, `opentraces trail blame pr render|create|update`, `opentraces trail graph`, `opentraces trail track`
 - Context Tree: `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `ctx list/info`
 - Bucket (portable capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket rebuild`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
-- Dataset workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`
+- Dataset workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`, plus the internal `opentraces workflow skill-intelligence` eval over skill episodes
 - Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`.
+- Skill verifier (trace-grounded reward for SkillOpt): `opentraces skill-verifier status/autoverify/align/score`
 - Security tools: `opentraces security tools list/info`, `opentraces security sanitize --tools <names>` or `--use-config`
 - OTLP capture source: `opentraces setup capture-otlp`, `opentraces capture-otlp start|stop|status|restart|flush`
 
@@ -39,31 +41,36 @@ opentraces setup
 opentraces setup auth
 opentraces setup bucket          # configure remote-by-default private bucket sync
 opentraces setup codex-cli       # install terminal Codex CLI hooks in ~/.codex/hooks.json
+opentraces setup pi              # check/install the Pi package entry
 opentraces setup skill           # install the opentraces skill into agent harnesses
 opentraces setup skill --harness codex-cli
+opentraces setup skill --harness pi
 opentraces setup upgrade         # upgrade CLI + refresh project skill file
 opentraces config tracking-mode  # show; pass global|manual to set
 opentraces auth whoami
 opentraces init
 opentraces init --agent codex-cli
+opentraces init --agent pi
 opentraces status
 opentraces doctor
 ```
 
 `setup` is machine-global: tracking mode, hooks, auth, watcher, TruffleHog,
 LLM review, and supporting binaries. Tracking mode (`opentraces config
-tracking-mode`) controls enrollment: `global` (default) auto-enrolls every
-project an agent touches — git or not — private + review-required the first
-time a capture hook fires there, so `init` is optional; `manual` keeps the
-explicit per-project `opentraces init` opt-in. `init` is project enrollment
-only; dataset remotes and review policy belong under `opentraces dataset
-...`. Private bucket configuration belongs under `opentraces setup bucket`
-and `opentraces bucket remote`.
+tracking-mode`) controls enrollment: `global` (default) auto-enrolls
+Claude/Codex projects — git or not — private + review-required the first time a
+capture hook fires there, so `init` is optional for those harnesses; `manual`
+keeps the explicit per-project `opentraces init` opt-in. Pi capture is never
+implicitly enabled by global tracking: use `/ot-setup` or `opentraces init
+--agent pi` for each repo before Pi sidecars are written. `init` is project
+enrollment only; dataset remotes and review policy belong under `opentraces
+dataset ...`. Private bucket configuration belongs under `opentraces setup
+bucket` and `opentraces bucket remote`.
 
 `opentraces setup skill` writes one canonical skill copy under
 `~/.agents/skills/opentraces/` and symlinks supported harnesses to it. Current
-harness targets are `claude-code` and `codex-cli`; pass `--harness <name>` to
-refresh only one link.
+harness targets are `claude-code`, `codex-cli`, and `pi`; pass `--harness
+<name>` to refresh only one link.
 
 Codex support is for terminal Codex CLI, not Codex Desktop. Install and
 authenticate Codex first, then run `opentraces setup codex-cli` once and
@@ -71,6 +78,21 @@ authenticate Codex first, then run `opentraces setup codex-cli` once and
 they record sidecars under `.opentraces/codex-cli/hooks/` and must not approve
 or deny permission prompts. Codex capture starts with future sessions;
 `--import-existing` is a Claude Code backfill path.
+
+Pi support is extension-backed. Install with `pi install npm:opentraces-pi`, use
+`/ot-setup` or `opentraces setup pi --dry-run --json` for the local checklist,
+and run `opentraces init --agent pi` in each repo. Pi sidecars land under
+`.opentraces/pi/events/` and flow through the same TraceRecord, Trace Trails,
+Context Tree, and bucket v2 pipeline. Raw provider bodies stay default-off.
+
+Inside Pi, use slash commands for quick private-bucket retrieval and setup:
+`/ot-capture-status`, `/ot-setup`, `/ot-search <query>`, `/ot-trace <trace-id>`,
+`/ot-standup`, `/ot-capsule [trace-id]`, and `/ot-dataset`. Model-facing tools
+are `ot_capture_status`, `ot_search`, `ot_trace`, `ot_standup`, `ot_capsule`,
+and `ot_dataset`. Prefer `/ot-search`/`ot_search` first, then `/ot-trace` or
+`ot_trace` for a selected bucket trace. Direct slash commands are TUI actions;
+model-invoked `ot_*` tools are captured as read-only `opentraces_retrieval`
+tool calls.
 
 ## Trace Retrieval
 
@@ -86,6 +108,9 @@ opentraces trace map <trace_id> --candidate <unit_id> --json
 opentraces trace slice <trace_id> --template bursts --json
 opentraces trace get <trace_id> --json
 opentraces trace get <trace_id> --remote-bucket --json
+opentraces trace map <trace_id> --waste --json
+opentraces trace get <trace_id> --run-intel --json
+opentraces trace compare <trace_a> <trace_b> --json
 opentraces trace teleport export <trace_id> --output <dir>
 ```
 
@@ -119,6 +144,39 @@ Pass `--no-commit-lookup` to skip the per-burst `git log` lookup when running
 offline or in a hot CLI path. The burst commit's SHA is a separate concept
 from the trace's `outcome.commit_sha` (which is the *last* commit of the
 session).
+
+### Trace Intelligence
+
+Deterministic, derive-on-demand signals about how a run went, layered on top
+of the Trace surface. No LLM, no schema change, nothing persisted; each is a
+frozen JSON envelope. Three capabilities: context waste, run signals, run compare.
+
+```bash
+opentraces trace map <trace_id> --waste --json       # also: trace get --waste
+opentraces trace get <trace_id> --run-intel --json   # also: trace map --run-intel
+opentraces trace compare <trace_a> <trace_b> --json  # add --no-quality to skip persona scores
+```
+
+- **Context waste** — `--waste` emits `opentraces.context_waste.v1`: `large_output`
+  (>= 12000 chars), `repeated_file_read` (same file 3+ times in 20 min), and
+  `repeated_search` (rg|grep|find|ag|ack 5+ times in 10 min) findings, with a
+  `summary` count block.
+- **Run signals** — `--run-intel` emits `opentraces.run_intel.v1` with
+  deterministic `resteer` / `recovery` / `loop` / `failure` annotations. Recovery
+  only fires after an uncleared prior failure; failure prefers structured tool
+  errors over substring matches; a repeated command is ONE `loop` signal carrying
+  `evidence.repeat_count`; a one-word approval never reads as a resteer.
+- **Run compare** — `trace compare <a> <b>` emits `opentraces.trace_compare.v1`:
+  per-side fidelity plus `{a, b, delta}` triples over Metrics, deterministic
+  quality persona scores, and burst/error/security signals (both traces pinned
+  to the same burst gap).
+
+`--waste` and `--run-intel` are mutually exclusive with `--bursts` (and with
+each other); on `trace get` they are also mutually exclusive with `--resume`.
+The `trace get` and `trace map` surfaces emit byte-identical payloads for
+`--waste` and `--run-intel`. Each detector reports a `fidelity` of `record` or
+`otel`, preferring full wire fidelity when the trace was captured via the OTLP
+receiver.
 
 ## Trace Trails
 
@@ -250,6 +308,33 @@ opentraces dataset new <name> --workflow ./workflows/<workflow>/
 The bundled `skill-command-trajectory-eval-v1` template materialises a ready
 workflow that emits command-trajectory evaluation rows.
 
+## Skill Verifier
+
+The skill verifier turns "was this agent *skill* used *effectively*?" into a
+reward signal SkillOpt can optimize against. It rests on the skill-intelligence
+consumer (skill episodes / rollouts / eval-tasks mined from bucket traces) and
+a per-skill **rubric** of weighted criteria, each judged against bounded,
+read-only evidence.
+
+```bash
+opentraces skill-verifier status <skill>            # feasibility triage: status + episode count + blockers
+opentraces skill-verifier autoverify <skill> --json # self-align a rubric to the skill goal + calibrate (fast path)
+opentraces skill-verifier align <skill> --json      # scaffold a manual alignment session (human gold labels)
+opentraces skill-verifier score <skill> --out <dir> # drive SkillOpt with the rubric; emit a package
+```
+
+The trust boundary is **the agent PROPOSES** a rubric, **the factory SCORES**
+it mechanically against evidence + calibration, **a human APPROVES** promotion
+(`manual_required_default_off`). Status is derived mechanically, never
+author-set: `blocked_<reason>` (cannot feed reward; the reason names the
+remedy), `provisional_weak_only` (a deterministic non-outcome signal separates
+the weak git signal but no human gold), or `calibrated` (the only fully-trusted
+status; always human-gated). Self-judgment can never exceed
+`provisional_weak_only`. On the current near-one-class bucket every seed skill
+honestly returns `blocked_*` — that is the correct answer, not an unfinished
+feature; the bottleneck is trustworthy human/deterministic labels, not the
+framework.
+
 ## Datasets
 
 A dataset is built by running a workflow over one or more traces. It can stay
@@ -302,9 +387,10 @@ opentraces setup llm-review
 ```
 
 Registered inline tools are `regex`, `entropy`, `trufflehog`,
-`privacy_filter`, `llm_pii`, `path_anonymizer`, and `classifier`. Session-level
-LLM review is configured by `setup llm-review` but is a dataset publication
-reviewer, not part of the per-record sanitize registry.
+`privacy_filter`, `llm_pii`, `business_logic`, `path_anonymizer`,
+`capsule_scope`, and `classifier`. Session-level LLM review is configured by
+`setup llm-review` but is a dataset publication reviewer, not part of the
+per-record sanitize registry.
 
 ## JSON Mode
 
@@ -327,7 +413,7 @@ opentraces --json dataset status <name>
 |---|---|
 | Not initialized | Run `opentraces init` |
 | Auth missing | Run `opentraces setup auth` or `opentraces auth login` |
-| No traces visible | Check `opentraces setup claude-code`, then `opentraces status` |
+| No traces visible | Check `opentraces setup claude-code` / `setup codex-cli`; for Pi run `/ot-capture-status` or `opentraces setup pi --dry-run --json` and ensure `opentraces init --agent pi` opted the repo in; then `opentraces status` |
 | Trace Trail event log invalid | Run `opentraces doctor`; `opentraces trail rebuild` re-derives advisory projections |
 | Bucket not syncing | Run `opentraces setup bucket` to configure a remote, then `opentraces bucket remote status` |
 | Publish blocked | Run `opentraces dataset status <name> --json` and `opentraces dataset publish <name> --check-only` |

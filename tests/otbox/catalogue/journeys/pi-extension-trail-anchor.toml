@@ -1,0 +1,53 @@
+name = "pi-extension-trail-anchor"
+description = "Plan 091 Pi tool boundaries feed shared Trace Trails track/explain surfaces."
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+status = "synthetic-or-artifact-backed"
+from_checkpoints = ["c-captured-pi-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "trail-track"
+argv = ["trail", "track", "{trace_id}", "--json", "--warn-missing-patches"]
+
+[[steps]]
+type = "cli"
+id = "trail-explain"
+argv = ["trail", "explain", "--trace", "{trace_id}", "--step", "2", "--json"]
+
+# Verify the Pi tool boundaries actually reached the SHARED Trace Trails
+# surfaces: trail track emits the frozen trail_timeline envelope, and trail
+# explain reads the canonical event log (not a Pi-only path).
+[[assertions]]
+kind = "returncode"
+step = "trail-track"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trail-track"
+path = "schema_version"
+equals = "opentraces.trail_timeline.v1"
+
+[[assertions]]
+kind = "stdout_json"
+step = "trail-track"
+path = "timeline.0.trace_id"
+
+[[assertions]]
+kind = "returncode"
+step = "trail-explain"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "trail-explain"
+path = "event_log_ref"
+equals = "refs/opentraces/local/events/v1"

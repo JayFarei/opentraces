@@ -1,0 +1,66 @@
+name = "pi-incremental-recovery"
+description = "Plan 091 Pi shutdown/repair path is dedupe-safe and bucket-repairable."
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+status = "synthetic-or-artifact-backed"
+from_checkpoints = ["c-captured-pi-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "bucket-repair"
+argv = ["bucket", "repair", "--json"]
+
+[[steps]]
+type = "cli"
+id = "bucket-verify"
+argv = ["bucket", "verify", "--full", "--json"]
+
+# Repair is dedupe-safe: re-running it over an already-ingested Pi session
+# regenerates the manifest and re-projects exactly the one captured trace
+# (not a duplicate), and the resulting bucket verifies with no dangling refs.
+[[assertions]]
+kind = "returncode"
+step = "bucket-repair"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-repair"
+path = "status"
+equals = "ok"
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-repair"
+path = "repair.traces_projected"
+equals = 1
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-repair"
+path = "repair.manifest_regenerated"
+equals = true
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-verify"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-verify"
+path = "ok"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "bucket-verify"
+path = "verify.dangling_count"
+equals = 0

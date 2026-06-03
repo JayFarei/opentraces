@@ -56,7 +56,7 @@ def detect_skill_invocations(record: TraceRecord) -> list[SkillInvocation]:
                 if body_read is None:
                     continue
                 skill_name, skill_path = body_read
-                source = "codex_cli_skill_body_read"
+                source = _skill_body_read_source(getattr(record.agent, "name", None))
                 evidence = {"input": tool_input, "skill_path": skill_path}
             tool_call_id = str(call.tool_call_id)
             metadata = metadata_by_tool_call_id.get(tool_call_id, {})
@@ -177,6 +177,15 @@ def _skill_md_path(value: str) -> str | None:
         if path.startswith("/") and path.endswith(f"/{_SKILL_MD}") and "..." not in path:
             return path
         start_at = path_end
+
+
+def _skill_body_read_source(agent_name: str | None) -> str:
+    normalized = (agent_name or "").lower()
+    if normalized == "codex-cli":
+        return "codex_cli_skill_body_read"
+    if normalized == "pi":
+        return "pi_skill_body_read"
+    return "skill_body_read"
 
 
 def _skill_name_from_skill_md_path(value: str) -> str | None:

@@ -140,6 +140,36 @@ def test_detects_codex_skill_body_read_tool_call_without_metadata() -> None:
     )
 
 
+def test_detects_pi_skill_body_read_tool_call_without_metadata() -> None:
+    record = _trace(
+        agent_name="pi",
+        steps=[
+            Step(
+                step_index=2,
+                role="agent",
+                tool_calls=[
+                    ToolCall(
+                        tool_call_id="call_read_pi_skill",
+                        tool_name="read",
+                        input={
+                            "path": "/tmp/project/.agents/skills/opentraces/SKILL.md",
+                        },
+                    )
+                ],
+            )
+        ],
+    )
+
+    invocations = detect_skill_invocations(record)
+
+    assert len(invocations) == 1
+    assert invocations[0].skill_name == "opentraces"
+    assert invocations[0].source == "pi_skill_body_read"
+    assert invocations[0].step_index == 2
+    assert invocations[0].tool_call_id == "call_read_pi_skill"
+    assert trace_skill_names(record) == ["opentraces"]
+
+
 def test_ignores_glob_skill_body_read_tool_call() -> None:
     record = _trace(
         agent_name="codex-cli",

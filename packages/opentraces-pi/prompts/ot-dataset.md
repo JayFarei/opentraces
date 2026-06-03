@@ -1,0 +1,1 @@
+Work with OpenTraces workflow-built datasets. Use `ot_dataset` to list/status/dry-run. Do not publish or configure remotes without explicit user approval.

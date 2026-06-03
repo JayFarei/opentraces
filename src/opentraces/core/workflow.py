@@ -47,7 +47,7 @@ STAGE_PRESENTATIONS = {
 
 
 def discover_supported_agents() -> tuple[str, ...]:
-    builtin_agents = (DEFAULT_AGENT, "codex-cli")
+    builtin_agents = (DEFAULT_AGENT, "codex-cli", "pi")
     try:
         from ..capture import get_parsers
 
@@ -58,7 +58,7 @@ def discover_supported_agents() -> tuple[str, ...]:
     if not parser_agents:
         parser_agents = builtin_agents
 
-    preferred_order = {DEFAULT_AGENT: 0, "codex-cli": 1}
+    preferred_order = {DEFAULT_AGENT: 0, "codex-cli": 1, "pi": 2}
     return tuple(sorted(
         {*builtin_agents, *parser_agents},
         key=lambda agent: (preferred_order.get(agent, 99), agent),

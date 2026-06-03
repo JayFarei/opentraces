@@ -1,0 +1,45 @@
+{
+  "name": "opentraces-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pack proxy for local opentraces-pi verification from the OpenTraces repository root",
+  "type": "module",
+  "main": "./packages/opentraces-pi/src/index.ts",
+  "files": [
+    "packages/opentraces-pi/package.json",
+    "packages/opentraces-pi/README.md",
+    "packages/opentraces-pi/src",
+    "packages/opentraces-pi/skills",
+    "packages/opentraces-pi/prompts"
+  ],
+  "scripts": {
+    "prepack": "npm --prefix packages/opentraces-pi run build && npm --prefix packages/opentraces-pi run test"
+  },
+  "keywords": [
+    "pi-package",
+    "opentraces",
+    "agent-traces"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JayFarei/opentraces.git",
+    "directory": "packages/opentraces-pi"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./packages/opentraces-pi/src/index.ts"
+    ],
+    "skills": [
+      "./packages/opentraces-pi/skills"
+    ],
+    "prompts": [
+      "./packages/opentraces-pi/prompts"
+    ],
+    "image": "https://opentraces.ai/og.png"
+  }
+}

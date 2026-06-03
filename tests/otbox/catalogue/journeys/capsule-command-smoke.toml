@@ -1,0 +1,89 @@
+name = "capsule-command-smoke"
+description = "Help-surface smoke for public capsule commands kept in the Click/JTBD inventory."
+lane = "core"
+tier = 0
+tier_label = "bronze"
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-installed-source"]
+status = "help-smoke"
+
+[[steps]]
+type = "cli"
+id = "capsule-export-help"
+argv = ["capsule", "export", "--help"]
+
+[[steps]]
+type = "cli"
+id = "capsule-open-help"
+argv = ["capsule", "open", "--help"]
+
+[[steps]]
+type = "cli"
+id = "capsule-preview-help"
+argv = ["capsule", "preview", "--help"]
+
+[[steps]]
+type = "cli"
+id = "capsule-share-help"
+argv = ["capsule", "share", "--help"]
+
+[[steps]]
+type = "cli"
+id = "capsule-issue-help"
+argv = ["capsule", "issue", "--help"]
+
+[[steps]]
+type = "cli"
+id = "capsule-replay-help"
+argv = ["capsule", "replay", "--help"]
+
+[[steps]]
+type = "cli"
+id = "capsule-verdict-help"
+argv = ["capsule", "verdict", "--help"]
+
+[[steps]]
+type = "cli"
+id = "capsule-watch-help"
+argv = ["capsule", "watch", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-export-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-open-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-preview-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-share-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-issue-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-replay-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-verdict-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "capsule-watch-help"
+equals = 0

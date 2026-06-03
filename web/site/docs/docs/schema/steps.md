@@ -152,6 +152,7 @@ opentraces ctx step <trace-id> <step-index> --json
 opentraces ctx resume <context-node-id> --json
 ```
 
-JSONL reconstruction can be an approximation for some agents. OTLP capture
-for Claude Code can provide fuller system prompt, tool schema, and sampling
-parameter evidence.
+JSONL reconstruction can be an approximation for some agents. Pi extension
+provider/context sidecars use `capture_method=live_capture` when available;
+Claude Code OTLP capture can provide fuller system prompt, tool schema, and
+sampling parameter evidence.

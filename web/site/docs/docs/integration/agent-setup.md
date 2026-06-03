@@ -10,6 +10,7 @@ Inside a repo, the normal path is:
 opentraces auth login
 opentraces init --agent claude-code
 opentraces init --agent codex-cli
+opentraces init --agent pi
 ```
 
 `init` writes `.opentraces.json`, registers the repo in the global config, and installs the per-agent capture hook. Dataset remotes and review policy are configured separately (`opentraces dataset remote ...`, `opentraces config set review_policy review --project`).
@@ -73,15 +74,39 @@ Snapshot forking with `--at-step` remains Claude Code only. Context
 continuation packets are produced separately with
 `opentraces ctx resume <context-node-id> --json`.
 
-## Claude Code And Codex CLI
+## Pi Setup
 
-Claude Code and Codex CLI are live-capture adapters.
+Pi support is extension-backed and local-first. Install the package, then enroll
+projects explicitly:
+
+```bash
+pi install npm:opentraces-pi
+opentraces setup pi --dry-run --json
+cd /path/to/repo
+opentraces init --agent pi
+```
+
+The Pi package registers slash commands (`/ot-capture-status`, `/ot-setup`,
+`/ot-search`, `/ot-trace`, `/ot-standup`, `/ot-capsule`, `/ot-dataset`) and
+high-level tools (`ot_capture_status`, `ot_search`, `ot_trace`, `ot_standup`,
+`ot_capsule`, `ot_dataset`). Use `/ot-search <query>` to find retained bucket
+traces and `/ot-trace <trace-id>` to load one trace's tool evidence. Extension
+failures are fail-open, raw provider bodies are default-off, and sidecars are
+written under `.opentraces/pi/events/<session-id>.jsonl` before flowing through
+the same TraceRecord, Trace Trails, Context Tree, and bucket v2 pipeline.
+`opentraces trace get <trace-id> --resume` hands off to `pi --session
+<session-id>`; `--at-step` is unsupported for Pi v1.
+
+## Claude Code, Codex CLI, And Pi
+
+Claude Code, Codex CLI, and Pi are live-capture adapters.
 
 For a full setup:
 
 ```bash
 opentraces setup claude-code
 opentraces setup codex-cli
+opentraces setup pi
 opentraces setup git
 opentraces setup skill
 opentraces setup bucket
@@ -93,8 +118,9 @@ What each integration does:
 
 - `setup claude-code` installs the `PreToolUse`, `PostToolUse`, `Stop`, and `PostCompact` hooks in `~/.claude/settings.json`
 - `setup codex-cli` installs native Codex CLI hook commands in `~/.codex/hooks.json` and copies hook scripts to `~/.codex/hooks/opentraces/`
+- `setup pi` checks or writes the Pi package entry; `pi install npm:opentraces-pi` is the primary package path. It supports `--project`, `--settings-file`, `--local`, `--dry-run`, `--remove`, and `--json`, but does not enable capture without `opentraces init --agent pi` consent.
 - `setup git` installs the post-commit correlator that powers `opentraces trail blame`
-- `setup skill` installs the vendor-neutral skill under `~/.agents/skills/opentraces/` and symlinks it into supported harnesses (currently `~/.claude/skills/opentraces` and `~/.codex/skills/opentraces`)
+- `setup skill` installs the vendor-neutral skill under `~/.agents/skills/opentraces/` and symlinks it into supported harnesses (currently `~/.claude/skills/opentraces`, `~/.codex/skills/opentraces`, and `~/.pi/agent/skills/opentraces`)
 - `setup bucket` configures the private bucket sync target (the workspace state that backs the trace index and Trace Trails)
 - `setup capture-otlp` enables the higher-fidelity Claude Code Context Tree capture source
 - `setup watcher` installs the background attribution daemon

@@ -54,6 +54,7 @@ from ..env import Box, isolated_env
 
 _CODEX_AGENTS = {"codex", "codex-cli"}
 _CLAUDE_AGENTS = {"claude", "claude-code"}
+_PI_AGENTS = {"pi"}
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +359,8 @@ def _agent_name(agent: str | None) -> str | None:
         return "codex-cli"
     if agent in _CLAUDE_AGENTS:
         return "claude"
+    if agent in _PI_AGENTS:
+        return "pi"
     return agent
 
 
@@ -479,6 +482,50 @@ def _prep_agent_home(box_home: Path, agent: str | None) -> str | None:
             (box_codex / "config.toml").write_text("", encoding="utf-8")
         return None
 
+    if normalized_agent == "pi":
+        host_home = Path(os.path.expanduser("~"))
+        host_pi = host_home / ".pi" / "agent"
+        host_auth = host_pi / "auth.json"
+        host_settings = host_pi / "settings.json"
+        host_models = host_pi / "models.json"
+        if not host_auth.is_file():
+            return (
+                f"agent prep: host {host_auth} not found — run `pi /login` "
+                "or authenticate Pi first"
+            )
+        if not host_settings.is_file():
+            return f"agent prep: host {host_settings} not found — run pi once to onboard"
+        box_pi = box_home / ".pi" / "agent"
+        box_pi.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(host_auth, box_pi / "auth.json")
+        if host_models.is_file():
+            shutil.copy2(host_models, box_pi / "models.json")
+        try:
+            import json as _json
+            settings = _json.loads(host_settings.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 - corrupt host config shouldn't crash the runner
+            return f"agent prep: failed to parse host {host_settings}: {exc}"
+        # Keep provider/model preferences so the box can run without first-run
+        # prompts, but drop host package/resource lists. `_install_opentraces_hooks_in_box`
+        # adds only the repo-local opentraces-pi package after this copy.
+        sanitized = {
+            key: settings[key]
+            for key in (
+                "defaultProvider",
+                "defaultModel",
+                "defaultThinkingLevel",
+                "enabledModels",
+                "theme",
+                "lastChangelogVersion",
+            )
+            if key in settings
+        }
+        sanitized["packages"] = []
+        (box_pi / "settings.json").write_text(
+            _json.dumps(sanitized, indent=2), encoding="utf-8"
+        )
+        return None
+
     if normalized_agent != "claude":
         return None
     host_home = Path(os.path.expanduser("~"))
@@ -592,12 +639,20 @@ def _install_opentraces_hooks_in_box(box: Box, agent: str | None = "claude") -> 
     elif normalized_agent == "codex-cli":
         setup_agent = "codex-cli"
         init_agent = "codex-cli"
+    elif normalized_agent == "pi":
+        setup_agent = "pi"
+        init_agent = "pi"
     else:
         return None
 
-    # 1. Install agent hooks into the box's isolated HOME.
+    # 1. Install agent hooks into the box's isolated HOME. Pi capture-refresh
+    # runs before npm publication, so load the repo-local package instead of
+    # resolving npm:opentraces-pi from the public registry.
+    setup_args = [str(testvenv_cli), "setup", setup_agent]
+    if normalized_agent == "pi":
+        setup_args.append("--local")
     setup_hooks = subprocess.run(
-        [str(testvenv_cli), "setup", setup_agent],
+        setup_args,
         cwd=str(box.project),
         env=env,
         capture_output=True,
@@ -880,7 +935,7 @@ def run_simulated_session(
 
     normalized_agent = _agent_name(agent)
 
-    if normalized_agent in {"codex-cli", "claude"}:
+    if normalized_agent in {"codex-cli", "claude", "pi"}:
         repo_error = _ensure_box_project_git_repo(box)
         if repo_error is not None:
             return ScenarioResult(
@@ -916,6 +971,24 @@ def run_simulated_session(
                 pane_log_path=str(pane_log_path),
                 error_message=hook_install_error,
             )
+
+    if normalized_agent == "pi":
+        hook_install_error = _install_opentraces_hooks_in_box(box, agent)
+        if hook_install_error is not None:
+            return ScenarioResult(
+                verdict="FAIL",
+                binary_path=binary_abs,
+                binary_version=binary_version,
+                turn_count=0,
+                pane_log_path=str(pane_log_path),
+                error_message=hook_install_error,
+            )
+        # Pi extension tools shell out to `opentraces`; put the box-local
+        # editable CLI first on PATH for TUI slash-command/tool smoke tests.
+        env_extra = {
+            **(env_extra or {}),
+            "PATH": f"{Path(box.project) / '.testvenv' / 'bin'}:{os.environ.get('PATH', '')}",
+        }
 
     # --- claude: --print headless mode (no tmux, no MCP prompts) -----------
     # ``claude``'s interactive TUI uses tmux's alternate-screen buffer and
@@ -1031,6 +1104,11 @@ def run_simulated_session(
                         if _handle_codex_rate_limit_prompt(session, last_pane):
                             continue
                     if pattern.search(last_pane):
+                        # Pi echoes prompts and shows intermediate reasoning/tool text while the
+                        # spinner is still active. Do not let a marker in the echoed prompt or
+                        # reasoning prematurely end the scenario before the session JSONL is flushed.
+                        if normalized_agent == "pi" and "Working" in last_pane:
+                            continue
                         matched = True
                         break
 

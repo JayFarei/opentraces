@@ -16,11 +16,12 @@ opentraces setup
 
 `setup` is the machine-wide wizard. It can configure:
 
-- **tracking mode** (`global` by default), so agent sessions can auto-enroll
-  projects private + review-required the first time capture fires.
-- **capture hooks** for Claude Code and Codex CLI.
+- **tracking mode** (`global` by default), so Claude/Codex sessions can
+  auto-enroll projects private + review-required the first time capture fires.
+  Pi remains explicit-consent per repo.
+- **capture hooks** for Claude Code and Codex CLI, plus Pi package checks.
 - **shared agent skill install**, which links the opentraces skill into
-  supported harnesses such as Claude Code and Codex CLI.
+  supported harnesses such as Claude Code, Codex CLI, and Pi.
 - **git hook** and **watcher**, which mature Trace Trails after commits land.
 - **bucket remote**, optional private HuggingFace sync for raw retained
   evidence.
@@ -34,6 +35,7 @@ You can run specific setup commands non-interactively:
 ```bash
 opentraces setup claude-code
 opentraces setup codex-cli
+opentraces setup pi
 opentraces setup git
 opentraces setup bucket
 opentraces setup capture-otlp
@@ -44,25 +46,32 @@ opentraces setup llm-review
 ```
 
 For Codex, install and authenticate Codex CLI first. `setup codex-cli` wires
-terminal Codex CLI hooks only; it does not cover Codex Desktop.
+terminal Codex CLI hooks only; it does not cover Codex Desktop. For Pi, install
+`opentraces-pi` with `pi install npm:opentraces-pi`; `setup pi --dry-run --json`
+shows the local package/checklist plan without doing Python/service/auth setup.
+Inside Pi, `/ot-capture-status` and `/ot-setup` expose the same local-first
+checklist.
 
 ## 3. Enroll A Project
 
-Under global tracking this is optional, but it is still useful when you want to
-import existing sessions or be explicit about the connected agent.
+Under global tracking this is optional for Claude/Codex projects, but it is
+still useful when you want to import existing sessions or be explicit about the
+connected agent. Pi capture always requires explicit project enrollment before
+sidecars are written.
 
 ```bash
 opentraces init
 opentraces init --agent claude-code --import-existing
 opentraces init --agent codex-cli
+opentraces init --agent pi
 ```
 
 `init` writes `.opentraces.json` and registers machine-local state under
 `~/.opentraces/`.
 
 `--import-existing` currently backfills Claude Code sessions for the current
-repo. Codex CLI capture starts with sessions run after the Codex hooks and
-project enrollment are in place.
+repo. Codex CLI and Pi capture start with sessions run after their runtime setup
+and project enrollment are in place.
 
 ## 4. Inspect The Portable Bucket
 

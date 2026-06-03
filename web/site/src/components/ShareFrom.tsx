@@ -26,6 +26,9 @@ export default function ShareFrom() {
               <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
                 <span style={{ color: "var(--text-dim)" }}>$ </span>brew install JayFarei/opentraces/opentraces
               </div>
+              <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)", marginBottom: 4 }}>
+                <span style={{ color: "var(--text-dim)" }}>$ </span>pi install npm:opentraces-pi
+              </div>
             </div>
           </div>
 
@@ -35,7 +38,7 @@ export default function ShareFrom() {
             <div style={{ flex: 1 }}>
               <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, color: "var(--text)", marginBottom: 4 }}>Init your project</div>
               <div style={{ background: "var(--bg-alt)", border: "1px solid var(--border)", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)" }}>
-                <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces init
+                <span style={{ color: "var(--text-dim)" }}>$ </span>opentraces init --agent &lt;claude-code|codex-cli|pi&gt;
               </div>
             </div>
           </div>
@@ -67,7 +70,8 @@ export default function ShareFrom() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
               {[
-                { name: "Claude Code skill", cmd: "opentraces setup skill" },
+                { name: "Agent skill links", cmd: "opentraces setup skill" },
+                { name: "Pi package status", cmd: "opentraces setup pi --dry-run --json" },
                 { name: "Git commit anchor", cmd: "opentraces setup git" },
               ].map((item) => (
                 <div key={item.name} style={{ border: "1px solid var(--border)", padding: "10px 12px", background: "var(--surface)" }}>

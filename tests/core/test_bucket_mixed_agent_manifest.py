@@ -25,7 +25,7 @@ def _trace(
 
 
 def test_bucket_manifest_trace_rows_include_agent_metadata(tmp_path: Path) -> None:
-    from opentraces.core.bucket_store import bucket_manifest, project_per_trace_exports
+    from opentraces.core.bucket_store import bucket_manifest, bucket_verify, project_per_trace_exports
 
     project_per_trace_exports(
         tmp_path,
@@ -49,6 +49,17 @@ def test_bucket_manifest_trace_rows_include_agent_metadata(tmp_path: Path) -> No
             agent_model="openai/gpt-5-codex",
         ),
     )
+    project_per_trace_exports(
+        tmp_path,
+        project_slug="demo",
+        trace_id="trace-pi",
+        record=_trace(
+            "trace-pi",
+            agent_name="pi",
+            agent_version="1.0.0",
+            agent_model="anthropic/claude-sonnet-4",
+        ),
+    )
 
     rows = {
         row["trace_id"]: row
@@ -61,9 +72,17 @@ def test_bucket_manifest_trace_rows_include_agent_metadata(tmp_path: Path) -> No
     assert rows["trace-codex"]["agent_name"] == "codex-cli"
     assert rows["trace-codex"]["agent_version"] == "0.31.0"
     assert rows["trace-codex"]["agent_model"] == "openai/gpt-5-codex"
+    assert rows["trace-pi"]["agent_name"] == "pi"
+    assert rows["trace-pi"]["agent_version"] == "1.0.0"
+    assert rows["trace-pi"]["agent_model"] == "anthropic/claude-sonnet-4"
 
     codex_rows = [row for row in rows.values() if row["agent_name"] == "codex-cli"]
     assert [row["trace_id"] for row in codex_rows] == ["trace-codex"]
+    pi_rows = [row for row in rows.values() if row["agent_name"] == "pi"]
+    assert [row["trace_id"] for row in pi_rows] == ["trace-pi"]
+
+    verify = bucket_verify(full=True)
+    assert verify["ok"] is True, verify
 
 
 def test_bucket_manifest_agent_metadata_allows_missing_optional_fields(

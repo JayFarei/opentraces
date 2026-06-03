@@ -1,0 +1,50 @@
+name = "pi-skill-detection-parity"
+description = "Pi traces expose reliable skill invocation units and OpenTraces readonly tool calls like other harnesses."
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+status = "synthetic-or-artifact-backed"
+from_checkpoints = ["c-captured-pi-readonly-session"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "skill-query"
+argv = ["trace", "query", "--skill", "opentraces", "--limit", "5", "--json"]
+
+[[steps]]
+type = "shell"
+id = "skill-tool-audit"
+argv = [".testvenv/bin/python", "-c", "import json, sys; from pathlib import Path; from opentraces_schema import TraceRecord; from opentraces.core.skill_detection import detect_skill_invocations, trace_skill_names; trace_id=sys.argv[1]; paths=list(Path.home().glob(f'.opentraces/projects/*/traces/{trace_id}.jsonl')); assert paths, f'no trace record for {trace_id}'; rec=TraceRecord.model_validate_json(paths[0].read_text().splitlines()[0]); names=trace_skill_names(rec); assert 'opentraces' in names, names; inv=detect_skill_invocations(rec); assert any(i.source == 'pi_skill_body_read' for i in inv), inv; rows=rec.metadata['normalized_tool_calls']; assert any(row['tool_kind']=='opentraces_retrieval' and row.get('opentraces_internal_readonly') is True for row in rows), rows; print(json.dumps({'status':'ok','skills':names,'tool_kinds':sorted({row['tool_kind'] for row in rows})}))", "{trace_id}"]
+
+[[assertions]]
+kind = "returncode"
+step = "skill-query"
+equals = 0
+
+[[assertions]]
+kind = "stdout_contains"
+step = "skill-query"
+value = "opentraces"
+
+[[assertions]]
+kind = "returncode"
+step = "skill-tool-audit"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "skill-tool-audit"
+path = "skills"
+equals = ["opentraces"]
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "skill-tool-audit"
+path = "tool_kinds"
+equals = ["opentraces_retrieval", "read"]

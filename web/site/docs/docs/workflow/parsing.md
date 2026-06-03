@@ -24,12 +24,14 @@ with `opentraces bucket remote push`.
 ```bash
 opentraces setup claude-code
 opentraces setup codex-cli
+opentraces setup pi
 opentraces init --agent claude-code
 opentraces init --agent codex-cli
+opentraces init --agent pi
 ```
 
-Claude Code and Codex CLI are live capture sources. Hermes remains an import
-adapter consumed by workflows/schema tooling, not a direct public capture
+Claude Code, Codex CLI, and Pi are live capture sources. Hermes remains an
+import adapter consumed by workflows/schema tooling, not a direct public capture
 command.
 
 Codex CLI capture requires both machine setup and repo enrollment:
@@ -45,6 +47,17 @@ opentraces init --agent codex-cli
 `.opentraces/codex-cli/hooks/` in the active repo and trigger a bounded ingest
 on Stop. They are passive observers; permission requests are recorded but not
 approved or denied.
+
+Pi capture is extension-backed: `pi install npm:opentraces-pi` loads the package,
+`opentraces init --agent pi` enrolls the repo, and native sessions live under
+`~/.pi/agent/sessions/--<cwd>--/*.jsonl`. Sidecars land under
+`.opentraces/pi/events/`. Provider/context sidecars use `capture_method =
+live_capture` when available; transcript fallback records explicit limitations.
+The exported TraceRecord follows the active branch in v1; inactive branch/tree
+transition details remain in `metadata.pi` and Context Tree events. Raw provider
+bodies are default-off and local/security-gated; opt in with
+`OPENTRACES_PI_RETAIN_RAW_PROVIDER_BODIES=1` only when the retained local blobs
+are acceptable.
 
 Codex Context Tree capture is reconstructed from rollout JSONL plus hook
 sidecars with `capture_method = transcript_reconstruction`. It produces useful

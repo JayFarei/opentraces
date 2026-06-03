@@ -21,7 +21,8 @@ opentraces has four separate surfaces:
 
 ```bash
 opentraces setup                          # install capture hooks and optional integrations
-opentraces init                           # explicitly enroll this project, if not auto-enrolled
+opentraces init                           # enroll Claude/Codex (or current default agent)
+opentraces init --agent pi                # required explicit consent for Pi
 opentraces bucket status                  # inspect private retained trace evidence
 opentraces trace query --since 7d         # search retained traces
 opentraces trace map <trace-id> --bursts  # deterministic edit/intent map
@@ -38,7 +39,9 @@ opentraces dataset publish my-dataset     # upload reviewed rows to the active r
 
 `init` writes the committable project marker at `.opentraces.json`. Captured
 traces, bucket state, and upload bookkeeping stay machine-local under
-`~/.opentraces/`.
+`~/.opentraces/`. Global tracking can auto-enroll Claude/Codex projects, but Pi
+is extension-backed and still requires `opentraces init --agent pi` or `/ot-setup`
+per repo before sidecars are written.
 
 ## What You Get
 
@@ -70,4 +73,4 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.6.0` field semantics |
 | **[Clients](/docs/clients/overview)** | How consumers use rows or bucket evidence |
 | **[Agent Workflows](/docs/clients/agent-workflows)** | Context warmup and progressive session-history discovery |
-| **[Trace Capsule](/docs/clients/trace-capsule)** | Manual dataset-of-1 capsule pattern before the capsule CLI exists |
+| **[Trace Capsule](/docs/clients/trace-capsule)** | Capsule preview/export and dataset-of-1 trace packets |

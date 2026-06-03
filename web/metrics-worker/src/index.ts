@@ -81,7 +81,7 @@ const PROJECTS: Record<string, ProjectConfig> = {
   opentraces: {
     id: "opentraces",
     pypiPackage: "opentraces",
-    homebrewFormula: "jayfarei/opentraces/opentraces",
+    homebrewFormula: "JayFarei/opentraces/opentraces",
     githubOwner: "JayFarei",
     githubRepo: "opentraces",
   },
