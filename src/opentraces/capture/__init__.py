@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import claude_code, codex_cli, hermes
+from . import claude_code, codex_cli, hermes, pi
 
 if TYPE_CHECKING:
     from ._base import (  # noqa: F401
@@ -23,6 +23,7 @@ REGISTRY = {
     "claude_code": claude_code,
     "codex_cli": codex_cli,
     "hermes": hermes,
+    "pi": pi,
 }
 
 # Live agent session parsers: agent_name -> parser class
@@ -162,18 +163,23 @@ def _register_defaults() -> None:
     from .codex_cli import CodexCliParser, CodexCliResumer
     from .codex_cli.install import CodexCliHookInstaller
     from .git.install import GitHookInstaller
+    from .pi import PiResumer, PiSessionParser
+    from .pi.install import PiHookInstaller
     from .hermes import HermesParser
     from .skill.install import SkillInstaller
 
     register_parser(claude_parser)
     register_parser(CodexCliParser)
+    register_parser(PiSessionParser)
     register_importer(HermesParser)
     register_hook_installer(ClaudeCodeHookInstaller)
     register_hook_installer(CodexCliHookInstaller)
+    register_hook_installer(PiHookInstaller)
     register_hook_installer(GitHookInstaller)
     register_hook_installer(SkillInstaller)
     register_resumer(_ClaudeCodeResumer)
     register_resumer(CodexCliResumer)
+    register_resumer(PiResumer)
 
 
 _registered = False
@@ -293,6 +299,7 @@ __all__ = [
     "claude_code",
     "codex_cli",
     "hermes",
+    "pi",
     "register_parser",
     "register_importer",
     "register_hook_installer",

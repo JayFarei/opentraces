@@ -931,7 +931,12 @@ def register_project(config: Config, project_dir: Path) -> bool:
 
 
 def _global_capture_agents() -> list[str]:
-    """Agents enabled by default for global capture enrollment."""
+    """Agents enabled by default for global capture enrollment.
+
+    Pi is intentionally excluded: installing the Pi package is separate from
+    per-project capture consent, which is recorded by ``opentraces init --agent
+    pi``. Global auto-enroll should not start writing Pi sidecars implicitly.
+    """
     return normalize_agents([DEFAULT_AGENT, "codex-cli"])
 
 

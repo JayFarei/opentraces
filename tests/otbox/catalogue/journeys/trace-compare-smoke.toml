@@ -1,0 +1,19 @@
+name = "trace-compare-smoke"
+description = "Help-surface smoke for trace compare in the Click/JTBD inventory."
+lane = "core"
+tier = 0
+tier_label = "bronze"
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-installed-source"]
+status = "help-smoke"
+
+[[steps]]
+type = "cli"
+id = "trace-compare-help"
+argv = ["trace", "compare", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-compare-help"
+equals = 0

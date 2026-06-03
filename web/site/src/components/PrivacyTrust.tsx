@@ -94,7 +94,7 @@ export default function PrivacyTrust() {
       <div className="privacy-grid">
         <div style={{ display: "flex", flexDirection: "column" }}>
           <p className="section-sub" style={{ marginBottom: 20 }}>
-            Per-record tools default off. Workflows can run regex, entropy, TruffleHog, privacy-filter, LLM PII, path anonymization, and classifier checks explicitly before dataset rows are approved.
+            Per-record tools default off. Workflows can run regex, entropy, TruffleHog, privacy-filter, LLM PII, path anonymization, and classifier checks explicitly before dataset rows are approved. Pi raw provider bodies are also default-off; explicit opt-in keeps retained blobs local and security-gated before any remote sync.
           </p>
 
           {/* Pipeline flow: four connected boxes */}

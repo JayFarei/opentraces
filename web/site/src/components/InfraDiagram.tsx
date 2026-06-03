@@ -8,7 +8,8 @@ interface Agent {
 
 const devTimeAgents: Agent[] = [
   { name: "Claude Code", ready: true },
-  { name: "Codex", ready: true },
+  { name: "Codex CLI", ready: true },
+  { name: "Pi", ready: true },
   { name: "Cursor", ready: false },
   { name: "OpenCode", ready: false },
 ];
@@ -84,7 +85,7 @@ export default function InfraDiagram() {
         </div>
 
         <div className="arch-line" />
-        <div className="arch-label">Local traces / Session Hook</div>
+        <div className="arch-label">Local sessions / hooks / Pi extension sidecars</div>
         <div className="arch-line" />
 
         {/* Core pipeline */}

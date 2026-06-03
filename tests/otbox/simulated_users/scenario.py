@@ -79,7 +79,7 @@ __all__ = [
 SCENARIOS_DIR: Path = Path(__file__).resolve().parent / "scenarios"
 TEMPLATES_DIR: Path = Path(__file__).resolve().parent / "templates"
 
-SUPPORTED_AGENTS: tuple[str, ...] = ("claude", "codex", "hermes", "echo")
+SUPPORTED_AGENTS: tuple[str, ...] = ("claude", "codex", "pi", "hermes", "echo")
 
 
 # ---------------------------------------------------------------------------

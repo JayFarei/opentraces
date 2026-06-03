@@ -14,6 +14,7 @@ def test_capabilities_json_reports_agents_from_registry():
     payload = json.loads(result.output)
     assert "claude-code" in payload["agents"]
     assert "codex-cli" in payload["agents"]
+    assert "pi" in payload["agents"]
     assert set(payload["features"]) >= {
         "private_bucket",
         "bucket_remote_sync",
@@ -26,6 +27,7 @@ def test_capabilities_json_reports_agents_from_registry():
         "context_tree",
         "otlp_receiver",
         "codex_cli_capture",
+        "pi_capture",
         "workflow_templates",
         "security_tool_registry",
     }

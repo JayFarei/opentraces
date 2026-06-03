@@ -1,0 +1,50 @@
+{
+  "name": "opentraces-pi",
+  "version": "0.1.0",
+  "description": "OpenTraces capture/search integration for the Pi coding agent",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "skills",
+    "prompts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/test.mjs",
+    "prepack": "npm run build && npm run test"
+  },
+  "keywords": [
+    "pi-package",
+    "opentraces",
+    "agent-traces",
+    "trace-capture",
+    "dataset",
+    "bucket"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JayFarei/opentraces.git",
+    "directory": "packages/opentraces-pi"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "prompts": [
+      "./prompts"
+    ],
+    "image": "https://opentraces.ai/og.png"
+  }
+}

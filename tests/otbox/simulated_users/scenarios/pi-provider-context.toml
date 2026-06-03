@@ -1,0 +1,16 @@
+name = "pi-provider-context"
+description = "provider/context capture with raw bodies default-off."
+agent = "pi"
+binary_name = "pi"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "Edit src/app.py in a tiny way, explain which tool you used, and commit the change."
+expect_regex = "(?is)(committed|created commit|commit [0-9a-f]{7,})"
+timeout_s = 240
+
+[capture]
+artifact_dir = "pi-provider-context"
+expected_paths = ["src/app.py"]

@@ -26,6 +26,7 @@ VERSION_FILE = ".opentraces-version"
 HARNESS_DIRS: dict[str, Path] = {
     "claude-code": Path.home() / ".claude" / "skills" / "opentraces",
     "codex-cli": Path.home() / ".codex" / "skills" / "opentraces",
+    "pi": Path.home() / ".pi" / "agent" / "skills" / "opentraces",
 }
 
 

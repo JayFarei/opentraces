@@ -62,7 +62,7 @@ const nextConfig: NextConfig = {
       '</docs>; rel="service-doc"; type="text/html"',
       '</llms.txt>; rel="describedby"; type="text/plain"',
       '</schema>; rel="describedby"; type="text/html"',
-      '<https://github.com/jayfarei/opentraces>; rel="via"',
+      '<https://github.com/JayFarei/opentraces>; rel="via"',
     ].join(", ");
     return [
       {

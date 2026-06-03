@@ -1,0 +1,51 @@
+name = "pi-tui-slash-commands"
+description = "Direct Pi TUI slash-command smoke for opentraces-pi commands."
+agent = "pi"
+binary_name = "pi"
+
+[initial_state]
+template = "single-file-python-project"
+
+[[turns]]
+prompt = "/ot-capture-status"
+expect_regex = "(?is)(raw_provider_bodies_default|project_capture|opentraces_cli|capture_enabled)"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-search recent work"
+expect_regex = "(?is)(OpenTraces search|candidate|trace query|No traces|query)"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-standup"
+expect_regex = "(?is)(candidate|trace query|recent work|status|total_returned)"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-capsule"
+expect_regex = "(?is)(OpenTraces capsule|bucket|manifest|trace_count|status)"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-dataset"
+expect_regex = "(?is)(OpenTraces dataset|dataset|rows|status|list)"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-setup"
+expect_regex = "(?is)(OpenTraces setup|project_capture|opentraces_cli|setup|status)"
+timeout_s = 90
+
+[[turns]]
+prompt = "/ot-trace missing-trace-id"
+expect_regex = "(?is)(Trace not found|missing-trace-id|code|stderr|Warning)"
+timeout_s = 90
+
+[[turns]]
+prompt = "Do not change files. Confirm the OpenTraces slash-command smoke is complete and end with the uppercase marker formed by OPENTRACES, SLASH, and DONE joined by hyphens."
+expect_regex = "OPENTRACES-SLASH-DONE"
+timeout_s = 180
+
+[capture]
+artifact_dir = "pi-tui-slash-commands"
+expected_paths = ["src/app.py"]

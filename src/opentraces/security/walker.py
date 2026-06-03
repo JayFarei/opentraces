@@ -201,6 +201,24 @@ def walk_string_fields(record: TraceRecord, transform: TransformFn) -> int:
             record.environment.vcs.diff = new
             changed += 1
 
+    # Harnesses that capture richer live provider context may carry prompt
+    # text in metadata before Context Tree projection. Keep this targeted so
+    # generic bookkeeping metadata is not rewritten, but Pi provider/context
+    # payloads receive the same security treatment as normal TraceRecord text.
+    pi_meta = record.metadata.get("pi") if isinstance(record.metadata, dict) else None
+    if isinstance(pi_meta, dict):
+        for key in ("provider_contexts", "branch_summaries"):
+            if key in pi_meta:
+                new_value, n = walk_dict_strings(
+                    pi_meta[key],
+                    transform,
+                    path=f"metadata.pi.{key}",
+                    field_type=FieldType.GENERAL,
+                )
+                if n:
+                    pi_meta[key] = new_value
+                    changed += n
+
     return changed
 
 

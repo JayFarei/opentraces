@@ -67,6 +67,7 @@ def setup_group(ctx: click.Context) -> None:
                     Claude Code step boundaries and session transcripts.
       codex-cli     Native Codex CLI hook commands that write opentraces
                     sidecars and trigger ingestion on Stop.
+      pi            Pi package install/repair/status for opentraces-pi.
       git           post-commit hook that correlates each commit to the
                     trace that produced it (via refs/notes/opentraces),
                     powering `opentraces trail blame`.
@@ -469,15 +470,15 @@ def _run_setup_wizard() -> None:
     human_echo("")
 
     # 0. Tracking mode — the headline choice (plan 081). Global (default)
-    #    auto-enrolls every project an agent touches; manual keeps the
-    #    explicit `opentraces init` opt-in. Persisted to global config.
+    #    auto-enrolls Claude/Codex projects; Pi keeps explicit per-project
+    #    `opentraces init --agent pi` consent. Persisted to global config.
     cfg = load_config()
     current_mode = cfg.capture.tracking_mode
     human_echo(f"  {_cli._bold('tracking mode'):<28} {_cli._ok(current_mode)}")
     track_global = _wizard_confirm(
         "track every project automatically?",
         default=(current_mode == "global"),
-        hint="global auto-enrolls each project an agent touches; no per-project 'opentraces init'",
+        hint="global auto-enrolls Claude/Codex projects; Pi still requires per-project 'opentraces init --agent pi' consent",
     )
     new_mode = "global" if track_global else "manual"
     if new_mode != current_mode:
@@ -649,8 +650,8 @@ def _run_setup_wizard() -> None:
     human_echo(_cli._bold("Next steps"))
     if new_mode == "global":
         human_echo(
-            "  • tracking mode is global: every project an agent touches is "
-            "auto-enrolled (private + review-required)."
+            "  • tracking mode is global: Claude/Codex projects are auto-enrolled "
+            "(private + review-required); Pi still requires explicit init consent."
         )
         human_echo(
             f"  • to opt one project out:  {_cli._bold('opentraces remove')}"
@@ -896,6 +897,117 @@ def setup_codex_cli(
 
 
 @setup_group.command(
+    "pi",
+    examples=[
+        "opentraces setup pi",
+        "opentraces setup pi --dry-run --json",
+        "opentraces setup pi --project --local",
+        "opentraces setup pi --remove",
+    ],
+    see_also=[
+        ("pi install npm:opentraces-pi", "primary Pi package install path"),
+        ("opentraces init --agent pi", "enroll this project for Pi capture"),
+        ("opentraces setup git", "install the post-commit hook"),
+    ],
+    option_groups=[
+        ("Scope", ["project_scope", "settings_file", "local_package"]),
+        ("Action", ["dry_run", "remove"]),
+    ],
+)
+@click.option("--project", "project_scope", is_flag=True, help="Write/check project-local .pi/settings.json instead of global Pi settings")
+@click.option("--settings-file", default=None, help="Explicit Pi settings.json path")
+@click.option("--local", "local_package", is_flag=True, help="Use local packages/opentraces-pi path when present")
+@click.option("--dry-run", is_flag=True, help="Report the setup plan without writing")
+@click.option("--remove", is_flag=True, help="Remove the package entry instead of installing")
+@click.option("--json", "json_flag", is_flag=True, help="Emit machine-readable JSON (accepted for Pi tool callers)")
+def setup_pi(
+    project_scope: bool,
+    settings_file: str | None,
+    local_package: bool,
+    dry_run: bool,
+    remove: bool,
+    json_flag: bool,
+) -> None:
+    """Verify, install, repair, or remove the OpenTraces Pi package.
+
+    This command manages the Pi package resource entry only. It does not
+    silently install Python, start services, configure HuggingFace auth, or
+    enable optional security tools. Use `/ot-setup` inside Pi or
+    `opentraces init --agent pi` for project capture enrollment.
+    """
+    if json_flag:
+        _cli._json_mode = True  # noqa: SLF001 - command-local --json compatibility
+    from ..capture._base import HookInstallError
+    from ..capture.pi.install import (
+        PiHookInstaller,
+        plan_install,
+        remove as remove_package,
+        setup_plan_json,
+        status as pi_status,
+    )
+
+    project_dir = Path.cwd()
+    sf = Path(settings_file).expanduser() if settings_file else None
+    try:
+        if remove:
+            result = remove_package(project=project_scope, settings_file=sf, cwd=project_dir)
+            human_echo("opentraces Pi package entry removed." if result.removed else "opentraces Pi package entry was not installed.")
+            emit_json({
+                "status": "ok",
+                "action": "remove",
+                "removed": result.removed,
+                "state": pi_status(project=project_scope, settings_file=sf, cwd=project_dir),
+            })
+            return
+
+        if dry_run:
+            plan, target = plan_install(
+                project=project_scope,
+                settings_file=sf,
+                cwd=project_dir,
+                local=local_package,
+            )
+            setup_plan = setup_plan_json(project_dir=project_dir, project=project_scope)
+            setup_plan.update({
+                "dry_run": True,
+                "plan": plan,
+                "settings_file": str(target),
+                "writes": [],
+            })
+            human_echo("[dry-run] Would ensure opentraces-pi is present in Pi settings")
+            human_echo(f"[dry-run] Would update: {target}")
+            emit_json(setup_plan)
+            return
+
+        inst = PiHookInstaller(
+            project=project_scope,
+            settings_file=sf,
+            cwd=project_dir,
+            local=local_package,
+        )
+        result = inst.install()
+    except HookInstallError as exc:
+        emit_json(error_response(exc.code, "install", exc.message))
+        sys.exit(5)
+
+    if result.added:
+        human_echo(f"Installed opentraces-pi package entry in {result.config_files[0] if result.config_files else 'Pi settings'}")
+    else:
+        human_echo("opentraces-pi package entry already present.")
+    emit_json({
+        "status": "ok",
+        "installed": result.installed,
+        "added": result.added,
+        "config_files": [str(p) for p in result.config_files],
+        "state": inst.status(),
+        "next_steps": [
+            "Run pi and invoke /ot-setup for guided local capture setup.",
+            "Run opentraces init --agent pi in each project you want to capture.",
+        ],
+    })
+
+
+@setup_group.command(
     "git",
     examples=[
         "opentraces setup git",
@@ -947,6 +1059,7 @@ def setup_git(remove: bool) -> None:
         "opentraces setup skill --remove",
         "opentraces setup skill --harness claude-code",
         "opentraces setup skill --harness codex-cli",
+        "opentraces setup skill --harness pi",
     ],
     see_also=[
         ("opentraces setup upgrade", "refresh the skill after a CLI update"),
@@ -1990,7 +2103,7 @@ def _tracking_mode_section(report: dict) -> None:
     mode = report.get("tracking_mode", "global")
     _section("Tracking mode")
     if mode == "global":
-        _row("ok", "mode", "global", detail="auto-enroll every project an agent touches")
+        _row("ok", "mode", "global", detail="auto-enroll Claude/Codex; Pi requires init consent")
     else:
         _row("off", "mode", "manual", detail="explicit 'opentraces init' opt-in per project")
 

@@ -414,6 +414,14 @@ def _captured_session(box: Box) -> dict[str, str]:
         result["step_index"] = str(codex_audit.get("step_index") or result.get("step_index", ""))
         result["transcript_path"] = str(codex_audit.get("transcript_path") or result.get("transcript_path", ""))
 
+    pi_audit = box.notes.get("c_captured_pi_session_audit") or {}
+    if pi_audit:
+        result["trace_id"] = str(pi_audit.get("trace_id") or result.get("trace_id", ""))
+        result["session_id"] = str(pi_audit.get("session_id") or result.get("session_id", ""))
+        result["commit_sha"] = str(pi_audit.get("commit_sha") or result.get("commit_sha", ""))
+        result["step_index"] = str(pi_audit.get("step_index") or result.get("step_index", ""))
+        result["transcript_path"] = str(pi_audit.get("transcript_path") or result.get("transcript_path", ""))
+
     # Plan 078: expose OTel checkpoint audit fields. Overrides plan-064
     # values when the journey forks from an OTel checkpoint because the
     # OTel audits also pin a session/trace id under the same key names.

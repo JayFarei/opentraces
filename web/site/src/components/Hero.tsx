@@ -14,6 +14,7 @@ const installMethods = [
   { label: "pipx", cmd: "pipx install opentraces", copyText: "pipx install opentraces" },
   { label: "brew", cmd: "brew install [..] opentraces", copyText: "brew install JayFarei/opentraces/opentraces" },
   { label: "skill", cmd: "npx skills add jayfarei/opentraces", copyText: "npx skills add jayfarei/opentraces" },
+  { label: "pi", cmd: "pi install npm:opentraces-pi", copyText: "pi install npm:opentraces-pi" },
   { label: "agent", cmd: `agent setup prompt +${AGENT_LINES} lines`, copyText: AGENT_PROMPT, prefix: ">" },
 ];
 
@@ -45,14 +46,15 @@ function MetricIcon({ icon }: { icon: HeroMetricItem["icon"] }) {
 
 function SetupContent() {
   const rows: [string, string, string][] = [
-    ["agent", "detect?", "claude-code"],
-    ["hooks", "install?", "PreToolUse, Stop"],
+    ["agents", "connect?", "claude · codex · pi"],
+    ["hooks", "install?", "hooks + Pi package"],
     ["git hook", "install?", "post-commit"],
     ["skill", "install?", "registered"],
     ["watcher", "install?", "powers blame"],
     ["bucket", "configure?", "remote sync"],
     ["hf login", "log in?", "alice-dev"],
     ["security", "optional?", "tools off"],
+    ["raw bodies", "default?", "off"],
     ["llm review", "optional?", "configured later"],
   ];
   return (
@@ -70,7 +72,7 @@ function SetupContent() {
             <span className="di wiz-label">{label}</span>
             <span className="di wiz-q">{q}</span>
             <span className="ok wiz-ok">{"\u2713"}</span>
-            <span className={label === "agent" || label === "hf login" ? "s wiz-val" : "di wiz-val"}>{val}</span>
+            <span className={label === "agents" || label === "hf login" ? "s wiz-val" : "di wiz-val"}>{val}</span>
           </span>
         ))}
         <span className="terminal-line rail-frame-label">

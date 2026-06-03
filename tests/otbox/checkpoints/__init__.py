@@ -218,6 +218,9 @@ from . import _captured_with_pr_branch  # noqa: E402,F401  (registers c-captured
 from . import _captured_codex_real_session  # noqa: E402,F401  (registers c-captured-codex-real-session)
 from . import _captured_codex_bash_session  # noqa: E402,F401  (registers c-captured-codex-bash-session)
 from . import _captured_codex_pending  # noqa: E402,F401  (registers pending plan 083 Codex checkpoints)
+# Plan 091 Pi lane scaffold — artifact-preferred with deterministic synthetic fallback.
+from . import _captured_pi_real_session  # noqa: E402,F401  (registers c-captured-pi-real-session)
+from . import _captured_pi_pending  # noqa: E402,F401  (registers pending plan 091 Pi checkpoints)
 # Plan 078 OTLP receiver capture-source checkpoints.
 from . import _context_tree_otel_linear  # noqa: E402,F401  (registers c-context-tree-otel-linear)
 from . import _context_tree_otel_with_mcp  # noqa: E402,F401  (registers c-context-tree-otel-with-mcp)

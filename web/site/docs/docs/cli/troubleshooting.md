@@ -33,6 +33,7 @@ opentraces status
 opentraces trace query --cwd --since 1d
 opentraces setup claude-code
 opentraces setup codex-cli --dry-run
+opentraces setup pi --dry-run --json
 opentraces capabilities --json
 ```
 
@@ -44,6 +45,11 @@ authenticated, then run both `opentraces setup codex-cli` and
 after hooks are installed; `--import-existing` is not a Codex backfill path.
 Sidecar hook files should appear under `.opentraces/codex-cli/hooks/` after a
 future Codex session runs.
+
+If you are using Pi, install `opentraces-pi` with `pi install npm:opentraces-pi`,
+then run `opentraces init --agent pi` in the repo. `/ot-capture-status` and
+`opentraces setup pi --dry-run --json` show the local checklist. Pi sidecars
+should appear under `.opentraces/pi/events/`; raw provider bodies are default-off.
 
 ### Codex Hooks File Is Corrupt
 

@@ -202,11 +202,12 @@ opentraces dataset publish bug-fixes --check-only
 
 `opentraces setup` runs an interactive wizard; each integration is also a direct subcommand:
 
-- `setup claude-code` / `setup codex-cli` install session-capture hooks. Run `opentraces init --agent <name>` inside each repo you want to capture. (Codex Desktop is not covered.)
+- `setup claude-code` / `setup codex-cli` install session-capture hooks. `setup pi` checks or writes the Pi package entry; the primary package path is `pi install npm:opentraces-pi`. Pi capture is no-op until `opentraces init --agent pi` opts a repo in. Global tracking does not implicitly enable Pi sidecars. Run `opentraces init --agent <name>` inside each repo you want to capture. (Codex Desktop is not covered.)
 - `setup git` installs a post-commit hook that correlates each commit to the trace that produced it (via `refs/notes/opentraces`), powering `trail blame`.
 - `setup watcher` installs a background **attribution watcher** (launchd on macOS, systemd `--user` on Linux; offered by default in the wizard). On an interval it walks enlisted projects, observes filesystem mutations as a backstop for writes hooks miss, reconciles them against open step windows, and matures Trace Trails over time. The watcher is polling-based today; a real-time (inotify/watchdog) observer that would narrow attribution windows is deferred. Subcommands: `install/start/stop/status/tick`.
 - `setup capture-otlp` patches `~/.claude/settings.json` so Claude Code emits OpenTelemetry, enabling the higher-fidelity Context Tree capture source. Control the receiver with `capture-otlp start/stop/restart/status/flush`.
-- `setup skill` installs the shared agent skill into Claude Code and Codex CLI harness skill directories.
+- `setup skill` installs the shared agent skill into Claude Code, Codex CLI, and Pi harness skill directories.
+- In Pi, the package exposes `/ot-capture-status`, `/ot-setup`, `/ot-search <query>`, `/ot-trace <trace-id>`, `/ot-standup`, `/ot-capsule [trace-id]`, and `/ot-dataset`. Use `/ot-search` to find candidates in the local/private bucket, then `/ot-trace` to load one trace's tool evidence.
 - `setup auth` logs in to HuggingFace for dataset and bucket remotes.
 - `setup upgrade` upgrades the CLI and refreshes the project skill file.
 
@@ -269,7 +270,7 @@ A dataset is a workflow-driven row projection over one or more bucket traces.
 
 ## Security
 
-The security pipeline is versioned independently from the CLI and schema (currently `SECURITY_VERSION = 0.5.0`). The contract is deliberately simple: all per-record security tools default off, and workflows opt into the named tools they need.
+The security pipeline is versioned independently from the CLI and schema (currently `SECURITY_VERSION = 0.6.0`). The contract is deliberately simple: all per-record security tools default off, and workflows opt into the named tools they need.
 
 | Tool | Kind | Default | What it does |
 |------|------|---------|--------------|
@@ -278,7 +279,9 @@ The security pipeline is versioned independently from the CLI and schema (curren
 | `trufflehog` | detector | off | Optional deep secret detector, configured with `opentraces setup trufflehog` |
 | `privacy_filter` | detector | off | Optional local/HF NER PII detector, configured with `opentraces setup privacy-filter` |
 | `llm_pii` | detector | off | Advanced per-field LLM PII detector, configured directly |
+| `business_logic` | detector | off | Redactable spans for internal hostnames, URLs, DB connection strings, and AWS account ids |
 | `path_anonymizer` | transformer | off | Rewrites local usernames in filesystem paths |
+| `capsule_scope` | transformer | off | Field-path exclusion for prompt-bearing capsule content |
 | `classifier` | judge | off | Heuristic sensitivity verdict without mutating content |
 
 Run `opentraces security tools list` to see the active config, and pipe JSON through `opentraces security sanitize --tools regex,entropy` when a workflow wants explicit sanitization. `--use-config` runs only tools you have enabled. Session-level LLM review (`opentraces dataset review`) is a separate, on-demand publication gate, not a per-record tool.
@@ -323,6 +326,8 @@ Set up opentraces in this project.
 
 4. Initialize the repo:
    `opentraces init`
+   For Pi, first install `pi install npm:opentraces-pi`, then run
+   `opentraces init --agent pi` or `/ot-setup` for explicit project consent.
    This enrolls the project. Dataset remotes and review policy live under
    `opentraces dataset ...`.
 
@@ -392,6 +397,7 @@ Set up opentraces in this project.
 | [`src/opentraces/`](src/opentraces/) | CLI, capture, review, publish, security, enrichment |
 | [`packages/opentraces-schema/`](packages/opentraces-schema/) | Standalone Pydantic schema package |
 | [`packages/opentraces-ui/`](packages/opentraces-ui/) | Shared design tokens and UI primitives |
+| [`packages/opentraces-pi/`](packages/opentraces-pi/) | Pi package with OpenTraces capture/search extension resources |
 
 ## Project Layout
 
@@ -399,12 +405,13 @@ Set up opentraces in this project.
 packages/
   opentraces-schema/
   opentraces-ui/
+  opentraces-pi/
 src/opentraces/
   cli/                  # Click command groups: trace, trail, ctx, bucket, dataset, workflow, setup, ...
   core/                 # Domain glue: config, paths, state, pipeline, datasets, bursts, intent, ...
     trails/             # VCS-anchored Trace Trails substrate (event log, snapshots, anchors, ...)
     context_tree/       # Context Tree substrate (layers, nodes, ctx projections)
-  capture/              # Inbound boundary: claude_code, codex_cli, hermes, git, fs_watcher, otlp, tool_boundary
+  capture/              # Inbound boundary: claude_code, codex_cli, pi, hermes, git, fs_watcher, otlp, tool_boundary
   watcher/              # Background attribution daemon (launchd/systemd polling worker)
   publish/              # Outbound boundary: format serializers and HuggingFace publisher
   enrichment/           # Read-only enrichers: git signals, attribution, dependencies, metrics

@@ -124,7 +124,54 @@ def _capture_agent_name(agent: str | None) -> str | None:
         return "codex-cli"
     if agent in {"claude", "claude-code"}:
         return "claude-code"
+    if agent == "pi":
+        return "pi"
     return agent
+
+
+def _capture_refresh_template_context(box: Box) -> dict[str, str]:
+    """Template vars available to PTY capture-refresh scenario turns.
+
+    Captured-session checkpoints record their minted trace/session ids in
+    ``box.notes``. Exposing those ids to the PTY scenario layer lets live TUI
+    smoke tests drive positive slash commands such as ``/ot-trace {trace_id}``
+    against a bucket trace that actually exists, instead of only exercising
+    negative/error rendering paths.
+    """
+    context: dict[str, str] = {}
+    for audit_key in (
+        "c_captured_pi_session_audit",
+        "c_captured_codex_session_audit",
+        "c_captured_session_audit",
+    ):
+        audit = box.notes.get(audit_key) or {}
+        if not isinstance(audit, dict):
+            continue
+        for field in ("trace_id", "session_id", "commit_sha", "transcript_path"):
+            value = audit.get(field)
+            if value and field not in context:
+                context[field] = str(value)
+    return context
+
+
+def _expand_capture_refresh_turns(turns, context: dict[str, str]):
+    """Replace ``{trace_id}``-style placeholders in scenario turns."""
+    from .simulated_users.runner import Turn
+
+    def expand(value: str) -> str:
+        expanded = value
+        for key, replacement in context.items():
+            expanded = expanded.replace("{" + key + "}", replacement)
+        return expanded
+
+    return [
+        Turn(
+            prompt=expand(turn.prompt),
+            expect_regex=expand(turn.expect_regex),
+            timeout_s=turn.timeout_s,
+        )
+        for turn in turns
+    ]
 
 
 def _postprocess_capture_box(driver, box: Box, agent: str | None) -> list[dict]:
@@ -136,7 +183,7 @@ def _postprocess_capture_box(driver, box: Box, agent: str | None) -> list[dict]:
     the box is archived.
     """
     normalized = _capture_agent_name(agent)
-    if normalized not in {"codex-cli", "claude-code"}:
+    if normalized not in {"codex-cli", "claude-code", "pi"}:
         return []
 
     paths = driver.paths(box)
@@ -151,6 +198,8 @@ def _postprocess_capture_box(driver, box: Box, agent: str | None) -> list[dict]:
             f"{home}/.codex/sessions/[0-9][0-9][0-9][0-9]/"
             "[0-9][0-9]/[0-9][0-9]/rollout-*.jsonl",
         )
+    elif normalized == "pi":
+        session_files = driver.glob(box, f"{home}/.pi/agent/sessions/--*--/*.jsonl")
     else:
         session_files = driver.glob(box, f"{home}/.claude/projects/*/*.jsonl")
 
@@ -184,6 +233,8 @@ def _postprocess_capture_box(driver, box: Box, agent: str | None) -> list[dict]:
 
     if normalized == "codex-cli" and not session_files:
         raise OtboxError("post-capture ingest found no Codex rollout JSONL files")
+    if normalized == "pi" and not session_files:
+        raise OtboxError("post-capture ingest found no Pi session JSONL files")
 
     tick = driver.exec(
         box,
@@ -248,6 +299,28 @@ def _postprocess_capture_box(driver, box: Box, agent: str | None) -> list[dict]:
             f"post-capture trace index rebuild failed: {index.stderr.strip() or index.stdout.strip()}"
         )
 
+    return reports
+
+
+def _scrub_capture_box_before_snapshot(driver, box: Box, agent: str | None) -> list[dict]:
+    """Remove live-agent credentials that are needed to run but not to replay."""
+
+    normalized = _capture_agent_name(agent)
+    if normalized != "pi":
+        return []
+    home = driver.paths(box)["home"]
+    targets = [f"{home}/.pi/agent/auth.json"]
+    reports: list[dict] = []
+    for target in targets:
+        result = driver.exec(box, ["rm", "-f", target], timeout=10)
+        reports.append({
+            "step": "scrub-secret",
+            "path": target,
+            "ok": result.ok,
+            "returncode": result.returncode,
+        })
+        if not result.ok:
+            raise OtboxError(f"capture secret scrub failed for {target}: {result.stderr.strip()}")
     return reports
 
 
@@ -856,6 +929,7 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
         binary_path = shutil.which(scenario.binary_name)
 
     base_checkpoint = args.base_checkpoint
+    real_pi_enabled = os.environ.get("OT_REAL_PI") == "1"
 
     # --dry-run reports the plan without running anything (and never
     # produces an artifact). The envelope shape mirrors the real-run one.
@@ -868,6 +942,7 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
             "binary_name": scenario.binary_name,
             "binary_path": binary_path,
             "binary_found": binary_path is not None,
+            "real_pi_enabled": real_pi_enabled if scenario.agent == "pi" else None,
             "turn_count": len(scenario.turns),
             "base_checkpoint": base_checkpoint,
             "artifact_path": str(artifact_path),
@@ -884,6 +959,29 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
             f"  metadata: {metadata_path}"
         )
         _emit(payload, json_mode=args.json, human=human)
+        return 0
+
+    # Live Pi capture is opt-in even when this development machine has a
+    # `pi` binary on PATH; default CI and ordinary package dev must stay
+    # offline/deterministic.
+    if scenario.agent == "pi" and not real_pi_enabled:
+        payload = {
+            "action": "capture-refresh",
+            "status": "skipped",
+            "reason": "set OT_REAL_PI=1 to refresh live Pi artifacts",
+            "scenario": scenario.name,
+            "agent": scenario.agent,
+            "binary_name": scenario.binary_name,
+            "binary_found": binary_path is not None,
+        }
+        _emit(
+            payload,
+            json_mode=args.json,
+            human=(
+                f"capture-refresh: SKIP — Pi live capture requires OT_REAL_PI=1 "
+                f"(scenario {scenario.name!r})"
+            ),
+        )
         return 0
 
     # Binary missing → SKIP cleanly. The whole point of this path is that
@@ -918,7 +1016,7 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
     # runner's initial_state_dir hook) so the runner stays focused on
     # PTY orchestration.
     template_dir = scenario.initial_state.template_dir
-    if template_dir.exists():
+    if template_dir is not None and template_dir.exists():
         for entry in template_dir.iterdir():
             dest = box.project / entry.name
             if entry.is_dir():
@@ -928,12 +1026,16 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
 
     output_dir = box.logs / "capture-refresh" / scenario.name
     output_dir.mkdir(parents=True, exist_ok=True)
+    turns = _expand_capture_refresh_turns(
+        scenario.turns,
+        _capture_refresh_template_context(box),
+    )
 
     result = run_simulated_session(
         driver,
         box,
         binary_path,
-        scenario.turns,
+        turns,
         initial_state_dir=None,
         output_dir=output_dir,
         agent=scenario.agent,
@@ -969,6 +1071,7 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
         return 3
 
     postprocess = _postprocess_capture_box(driver, box, scenario.agent)
+    postprocess.extend(_scrub_capture_box_before_snapshot(driver, box, scenario.agent))
 
     # PASS → snapshot the box, copy the archive into the artifact dir.
     snap_name = f"_capture-refresh-{scenario.name}-{box.box_id}"

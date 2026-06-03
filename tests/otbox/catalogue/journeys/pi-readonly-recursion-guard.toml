@@ -1,0 +1,33 @@
+name = "pi-readonly-recursion-guard"
+description = "Plan 091 Pi ot_* readonly tool traces remain searchable without Pi-only attribution paths."
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+status = "synthetic-or-artifact-backed"
+from_checkpoints = ["c-captured-pi-readonly-session"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "trace-query"
+argv = ["trace", "query", "--facet", "agent.name=pi", "--json"]
+
+[[steps]]
+type = "cli"
+id = "bucket-verify"
+argv = ["bucket", "verify", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "trace-query"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-verify"
+equals = 0

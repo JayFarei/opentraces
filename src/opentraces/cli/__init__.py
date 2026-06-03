@@ -1488,11 +1488,13 @@ def config_tracking_mode(mode: str | None) -> None:
     """Show or set the project tracking mode (plan 081).
 
       ot config tracking-mode            # show current mode
-      ot config tracking-mode global     # auto-enroll every project an agent touches
+      ot config tracking-mode global     # auto-enroll Claude/Codex projects on capture
       ot config tracking-mode manual     # explicit 'opentraces init' opt-in per project
 
-    Global mode auto-enrolls projects (git or not) with a private +
-    review-required policy the first time a capture hook fires there.
+    Global mode auto-enrolls Claude/Codex projects (git or not) with a private +
+    review-required policy the first time a capture hook fires there. Pi is
+    extension-backed and always requires explicit `opentraces init --agent pi`
+    project consent before sidecars are written.
     """
     cfg = load_config()
     if mode is None:
@@ -1673,10 +1675,14 @@ def _plan043_finalize_identity(project_dir: Path) -> None:
     examples=[
         "opentraces init",
         "opentraces init --agent claude-code",
+        "opentraces init --agent codex-cli",
+        "opentraces init --agent pi --start-fresh",
         "opentraces init --start-fresh",
     ],
     see_also=[
         ("opentraces setup claude-code", "install Claude Code capture hooks"),
+        ("opentraces setup codex-cli", "install Codex CLI hooks"),
+        ("opentraces setup pi", "install/check the Pi package entry"),
         ("opentraces setup git", "install or remove the git post-commit hook"),
         ("opentraces dataset remote create", "create or bind a dataset remote"),
         ("opentraces setup auth", "authenticate with HuggingFace"),
@@ -1730,6 +1736,20 @@ def init(
         if _register_project(_cfg_for_register, project_dir):
             save_config(_cfg_for_register)
             click.echo("(added to global opted-in registry)")
+        requested_agents = normalize_agents(list(agents)) if agents else []
+        current_agents = normalize_agents(proj_config.get("agents"))
+        merged_agents = list(current_agents)
+        added_agents: list[str] = []
+        for agent in requested_agents:
+            if agent not in merged_agents:
+                merged_agents.append(agent)
+                added_agents.append(agent)
+        if added_agents:
+            proj_config["agents"] = merged_agents
+            save_project_config(project_dir, proj_config)
+            _install_capture_hook(project_dir, added_agents)
+            _install_skill(project_dir, added_agents)
+            click.echo(f"Added agent capture: {', '.join(added_agents)}")
         click.echo(
             "Already initialized "
             f"(mode: {proj_config.get('review_policy', 'review')}, remote: {current_remote})"
@@ -1738,10 +1758,11 @@ def init(
         emit_json(
             {
                 "status": "ok",
-                "message": "Already initialized",
+                "message": "Already initialized" if not added_agents else "Updated initialized project",
                 "review_policy": proj_config["review_policy"],
                 "push_policy": proj_config["push_policy"],
                 "agents": proj_config["agents"],
+                "agents_added": added_agents,
             }
         )
         return
@@ -1801,9 +1822,10 @@ def init(
     if _register_project(_cfg_for_register, project_dir):
         save_config(_cfg_for_register)
 
-    # Note: traces and runtime state now live in ~/.opentraces/projects/<slug>/,
-    # so the only opentraces artifact in the repo is the .opentraces.json marker —
-    # which is meant to be committed. No .gitignore changes needed.
+    # Note: canonical traces/runtime state live in ~/.opentraces/projects/<slug>/.
+    # The .opentraces.json marker is meant to be committed. Some live harnesses
+    # may also write ignored local sidecars (for example .opentraces/pi/events/)
+    # before ingest projects them into the shared bucket.
 
     hook_installed = _install_capture_hook(project_dir, selected_agents)
 
@@ -1870,6 +1892,8 @@ def init(
             hook_targets.append(".claude/settings.json")
         if "codex-cli" in selected_agents:
             hook_targets.append("~/.codex/hooks.json")
+        if "pi" in selected_agents:
+            hook_targets.append(".pi/settings.json")
         click.echo(f"  Hook:    {', '.join(hook_targets) if hook_targets else 'installed'}")
     if skill_installed:
         click.echo("  Skill:   .agents/skills/opentraces/SKILL.md")
@@ -2289,6 +2313,25 @@ def _install_capture_hook(project_dir: Path, agents: list[str]) -> bool:
             human_echo("  Run 'opentraces setup codex-cli' after fixing ~/.codex/hooks.json")
         except Exception as exc:
             human_echo(f"  Could not install Codex CLI hooks: {exc}")
+
+    if "pi" in agents:
+        try:
+            from ..capture._base import HookInstallError
+            from ..capture.pi.install import PiHookInstaller
+
+            result = PiHookInstaller(project=True, cwd=project_dir, local=True).install()
+            if result.ok:
+                target = result.config_files[0] if result.config_files else project_dir / ".pi" / "settings.json"
+                if result.added:
+                    human_echo(f"  Installed Pi package entry: {target}")
+                else:
+                    human_echo(f"  Pi package entry already present: {target}")
+                installed_any = True
+        except HookInstallError as exc:
+            human_echo(f"  Could not install Pi package entry: {exc.message}")
+            human_echo("  Run 'opentraces setup pi' after fixing Pi settings")
+        except Exception as exc:
+            human_echo(f"  Could not install Pi package entry: {exc}")
 
     return installed_any
 
@@ -3613,6 +3656,50 @@ def _capture_project_root(path: Path) -> Path:
     return path.resolve()
 
 
+@main.command("_pi-bridge", hidden=True)
+@click.option("--status", "status_only", is_flag=True, help="Print Pi bridge status.")
+@click.option("--cwd", "cwd_override", default=None, type=click.Path(), help="Project cwd for status/payload.")
+@click.option("--payload", default=None, help="JSON payload to record (prefer --payload-file for large events).")
+@click.option("--payload-file", default=None, type=click.Path(), help="Path to JSON payload to record.")
+@click.option("--strict", is_flag=True, help="Raise bridge validation errors instead of fail-open JSON.")
+def _pi_bridge_cmd(
+    status_only: bool,
+    cwd_override: str | None,
+    payload: str | None,
+    payload_file: str | None,
+    strict: bool,
+) -> None:
+    """Hidden argv-safe Pi extension bridge.
+
+    The public Pi package calls this command instead of importing Python with
+    system ``python3`` so pipx/uv-tool installs work and the bridge runs in the
+    same environment as the OpenTraces CLI.
+    """
+    from ..capture.pi.bridge import BridgeResult, bridge_status, record_event
+
+    if status_only:
+        click.echo(json.dumps(bridge_status(cwd_override), sort_keys=True))
+        return
+
+    try:
+        if payload_file:
+            raw_payload = Path(payload_file).read_text(encoding="utf-8")
+        elif payload is not None:
+            raw_payload = payload
+        else:
+            raw_payload = sys.stdin.read()
+        event = json.loads(raw_payload)
+    except Exception as exc:  # noqa: BLE001 - hidden fail-open bridge surface
+        if strict:
+            raise
+        click.echo(json.dumps(BridgeResult(ok=False, status="error", errors=[str(exc)]).to_json(), sort_keys=True))
+        return
+    if cwd_override and isinstance(event, dict) and not event.get("cwd"):
+        event["cwd"] = cwd_override
+    result = record_event(event, fail_open=not strict)
+    click.echo(json.dumps(result.to_json(), sort_keys=True))
+
+
 @main.command("_ingest-session", hidden=True)
 @click.argument("transcript_path", type=click.Path())
 @click.option("--project", "project_override", type=click.Path(),
@@ -4013,6 +4100,7 @@ def capabilities(as_json: bool) -> None:
             "passive_capture",
             "claude_code_capture",
             "codex_cli_capture",
+            "pi_capture",
             "git_post_commit_correlation",
             "private_bucket",
             "bucket_remote_sync",

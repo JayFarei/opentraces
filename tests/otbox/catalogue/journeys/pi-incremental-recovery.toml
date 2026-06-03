@@ -1,0 +1,33 @@
+name = "pi-incremental-recovery"
+description = "Plan 091 Pi shutdown/repair path is dedupe-safe and bucket-repairable."
+lane = "core"
+tier = 0
+tier_label = "gold"
+persona = "agent"
+requires = ["cli", "git"]
+status = "synthetic-or-artifact-backed"
+from_checkpoints = ["c-captured-pi-real-session"]
+
+[preconditions]
+min_captured_traces = 1
+context_tree_built = true
+
+[[steps]]
+type = "cli"
+id = "bucket-repair"
+argv = ["bucket", "repair", "--json"]
+
+[[steps]]
+type = "cli"
+id = "bucket-verify"
+argv = ["bucket", "verify", "--full", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-repair"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "bucket-verify"
+equals = 0

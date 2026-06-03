@@ -41,31 +41,36 @@ opentraces setup
 opentraces setup auth
 opentraces setup bucket          # configure remote-by-default private bucket sync
 opentraces setup codex-cli       # install terminal Codex CLI hooks in ~/.codex/hooks.json
+opentraces setup pi              # check/install the Pi package entry
 opentraces setup skill           # install the opentraces skill into agent harnesses
 opentraces setup skill --harness codex-cli
+opentraces setup skill --harness pi
 opentraces setup upgrade         # upgrade CLI + refresh project skill file
 opentraces config tracking-mode  # show; pass global|manual to set
 opentraces auth whoami
 opentraces init
 opentraces init --agent codex-cli
+opentraces init --agent pi
 opentraces status
 opentraces doctor
 ```
 
 `setup` is machine-global: tracking mode, hooks, auth, watcher, TruffleHog,
 LLM review, and supporting binaries. Tracking mode (`opentraces config
-tracking-mode`) controls enrollment: `global` (default) auto-enrolls every
-project an agent touches — git or not — private + review-required the first
-time a capture hook fires there, so `init` is optional; `manual` keeps the
-explicit per-project `opentraces init` opt-in. `init` is project enrollment
-only; dataset remotes and review policy belong under `opentraces dataset
-...`. Private bucket configuration belongs under `opentraces setup bucket`
-and `opentraces bucket remote`.
+tracking-mode`) controls enrollment: `global` (default) auto-enrolls
+Claude/Codex projects — git or not — private + review-required the first time a
+capture hook fires there, so `init` is optional for those harnesses; `manual`
+keeps the explicit per-project `opentraces init` opt-in. Pi capture is never
+implicitly enabled by global tracking: use `/ot-setup` or `opentraces init
+--agent pi` for each repo before Pi sidecars are written. `init` is project
+enrollment only; dataset remotes and review policy belong under `opentraces
+dataset ...`. Private bucket configuration belongs under `opentraces setup
+bucket` and `opentraces bucket remote`.
 
 `opentraces setup skill` writes one canonical skill copy under
 `~/.agents/skills/opentraces/` and symlinks supported harnesses to it. Current
-harness targets are `claude-code` and `codex-cli`; pass `--harness <name>` to
-refresh only one link.
+harness targets are `claude-code`, `codex-cli`, and `pi`; pass `--harness
+<name>` to refresh only one link.
 
 Codex support is for terminal Codex CLI, not Codex Desktop. Install and
 authenticate Codex first, then run `opentraces setup codex-cli` once and
@@ -73,6 +78,21 @@ authenticate Codex first, then run `opentraces setup codex-cli` once and
 they record sidecars under `.opentraces/codex-cli/hooks/` and must not approve
 or deny permission prompts. Codex capture starts with future sessions;
 `--import-existing` is a Claude Code backfill path.
+
+Pi support is extension-backed. Install with `pi install npm:opentraces-pi`, use
+`/ot-setup` or `opentraces setup pi --dry-run --json` for the local checklist,
+and run `opentraces init --agent pi` in each repo. Pi sidecars land under
+`.opentraces/pi/events/` and flow through the same TraceRecord, Trace Trails,
+Context Tree, and bucket v2 pipeline. Raw provider bodies stay default-off.
+
+Inside Pi, use slash commands for quick private-bucket retrieval and setup:
+`/ot-capture-status`, `/ot-setup`, `/ot-search <query>`, `/ot-trace <trace-id>`,
+`/ot-standup`, `/ot-capsule [trace-id]`, and `/ot-dataset`. Model-facing tools
+are `ot_capture_status`, `ot_search`, `ot_trace`, `ot_standup`, `ot_capsule`,
+and `ot_dataset`. Prefer `/ot-search`/`ot_search` first, then `/ot-trace` or
+`ot_trace` for a selected bucket trace. Direct slash commands are TUI actions;
+model-invoked `ot_*` tools are captured as read-only `opentraces_retrieval`
+tool calls.
 
 ## Trace Retrieval
 
@@ -393,7 +413,7 @@ opentraces --json dataset status <name>
 |---|---|
 | Not initialized | Run `opentraces init` |
 | Auth missing | Run `opentraces setup auth` or `opentraces auth login` |
-| No traces visible | Check `opentraces setup claude-code`, then `opentraces status` |
+| No traces visible | Check `opentraces setup claude-code` / `setup codex-cli`; for Pi run `/ot-capture-status` or `opentraces setup pi --dry-run --json` and ensure `opentraces init --agent pi` opted the repo in; then `opentraces status` |
 | Trace Trail event log invalid | Run `opentraces doctor`; `opentraces trail rebuild` re-derives advisory projections |
 | Bucket not syncing | Run `opentraces setup bucket` to configure a remote, then `opentraces bucket remote status` |
 | Publish blocked | Run `opentraces dataset status <name> --json` and `opentraces dataset publish <name> --check-only` |

@@ -1,0 +1,31 @@
+name = "pi-setup-dry-run"
+description = "Plan 091 setup pi dry-run JSON is reversible and local-first."
+lane = "core"
+tier = 0
+tier_label = "silver"
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-installed-source"]
+status = "setup-smoke"
+
+[[steps]]
+type = "cli"
+id = "setup-pi-dry-run"
+argv = ["setup", "pi", "--dry-run", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "setup-pi-dry-run"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-pi-dry-run"
+path = "dry_run"
+equals = true
+
+[[assertions]]
+kind = "stdout_json"
+step = "setup-pi-dry-run"
+path = "writes"
+equals = []

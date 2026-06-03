@@ -168,3 +168,17 @@ class TestSanitizeRecord:
         rec = _trace(description="x")
         rec, report = sanitize_record(rec, tools=["classifier", "regex"])
         assert report.tools_applied == ["regex", "classifier"]
+
+    def test_pi_provider_context_metadata_is_redacted(self) -> None:
+        rec = _trace(description="safe")
+        rec.metadata["pi"] = {
+            "provider_contexts": [
+                {"messages": [{"role": "user", "content": "leak AKIAIOSFODNN7EXAMPLE"}]}
+            ]
+        }
+
+        rec, report = sanitize_record(rec, tools=["regex"])
+
+        assert report.redactions_applied >= 1
+        content = rec.metadata["pi"]["provider_contexts"][0]["messages"][0]["content"]
+        assert content == "leak [REDACTED]"

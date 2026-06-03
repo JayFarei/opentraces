@@ -1,0 +1,79 @@
+name = "skill-verifier-command-smoke"
+description = "Help-surface smoke for skill verifier and workflow intelligence commands in the Click/JTBD inventory."
+lane = "core"
+tier = 0
+tier_label = "bronze"
+persona = "agent"
+requires = ["cli"]
+from_checkpoints = ["c-installed-source"]
+status = "help-smoke"
+
+[[steps]]
+type = "cli"
+id = "skill-verifier-status-help"
+argv = ["skill-verifier", "status", "--help"]
+
+[[steps]]
+type = "cli"
+id = "skill-verifier-autoverify-help"
+argv = ["skill-verifier", "autoverify", "--help"]
+
+[[steps]]
+type = "cli"
+id = "skill-verifier-align-help"
+argv = ["skill-verifier", "align", "--help"]
+
+[[steps]]
+type = "cli"
+id = "skill-verifier-score-help"
+argv = ["skill-verifier", "score", "--help"]
+
+[[steps]]
+type = "cli"
+id = "workflow-skill-intelligence-help"
+argv = ["workflow", "skill-intelligence", "--help"]
+
+[[steps]]
+type = "cli"
+id = "workflow-verifier-factory-help"
+argv = ["workflow", "verifier-factory", "--help"]
+
+[[steps]]
+type = "cli"
+id = "workflow-optimize-help"
+argv = ["workflow", "optimize", "--help"]
+
+[[assertions]]
+kind = "returncode"
+step = "skill-verifier-status-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "skill-verifier-autoverify-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "skill-verifier-align-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "skill-verifier-score-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "workflow-skill-intelligence-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "workflow-verifier-factory-help"
+equals = 0
+
+[[assertions]]
+kind = "returncode"
+step = "workflow-optimize-help"
+equals = 0

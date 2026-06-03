@@ -1,0 +1,1 @@
+Build a concise standup from recent OpenTraces traces. Use `ot_standup`; if unavailable, search recent traces with `ot_search` and summarize attempted / landed / still-open.
