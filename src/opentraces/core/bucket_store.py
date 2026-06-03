@@ -4,6 +4,17 @@ The bucket is the local mirror of the future remote sync substrate. It stores
 content-addressed trace evidence, optional raw source artifacts, portable
 Trace Trail event exports, and rebuildable projections; versioned datasets
 stay outside the bucket as HF-shaped repositories.
+
+This module is the PUBLIC FACADE. The implementation is split across three
+sibling modules to keep each cluster cohesive:
+
+  _bucket_io.py            — Pure I/O utilities (atomic writes, gzip, digests)
+  bucket_events.py         — Trail/events-mirror cluster (plan 080 §4)
+  bucket_context_store.py  — Context Tree bucket projection (plan 079/080)
+
+Every symbol that existed here before the split is re-exported from this
+module so all ~91 existing call sites remain importable from
+``opentraces.core.bucket_store`` without change.
 """
 
 from __future__ import annotations
@@ -60,6 +71,65 @@ from .bucket_layout import (
     trail_events_root,
 )
 
+# ---------------------------------------------------------------------------
+# Re-export I/O utilities from the extracted _bucket_io module.
+# All internal callers within this file still work; external callers that
+# do ``from opentraces.core.bucket_store import _atomic_write_json`` etc.
+# continue to resolve.
+# ---------------------------------------------------------------------------
+from ._bucket_io import (
+    _atomic_write_bytes,
+    _atomic_write_gzip,
+    _atomic_write_json,
+    _atomic_write_text,
+    _canonical_json,
+    _digest_bytes,
+    _digest_payload,
+    _gzip_deterministic,
+    _read_gzip_bytes,
+)
+
+# ---------------------------------------------------------------------------
+# Re-export trail/events-mirror cluster from bucket_events.
+# ---------------------------------------------------------------------------
+from .bucket_events import (
+    BUCKET_EVENTS_INDEX_SCHEMA,
+    TRAIL_EVENT_SNAPSHOT_SCHEMA,
+    read_events_mirror_batches,
+    read_trail_event_export,
+    restore_trail_events_to_repo,
+    sync_events_mirror,
+    sync_trail_events_from_repo,
+    trail_event_snapshot,
+)
+
+# ---------------------------------------------------------------------------
+# Re-export Context Tree bucket projection cluster from bucket_context_store.
+# ---------------------------------------------------------------------------
+from .bucket_context_store import (
+    CONTEXT_LAYER_BLOB_SCHEMA,
+    CONTEXT_TREE_BUCKET_SCHEMA,
+    CONTEXT_TREE_REMOTE_SYNC_BLOCKER,
+    CONTEXT_TREE_SNAPSHOT_SCHEMA,
+    _BRANCH_TYPE_ORDINAL,
+    _blob_content_matches_path,
+    _build_context_head,
+    _build_context_layer_blob,
+    _context_blob_scope,
+    _hash_for_blob_path,
+    _head_payload_to_row,
+    _iter_context_blob_files,
+    _iter_context_tree_head_payloads,
+    _layer_id_refs_for_trace,
+    _layer_id_refs_from_events_mirror,
+    compute_context_tree_status,
+    context_tree_snapshot,
+    iter_context_tree_traces,
+    project_context_tree_to_bucket,
+    read_context_tree_head,
+    verify_context_tree_layer_refs,
+)
+
 
 TRACE_RECORD_BUCKET_SCHEMA = "opentraces.bucket.trace_record.v1"
 TRACE_RECORD_POINTER_SCHEMA = "opentraces.bucket.trace_record_pointer.v1"
@@ -67,22 +137,14 @@ TRACE_RECORD_PROJECT_STAGING = "_staging"
 RAW_SOURCE_SCHEMA = "opentraces.bucket.raw_source.v1"
 RAW_SOURCE_SNAPSHOT_SCHEMA = "opentraces.bucket.raw_sources_snapshot.v1"
 TRAIL_EVENT_EXPORT_SCHEMA = "opentraces.bucket.trail_events_export.v1"
-TRAIL_EVENT_SNAPSHOT_SCHEMA = "opentraces.bucket.trail_events_snapshot.v1"
 
 # Plan 080 — bucket layout v2. The schema_version on ``bucket/manifest.json`` is
 # the load-bearing contract between writer (this module) and remote sync
 # (``bucket_remote.py``). Mismatched versions raise ``BucketLayoutError`` on
 # read; there is no v1 reader path on this branch.
 BUCKET_MANIFEST_SCHEMA = "opentraces.bucket.manifest.v2"
-BUCKET_EVENTS_INDEX_SCHEMA = "opentraces.bucket.events.v2"
 BUCKET_PER_TRACE_SCHEMA = "opentraces.bucket.trace_envelope.v2"
 BUCKET_REMOTE_SCHEMA = "opentraces.bucket.fake_remote.v1"
-
-# Plan 079 — first-class Context Tree bucket projection (compat aliases).
-CONTEXT_TREE_BUCKET_SCHEMA = "opentraces.bucket.context_tree.v1"
-CONTEXT_LAYER_BLOB_SCHEMA = "opentraces.bucket.context_layer_blob.v1"
-CONTEXT_TREE_SNAPSHOT_SCHEMA = "opentraces.bucket.context_trees_snapshot.v1"
-CONTEXT_TREE_REMOTE_SYNC_BLOCKER = "context_tree_unfiltered_layers"
 
 
 class BucketLayoutError(RuntimeError):
@@ -456,873 +518,6 @@ def raw_source_snapshot(*, include_objects: bool = False) -> dict[str, Any]:
     return snapshot
 
 
-def sync_events_mirror(
-    repo: Path,
-    *,
-    repo_id: str,
-) -> dict[str, Any]:
-    """Mirror the repo-local TrailEvent Git ref into ``bucket/events/v1/`` (plan 080 §4).
-
-    Per Resolution B, this hard-cuts the legacy ``bucket/events/trail/v1/``
-    layout. Each Git batch becomes one ``batches/<seq>-<batch-id>.jsonl.gz``
-    file (gzip-deterministic) and the ``index.json`` head records the
-    aggregate counters consumed by remote sync and ``bucket repair``.
-
-    Idempotent: a tick that finds no new batches writes nothing (and skips
-    rewriting index.json when the counters are unchanged).
-    """
-
-    from .trails import EVENT_LOG_REF, event_log_status, read_events
-
-    status = event_log_status(repo)
-    if status.get("state") == "missing":
-        index = {
-            "schema_version": BUCKET_EVENTS_INDEX_SCHEMA,
-            "repo_id": repo_id,
-            "event_log_ref": EVENT_LOG_REF,
-            "event_log_head": None,
-            "batch_count": 0,
-            "last_batch_id": None,
-            "latest_event_sequence": 0,
-            "state": "missing",
-            "updated_at": utc_now_str(),
-        }
-        _atomic_write_json(events_v1_index_path(), index)
-        return index
-
-    from .trails.event_log import _is_ancestor
-
-    events = sorted(read_events(repo, verify=False), key=lambda e: e.event_sequence)
-
-    # Incremental fast-path: existing batch files are immutable (one batch per
-    # append, content-addressed), so when the prior index head is an ancestor
-    # of the current head we only group + write batches for events appended
-    # since. New batches always sort after existing ones, so their ordinals
-    # (and therefore filenames + contents) match a full rebuild byte-for-byte
-    # — keeping the replay-equals-git invariant.
-    index_path = events_v1_index_path()
-    prior_index: dict[str, Any] | None = None
-    if index_path.exists():
-        try:
-            prior_index = json.loads(index_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, json.JSONDecodeError):
-            prior_index = None
-    prior_head = prior_index.get("event_log_head") if prior_index else None
-    prior_seq = int(prior_index.get("latest_event_sequence", 0)) if prior_index else 0
-    prior_batch_count = int(prior_index.get("batch_count", 0)) if prior_index else 0
-    incremental = (
-        prior_index is not None
-        and isinstance(prior_head, str)
-        and events_v1_batches_dir().exists()
-        and _is_ancestor(repo, prior_head, status.get("head") or prior_head)
-    )
-
-    if incremental and prior_head == status.get("head"):
-        # Nothing new since the last mirror; leave the bucket untouched.
-        return prior_index
-
-    work_events = (
-        [e for e in events if e.event_sequence > prior_seq]
-        if incremental else events
-    )
-    seq_offset = prior_batch_count if incremental else 0
-
-    # Group the events we need to write by batch_id, in sequence order.
-    batch_order: list[str] = []
-    by_batch: dict[str, list[Any]] = {}
-    for event in work_events:
-        bid = event.batch_id
-        if bid not in by_batch:
-            by_batch[bid] = []
-            batch_order.append(bid)
-        by_batch[bid].append(event)
-
-    batches_dir = events_v1_batches_dir()
-    batches_dir.mkdir(parents=True, exist_ok=True)
-
-    batches_written = 0
-    last_batch_id: str | None = (
-        prior_index.get("last_batch_id") if incremental else None
-    )
-    latest_event_sequence = prior_seq if incremental else 0
-    for offset, bid in enumerate(batch_order, start=1):
-        seq = seq_offset + offset
-        batch_events = by_batch[bid]
-        # Filename: <seq>-<batch-id>.jsonl.gz; seq is zero-padded for sort.
-        safe_bid = _path_part(bid)
-        filename = f"{seq:012d}-{safe_bid}.jsonl.gz"
-        path = batches_dir / filename
-        lines = [
-            _canonical_json(event.model_dump(mode="json"))
-            for event in sorted(batch_events, key=lambda e: e.event_sequence)
-        ]
-        body = ("\n".join(lines) + "\n").encode("utf-8") if lines else b""
-        compressed = _gzip_deterministic(body)
-        if not (path.exists() and path.read_bytes() == compressed):
-            _atomic_write_bytes(path, compressed)
-            batches_written += 1
-        last_batch_id = bid
-        for ev in batch_events:
-            if ev.event_sequence > latest_event_sequence:
-                latest_event_sequence = ev.event_sequence
-
-    index = {
-        "schema_version": BUCKET_EVENTS_INDEX_SCHEMA,
-        "repo_id": repo_id,
-        "event_log_ref": EVENT_LOG_REF,
-        "event_log_head": status.get("head"),
-        "batch_count": seq_offset + len(batch_order),
-        "last_batch_id": last_batch_id,
-        "latest_event_sequence": latest_event_sequence,
-        "state": status.get("state"),
-        "updated_at": utc_now_str(),
-        "verification": {
-            "batch_count": status.get("batch_count"),
-            "batch_parents_linear": status.get("batch_parents_linear"),
-            "content_hashes_valid": status.get("content_hashes_valid"),
-            "event_chain_valid": status.get("event_chain_valid"),
-        },
-        "batches_written": batches_written,
-    }
-    _atomic_write_json(events_v1_index_path(), index)
-    return index
-
-
-# Compat alias for existing call sites (ingest.py / watcher/daemon.py).
-# These will be retired when those tracks merge.
-def sync_trail_events_from_repo(repo: Path, *, repo_id: str) -> dict[str, Any]:
-    """Deprecated alias for :func:`sync_events_mirror`. Plan 080 Resolution B."""
-
-    return sync_events_mirror(repo, repo_id=repo_id)
-
-
-def read_events_mirror_batches() -> Iterator[Any]:
-    """Yield decompressed ``TrailEvent`` instances from the v2 event-log mirror.
-
-    Walks ``bucket/events/v1/batches/*.jsonl.gz`` in sequence-prefix order,
-    decompressing each batch and yielding events in original order. Raises
-    ``FileNotFoundError`` if the mirror is missing entirely.
-    """
-
-    from .trails import TrailEvent
-
-    index_path = events_v1_index_path()
-    if not index_path.exists():
-        raise FileNotFoundError(
-            f"no v2 events mirror found at {index_path}; run "
-            f"'opentraces setup watcher tick' or 'opentraces bucket repair'"
-        )
-    try:
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        raise ValueError(f"unreadable events mirror index: {exc}") from exc
-    if index.get("schema_version") != BUCKET_EVENTS_INDEX_SCHEMA:
-        raise BucketLayoutError(
-            f"events mirror schema {index.get('schema_version')!r} incompatible with "
-            f"local {BUCKET_EVENTS_INDEX_SCHEMA!r}; run "
-            f"'opentraces bucket repair'"
-        )
-    batches_dir = events_v1_batches_dir()
-    if not batches_dir.exists():
-        return
-    for batch_path in sorted(batches_dir.glob("*.jsonl.gz")):
-        try:
-            raw = _read_gzip_bytes(batch_path).decode("utf-8")
-        except (OSError, gzip.BadGzipFile) as exc:
-            raise ValueError(f"unreadable events mirror batch {batch_path}: {exc}") from exc
-        for line in raw.splitlines():
-            if not line.strip():
-                continue
-            yield TrailEvent.model_validate_json(line)
-
-
-# Compat alias for callers still on the v1 export reader signature. Returns
-# (head, events) like the old function. The head shape uses the v2 fields so
-# downstream code can dispatch on schema_version.
-def read_trail_event_export(repo_id: str | None = None) -> tuple[dict[str, Any], list[Any]]:
-    """Deprecated alias for :func:`read_events_mirror_batches`.
-
-    Returns the v2 index head plus a list of decompressed ``TrailEvent``
-    instances, matching the legacy ``(head, events)`` tuple shape used by
-    ``bucket replay`` callers.
-    """
-
-    index_path = events_v1_index_path()
-    if not index_path.exists():
-        raise FileNotFoundError(
-            f"no v2 events mirror found for repo_id={repo_id!r}; run "
-            f"'opentraces setup watcher tick' or 'opentraces bucket repair'"
-        )
-    index = json.loads(index_path.read_text(encoding="utf-8"))
-    if index.get("schema_version") != BUCKET_EVENTS_INDEX_SCHEMA:
-        raise BucketLayoutError(
-            f"events mirror schema {index.get('schema_version')!r} incompatible with "
-            f"local {BUCKET_EVENTS_INDEX_SCHEMA!r}; run "
-            f"'opentraces bucket repair'"
-        )
-    events = list(read_events_mirror_batches())
-    return index, events
-
-
-def restore_trail_events_to_repo(
-    repo: Path,
-    *,
-    repo_id: str | None = None,
-    force: bool = False,
-) -> dict[str, Any]:
-    """Restore bucket-exported Trace Trails into a supplied Git repository.
-
-    Plan 080: reads from the v2 events mirror (``bucket/events/v1/``).
-    """
-
-    from .trails import import_event_log
-
-    head, events = read_trail_event_export(repo_id)
-    if not events:
-        return {
-            "state": "empty",
-            "repo": str(repo),
-            "repo_id": head.get("repo_id"),
-            "event_count": 0,
-            "events_imported": 0,
-        }
-    imported = import_event_log(repo, events, writer="bucket-restore", force=force)
-    return {
-        **imported,
-        "repo": str(repo),
-        "repo_id": head.get("repo_id"),
-        "export_event_log_head": head.get("event_log_head"),
-    }
-
-
-def trail_event_snapshot(*, include_objects: bool = False) -> dict[str, Any]:
-    """Return a deterministic snapshot of the v2 events mirror (plan 080).
-
-    Reads ``bucket/events/v1/index.json``. The legacy
-    ``bucket/events/trail/v1`` layout is retired; this snapshot is kept
-    only as a manifest contributor for compat callers.
-    """
-
-    index_path = events_v1_index_path()
-    head: dict[str, Any] | None = None
-    if index_path.exists():
-        try:
-            payload = json.loads(index_path.read_text(encoding="utf-8"))
-            if (
-                isinstance(payload, dict)
-                and payload.get("schema_version") == BUCKET_EVENTS_INDEX_SCHEMA
-            ):
-                head = payload
-        except (OSError, ValueError, json.JSONDecodeError):
-            head = None
-
-    heads_rows: list[dict[str, Any]] = []
-    if head is not None:
-        heads_rows.append(
-            {
-                "path": "events/v1/index.json",
-                "repo_id": head.get("repo_id"),
-                "event_log_head": head.get("event_log_head"),
-                "event_count": int(head.get("latest_event_sequence") or 0),
-                "batch_count": int(head.get("batch_count") or 0),
-                "state": head.get("state"),
-                "updated_at": head.get("updated_at"),
-                **({"object": head} if include_objects else {}),
-            }
-        )
-
-    digest_material = [
-        (
-            f"{item.get('path')} {item.get('event_log_head')} "
-            f"{item.get('event_count')} {item.get('batch_count')} {item.get('state')}"
-        )
-        for item in heads_rows
-    ]
-    snapshot: dict[str, Any] = {
-        "schema_version": TRAIL_EVENT_SNAPSHOT_SCHEMA,
-        "root": str(events_v1_root()),
-        "repository_count": len(heads_rows),
-        "event_count": sum(int(item.get("event_count") or 0) for item in heads_rows),
-        "batch_count": sum(int(item.get("batch_count") or 0) for item in heads_rows),
-        "digest": _digest_payload(digest_material),
-    }
-    if include_objects:
-        snapshot["objects"] = heads_rows
-    return snapshot
-
-
-# --------------------------------------------------------------------------- #
-# Plan 079 — Context Tree bucket projection (writer + reader API)
-# --------------------------------------------------------------------------- #
-#
-# This section owns the single writer for ``bucket/contexts/v1/``. The
-# canonical event log under ``refs/opentraces/local/events/v1`` is the
-# source of truth; this projection rebuilds the bucket layout from those
-# events on every call. Failure semantics: bucket write fails => event
-# log unaffected => next call rebuilds. Per plan 079, Context Tree blobs
-# are not remote-syncable by default (closed gate). Per the adversarial
-# review's Condition 1, layer blobs are scoped per-project unless the
-# user opts in to ``layer_blob_scope="global"``.
-
-# Branch types ordered for deterministic on-disk nodes.jsonl sort.
-_BRANCH_TYPE_ORDINAL: dict[str, int] = {
-    "root": 0,
-    "linear": 1,
-    "compaction_fork": 2,
-    "subagent_fork": 3,
-    "rewind_branch": 4,
-    "manual_branch": 5,
-}
-
-
-def _context_blob_scope() -> str:
-    """Resolve the active layer blob scope from config, with a safe default."""
-
-    try:
-        from .config import load_config
-
-        return load_config().bucket.contexts.layer_blob_scope
-    except Exception:
-        return "project"
-
-
-def _build_context_layer_blob(layer: Any) -> dict[str, Any]:
-    """Wrap a ContextLayer into the bucket-shaped blob envelope.
-
-    Plan 080 Resolution H: ``written_at`` is dropped from the blob payload —
-    layer blobs are pure content (``{layer_id, layer_type, capture_method,
-    completeness, content}``). Provenance lives in the event log.
-    """
-
-    return {
-        "schema_version": CONTEXT_LAYER_BLOB_SCHEMA,
-        "layer_id": layer.layer_id,
-        "layer_type": layer.layer_type,
-        "capture_method": layer.capture_method,
-        "completeness": layer.completeness,
-        "content": layer.content,
-    }
-
-
-def _build_context_head(
-    *,
-    project_slug: str,
-    trace_id: str,
-    node_ids: list[str],
-    layer_refs: list[str],
-    capture_methods: list[str],
-    active_leaf_node_id: str | None,
-    subagent_session_ids: list[str],
-    capture_limitations: list[str],
-    blob_scope: str,
-    event_log_head: str | None,
-    events_processed_through_sequence: int,
-) -> dict[str, Any]:
-    """Assemble the head.json envelope and compute its self-digest."""
-
-    payload = {
-        "schema_version": CONTEXT_TREE_BUCKET_SCHEMA,
-        "project_slug": project_slug,
-        "trace_id": trace_id,
-        "node_count": len(node_ids),
-        "layer_count": len(layer_refs),
-        "layer_refs": layer_refs,
-        "capture_methods": capture_methods,
-        "active_leaf_node_id": active_leaf_node_id,
-        "subagent_session_ids": subagent_session_ids,
-        "capture_limitations": capture_limitations,
-        "remote_sync": {
-            "eligible": False,
-            "scope": "private_bucket_only",
-            "publishable": False,
-            "blocked_reasons": [CONTEXT_TREE_REMOTE_SYNC_BLOCKER],
-        },
-        "blob_scope": blob_scope,
-        "last_projection_at": utc_now_str(),
-        "event_log_head": event_log_head,
-        "events_processed_through_sequence": events_processed_through_sequence,
-    }
-    payload["digest"] = _digest_payload(payload)
-    return payload
-
-
-def project_context_tree_to_bucket(
-    repo: Path,
-    *,
-    project_slug: str,
-    trace_id: str | None = None,
-) -> dict[str, Any]:
-    """Project Context Tree events from the canonical event log into the bucket.
-
-    Reads ``read_events(repo)`` through ``build_context_tree_projection``.
-    For each trace (or just ``trace_id`` if given) writes layer blobs,
-    nodes.jsonl, optional reconciliation.json, then atomically writes
-    head.json LAST so a partial run never points at missing blobs.
-
-    See plan 079 §"Writer" for the full contract.
-    """
-
-    from .context_tree.contract import CONTEXT_TREE_RECONCILED
-    from .context_tree.query import build_context_tree_projection
-    from .trails import event_log_status, read_events
-
-    # When a single trace is targeted (the per-session ingest path), build
-    # only that trace's projection instead of re-walking the whole history.
-    projection = build_context_tree_projection(repo, trace_id=trace_id)
-    status = event_log_status(repo)
-    event_log_head = status.get("head")
-    blob_scope = _context_blob_scope()
-
-    if trace_id is not None:
-        target_trace_ids = [trace_id] if trace_id in projection.nodes_by_trace else []
-    else:
-        target_trace_ids = sorted(projection.nodes_by_trace.keys())
-
-    # Precompute reconciled payload + max event sequence per trace.
-    # NOTE: ``build_context_tree_projection`` above already called
-    # ``read_events(repo)`` with the default ``verify=True``. We share that
-    # cache key here to avoid a second full event-log walk per projection.
-    reconciled_by_trace: dict[str, dict[str, Any]] = {}
-    max_seq_by_trace: dict[str, int] = {tid: 0 for tid in target_trace_ids}
-    target_set = set(target_trace_ids)
-    for event in read_events(repo):
-        ev_trace_id = event.trace_id or (event.payload.get("trace_id") if isinstance(event.payload, dict) else None)
-        if not ev_trace_id or ev_trace_id not in target_set:
-            continue
-        if event.event_sequence > max_seq_by_trace.get(ev_trace_id, 0):
-            max_seq_by_trace[ev_trace_id] = event.event_sequence
-        if event.event_type == CONTEXT_TREE_RECONCILED:
-            reconciled_by_trace[ev_trace_id] = dict(event.payload or {})
-
-    blobs_written = 0
-    blobs_unchanged = 0
-    heads_written = 0
-    heads_unchanged = 0
-
-    for tid in target_trace_ids:
-        node_ids = list(projection.nodes_by_trace.get(tid, []))
-        nodes = [projection.nodes_by_id[nid] for nid in node_ids if nid in projection.nodes_by_id]
-        if not nodes:
-            continue
-
-        # Collect referenced layer ids (sorted dedup).
-        ref_set: set[str] = set()
-        for n in nodes:
-            ref_set.update({
-                n.system_layer_id,
-                n.messages_layer_id,
-                n.tool_registry_layer_id,
-                n.runtime_state_layer_id,
-            })
-        layer_refs = sorted(ref_set)
-
-        # Per-layer capture_methods (sorted dedup across all referenced layers).
-        capture_methods_set: set[str] = set()
-        for lid in layer_refs:
-            layer = projection.layers_by_id.get(lid)
-            if layer is None:
-                continue
-            capture_methods_set.add(layer.capture_method)
-        capture_methods = sorted(capture_methods_set)
-
-        # 1. Write layer blobs first (content-addressed; no-op when present).
-        for lid in layer_refs:
-            layer = projection.layers_by_id.get(lid)
-            if layer is None:
-                continue
-            blob_path = context_layer_blob_path(project_slug, lid, scope=blob_scope)
-            blob_payload = _build_context_layer_blob(layer)
-            blob_bytes = _canonical_json(blob_payload, pretty=True).encode("utf-8")
-            if blob_path.exists():
-                try:
-                    existing = json.loads(_read_gzip_bytes(blob_path).decode("utf-8"))
-                except (OSError, ValueError, gzip.BadGzipFile, json.JSONDecodeError):
-                    existing = None
-                if isinstance(existing, dict) and existing == blob_payload:
-                    blobs_unchanged += 1
-                    continue
-            _atomic_write_gzip(blob_path, blob_bytes)
-            blobs_written += 1
-
-        # 2. nodes.jsonl — full deterministic rewrite, sorted.
-        sorted_nodes = sorted(
-            nodes,
-            key=lambda n: (
-                _BRANCH_TYPE_ORDINAL.get(n.branch_type, 99),
-                n.step_index if n.step_index is not None else 1_000_000_000,
-                n.node_id,
-            ),
-        )
-        nodes_jsonl_text = "\n".join(
-            _canonical_json(n.model_dump(mode="json")) for n in sorted_nodes
-        )
-        if nodes_jsonl_text:
-            nodes_jsonl_text += "\n"
-        _atomic_write_text(
-            context_tree_nodes_path(project_slug, tid),
-            nodes_jsonl_text,
-        )
-
-        # 3. reconciliation.json (only when a reconciled event exists).
-        reconciled = reconciled_by_trace.get(tid)
-        recon_path = context_tree_reconciliation_path(project_slug, tid)
-        if reconciled is not None:
-            reconciliation_payload = {
-                "schema_version": CONTEXT_TREE_BUCKET_SCHEMA,
-                "trace_id": tid,
-                **reconciled,
-            }
-            _atomic_write_json(recon_path, reconciliation_payload)
-
-        # 4. Determine head + active leaf metadata for the head.json envelope.
-        active_leaf_uuid = projection.active_leaves_by_trace.get(tid)
-        active_leaf_node_id: str | None = None
-        if active_leaf_uuid:
-            leaf_node = projection.node_for_transcript_uuid(tid, active_leaf_uuid)
-            if leaf_node is not None:
-                active_leaf_node_id = leaf_node.node_id
-        if active_leaf_node_id is None and reconciled and reconciled.get("active_path_leaf_id"):
-            active_leaf_node_id = reconciled.get("active_path_leaf_id")
-
-        subagent_session_ids = sorted(set(
-            projection.subagent_session_ids_by_trace.get(tid, []) or []
-        ))
-        capture_limitations = sorted(set(
-            projection.capture_limitations_by_trace.get(tid, []) or []
-        ))
-
-        head_payload = _build_context_head(
-            project_slug=project_slug,
-            trace_id=tid,
-            node_ids=node_ids,
-            layer_refs=layer_refs,
-            capture_methods=capture_methods,
-            active_leaf_node_id=active_leaf_node_id,
-            subagent_session_ids=subagent_session_ids,
-            capture_limitations=capture_limitations,
-            blob_scope=blob_scope,
-            event_log_head=event_log_head,
-            events_processed_through_sequence=int(max_seq_by_trace.get(tid, 0)),
-        )
-
-        # 5. head.json LAST. Detect byte-identical (ignoring volatile fields).
-        head_path = context_tree_head_path(project_slug, tid)
-        existing_head = read_context_tree_head(project_slug, tid)
-        unchanged = False
-        if existing_head is not None:
-            volatile = {"last_projection_at", "digest", "event_log_head"}
-            stable_existing = {k: v for k, v in existing_head.items() if k not in volatile}
-            stable_new = {k: v for k, v in head_payload.items() if k not in volatile}
-            unchanged = stable_existing == stable_new
-        if unchanged:
-            heads_unchanged += 1
-        else:
-            _atomic_write_json(head_path, head_payload)
-            heads_written += 1
-
-    return {
-        "schema_version": CONTEXT_TREE_BUCKET_SCHEMA,
-        "substrate": "context-tree",
-        "traces_projected": len(target_trace_ids),
-        "blobs_written": blobs_written,
-        "blobs_unchanged": blobs_unchanged,
-        "heads_written": heads_written,
-        "heads_unchanged": heads_unchanged,
-        "idempotent_noop": blobs_written == 0 and heads_written == 0,
-        "event_log_head": event_log_head,
-        "blob_scope": blob_scope,
-        "projected_at": utc_now_str(),
-    }
-
-
-def read_context_tree_head(project_slug: str, trace_id: str) -> dict[str, Any] | None:
-    """Return the per-trace head envelope (raw dict), or None if missing."""
-
-    path = context_tree_head_path(project_slug, trace_id)
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    if payload.get("schema_version") != CONTEXT_TREE_BUCKET_SCHEMA:
-        return None
-    return payload
-
-
-def _iter_context_tree_head_payloads(
-    project_slug: str | None = None,
-) -> list[tuple[str, str, dict[str, Any]]]:
-    """Walk every projected head.json once; return ``(slug, tid, payload)``.
-
-    Single source of disk I/O for ``iter_context_tree_traces``,
-    ``verify_context_tree_layer_refs``, and ``context_tree_snapshot`` so a
-    status / manifest pass reads each head exactly once. Sorted by
-    ``(project_slug, trace_id)``.
-    """
-
-    root = contexts_root()
-    out: list[tuple[str, str, dict[str, Any]]] = []
-    if not root.exists():
-        return out
-    project_pattern = _path_part(project_slug) if project_slug else "*"
-    for head_path in sorted(root.glob(f"{project_pattern}/*/head.json")):
-        try:
-            payload = json.loads(head_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("schema_version") != CONTEXT_TREE_BUCKET_SCHEMA:
-            continue
-        proj_slug = str(payload.get("project_slug") or head_path.parent.parent.name)
-        tid = str(payload.get("trace_id") or head_path.parent.name)
-        if project_slug is not None and proj_slug != project_slug:
-            continue
-        out.append((proj_slug, tid, payload))
-    out.sort(key=lambda item: (item[0], item[1]))
-    return out
-
-
-def _head_payload_to_row(
-    proj_slug: str, tid: str, payload: dict[str, Any]
-) -> dict[str, Any]:
-    sync = payload.get("remote_sync") or {}
-    return {
-        "project_slug": proj_slug,
-        "trace_id": tid,
-        "node_count": int(payload.get("node_count") or 0),
-        "layer_count": int(payload.get("layer_count") or 0),
-        "capture_methods": list(payload.get("capture_methods") or []),
-        "blob_scope": payload.get("blob_scope") or "project",
-        "last_projection_at": payload.get("last_projection_at"),
-        "remote_sync_eligible": bool(sync.get("eligible")),
-        "events_processed_through_sequence": int(
-            payload.get("events_processed_through_sequence") or 0
-        ),
-    }
-
-
-def iter_context_tree_traces(
-    project_slug: str | None = None,
-) -> list[dict[str, Any]]:
-    """Return one summary row per projected trace.
-
-    Sorted deterministically by ``(project_slug, trace_id)``.
-    """
-
-    return [
-        _head_payload_to_row(slug, tid, payload)
-        for slug, tid, payload in _iter_context_tree_head_payloads(project_slug)
-    ]
-
-
-def verify_context_tree_layer_refs(
-    project_slug: str | None = None,
-    *,
-    _heads: list[tuple[str, str, dict[str, Any]]] | None = None,
-) -> dict[str, Any]:
-    """Walk every projected head and confirm referenced layer_ids resolve to blobs.
-
-    ``_heads`` is an internal optimisation knob used by aggregators that
-    have already walked the heads (e.g. ``compute_context_tree_status``);
-    when supplied the helper skips its own disk walk. Pass-through only,
-    not part of the public contract.
-    """
-
-    if _heads is None:
-        head_triples = _iter_context_tree_head_payloads(project_slug=project_slug)
-    else:
-        if project_slug is None:
-            head_triples = list(_heads)
-        else:
-            head_triples = [item for item in _heads if item[0] == project_slug]
-    dangling: list[dict[str, Any]] = []
-    for slug, tid, head in head_triples:
-        scope = head.get("blob_scope") or "project"
-        for layer_id in head.get("layer_refs") or []:
-            expected_path = context_layer_blob_path(
-                slug, str(layer_id), scope=str(scope)
-            )
-            if not expected_path.exists():
-                try:
-                    rel = expected_path.relative_to(paths.bucket_dir()).as_posix()
-                except ValueError:
-                    rel = str(expected_path)
-                dangling.append(
-                    {
-                        "project_slug": slug,
-                        "trace_id": tid,
-                        "missing_layer_id": layer_id,
-                        "expected_blob_path": rel,
-                    }
-                )
-    return {
-        "state": "ok" if not dangling else "dangling",
-        "trace_count": len(head_triples),
-        "dangling_layer_refs_count": len(dangling),
-        "dangling": dangling,
-    }
-
-
-def compute_context_tree_status() -> dict[str, Any]:
-    """Aggregate snapshot + freshness + integrity for plan 079 status surfaces.
-
-    Single source of truth shared by ``opentraces bucket context-tree status``
-    and the doctor ``context_tree`` panel so the two surfaces never drift.
-    Pure read-only aggregator over ``context_tree_snapshot()`` (dedup
-    metrics), per-project event log status (catch-up metrics), and
-    ``verify_context_tree_layer_refs`` (integrity).
-    """
-
-    from .config import get_project_dir, load_config, opted_in_projects
-    from .trails import event_log_status, read_events
-
-    # Walk every head.json exactly once and feed the three aggregators
-    # via internal ``_heads`` kwargs so they never re-read from disk.
-    # Without this, an interactive ``bucket context-tree status`` on a
-    # registry with N traces does 3*N head reads.
-    head_triples = _iter_context_tree_head_payloads()
-    snapshot = context_tree_snapshot(include_objects=False, _heads=head_triples)
-    verify = verify_context_tree_layer_refs(_heads=head_triples)
-
-    # Aggregate per-project max processed sequence + latest projection
-    # timestamp in the same pass; rows list is unused beyond this loop.
-    max_processed_by_project: dict[str, int] = {}
-    last_projection_at: str | None = None
-    for slug, _tid, payload in head_triples:
-        processed = int(payload.get("events_processed_through_sequence") or 0)
-        if processed > max_processed_by_project.get(slug, 0):
-            max_processed_by_project[slug] = processed
-        ts = payload.get("last_projection_at")
-        if ts and (last_projection_at is None or ts > last_projection_at):
-            last_projection_at = ts
-
-    cfg = load_config()
-    project_paths = [Path(path) for path in opted_in_projects(cfg)]
-    events_behind = 0
-    oldest_unprojected_event_time: str | None = None
-    event_log_head: str | None = None
-    for project_path in project_paths:
-        if not project_path.exists():
-            continue
-        try:
-            project_slug = get_project_dir(project_path).name
-            status = event_log_status(project_path)
-        except Exception:
-            continue
-        if status.get("state") in {"missing", "error"}:
-            continue
-        current_count = int(status.get("event_count", 0) or 0)
-        if event_log_head is None:
-            event_log_head = status.get("head")
-        max_processed = max_processed_by_project.get(project_slug, 0)
-        delta = max(0, current_count - max_processed)
-        events_behind += delta
-        if delta > 0:
-            try:
-                events = read_events(project_path, verify=False)
-            except Exception:
-                events = []
-            for event in sorted(events, key=lambda e: e.event_sequence):
-                if event.event_sequence <= max_processed:
-                    continue
-                ts = getattr(event, "created_at", None)
-                if ts is not None:
-                    ts_str = ts if isinstance(ts, str) else ts.isoformat()
-                    if (
-                        oldest_unprojected_event_time is None
-                        or ts_str < oldest_unprojected_event_time
-                    ):
-                        oldest_unprojected_event_time = ts_str
-                break
-
-    return {
-        "schema_version": snapshot.get("schema_version"),
-        "root": snapshot.get("root"),
-        "trace_count": snapshot.get("trace_count", 0),
-        "unique_layer_blob_count": snapshot.get("unique_layer_blob_count", 0),
-        "sum_layer_refs_count": snapshot.get("sum_layer_refs_count", 0),
-        "dedup_hits": snapshot.get("dedup_hits", 0),
-        "global_shared_blob_count": snapshot.get("global_shared_blob_count", 0),
-        "digest": snapshot.get("digest"),
-        "last_projection_at": last_projection_at,
-        "events_since_last_projection": events_behind,
-        "oldest_unprojected_event_time": oldest_unprojected_event_time,
-        "event_log_head": event_log_head,
-        "dangling_layer_refs_count": int(
-            verify.get("dangling_layer_refs_count", 0) or 0
-        ),
-    }
-
-
-def context_tree_snapshot(
-    *,
-    include_objects: bool = False,
-    _heads: list[tuple[str, str, dict[str, Any]]] | None = None,
-) -> dict[str, Any]:
-    """Deterministic snapshot for bucket manifest digest contribution.
-
-    ``_heads`` is an internal optimisation knob — see
-    ``verify_context_tree_layer_refs`` for the same pattern.
-    """
-
-    root = contexts_root()
-    head_triples = (
-        _iter_context_tree_head_payloads() if _heads is None else list(_heads)
-    )
-    head_payloads: list[dict[str, Any]] = [payload for _, _, payload in head_triples]
-    unique_blob_ids: set[str] = set()
-    sum_layer_refs = 0
-    for head in head_payloads:
-        for lid in head.get("layer_refs") or []:
-            unique_blob_ids.add(str(lid))
-        sum_layer_refs += int(head.get("layer_count") or 0)
-
-    # Count blobs physically present under _shared/ (global scope).
-    # Plan 080: global-scope blobs now live at
-    # ``bucket/blobs/v1/_shared/context/<hh>/<hash>.json.gz``.
-    global_shared_blob_count = 0
-    shared_dir = blobs_v1_root() / "_shared" / "context"
-    if shared_dir.exists():
-        for blob_path in shared_dir.rglob("*.json.gz"):
-            if blob_path.is_file():
-                global_shared_blob_count += 1
-
-    digest_material = {
-        "schema_version": CONTEXT_TREE_SNAPSHOT_SCHEMA,
-        "trace_count": len(head_payloads),
-        "heads": sorted(
-            [
-                {
-                    "project_slug": h.get("project_slug"),
-                    "trace_id": h.get("trace_id"),
-                    "digest": h.get("digest"),
-                }
-                for h in head_payloads
-            ],
-            key=lambda item: (str(item.get("project_slug")), str(item.get("trace_id"))),
-        ),
-        "unique_layer_blob_ids": sorted(unique_blob_ids),
-        "global_shared_blob_count": global_shared_blob_count,
-    }
-    snapshot: dict[str, Any] = {
-        "schema_version": CONTEXT_TREE_SNAPSHOT_SCHEMA,
-        "root": str(root),
-        "trace_count": len(head_payloads),
-        "unique_layer_blob_count": len(unique_blob_ids),
-        "sum_layer_refs_count": sum_layer_refs,
-        "dedup_hits": sum_layer_refs - len(unique_blob_ids),
-        "global_shared_blob_count": global_shared_blob_count,
-        "digest": _digest_payload(digest_material),
-    }
-    if include_objects:
-        snapshot["objects"] = head_payloads
-    return snapshot
-
-
 # ---------------------------------------------------------------------------
 # Plan 080 — Per-trace envelope projector (Writer 2 per plan §9)
 # ---------------------------------------------------------------------------
@@ -1640,166 +835,6 @@ def _trace_ids_for_project(repo: Path) -> list[str]:
         if tid:
             seen.add(str(tid))
     return sorted(seen)
-
-
-def _layer_id_refs_for_trace(
-    project_slug: str, trace_id: str
-) -> set[str]:
-    """Collect every layer_id referenced by one per-trace ``context.jsonl.gz``.
-
-    A layer_id appears either at the top of a ``context_layer_captured``
-    payload (``layer_id`` / ``payload.layer_id``) or as one of the four
-    ``*_layer_id`` slots on a ``context_node_observed`` payload. Both shapes
-    are walked; missing files yield an empty set.
-    """
-
-    ctx_path = trace_v1_context_path(project_slug, trace_id)
-    if not ctx_path.exists():
-        return set()
-    try:
-        raw = _read_gzip_bytes(ctx_path).decode("utf-8")
-    except (OSError, gzip.BadGzipFile):
-        return set()
-    refs: set[str] = set()
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except (ValueError, json.JSONDecodeError):
-            continue
-        payload = obj.get("payload") if isinstance(obj, dict) else None
-        if not isinstance(payload, dict):
-            continue
-        lid = payload.get("layer_id")
-        if isinstance(lid, str) and lid:
-            refs.add(lid)
-        for key in (
-            "system_layer_id",
-            "messages_layer_id",
-            "tool_registry_layer_id",
-            "runtime_state_layer_id",
-        ):
-            value = payload.get(key)
-            if isinstance(value, str) and value:
-                refs.add(value)
-    return refs
-
-
-def _layer_id_refs_from_events_mirror() -> set[str]:
-    """Collect layer_ids referenced by the events mirror (``bucket/events/v1/``).
-
-    Walks ``bucket/events/v1/batches/*.jsonl.gz`` directly so we never touch
-    the canonical Git ref. Empty if the mirror does not exist.
-    """
-
-    refs: set[str] = set()
-    batches_dir = events_v1_batches_dir()
-    if not batches_dir.exists():
-        return refs
-    for batch_path in sorted(batches_dir.glob("*.jsonl.gz")):
-        try:
-            raw = _read_gzip_bytes(batch_path).decode("utf-8")
-        except (OSError, gzip.BadGzipFile):
-            continue
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except (ValueError, json.JSONDecodeError):
-                continue
-            payload = obj.get("payload") if isinstance(obj, dict) else None
-            if not isinstance(payload, dict):
-                continue
-            lid = payload.get("layer_id")
-            if isinstance(lid, str) and lid:
-                refs.add(lid)
-            for key in (
-                "system_layer_id",
-                "messages_layer_id",
-                "tool_registry_layer_id",
-                "runtime_state_layer_id",
-            ):
-                value = payload.get(key)
-                if isinstance(value, str) and value:
-                    refs.add(value)
-    return refs
-
-
-def _iter_context_blob_files() -> Iterator[Path]:
-    """Yield every existing context blob file under ``bucket/blobs/v1/.../context/``.
-
-    Includes both per-project (``<project>/context/<hh>/<hash>.json.gz``)
-    and globally-shared (``_shared/context/...``) layouts. Sorted for
-    deterministic prune output.
-    """
-
-    root = blobs_v1_root()
-    if not root.exists():
-        return
-    for blob in sorted(root.glob("*/context/*/*.json.gz")):
-        if blob.is_file():
-            yield blob
-
-
-def _hash_for_blob_path(path: Path) -> str | None:
-    """Return the ``sha256:<hex>`` value encoded in ``<hh>/<hash>.json.gz``.
-
-    Returns ``None`` if the path does not match the expected shape — the
-    caller treats those as orphans worth a log line but never deletes them.
-    """
-
-    if path.suffix != ".gz":
-        return None
-    stem = path.stem  # "<hash>.json" once gzip suffix is dropped
-    if not stem.endswith(".json"):
-        return None
-    digest_hex = stem[: -len(".json")]
-    if not digest_hex or len(digest_hex) < 4:
-        return None
-    return f"sha256:{digest_hex}"
-
-
-def _blob_content_matches_path(path: Path) -> tuple[bool, str | None]:
-    """Recompute the content hash of one context blob and compare to its path.
-
-    The canonical form is the JSON the writer fed through
-    :func:`_canonical_json` in :func:`project_context_tree_to_bucket`: it
-    contains ``layer_id`` / ``layer_type`` / ``capture_method`` /
-    ``completeness`` / ``content`` (plus the ``schema_version`` envelope).
-    The recomputed hash matches the path-encoded hash IFF the writer stored
-    a hash of the layer content matching the file location.
-
-    For plan 080's verify primitive we treat the *layer_id* itself as the
-    truth: blobs are content-addressed by the layer_id encoded in the path,
-    and the blob payload must echo that same layer_id (otherwise it is
-    corrupted). This avoids re-deriving the layer_id hashing rules (those
-    live in :mod:`context_tree.models`) and instead asserts: "the path's
-    hash equals the blob payload's layer_id".
-
-    Returns ``(ok, detail)`` where ``ok`` is True on a clean match and
-    ``detail`` is a short failure reason when False.
-    """
-
-    expected = _hash_for_blob_path(path)
-    if expected is None:
-        return False, "unexpected filename shape"
-    try:
-        raw = _read_gzip_bytes(path).decode("utf-8")
-        payload = json.loads(raw)
-    except (OSError, gzip.BadGzipFile, ValueError, json.JSONDecodeError) as exc:
-        return False, f"unreadable blob: {exc}"
-    if not isinstance(payload, dict):
-        return False, "blob payload is not an object"
-    lid = payload.get("layer_id")
-    if not isinstance(lid, str) or not lid:
-        return False, "blob missing layer_id"
-    if lid != expected:
-        return False, f"layer_id {lid!r} does not match path hash {expected!r}"
-    return True, None
 
 
 def bucket_repair(*, dry_run: bool = False) -> dict[str, Any]:
@@ -3054,64 +2089,6 @@ def _needs_legacy_security_refresh(record: TraceRecord) -> bool:
     return not bool(state.get("syncable"))
 
 
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    text = _canonical_json(payload, pretty=True)
-    _atomic_write_text(path, text)
-
-
-def _atomic_write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    current = path.read_text(encoding="utf-8") if path.exists() else None
-    if current == text:
-        return
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        Path(tmp_name).replace(path)
-    finally:
-        tmp_path = Path(tmp_name)
-        if tmp_path.exists():
-            tmp_path.unlink()
-
-
-def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and path.read_bytes() == data:
-        return
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-        Path(tmp_name).replace(path)
-    finally:
-        tmp_path = Path(tmp_name)
-        if tmp_path.exists():
-            tmp_path.unlink()
-
-
-def _gzip_deterministic(data: bytes) -> bytes:
-    """Deterministic gzip with ``mtime=0`` per plan 080 Resolution H.
-
-    All gzipped surfaces (layer blobs, per-trace JSONL, event-log mirror)
-    use this helper so two machines projecting the same content produce
-    byte-identical output.
-    """
-
-    return gzip.compress(data, mtime=0, compresslevel=6)
-
-
-def _atomic_write_gzip(path: Path, data: bytes) -> None:
-    """Atomic write of ``data`` gzipped with deterministic settings."""
-
-    _atomic_write_bytes(path, _gzip_deterministic(data))
-
-
-def _read_gzip_bytes(path: Path) -> bytes:
-    return gzip.decompress(path.read_bytes())
-
-
 def _bucket_sync_blockers(
     *,
     unfiltered_count: int,
@@ -3167,26 +2144,6 @@ def _copy_bucket_tree(
         tmp.replace(target)
         copied += 1
     return copied
-
-
-def _digest_payload(payload: Any) -> str:
-    import hashlib
-
-    return f"sha256:{hashlib.sha256(_canonical_json(payload).encode('utf-8')).hexdigest()}"
-
-
-def _digest_bytes(payload: bytes) -> str:
-    import hashlib
-
-    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
-
-
-def _canonical_json(payload: Any, *, pretty: bool = False) -> str:
-    if pretty:
-        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-
-
 
 
 def _resolve_trace_record_pointer(path: Path) -> Path:
