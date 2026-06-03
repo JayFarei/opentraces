@@ -10,6 +10,7 @@ from pathlib import Path
 import click
 
 from ._help import OpentracesCommand, OpentracesGroup
+from ._options import dump_json as _dump_json
 from ..core.datasets import list_datasets
 from ..core.workflows import (
     WorkflowPackage,
@@ -56,7 +57,7 @@ def workflow_list(show_digest: bool, as_json: bool) -> None:
         for workflow in workflows
     ]
     if as_json:
-        click.echo(json.dumps({"status": "ok", "workflows": payload}, indent=2, sort_keys=True))
+        click.echo(_dump_json({"status": "ok", "workflows": payload}))
         return
     if not workflows:
         click.echo("No workflows installed.")
@@ -88,7 +89,7 @@ def workflow_create(
         sys.exit(3)
     payload = {"status": "ok", "workflow": _workflow_payload(workflow)}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Workflow created: {workflow.name}  {workflow.path}")
 
@@ -99,7 +100,7 @@ def workflow_templates(as_json: bool) -> None:
     """List built-in workflow templates available to `workflow create`."""
     templates = list_workflow_templates()
     if as_json:
-        click.echo(json.dumps({"status": "ok", "templates": templates}, indent=2, sort_keys=True))
+        click.echo(_dump_json({"status": "ok", "templates": templates}))
         return
     for template in templates:
         click.echo(template)
@@ -127,7 +128,7 @@ def workflow_remove(name: str, yes: bool, as_json: bool) -> None:
         },
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Workflow removed: {name}")
 
@@ -237,7 +238,7 @@ def workflow_optimize(
         **outcome.metadata,
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(
         f"SkillOpt: {outcome.rollout_rows} rollout row(s), "
@@ -317,7 +318,7 @@ def workflow_skill_intelligence(
         **result.metadata,
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(
         f"Skill Intelligence: {result.selected_skill}, "
@@ -431,7 +432,7 @@ def workflow_verifier_factory(
         "packages": packages,
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Verifier candidates: {result.candidates_path}")
     for pkg in packages:

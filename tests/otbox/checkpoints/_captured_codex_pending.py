@@ -1,10 +1,10 @@
-"""Pending plan 083 Codex capture checkpoints.
+"""Artifact-preferred plan 083 Codex capture checkpoints.
 
-Each checkpoint is artifact-preferred and inert until its corresponding
-``tests/otbox/captures/<scenario>/`` artifact exists. This lets journey
-TOMLs pin the correct future lane today while default CI reports SKIP
-instead of accidentally exercising assertions against the linear Codex
-artifact.
+Each checkpoint is inert until its corresponding
+``tests/otbox/captures/<scenario>/`` snapshot.tar.gz artifact exists.
+This lets journey TOMLs declare the correct capture lane while default
+CI reports SKIP instead of accidentally exercising assertions against
+the missing artifact.
 """
 
 from __future__ import annotations

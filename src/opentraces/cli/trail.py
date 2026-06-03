@@ -12,6 +12,7 @@ from typing import Any
 import click
 
 from ._help import OpentracesCommand, OpentracesGroup
+from ._options import dump_json as _dump_json, project_dir_option
 from ..clients.text.colors import Role, detect_color, paint, render_handle
 
 
@@ -250,13 +251,7 @@ def trail_group() -> None:
 @click.option("--step", "step_index", default=None, type=int, help="Trace step index.")
 @click.option("--commit", "commit", default=None, help="Git commit to explain.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def explain_cmd(
     target: str | None,
     trace_id: str | None,
@@ -287,7 +282,7 @@ def explain_cmd(
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     if target:
@@ -358,13 +353,7 @@ def explain_cmd(
 )
 @click.argument("resource")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def resolve_cmd(resource: str, as_json: bool, project_dir: Path | None) -> None:
     """Resolve a stable ot:// Trace Trails resource."""
     from ..core.trails import resolve_resource
@@ -380,7 +369,7 @@ def resolve_cmd(resource: str, as_json: bool, project_dir: Path | None) -> None:
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     click.echo(f"{payload.get('resource_type')}: {payload.get('relation')}")
@@ -418,13 +407,7 @@ def resolve_cmd(resource: str, as_json: bool, project_dir: Path | None) -> None:
     help="Max commits to observe per Git Anchor (default 500, min 2).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def sync_cmd(
     trace_patch_id: str | None,
     git_anchor_id: str | None,
@@ -454,7 +437,7 @@ def sync_cmd(
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     current = payload.get("current_survival") or {}
@@ -494,13 +477,7 @@ def sync_cmd(
 )
 @click.option("--trace", "trace_id", required=True, help="Trace id to inspect.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def snapshots_cmd(trace_id: str, as_json: bool, project_dir: Path | None) -> None:
     """List Trace Snapshot rewind candidates for a trace."""
     from ..core.trails import list_trace_snapshots
@@ -516,7 +493,7 @@ def snapshots_cmd(trace_id: str, as_json: bool, project_dir: Path | None) -> Non
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     click.echo(f"Trace Snapshots for {trace_id}")
@@ -563,13 +540,7 @@ def snapshot_group() -> None:
     default=None,
     help="Materialization directory. Defaults to an isolated opentraces worktree path.",
 )
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def snapshot_checkout_cmd(
     snapshot_ref: str,
     dry_run: bool,
@@ -596,7 +567,7 @@ def snapshot_checkout_cmd(
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     if payload.get("relation") == "unknown":
@@ -628,13 +599,7 @@ def snapshot_checkout_cmd(
 @click.argument("trace_id")
 @click.option("--table", "as_table", is_flag=True, help="Emit compact human table.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def timeline_cmd(
     trace_id: str,
     as_table: bool,
@@ -659,7 +624,7 @@ def timeline_cmd(
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     if as_table:
@@ -828,13 +793,7 @@ def _render_explain_step(payload: dict[str, Any]) -> str:
     default=None,
     help="Max commits walked per Git Anchor (default 500).",
 )
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def track_cmd(
     trace_id: str | None,
     trace_patch_id: str | None,
@@ -1004,7 +963,7 @@ def track_cmd(
         return
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     if renderer is not None:
@@ -1074,7 +1033,7 @@ def teleport_export_cmd(trace_id: str, output: Path, as_json: bool) -> None:
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Trace teleported: {payload['output']}")
     click.echo(f"  events:    {payload['event_count']}")
@@ -1118,7 +1077,7 @@ def teleport_open_cmd(workspace: Path, project: Path, as_json: bool) -> None:
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Trace workspace opened: {payload['project']}")
     click.echo(f"  events:    {payload['event_count']}")
@@ -2090,13 +2049,7 @@ def _render_search_results(
     default=None,
     help="Bucket TrailEvents repo id when the remote bucket has multiple repository exports.",
 )
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def search_cmd(
     trace_id: str | None,
     commit: str | None,
@@ -2239,7 +2192,7 @@ def search_cmd(
         payload["remote_bucket"] = remote_bucket_payload
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     click.echo(
@@ -2275,13 +2228,7 @@ def search_cmd(
 @click.option("--from-step", "from_step", required=True, type=int, help="Starting step snapshot.")
 @click.option("--to-step", "to_step", required=True, type=int, help="Ending step snapshot.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def diff_cmd(
     trace_id: str,
     from_step: int,
@@ -2303,7 +2250,7 @@ def diff_cmd(
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     if payload.get("relation") == "unknown":
@@ -2336,13 +2283,7 @@ def diff_cmd(
     "--commit", "commit", required=True, help="Git commit to anchor against."
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def attach_cmd(
     trace_id: str,
     commit: str,
@@ -2418,13 +2359,7 @@ def attach_cmd(
     ],
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 @click.option(
     "--commits",
     type=int,
@@ -2467,7 +2402,7 @@ def mature_cmd(
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(summary, indent=2, sort_keys=True))
+        click.echo(_dump_json(summary))
         if summary["errors"]:
             sys.exit(2)
         return
@@ -2502,13 +2437,7 @@ def mature_cmd(
     ],
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def rebuild_cmd(as_json: bool, project_dir: Path | None) -> None:
     """Re-derive Trace Trails advisory projections from the event log.
 
@@ -2530,7 +2459,7 @@ def rebuild_cmd(as_json: bool, project_dir: Path | None) -> None:
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(summary, indent=2, sort_keys=True))
+        click.echo(_dump_json(summary))
         return
 
     click.echo(

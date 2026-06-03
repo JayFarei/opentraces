@@ -23,6 +23,7 @@ from typing import Any
 import click
 
 from ._help import OpentracesCommand, OpentracesGroup
+from ._options import dump_json as _dump_json, project_dir_option
 from ..core.context_tree.contract import (
     CONTEXT_READS_SCHEMA_VERSION,
     CONTEXT_RESOLVE_SCHEMA_VERSION,
@@ -67,7 +68,7 @@ def _project_repo(project_dir: Path | None) -> Path:
 
 def _emit(payload: dict[str, Any]) -> None:
     """Stable JSON envelope emitter (mirrors cli/trace.py style)."""
-    click.echo(json.dumps(payload, indent=2, sort_keys=True))
+    click.echo(_dump_json(payload))
 
 
 def _empty_state(schema_version: str, reason: str, **extras: Any) -> dict[str, Any]:
@@ -484,13 +485,7 @@ def ctx_info_cmd(trace_id: str, remote: str | None, as_json: bool) -> None:
 @click.option("--depth", type=int, default=None, help="Cap the displayed depth (default: full path).")
 @click.option("--show-orphans", "show_orphans", is_flag=True, help="Include orphan rewind subtrees.")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def ctx_tree_cmd(
     trace_id: str,
     leaf: str | None,
@@ -630,13 +625,7 @@ def ctx_tree_cmd(
     ),
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def ctx_show_cmd(
     node_id: str,
     layers_filter: str | None,
@@ -809,13 +798,7 @@ def ctx_show_cmd(
 @click.argument("trace_id")
 @click.argument("step_index", type=int)
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def ctx_step_cmd(
     trace_id: str,
     step_index: int,
@@ -912,13 +895,7 @@ def _io_range_options(func):
 @click.argument("trace_id")
 @_io_range_options
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def ctx_reads_cmd(
     trace_id: str,
     step: int | None,
@@ -992,13 +969,7 @@ def ctx_reads_cmd(
     help="Annotate each write with the resolved trail_anchor_hint on its node.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def ctx_writes_cmd(
     trace_id: str,
     step: int | None,
@@ -1087,13 +1058,7 @@ def ctx_writes_cmd(
     help="Restrict the diff to one layer_type (system|messages|tool_registry|runtime_state).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def ctx_diff_cmd(
     node_a: str,
     node_b: str,
@@ -1182,13 +1147,7 @@ def ctx_diff_cmd(
     help="Include the lossy-diff payload for each compaction.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def ctx_compactions_cmd(
     trace_id: str,
     index: int | None,
@@ -1305,13 +1264,7 @@ def ctx_compactions_cmd(
     help="Actually write the new JSONL (default: dry-run; reports the target).",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def ctx_prune_cmd(
     node_id: str,
     source_jsonl: Path,
@@ -1397,13 +1350,7 @@ def ctx_prune_cmd(
     help="Emit the structured packet only (default); informational text suppressed.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def ctx_resume_cmd(
     node_id: str,
     packet_only: bool,
@@ -1473,13 +1420,7 @@ def ctx_resume_cmd(
 )
 @click.argument("resource")
 @click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def ctx_resolve_cmd(
     resource: str,
     as_json: bool,
@@ -1541,13 +1482,7 @@ def ctx_resolve_cmd(
 )
 @click.argument("trace_id")
 @click.argument("step_index", type=int)
-@click.option(
-    "--project",
-    "project_dir",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-    default=None,
-    help="Project directory (default: CWD).",
-)
+@project_dir_option
 def ctx_anchor_for_step_cmd(
     trace_id: str,
     step_index: int,

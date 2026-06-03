@@ -30,6 +30,7 @@ from typing import Any
 import click
 
 from ._help import OpentracesCommand, OpentracesGroup
+from ._options import dump_json as _dump_json
 from ..core.paths import (
     OPENTRACES_DIR,
     otel_staging_dir,
@@ -99,7 +100,7 @@ def _emit(payload: dict[str, Any]) -> None:
     the v1 shape.
     """
     payload.setdefault("schema_version", CAPTURE_OTLP_SCHEMA_VERSION)
-    click.echo(json.dumps(payload, indent=2, sort_keys=True))
+    click.echo(_dump_json(payload))
 
 
 def _ensure_dirs() -> None:
@@ -489,7 +490,7 @@ def _write_status_file_loop(
                 "written_at": time.time(),
                 "sessions": buffer.session_ids() if buffer is not None else [],
             }
-            STATUS_FILE.write_text(json.dumps(status, indent=2, sort_keys=True))
+            STATUS_FILE.write_text(_dump_json(status))
         except OSError:
             pass
 

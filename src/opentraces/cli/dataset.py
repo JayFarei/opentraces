@@ -11,6 +11,7 @@ from pathlib import Path
 import click
 
 from ._help import OpentracesCommand, OpentracesGroup
+from ._options import dump_json as _dump_json
 from ..core.datasets import (
     add_dataset_remote,
     append_rows,
@@ -197,7 +198,7 @@ def dataset_remote_list(name: str, verbose: bool, as_json: bool) -> None:
         for remote in remotes
     }
     if as_json:
-        click.echo(json.dumps({"status": "ok", "dataset": name, "remotes": payload}, indent=2, sort_keys=True))
+        click.echo(_dump_json({"status": "ok", "dataset": name, "remotes": payload}))
         return
     if not remotes:
         click.echo("No remotes connected.")
@@ -247,7 +248,7 @@ def dataset_remote_remove(
     payload = _remote_payload(summary)
     payload["deleted_remote"] = delete_remote
     if as_json:
-        click.echo(json.dumps({"status": "ok", "remote": payload}, indent=2, sort_keys=True))
+        click.echo(_dump_json({"status": "ok", "remote": payload}))
         return
     click.echo(f"Disconnected {summary.name}.")
 
@@ -344,7 +345,7 @@ def dataset_schedule_list(as_json: bool) -> None:
     """List local dataset workflow schedules."""
     schedules = [_schedule_payload(schedule) for schedule in list_schedules()]
     if as_json:
-        click.echo(json.dumps({"status": "ok", "schedules": schedules}, indent=2, sort_keys=True))
+        click.echo(_dump_json({"status": "ok", "schedules": schedules}))
         return
     for schedule in schedules:
         click.echo(f"{schedule['dataset']}  {schedule['every']}  enabled={schedule['enabled']}")
@@ -402,7 +403,7 @@ def dataset_schedule_logs(name: str, tail: bool, as_json: bool) -> None:
         sys.exit(3)
     payload = {"status": "ok", "dataset": name, "logs": logs}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     for line in logs:
         click.echo(line)
@@ -426,7 +427,7 @@ def dataset_schedule_remove(name: str, as_json: bool) -> None:
         },
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Schedule removed: {name}")
 
@@ -437,7 +438,7 @@ def dataset_list(as_json: bool) -> None:
     """List local HF-shaped datasets."""
     datasets = [_dataset_payload(dataset) for dataset in list_datasets()]
     if as_json:
-        click.echo(json.dumps({"status": "ok", "datasets": datasets}, indent=2, sort_keys=True))
+        click.echo(_dump_json({"status": "ok", "datasets": datasets}))
         return
     for dataset in datasets:
         click.echo(f"{dataset['name']}  {dataset['path']}")
@@ -473,7 +474,7 @@ def dataset_status(name: str, as_json: bool) -> None:
     if rq is not None:
         payload["row_quality"] = rq
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     counts = payload["counts"]
     summary = ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "no rows"
@@ -600,7 +601,7 @@ def dataset_new(
         sys.exit(3)
     payload = {"status": "ok", "dataset": _dataset_payload(dataset)}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Dataset created: {dataset.name}")
 
@@ -791,7 +792,7 @@ def _create_manual_dataset(
     dataset = load_dataset(name)
     payload = {"status": "ok", "dataset": _dataset_payload(dataset)}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Manual dataset created: {dataset.name} ({len(rows)} row(s))")
 
@@ -900,7 +901,7 @@ def dataset_run(
             ),
         }
         if as_json:
-            click.echo(json.dumps(payload, indent=2, sort_keys=True))
+            click.echo(_dump_json(payload))
             return
         click.echo(payload["message"])
         return
@@ -967,7 +968,7 @@ def dataset_run(
     if verbose:
         payload["artefacts"] = {"run_dir": str(result.run_dir)}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     if result.status == "instructions":
         click.echo(f"Run packet ready: {result.run_dir}")
@@ -1036,11 +1037,11 @@ def dataset_review(args: tuple[str, ...], mode: str | None, all_rows: bool, as_j
         sys.exit(2)
     if mode in {"tui", "web"}:
         if as_json:
-            click.echo(json.dumps({
+            click.echo(_dump_json({
                 "status": "error",
                 "error": "interactive_review_decommissioned",
                 "message": _INTERACTIVE_REVIEW_DECOMMISSIONED,
-            }, indent=2, sort_keys=True))
+            }))
         else:
             click.echo(_INTERACTIVE_REVIEW_DECOMMISSIONED, err=True)
         sys.exit(2)
@@ -1074,7 +1075,7 @@ def dataset_review(args: tuple[str, ...], mode: str | None, all_rows: bool, as_j
         "rows": review_rows,
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(
         f"{name}: {payload['counts'].get('needs_review', 0)} rows need review, "
@@ -1147,7 +1148,7 @@ def dataset_publish(
     publish_payload = _publish_summary_payload(summary)
     payload = {"status": "ok", "publish": publish_payload}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     line = (
         f"{summary.message}: rows={summary.new_row_count} "
@@ -1196,7 +1197,7 @@ def dataset_remove(name: str, yes: bool, as_json: bool) -> None:
     shutil.rmtree(path)
     payload = {"status": "ok", "removed": {"name": name, "path": str(path)}}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Dataset removed: {name}")
 
@@ -1326,7 +1327,7 @@ def _publish_summary_payload(summary) -> dict[str, object]:
 def _emit_remote_payload(summary, *, as_json: bool, verb: str) -> None:
     payload = _remote_payload(summary)
     if as_json:
-        click.echo(json.dumps({"status": "ok", "remote": payload}, indent=2, sort_keys=True))
+        click.echo(_dump_json({"status": "ok", "remote": payload}))
         return
     click.echo(f"Remote {verb}: {summary.name} ({summary.visibility})")
 
@@ -1345,7 +1346,7 @@ def _schedule_payload(schedule) -> dict[str, object]:
 def _emit_schedule_payload(schedule, *, as_json: bool) -> None:
     payload = {"status": "ok", "schedule": _schedule_payload(schedule)}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(
         f"{schedule.dataset}: every={schedule.every} "
@@ -1387,6 +1388,6 @@ def _dataset_review_transition(
         "row_ids": selected,
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"{name}: updated {len(selected)} row(s)")

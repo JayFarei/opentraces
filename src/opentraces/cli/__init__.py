@@ -4058,7 +4058,6 @@ for _legacy_root_command in [
     "remote",
     "redact",
     "llm-review",
-    "export",
     "stats",
     "log",
     "graph",

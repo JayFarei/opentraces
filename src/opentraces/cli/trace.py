@@ -16,6 +16,7 @@ import click
 
 from opentraces import cli as _cli
 from ._help import OpentracesCommand, OpentracesGroup
+from ._options import dump_json as _dump_json
 from ..core.trace_meta import short_trace_id
 from ..core.workflow import resolve_visible_stage
 
@@ -170,7 +171,7 @@ def trace_discover(
     if diag:
         payload.update(diag)
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     click.echo(f"{packet.topic}  {packet.total_cards} trace cards")
@@ -534,7 +535,7 @@ def trace_query(
 
         payload["semantic_query"] = expand_semantic_query(semantic)
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     for warning in page.warnings:
         if warning.get("severity") == "warning":
@@ -568,7 +569,7 @@ def trace_index_rebuild_cmd(as_json: bool) -> None:
         "search_projection": search_summary.as_dict(),
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     click.echo(f"Trace Index rebuilt: {index_summary.index_path}")
@@ -612,7 +613,7 @@ def trace_index_refresh_cmd(query_source: str, as_json: bool) -> None:
     if result.error:
         payload["error"] = result.error
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     if not result.ok:
@@ -656,7 +657,7 @@ def trace_index_status_cmd(as_json: bool) -> None:
         "trail_freshness": trail_freshness,
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
 
     index_state = "present" if index_path.exists() else "missing"
@@ -873,7 +874,7 @@ def trace_map_cmd(
         "map": selected.model_dump(mode="json"),
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     for node in selected.nodes:
         click.echo(f"{node.node_id}  {node.action_type}  {node.text_preview or ''}")
@@ -1014,7 +1015,7 @@ def trace_slice_cmd(
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     for item in payload["slices"]:
         click.echo(
@@ -1194,7 +1195,7 @@ def trace_get(
         if remote_bucket_payload is not None:
             payload["remote_bucket"] = remote_bucket_payload
         if as_json:
-            click.echo(json.dumps(payload, indent=2, sort_keys=True))
+            click.echo(_dump_json(payload))
             return
         click.echo(f"{card.trace_id}  {card.headline}")
         return
@@ -1237,7 +1238,7 @@ def trace_get(
         if remote_bucket_payload is not None:
             payload["remote_bucket"] = remote_bucket_payload
         if as_json:
-            click.echo(json.dumps(payload, indent=2, sort_keys=True))
+            click.echo(_dump_json(payload))
             return
         click.echo(payload["trace"]["trace_id"])
         return
@@ -1276,7 +1277,7 @@ def trace_get(
     if remote_bucket_payload is not None:
         payload["remote_bucket"] = remote_bucket_payload
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     if "trace" in payload:
         click.echo(payload["trace"]["trace_id"])
@@ -1330,7 +1331,7 @@ def trace_compare_cmd(
         burst_gap=gap,
     )
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     m = payload["delta"]["metrics"]
     click.echo(f"compare {payload['trace_a']} -> {payload['trace_b']}")
@@ -1374,7 +1375,7 @@ def _trace_get_bursts_impl(
         "bursts": [b.to_metadata() for b in bursts],
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     for index, b in enumerate(bursts, 1):
         files = sum(b.unique_files.values())
@@ -1411,7 +1412,7 @@ def _trace_get_waste_impl(
     report = detect_context_waste(record, **kwargs)
     payload = {"status": "ok", "trace_id": trace_id, "waste": report.to_dict()}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     for f in report.findings:
         click.echo(f"{f.pattern}  step {f.step_index}  {f.reason}")
@@ -1429,7 +1430,7 @@ def _trace_get_run_intel_impl(ref: str, as_json: bool) -> None:
     report = detect_run_signals(record)
     payload = report.to_envelope()
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     for s in report.signals:
         click.echo(f"{s.kind}  step {s.step_index}  {s.reason}")
@@ -1600,7 +1601,7 @@ def teleport_export_cmd(trace_id: str, output: Path, as_json: bool) -> None:
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Trace teleported: {payload['output']}")
     click.echo(f"  events:    {payload['event_count']}")
@@ -1644,7 +1645,7 @@ def teleport_open_cmd(workspace: Path, project: Path, as_json: bool) -> None:
         sys.exit(2)
 
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Trace workspace opened: {payload['project']}")
     click.echo(f"  events:    {payload['event_count']}")
@@ -1989,7 +1990,7 @@ def _resume_trace_impl(
                         click.echo(str(exc), err=True)
                     sys.exit(2)
                 if as_json:
-                    click.echo(json.dumps(snapshot_packet, indent=2, sort_keys=True))
+                    click.echo(_dump_json(snapshot_packet))
                     sys.exit(0)
                 if snapshot_packet.get("resume_mode") == "snapshot_backed":
                     argv = snapshot_packet.get("launch", {}).get("argv") or []

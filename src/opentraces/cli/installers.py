@@ -12,6 +12,7 @@ import click
 
 from opentraces import cli as _cli
 from . import main
+from ._options import dump_json as _dump_json
 from ..core.config import load_config, save_config  # noqa: F401
 
 logger = logging.getLogger("opentraces.cli.installers")
@@ -267,7 +268,7 @@ def setup_bucket_cmd(
     if remote_sync is not None:
         payload["remote_sync"] = remote_sync
     if as_json:
-        click.echo(_setup_watcher_json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     if bucket["storage"] == "remote":
         human_echo(f"Private HuggingFace bucket remote: {bucket['remote']['url']}")
@@ -338,11 +339,7 @@ def _handle_bucket_migrate(*, as_json: bool) -> None:
     if from_layout in ("empty", "v2"):
         payload["status"] = "ok" if from_layout == "v2" else "noop"
         if as_json:
-            click.echo(
-                _setup_watcher_json.dumps(
-                    {"status": "ok", "migrate": payload}, indent=2, sort_keys=True
-                )
-            )
+            click.echo(_dump_json({"status": "ok", "migrate": payload}))
             return
         if from_layout == "v2":
             human_echo("Bucket already on plan-080 v2 layout; nothing to migrate.")
@@ -361,11 +358,7 @@ def _handle_bucket_migrate(*, as_json: bool) -> None:
         payload["status"] = "stub_missing"
         payload["error"] = msg
         if as_json:
-            click.echo(
-                _setup_watcher_json.dumps(
-                    {"status": "error", "migrate": payload}, indent=2, sort_keys=True
-                )
-            )
+            click.echo(_dump_json({"status": "error", "migrate": payload}))
         else:
             click.echo(msg, err=True)
         sys.exit(3)
@@ -381,11 +374,7 @@ def _handle_bucket_migrate(*, as_json: bool) -> None:
         payload["status"] = "stub_missing"
         payload["error"] = msg
         if as_json:
-            click.echo(
-                _setup_watcher_json.dumps(
-                    {"status": "error", "migrate": payload}, indent=2, sort_keys=True
-                )
-            )
+            click.echo(_dump_json({"status": "error", "migrate": payload}))
         else:
             click.echo(msg, err=True)
         sys.exit(3)
@@ -393,11 +382,7 @@ def _handle_bucket_migrate(*, as_json: bool) -> None:
         payload["status"] = "error"
         payload["error"] = str(exc)
         if as_json:
-            click.echo(
-                _setup_watcher_json.dumps(
-                    {"status": "error", "migrate": payload}, indent=2, sort_keys=True
-                )
-            )
+            click.echo(_dump_json({"status": "error", "migrate": payload}))
         else:
             click.echo(f"bucket migrate failed: {exc}", err=True)
         sys.exit(3)
@@ -414,11 +399,7 @@ def _handle_bucket_migrate(*, as_json: bool) -> None:
         if key not in payload:
             payload[key] = value
     if as_json:
-        click.echo(
-            _setup_watcher_json.dumps(
-                {"status": "ok", "migrate": payload}, indent=2, sort_keys=True
-            )
-        )
+        click.echo(_dump_json({"status": "ok", "migrate": payload}))
         return
     human_echo(f"Bucket migrate: {from_layout} -> {to_layout}")
     human_echo(f"  traces_migrated: {payload['traces_migrated']}")

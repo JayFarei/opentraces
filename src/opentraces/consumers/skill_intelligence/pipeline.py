@@ -13,13 +13,13 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 from opentraces_schema import TraceFacet, TraceRecord, TraceUnit
 
 from ...core import trace_index
+from ...core._time import utc_now_str as _utc_now
 from ...core.bucket_store import iter_trace_record_objects
 from ..skill_opt import engine as skill_opt
 from ..skill_opt.proposers import default_proposer
@@ -63,10 +63,6 @@ class SkillIntelligenceResult:
     accepted: bool
     split_counts: dict[str, int]
     metadata: dict[str, Any]
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _canonical_json(payload: Any) -> str:

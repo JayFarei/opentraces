@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 
 from ._help import OpentracesCommand, OpentracesGroup
+from ._options import dump_json as _dump_json
 
 
 @click.group("bucket", cls=OpentracesGroup)
@@ -24,7 +25,7 @@ def bucket_status_cmd(as_json: bool) -> None:
 
     payload = bucket_status(write_manifest=True)
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     bucket = payload["bucket"]
     config = payload.get("config") or {}
@@ -64,7 +65,7 @@ def bucket_manifest_cmd(as_json: bool) -> None:
 
     manifest = bucket_manifest(write=True, include_objects=False)
     if as_json:
-        click.echo(json.dumps({"status": "ok", "manifest": manifest}, indent=2, sort_keys=True))
+        click.echo(_dump_json({"status": "ok", "manifest": manifest}))
         return
     click.echo(f"Bucket manifest: {bucket_manifest_path()}")
     click.echo(f"  digest: {manifest.get('digest')}")
@@ -90,7 +91,7 @@ def bucket_remote_status_cmd(remote_root: Path | None, as_json: bool) -> None:
 
     payload = {"status": "ok", "remote": remote_status(fake_root=remote_root)}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     remote = payload["remote"]
     click.echo(f"Bucket remote: {remote.get('state')}")
@@ -122,7 +123,7 @@ def bucket_remote_diff_cmd(remote_root: Path | None, as_json: bool) -> None:
     remote = remote_diff(fake_root=remote_root)
     payload = {"status": "ok", "remote": remote}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Bucket remote diff: {remote.get('state')}")
     click.echo(f"  different: {remote.get('different')}")
@@ -164,7 +165,7 @@ def bucket_remote_push_cmd(
         sys.exit(3)
     payload = {"status": "ok", "remote": remote}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Bucket remote pushed: {remote.get('remote_root') or remote.get('repo_id')}")
     click.echo(
@@ -207,7 +208,7 @@ def bucket_remote_pull_cmd(
         sys.exit(3)
     payload = {"status": "ok", "remote": remote}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Bucket remote pulled: {remote.get('remote_root') or remote.get('repo_id')}")
     click.echo(
@@ -248,7 +249,7 @@ def bucket_replay_cmd(
         sys.exit(3)
     payload = {"status": "ok", "replay": replay}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"Bucket replay: {replay.get('state')}")
     click.echo(f"  repo: {replay.get('repo')}")
@@ -369,7 +370,7 @@ def bucket_rebuild_cmd(substrate: str, as_json: bool) -> None:
     if substrate != "all" and substrate in rebuild_results:
         envelope["rebuild"].update(rebuild_results[substrate])
     if as_json:
-        click.echo(json.dumps(envelope, indent=2, sort_keys=True))
+        click.echo(_dump_json(envelope))
         return
     click.echo(f"Bucket rebuild: substrate={substrate}")
     for sub, result in rebuild_results.items():
@@ -417,7 +418,7 @@ def bucket_repair_cmd(as_json: bool) -> None:
 
     payload = {"status": "ok", "repair": dict(result)}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo("Bucket repair:")
     for key, value in result.items():
@@ -478,7 +479,7 @@ def bucket_verify_cmd(sample_size: int, as_full: bool, as_json: bool) -> None:
         "verify": result_dict,
     }
     if as_json:
-        click.echo(json.dumps(envelope, indent=2, sort_keys=True))
+        click.echo(_dump_json(envelope))
         if not ok:
             sys.exit(3)
         return
@@ -535,7 +536,7 @@ def bucket_prune_cmd(dry_run: bool, as_json: bool) -> None:
         "prune": result_dict,
     }
     if as_json:
-        click.echo(json.dumps(envelope, indent=2, sort_keys=True))
+        click.echo(_dump_json(envelope))
         return
     click.echo(f"Bucket prune (dry_run={dry_run}):")
     click.echo(f"  would_delete: {would_delete}")
@@ -571,7 +572,7 @@ def bucket_prefetch_cmd(trace_id: str, remote: str | None, as_json: bool) -> Non
     result_dict = dict(result)
     envelope = {"status": "ok", "trace_id": trace_id, "prefetch": result_dict}
     if as_json:
-        click.echo(json.dumps(envelope, indent=2, sort_keys=True))
+        click.echo(_dump_json(envelope))
         return
     click.echo(f"Bucket prefetch: trace={trace_id}")
     for key, value in result_dict.items():

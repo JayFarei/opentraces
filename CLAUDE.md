@@ -2,14 +2,14 @@
 
 ## Project Overview
 
-Open schema + CLI for crowdsourcing agent traces to HuggingFace Hub. Parses coding agent traces, applies security scanning and redaction, enriches with attribution/git signals, and publishes as structured JSONL datasets.
+Open schema + CLI for capturing agent traces into a private local bucket, applying security scanning and redaction, enriching with attribution/git signals, and optionally publishing as structured JSONL datasets to HuggingFace Hub.
 
 ## Stack
 
 - **Language**: Python 3.10+
 - **Schema**: `opentraces-schema` (standalone Pydantic v2 package in `packages/`)
 - **CLI**: Click-based (`src/opentraces/cli/`)
-- **Web review**: Flask (`src/opentraces/clients/web/`) + React SPA (`web/viewer/`)
+- **Web review**: Flask (`src/opentraces/clients/web/`) + React SPA (`web/viewer/`) — decommissioned; `web` and `tui` verbs are dropped from the CLI root
 - **Marketing site**: Next.js (`web/site/`)
 - **Coming soon page**: Static HTML (`web/coming-soon/`)
 - **Optional security extras** (opt-in via `opentraces setup <tool>`): `trufflehog` (binary), `transformers` + `torch` (for the `openai/privacy-filter` PII NER), and an OpenAI-compat LLM endpoint (for `llm_pii` and `llm_review`).

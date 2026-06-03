@@ -16,11 +16,11 @@ Reads only the existing read side: it reuses
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ..skill_intelligence import pipeline as si
+from ...core._time import utc_now_str as _utc_now
 from ...core.bucket_store import iter_trace_record_objects
 from . import archetypes as arch
 from . import scorers
@@ -28,10 +28,6 @@ from .schema import CANDIDATES_SCHEMA_VERSION, validate_candidates
 
 #: Cap on provenance refs embedded per archetype candidate (keep summary bounded).
 _MAX_SOURCE_REFS = 8
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _load_episodes(

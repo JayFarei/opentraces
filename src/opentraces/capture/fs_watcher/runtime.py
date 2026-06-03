@@ -15,11 +15,11 @@ import stat
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from ...core.trails.event_log import append_event_batch
+from ...core._time import utc_now_str as _utc_now
 from ...core.trails.models import GitObjectID, TrailEvent
 from .observations import filesystem_mutation_observed_draft
 
@@ -196,10 +196,6 @@ def _normalize_excluded_paths(
         if normalized and normalized != ".":
             excluded.add(normalized)
     return excluded
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _timestamp_or_now(value: Any, fallback: str) -> str:

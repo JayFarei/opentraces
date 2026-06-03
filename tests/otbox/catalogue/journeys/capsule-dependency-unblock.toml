@@ -14,9 +14,8 @@ hermetic bundle of the client, asserts:
 tier = 0 — included in `make otbox-journeys`. Verified GREEN through the exact
 tier-0 test the make target runs (`test_tier0_catalogue_journey`): VERDICT PASS,
 all 4 assertions OK (reproduce rc=0 + "reproduces"; upgrade "fixed"; matrix
-"humanduration=v0.2.0"). The box CLI must carry the `capsule` group — on this
-unmerged branch, point it at the worktree via `OT_CLI_BIN=<worktree>/otc`; after
-merge it is the installed CLI.
+"humanduration=v0.2.0"). The box CLI must carry the `capsule` group, available
+via the installed `otd` CLI.
 
 CAVEAT (network): the steps resolve the live published demo capsule (HF) and
 install the consumed dependency from github + pip. That is fine in a networked
