@@ -2734,8 +2734,6 @@ def status(limit: int) -> None:
 
 # Register subcommand modules (side-effect: @main.command() bindings)
 from . import installers as _installers_module  # noqa: F401,E402
-from . import publish as _publish_module  # noqa: F401,E402
-from . import import_hf as _import_hf_module  # noqa: F401,E402
 from . import _debug as __debug_module  # noqa: F401,E402
 from . import inspect as _inspect_module  # noqa: F401,E402
 
@@ -4052,25 +4050,18 @@ def _drop_command(name: str) -> None:
 # security, capture, and maintenance surfaces declared in COMMAND_SECTIONS.
 for _legacy_root_command in [
     "list",
-    "show",
     "add",
-    "reject",
     "push",
     "pull",
     "web",
     "tui",
     "remote",
-    "reset",
     "redact",
-    "discard",
     "llm-review",
     "export",
     "stats",
     "log",
-    "assess",
-    "blame",
     "graph",
-    "resume",
 ]:
     _drop_command(_legacy_root_command)
 

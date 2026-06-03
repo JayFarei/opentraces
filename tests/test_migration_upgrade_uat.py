@@ -287,10 +287,11 @@ def test_u_hf_1_dataset_publish_does_not_reach_hfuploader():
     assert os.environ.get("OPENTRACES_PLAN058_FAKE_REMOTE_ROOT") is None
     assert datasets._fake_remote_dir("owner/repo") is None
 
-    # Document where the schema-safe guards ARE wired: the legacy push command.
-    import opentraces.cli.publish as legacy_push
+    # Document where the schema-safe guards ARE wired: the HF uploader core
+    # (cli/publish.py was removed; HFUploader remains in publish/huggingface/).
+    from opentraces.publish.huggingface import upload as hf_upload_module
 
-    assert "HFUploader" in inspect.getsource(legacy_push)
+    assert "HFUploader" in inspect.getsource(hf_upload_module)
 
 
 # --- U-config-6 / U-auth-1 (P0/P1, real-v033-venv) --------------------------

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from opentraces.cli.publish import (
+from opentraces.core.publish_flow import (
     _persist_push_target,
     _resolve_push_target,
     _resolve_push_visibility,
