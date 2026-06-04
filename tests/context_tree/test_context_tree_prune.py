@@ -26,7 +26,7 @@ from opentraces.core.context_tree.query import build_context_tree_projection
 from opentraces_schema.models import Agent, TraceRecord
 
 
-FIXTURES_DIR = Path(__file__).parent / "otbox" / "fixtures" / "sessions"
+FIXTURES_DIR = Path(__file__).parent.parent / "otbox" / "fixtures" / "sessions"
 
 
 def _init_git_repo(path: Path) -> None:

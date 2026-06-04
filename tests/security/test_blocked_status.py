@@ -25,7 +25,7 @@ from dataclasses import dataclass
 import pytest
 
 from opentraces.core.state import TraceStatus
-from opentraces.core.workflow import (
+from opentraces.core.trace_stage import (
     STAGE_PRESENTATIONS,
     VISIBLE_STAGE_ORDER,
     decide_post_parse_status,

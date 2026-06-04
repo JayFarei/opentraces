@@ -13,7 +13,7 @@ from . import main
 from .. import __version__  # noqa: F401
 from ..core.config import load_config, load_project_config, auth_identity as _auth_identity
 from ..core.trace_meta import short_trace_id
-from ..core.workflow import resolve_visible_stage
+from ..core.trace_stage import resolve_visible_stage
 
 logger = logging.getLogger("opentraces.cli.inspect")
 

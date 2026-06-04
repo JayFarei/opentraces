@@ -4,11 +4,11 @@ This package centralizes state-mutating review and publish-flow helpers so that
 the CLI, TUI, and web clients share a single implementation for each operation.
 
 As of phase 4 of the core refactor, this package also owns the glue/domain
-modules (config, paths, state, workflow, inbox, pipeline, processors) that
+modules (config, paths, state, trace_stage, inbox, pipeline, processors) that
 previously lived directly under ``opentraces.``. The old top-level paths remain
 as deprecation shims for backwards compatibility.
 
-Future work: state.py and workflow.py may eventually be merged into a single
+Future work: state.py and trace_stage.py may eventually be merged into a single
 ``core/trace.py`` module, but are kept separate here to minimize risk.
 """
 
@@ -22,8 +22,9 @@ from .config import (
     save_project_config,
 )
 from .state import StateManager, TraceStatus
-from .workflow import (
+from .trace_stage import (
     SUPPORTED_AGENTS,
+    decide_post_parse_status,
     resolve_visible_stage,
 )
 
@@ -34,6 +35,7 @@ __all__ = [
     "SUPPORTED_AGENTS",
     "TraceStatus",
     "auth_identity",
+    "decide_post_parse_status",
     "load_config",
     "load_project_config",
     "resolve_visible_stage",

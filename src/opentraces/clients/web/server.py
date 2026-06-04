@@ -30,7 +30,7 @@ from ...core.config import (
 )
 from ...core.inbox import get_stage, load_traces
 from ...core.state import StateManager, TraceStatus
-from ...core.workflow import (
+from ...core.trace_stage import (
     DEFAULT_AGENT,
     DEFAULT_PUSH_POLICY,
     DEFAULT_REVIEW_POLICY,

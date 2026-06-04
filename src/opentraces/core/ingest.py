@@ -65,7 +65,7 @@ from .state import (
     StateManager,
     TraceStatus,
 )
-from .workflow import decide_post_parse_status
+from .trace_stage import decide_post_parse_status
 
 logger = logging.getLogger(__name__)
 

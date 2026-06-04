@@ -18,7 +18,7 @@ from opentraces import cli as _cli
 from ._help import OpentracesCommand, OpentracesGroup
 from ._options import dump_json as _dump_json
 from ..core.trace_meta import short_trace_id
-from ..core.workflow import resolve_visible_stage
+from ..core.trace_stage import resolve_visible_stage
 
 
 def _resolve_trace_id(trace_id: str) -> str | None:
