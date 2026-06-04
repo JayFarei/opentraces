@@ -1,21 +1,24 @@
-"""Local Trace Index cache for Plan 56 query workflows."""
+"""Local Trace Index cache for Plan 56 query workflows.
+
+Public facade — all symbols that external code imports from this module remain
+importable here. Connection helpers, DDL schema, and the cheap-sync cluster are
+split into sibling modules (``trace_index_sqlite``, ``trace_index_sync``) but
+are re-exported below so the import contract is preserved.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import sqlite3
 import subprocess
-import time
-from contextlib import contextmanager
 from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime, timedelta, timezone
 from fnmatch import fnmatch
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Iterator, TypeVar
+from typing import Any, TypeVar
 from urllib.parse import urlparse
 
 from pydantic import ValidationError
@@ -57,79 +60,52 @@ from .trace_map import build_trace_map
 from .trace_map import slice_trace_map_for_candidate
 from .trails.query import TrailQueryProjection, build_trail_query_projection
 
+# ---------------------------------------------------------------------------
+# Re-exports from trace_index_sqlite (connection/lock/schema helpers).
+# ---------------------------------------------------------------------------
+from .trace_index_sqlite import (
+    INDEX_VERSION,
+    INDEX_BUSY_TIMEOUT_MS,
+    INDEX_WRITE_RETRY_LIMIT,
+    INDEX_WRITE_RETRY_BASE_SECONDS,
+    IndexLockedError,
+    T,
+    _configure_connection,
+    _connect,
+    _unlink_wal_sidecars,
+    _is_lock_error,
+    _retry_on_lock,
+    _cheap_sync_lock,
+    _create_schema,
+)
+
+# ---------------------------------------------------------------------------
+# Re-exports from trace_index_sync (cheap-sync cluster).
+# ---------------------------------------------------------------------------
+from .trace_index_sync import (
+    _SYNCED_DIGEST_KEY,
+    _SYNCED_TRACE_DIGESTS_KEY,
+    _SYNCED_CHEAP_SIGNAL_KEY,
+    _synced_digest_key,
+    _synced_trace_digests_key,
+    _synced_cheap_signal_key,
+    CheapSyncResult,
+    _meta_get_safe,
+    _compute_trace_delta,
+    _bootstrap_projection_markers,
+    cheap_sync_query_state,
+    _cheap_sync_query_state_guarded,
+    _sync_marker_snapshot,
+    _cheap_signal_matches,
+    _cheap_sync_query_state_locked,
+    KeepWarmResult,
+    keep_index_warm,
+)
+# _meta_get and _meta_set are also re-exported for internal use in this module
+# and for any test code that reaches them via trace_index.
+from .trace_index_sqlite import _meta_get, _meta_set
+
 logger = logging.getLogger(__name__)
-
-try:  # POSIX advisory locking; available on macOS/Linux.
-    import fcntl as _fcntl
-except ImportError:  # pragma: no cover - non-POSIX fallback.
-    _fcntl = None
-
-
-# Cluster A — A2/A5 schema bump: ``trail_sources.limitations_json`` carries
-# structured limitations and ``indexed_at`` records when the trail projection
-# was last synced into the query index.
-INDEX_VERSION = "plan056-m1-v8"
-INDEX_BUSY_TIMEOUT_MS = 5000
-INDEX_WRITE_RETRY_LIMIT = 5
-INDEX_WRITE_RETRY_BASE_SECONDS = 0.05
-
-
-class IndexLockedError(RuntimeError):
-    """Raised when the index DB stays locked past the retry budget.
-
-    Surfaces a clean message instead of a raw ``sqlite3.OperationalError``
-    so the CLI can exit with a typed error code rather than a traceback.
-    """
-
-
-T = TypeVar("T")
-
-
-def _configure_connection(conn: sqlite3.Connection, *, wal: bool = True) -> None:
-    """Apply WAL + busy-timeout pragmas on every fresh connection.
-
-    ``busy_timeout`` is a per-connection setting that needs to be set on each
-    new handle. ``journal_mode=wal`` is a one-time DB-level switch but is
-    harmless to re-emit. We skip WAL for the tmp file used during
-    ``_rebuild_index_locked`` because the tmp gets atomically renamed into
-    place: a WAL-mode tmp would leave its ``-wal``/``-shm`` sidecars dangling
-    on the rename and the new live DB would surface ``disk I/O error`` on
-    the first read.
-    """
-    try:
-        conn.execute(f"PRAGMA busy_timeout={INDEX_BUSY_TIMEOUT_MS}")
-        if wal:
-            conn.execute("PRAGMA journal_mode=WAL")
-    except sqlite3.OperationalError:
-        # Some shapes (e.g. fresh empty DB on a read-only filesystem) cannot
-        # set journal_mode=WAL; fall back silently. busy_timeout still helps.
-        pass
-
-
-def _connect(db_path: Path, *, wal: bool = True) -> sqlite3.Connection:
-    """Open the index DB with the WAL + busy-timeout pragmas applied."""
-    conn = sqlite3.connect(db_path, timeout=INDEX_BUSY_TIMEOUT_MS / 1000.0)
-    _configure_connection(conn, wal=wal)
-    return conn
-
-
-def _unlink_wal_sidecars(db_path: Path) -> None:
-    """Remove any ``-wal``/``-shm`` sidecars belonging to ``db_path``.
-
-    A WAL sidecar is only valid for the exact DB file it was created against.
-    After a file-level swap of the DB (an atomic ``replace`` during rebuild, or
-    an otbox snapshot restore that copies the ``.db`` separately from its
-    sidecars) the leftover ``-wal``/``-shm`` belong to the *old* file; replaying
-    them against the new DB on the next ``PRAGMA journal_mode=WAL`` raises
-    ``sqlite3.DatabaseError: database disk image is malformed``. Discarding them
-    is safe because the index is a fully rebuildable cache.
-    """
-    for suffix in ("-wal", "-shm"):
-        sidecar = db_path.with_name(db_path.name + suffix)
-        try:
-            sidecar.unlink()
-        except OSError:
-            pass
 
 
 def _heal_corrupt_index(db_path: Path) -> None:
@@ -146,58 +122,105 @@ def _heal_corrupt_index(db_path: Path) -> None:
     rebuild_index(db_path)
 
 
-def _is_lock_error(exc: sqlite3.OperationalError) -> bool:
-    msg = str(exc).lower()
-    return "locked" in msg or "busy" in msg
+def _cheap_bucket_signal() -> str:
+    """Return a cheap, stat-only fingerprint of the trace-source roots (F1).
 
+    This is the O(1) freshness signal for the ``trace query`` hot path. It walks
+    the four roots that feed the bucket's trace corpus — the mirrored
+    ``objects/traces/v1`` envelope root, the legacy ``trace-records`` mirror, and
+    the canonical legacy stores (``projects/*/traces/*.jsonl`` + ``staging/*.jsonl``)
+    that ``sync_trace_records_from_local_stores`` reads from — and aggregates
+    ``(path, mtime_ns, size)`` over the files it finds. NO file is opened or
+    parsed; no manifest is recomputed. A new / changed / removed trace file (in
+    either the mirror or the canonical store) flips the fingerprint, which is the
+    only signal allowed to engage the expensive delta path.
 
-def _retry_on_lock(action: Callable[[], T]) -> T:
-    """Run ``action`` and retry on transient SQLite lock contention.
-
-    Used to wrap the top-level write transactions (``rebuild_index`` /
-    ``refresh_index``). A persistent lock past the retry budget surfaces as
-    :class:`IndexLockedError` so the CLI can produce a clean error message.
-    """
-    delay = INDEX_WRITE_RETRY_BASE_SECONDS
-    last_exc: sqlite3.OperationalError | None = None
-    for _ in range(INDEX_WRITE_RETRY_LIMIT):
-        try:
-            return action()
-        except sqlite3.OperationalError as exc:
-            if not _is_lock_error(exc):
-                raise
-            last_exc = exc
-            time.sleep(delay)
-            delay = min(delay * 2, 1.0)
-    assert last_exc is not None
-    raise IndexLockedError(
-        f"trace index DB stayed locked after {INDEX_WRITE_RETRY_LIMIT} retries: {last_exc}"
-    )
-
-
-@contextmanager
-def _cheap_sync_lock(db_path: Path) -> Iterator[None]:
-    """Serialize expensive cheap-sync delta work across processes.
-
-    Steady-state readers take no lock. The lock is only acquired after the
-    stat-only signal indicates the bucket may have changed; once acquired, the
-    caller re-checks the marker so only one process pays the delta sync.
+    Cost is one ``os.scandir``/``stat`` per trace file (~17ms for ~3.7k files on
+    the live bucket), versus the ~46s full sync+parse+manifest the digest probe
+    used to pay on every steady-state query. Best-effort: any error yields an
+    empty signal so the caller treats it as "changed" and falls back to the heavy
+    path rather than wrongly short-circuiting.
     """
 
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    if _fcntl is None:  # pragma: no cover - POSIX-only targets.
-        yield
-        return
-    lock_path = db_path.parent / ".cheap-sync.lock"
-    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+    from .bucket_layout import legacy_trace_records_root, trace_records_root
+    import os
+
+    parts: list[str] = []
+
+    def _walk(root: Path) -> None:
+        if not root.exists():
+            return
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            try:
+                with os.scandir(current) as it:
+                    for entry in it:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(Path(entry.path))
+                                continue
+                            st = entry.stat(follow_symlinks=False)
+                        except OSError:
+                            continue
+                        parts.append(f"{entry.path}|{st.st_mtime_ns}|{st.st_size}")
+            except OSError:
+                continue
+
     try:
-        _fcntl.flock(fd, _fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            _fcntl.flock(fd, _fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
+        _walk(trace_records_root())
+        _walk(legacy_trace_records_root())
+        projects_root = getattr(paths, "PROJECTS_DIR", None)
+        if projects_root is not None:
+            for project_home in (projects_root.iterdir() if projects_root.exists() else []):
+                if project_home.is_dir():
+                    _walk(project_home / "traces")
+        staging_root = getattr(paths, "STAGING_DIR", None)
+        if staging_root is not None:
+            _walk(staging_root)
+    except Exception:  # noqa: BLE001 — cheap signal must never raise.
+        return ""
+
+    parts.sort()
+    import hashlib
+
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _current_bucket_trace_digests() -> tuple[str | None, dict[str, str]]:
+    """Return ``(top_level_digest, {trace_id: per_trace_record_hash})``.
+
+    Mirrors local project/staging stores into the bucket first (the same
+    bridge ``_iter_trace_sources`` performs before reindex) so the digest
+    reflects freshly-written-but-not-yet-indexed traces and prunes removed
+    legacy mirrors. The per-trace map is keyed off the record-object
+    ``record_hash`` (the layer the index actually syncs from); the top-level
+    digest is the deterministic ``bucket_digest`` used as the projection's
+    ``built_from_digest`` so the projection and index share one freshness
+    signal. Best-effort: any failure yields ``(None, {})`` and the caller
+    falls back to a full sync.
+    """
+
+    try:
+        sync_trace_records_from_local_stores()
+    except Exception:
+        pass
+    try:
+        per_trace = {
+            obj.trace_id: str(obj.record_hash)
+            for obj in iter_trace_record_objects()
+            if obj.trace_id
+        }
+    except Exception:
+        per_trace = {}
+    try:
+        manifest = bucket_manifest(write=False, include_objects=False)
+        top = manifest.get("bucket_digest") or manifest.get("digest")
+    except Exception:
+        top = None
+    return (str(top) if top is not None else None), per_trace
+
+
 _M1_UNIT_TYPES = {
     "trace",
     "trace_map_node",
@@ -369,617 +392,6 @@ def refresh_index(
         )
     )
 
-
-# --------------------------------------------------------------------------
-# Plan 087 U4 — cheap-sync-then-serve for the ``trace query`` hot path.
-#
-# Phase 1 stopped the query path from auto-rebuilding (killing the 105s tax)
-# but opened a stale window: a freshly captured/altered trace was invisible
-# until an explicit refresh. U4 closes that window with a digest-gated
-# incremental sync that scales with the delta, never the corpus.
-#
-# Mechanics:
-#   1. Cheap probe — read the last-synced bucket digest from the index meta
-#      table; compute the current bucket digest. Equal => steady state, return
-#      immediately (zero refresh work, sub-2s).
-#   2. On mismatch — compute the per-trace delta (changed/added vs deleted) by
-#      diffing the current per-trace bucket digests against the snapshot stored
-#      at last sync, then run the BOUNDED incremental refreshers:
-#        - ``refresh_index`` (already incremental + R3-cheap) for the index,
-#        - ``refresh_search_projection(changed, deleted)`` for the projection.
-#   3. Persist the new digest + per-trace snapshot so the next call short-
-#      circuits. The pointer/marker advance is the last step.
-# --------------------------------------------------------------------------
-
-_SYNCED_DIGEST_KEY = "synced_bucket_digest"
-_SYNCED_TRACE_DIGESTS_KEY = "synced_trace_digests"
-# F1 (plan 087 fix) — the cheap O(1) freshness signal persisted at last sync.
-# A stat-only fingerprint over the trace-source roots; when it is unchanged the
-# steady-state probe short-circuits WITHOUT any corpus scan / manifest recompute.
-_SYNCED_CHEAP_SIGNAL_KEY = "synced_cheap_signal"
-
-
-def _synced_digest_key(query_source: str) -> str:
-    return f"{_SYNCED_DIGEST_KEY}:{query_source}"
-
-
-def _synced_trace_digests_key(query_source: str) -> str:
-    return f"{_SYNCED_TRACE_DIGESTS_KEY}:{query_source}"
-
-
-def _synced_cheap_signal_key(query_source: str) -> str:
-    # Per-source so an ``index``-source sync does not mask a still-stale
-    # ``projection`` (each source advances its own marker independently).
-    return f"{_SYNCED_CHEAP_SIGNAL_KEY}:{query_source}"
-
-
-def _cheap_bucket_signal() -> str:
-    """Return a cheap, stat-only fingerprint of the trace-source roots (F1).
-
-    This is the O(1) freshness signal for the ``trace query`` hot path. It walks
-    the four roots that feed the bucket's trace corpus — the mirrored
-    ``objects/traces/v1`` envelope root, the legacy ``trace-records`` mirror, and
-    the canonical legacy stores (``projects/*/traces/*.jsonl`` + ``staging/*.jsonl``)
-    that ``sync_trace_records_from_local_stores`` reads from — and aggregates
-    ``(path, mtime_ns, size)`` over the files it finds. NO file is opened or
-    parsed; no manifest is recomputed. A new / changed / removed trace file (in
-    either the mirror or the canonical store) flips the fingerprint, which is the
-    only signal allowed to engage the expensive delta path.
-
-    Cost is one ``os.scandir``/``stat`` per trace file (~17ms for ~3.7k files on
-    the live bucket), versus the ~46s full sync+parse+manifest the digest probe
-    used to pay on every steady-state query. Best-effort: any error yields an
-    empty signal so the caller treats it as "changed" and falls back to the heavy
-    path rather than wrongly short-circuiting.
-    """
-
-    from .bucket_layout import legacy_trace_records_root, trace_records_root
-
-    parts: list[str] = []
-
-    def _walk(root: Path) -> None:
-        if not root.exists():
-            return
-        stack = [root]
-        while stack:
-            current = stack.pop()
-            try:
-                with os.scandir(current) as it:
-                    for entry in it:
-                        try:
-                            if entry.is_dir(follow_symlinks=False):
-                                stack.append(Path(entry.path))
-                                continue
-                            st = entry.stat(follow_symlinks=False)
-                        except OSError:
-                            continue
-                        parts.append(f"{entry.path}|{st.st_mtime_ns}|{st.st_size}")
-            except OSError:
-                continue
-
-    try:
-        _walk(trace_records_root())
-        _walk(legacy_trace_records_root())
-        projects_root = getattr(paths, "PROJECTS_DIR", None)
-        if projects_root is not None:
-            for project_home in (projects_root.iterdir() if projects_root.exists() else []):
-                if project_home.is_dir():
-                    _walk(project_home / "traces")
-        staging_root = getattr(paths, "STAGING_DIR", None)
-        if staging_root is not None:
-            _walk(staging_root)
-    except Exception:  # noqa: BLE001 — cheap signal must never raise.
-        return ""
-
-    parts.sort()
-    import hashlib
-
-    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
-
-
-@dataclass
-class CheapSyncResult:
-    """Outcome of one :func:`cheap_sync_query_state` call."""
-
-    synced: bool
-    query_source: str
-    changed_trace_ids: list[str] = dataclass_field(default_factory=list)
-    deleted_trace_ids: list[str] = dataclass_field(default_factory=list)
-    bucket_digest: str | None = None
-
-
-def _meta_get(conn: sqlite3.Connection, key: str) -> str | None:
-    try:
-        row = conn.execute(
-            "select value from meta where key = ?", (key,)
-        ).fetchone()
-    except sqlite3.Error:
-        return None
-    if row is None:
-        return None
-    return row[0] if not isinstance(row, sqlite3.Row) else row["value"]
-
-
-def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
-    conn.execute(
-        "insert or replace into meta(key, value) values (?, ?)", (key, value)
-    )
-
-
-def _current_bucket_trace_digests() -> tuple[str | None, dict[str, str]]:
-    """Return ``(top_level_digest, {trace_id: per_trace_record_hash})``.
-
-    Mirrors local project/staging stores into the bucket first (the same
-    bridge ``_iter_trace_sources`` performs before reindex) so the digest
-    reflects freshly-written-but-not-yet-indexed traces and prunes removed
-    legacy mirrors. The per-trace map is keyed off the record-object
-    ``record_hash`` (the layer the index actually syncs from); the top-level
-    digest is the deterministic ``bucket_digest`` used as the projection's
-    ``built_from_digest`` so the projection and index share one freshness
-    signal. Best-effort: any failure yields ``(None, {})`` and the caller
-    falls back to a full sync.
-    """
-
-    try:
-        sync_trace_records_from_local_stores()
-    except Exception:
-        pass
-    try:
-        per_trace = {
-            obj.trace_id: str(obj.record_hash)
-            for obj in iter_trace_record_objects()
-            if obj.trace_id
-        }
-    except Exception:
-        per_trace = {}
-    try:
-        manifest = bucket_manifest(write=False, include_objects=False)
-        top = manifest.get("bucket_digest") or manifest.get("digest")
-    except Exception:
-        top = None
-    return (str(top) if top is not None else None), per_trace
-
-
-def _compute_trace_delta(
-    current: dict[str, str], previous: dict[str, str]
-) -> tuple[list[str], list[str]]:
-    """Diff two ``{trace_id: digest}`` maps into ``(changed, deleted)``."""
-
-    changed = sorted(
-        tid
-        for tid, digest in current.items()
-        if previous.get(tid) != digest
-    )
-    deleted = sorted(tid for tid in previous if tid not in current)
-    return changed, deleted
-
-
-def _meta_get_safe(db_path: Path, key: str) -> str | None:
-    """Best-effort single meta read from the index DB (never raises)."""
-
-    try:
-        with _connect(db_path) as conn:
-            return _meta_get(conn, key)
-    except sqlite3.Error:
-        return None
-
-
-def _bootstrap_projection_markers(
-    db_path: Path,
-    *,
-    current_cheap_signal: str,
-    index_digest: str | None,
-    index_trace_digests: str | None,
-) -> str | None:
-    """Seed the projection-source cheap-sync markers from the serving build (G2).
-
-    Returns the bucket digest to report (so the caller can short-circuit O(1))
-    when the serving search projection is already fresh for ``current_cheap_signal``
-    — i.e. the projection build stamped a ``built_from_cheap_signal`` that equals
-    the current stat-only bucket signal. In that case the projection needs NO
-    delta: we persist the projection's per-source markers exactly the way the
-    index source persists its own (so the NEXT steady-state probe short-circuits
-    via the cheap-signal equality at the top of ``cheap_sync_query_state``), then
-    return.
-
-    Returns ``None`` when no serving build exists, the build never stamped a
-    cheap signal (legacy build), or the stamp does not match the current signal
-    (the bucket genuinely moved since the build) — the caller then falls through
-    to the normal delta path. Best-effort: any failure yields ``None`` so the
-    caller never wrongly short-circuits a stale projection.
-    """
-
-    try:
-        from .search_projection import search_projection_status
-
-        status = search_projection_status()
-    except Exception:  # noqa: BLE001 — bootstrap must never raise into queries.
-        return None
-    if status.get("state") != "ok":
-        return None
-    built_from_signal = status.get("built_from_cheap_signal")
-    if not built_from_signal or built_from_signal != current_cheap_signal:
-        # No stamp, or the bucket moved since the build — let the delta path run.
-        return None
-
-    # The projection is fresh for the current signal. Seed the projection
-    # markers from the index source's snapshot (same bucket, same per-trace
-    # record hashes) plus the cheap signal we just confirmed.
-    bucket_digest = status.get("built_from_digest") or index_digest
-    try:
-        with _connect(db_path) as conn:
-            _meta_set(
-                conn,
-                _synced_cheap_signal_key("projection"),
-                current_cheap_signal,
-            )
-            if bucket_digest is not None:
-                _meta_set(
-                    conn, _synced_digest_key("projection"), str(bucket_digest)
-                )
-            if index_trace_digests is not None:
-                _meta_set(
-                    conn,
-                    _synced_trace_digests_key("projection"),
-                    index_trace_digests,
-                )
-            conn.commit()
-    except sqlite3.Error:
-        return None
-    return str(bucket_digest) if bucket_digest is not None else None
-
-
-def cheap_sync_query_state(
-    *,
-    query_source: str = "index",
-    index_path: Path | None = None,
-    cheap_signal: str | None = None,
-    trace_id: str | None = None,
-) -> CheapSyncResult:
-    """Digest-gated incremental sync run immediately before a query (U4).
-
-    Closes the Phase-1 stale-query window for the local bucket without
-    reintroducing the full-rebuild cost. Steady state (no bucket change since
-    the last sync) short-circuits with zero refresh work. A changed bucket
-    triggers a BOUNDED ``refresh_index`` (and, for ``query_source ==
-    "projection"``, a bounded ``refresh_search_projection``) keyed by the
-    per-trace delta, then records the new digest snapshot.
-
-    ``cheap_signal`` (F3): an already-computed :func:`_cheap_bucket_signal`
-    snapshot. When the caller drives several query sources in one pass
-    (``keep_index_warm``), it computes the stat-only signal ONCE and threads it
-    in so each source does not re-scan the trace-source roots. ``None`` means
-    "compute it here" (the standalone query-path contract is unchanged).
-
-    ``trace_id`` (F3): the post-INGEST fast path. The capture pipeline already
-    knows the single trace it just wrote, so when ``trace_id`` is given and the
-    cheap signal moved, we skip the ~46s whole-corpus
-    :func:`_current_bucket_trace_digests` scan entirely and instead run the
-    bounded ``refresh_index`` (incremental, finds the one changed source by
-    mtime) + a projection delta scoped to exactly that trace. The per-trace
-    digest snapshot is NOT advanced on this path (only the cheap signal is), so
-    a later whole-corpus sync still reconciles correctly.
-
-    Best-effort: any failure leaves the warm cache serving and is swallowed
-    (the query still runs against whatever is on disk). It never raises into
-    the query path.
-    """
-
-    return _cheap_sync_query_state_guarded(
-        query_source=query_source,
-        index_path=index_path,
-        cheap_signal=cheap_signal,
-        trace_id=trace_id,
-    )
-
-
-def _cheap_sync_query_state_guarded(
-    *,
-    query_source: str,
-    index_path: Path | None,
-    cheap_signal: str | None,
-    trace_id: str | None,
-) -> CheapSyncResult:
-    search_diag.incr("cheap_sync_calls")
-    db_path = index_path or default_index_path()
-    if not db_path.exists():
-        return CheapSyncResult(synced=False, query_source=query_source)
-
-    prev_digest, prev_cheap_signal, prev_per_trace_raw = _sync_marker_snapshot(
-        db_path, query_source
-    )
-    current_cheap_signal = cheap_signal if cheap_signal is not None else _cheap_bucket_signal()
-    if _cheap_signal_matches(prev_cheap_signal, current_cheap_signal):
-        return CheapSyncResult(
-            synced=False, query_source=query_source, bucket_digest=prev_digest
-        )
-
-    with _cheap_sync_lock(db_path):
-        prev_digest, prev_cheap_signal, prev_per_trace_raw = _sync_marker_snapshot(
-            db_path, query_source
-        )
-        current_cheap_signal = (
-            cheap_signal if cheap_signal is not None else _cheap_bucket_signal()
-        )
-        if _cheap_signal_matches(prev_cheap_signal, current_cheap_signal):
-            return CheapSyncResult(
-                synced=False, query_source=query_source, bucket_digest=prev_digest
-            )
-        return _cheap_sync_query_state_locked(
-            db_path=db_path,
-            query_source=query_source,
-            current_cheap_signal=current_cheap_signal,
-            prev_digest=prev_digest,
-            prev_cheap_signal=prev_cheap_signal,
-            prev_per_trace_raw=prev_per_trace_raw,
-            trace_id=trace_id,
-        )
-
-
-def _sync_marker_snapshot(
-    db_path: Path, query_source: str
-) -> tuple[str | None, str | None, str | None]:
-    try:
-        with _connect(db_path) as conn:
-            return (
-                _meta_get(conn, _synced_digest_key(query_source)),
-                _meta_get(conn, _synced_cheap_signal_key(query_source)),
-                _meta_get(conn, _synced_trace_digests_key(query_source)),
-            )
-    except sqlite3.Error:
-        return None, None, None
-
-
-def _cheap_signal_matches(prev_cheap_signal: str | None, current_cheap_signal: str) -> bool:
-    return (
-        prev_cheap_signal is not None
-        and current_cheap_signal != ""
-        and prev_cheap_signal == current_cheap_signal
-    )
-
-
-def _cheap_sync_query_state_locked(
-    *,
-    db_path: Path,
-    query_source: str,
-    current_cheap_signal: str,
-    prev_digest: str | None,
-    prev_cheap_signal: str | None,
-    prev_per_trace_raw: str | None,
-    trace_id: str | None,
-) -> CheapSyncResult:
-    if (
-        query_source == "projection"
-        and prev_cheap_signal is None
-        and current_cheap_signal != ""
-    ):
-        seeded = _bootstrap_projection_markers(
-            db_path,
-            current_cheap_signal=current_cheap_signal,
-            index_digest=_meta_get_safe(db_path, _synced_digest_key("index")),
-            index_trace_digests=_meta_get_safe(
-                db_path, _synced_trace_digests_key("index")
-            ),
-        )
-        if seeded is not None:
-            return CheapSyncResult(
-                synced=False,
-                query_source=query_source,
-                bucket_digest=seeded,
-            )
-
-    if trace_id is not None:
-        try:
-            refresh_index(db_path)
-        except Exception:
-            return CheapSyncResult(synced=False, query_source=query_source)
-        if query_source == "projection":
-            try:
-                from .search_projection import refresh_search_projection
-
-                refresh_search_projection(
-                    changed_trace_ids=[trace_id],
-                    deleted_trace_ids=[],
-                    index_path=db_path,
-                )
-            except Exception:
-                search_diag.incr("cheap_sync_delta_syncs")
-                return CheapSyncResult(
-                    synced=True,
-                    query_source=query_source,
-                    changed_trace_ids=[trace_id],
-                    bucket_digest=prev_digest,
-                )
-        try:
-            with _connect(db_path) as conn:
-                _meta_set(
-                    conn,
-                    _synced_cheap_signal_key(query_source),
-                    _cheap_bucket_signal(),
-                )
-                conn.commit()
-        except sqlite3.Error:
-            pass
-        search_diag.incr("cheap_sync_delta_syncs")
-        return CheapSyncResult(
-            synced=True,
-            query_source=query_source,
-            changed_trace_ids=[trace_id],
-            bucket_digest=prev_digest,
-        )
-
-    try:
-        top_digest, current_per_trace = _current_bucket_trace_digests()
-    except Exception:
-        return CheapSyncResult(synced=False, query_source=query_source)
-
-    if top_digest is not None and prev_digest == top_digest:
-        try:
-            with _connect(db_path) as conn:
-                _meta_set(
-                    conn,
-                    _synced_cheap_signal_key(query_source),
-                    _cheap_bucket_signal(),
-                )
-                conn.commit()
-        except sqlite3.Error:
-            pass
-        return CheapSyncResult(
-            synced=False, query_source=query_source, bucket_digest=top_digest
-        )
-
-    try:
-        previous_per_trace = json.loads(prev_per_trace_raw) if prev_per_trace_raw else {}
-        if not isinstance(previous_per_trace, dict):
-            previous_per_trace = {}
-    except (ValueError, json.JSONDecodeError):
-        previous_per_trace = {}
-
-    changed, deleted = _compute_trace_delta(current_per_trace, previous_per_trace)
-
-    try:
-        refresh_index(db_path)
-    except Exception:
-        return CheapSyncResult(
-            synced=False,
-            query_source=query_source,
-            bucket_digest=top_digest,
-        )
-
-    if query_source == "projection":
-        try:
-            from .search_projection import refresh_search_projection
-
-            refresh_search_projection(
-                changed_trace_ids=changed,
-                deleted_trace_ids=deleted,
-                index_path=db_path,
-            )
-        except Exception:
-            search_diag.incr("cheap_sync_delta_syncs")
-            return CheapSyncResult(
-                synced=True,
-                query_source=query_source,
-                changed_trace_ids=changed,
-                deleted_trace_ids=deleted,
-                bucket_digest=top_digest,
-            )
-
-    try:
-        with _connect(db_path) as conn:
-            if top_digest is not None:
-                _meta_set(conn, _synced_digest_key(query_source), top_digest)
-            _meta_set(
-                conn,
-                _synced_trace_digests_key(query_source),
-                json.dumps(current_per_trace, sort_keys=True),
-            )
-            _meta_set(
-                conn,
-                _synced_cheap_signal_key(query_source),
-                _cheap_bucket_signal(),
-            )
-            conn.commit()
-    except sqlite3.Error:
-        pass
-
-    search_diag.incr("cheap_sync_delta_syncs")
-    return CheapSyncResult(
-        synced=True,
-        query_source=query_source,
-        changed_trace_ids=changed,
-        deleted_trace_ids=deleted,
-        bucket_digest=top_digest,
-    )
-
-
-# --------------------------------------------------------------------------
-# Plan 087 U5 — best-effort keep-warm hooks.
-#
-# Capture (ingest) and the watcher sweep call ``keep_index_warm`` after they
-# have written a trace to the bucket so the warm index + search projection
-# reflect the new trace WITHOUT a manual ``trace index refresh``. This rides
-# on the U4 ``cheap_sync_query_state`` primitive: steady-state short-circuits
-# (zero refresh work), a changed bucket triggers the bounded incremental
-# refreshers.
-#
-# HARD CONTRACT: keep-warm is best-effort and MUST NOT raise into the capture
-# / scan path. Any failure is swallowed, logged at warning level, and reported
-# as ``ok=False`` so the warm cache keeps serving and capture still succeeds.
-# --------------------------------------------------------------------------
-
-
-@dataclass
-class KeepWarmResult:
-    """Outcome of one :func:`keep_index_warm` best-effort call."""
-
-    ok: bool
-    synced: bool = False
-    changed_trace_ids: list[str] = dataclass_field(default_factory=list)
-    deleted_trace_ids: list[str] = dataclass_field(default_factory=list)
-    error: str | None = None
-
-
-def keep_index_warm(
-    *,
-    index_path: Path | None = None,
-    query_sources: tuple[str, ...] = ("index",),
-    trace_id: str | None = None,
-) -> KeepWarmResult:
-    """Best-effort keep-warm of the Trace Index (+ search projection) (U5/F3).
-
-    Runs the U4 digest-gated cheap sync for each requested query source so a
-    freshly captured trace becomes queryable without a manual refresh. Steady
-    state is a cheap no-op: the stat-only bucket signal is computed ONCE here
-    and threaded into every source (no per-source re-scan), and an unchanged
-    signal short-circuits each source with zero corpus scan / manifest recompute
-    / refresh.
-
-    F3 default — ``query_sources`` defaults to ``("index",)``. The Trace Index
-    refresh is incremental and cheap; the search-projection delta still stamps
-    the build with a heavier bucket digest, so the per-capture / per-scan hot
-    path warms only the index by default and leaves the projection to be warmed
-    on its own (the now-cheap F2 delta refresh) by callers that opt in via
-    ``query_sources=("index", "projection")``.
-
-    ``trace_id`` (F3) — when the caller is the post-INGEST hook it passes the
-    single trace it just wrote. The cheap sync then refreshes ONLY that trace
-    (no ~46s whole-corpus delta derivation).
-
-    NEVER raises: any internal failure is swallowed and surfaced as
-    ``ok=False`` so capture / scan can never be broken by an index hiccup.
-    """
-
-    try:
-        # F3: one stat-only scan, reused across every query source.
-        shared_signal = _cheap_bucket_signal()
-        synced = False
-        changed: list[str] = []
-        deleted: list[str] = []
-        for query_source in query_sources:
-            result = cheap_sync_query_state(
-                query_source=query_source,
-                index_path=index_path,
-                cheap_signal=shared_signal,
-                trace_id=trace_id,
-            )
-            if result.synced:
-                synced = True
-                for tid in result.changed_trace_ids:
-                    if tid not in changed:
-                        changed.append(tid)
-                for tid in result.deleted_trace_ids:
-                    if tid not in deleted:
-                        deleted.append(tid)
-        return KeepWarmResult(
-            ok=True,
-            synced=synced,
-            changed_trace_ids=changed,
-            deleted_trace_ids=deleted,
-        )
-    except Exception as exc:  # noqa: BLE001 — keep-warm must never raise.
-        logger.warning("keep_index_warm failed (best-effort, ignored)", exc_info=True)
-        return KeepWarmResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 
 
 def _refresh_index_locked(
@@ -1866,86 +1278,6 @@ def trail_freshness_warnings(
         )
     return entries
 
-
-def _create_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        create table meta (
-            key text primary key,
-            value text not null
-        );
-        create table sources (
-            path text primary key,
-            mtime_ns integer not null,
-            size integer not null,
-            record_count integer not null
-        );
-        create table trail_sources (
-            project_slug text primary key,
-            repo_path text not null,
-            ref_sha text not null,
-            indexed_at text not null,
-            limitations_json text not null default '[]'
-        );
-        create table traces (
-            trace_id text primary key,
-            project_slug text not null,
-            session_id text not null,
-            generation_index integer not null,
-            trace_path text not null,
-            title text not null
-        );
-        create table units (
-            unit_id text primary key,
-            unit_type text not null,
-            trace_id text not null,
-            project_slug text not null,
-            title_text text not null,
-            intent_text text not null,
-            action_text text not null,
-            evidence_text text not null,
-            artifact_text text not null,
-            files_json text not null,
-            skills_json text not null,
-            facets_json text not null,
-            signals_json text not null,
-            metadata_json text not null,
-            trail_refs_json text not null
-        );
-        create virtual table units_fts using fts5(
-            title_text,
-            intent_text,
-            action_text,
-            evidence_text,
-            artifact_text,
-            content='units',
-            content_rowid='rowid'
-        );
-        create table facets (
-            unit_id text not null,
-            name text not null,
-            value text not null
-        );
-        create table signals (
-            unit_id text not null,
-            name text not null,
-            value text not null
-        );
-        create table trace_map_nodes (
-            node_id text primary key,
-            trace_id text not null,
-            ordinal integer not null,
-            payload text not null
-        );
-        create table trace_map_edges (
-            edge_id text primary key,
-            trace_id text not null,
-            ordinal integer not null,
-            payload text not null
-        );
-        create index idx_units_project_type on units(project_slug, unit_type);
-        """
-    )
 
 
 def _iter_project_homes() -> list[Path]:
