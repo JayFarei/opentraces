@@ -58,6 +58,14 @@ snapshot_report.html
 tests/otbox/captures/*/snapshot.tar.gz
 tests/otbox/captures/*/metadata.json
 
+# otbox journey footage (terminal-control). MEDIA ONLY — the recorder code is
+# committed, the generated MP4/recordings/gallery are not. Regenerate via
+# `make otbox-footage SCENARIO=<name>` / `make otbox-footage-all`.
+tests/otbox/captures/**/footage/
+tests/otbox/captures/_footage/
+*.termctrl
+tests/otbox/captures/**/*.mp4
+
 # search-eval raw run artifacts (machine-specific perf; SEARCH-EVAL.md is the committed deliverable)
 tests/search_eval/artifacts/
 

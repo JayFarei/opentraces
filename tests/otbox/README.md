@@ -459,6 +459,23 @@ These are committed verbatim under `tests/otbox/captures/`. If they
 grow past ~1MB each, the plan is to migrate to Git LFS in a follow-up
 (out of scope for plan 071).
 
+## Journey footage (terminal-control)
+
+`make otbox-footage SCENARIO=<name>` (and `make otbox-footage-all`) records
+an **MP4 of a journey playing out inside a real PTY** via
+[terminal-control](https://github.com/kitlangton/terminal-control), then
+builds a self-contained gallery at `tests/otbox/captures/_footage/gallery.html`.
+This is an additive **visual review aid** — a parallel termctrl-backed
+recorder (`simulated_users/footage_runner.py`) that reuses the tmux runner's
+exact box-preparation helpers but swaps the tmux turn loop for
+`termctrl start/send/show/mark/stop` + `termctrl video`. The tmux
+`capture-refresh` path above remains the assertion-grade lane; footage is for
+reviewing what a journey looks like, not for assertions. It graceful-degrades
+to `SKIP` whenever `termctrl`, the agent binary, or `ffmpeg` is absent, so it
+never blocks default CI (the `echo-meta` scenario records with no real agent).
+All generated media is gitignored. See [`FOOTAGE.md`](FOOTAGE.md) for the full
+operator guide.
+
 ## Tiered SSoT coverage gate (plan 069)
 
 Every journey TOML declares a `tier_label` (default `bronze`). The

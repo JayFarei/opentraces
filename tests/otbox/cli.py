@@ -1135,6 +1135,89 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_footage(args: argparse.Namespace) -> int:
+    """Record termctrl journey footage and build the gallery (additive).
+
+    Sibling of ``cmd_capture_refresh`` but visual: drives a simulated-user
+    scenario through the termctrl-backed recorder, exports an MP4, and
+    builds a self-contained gallery. termctrl / agent-binary / ffmpeg
+    absence all SKIP cleanly so default CI never depends on a real agent.
+    """
+    from .footage import (
+        FOOTAGE_GALLERY_DIR,
+        build_gallery,
+        record_all,
+        record_scenario,
+    )
+
+    fps = args.fps
+
+    if args.all:
+        harnesses = [args.harness] if args.harness else None
+        results = record_all(harnesses=harnesses, fps=fps)
+    else:
+        if not args.scenario:
+            raise OtboxError(
+                "footage: pass --scenario <name> or --all"
+            )
+        results = [
+            record_scenario(args.scenario, harness=args.harness, fps=fps)
+        ]
+
+    gallery_path = build_gallery(results)
+
+    counts = {"PASS": 0, "FAIL": 0, "SKIP": 0}
+    for r in results:
+        counts[r.verdict] = counts.get(r.verdict, 0) + 1
+
+    payload = {
+        "action": "footage",
+        "status": "ok",
+        "gallery": str(gallery_path),
+        "gallery_dir": str(FOOTAGE_GALLERY_DIR),
+        "fps": fps,
+        "counts": counts,
+        "clips": [
+            {
+                "scenario": r.scenario,
+                "agent": r.agent,
+                "verdict": r.verdict,
+                "mp4_path": r.mp4_path,
+                "termctrl_path": r.termctrl_path,
+                "duration_s": r.duration_s,
+                "turn_count": r.turn_count,
+                "error": r.error_message,
+            }
+            for r in results
+        ],
+    }
+    human_lines = [
+        f"footage: {counts['PASS']} PASS / {counts['FAIL']} FAIL / "
+        f"{counts['SKIP']} SKIP",
+        f"  gallery: {gallery_path}",
+    ]
+    for r in results:
+        line = f"  [{r.verdict}] {r.scenario} ({r.agent})"
+        if r.mp4_path:
+            line += f" → {r.mp4_path}"
+        elif r.error_message:
+            line += f" — {r.error_message}"
+        human_lines.append(line)
+    _emit(payload, json_mode=args.json, human="\n".join(human_lines))
+
+    if args.open and not args.json:
+        try:
+            import subprocess as _sp
+
+            _sp.run(["open", str(gallery_path)], check=False)
+        except OSError:
+            pass
+
+    # A clip-level FAIL is a real failure; SKIPs are clean (binary/ffmpeg
+    # absent). Exit non-zero only on a genuine FAIL.
+    return 1 if counts["FAIL"] else 0
+
+
 def cmd_snapshot_rm(args: argparse.Namespace) -> int:
     if not snapshot_exists(args.name):
         raise OtboxError(f"no snapshot named {args.name!r}")
@@ -1278,6 +1361,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_capref.add_argument("--base-checkpoint", default="c-installed-source",
                           help="base checkpoint to fork from (default: c-installed-source)")
     p_capref.set_defaults(func=cmd_capture_refresh)
+
+    p_footage = add(
+        "footage",
+        help="record termctrl journey footage and build the gallery (additive)",
+    )
+    p_footage.add_argument(
+        "--scenario",
+        help="scenario name under tests/otbox/simulated_users/scenarios/",
+    )
+    p_footage.add_argument(
+        "--harness",
+        choices=("claude", "codex", "pi", "echo"),
+        help="override the agent/harness to record against (default: scenario's agent)",
+    )
+    p_footage.add_argument(
+        "--all",
+        action="store_true",
+        help="record every scenario for its native agent, then build the gallery",
+    )
+    p_footage.add_argument(
+        "--fps", type=int, default=20, help="MP4 frames per second (default: 20)"
+    )
+    p_footage.add_argument(
+        "--open",
+        action="store_true",
+        help="open the gallery in the default browser (macOS `open`)",
+    )
+    p_footage.set_defaults(func=cmd_footage)
 
     p_image = add("image", help="build the Linux runtime image for the docker driver")
     image_sub = p_image.add_subparsers(dest="_image_cmd", required=True)

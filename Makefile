@@ -2,6 +2,7 @@
        test lint publish-schema publish-cli publish-test-schema publish-test-cli \
        tag release brew-update otbox-slice otbox-journeys otbox-tier1 \
        otbox-matrix otbox-inventory otbox-agent-session otbox-live-hf capture-refresh \
+       otbox-footage otbox-footage-all \
        search-eval search-eval-real search-eval-xl search-eval-slope \
        search-eval-cache search-eval-live search-eval-profile search-eval-test
 
@@ -97,6 +98,21 @@ otbox-live-hf:
 SCENARIO ?= echo-meta
 capture-refresh:
 	$(OTBOX_PY) -m tests.otbox capture-refresh --scenario $(SCENARIO) --json
+
+# Journey footage (terminal-control). ADDITIVE visual-review aid: records an
+# MP4 of a simulated-user journey via `termctrl` and builds a gallery. Needs
+# `termctrl` (cargo install terminal-control) + ffmpeg; absent → SKIP cleanly.
+# The default-CI safe value is `echo-meta` (uses the in-tree echo binary).
+# `make otbox-footage SCENARIO=add-helper-function HARNESS=claude FPS=24`.
+# See tests/otbox/FOOTAGE.md.
+HARNESS ?=
+FPS ?= 20
+otbox-footage:
+	$(OTBOX_PY) -m tests.otbox footage --scenario $(SCENARIO) \
+		$(if $(HARNESS),--harness $(HARNESS),) --fps $(FPS) --json
+
+otbox-footage-all:
+	$(OTBOX_PY) -m tests.otbox footage --all $(if $(HARNESS),--harness $(HARNESS),) --fps $(FPS) --json
 
 # ---------- search-eval harness (plan 088) ----------
 # Runs the progressive-discovery loop over a deterministic, real-bucket-sized
