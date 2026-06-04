@@ -10,18 +10,11 @@ from pathlib import Path
 
 import click
 
-from opentraces import cli as _cli
+import opentraces.cli as _cli
 from . import main
 from ._options import dump_json as _dump_json
-from ..core.config import load_config, save_config  # noqa: F401
 
 logger = logging.getLogger("opentraces.cli.installers")
-
-emit_json = _cli.emit_json
-error_response = _cli.error_response
-human_echo = _cli.human_echo
-human_hint = _cli.human_hint
-print_banner = _cli.print_banner
 
 
 
@@ -95,14 +88,14 @@ def _wizard_confirm(prompt: str, *, default: bool, hint: str | None = None) -> b
 
 
 def _configure_bucket_local(cfg) -> dict:
-    from ..core.config import BucketConfig, BucketRemoteConfig, save_config
+    from ..core.config import BucketConfig, BucketRemoteConfig
 
     cfg.bucket = BucketConfig(
         storage="local",
         local_cache=True,
         remote=BucketRemoteConfig(enabled=False),
     )
-    save_config(cfg)
+    _cli.save_config(cfg)
     return cfg.bucket.model_dump(mode="json")
 
 
@@ -115,7 +108,7 @@ def _configure_bucket_remote(
     fake_root: Path | None,
     sync_policy: str,
 ) -> dict:
-    from ..core.config import BucketConfig, BucketRemoteConfig, save_config
+    from ..core.config import BucketConfig, BucketRemoteConfig
     from ..core.datasets import hf_url, normalize_hf_repo_id
 
     if provider == "fake":
@@ -137,7 +130,7 @@ def _configure_bucket_remote(
             sync_policy=sync_policy,
         ),
     )
-    save_config(cfg)
+    _cli.save_config(cfg)
     return cfg.bucket.model_dump(mode="json")
 
 
@@ -230,7 +223,7 @@ def setup_bucket_cmd(
         _handle_bucket_migrate(as_json=as_json)
         return
 
-    cfg = load_config()
+    cfg = _cli.load_config()
     remote_sync: dict[str, object] | None = None
     from ..core.bucket_remote import BucketRemoteError
 
@@ -271,12 +264,12 @@ def setup_bucket_cmd(
         click.echo(_dump_json(payload))
         return
     if bucket["storage"] == "remote":
-        human_echo(f"Private HuggingFace bucket remote: {bucket['remote']['url']}")
-        human_echo("Dataset remotes remain explicit: opentraces dataset remote create ...")
+        _cli.human_echo(f"Private HuggingFace bucket remote: {bucket['remote']['url']}")
+        _cli.human_echo("Dataset remotes remain explicit: opentraces dataset remote create ...")
         if remote_sync is not None:
-            human_echo(f"Bucket remote sync: {remote_sync.get('state')}")
+            _cli.human_echo(f"Bucket remote sync: {remote_sync.get('state')}")
     else:
-        human_echo("Private bucket: local-only")
+        _cli.human_echo("Private bucket: local-only")
 
 
 def _detect_bucket_layout() -> str:
@@ -342,9 +335,9 @@ def _handle_bucket_migrate(*, as_json: bool) -> None:
             click.echo(_dump_json({"status": "ok", "migrate": payload}))
             return
         if from_layout == "v2":
-            human_echo("Bucket already on plan-080 v2 layout; nothing to migrate.")
+            _cli.human_echo("Bucket already on plan-080 v2 layout; nothing to migrate.")
         else:
-            human_echo("No bucket present yet; nothing to migrate.")
+            _cli.human_echo("No bucket present yet; nothing to migrate.")
         return
 
     # B1 owns the actual migration body in core/bucket_store.
@@ -401,10 +394,10 @@ def _handle_bucket_migrate(*, as_json: bool) -> None:
     if as_json:
         click.echo(_dump_json({"status": "ok", "migrate": payload}))
         return
-    human_echo(f"Bucket migrate: {from_layout} -> {to_layout}")
-    human_echo(f"  traces_migrated: {payload['traces_migrated']}")
-    human_echo(f"  blobs_migrated:  {payload['blobs_migrated']}")
-    human_echo(f"  status:          {payload['status']}")
+    _cli.human_echo(f"Bucket migrate: {from_layout} -> {to_layout}")
+    _cli.human_echo(f"  traces_migrated: {payload['traces_migrated']}")
+    _cli.human_echo(f"  blobs_migrated:  {payload['blobs_migrated']}")
+    _cli.human_echo(f"  status:          {payload['status']}")
 
 
 def _run_setup_wizard() -> None:
@@ -426,17 +419,16 @@ def _run_setup_wizard() -> None:
     from ..enrichment.entities import installer as _entinst
     from ..enrichment.entities import EntityRunner
     from ..enrichment.entities.runner import resolve_binary_path
-    from opentraces import cli as _cli
 
-    print_banner(tagline="setup wizard")
-    human_echo("")
+    _cli.print_banner(tagline="setup wizard")
+    _cli.human_echo("")
 
     # 0. Tracking mode — the headline choice (plan 081). Global (default)
     #    auto-enrolls every project an agent touches; manual keeps the
     #    explicit `opentraces init` opt-in. Persisted to global config.
-    cfg = load_config()
+    cfg = _cli.load_config()
     current_mode = cfg.capture.tracking_mode
-    human_echo(f"  {_cli._bold('tracking mode'):<28} {_cli._ok(current_mode)}")
+    _cli.human_echo(f"  {_cli._bold('tracking mode'):<28} {_cli._ok(current_mode)}")
     track_global = _wizard_confirm(
         "track every project automatically?",
         default=(current_mode == "global"),
@@ -445,8 +437,8 @@ def _run_setup_wizard() -> None:
     new_mode = "global" if track_global else "manual"
     if new_mode != current_mode:
         cfg.capture.tracking_mode = new_mode
-        save_config(cfg)
-    human_echo(f"    {_cli._ok(new_mode)}")
+        _cli.save_config(cfg)
+    _cli.human_echo(f"    {_cli._ok(new_mode)}")
 
     # 1. Hook installers (agents, git, skill) — one prompt each, default yes.
     for name, cls in get_hook_installers().items():
@@ -454,7 +446,7 @@ def _run_setup_wizard() -> None:
         st = inst.status()
         installed = bool(st.get("installed"))
         label = _cli._ok("installed") if installed else _cli._dim("not installed")
-        human_echo(f"  {_cli._bold(name):<28} {label}")
+        _cli.human_echo(f"  {_cli._bold(name):<28} {label}")
         if installed:
             continue
         if not _wizard_confirm(f"install {name}?", default=True):
@@ -462,13 +454,13 @@ def _run_setup_wizard() -> None:
         try:
             result = inst.install()
         except Exception as e:
-            human_echo(f"    {_cli._err('failed')}: {e}")
+            _cli.human_echo(f"    {_cli._err('failed')}: {e}")
             continue
         if result.ok:
-            human_echo(f"    {_cli._ok('done')} ({', '.join(result.added) or 'already present'})")
+            _cli.human_echo(f"    {_cli._ok('done')} ({', '.join(result.added) or 'already present'})")
         else:
             for note in result.notes:
-                human_echo(f"    {_cli._err('skip')}: {note}")
+                _cli.human_echo(f"    {_cli._err('skip')}: {note}")
 
     # 2. Watcher — default yes. Powers "opentraces trail blame" by running
     #    incremental backfill in the background after each commit.
@@ -476,7 +468,7 @@ def _run_setup_wizard() -> None:
     w_label = (
         _cli._ok("installed") if w_st.installed else _cli._dim("not installed")
     )
-    human_echo(f"  {_cli._bold('watcher'):<28} {w_label}")
+    _cli.human_echo(f"  {_cli._bold('watcher'):<28} {w_label}")
     if not w_st.installed:
         if _wizard_confirm(
             "install the attribution watcher?",
@@ -485,9 +477,9 @@ def _run_setup_wizard() -> None:
         ):
             try:
                 path = _winst.install()
-                human_echo(f"    {_cli._ok('installed')} {path}")
+                _cli.human_echo(f"    {_cli._ok('installed')} {path}")
             except Exception as e:
-                human_echo(f"    {_cli._err('failed')}: {e}")
+                _cli.human_echo(f"    {_cli._err('failed')}: {e}")
 
     # 3. Entity parser (sem) — default yes, richer commit diffs.
     ent_runner = EntityRunner(binary_path=resolve_binary_path())
@@ -495,7 +487,7 @@ def _run_setup_wizard() -> None:
     ent_label = (
         _cli._ok("installed") if ent_installed else _cli._dim("not installed")
     )
-    human_echo(f"  {_cli._bold('entity-parser'):<28} {ent_label}")
+    _cli.human_echo(f"  {_cli._bold('entity-parser'):<28} {ent_label}")
     if not ent_installed:
         if _wizard_confirm(
             "install the entity parser (sem)?",
@@ -504,21 +496,21 @@ def _run_setup_wizard() -> None:
         ):
             try:
                 _entinst.install()
-                human_echo(f"    {_cli._ok('installed')}")
+                _cli.human_echo(f"    {_cli._ok('installed')}")
             except _entinst.InstallError as e:
-                human_echo(f"    {_cli._err('failed')}: {e}")
+                _cli.human_echo(f"    {_cli._err('failed')}: {e}")
 
     # 4. HuggingFace login.
-    cfg = load_config()
+    cfg = _cli.load_config()
     identity = _cli._auth_identity(cfg.hf_token) if cfg.hf_token else None
     if identity:
-        human_echo(
+        _cli.human_echo(
             f"  {_cli._bold('huggingface'):<28} "
             f"{_cli._ok('authenticated')} "
             f"{_cli._dim('(' + str(identity.get('name') or '') + ')')}"
         )
     else:
-        human_echo(f"  {_cli._bold('huggingface'):<28} {_cli._dim('not authenticated')}")
+        _cli.human_echo(f"  {_cli._bold('huggingface'):<28} {_cli._dim('not authenticated')}")
         if _wizard_confirm(
             "log into HuggingFace now?",
             default=True,
@@ -528,9 +520,9 @@ def _run_setup_wizard() -> None:
                 from ..core.config import save_credentials, CREDENTIALS_PATH
                 _cli._login_with_device_code(save_credentials, CREDENTIALS_PATH)
             except Exception as e:
-                human_echo(f"    {_cli._err('failed')}: {e}")
+                _cli.human_echo(f"    {_cli._err('failed')}: {e}")
 
-    cfg = load_config()
+    cfg = _cli.load_config()
     identity = _cli._auth_identity(cfg.hf_token) if cfg.hf_token else None
     bucket_remote = cfg.bucket.remote
     bucket_configured = cfg.bucket.storage == "remote" and bucket_remote.enabled
@@ -541,7 +533,7 @@ def _run_setup_wizard() -> None:
         if bucket_configured
         else _cli._dim("local only")
     )
-    human_echo(f"  {_cli._bold('private bucket'):<28} {bucket_label}")
+    _cli.human_echo(f"  {_cli._bold('private bucket'):<28} {bucket_label}")
     if not bucket_configured:
         if identity:
             username = str(identity.get("name") or "")
@@ -558,12 +550,12 @@ def _run_setup_wizard() -> None:
                     fake_root=None,
                     sync_policy="daemon",
                 )
-                human_echo(f"    {_cli._ok('configured')} {configured['remote']['url']}")
+                _cli.human_echo(f"    {_cli._ok('configured')} {configured['remote']['url']}")
             else:
                 _configure_bucket_local(cfg)
-                human_echo(f"    {_cli._dim('local-only')}")
+                _cli.human_echo(f"    {_cli._dim('local-only')}")
         else:
-            human_hint(
+            _cli.human_hint(
                 "    private bucket sync will stay local until HuggingFace auth is configured."
             )
 
@@ -575,7 +567,7 @@ def _run_setup_wizard() -> None:
         _cli._ok(f"enabled ({th_version})") if th_enabled and th_version
         else _cli._dim("disabled" if not th_enabled else "enabled but missing")
     )
-    human_echo(f"  {_cli._bold('trufflehog'):<28} {th_label}")
+    _cli.human_echo(f"  {_cli._bold('trufflehog'):<28} {th_label}")
     if not (th_enabled and th_version):
         if _wizard_confirm(
             "enable the optional TruffleHog secret detector globally?",
@@ -585,47 +577,47 @@ def _run_setup_wizard() -> None:
             if th_version is None:
                 ok, method = install_binary()
                 if ok:
-                    human_echo(f"    installed via {method}")
+                    _cli.human_echo(f"    installed via {method}")
                     th_version = find_trufflehog()
                 else:
-                    human_echo(f"    {_cli._err('install failed')} — see https://github.com/trufflesecurity/trufflehog")
+                    _cli.human_echo(f"    {_cli._err('install failed')} — see https://github.com/trufflesecurity/trufflehog")
             if th_version:
                 cfg.security.trufflehog.enabled = True
-                save_config(cfg)
-                human_echo(f"    {_cli._ok('enabled')}")
+                _cli.save_config(cfg)
+                _cli.human_echo(f"    {_cli._ok('enabled')}")
 
     # 7. Optional: LLM review. Also a global config change.
     llm_enabled = getattr(cfg.security, "llm_review", None) and getattr(cfg.security.llm_review, "enabled", False)
     llm_label = _cli._ok("enabled") if llm_enabled else _cli._dim("disabled")
-    human_echo(f"  {_cli._bold('llm-review'):<28} {llm_label}")
+    _cli.human_echo(f"  {_cli._bold('llm-review'):<28} {llm_label}")
     if not llm_enabled:
         if _wizard_confirm(
             "enable optional LLM dataset-row review globally?",
             default=False,
             hint="configure via 'opentraces setup llm-review'; global setting",
         ):
-            human_hint(
+            _cli.human_hint(
                 "    run 'opentraces setup llm-review' to pick provider/model."
             )
 
-    human_echo("")
-    human_echo(_cli._bold("Next steps"))
+    _cli.human_echo("")
+    _cli.human_echo(_cli._bold("Next steps"))
     if new_mode == "global":
-        human_echo(
+        _cli.human_echo(
             "  • tracking mode is global: every project an agent touches is "
             "auto-enrolled (private + review-required)."
         )
-        human_echo(
+        _cli.human_echo(
             f"  • to opt one project out:  {_cli._bold('opentraces remove')}"
         )
     else:
-        human_echo(
+        _cli.human_echo(
             f"  • to track a project:  {_cli._bold('cd <project> && opentraces init')}"
         )
-    human_echo(
+    _cli.human_echo(
         f"  • to inspect health:   {_cli._bold('opentraces doctor')}"
     )
-    human_echo("  • dataset review policy lives in the dataset manifest and review commands.")
+    _cli.human_echo("  • dataset review policy lives in the dataset manifest and review commands.")
 
 @setup_group.command(
     "claude-code",
@@ -684,10 +676,10 @@ def setup_claude_code(
 
     if remove:
         result = remove_hooks(hd, sf)
-        human_echo(
+        _cli.human_echo(
             f"opentraces hooks removed from {result.config_files[0] if result.config_files else sf}."
         )
-        emit_json({
+        _cli.emit_json({
             "status": "ok",
             "action": "remove",
             "removed": result.removed,
@@ -701,11 +693,11 @@ def setup_claude_code(
                 {"event": p.event, "source": str(p.source), "dest": str(p.dest)}
                 for p in plan
             ]
-            human_echo("[dry-run] Would install hooks:")
+            _cli.human_echo("[dry-run] Would install hooks:")
             for pd in plan_data:
-                human_echo(f"  {pd['event']}: {pd['source']} -> {pd['dest']}")
-            human_echo(f"[dry-run] Would update: {ts}")
-            emit_json({
+                _cli.human_echo(f"  {pd['event']}: {pd['source']} -> {pd['dest']}")
+            _cli.human_echo(f"[dry-run] Would update: {ts}")
+            _cli.emit_json({
                 "status": "ok",
                 "dry_run": True,
                 "plan": plan_data,
@@ -715,21 +707,21 @@ def setup_claude_code(
 
         result = install_hooks(hd, sf)
     except InstallError as e:
-        emit_json(error_response(e.code, "install", e.message))
+        _cli.emit_json(_cli.error_response(e.code, "install", e.message))
         sys.exit(5)
 
     for dest in result.installed.values():
-        human_echo(f"Installed: {dest}")
+        _cli.human_echo(f"Installed: {dest}")
     if result.added:
-        human_echo(
+        _cli.human_echo(
             f"Registered hooks in {result.settings_file}: {', '.join(result.added)}"
         )
     else:
-        human_echo(
+        _cli.human_echo(
             f"Hooks already registered in {result.settings_file}, no changes needed."
         )
 
-    emit_json({
+    _cli.emit_json({
         "status": "ok",
         "installed": result.installed,
         "settings_file": str(result.settings_file),
@@ -796,8 +788,8 @@ def setup_codex_cli(
     if remove:
         result = remove_hooks(hd, hf)
         target = result.config_files[0] if result.config_files else hf
-        human_echo(f"opentraces Codex hooks removed from {target}.")
-        emit_json({
+        _cli.human_echo(f"opentraces Codex hooks removed from {target}.")
+        _cli.emit_json({
             "status": "ok",
             "action": "remove",
             "removed": result.removed,
@@ -816,13 +808,13 @@ def setup_codex_cli(
                 }
                 for item in plan
             ]
-            human_echo("[dry-run] Would install Codex hooks:")
+            _cli.human_echo("[dry-run] Would install Codex hooks:")
             for item in plan_data:
-                human_echo(
+                _cli.human_echo(
                     f"  {item['event']}: {item['source']} -> {item['dest']}"
                 )
-            human_echo(f"[dry-run] Would update: {target}")
-            emit_json({
+            _cli.human_echo(f"[dry-run] Would update: {target}")
+            _cli.emit_json({
                 "status": "ok",
                 "dry_run": True,
                 "plan": plan_data,
@@ -832,21 +824,21 @@ def setup_codex_cli(
 
         result = install_hooks(hd, hf)
     except HookInstallError as exc:
-        emit_json(error_response(exc.code, "install", exc.message))
+        _cli.emit_json(_cli.error_response(exc.code, "install", exc.message))
         sys.exit(5)
 
     for dest in result.installed.values():
-        human_echo(f"Installed: {dest}")
+        _cli.human_echo(f"Installed: {dest}")
     if result.added:
-        human_echo(
+        _cli.human_echo(
             f"Registered Codex hooks in {result.hooks_file}: {', '.join(result.added)}"
         )
     else:
-        human_echo(
+        _cli.human_echo(
             f"Codex hooks already registered in {result.hooks_file}, no changes needed."
         )
 
-    emit_json({
+    _cli.emit_json({
         "status": "ok",
         "installed": result.installed,
         "hooks_file": str(result.hooks_file),
@@ -888,19 +880,19 @@ def setup_git(remove: bool) -> None:
     from ..capture.git import install as git_hook
     if remove:
         git_hook.remove(Path.cwd())
-        human_echo("opentraces post-commit hook removed.")
-        emit_json({"status": "ok", "action": "remove",
+        _cli.human_echo("opentraces post-commit hook removed.")
+        _cli.emit_json({"status": "ok", "action": "remove",
                    "state": git_hook.status(Path.cwd())})
         return
     ok = git_hook.install(Path.cwd())
     st = git_hook.status(Path.cwd())
     if ok and st["installed"]:
-        human_echo("")
-        print_banner(tagline=_cli._ok("git hook installed"))
-        human_echo(f"  {_cli._dim('owned hook:')} {st['hook_dir']}/{git_hook.HOOK_FILENAME}")
+        _cli.human_echo("")
+        _cli.print_banner(tagline=_cli._ok("git hook installed"))
+        _cli.human_echo(f"  {_cli._dim('owned hook:')} {st['hook_dir']}/{git_hook.HOOK_FILENAME}")
     else:
-        human_echo("install failed: not a git repo or insufficient permissions.")
-    emit_json({"status": "ok" if ok else "error", "action": "install", "state": st})
+        _cli.human_echo("install failed: not a git repo or insufficient permissions.")
+    _cli.emit_json({"status": "ok" if ok else "error", "action": "install", "state": st})
 
 
 @setup_group.command(
@@ -935,24 +927,23 @@ def setup_skill(remove: bool, harnesses: tuple[str, ...]) -> None:
     moved aside to opentraces.bak.<timestamp> before the symlink is created.
     """
     from ..capture.skill.install import HARNESS_DIRS, SkillInstaller
-    from opentraces import cli as _cli
 
     targets = list(harnesses) if harnesses else list(HARNESS_DIRS.keys())
     unknown = [h for h in targets if h not in HARNESS_DIRS]
     if unknown:
-        human_echo(
+        _cli.human_echo(
             f"unknown harness(es): {', '.join(unknown)}. "
             f"supported: {', '.join(HARNESS_DIRS.keys())}"
         )
-        emit_json(error_response("UNKNOWN_HARNESS", "setup",
+        _cli.emit_json(_cli.error_response("UNKNOWN_HARNESS", "setup",
                                  f"unknown harness: {unknown}"))
         raise click.exceptions.Exit(2)
 
     inst = SkillInstaller(harnesses=targets)
     if remove:
         result = inst.remove()
-        human_echo("opentraces skill removed.")
-        emit_json({"status": "ok", "action": "remove",
+        _cli.human_echo("opentraces skill removed.")
+        _cli.emit_json({"status": "ok", "action": "remove",
                    "removed": result.removed, "state": inst.status()})
         return
 
@@ -960,26 +951,26 @@ def setup_skill(remove: bool, harnesses: tuple[str, ...]) -> None:
     st = inst.status()
     if not result.ok:
         for note in result.notes:
-            human_echo(f"  {_cli._err('error')}: {note}")
-        emit_json({"status": "error", "action": "install",
+            _cli.human_echo(f"  {_cli._err('error')}: {note}")
+        _cli.emit_json({"status": "error", "action": "install",
                    "notes": result.notes, "state": st})
         raise click.exceptions.Exit(3)
 
-    human_echo("")
-    print_banner(tagline=_cli._ok("skill installed"))
-    human_echo(f"  {_cli._dim('canonical:')} {st['canonical']} ({st['installed_version']})")
+    _cli.human_echo("")
+    _cli.print_banner(tagline=_cli._ok("skill installed"))
+    _cli.human_echo(f"  {_cli._dim('canonical:')} {st['canonical']} ({st['installed_version']})")
     for h, hs in st["harnesses"].items():
         if h not in targets:
             continue
         if hs.get("canonical"):
-            human_echo(f"  {_cli._dim('linked:'):<14} {hs.get('symlink_path')}")
+            _cli.human_echo(f"  {_cli._dim('linked:'):<14} {hs.get('symlink_path')}")
         elif hs.get("present"):
-            human_echo(f"  {_cli._dim(h+':')} present but not canonical ({hs.get('kind')})")
+            _cli.human_echo(f"  {_cli._dim(h+':')} present but not canonical ({hs.get('kind')})")
         else:
-            human_echo(f"  {_cli._dim(h+':')} not linked")
+            _cli.human_echo(f"  {_cli._dim(h+':')} not linked")
     for note in result.notes:
-        human_echo(f"  {_cli._dim('note:')} {note}")
-    emit_json({"status": "ok", "action": "install",
+        _cli.human_echo(f"  {_cli._dim('note:')} {note}")
+    _cli.emit_json({"status": "ok", "action": "install",
                "added": result.added, "notes": result.notes, "state": st})
 
 
@@ -994,24 +985,24 @@ def _pick_install_method_interactive() -> str | None:
 
     available = available_installers()
     if not available:
-        human_echo(
+        _cli.human_echo(
             "trufflehog is not installed and no supported installer was found "
             "(brew, go) on this machine."
         )
-        human_echo(
+        _cli.human_echo(
             "Install it manually from https://github.com/trufflesecurity/trufflehog "
             "and re-run 'opentraces setup trufflehog --enable'."
         )
         return None
 
-    human_echo("")
-    human_echo("trufflehog is not installed. choose an install method:")
+    _cli.human_echo("")
+    _cli.human_echo("trufflehog is not installed. choose an install method:")
     for i, name in enumerate(available, 1):
         blurb = {"brew": "Homebrew (recommended on macOS)",
                  "go": "go install from source"}.get(name, name)
-        human_echo(f"  {i}. {name}    [{blurb}]")
-    human_echo(f"  {len(available) + 1}. skip    [leave trufflehog unconfigured]")
-    human_echo("")
+        _cli.human_echo(f"  {i}. {name}    [{blurb}]")
+    _cli.human_echo(f"  {len(available) + 1}. skip    [leave trufflehog unconfigured]")
+    _cli.human_echo("")
 
     default_idx = "1"
     raw = click.prompt("choose", default=default_idx, show_default=True)
@@ -1067,14 +1058,14 @@ def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool, scope_projec
     """
     from ..security.trufflehog import find_trufflehog, install_binary
 
-    cfg = load_config()
+    cfg = _cli.load_config()
 
     if disable:
         cfg.security.trufflehog.enabled = False
-        save_config(cfg)
-        human_echo("TruffleHog detector disabled. Binary was not uninstalled.")
-        human_hint("Re-enable with: opentraces setup trufflehog --enable")
-        emit_json({"status": "ok", "action": "disable",
+        _cli.save_config(cfg)
+        _cli.human_echo("TruffleHog detector disabled. Binary was not uninstalled.")
+        _cli.human_hint("Re-enable with: opentraces setup trufflehog --enable")
+        _cli.emit_json({"status": "ok", "action": "disable",
                    "trufflehog_enabled": False})
         return
 
@@ -1083,11 +1074,11 @@ def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool, scope_projec
     if enable_only:
         version = find_trufflehog()
         if version is None:
-            human_echo(
+            _cli.human_echo(
                 "trufflehog binary not found on PATH. "
                 "Install it first, then re-run 'opentraces setup trufflehog --enable'."
             )
-            emit_json(error_response(
+            _cli.emit_json(_cli.error_response(
                 "TRUFFLEHOG_MISSING", "setup",
                 "trufflehog binary not found",
                 "Install trufflehog, then run --enable. "
@@ -1095,9 +1086,9 @@ def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool, scope_projec
             ))
             sys.exit(3)
         cfg.security.trufflehog.enabled = True
-        save_config(cfg)
+        _cli.save_config(cfg)
         _render_trufflehog_success(version, already_present=True)
-        emit_json({"status": "ok", "action": "enable",
+        _cli.emit_json({"status": "ok", "action": "enable",
                    "trufflehog_version": version, "trufflehog_enabled": True})
         return
 
@@ -1105,29 +1096,29 @@ def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool, scope_projec
     version = find_trufflehog()
     if version is not None:
         cfg.security.trufflehog.enabled = True
-        save_config(cfg)
+        _cli.save_config(cfg)
         _render_trufflehog_success(version, already_present=True)
-        emit_json({"status": "ok", "action": "enable",
+        _cli.emit_json({"status": "ok", "action": "enable",
                    "trufflehog_version": version, "trufflehog_enabled": True,
                    "install_method": "already-installed"})
         return
 
     chosen = _pick_install_method_interactive()
     if chosen is None:
-        human_echo("")
-        human_echo("trufflehog left unconfigured.")
-        emit_json({"status": "ok", "action": "declined",
+        _cli.human_echo("")
+        _cli.human_echo("trufflehog left unconfigured.")
+        _cli.emit_json({"status": "ok", "action": "declined",
                    "trufflehog_enabled": False})
         return
 
     ok, method = install_binary(method=chosen)
     if not ok:
-        human_echo(
+        _cli.human_echo(
             f"\nCould not install trufflehog via {chosen}.\n"
             "Install it manually from https://github.com/trufflesecurity/trufflehog\n"
             "and re-run 'opentraces setup trufflehog --enable'."
         )
-        emit_json(error_response(
+        _cli.emit_json(_cli.error_response(
             "TRUFFLEHOG_INSTALL_FAILED", "setup",
             f"install via {chosen} failed",
             "Install manually, then run --enable.",
@@ -1136,22 +1127,22 @@ def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool, scope_projec
 
     version = find_trufflehog()
     if version is None:
-        human_echo(
+        _cli.human_echo(
             f"trufflehog installed via {method} but not yet on PATH. "
             "Re-run 'opentraces setup trufflehog --enable' once PATH is updated."
         )
-        emit_json(error_response(
+        _cli.emit_json(_cli.error_response(
             "TRUFFLEHOG_PATH_MISS", "setup",
             f"installed via {method} but not on PATH",
             "Source your shell config or add GOPATH/bin, then --enable.",
         ))
         sys.exit(4)
 
-    human_echo(f"Installed trufflehog via {method}: {version}")
+    _cli.human_echo(f"Installed trufflehog via {method}: {version}")
     cfg.security.trufflehog.enabled = True
-    save_config(cfg)
+    _cli.save_config(cfg)
     _render_trufflehog_success(version, already_present=False, method=method)
-    emit_json({"status": "ok", "action": "install",
+    _cli.emit_json({"status": "ok", "action": "install",
                "trufflehog_version": version, "trufflehog_enabled": True,
                "install_method": method})
 
@@ -1159,22 +1150,21 @@ def setup_trufflehog_cmd(enable: bool, disable: bool, verify: bool, scope_projec
 def _render_trufflehog_success(version: str, *, already_present: bool,
                                method: str | None = None) -> None:
     """Shared success banner with a clear what-this-means + disable hint."""
-    from opentraces import cli as _cli
 
-    human_echo("")
-    print_banner(tagline=_cli._ok(f"trufflehog ready ({version})"))
+    _cli.human_echo("")
+    _cli.print_banner(tagline=_cli._ok(f"trufflehog ready ({version})"))
     if already_present:
-        human_echo(f"  {_cli._dim('(binary was already installed)')}")
+        _cli.human_echo(f"  {_cli._dim('(binary was already installed)')}")
     elif method:
-        human_echo(f"  {_cli._dim(f'installed via {method}')}")
-    human_echo("")
-    human_echo(f"  {_cli._bold('From now on:')} dataset publication gates can use TruffleHog.")
-    human_echo(f"  {_cli._dim('Findings are redacted in place and require review before publication.')}")
-    human_echo("")
-    human_echo(f"  {_cli._dim('disable:')}        opentraces setup trufflehog --disable")
-    human_echo(f"  {_cli._dim('re-enable:')}      opentraces setup trufflehog --enable")
-    human_echo(f"  {_cli._dim('publish gate:')}    opentraces dataset publish <name> --check-only")
-    human_echo(f"  {_cli._dim('health check:')}   opentraces doctor")
+        _cli.human_echo(f"  {_cli._dim(f'installed via {method}')}")
+    _cli.human_echo("")
+    _cli.human_echo(f"  {_cli._bold('From now on:')} dataset publication gates can use TruffleHog.")
+    _cli.human_echo(f"  {_cli._dim('Findings are redacted in place and require review before publication.')}")
+    _cli.human_echo("")
+    _cli.human_echo(f"  {_cli._dim('disable:')}        opentraces setup trufflehog --disable")
+    _cli.human_echo(f"  {_cli._dim('re-enable:')}      opentraces setup trufflehog --enable")
+    _cli.human_echo(f"  {_cli._dim('publish gate:')}    opentraces dataset publish <name> --check-only")
+    _cli.human_echo(f"  {_cli._dim('health check:')}   opentraces doctor")
 
 
 # ---------------------------------------------------------------------------
@@ -1231,11 +1221,11 @@ def _maybe_ollama_pull(model: str) -> bool:
     if shutil.which("ollama") is None:
         return False
     try:
-        human_echo(f"running: ollama pull {model}")
+        _cli.human_echo(f"running: ollama pull {model}")
         result = subprocess.run(["ollama", "pull", model], check=False)
         return result.returncode == 0
     except Exception as exc:
-        human_echo(f"ollama pull failed: {exc}")
+        _cli.human_echo(f"ollama pull failed: {exc}")
         return False
 
 
@@ -1250,19 +1240,18 @@ def _pick_model_from_list(
     - Unreachable or non-local preset: free-form prompt with the
       suggested default.
     """
-    from opentraces import cli as _cli
 
     is_local = preset_name in _LOCAL_PRESETS
     if is_local:
         ok, names, message = _probe_models(base_url, api_key_env)
         if ok and names:
-            human_echo("")
-            human_echo(f"{_cli._dim('models available:')}")
+            _cli.human_echo("")
+            _cli.human_echo(f"{_cli._dim('models available:')}")
             for i, n in enumerate(names, 1):
                 marker = _cli._ok(" ← suggested") if n == suggested else ""
-                human_echo(f"  {i}. {n}{marker}")
-            human_echo(f"  {len(names) + 1}. {_cli._bold('custom')} {_cli._dim('(type a tag; will pull if ollama)')}")
-            human_echo("")
+                _cli.human_echo(f"  {i}. {n}{marker}")
+            _cli.human_echo(f"  {len(names) + 1}. {_cli._bold('custom')} {_cli._dim('(type a tag; will pull if ollama)')}")
+            _cli.human_echo("")
             default_idx = str(names.index(suggested) + 1) if suggested in names else "1"
             raw = click.prompt("choose a model", default=default_idx, show_default=True)
             try:
@@ -1279,17 +1268,17 @@ def _pick_model_from_list(
 
         # Unreachable local endpoint — warn clearly, fall through.
         if is_local:
-            human_echo("")
-            human_echo(_cli._err(f"couldn't reach {base_url}") + f": {message}")
+            _cli.human_echo("")
+            _cli.human_echo(_cli._err(f"couldn't reach {base_url}") + f": {message}")
             if preset_name == "ollama":
-                human_echo(_cli._dim("is ollama running? try: ollama serve"))
+                _cli.human_echo(_cli._dim("is ollama running? try: ollama serve"))
             elif preset_name == "lm-studio":
-                human_echo(_cli._dim("start LM Studio's local server from the app"))
+                _cli.human_echo(_cli._dim("start LM Studio's local server from the app"))
             elif preset_name == "llama-cpp":
-                human_echo(_cli._dim("start llama.cpp: llama-server -m <model.gguf> --port 8080"))
+                _cli.human_echo(_cli._dim("start llama.cpp: llama-server -m <model.gguf> --port 8080"))
             elif preset_name == "vllm":
-                human_echo(_cli._dim("start vllm: vllm serve <model>"))
-            human_echo("")
+                _cli.human_echo(_cli._dim("start vllm: vllm serve <model>"))
+            _cli.human_echo("")
 
     tag = click.prompt("model", default=suggested or "", show_default=bool(suggested))
     return _maybe_pull_and_return(preset_name, tag)
@@ -1297,7 +1286,6 @@ def _pick_model_from_list(
 
 def _maybe_pull_and_return(preset_name: str, tag: str) -> str:
     """For Ollama, offer to pull the tag if it isn't installed yet."""
-    from opentraces import cli as _cli
 
     if preset_name != "ollama" or not tag:
         return tag
@@ -1311,13 +1299,13 @@ def _maybe_pull_and_return(preset_name: str, tag: str) -> str:
         f"'{tag}' is not pulled. run 'ollama pull {tag}' now?",
         default=True,
     ):
-        human_echo(_cli._dim("skipped; you can pull later with: ollama pull " + tag))
+        _cli.human_echo(_cli._dim("skipped; you can pull later with: ollama pull " + tag))
         return tag
     pulled = _maybe_ollama_pull(tag)
     if pulled:
-        human_echo(_cli._ok(f"pulled {tag}"))
+        _cli.human_echo(_cli._ok(f"pulled {tag}"))
     else:
-        human_echo(_cli._err(f"pull failed; saving '{tag}' anyway"))
+        _cli.human_echo(_cli._err(f"pull failed; saving '{tag}' anyway"))
     return tag
 
 
@@ -1371,21 +1359,20 @@ def _review_llm_config_from_cfg(cfg) -> dict:
 
 def _setup_review_llm_interactive() -> tuple[str, str, str, str, float]:
     """Walk the user through preset selection. Returns config tuple."""
-    from opentraces import cli as _cli
 
-    human_echo("")
-    print_banner(tagline="configure review LLM")
-    human_echo("")
-    human_echo("This is the third-party LLM used to independently review")
-    human_echo("staged traces before you push. Runs locally or against a")
-    human_echo("hosted API — this config is global, not per-project.")
-    human_echo("")
+    _cli.human_echo("")
+    _cli.print_banner(tagline="configure review LLM")
+    _cli.human_echo("")
+    _cli.human_echo("This is the third-party LLM used to independently review")
+    _cli.human_echo("staged traces before you push. Runs locally or against a")
+    _cli.human_echo("hosted API — this config is global, not per-project.")
+    _cli.human_echo("")
 
     for i, (name, base_url, key_env, sample, blurb) in enumerate(_REVIEW_LLM_PRESETS, 1):
         tag = _cli._dim(f"[{blurb}]")
-        human_echo(f"  {i}. {_cli._bold(name):<26} {tag}")
-    human_echo(f"  {len(_REVIEW_LLM_PRESETS) + 1}. {_cli._bold('custom'):<26} {_cli._dim('[enter URL and model manually]')}")
-    human_echo("")
+        _cli.human_echo(f"  {i}. {_cli._bold(name):<26} {tag}")
+    _cli.human_echo(f"  {len(_REVIEW_LLM_PRESETS) + 1}. {_cli._bold('custom'):<26} {_cli._dim('[enter URL and model manually]')}")
+    _cli.human_echo("")
 
     choice_str = click.prompt(
         "choose a preset",
@@ -1478,18 +1465,18 @@ def setup_review_llm_cmd(
         opentraces setup llm-review --api-format anthropic \\
             --model claude-haiku-4-5-20251001 --api-key-env ANTHROPIC_API_KEY
     """
-    cfg = load_config()
+    cfg = _cli.load_config()
     rc = cfg.security.llm_review
 
     if print_only:
-        emit_json({"status": "ok", "llm_review": _review_llm_config_from_cfg(cfg)})
+        _cli.emit_json({"status": "ok", "llm_review": _review_llm_config_from_cfg(cfg)})
         return
 
     if disable:
         rc.enabled = False
-        save_config(cfg)
-        human_echo("llm-review disabled.")
-        emit_json({"status": "ok", "action": "disable",
+        _cli.save_config(cfg)
+        _cli.human_echo("llm-review disabled.")
+        _cli.emit_json({"status": "ok", "action": "disable",
                    "llm_review": _review_llm_config_from_cfg(cfg)})
         return
 
@@ -1510,8 +1497,8 @@ def setup_review_llm_cmd(
         ok, message = _test_review_llm(
             eff_api_format, eff_base_url, eff_model, eff_api_key_env, eff_timeout,
         )
-        human_echo(f"llm-review test: {'ok' if ok else 'failed'} — {message}")
-        emit_json({
+        _cli.human_echo(f"llm-review test: {'ok' if ok else 'failed'} — {message}")
+        _cli.emit_json({
             "status": "ok" if ok else "error",
             "action": "test",
             "llm_review": {
@@ -1530,30 +1517,29 @@ def setup_review_llm_cmd(
     rc.api_key_env = eff_api_key_env
     rc.timeout = eff_timeout
     rc.enabled = True
-    save_config(cfg)
+    _cli.save_config(cfg)
 
     ok, message = _test_review_llm(
         rc.api_format, rc.base_url, rc.model, rc.api_key_env, rc.timeout,
     )
-    human_echo("")
-    from opentraces import cli as _cli
+    _cli.human_echo("")
     tag = _cli._ok("llm-review configured") if ok else _cli._err("llm-review saved but unreachable")
-    print_banner(tagline=tag)
-    human_echo(f"  {_cli._dim('api format:')} {rc.api_format}")
+    _cli.print_banner(tagline=tag)
+    _cli.human_echo(f"  {_cli._dim('api format:')} {rc.api_format}")
     if rc.api_format != "anthropic":
-        human_echo(f"  {_cli._dim('base url:  ')} {rc.base_url}")
-    human_echo(f"  {_cli._dim('model:     ')} {rc.model}")
+        _cli.human_echo(f"  {_cli._dim('base url:  ')} {rc.base_url}")
+    _cli.human_echo(f"  {_cli._dim('model:     ')} {rc.model}")
     if rc.api_key_env:
         present = "set" if os.environ.get(rc.api_key_env) else _cli._err("NOT SET")
-        human_echo(f"  {_cli._dim('api key:   ')} ${rc.api_key_env} ({present})")
-    human_echo(f"  {_cli._dim('reachable: ')} {message}")
-    human_echo("")
-    human_echo(f"  {_cli._bold('To run:')} opentraces dataset publish <name> --check-only")
-    human_echo(f"  {_cli._dim('scope:')}         dataset publication gates; upload remains explicit")
-    human_echo(f"  {_cli._dim('disable:')}       opentraces setup llm-review --disable")
-    human_echo(f"  {_cli._dim('health check:')}  opentraces doctor")
+        _cli.human_echo(f"  {_cli._dim('api key:   ')} ${rc.api_key_env} ({present})")
+    _cli.human_echo(f"  {_cli._dim('reachable: ')} {message}")
+    _cli.human_echo("")
+    _cli.human_echo(f"  {_cli._bold('To run:')} opentraces dataset publish <name> --check-only")
+    _cli.human_echo(f"  {_cli._dim('scope:')}         dataset publication gates; upload remains explicit")
+    _cli.human_echo(f"  {_cli._dim('disable:')}       opentraces setup llm-review --disable")
+    _cli.human_echo(f"  {_cli._dim('health check:')}  opentraces doctor")
 
-    emit_json({
+    _cli.emit_json({
         "status": "ok", "action": "install",
         "llm_review": _review_llm_config_from_cfg(cfg),
         "reachable": ok, "message": message,
@@ -1617,7 +1603,7 @@ def _filter_by_trace_ids(records: list[dict],
                 break
     unmatched = [p for p in wanted if p not in matched]
     if unmatched:
-        human_hint(f"no matching trace for: {', '.join(unmatched)}")
+        _cli.human_hint(f"no matching trace for: {', '.join(unmatched)}")
     return out
 
 
@@ -1662,7 +1648,7 @@ def _persist_llm_verdicts(staging_dir: Path, outcome, state) -> None:
             meta["llm_review"] = verdict
             jsonl.write_text(_json.dumps(rec) + "\n")
         except Exception as exc:
-            human_hint(f"could not persist verdict for {tid}: {exc}")
+            _cli.human_hint(f"could not persist verdict for {tid}: {exc}")
             continue
 
         if verdict.get("shareable") == "no" or \
@@ -1671,7 +1657,7 @@ def _persist_llm_verdicts(staging_dir: Path, outcome, state) -> None:
             try:
                 state.block_trace(tid, f"llm-review: {reason}")
             except Exception as exc:
-                human_hint(f"could not mark {tid} blocked: {exc}")
+                _cli.human_hint(f"could not mark {tid} blocked: {exc}")
 
 
 @main.command(
@@ -1737,7 +1723,7 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
     from ..core.review import estimate_llm_review, run_llm_review
     from ..core.state import StateManager
 
-    cfg = load_config()
+    cfg = _cli.load_config()
     rc = cfg.security.llm_review
     eff_api_format = api_format or rc.api_format
     eff_model = model or rc.model
@@ -1746,15 +1732,15 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
     eff_timeout = rc.timeout
 
     if not rc.enabled and api_format is None and model is None:
-        human_hint(
+        _cli.human_hint(
             "llm-review is not configured. Run 'opentraces setup llm-review' "
             "once, or pass --api-format/--model explicitly."
         )
 
     staging = get_project_traces_dir(Path.cwd())
     if not staging.exists():
-        human_echo("No staging directory found. Run opentraces init first.")
-        emit_json(error_response(
+        _cli.human_echo("No staging directory found. Run opentraces init first.")
+        _cli.emit_json(_cli.error_response(
             "NO_STAGING", "review", "staging dir missing",
             "Run 'opentraces init'.",
         ))
@@ -1775,7 +1761,7 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
         records = records[:limit]
 
     if not records:
-        human_echo(
+        _cli.human_echo(
             f"No traces match {filter_desc}"
             + (f" (limit {limit})" if limit else "")
             + f" — {total_available} trace(s) in staging."
@@ -1794,11 +1780,10 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
             })
         else:
             payload["results"] = []
-        emit_json(payload)
+        _cli.emit_json(payload)
         return
 
-    from opentraces import cli as _cli
-    human_echo(
+    _cli.human_echo(
         f"{_cli._dim(filter_desc + ':')} "
         f"{len(records)}/{total_available} trace(s) selected"
         + (f" (limit {limit})" if limit else "")
@@ -1809,16 +1794,16 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
         try:
             context = Path(context_file).read_text()[:10_000]
         except OSError as exc:
-            human_echo(f"Could not read context file: {exc}")
+            _cli.human_echo(f"Could not read context file: {exc}")
             sys.exit(2)
 
     if dry_run:
         est = estimate_llm_review(records, api_format=eff_api_format, model=eff_model)
-        human_echo(
+        _cli.human_echo(
             f"Dry run: {est.sessions} sessions, ~{est.chars:,} chars, "
             f"~{est.tokens:,} tokens, ~${est.cost_usd:.4f}."
         )
-        emit_json({
+        _cli.emit_json({
             "status": "ok",
             "action": "llm-review",
             "dry_run": True,
@@ -1840,7 +1825,7 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
 
     def _progress(trace_id: str, status: str) -> None:
         _counter["i"] += 1
-        human_echo(f"[{_counter['i']}/{n}] {trace_id}: {status}")
+        _cli.human_echo(f"[{_counter['i']}/{n}] {trace_id}: {status}")
 
     outcome = run_llm_review(
         records,
@@ -1861,7 +1846,7 @@ def review_llm_cmd(api_format: str | None, model: str | None, base_url: str | No
     # push flow skips them and the user sees them flagged.
     state_for_block = StateManager(get_project_state_path(Path.cwd()))
     _persist_llm_verdicts(staging, outcome, state_for_block)
-    emit_json({
+    _cli.emit_json({
         "status": "ok",
         "action": "llm-review",
         "dry_run": False,
@@ -1951,18 +1936,18 @@ def setup_entity_parser(force: bool) -> None:
     except _inst.InstallError as e:
         if total["n"]:
             click.echo("")
-        human_echo(f"{_cli._err('error')}: {e}")
-        emit_json({"status": "error", "action": "setup-entity-parser",
+        _cli.human_echo(f"{_cli._err('error')}: {e}")
+        _cli.emit_json({"status": "error", "action": "setup-entity-parser",
                    "message": str(e)})
         sys.exit(5)
 
     if total["n"]:
         click.echo("")
-    human_echo(
+    _cli.human_echo(
         f"Entity parser installed at {result.path} "
         f"(version {ENTITY_BINARY_VERSION}, {result.source})"
     )
-    emit_json({
+    _cli.emit_json({
         "status": "ok",
         "action": "setup-entity-parser",
         "binary_path": str(result.path),
@@ -2006,11 +1991,11 @@ def setup_privacy_filter_cmd(
     ``opentraces`` invocation. Either way this command flips
     ``cfg.security.privacy_filter.enabled`` to match ``--enable/--disable``.
     """
-    cfg = load_config()
+    cfg = _cli.load_config()
     cfg.security.privacy_filter.enabled = enable
     cfg.security.privacy_filter.model_name = model
     cfg.security.privacy_filter.score_threshold = score_threshold
-    save_config(cfg)
+    _cli.save_config(cfg)
 
     if install_deps and enable:
         import subprocess
@@ -2101,15 +2086,15 @@ def setup_watcher_install(interval: int, no_install: bool) -> None:
     try:
         path = _winst.install(interval=interval, dry_run=no_install)
     except RuntimeError as e:
-        human_echo(f"{_cli._err('error')}: {e}")
-        emit_json({"status": "error", "action": "setup-watcher",
+        _cli.human_echo(f"{_cli._err('error')}: {e}")
+        _cli.emit_json({"status": "error", "action": "setup-watcher",
                    "message": str(e)})
         sys.exit(5)
 
-    human_echo(f"Watcher unit written: {path}")
+    _cli.human_echo(f"Watcher unit written: {path}")
     if no_install:
-        human_hint("(dry run — not loaded)")
-    emit_json({
+        _cli.human_hint("(dry run — not loaded)")
+    _cli.emit_json({
         "status": "ok",
         "action": "setup-watcher",
         "unit_path": str(path),
@@ -2126,12 +2111,12 @@ def setup_watcher_uninstall() -> None:
     try:
         _winst.uninstall()
     except RuntimeError as e:
-        human_echo(f"{_cli._err('error')}: {e}")
-        emit_json({"status": "error", "action": "uninstall-watcher",
+        _cli.human_echo(f"{_cli._err('error')}: {e}")
+        _cli.emit_json({"status": "error", "action": "uninstall-watcher",
                    "message": str(e)})
         sys.exit(5)
-    human_echo(f"{_cli._ok('uninstalled')} watcher")
-    emit_json({"status": "ok", "action": "uninstall-watcher"})
+    _cli.human_echo(f"{_cli._ok('uninstalled')} watcher")
+    _cli.emit_json({"status": "ok", "action": "uninstall-watcher"})
 
 
 @setup_watcher_group.command("status")

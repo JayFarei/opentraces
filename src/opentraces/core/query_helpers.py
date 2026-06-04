@@ -34,7 +34,7 @@ def _terms(text: str) -> list[str]:
     seen: set[str] = set()
     for raw in re.findall(r"[a-zA-Z0-9_@./-]+", text):
         tok = raw.lower()
-        if len(tok) > 1 and tok not in seen:
+        if tok and tok not in seen:
             seen.add(tok)
             out.append(tok)
         if "/" in tok or "." in tok or "@" in tok:

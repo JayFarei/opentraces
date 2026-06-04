@@ -767,10 +767,10 @@ def ctx_show_cmd(
             f"{entry['byte_count']:>8}B  {entry['layer_id'] or '-'}"
         )
         if as_full and "content" in entry:
-            text = json.dumps(entry["content"], indent=2, sort_keys=True)
+            text = _dump_json(entry["content"])
             click.echo(text)
         elif "content" in entry:
-            text = json.dumps(entry["content"], indent=2, sort_keys=True)
+            text = _dump_json(entry["content"])
             click.echo(_truncate_for_text(text))
 
 

@@ -8,20 +8,13 @@ from pathlib import Path
 
 import click
 
-from opentraces import cli as _cli
+import opentraces.cli as _cli
 from . import main
 from .. import __version__  # noqa: F401
-from ..core.config import load_config, load_project_config, auth_identity as _auth_identity
 from ..core.trace_meta import short_trace_id
 from ..core.trace_stage import resolve_visible_stage
 
 logger = logging.getLogger("opentraces.cli.inspect")
-
-
-emit_json = _cli.emit_json
-error_response = _cli.error_response
-human_echo = _cli.human_echo
-human_hint = _cli.human_hint
 
 
 
@@ -110,19 +103,19 @@ def stats() -> None:
         },
     }
 
-    human_echo(f"Traces: {len(staged_files)}")
-    human_echo(f"Steps:  {total_steps}")
-    human_echo(f"Tokens: {total_tokens}")
-    human_echo(f"Cost:   ${total_cost:.4f}")
+    _cli.human_echo(f"Traces: {len(staged_files)}")
+    _cli.human_echo(f"Steps:  {total_steps}")
+    _cli.human_echo(f"Tokens: {total_tokens}")
+    _cli.human_echo(f"Cost:   ${total_cost:.4f}")
     for stage, count in counts.items():
         if count > 0:
-            human_echo(f"  {stage}: {count}")
+            _cli.human_echo(f"  {stage}: {count}")
     if models:
-        human_echo("Models:")
+        _cli.human_echo("Models:")
         for m, c in sorted(models.items(), key=lambda x: -x[1]):
-            human_echo(f"  {m}: {c}")
+            _cli.human_echo(f"  {m}: {c}")
 
-    emit_json(result)
+    _cli.emit_json(result)
 
 
 @main.command(hidden=True)
@@ -139,11 +132,11 @@ def context() -> None:
     project_dir = Path.cwd()
     if not project_is_opted_in(project_dir):
         click.echo("Not an opentraces project.")
-        human_hint("Run: opentraces init")
-        emit_json(error_response("NOT_INITIALIZED", "project", "No .opentraces.json marker", "Run: opentraces init"))
+        _cli.human_hint("Run: opentraces init")
+        _cli.emit_json(_cli.error_response("NOT_INITIALIZED", "project", "No .opentraces.json marker", "Run: opentraces init"))
         sys.exit(3)
 
-    proj_config = load_project_config(project_dir)
+    proj_config = _cli.load_project_config(project_dir)
     staging_dir = get_project_traces_dir(project_dir)
     state_path = get_project_state_path(project_dir)
     state = StateManager(state_path=state_path)
@@ -162,8 +155,8 @@ def context() -> None:
         counts["inbox"] += untracked
 
     # Auth status
-    cfg = load_config()
-    identity = _auth_identity(cfg.hf_token)
+    cfg = _cli.load_config()
+    identity = _cli._auth_identity(cfg.hf_token)
     authenticated = identity is not None
     username = identity.get("name", "unknown") if identity else None
 
@@ -198,13 +191,13 @@ def context() -> None:
         "suggested_next": suggested_next,
     }
 
-    human_echo(f"Project:  {project_dir.name}")
-    human_echo(f"Remote:   {proj_config.get('remote', 'not set')}")
-    human_echo(f"Auth:     {'yes (' + username + ')' if authenticated else 'no'}")
-    human_echo(f"Inbox:    {counts['inbox']}  Staged: {counts['staged']}  Pushed: {counts['pushed']}")
-    human_echo(f"Next:     {suggested_next}")
+    _cli.human_echo(f"Project:  {project_dir.name}")
+    _cli.human_echo(f"Remote:   {proj_config.get('remote', 'not set')}")
+    _cli.human_echo(f"Auth:     {'yes (' + username + ')' if authenticated else 'no'}")
+    _cli.human_echo(f"Inbox:    {counts['inbox']}  Staged: {counts['staged']}  Pushed: {counts['pushed']}")
+    _cli.human_echo(f"Next:     {suggested_next}")
 
-    emit_json(result)
+    _cli.emit_json(result)
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +512,7 @@ def graph_cmd(mode: str, limit: int, no_pager: bool) -> None:
     else:
         click.echo(output, nl=False)
 
-    emit_json({"status": "ok", "mode": mode, "limit": limit})
+    _cli.emit_json({"status": "ok", "mode": mode, "limit": limit})
 
 
 def _log_fmt_tokens(n: int) -> str:
@@ -594,8 +587,8 @@ def log(limit: int, verbose: bool) -> None:
     uploaded = state.get_traces_by_status(TraceStatus.UPLOADED)
 
     if not uploaded:
-        human_echo("No traces have been pushed yet.")
-        emit_json({"status": "ok", "limit": limit, "days": [], "total_days": 0})
+        _cli.human_echo("No traces have been pushed yet.")
+        _cli.emit_json({"status": "ok", "limit": limit, "days": [], "total_days": 0})
         return
 
     buckets: dict[str, list] = {}
@@ -685,7 +678,7 @@ def log(limit: int, verbose: bool) -> None:
                 extras.append(f"~${day_cost:.2f}")
             if extras:
                 header += f"   ({', '.join(extras)})"
-        human_echo(header)
+        _cli.human_echo(header)
 
         if verbose:
             for row in trace_rows:
@@ -697,7 +690,7 @@ def log(limit: int, verbose: bool) -> None:
                 line = f"  {short_id}  {time_str}  {model_str:<18}  {task_str}"
                 if tok_str:
                     line += f"   [{tok_str}]"
-                human_echo(line.rstrip())
+                _cli.human_echo(line.rstrip())
 
         days_payload.append({
             "date": date_str,
@@ -721,9 +714,9 @@ def log(limit: int, verbose: bool) -> None:
         })
 
     if limit > 0 and total_days > limit:
-        human_echo(f"\n... {total_days - limit} older day(s) hidden. Use --limit 0 to show all.")
+        _cli.human_echo(f"\n... {total_days - limit} older day(s) hidden. Use --limit 0 to show all.")
 
-    emit_json({"status": "ok", "limit": limit, "days": days_payload, "total_days": total_days})
+    _cli.emit_json({"status": "ok", "limit": limit, "days": days_payload, "total_days": total_days})
 
 
 @main.command(hidden=True)
@@ -731,13 +724,13 @@ def discover() -> None:
     """List available agent sessions across projects."""
     from ..core.config import get_projects_path
 
-    cfg = load_config()
+    cfg = _cli.load_config()
     projects_path = get_projects_path(cfg)
 
     if not projects_path.exists():
         click.echo(f"No sessions found. Directory does not exist: {projects_path}")
-        human_hint("Run Claude Code at least once to generate session logs, or use 'opentraces config set --projects-path' to specify a custom location")
-        emit_json(error_response(
+        _cli.human_hint("Run Claude Code at least once to generate session logs, or use 'opentraces config set --projects-path' to specify a custom location")
+        _cli.emit_json(_cli.error_response(
             code="NO_SESSIONS_FOUND",
             kind="not_found",
             message=f"{projects_path} not found",
@@ -759,8 +752,8 @@ def discover() -> None:
 
     if not sessions:
         click.echo("No session files found.")
-        human_hint("Run Claude Code to generate session logs")
-        emit_json(error_response(
+        _cli.human_hint("Run Claude Code to generate session logs")
+        _cli.emit_json(_cli.error_response(
             code="NO_SESSIONS_FOUND",
             kind="not_found",
             message="No .jsonl session files found",
@@ -772,7 +765,7 @@ def discover() -> None:
     for s in sessions:
         click.echo(f"  {s['project']}: {s['session_files']} session file(s)")
 
-    emit_json({
+    _cli.emit_json({
         "status": "ok",
         "sessions": sessions,
         "total_projects": len(sessions),

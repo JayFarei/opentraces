@@ -1953,17 +1953,11 @@ def _resume_trace_impl(
             if not getattr(resumer, "supports_at_step", False):
                 message = f"--at-step resume is not supported for {agent_name} traces."
                 if as_json:
-                    click.echo(
-                        json.dumps(
-                            error_response(
-                                "UNSUPPORTED_AT_STEP_AGENT",
-                                "resume",
-                                message,
-                            ),
-                            indent=2,
-                            sort_keys=True,
-                        )
-                    )
+                    click.echo(_dump_json(error_response(
+                        "UNSUPPORTED_AT_STEP_AGENT",
+                        "resume",
+                        message,
+                    )))
                 else:
                     click.echo(message, err=True)
                 sys.exit(2)
@@ -1979,13 +1973,7 @@ def _resume_trace_impl(
                     )
                 except ValueError as exc:
                     if as_json:
-                        click.echo(
-                            json.dumps(
-                                error_response("INVALID_STEP", "resume", str(exc)),
-                                indent=2,
-                                sort_keys=True,
-                            )
-                        )
+                        click.echo(_dump_json(error_response("INVALID_STEP", "resume", str(exc))))
                     else:
                         click.echo(str(exc), err=True)
                     sys.exit(2)

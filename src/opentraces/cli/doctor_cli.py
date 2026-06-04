@@ -15,12 +15,8 @@ from pathlib import Path
 
 import click
 
-from opentraces import cli as _cli
+import opentraces.cli as _cli
 from . import main
-from ..core.config import load_config
-
-emit_json = _cli.emit_json
-human_echo = _cli.human_echo
 
 
 @main.command(
@@ -47,7 +43,7 @@ def doctor_cmd(security_only: bool) -> None:
     """
     from ..core import doctor
 
-    cfg = load_config()
+    cfg = _cli.load_config()
     report = doctor.report(cfg, Path.cwd())
 
     if security_only:
@@ -60,10 +56,10 @@ def doctor_cmd(security_only: bool) -> None:
             "schema_version": report.get("schema_version"),
             "security": report["security"],
         }
-        emit_json({"status": "ok", "doctor": trimmed})
+        _cli.emit_json({"status": "ok", "doctor": trimmed})
     else:
         _render_doctor_human(report)
-        emit_json({"status": "ok", "doctor": report})
+        _cli.emit_json({"status": "ok", "doctor": report})
 
     code = doctor.exit_code(report)
     if code:
@@ -88,8 +84,8 @@ def _mark_for(kind: str) -> str:
 
 
 def _section(title: str) -> None:
-    human_echo("")
-    human_echo(_cli._bold(title))
+    _cli.human_echo("")
+    _cli.human_echo(_cli._bold(title))
 
 
 def _row(mark_kind: str, label: str, value: str, *, detail: str | None = None) -> None:
@@ -99,7 +95,7 @@ def _row(mark_kind: str, label: str, value: str, *, detail: str | None = None) -
     line = f"  {mark} {padded} {value}"
     if detail:
         line += f"  {_cli._dim(detail)}"
-    human_echo(line)
+    _cli.human_echo(line)
 
 
 _TIER_STATE_MARK = {
@@ -137,14 +133,14 @@ def _tier_row(tier: dict) -> None:
     line = f"  {mark} {head} {value}"
     if detail:
         line += f"  {_cli._dim(detail)}"
-    human_echo(line)
+    _cli.human_echo(line)
 
     # Setup info lines (e.g., LLM endpoint/env) render above the hints,
     # at the same indent, so `doctor` exposes the full configuration.
     pad = " " * (4 + 22 + 1)  # align under the state column
     for info in _tier_info_lines(tier):
         if info:
-            human_echo(f"{pad}{_cli._dim(info)}")
+            _cli.human_echo(f"{pad}{_cli._dim(info)}")
 
     # Actionable hints, only where applicable.
     hints = _tier_toggle_hint(state, tier)
@@ -153,7 +149,7 @@ def _tier_row(tier: dict) -> None:
             hints = [hints]
         for h in hints:
             if h:
-                human_echo(f"{pad}{_cli._dim(h)}")
+                _cli.human_echo(f"{pad}{_cli._dim(h)}")
 
 
 def _tier_info_lines(tier: dict) -> list[str]:
@@ -226,14 +222,14 @@ def _security_section(sec: dict) -> None:
         _tier_row(tier)
     sensitivity = sec.get("classifier_sensitivity")
     if sensitivity:
-        human_echo("")
-        human_echo(f"  {_cli._dim(f'classifier sensitivity: {sensitivity}')}")
+        _cli.human_echo("")
+        _cli.human_echo(f"  {_cli._dim(f'classifier sensitivity: {sensitivity}')}")
 
 
 def _processors_section(specs: list[dict]) -> None:
     _section("Post-processors")
     if not specs:
-        human_echo(f"  {_cli._dim('(none configured)')}")
+        _cli.human_echo(f"  {_cli._dim('(none configured)')}")
         return
     for p in specs:
         status = p.get("status")
@@ -264,7 +260,7 @@ def _entity_parser_section(info: dict) -> None:
 def _hooks_section(hooks: list[dict]) -> None:
     _section("Agent integrations")
     if not hooks:
-        human_echo(f"  {_cli._dim('(no installers registered)')}")
+        _cli.human_echo(f"  {_cli._dim('(no installers registered)')}")
         return
     for h in hooks:
         name = h.get("installer", "?")
@@ -395,14 +391,14 @@ def _opted_in_section(info: dict) -> None:
     count = info.get("count", 0)
     paths = info.get("paths") or []
     if not count:
-        human_echo(f"  {_cli._dim('(none — run opentraces init in a project to opt in)')}")
+        _cli.human_echo(f"  {_cli._dim('(none — run opentraces init in a project to opt in)')}")
         return
-    human_echo(f"  {_cli._dim(f'{count} project(s) registered')}")
+    _cli.human_echo(f"  {_cli._dim(f'{count} project(s) registered')}")
     # Show at most 3 to keep doctor compact.
     for p in paths[:3]:
-        human_echo(f"    {_cli._dim(p)}")
+        _cli.human_echo(f"    {_cli._dim(p)}")
     if len(paths) > 3:
-        human_echo(f"    {_cli._dim(f'... and {len(paths) - 3} more')}")
+        _cli.human_echo(f"    {_cli._dim(f'... and {len(paths) - 3} more')}")
 
 
 def _versions_section(report: dict) -> None:
@@ -444,7 +440,7 @@ def _render_doctor_human(report: dict) -> None:
     _hooks_section(report["hooks"])
     _post_commit_hook_section(report.get("post_commit_hook") or {})
     _trail_event_log_section(report.get("trail_event_log") or {})
-    human_echo("")
+    _cli.human_echo("")
 
 
 def _bucket_section(info: dict) -> None:
@@ -558,7 +554,7 @@ def _trail_event_log_section(info: dict) -> None:
 
 def _render_doctor_security(report: dict) -> None:
     """Focused subview: versions + security pipeline only."""
-    human_echo(_cli._bold("opentraces doctor — security"))
+    _cli.human_echo(_cli._bold("opentraces doctor — security"))
     _versions_section(report)
     _security_section(report["security"])
-    human_echo("")
+    _cli.human_echo("")

@@ -830,17 +830,11 @@ def attach_cmd(
         sys.exit(2)
 
     if as_json:
-        click.echo(
-            json.dumps(
-                {
-                    "trace_id": trace_id,
-                    "commit_ref": commit,
-                    "created_anchors": created,
-                },
-                indent=2,
-                sort_keys=True,
-            )
-        )
+        click.echo(_dump_json({
+            "trace_id": trace_id,
+            "commit_ref": commit,
+            "created_anchors": created,
+        }))
         return
 
     if not created:
