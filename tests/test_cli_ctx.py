@@ -3,7 +3,7 @@
 One test per verb covers happy-path JSON envelope shape, an empty-state
 case (returns rc=0 with ``limitations``, not a traceback), and rc=3
 on missing resources. Fixtures reuse the same e2e capture flow as
-``tests/test_context_tree_e2e.py`` so the CLI is exercised on real
+``tests/context_tree/test_context_tree_e2e.py`` so the CLI is exercised on real
 projection state rather than handcrafted dicts.
 """
 from __future__ import annotations

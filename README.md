@@ -326,9 +326,9 @@ Set up opentraces in this project.
 
 4. Initialize the repo:
    `opentraces init`
-   For Pi, first install `pi install npm:opentraces-pi`, then run
-   `opentraces init --agent pi` or `/ot-setup` for explicit project consent.
-   This enrolls the project. Dataset remotes and review policy live under
+   For Pi, first install `pi install npm:opentraces-pi`. Under global tracking
+   (the default) Pi auto-enrolls; `opentraces init --agent pi` or `/ot-setup`
+   enrolls a project explicitly. Dataset remotes and review policy live under
    `opentraces dataset ...`.
 
 5. After init, the daily workflow is:

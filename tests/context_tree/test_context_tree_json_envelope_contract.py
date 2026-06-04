@@ -186,7 +186,7 @@ EXPECTED_KEYS_RESUME_EMPTY: dict[str, tuple[type, ...]] = {
 
 # --------------------------------------------------------------------------- #
 # Fixture: build a deterministic projection from the linear session fixture.
-# Reuses the same end-to-end pattern as tests/test_context_tree_e2e.py so the
+# Reuses the same end-to-end pattern as tests/context_tree/test_context_tree_e2e.py so the
 # substrate the envelopes describe is the substrate we actually produce.
 # --------------------------------------------------------------------------- #
 

@@ -412,7 +412,7 @@ def _tracking_mode_section(report: dict) -> None:
     mode = report.get("tracking_mode", "global")
     _section("Tracking mode")
     if mode == "global":
-        _row("ok", "mode", "global", detail="auto-enroll Claude/Codex; Pi requires init consent")
+        _row("ok", "mode", "global", detail="auto-enroll Claude/Codex/Pi; opt out via manual mode")
     else:
         _row("off", "mode", "manual", detail="explicit 'opentraces init' opt-in per project")
 

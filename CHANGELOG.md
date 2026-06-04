@@ -7,7 +7,34 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## MERGED-I — Trace Intelligence
+## [0.4.0] - 2026-04-26
+
+This release consolidates everything that accumulated on the 0.4.0 line since
+the initial cut: the Trace Intelligence layer and substrate work grouped below,
+a release-readiness simplification pass, the parallel Pi-capture opt-out work,
+and otbox terminal-control journey footage.
+
+### Release-readiness simplification + terminal-control footage (2026-06-04)
+
+- **Codebase simplification (~ -4,857 LOC).** Removed dead modules (the
+  `capture/http_proxy/` prototype, archived scripts, the broken `otc` shim,
+  noop `hatch_build.py`), never-registered `trace_*` commands, and ~34 `_cli`
+  forwarding shims; consolidated `core/` time + query helpers; fixed the live
+  CI red-bar (`SECURITY_VERSION` doc drift). Split the largest modules
+  (`trace_index.py`, `bucket_store.py`, `cli/trail.py`, `installers.py`,
+  `cli/__init__.py`) into well-interfaced submodules and renamed
+  `core/workflow.py` to `core/trace_stage.py`, all behavior-preserving.
+- **Pi capture is opt-out under global tracking** (merged from the parallel
+  Pi-capture line): Claude/Codex/Pi projects auto-enroll on first capture; opt
+  out via manual mode or a per-project marker. `opentraces setup pi` manages the
+  Pi package entry.
+- **otbox terminal-control journey footage.** New `make otbox-footage` /
+  `otbox-footage-all` record MP4 footage of every otbox user journey across the
+  supported harnesses (claude, codex, pi, synthetic echo) via
+  kitlangton/terminal-control, rendered into a reviewable gallery. Graceful
+  degrades and stays default-CI-safe when termctrl/ffmpeg is absent.
+
+### MERGED-I — Trace Intelligence
 
 - **Three deterministic, derive-on-demand detectors over a single trace.**
   All read-side, no LLM, nothing persisted, no schema-package change. Each
@@ -43,7 +70,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exits 2 and an unresolved trace ref exits 6. The `trace get` and `trace
   map` surfaces emit byte-identical payloads for matching flags. See plan 086.
 
-## MERGED-H — Trajectory Slicing
+### MERGED-H — Trajectory Slicing
 
 - **Adaptive burst gap (T2).** `core/bursts.py::detect_bursts` now
   picks `gap` per-trace from the median step-distance between
@@ -90,7 +117,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   labeled burst boundaries. Current accuracy: 100 % (6/6 labeled
   bursts across the two label modes).
 
-## MERGED-G — Performance
+### MERGED-G — Performance
 
 - **Defer A4 survival enrichment from refresh-time to query-time (P1).**
   `_build_trail_units` no longer calls `sync_patch` per Git Anchor. The
@@ -154,7 +181,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   per-anchor descendant walk over real-project history). Warm
   cache hits are at 13/13 labeled regression assertions.
 
-## MERGED-F — Survivorship Hygiene
+### MERGED-F — Survivorship Hygiene
 
 - **`trace_id` in batch `trail track` output (D1).** Every JSONL row
   emitted by `trail track --since` / `--all` / `--patches-from` now
@@ -220,7 +247,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `retention_fraction*`, `lost_kind`, `lost_at_commit_sha`). All
   patches share one `lost_attribution_cache`.
 
-## MERGED-E — Intent Richness
+### MERGED-E — Intent Richness
 
 - **Structured `intent` object on `change_burst` nodes (I7).**
   `trace map --bursts` and `trace get --bursts` now expose an `intent`
@@ -299,7 +326,7 @@ commit SHA `68d6723dbb`, its subject "refactor(dataset): rename `apply`
 to `clone`, add `--data` for one-step setup", and its body explaining
 why `apply` was opaque.
 
-## MERGED-A — Indexer Reliability
+### MERGED-A — Indexer Reliability
 
 - **Trail-projection cache self-heals after staleness.** `_build_trail_units`
   no longer swallows `OSError | RuntimeError | ValueError | ValidationError |
@@ -331,7 +358,7 @@ why `apply` was opaque.
   the unit type (e.g. `trace`, `patch`, `git_anchor`, `skill_invocation`,
   `tool_sequence`, `test_or_error_signal`). Tool-less prompt traces get
   `candidate_kind=trace` instead of `null`.
-## MERGED-B — Trace Map Projections & Bursts
+### MERGED-B — Trace Map Projections & Bursts
 
 Cluster B / Plan 54 trace-map projection work. Targets the "1.6 MB
 trace map for one heavy trace" pain point: ships a compactness filter,
@@ -387,7 +414,7 @@ intent + patches + git anchor" with a one-line jq.
 - New tests: `tests/core/test_bursts.py`,
   `tests/core/test_trace_map_actions_filter.py`,
   `tests/cli/test_trace_map_cli.py`.
-## MERGED-C — Survivorship surface & batch track
+### MERGED-C — Survivorship surface & batch track
 
 ### Added
 
@@ -430,7 +457,7 @@ intent + patches + git anchor" with a one-line jq.
   optional pre-loaded `events: list[TrailEvent]` so batch callers can
   amortize the one-time read cost across many patches.
 
-## MERGED-D — CLI ergonomics & ad-hoc datasets
+### MERGED-D — CLI ergonomics & ad-hoc datasets
 
 ### Added
 
@@ -484,9 +511,9 @@ intent + patches + git anchor" with a one-line jq.
   full create / list / status / review / approve / run loop on a
   manual dataset.
 
-## [0.4.0] - 2026-04-26
+### Trace Trails Phase 5: initial 0.4.0 cut (2026-04-26)
 
-This release ships **Trace Trails Phase 5**: a VCS-anchored evidence
+This subsection ships **Trace Trails Phase 5**: a VCS-anchored evidence
 substrate that links agent trace steps to the Git history that accepted
 their patches. Trace Trails are exposed via a new `opentraces trail`
 command group, an append-only `TrailEvent` log, and stable `ot://`

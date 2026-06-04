@@ -177,7 +177,7 @@ command_families = ["Step", "ctx step", "ctx show", "ctx resume"]
 evidence = [
   "pytest:tests/schema/test_schema.py",
   "pytest:tests/test_cli_ctx.py",
-  "pytest:tests/test_context_tree_cross_substrate_join.py",
+  "pytest:tests/context_tree/test_context_tree_cross_substrate_join.py",
   "pytest:tests/capture/test_parser_claude_code.py",
   "pytest:tests/capture/test_parser_codex_cli_advanced.py",
 ]
@@ -284,7 +284,7 @@ evidence = [
   "otbox:context-tree-otel-capture-fidelity",
   "otbox:context-tree-otel-receiver-up",
   "pytest:tests/test_cli_ctx.py",
-  "pytest:tests/test_context_tree_json_envelope_contract.py",
+  "pytest:tests/context_tree/test_context_tree_json_envelope_contract.py",
   "pytest:tests/test_otlp_capture.py",
 ]
 

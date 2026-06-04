@@ -605,8 +605,8 @@ def _run_setup_wizard() -> None:
     _cli.human_echo(_cli._bold("Next steps"))
     if new_mode == "global":
         _cli.human_echo(
-            "  • tracking mode is global: Claude/Codex projects are auto-enrolled "
-            "(private + review-required); Pi still requires explicit init consent."
+            "  • tracking mode is global: Claude/Codex/Pi projects are auto-enrolled "
+            "(private + review-required); opt out via manual mode or a per-project marker."
         )
         _cli.human_echo(
             f"  • to opt one project out:  {_cli._bold('opentraces remove')}"
