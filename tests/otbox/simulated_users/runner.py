@@ -815,6 +815,103 @@ def _run_claude_print_turns(
     return "PASS", completed, "", last_stdout
 
 
+def _run_pi_print_turns(
+    binary: str,
+    project: Path,
+    env: dict[str, str],
+    turns: list[Turn],
+    pane_log_path: Path,
+) -> tuple[str, int, str, str]:
+    """Drive ``pi --print`` turns in subprocess mode (no tmux).
+
+    Returns ``(verdict, completed_turns, error_message, final_output)``.
+
+    Why not tmux for real pi:
+      * pi's interactive TUI boots slowly (skill/extension load + a
+        "setup step(s) missing" nag). The tmux poll loop sends the
+        prompt after a 0.15s settle, before the TUI is ready to accept
+        input, so the typed prompt is never submitted (observed: prompt
+        in the input box, ``$0.000`` spent, ``0.0%`` context).
+      * ``pi --print`` (documented in ``pi --help``: "Non-interactive
+        mode: process prompt and exit") runs the prompt headlessly with
+        the same read/bash/edit/write tools and the loaded opentraces-pi
+        extension, so the bridge sidecars + session JSONL are produced
+        exactly as in interactive mode.
+      * ``pi --continue`` resumes the most recent session in the cwd, so
+        multi-turn scenarios compose as ``--print <turn0>`` then
+        ``--print --continue <turnN>``.
+    """
+    completed = 0
+    last_stdout = ""
+    last_stderr = ""
+    with pane_log_path.open("a", encoding="utf-8") as log:
+        log.write("=== pi --print mode (no tmux) ===\n")
+        for turn_idx, turn in enumerate(turns):
+            cmd = [binary, "--print"]
+            if turn_idx > 0:
+                cmd.append("--continue")
+            cmd.append(turn.prompt)
+            log.write(
+                f"=== turn {turn_idx} cmd={cmd!r} expect={turn.expect_regex!r} "
+                f"timeout={turn.timeout_s}s ===\n"
+            )
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    cwd=str(project),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=max(1.0, turn.timeout_s),
+                    stdin=subprocess.DEVNULL,
+                )
+            except subprocess.TimeoutExpired as exc:
+                last_stdout = (exc.stdout.decode("utf-8", "replace")
+                               if isinstance(exc.stdout, (bytes, bytearray))
+                               else (exc.stdout or ""))
+                last_stderr = (exc.stderr.decode("utf-8", "replace")
+                               if isinstance(exc.stderr, (bytes, bytearray))
+                               else (exc.stderr or ""))
+                log.write(f"--- TIMEOUT after {turn.timeout_s}s ---\n")
+                log.write(f"--- partial stdout ---\n{last_stdout}\n")
+                log.write(f"--- partial stderr ---\n{last_stderr}\n")
+                return (
+                    "FAIL",
+                    completed,
+                    f"turn {turn_idx}: pi --print timed out after {turn.timeout_s}s",
+                    last_stdout,
+                )
+            last_stdout = proc.stdout or ""
+            last_stderr = proc.stderr or ""
+            log.write(f"--- stdout (rc={proc.returncode}) ---\n{last_stdout}\n")
+            if last_stderr:
+                log.write(f"--- stderr ---\n{last_stderr}\n")
+            if proc.returncode != 0:
+                return (
+                    "FAIL",
+                    completed,
+                    (
+                        f"turn {turn_idx}: pi --print exited rc={proc.returncode}: "
+                        f"{last_stderr.strip()[:200]}"
+                    ),
+                    last_stdout,
+                )
+            pattern = re.compile(turn.expect_regex, re.IGNORECASE)
+            if not pattern.search(last_stdout):
+                return (
+                    "FAIL",
+                    completed,
+                    (
+                        f"turn {turn_idx}: expect_regex "
+                        f"{turn.expect_regex!r} did not match pi --print "
+                        f"stdout (prompt={turn.prompt!r})"
+                    ),
+                    last_stdout,
+                )
+            completed += 1
+    return "PASS", completed, "", last_stdout
+
+
 # ---------------------------------------------------------------------------
 # public entry point
 # ---------------------------------------------------------------------------
@@ -1016,6 +1113,33 @@ def run_simulated_session(
             )
         env = isolated_env(box, env_extra)
         verdict, completed_turns, error_message, final_out = _run_claude_print_turns(
+            binary=binary_abs,
+            project=Path(box.project),
+            env=env,
+            turns=turns,
+            pane_log_path=pane_log_path,
+        )
+        return ScenarioResult(
+            verdict=verdict,
+            binary_path=binary_abs,
+            binary_version=binary_version,
+            turn_count=completed_turns,
+            pane_log_path=str(pane_log_path),
+            error_message=error_message,
+            pane_excerpt=final_out[-2000:] if final_out else "",
+        )
+
+    # --- pi: --print headless mode (no tmux) -------------------------------
+    # pi's interactive TUI boots slowly (skill/extension load + a setup-step
+    # nag); the tmux poll loop sends the prompt before the TUI accepts input,
+    # so the Enter never submits (observed: prompt typed, $0.000 spent, 0.0%
+    # context). ``pi --print`` runs the prompt headlessly with the same
+    # read/bash/edit/write tools + loaded opentraces-pi extension, producing
+    # the bridge sidecars + session JSONL exactly as interactive mode. Box
+    # prep (hooks + box-local opentraces on PATH) already ran above.
+    if normalized_agent == "pi":
+        env = isolated_env(box, env_extra)
+        verdict, completed_turns, error_message, final_out = _run_pi_print_turns(
             binary=binary_abs,
             project=Path(box.project),
             env=env,
