@@ -62,9 +62,56 @@ def test_bridge_retains_raw_body_only_when_opted_in(tmp_path: Path, monkeypatch)
     assert Path(ref["path"]).exists()
 
 
-def test_bridge_skips_capture_until_project_is_enabled(tmp_path: Path) -> None:
+def _set_tracking_mode(mode: str) -> None:
+    from opentraces.core.config import load_config, save_config
+
+    cfg = load_config()
+    cfg.capture.tracking_mode = mode
+    save_config(cfg)
+
+
+def test_bridge_skips_capture_in_manual_mode_without_marker(tmp_path: Path) -> None:
+    _set_tracking_mode("manual")
     project = tmp_path / "repo"
     project.mkdir()
+
+    result = bridge.record_event({"event": "session_start", "cwd": str(project), "session_id": "s"})
+
+    assert result.ok is True
+    assert result.status == "capture_disabled"
+    assert not (project / ".opentraces" / "pi" / "events").exists()
+
+
+def test_bridge_captures_by_default_under_global_tracking(tmp_path: Path, monkeypatch) -> None:
+    # Global tracking is the default; Pi capture is opt-out, consistent with
+    # Claude/Codex. An un-init'd project auto-enrolls (private + review-required)
+    # and captures, and the marker is backfilled with the pi agent.
+    _set_tracking_mode("global")
+    monkeypatch.setattr(bridge, "spawn_ingest", lambda envelope: True)
+    project = tmp_path / "repo"
+    project.mkdir()
+
+    result = bridge.record_event({
+        "event": "provider_request",
+        "session_id": "s",
+        "cwd": str(project),
+        "data": {"messages": [{"role": "user", "content": "hi"}]},
+    })
+
+    assert result.ok is True
+    assert result.status == "ok"
+    assert bridge.capture_enabled_for_project(project) is True
+    marker = json.loads((project / ".opentraces.json").read_text())
+    assert "pi" in {str(agent).lower() for agent in marker.get("agents", [])}
+
+
+def test_bridge_honors_explicit_project_exclusion_under_global(tmp_path: Path) -> None:
+    _set_tracking_mode("global")
+    project = tmp_path / "repo"
+    project.mkdir()
+    (project / ".opentraces.json").write_text(
+        json.dumps({"project_id": "x", "excluded": True}), encoding="utf-8"
+    )
 
     result = bridge.record_event({"event": "session_start", "cwd": str(project), "session_id": "s"})
 

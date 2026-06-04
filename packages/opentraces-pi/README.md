@@ -19,9 +19,11 @@ opentraces setup pi --project --local
 
 Package install is quick and reversible. It does **not** silently install
 Python, start services, authenticate HuggingFace, enable remote sync, or turn on
-optional security tools, or enable capture. Use `/ot-setup` in Pi or
-`opentraces init --agent pi` in a repo to opt that project into capture; before
-that consent marker exists the extension's capture path is fail-open/no-op.
+optional security tools. Capture itself is opt-out: under global tracking (the
+default) the extension auto-enrolls each repo on first capture, into a private +
+review-required bucket, once the `opentraces` CLI is present. Opt out with
+`opentraces config tracking-mode manual` or a per-project `excluded` marker;
+`opentraces init --agent pi` still enrolls a repo explicitly.
 
 Raw provider bodies are default-off. Structured context/provider metadata can
 feed Context Tree; raw bodies are only retained when explicitly opted in and stay

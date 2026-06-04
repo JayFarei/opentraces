@@ -1488,13 +1488,14 @@ def config_tracking_mode(mode: str | None) -> None:
     """Show or set the project tracking mode (plan 081).
 
       ot config tracking-mode            # show current mode
-      ot config tracking-mode global     # auto-enroll Claude/Codex projects on capture
+      ot config tracking-mode global     # auto-enroll projects on capture
       ot config tracking-mode manual     # explicit 'opentraces init' opt-in per project
 
-    Global mode auto-enrolls Claude/Codex projects (git or not) with a private +
-    review-required policy the first time a capture hook fires there. Pi is
-    extension-backed and always requires explicit `opentraces init --agent pi`
-    project consent before sidecars are written.
+    Global mode (the default) auto-enrolls Claude/Codex AND Pi projects (git or
+    not) with a private + review-required policy the first time a capture hook or
+    the Pi extension fires there. Capture is opt-out: switch to manual mode, or
+    set a per-project `excluded` marker / `opentraces remove`, to turn it off.
+    Raw provider bodies stay default-off regardless of tracking mode.
     """
     cfg = load_config()
     if mode is None:
@@ -1503,7 +1504,7 @@ def config_tracking_mode(mode: str | None) -> None:
         return
     cfg.capture.tracking_mode = mode
     save_config(cfg)
-    click.echo(f"Set tracking-mode={mode} (global)")
+    click.echo(f"Set tracking-mode={mode}")
     emit_json({"status": "ok", "tracking_mode": mode})
 
 

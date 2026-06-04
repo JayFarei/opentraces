@@ -18,14 +18,22 @@ export type PiSidecarEvent = {
 };
 
 let sequence = 0;
+// Once the opentraces CLI is confirmed absent for this session we stop trying to
+// spawn it on every event (an extension-only install has nothing to capture
+// into). Re-probed on the next extension load.
+let cliMissing = false;
 
-function captureEnabled(cwd: string): boolean {
+function captureOptedOut(cwd: string): boolean {
+  // Pi capture is global-default (opt-out), consistent with Claude/Codex. The
+  // only cheap, local opt-out signal is an explicit `excluded: true` marker;
+  // global vs manual tracking mode is decided authoritatively by the Python
+  // bridge (which auto-enrolls under global mode and drops under manual). An
+  // absent marker is NOT an opt-out: the bridge auto-enrolls it under global.
   try {
     const marker = join(cwd, ".opentraces.json");
     if (!existsSync(marker)) return false;
     const data = JSON.parse(readFileSync(marker, "utf8"));
-    const agents = Array.isArray(data?.agents) ? data.agents : typeof data?.agents === "string" ? [data.agents] : [];
-    return agents.map((agent: unknown) => String(agent).trim().toLowerCase()).includes("pi");
+    return data?.excluded === true;
   } catch (_error) {
     return false;
   }
@@ -62,13 +70,17 @@ export async function sendBridgeEvent(
     leaf_id: event.leaf_id ?? info.leaf_id,
     data: event.data ?? {},
   } as PiSidecarEvent;
-  if (event.event !== "setup_status" && !captureEnabled(payload.cwd)) {
+  if (event.event !== "setup_status" && captureOptedOut(payload.cwd)) {
     return { ok: true, status: "capture_disabled" };
+  }
+  if (event.event !== "setup_status" && cliMissing) {
+    return { ok: true, status: "cli_unavailable" };
   }
   let payloadFile: string | undefined;
   try {
     payloadFile = writePayloadFile(payload.cwd, payload);
     const result = await runOpenTraces(pi, ["_pi-bridge", "--payload-file", payloadFile], ctx, { timeout, parseJson: true });
+    if ((result.details as any)?.status === "missing_cli") cliMissing = true;
     return result.details;
   } catch (error) {
     return { ok: false, status: "fail_open", error: String(error) };

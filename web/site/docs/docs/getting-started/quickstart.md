@@ -54,10 +54,10 @@ checklist.
 
 ## 3. Enroll A Project
 
-Under global tracking this is optional for Claude/Codex projects, but it is
-still useful when you want to import existing sessions or be explicit about the
-connected agent. Pi capture always requires explicit project enrollment before
-sidecars are written.
+Under global tracking (the default) this is optional for every agent, including
+Pi, which auto-enrolls each project on first capture. Running `init` explicitly
+is still useful when you want to import existing sessions, be explicit about the
+connected agent, or are running in `manual` tracking mode.
 
 ```bash
 opentraces init

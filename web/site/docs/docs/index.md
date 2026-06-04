@@ -21,8 +21,8 @@ opentraces has four separate surfaces:
 
 ```bash
 opentraces setup                          # install capture hooks and optional integrations
-opentraces init                           # enroll Claude/Codex (or current default agent)
-opentraces init --agent pi                # required explicit consent for Pi
+opentraces init                           # enroll a repo explicitly (optional under global tracking)
+opentraces init --agent pi                # enroll Pi explicitly (optional; auto under global tracking)
 opentraces bucket status                  # inspect private retained trace evidence
 opentraces trace query --since 7d         # search retained traces
 opentraces trace map <trace-id> --bursts  # deterministic edit/intent map
@@ -39,9 +39,10 @@ opentraces dataset publish my-dataset     # upload reviewed rows to the active r
 
 `init` writes the committable project marker at `.opentraces.json`. Captured
 traces, bucket state, and upload bookkeeping stay machine-local under
-`~/.opentraces/`. Global tracking can auto-enroll Claude/Codex projects, but Pi
-is extension-backed and still requires `opentraces init --agent pi` or `/ot-setup`
-per repo before sidecars are written.
+`~/.opentraces/`. Global tracking (the default) auto-enrolls every agent,
+including Pi, the first time a capture hook or the Pi extension fires in a repo,
+private + review-required. Capture is opt-out: `opentraces config tracking-mode
+manual` or a per-project `excluded` marker turns it off.
 
 ## What You Get
 

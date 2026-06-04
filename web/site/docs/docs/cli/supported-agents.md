@@ -8,7 +8,7 @@
 |------|------------|--------|-------|
 | Live capture | `claude-code` | Supported | Installed via `opentraces init` or `opentraces setup claude-code`; supports snapshot-backed `--at-step` resume |
 | Live capture | `codex-cli` | Supported | Installed via `opentraces setup codex-cli` plus `opentraces init --agent codex-cli` inside each repo |
-| Live capture | `pi` | Supported | Install `opentraces-pi` with `pi install npm:opentraces-pi` or `opentraces setup pi`; enroll repos with `opentraces init --agent pi` |
+| Live capture | `pi` | Supported | Install `opentraces-pi` with `pi install npm:opentraces-pi` or `opentraces setup pi`; auto-enrolled under global tracking (default), opt out via `config tracking-mode manual` or per-project exclusion |
 | Context capture source | `capture-otlp` | Supported for Claude Code | Installed via `opentraces setup capture-otlp`; feeds Context Tree events from OTel/raw API-body capture |
 | Dataset import | `hermes` | Supported | Registered `FormatImporter`. Invoked from dataset workflows or via the schema package's serializers |
 
@@ -73,7 +73,7 @@ marker instead of inventing hidden chain-of-thought content.
 
 ## Pi Details
 
-Pi support is extension-backed. Package install only loads resources; capture is a no-op until the repo has explicitly opted in. Global tracking does not implicitly enable Pi sidecars. The primary package install is:
+Pi support is extension-backed. Under global tracking (the default), an installed Pi extension auto-enrolls each project on first capture, the same way Claude/Codex do, into a private + review-required bucket; capture is opt-out (switch to `opentraces config tracking-mode manual`, or set a per-project `excluded` marker / run `opentraces remove`). Capture still requires the `opentraces` CLI on PATH. The primary package install is:
 
 ```bash
 pi install npm:opentraces-pi
@@ -109,9 +109,11 @@ Raw provider bodies are default-off and local/security-gated when explicitly
 enabled. Opt in with `OPENTRACES_PI_RETAIN_RAW_PROVIDER_BODIES=1` (or
 `true`/`yes`) or an explicit sidecar opt-in; retained blob refs stay local under
 `.opentraces/pi/blobs/` before any bucket/workflow sync. Extension/bridge
-failures are fail-open and must not block Pi; before `opentraces init --agent
-pi` creates the project consent marker, the bridge returns `capture_disabled`
-without writing sidecars.
+failures are fail-open and must not block Pi. Under `manual` tracking mode, or
+for a project with an `excluded` marker, the bridge returns `capture_disabled`
+without writing sidecars; under global tracking (default) it auto-enrolls the
+project and captures. `opentraces init --agent pi` still enrolls a repo
+explicitly.
 
 ## Adapter Contracts
 

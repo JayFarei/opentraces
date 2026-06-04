@@ -317,7 +317,7 @@ def _append_sidecar(envelope: dict[str, Any]) -> tuple[Path, bool]:
 
 
 def capture_enabled_for_project(cwd: str | Path) -> bool:
-    """Return True only after explicit ``opentraces init --agent pi`` consent."""
+    """Return True when the project marker explicitly lists the ``pi`` agent."""
 
     marker = Path(cwd).expanduser().resolve() / ".opentraces.json"
     try:
@@ -330,6 +330,66 @@ def capture_enabled_for_project(cwd: str | Path) -> bool:
     if not isinstance(agents, list):
         return False
     return "pi" in {str(agent).strip().lower() for agent in agents}
+
+
+def _capture_decision_readonly(cwd: str | Path) -> tuple[bool, str]:
+    """Resolve the effective capture decision WITHOUT side effects.
+
+    Pi capture is opt-out (global tracking mode is the default), consistent with
+    Claude/Codex. An explicit ``pi`` marker always captures; otherwise capture is
+    on under global tracking mode unless the project is excluded; manual mode
+    captures only explicitly-marked projects. Fail-closed: any config error
+    collapses to the strict marker check so a failure never widens capture.
+    """
+    if cwd is None:
+        return False, "no_cwd"
+    if capture_enabled_for_project(cwd):
+        return True, "marker"
+    try:
+        from opentraces.core.config import is_project_excluded, load_config
+
+        resolved = str(Path(cwd).expanduser().resolve())
+        config = load_config()
+        if is_project_excluded(config, resolved):
+            return False, "excluded"
+        if config.capture.tracking_mode == "global":
+            return True, "global_default"
+        return False, "manual"
+    except Exception:
+        return capture_enabled_for_project(cwd), "marker"
+
+
+def pi_capture_consented(cwd: str | Path | None) -> bool:
+    """Decide whether to capture this Pi session, opt-out by default.
+
+    Mirrors the Claude/Codex hook path: an explicit ``init --agent pi`` marker is
+    honored directly; otherwise, under the default ``global`` tracking mode, the
+    project is auto-enrolled (private + review-required) on first capture so the
+    marker then lists ``pi``. Manual mode and per-project exclusion keep capture
+    off. Best-effort and fail-closed on error (returns the strict marker check)
+    so a config failure never widens capture beyond an explicit marker.
+    """
+    if cwd is None:
+        return False
+    if capture_enabled_for_project(cwd):
+        return True
+    try:
+        from opentraces.core.config import (
+            auto_enroll_if_global,
+            is_project_excluded,
+            load_config,
+        )
+
+        resolved = str(Path(cwd).expanduser().resolve())
+        config = load_config()
+        if is_project_excluded(config, resolved):
+            return False
+        if config.capture.tracking_mode != "global":
+            return False
+        auto_enroll_if_global(Path(cwd))
+    except Exception:
+        return capture_enabled_for_project(cwd)
+    return capture_enabled_for_project(cwd)
 
 
 def _recovery_marker(cwd: str | Path, session_id: str) -> Path:
@@ -439,7 +499,7 @@ def record_event(payload: dict[str, Any], *, fail_open: bool = True) -> BridgeRe
 
     try:
         envelope = normalize_event(payload)
-        consented = capture_enabled_for_project(envelope.get("cwd"))
+        consented = pi_capture_consented(envelope.get("cwd"))
         if not consented and envelope.get("event") != "setup_status":
             return BridgeResult(
                 ok=True,
@@ -528,10 +588,18 @@ def bridge_status(cwd: str | Path | None = None) -> dict[str, Any]:
             except OSError:
                 continue
     marker = cwd_path / ".opentraces.json"
-    capture_enabled = capture_enabled_for_project(cwd_path)
+    marker_capture_enabled = capture_enabled_for_project(cwd_path)
+    effective_enabled, capture_source = _capture_decision_readonly(cwd_path)
+    try:
+        from opentraces.core.config import load_config
+
+        tracking_mode = load_config().capture.tracking_mode
+    except Exception:
+        tracking_mode = "unknown"
     return {
         "schema_version": "opentraces.pi.bridge_status.v1",
         "cwd": str(cwd_path),
+        "tracking_mode": tracking_mode,
         "cli": {
             "found": cli_path is not None,
             "path": cli_path,
@@ -545,13 +613,21 @@ def bridge_status(cwd: str | Path | None = None) -> dict[str, Any]:
         },
         "project": {
             "initialized": marker.exists(),
-            "capture_enabled": capture_enabled,
+            "capture_enabled": effective_enabled,
+            "marker_capture_enabled": marker_capture_enabled,
+            "capture_source": capture_source,
             "marker_path": str(marker),
             "init_command": "opentraces init --agent pi",
+            "opt_out_commands": [
+                "opentraces config tracking-mode manual",
+                "opentraces remove",
+            ],
         },
         "capture": {
             "sidecar_dir": str(sidecar_dir),
-            "enabled": capture_enabled,
+            "enabled": effective_enabled,
+            "source": capture_source,
+            "tracking_mode": tracking_mode,
             "sidecar_event_count": event_count,
             "latest_event_at": latest_event_at,
             "raw_provider_bodies_default": "off",
@@ -560,7 +636,7 @@ def bridge_status(cwd: str | Path | None = None) -> dict[str, Any]:
         },
         "checklist": [
             {"name": "opentraces_cli", "state": "ok" if cli_path else "missing"},
-            {"name": "project_init", "state": "ok" if capture_enabled else "missing", "command": "opentraces init --agent pi"},
+            {"name": "project_capture", "state": "ok" if effective_enabled else "off", "source": capture_source, "command": "opentraces init --agent pi", "opt_out": "opentraces config tracking-mode manual"},
             {"name": "git_hook", "state": "needs_terminal", "command": "opentraces setup git"},
             {"name": "hf_auth", "state": "needs_terminal", "optional": True, "command": "opentraces setup auth"},
             {"name": "bucket_remote", "state": "needs_terminal", "optional": True, "command": "opentraces setup bucket"},
