@@ -36,24 +36,37 @@ def _verdict_chip(verdict: str) -> str:
     return f'<span class="chip {cls}">{_esc(verdict)}</span>'
 
 
-def _turn_rows(turns: list[dict]) -> str:
+def _task_block(turns: list[dict]) -> str:
+    """The simulated user's actual instruction(s) — the heart of the journey."""
+    prompts = [str(t.get("prompt") or "") for t in turns if t.get("prompt")]
+    if not prompts:
+        return ""
+    steps = "".join(f"<li>{_esc(p)}</li>" for p in prompts)
+    suffix = "" if len(prompts) == 1 else f" · {len(prompts)} turns"
+    return (
+        f'<div class="card-task">'
+        f'<span class="task-label">▸ the simulated user asked{suffix}</span>'
+        f'<ol class="task-steps">{steps}</ol>'
+        f"</div>"
+    )
+
+
+def _outcome_strip(turns: list[dict]) -> str:
+    """Compact per-turn outcome (matched ✓/✗ + elapsed); no prompt repeat."""
     if not turns:
-        return '<li class="turn turn-empty">no turns recorded</li>'
-    out: list[str] = []
+        return ""
+    chips: list[str] = []
     for t in turns:
-        mark = "✓" if t.get("matched") else "✗"
-        mark_cls = "turn-ok" if t.get("matched") else "turn-miss"
-        prompt = _esc(t.get("prompt", ""))
+        ok = bool(t.get("matched"))
+        mark = "✓" if ok else "✗"
+        cls = "turn-ok" if ok else "turn-miss"
         elapsed = t.get("elapsed_s", 0.0)
-        out.append(
-            f'<li class="turn {mark_cls}">'
-            f'<span class="turn-mark">{mark}</span>'
-            f'<span class="turn-idx">{_esc(t.get("index", "?"))}</span>'
-            f'<span class="turn-prompt">{prompt}</span>'
-            f'<span class="turn-time">{_esc(f"{elapsed:.1f}s")}</span>'
+        chips.append(
+            f'<li class="turn {cls}"><span class="turn-mark">{mark}</span>'
+            f'turn {_esc(t.get("index", "?"))} · {_esc(f"{elapsed:.1f}s")}'
             f"</li>"
         )
-    return "\n".join(out)
+    return f'<ol class="card-turns">{"".join(chips)}</ol>'
 
 
 def _card(card: dict) -> str:
@@ -100,10 +113,11 @@ def _card(card: dict) -> str:
         {_verdict_chip(verdict)}
       </header>
       <div class="card-media">{media}</div>
-      <p class="card-desc">{description}</p>
+      {_task_block(card.get("turns", []))}
+      {f'<p class="card-desc"><span class="desc-label">validates</span>{description}</p>' if description else ""}
       <p class="card-meta">{meta_line}</p>
       {error_block}
-      <ol class="card-turns">{_turn_rows(card.get("turns", []))}</ol>
+      {_outcome_strip(card.get("turns", []))}
     </article>
     """
 
@@ -309,7 +323,24 @@ def render_gallery_html(cards: list[dict]) -> str:
   .novideo-mark {{ font-size: 26px; opacity: 0.5; }}
   .novideo-reason {{ font-family: "JetBrains Mono", monospace; font-size: 12px; max-width: 80%; }}
 
-  .card-desc {{ margin: 0; color: var(--ink); font-size: 14px; }}
+  .card-desc {{ margin: 0; color: var(--ink-soft); font-size: 13px; }}
+  .desc-label {{
+    display: inline-block; margin-right: 6px; font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent);
+    font-weight: 600;
+  }}
+  .card-task {{
+    margin: 0; padding: 11px 13px; border-radius: 9px;
+    background: var(--accent-soft); border: 1px solid var(--line);
+  }}
+  .task-label {{
+    display: block; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.09em; color: var(--accent); font-weight: 600;
+    margin-bottom: 6px;
+  }}
+  .task-steps {{ list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }}
+  .task-steps li {{ font-size: 13.5px; line-height: 1.45; color: var(--ink); }}
+  .task-steps li + li {{ padding-top: 6px; border-top: 1px dashed var(--line); }}
   .card-meta {{
     margin: 0;
     font-family: "JetBrains Mono", monospace;
@@ -364,9 +395,12 @@ def render_gallery_html(cards: list[dict]) -> str:
     <p class="eyebrow">opentraces · otbox</p>
     <h1 class="title">otbox journey <span class="thin">footage</span></h1>
     <p class="lede">
-      Terminal-control recordings of every simulated-user journey across the
-      supported harnesses. A visual review aid — the tmux capture-refresh
-      remains the assertion-grade path.
+      Each clip is a <strong>simulated user driving a real coding agent</strong>
+      (claude / codex / pi) through a scripted task inside an isolated otbox,
+      recorded with terminal-control. Every card shows the exact instruction the
+      user gave and what the agent did, so you can watch each journey opentraces
+      captures. A visual review aid; the tmux capture-refresh path stays the
+      assertion-grade gate.
     </p>
     <div class="legend">{legend}</div>
   </header>

@@ -132,6 +132,59 @@ def _tc_show(session: str) -> str:
     return proc.stdout or ""
 
 
+def _tc_logs(session: str) -> str:
+    """Return retained scrollback for ``session`` (or ``""`` on failure).
+
+    ``termctrl logs`` keeps readable terminal output that has scrolled past
+    the visible viewport, used alongside accumulated ``show`` frames so a
+    completion line that scrolled off is still matchable.
+    """
+    try:
+        proc = _tc("logs", session, timeout=15.0)
+    except (subprocess.TimeoutExpired, OSError):
+        return ""
+    return proc.stdout if proc.returncode == 0 else ""
+
+
+def _tc_key(session: str, *tokens: str) -> None:
+    """Send raw key tokens (e.g. ``enter``, ``down``, ``text:t``) to the session."""
+    try:
+        _tc("send", session, *tokens, timeout=10.0)
+    except (subprocess.TimeoutExpired, OSError):
+        return
+
+
+def _dismiss_codex_hooks(session: str, *, timeout_s: float = 12.0) -> bool:
+    """Trust the box-local Codex hooks before the scenario prompt is sent.
+
+    Codex shows a "hooks need review" interstitial the first time a HOME sees
+    new lifecycle hooks. The footage box installs opentraces hooks into a fresh
+    HOME, so the recorder must clear that modal ("Press t to trust all") or the
+    first prompt is swallowed and the journey stalls on the trust dialog for the
+    whole timeout. Mirrors the tmux runner's ``_dismiss_codex_hook_review``.
+    """
+    deadline = time.monotonic() + max(0.1, timeout_s)
+    while time.monotonic() < deadline:
+        lower = _tc_show(session).lower()
+        if "hooks need review" not in lower and "hooks are new or changed" not in lower:
+            time.sleep(0.3)
+            continue
+        if "press t to trust all" in lower:
+            _tc_key(session, "text:t")
+        elif "trust all and continue" in lower:
+            _tc_key(session, "down")
+            _tc_key(session, "enter")
+        else:
+            _tc_key(session, "text:t")
+        time.sleep(1.0)
+        after = _tc_show(session).lower()
+        if "hooks need review" in after or "hooks are new or changed" in after:
+            _tc_key(session, "text:t")
+            time.sleep(1.0)
+        return True
+    return False
+
+
 def _tc_mark(session: str, marker: str, markers: list[str]) -> None:
     """Add a navigable marker, recording its name for the result."""
     try:
@@ -447,6 +500,13 @@ def record_simulated_session(
         _await_ready(session, budget_s=ready_budget)
         _tc_mark(session, "ready", markers)
 
+        # Codex shows a hook-review trust modal the first time a fresh HOME sees
+        # the box's opentraces hooks; clear it ("Press t to trust all") or the
+        # first prompt is swallowed and the journey stalls on the dialog.
+        if normalized == "codex-cli":
+            if _dismiss_codex_hooks(session):
+                _tc_mark(session, "codex-hooks-trusted", markers)
+
         for turn_idx, turn in enumerate(turns):
             _tc_mark(session, f"turn-{turn_idx}-prompt", markers)
             _tc_send_prompt(session, turn.prompt)
@@ -455,10 +515,27 @@ def record_simulated_session(
             turn_started = time.monotonic()
             deadline = turn_started + max(0.1, turn.timeout_s)
             matched = False
+            # Accumulate distinct visible-screen frames (+ scrollback) and
+            # match the expect_regex against the WHOLE transcript. Full-screen
+            # TUIs (codex/claude/pi) re-render and scroll the completion line
+            # off the visible screen between polls; matching only the latest
+            # `show` snapshot misses it and the turn FAILs after the timeout
+            # even though the agent finished (the codex-* footage failures).
+            # Poll faster (0.3s) and retain every distinct frame so transient
+            # completion text is still detected.
+            seen_frames: list[str] = []
+            last_frame = ""
             while time.monotonic() < deadline:
-                time.sleep(0.5)
+                time.sleep(0.3)
                 screen = _tc_show(session)
-                if pattern.search(screen):
+                if screen and screen != last_frame:
+                    seen_frames.append(screen)
+                    last_frame = screen
+                haystack = "\n".join(seen_frames)
+                logs = _tc_logs(session)
+                if logs:
+                    haystack = f"{haystack}\n{logs}"
+                if pattern.search(haystack):
                     matched = True
                     break
 
