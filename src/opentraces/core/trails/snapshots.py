@@ -6,7 +6,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from opentraces.core._time import utc_now_str
 from pathlib import Path
 from typing import Any
 
@@ -46,8 +46,7 @@ class StepTrailEmissionResult:
     skipped_tool_calls: int = 0
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
 
 
 def _git(
@@ -388,7 +387,7 @@ def _boundary_state(
     normalized = list(limitations or [])
     if claimed_tree_id and claimed_tree_id != verified_tree_id:
         normalized.append("hook_payload_state_mismatch")
-    return event_time or _utc_now(), verified_tree_id, verified_git_head, sorted(set(normalized))
+    return event_time or utc_now_str(), verified_tree_id, verified_git_head, sorted(set(normalized))
 
 
 def _window_payload(
@@ -749,7 +748,7 @@ def emit_step_window_events_from_record(
                             tool_call_id=tool_call_id,
                             tree_id=pre_tree_id,
                             git_head=pre_git_head,
-                            event_time=pre.get("timestamp") or _utc_now(),
+                            event_time=pre.get("timestamp") or utc_now_str(),
                             capture_method=["hook_pretooluse"],
                             boundary_firmness="firm",
                             limitations=[],
@@ -847,7 +846,7 @@ def emit_step_window_events_from_record(
                             tool_call_id=tool_call_id,
                             tree_id=post_tree_id,
                             git_head=post_git_head,
-                            event_time=post.get("timestamp") or _utc_now(),
+                            event_time=post.get("timestamp") or utc_now_str(),
                             capture_method=["hook_posttooluse"],
                             boundary_firmness="firm",
                             limitations=limitations,

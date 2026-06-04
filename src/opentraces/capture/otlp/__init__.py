@@ -1,10 +1,9 @@
 """OTLP HTTP/JSON receiver capture source for the Context Tree substrate.
 
-Third capture source for Context Tree alongside the JSONL parser
-(``capture/claude_code/context_tree_capture.py``) and the prototype HTTP
-proxy (``capture/http_proxy/``). Per plan 078 the receiver consumes
-Claude Code's native OTel emission and, paired with the mapper, emitter,
-and raw-body watcher (sibling modules), drives the same
+Second live capture source for Context Tree alongside the JSONL parser
+(``capture/claude_code/context_tree_capture.py``). Per plan 078 the receiver
+consumes Claude Code's native OTel emission and, paired with the mapper,
+emitter, and raw-body watcher (sibling modules), drives the same
 ``refs/opentraces/local/events/v1`` log with ``capture_method=otel``.
 
 This package exposes only the receiver surface. The mapper / emitter /

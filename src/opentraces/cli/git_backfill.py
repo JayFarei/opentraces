@@ -16,12 +16,11 @@ from pathlib import Path
 import click
 
 from ..capture.git import post_commit as _pc
+from ._options import project_dir_option
 
 
 @click.command("git-backfill")
-@click.option("--project", "project_dir", type=click.Path(
-                  exists=True, file_okay=False, dir_okay=True, path_type=Path),
-              default=None, help="Project directory (default: CWD).")
+@project_dir_option
 @click.option("--max-commits", type=int, default=500, show_default=True,
               help="Cap on first-parent commits to walk.")
 @click.option("--window-hours", type=float, default=24.0, show_default=True,

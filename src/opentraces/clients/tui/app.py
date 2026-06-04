@@ -50,7 +50,7 @@ from ...core.review import (
     unstage_trace,
 )
 from ...core.state import StateManager, TraceStatus
-from ...core.workflow import OPENTRACES_ASCII
+from ...core.trace_stage import OPENTRACES_ASCII
 from .transforms import conversation_view, full_view
 
 logger = logging.getLogger(__name__)

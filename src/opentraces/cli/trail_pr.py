@@ -21,6 +21,7 @@ from typing import Any
 import click
 
 from ._help import OpentracesCommand, OpentracesGroup
+from ._options import project_dir_option
 
 
 PR_INTENT_WORKFLOW_NAME = "pr-intent-summary"
@@ -141,13 +142,7 @@ def attach(parent_group: click.Group) -> None:
     )
     @click.option("--base", default="main", show_default=True, help="Base branch.")
     @click.option("--head", default=None, help="Head ref (default: HEAD).")
-    @click.option(
-        "--project",
-        "project_dir",
-        type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-        default=None,
-        help="Project directory (default: CWD).",
-    )
+    @project_dir_option
     @click.option(
         "--output", "-o",
         "output",

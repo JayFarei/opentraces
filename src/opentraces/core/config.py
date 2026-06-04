@@ -41,7 +41,7 @@ from .paths import (
     OPENTRACES_DIR,
     PROJECTS_DIR,
 )
-from .workflow import (
+from .trace_stage import (
     DEFAULT_AGENT,
     DEFAULT_PUSH_POLICY,
     DEFAULT_REVIEW_POLICY,

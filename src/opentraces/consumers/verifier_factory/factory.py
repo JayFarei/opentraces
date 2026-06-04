@@ -12,11 +12,11 @@ promoted and no skill is changed: every artifact is advisory and human-gated.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .archetypes import DEFAULT_EXAMPLES, resolve_archetype
+from ...core._time import utc_now_str as _utc_now
 from .mining import mine_verifier_candidates
 from .packaging import VerifierPackageResult, emit_verifier_package
 from .schema import APPROVAL_STATE
@@ -42,10 +42,6 @@ class VerifierFactoryResult:
     index_path: Path
     packages: tuple[VerifierPackageResult, ...]
     candidates: dict[str, Any]
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def run_factory(request: VerifierFactoryRequest) -> VerifierFactoryResult:

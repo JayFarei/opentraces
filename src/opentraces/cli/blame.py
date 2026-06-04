@@ -34,6 +34,7 @@ from typing import Any
 import click
 
 from ._help import OpentracesCommand, OpentracesGroup
+from ._options import project_dir_option
 from ..clients.text.colors import (
     Role,
     coverage_role,
@@ -1373,9 +1374,7 @@ def _resolve_blame_target(cwd: Path, arg: str) -> tuple[str, str] | tuple[None, 
               help="Emit structured JSON instead of text.")
 @click.option("--no-color", "no_color", is_flag=True,
               help="Disable ANSI colors.")
-@click.option("--project", "project_dir", type=click.Path(
-                  exists=True, file_okay=False, dir_okay=True, path_type=Path),
-              default=None, help="Project directory (default: CWD).")
+@project_dir_option
 def blame_cmd(sha: str, path: str | None, show_lines: bool, show_entities: bool,
               include_overlapping: bool, as_json: bool, no_color: bool,
               project_dir: Path | None) -> None:

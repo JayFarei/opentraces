@@ -10,38 +10,10 @@ from pathlib import Path
 
 import click
 
-from opentraces import cli as _cli
+import opentraces.cli as _cli
 from . import main
 
 logger = logging.getLogger("opentraces.cli._debug")
-
-
-def load_config():
-    return _cli.load_config()
-
-
-def emit_json(data):
-    return _cli.emit_json(data)
-
-
-def error_response(*a, **k):
-    return _cli.error_response(*a, **k)
-
-
-def human_echo(*a, **k):
-    return _cli.human_echo(*a, **k)
-
-
-def _auth_identity(*a, **k):
-    return _cli._auth_identity(*a, **k)
-
-
-def _capture_sessions_into_project(*a, **k):
-    return _cli._capture_sessions_into_project(*a, **k)
-
-
-def _current_project_session_dir(*a, **k):
-    return _cli._current_project_session_dir(*a, **k)
 
 
 
@@ -68,7 +40,7 @@ def capture(session_dir: str | None, project_dir: str) -> None:
             click.echo(f"Session dir not found: {session_dir}", err=True)
             return
     else:
-        session_path = _current_project_session_dir(proj_path)
+        session_path = _cli._current_project_session_dir(proj_path)
         if session_path is None:
             click.echo("No session dir found for this project.", err=True)
             return
@@ -79,7 +51,7 @@ def capture(session_dir: str | None, project_dir: str) -> None:
         click.echo("No session files found.", err=True)
         return
 
-    parsed_count, error_count = _capture_sessions_into_project(session_path, proj_path)
+    parsed_count, error_count = _cli._capture_sessions_into_project(session_path, proj_path)
     click.echo(f"Captured {parsed_count} sessions ({error_count} errors)", err=True)
 
 
@@ -108,7 +80,6 @@ def assess_remote(repo: str, judge: bool, judge_model: str, limit: int, rewrite_
     from ..quality.summary import build_summary
     from ..publish.huggingface.upload import HFUploader
     from ..publish.huggingface.dataset_card import generate_dataset_card
-    from ..core.config import load_config
     from opentraces_schema import TraceRecord
 
     if not shutil.which("hf-mount"):
@@ -116,7 +87,7 @@ def assess_remote(repo: str, judge: bool, judge_model: str, limit: int, rewrite_
         click.echo("Install: curl -fsSL https://raw.githubusercontent.com/huggingface/hf-mount/main/install.sh | sh", err=True)
         raise SystemExit(1)
 
-    config = load_config()
+    config = _cli.load_config()
     token = config.hf_token
 
     slug = repo.replace("/", "-")
@@ -222,7 +193,7 @@ def assess_remote(repo: str, judge: bool, judge_model: str, limit: int, rewrite_
         report_path.write_text(generate_report(batch))
         click.echo(f"\nLocal report: {report_path}")
 
-        emit_json({
+        _cli.emit_json({
             "status": "ok",
             "command": "_assess-remote",
             "repo_id": repo,

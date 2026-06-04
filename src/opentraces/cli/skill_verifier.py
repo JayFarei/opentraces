@@ -15,6 +15,7 @@ from pathlib import Path
 import click
 
 from ._help import OpentracesCommand, OpentracesGroup
+from ._options import dump_json as _dump_json
 
 
 @click.group("skill-verifier", cls=OpentracesGroup)
@@ -48,7 +49,7 @@ def sv_autoverify(skill: str, project: str | None, as_json: bool) -> None:
     payload = res.as_dict()
     payload["episodes"] = len(episodes)
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"autoverify {skill}: status={res.calibration.status} recommended={res.recommended}")
     click.echo(f"  auc={res.calibration.auc_human} rho={res.calibration.rho_secondary}")
@@ -68,7 +69,7 @@ def sv_align(skill: str, project: str | None, as_json: bool) -> None:
     episodes, records = _load(skill, project)
     sess = align_session(skill, episodes=episodes, records=records)
     if as_json:
-        click.echo(json.dumps(sess, indent=2, sort_keys=True))
+        click.echo(_dump_json(sess))
         return
     click.echo(sess["desired_outcome_prompt"])
     click.echo(f"  label >= {sess['labels_needed']['min_total']} traces "
@@ -107,7 +108,7 @@ def sv_score(skill: str, project: str | None, out_dir: str | None, emulate_label
         "gold_emulated": emulate_labels,
     }
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"score {skill}: status={res.status} usable={res.usable} "
                f"Dsel {res.dsel_before:.3f}->{res.dsel_after:.3f} Dtest {res.dtest_score:.3f} "
@@ -127,7 +128,7 @@ def sv_status(skill: str, project: str | None, as_json: bool) -> None:
     payload = {"skill": skill, "status": res.calibration.status, "recommended": res.recommended,
                "episodes": len(episodes), "blockers": list(res.calibration.blockers)}
     if as_json:
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(f"{skill}: {res.calibration.status} (recommended={res.recommended}, "
                f"{len(episodes)} episodes)")

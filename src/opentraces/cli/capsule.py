@@ -32,6 +32,8 @@ from pathlib import Path
 
 import click
 
+from ._options import project_dir_option
+
 
 def _resolve_project(project: Path | None) -> Path:
     return Path(project or Path.cwd()).resolve()
@@ -68,11 +70,7 @@ def _export_options(fn):
     fn = click.option("--node", "node_id", default=None, help="Context node id (default: from the failing step).")(fn)
     fn = click.option("--radius", type=int, default=4, show_default=True, help="Slice radius around the failing step.")(fn)
     fn = click.option("--repo-url", default=None, help="Override the public repo remote URL recorded in the pin.")(fn)
-    fn = click.option(
-        "--project", "project_dir",
-        type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
-        default=None, help="Project directory (default: CWD).",
-    )(fn)
+    fn = project_dir_option(fn)
     fn = click.option(
         "--test-command", "test_command", default=None,
         help="Declare the repro command that makes this capsule a runnable test.",

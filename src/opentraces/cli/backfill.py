@@ -19,6 +19,7 @@ from pathlib import Path
 import click
 
 from ..core import backfill as _backfill
+from ._options import project_dir_option
 
 
 @click.command("backfill", hidden=True)
@@ -29,9 +30,7 @@ from ..core import backfill as _backfill
 @click.option("--since", "since_ref", default=None,
               help="Start from this ref instead of the state bookmark. "
                    "Reserved; currently forces --rebuild from HEAD.")
-@click.option("--project", "project_dir", type=click.Path(
-                  exists=True, file_okay=False, dir_okay=True, path_type=Path),
-              default=None, help="Project directory (default: CWD).")
+@project_dir_option
 @click.option("--max-commits", type=int, default=_backfill.DEFAULT_MAX_COMMITS,
               show_default=True,
               help="Cap on commits to walk when rebuilding.")

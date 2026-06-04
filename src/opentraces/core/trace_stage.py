@@ -96,14 +96,6 @@ def normalize_agents(agents: list[str] | None) -> list[str]:
     return cleaned or [DEFAULT_AGENT]
 
 
-def legacy_mode_for_review_policy(review_policy: str) -> str:
-    return "auto" if normalize_review_policy(review_policy) == "auto" else "review"
-
-
-def review_policy_from_legacy_mode(mode: str | None) -> str:
-    return "auto" if mode == "auto" else DEFAULT_REVIEW_POLICY
-
-
 def resolve_visible_stage(status: TraceStatus | str | None) -> str:
     if isinstance(status, str):
         try:
@@ -168,9 +160,3 @@ def decide_post_parse_status(
     return TraceStatus.STAGED, None
 
 
-def stage_label(stage: str) -> str:
-    return STAGE_PRESENTATIONS.get(stage, STAGE_PRESENTATIONS["inbox"]).label
-
-
-def stage_description(stage: str) -> str:
-    return STAGE_PRESENTATIONS.get(stage, STAGE_PRESENTATIONS["inbox"]).description

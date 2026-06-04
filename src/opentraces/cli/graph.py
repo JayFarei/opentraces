@@ -19,6 +19,7 @@ from pathlib import Path
 import click
 
 from ._help import OpentracesCommand
+from ._options import dump_json as _dump_json, project_dir_option
 from ..clients.text import graph_renderer as _gr
 
 
@@ -59,9 +60,7 @@ from ..clients.text import graph_renderer as _gr
               help="Emit structured JSON instead of text.")
 @click.option("--no-color", "no_color", is_flag=True,
               help="Disable ANSI colors.")
-@click.option("--project", "project_dir", type=click.Path(
-                  exists=True, file_okay=False, dir_okay=True, path_type=Path),
-              default=None, help="Project directory (default: CWD).")
+@project_dir_option
 def graph_cmd(limit: int, page: int, trace_id: str | None,
               since_ref: str | None, until_ref: str | None,
               show_all: bool, show_entities: bool, as_json: bool, no_color: bool,
@@ -137,17 +136,11 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
     commits = _gr.load_commits_from_repo(cwd, opts)
     if not commits:
         if as_json:
-            click.echo(
-                json.dumps(
-                    {
-                        "mode": opts.mode,
-                        "pivot_trace_id": opts.pivot_trace_id,
-                        "commits": [],
-                    },
-                    indent=2,
-                    sort_keys=True,
-                )
-            )
+            click.echo(_dump_json({
+                    "mode": opts.mode,
+                    "pivot_trace_id": opts.pivot_trace_id,
+                    "commits": [],
+                }))
             return
         click.echo("(no commits in range)")
         return
@@ -177,6 +170,6 @@ def graph_cmd(limit: int, page: int, trace_id: str | None,
                 for commit in commits
             ],
         }
-        click.echo(json.dumps(payload, indent=2, sort_keys=True))
+        click.echo(_dump_json(payload))
         return
     click.echo(_gr.render(commits, opts), nl=False)

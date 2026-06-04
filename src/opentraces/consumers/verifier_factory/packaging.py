@@ -19,11 +19,11 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ...core.bucket_store import iter_trace_record_objects as _iter_records
+from ...core._time import utc_now_str as _utc_now
 from ..skill_intelligence import pipeline as si
 from ..skill_opt.engine import (
     BucketHarness,
@@ -64,10 +64,6 @@ class VerifierPackageResult:
     gate_basis: str = "train_failure_minibatch"
     recommended: bool = False
     is_generic: bool = False
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _digest_text(text: str) -> str:

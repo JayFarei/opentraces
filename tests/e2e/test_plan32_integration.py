@@ -29,8 +29,8 @@ from opentraces.core.state import StateManager, TraceStatus
 from opentraces.publish.huggingface.upload import verify_hf_token
 
 
-def test_security_version_is_0_5_0() -> None:
-    assert SECURITY_VERSION == "0.5.0"
+def test_security_version_is_0_6_0() -> None:
+    assert SECURITY_VERSION == "0.6.0"
 
 
 def test_full_stack_integration(monkeypatch, tmp_path) -> None:

@@ -26,6 +26,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from opentraces.core._time import utc_now_str
 from pathlib import Path
 from typing import Any
 
@@ -89,7 +90,7 @@ def run_dataset_workflow(
     run_id = _new_run_id()
     run_dir = dataset.path / ".opentraces" / "runs" / run_id
     run_dir.mkdir(parents=True)
-    started_at = _utc_now()
+    started_at = utc_now_str()
     schema = read_json(dataset.path / dataset.manifest.schema_ref.path)
     schema_digest = dataset.manifest.schema_ref.digest or digest_payload(schema)
     workflow_digest = dataset.manifest.workflow.digest
@@ -340,7 +341,7 @@ def _run_record(
         workflow_digest=workflow_digest,
         schema_digest=schema_digest,
         started_at=started_at,
-        finished_at=_utc_now(),
+        finished_at=utc_now_str(),
         candidate_count=0,
         emitted_count=append_summary.emitted_count,
         appended_count=append_summary.appended_count,
@@ -393,7 +394,7 @@ def _advance_cursor(root: Path, manifest, run_id: str) -> None:
             query.model_dump(mode="json") if query else {"scope": "all-projects"}
         ),
         "last_successful_run_id": run_id,
-        "last_successful_run_at": _utc_now(),
+        "last_successful_run_at": utc_now_str(),
     }
     cursors_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     save_manifest(root, manifest)
@@ -419,8 +420,6 @@ def _new_run_id() -> str:
     return f"run_{stamp}"
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 # ---------------------------------------------------------------------------
@@ -491,7 +490,7 @@ def execute_workflow(
     run_dir = output_path.parent
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    started_at = _utc_now()
+    started_at = utc_now_str()
     run_packet = _build_workflow_packet(
         workflow=workflow,
         scope=scope,
@@ -505,7 +504,7 @@ def execute_workflow(
     _execute_script(workflow, run_dir, output_path, run_packet, extra_env=extra_env)
 
     rows = _read_output_rows(output_path)
-    finished_at = _utc_now()
+    finished_at = utc_now_str()
     return WorkflowExecutionResult(
         workflow_name=workflow.name,
         workflow_digest=workflow.digest,

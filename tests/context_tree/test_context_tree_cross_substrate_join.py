@@ -17,7 +17,7 @@ from opentraces.capture.claude_code.context_tree_capture import (
 from opentraces_schema.models import Agent, Step, TraceRecord
 
 
-FIXTURES_DIR = Path(__file__).parent / "otbox" / "fixtures" / "sessions"
+FIXTURES_DIR = Path(__file__).parent.parent / "otbox" / "fixtures" / "sessions"
 
 
 def _init_git_repo(path: Path) -> None:

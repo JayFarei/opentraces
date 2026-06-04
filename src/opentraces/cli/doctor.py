@@ -1,6 +1,6 @@
 """Cluster C-4 — trail-capture audit surface for ``opentraces doctor``.
 
-The doctor command lives at ``cli.installers.doctor_cmd`` and pulls its
+The doctor command lives at ``cli.doctor_cli.doctor_cmd`` and pulls its
 data from ``core.doctor.report``. This module exposes a focused helper
 that scans recent traces in the local index and reports any whose
 TrailEvent log shows ``file_edit`` events without matching

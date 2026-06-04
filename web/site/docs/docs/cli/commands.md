@@ -76,8 +76,8 @@ opentraces setup upgrade
 ```
 
 Security setup commands only enable the tools you choose. Regex, entropy,
-path anonymization, classifier, TruffleHog, privacy-filter, and LLM PII are
-not on by default for per-record sanitization.
+TruffleHog, privacy-filter, LLM PII, business-logic signals, path anonymization,
+capsule scope, and classifier are not on by default for per-record sanitization.
 
 `opentraces setup codex-cli` supports:
 
@@ -312,7 +312,7 @@ printf '%s\n' '{"record":{...}}' | opentraces security sanitize --use-config
 tools explicitly enabled in the loaded config.
 
 Registered tools: `regex`, `entropy`, `trufflehog`, `privacy_filter`,
-`llm_pii`, `path_anonymizer`, and `classifier`.
+`llm_pii`, `business_logic`, `path_anonymizer`, `capsule_scope`, and `classifier`.
 
 ## OTLP Capture
 
