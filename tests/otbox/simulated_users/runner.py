@@ -128,6 +128,10 @@ class ScenarioResult:
     # (capture-refresh) can export footage from the SAME run. Empty in legacy mode.
     termctrl_path: str = ""
     mp4_path: str = ""
+    # The agent-run verdict BEFORE any (footage-only) MP4 export could mutate
+    # it. capture-refresh keys PASS/FAIL on this so a footage export hiccup
+    # never sinks a real trace capture. Mirrors ``verdict`` unless export ran.
+    turn_verdict: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -461,12 +465,20 @@ def run_simulated_session(
     agent: str | None = None,
     mode: str = "interactive",
     scenario: str = "session",
+    export_mp4: bool = False,
+    record_dir: Path | None = None,
 ) -> ScenarioResult:
     """Drive an interactive session with ``binary`` inside ``box``.
 
     Default ``mode="interactive"`` drives the real TUI via terminal-control and
     records the session (one run yields both the trace capture and the footage).
     ``mode="legacy"`` keeps the original tmux + claude/pi ``--print`` dispatch.
+
+    When ``export_mp4=True`` (capture-refresh footage path), the interactive
+    lane renders an MP4 + writes the gallery-ready ``result.json`` /
+    ``markers.json`` into ``record_dir`` (or ``output_dir`` when
+    ``record_dir`` is ``None``). The legacy lane ignores both. So a SINGLE
+    interactive run can validate capture AND emit the UAT footage.
 
     Parameters
     ----------
@@ -532,8 +544,8 @@ def run_simulated_session(
             initial_state_dir=initial_state_dir,
             env_extra=env_extra,
             scenario=scenario,
-            record_dir=output_dir,
-            export_mp4=False,
+            record_dir=record_dir,
+            export_mp4=export_mp4,
         )
         return ScenarioResult(
             verdict=sr.verdict,
@@ -545,6 +557,7 @@ def run_simulated_session(
             pane_excerpt=sr.pane_excerpt,
             termctrl_path=sr.termctrl_path,
             mp4_path=sr.mp4_path,
+            turn_verdict=sr.turn_verdict or sr.verdict,
         )
 
     pane_log_path = output_dir / "pane.log"

@@ -13,8 +13,11 @@ moved the drive loop + box prep out of here:
 ``FootageResult`` shape unchanged (``tests/otbox/footage.py::_card_payload``
 and ``to_dict`` depend on it). It calls ``drive.drive_session(...,
 record_dir=footage_dir, export_mp4=True, scenario=scenario)`` and projects
-the returned :class:`drive.SessionResult` 1:1 into ``FootageResult``,
-then persists ``markers.json`` / ``result.json`` exactly as before.
+the returned :class:`drive.SessionResult` 1:1 into ``FootageResult``.
+``drive.drive_session`` is now the SINGLE writer of the gallery-ready
+``result.json`` / ``markers.json`` (into ``record_dir`` == ``footage_dir``),
+so this wrapper no longer double-writes them — that's what makes
+capture-refresh emit the same gallery metadata from its one run.
 
 Determinism note: footage is media, not an assertion artifact. The MP4 is
 not byte-stable across runs/machines; ``result.json`` is stable-ish (it
@@ -23,7 +26,6 @@ records turn outcomes + marker names, not frame timing).
 
 from __future__ import annotations
 
-import json
 import shutil  # noqa: F401 - kept importable so tests can monkeypatch footage_runner.shutil.which
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -144,6 +146,10 @@ def record_simulated_session(
     )
 
     # Project the unified SessionResult 1:1 into the legacy FootageResult.
+    # `drive.drive_session(export_mp4=True)` is now the SINGLE writer of the
+    # gallery-ready `result.json` + `markers.json` into `footage_dir` (it is
+    # passed as `record_dir`), so both this footage path AND capture-refresh
+    # emit identical metadata. We no longer double-write them here.
     result = FootageResult(
         verdict=session_result.verdict,
         binary_path=session_result.binary_path,
@@ -161,17 +167,5 @@ def record_simulated_session(
         fps=session_result.fps,
         error_message=session_result.error_message,
     )
-
-    # --- persist markers.json + result.json --------------------------------
-    try:
-        (footage_dir / "markers.json").write_text(
-            json.dumps(result.markers, indent=2) + "\n", encoding="utf-8"
-        )
-        (footage_dir / "result.json").write_text(
-            json.dumps(result.to_dict(), indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
 
     return result

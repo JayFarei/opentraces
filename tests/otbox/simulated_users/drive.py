@@ -23,12 +23,13 @@ library only — never ``runner`` or ``footage_runner``.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from ..drivers.base import Driver
@@ -95,6 +96,12 @@ class SessionResult:
     scenario: str
     turn_count: int
     error_message: str = ""
+    # The verdict from the TURN LOOP alone — i.e. did the agent run pass —
+    # BEFORE the (footage-only) MP4 export can mutate ``verdict``. The trace
+    # capture lane (capture-refresh) keys its PASS/FAIL on this so a footage
+    # export hiccup (missing ffmpeg / video timeout) never sinks a real
+    # capture. Mirrors ``verdict`` exactly on the non-export path.
+    turn_verdict: str = ""
     # assertion lane
     pane_log_path: str = ""
     pane_excerpt: str = field(default="", repr=False)
@@ -411,6 +418,7 @@ def drive_session(
         termctrl: str = "",
         error_message: str = "",
         pane_excerpt: str = "",
+        turn_verdict: str | None = None,
     ) -> SessionResult:
         return SessionResult(
             verdict=verdict,
@@ -420,6 +428,11 @@ def drive_session(
             scenario=scenario,
             turn_count=turn_count,
             error_message=error_message,
+            # Defaults to ``verdict`` for the early-return paths (preflight
+            # SKIP/FAIL never reached the turn loop, so the run-level and
+            # turn-level verdicts coincide). The final result passes the
+            # pre-export turn verdict explicitly.
+            turn_verdict=turn_verdict if turn_verdict is not None else verdict,
             pane_log_path=str(pane_log_path),
             pane_excerpt=pane_excerpt,
             termctrl_path=termctrl,
@@ -621,6 +634,11 @@ def drive_session(
     duration_s = time.monotonic() - started
     pane_excerpt = last_frame[-2000:] if last_frame else ""
 
+    # Freeze the turn-loop verdict BEFORE the footage export can mutate it,
+    # so the trace-capture lane (capture-refresh) decides PASS/FAIL on the
+    # agent run alone and a footage hiccup never sinks a real capture.
+    turn_verdict = verdict
+
     # --- export the MP4 (graceful-degrade if ffmpeg is absent) -------------
     # Only the footage path requests an export; the capture path records the
     # `.termctrl` byproduct but skips the (expensive) video render.
@@ -658,7 +676,7 @@ def drive_session(
                     verdict = "FAIL"
                     error_message = f"termctrl video export errored: {exc}"
 
-    return _result(
+    session_result = _result(
         verdict,
         binary_path=binary_abs,
         binary_version=binary_version,
@@ -670,4 +688,28 @@ def drive_session(
         termctrl=str(termctrl_path) if termctrl_path.exists() else "",
         error_message=error_message,
         pane_excerpt=pane_excerpt,
+        turn_verdict=turn_verdict,
     )
+
+    # --- write the gallery metadata (single writer) ------------------------
+    # When this is a footage drive (export_mp4=True), drive_session is the
+    # SINGLE writer of the gallery-ready `result.json` + `markers.json` so
+    # BOTH the footage path AND capture-refresh emit identical metadata next
+    # to the MP4. `footage.py` reads `result.json` from here and writes
+    # `scenario.json` itself; `footage_runner` no longer double-writes these.
+    # Never raise — footage media is best-effort, independent of the drive.
+    if export_mp4:
+        try:
+            (record_dir / "result.json").write_text(
+                json.dumps(asdict(session_result), indent=2, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
+            (record_dir / "markers.json").write_text(
+                json.dumps(session_result.markers, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+    return session_result

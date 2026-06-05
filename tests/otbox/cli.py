@@ -902,6 +902,7 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
     from .checkpoints import resolve_checkpoint
     from .drivers import get_driver
     from .env import REPO_ROOT
+    from .footage import _footage_dir
     from .simulated_users.runner import run_simulated_session
     from .simulated_users.scenario import load_scenario, scenario_digest
     from .snapshot import create_snapshot
@@ -1031,6 +1032,15 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
         _capture_refresh_template_context(box),
     )
 
+    # Footage is purely additive to capture-refresh: the SAME interactive
+    # run that validates capture also renders the gallery-ready MP4 +
+    # result.json/markers.json into the footage dir (drive.drive_session
+    # writes those when export_mp4=True). The trace-capture path below is
+    # unchanged. footage_dir mirrors footage._footage_dir so the gallery
+    # picks it up; it is gitignored (captures/**/footage/).
+    footage_dir = _footage_dir(scenario.name, scenario.agent)
+    footage_dir.mkdir(parents=True, exist_ok=True)
+
     result = run_simulated_session(
         driver,
         box,
@@ -1039,11 +1049,21 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
         initial_state_dir=None,
         output_dir=output_dir,
         agent=scenario.agent,
+        scenario=scenario.name,
+        record_dir=footage_dir,
+        export_mp4=True,
     )
 
     # FAIL → leave the box up for inspection, exit non-zero. The runner's
     # pane_log_path is the operator's debugging entry point.
-    if result.verdict != "PASS":
+    #
+    # Key the capture verdict on ``turn_verdict`` (the agent-run outcome
+    # BEFORE the footage MP4 export could mutate ``verdict``). Footage is
+    # purely additive: a video-export hiccup (missing ffmpeg / video
+    # timeout) must never sink a real trace capture. ``turn_verdict`` falls
+    # back to ``verdict`` on the legacy lane that doesn't set it.
+    capture_verdict = result.turn_verdict or result.verdict
+    if capture_verdict != "PASS":
         payload = {
             "action": "capture-refresh",
             "status": "failed",
@@ -1069,6 +1089,27 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
             ),
         )
         return 3
+
+    # Stamp the footage's scenario.json so the gallery shows a description
+    # (drive already wrote result.json + markers.json + the mp4 there). This
+    # is footage-only metadata, independent of the trace capture below.
+    try:
+        footage_dir.mkdir(parents=True, exist_ok=True)
+        (footage_dir / "scenario.json").write_text(
+            json.dumps(
+                {
+                    "name": scenario.name,
+                    "description": scenario.description,
+                    "agent": scenario.agent,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
 
     postprocess = _postprocess_capture_box(driver, box, scenario.agent)
     postprocess.extend(_scrub_capture_box_before_snapshot(driver, box, scenario.agent))
@@ -1124,12 +1165,16 @@ def cmd_capture_refresh(args: argparse.Namespace) -> int:
         "binary_version": result.binary_version,
         "turn_count": result.turn_count,
         "base_checkpoint": base_checkpoint,
+        # Footage emitted from the SAME run (empty when ffmpeg/export skipped).
+        "footage_mp4": result.mp4_path or None,
+        "footage_dir": str(footage_dir),
     }
     human = (
         f"capture-refresh: OK — scenario={scenario.name!r} "
         f"binary_version={result.binary_version!r} turns={result.turn_count}\n"
         f"  artifact: {artifact_path}\n"
-        f"  metadata: {metadata_path}"
+        f"  metadata: {metadata_path}\n"
+        f"  footage:  {result.mp4_path or '(none)'}"
     )
     _emit(payload, json_mode=args.json, human=human)
     return 0
