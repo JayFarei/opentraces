@@ -261,7 +261,7 @@ hands you a bucket and you need to materialise its evidence locally).
 
 The Context Tree answers "what did the agent see at this step?" It rides on
 the same canonical event log as Trace Trails and is addressed by
-`Step.context_node_id` in schema `0.6.0`.
+`Step.context_node_id` in schema `0.5.0`.
 
 ```bash
 opentraces ctx list --json
