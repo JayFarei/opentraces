@@ -213,6 +213,15 @@ def _stamp_provenance(footage_dir: Path, scenario: Scenario) -> None:
 # ---------------------------------------------------------------------------
 # record every scenario
 # ---------------------------------------------------------------------------
+# Scenarios that need a pre-seeded bucket trace + a {trace_id} template context.
+# capture-refresh provides both (it seeds a real trace and expands the template),
+# and now produces footage too — so their footage comes from
+# `make capture-refresh SCENARIO=<name>`, not the standalone footage sweep, which
+# drives a clean c-installed-source box and would fail mid-sequence (e.g. on
+# `/ot-trace {trace_id}` with no captured trace).
+_NEEDS_SEEDED_BUCKET = frozenset({"pi-tui-slash-commands-bucket"})
+
+
 def record_all(
     *,
     harnesses: list[str] | None = None,
@@ -229,6 +238,8 @@ def record_all(
         name = summary.get("name")
         if not name or summary.get("error"):
             continue
+        if name in _NEEDS_SEEDED_BUCKET:
+            continue  # seeded-bucket scenario; footage comes from capture-refresh
         agent = summary.get("agent")
         if harnesses is not None and agent not in harnesses:
             continue

@@ -6,11 +6,15 @@ playing out inside a real PTY, across the supported harnesses (`claude`,
 [terminal-control](https://github.com/kitlangton/terminal-control)
 (`termctrl`) and collected into a self-contained gallery.
 
-This is **additive** and **not** assertion-grade. The tmux-based
-`make capture-refresh` path remains the validated, tested capture lane; this
-recorder reuses the exact same box-preparation sequence (it imports
-`runner.py`'s private helpers verbatim) but swaps the tmux spawn + expect
-loop for `termctrl start/send/show/mark/stop` + `termctrl video`.
+Capture and footage share **one driver**. The simulated-user runner drives the
+real interactive TUI via terminal-control through the single drive core in
+`simulated_users/drive.py` (shared by `run_simulated_session` and the footage
+recorder; box prep lives in the neutral `simulated_users/prep.py`). So a single
+`make capture-refresh` run produces BOTH the trace capture **and** the footage —
+the footage you review is the same run that produced the trace, not a re-enactment.
+`make otbox-footage` records footage for a scenario without the capture
+post-processing. The original tmux + `--print` dispatch survives as
+`run_simulated_session(mode="legacy")` (assertion-only, no footage).
 
 ## Quick start
 
@@ -99,10 +103,12 @@ cleanly for every absent binary and only exits non-zero on a genuine FAIL.
 
 ## Relationship to capture-refresh
 
-| Path                        | Purpose                          | Output                |
-| --------------------------- | -------------------------------- | --------------------- |
-| `make capture-refresh`      | assertion-grade capture (tmux)   | box snapshot + audit  |
-| `make otbox-footage`        | visual review aid (termctrl)     | MP4 + gallery         |
+| Path                   | Drives via       | Output                                         |
+| ---------------------- | ---------------- | ---------------------------------------------- |
+| `make capture-refresh` | terminal-control | box snapshot + audit **and** MP4 + gallery     |
+| `make otbox-footage`   | terminal-control | MP4 + gallery (no capture post-processing)     |
 
-Both resolve a box the same way and drive the same scenarios; only the
-drive + output differ. Use capture-refresh for evidence, footage for review.
+Both share the one `drive.py` core, so the footage you review is the same run
+that produced the trace. capture-refresh adds the snapshot/ingest; footage skips
+it. Set `mode="legacy"` to fall back to the original tmux + `--print` dispatch
+(assertion-only, no footage).

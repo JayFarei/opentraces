@@ -399,8 +399,8 @@ def render_gallery_html(cards: list[dict]) -> str:
       (claude / codex / pi) through a scripted task inside an isolated otbox,
       recorded with terminal-control. Every card shows the exact instruction the
       user gave and what the agent did, so you can watch each journey opentraces
-      captures. A visual review aid; the tmux capture-refresh path stays the
-      assertion-grade gate.
+      captures. The capture-refresh run produces this footage as a byproduct of
+      the same terminal-control drive.
     </p>
     <div class="legend">{legend}</div>
   </header>
