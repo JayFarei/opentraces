@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenTraces — Release-Readiness Simplification</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0c1827; --bg2:#0a1320; --surface:#13243a; --surface2:#17314c; --recessed:#0f1d2e;
+  --border:rgba(126,166,208,.16); --border-strong:rgba(126,166,208,.30); --grid:rgba(126,166,208,.055);
+  --text:#e7eff7; --text-dim:#94aac1; --text-faint:#6c8198;
+  --primary:#46b8e6; --primary-dim:rgba(70,184,230,.14);
+  --gold:#d8ad48; --gold-dim:rgba(216,173,72,.14);
+  --pass:#3fcaa0; --pass-dim:rgba(63,202,160,.14);
+  --warn:#e3a93f; --warn-dim:rgba(227,169,63,.14);
+  --info:#7f9bd4; --info-dim:rgba(127,155,212,.14);
+  --shadow:0 18px 40px -22px rgba(0,0,0,.7);
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --bg:#eef3f8; --bg2:#e6edf4; --surface:#ffffff; --surface2:#f3f7fb; --recessed:#eaeff5;
+    --border:rgba(28,62,98,.14); --border-strong:rgba(28,62,98,.26); --grid:rgba(28,62,98,.05);
+    --text:#15293c; --text-dim:#4a6076; --text-faint:#7388a0;
+    --primary:#1d7fb0; --primary-dim:rgba(29,127,176,.10);
+    --gold:#a9802a; --gold-dim:rgba(169,128,42,.12);
+    --pass:#1d9e76; --pass-dim:rgba(29,158,118,.12);
+    --warn:#b07d20; --warn-dim:rgba(176,125,32,.12);
+    --info:#3f5fa0; --info-dim:rgba(63,95,160,.12);
+    --shadow:0 18px 36px -24px rgba(20,45,70,.4);
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:"IBM Plex Sans",system-ui,sans-serif; line-height:1.55;
+  background-image:
+    linear-gradient(var(--grid) 1px,transparent 1px),
+    linear-gradient(90deg,var(--grid) 1px,transparent 1px),
+    radial-gradient(900px 500px at 80% -8%, var(--primary-dim), transparent 60%);
+  background-size:34px 34px,34px 34px,100% 100%;
+}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+.wrap{max-width:1140px;margin:0 auto;padding:0 24px}
+a{color:var(--primary);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* nav */
+nav.top{position:sticky;top:0;z-index:30;backdrop-filter:blur(10px);
+  background:color-mix(in srgb,var(--bg) 82%,transparent);border-bottom:1px solid var(--border)}
+nav.top .wrap{display:flex;align-items:center;gap:18px;height:54px;overflow-x:auto}
+nav.top .brand{font-family:"IBM Plex Mono",monospace;font-weight:600;color:var(--text);white-space:nowrap;font-size:.82rem;letter-spacing:.5px}
+nav.top .brand b{color:var(--gold)}
+nav.top a.lnk{color:var(--text-dim);font-size:.78rem;white-space:nowrap;font-family:"IBM Plex Mono",monospace}
+nav.top a.lnk:hover{color:var(--text);text-decoration:none}
+nav.top .pr{margin-left:auto;white-space:nowrap;font-family:"IBM Plex Mono",monospace;font-size:.76rem;
+  border:1px solid var(--border-strong);border-radius:6px;padding:5px 11px;color:var(--gold)}
+
+/* hero */
+header.hero{padding:64px 0 30px;position:relative}
+.eyebrow{font-family:"IBM Plex Mono",monospace;font-size:.74rem;letter-spacing:2.5px;text-transform:uppercase;color:var(--primary);
+  display:inline-flex;align-items:center;gap:9px}
+.eyebrow::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--primary);box-shadow:0 0 0 4px var(--primary-dim)}
+header.hero h1{font-size:clamp(2rem,4.6vw,3.3rem);line-height:1.04;margin:.5em 0 .25em;letter-spacing:-.02em;font-weight:700}
+header.hero p.sub{font-size:1.06rem;color:var(--text-dim);max-width:62ch;margin:0}
+header.hero .meta{margin-top:22px;display:flex;flex-wrap:wrap;gap:8px}
+.chip{font-family:"IBM Plex Mono",monospace;font-size:.74rem;border:1px solid var(--border);background:var(--surface);
+  border-radius:6px;padding:5px 10px;color:var(--text-dim)}
+.chip b{color:var(--text)}
+
+/* kpi */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:34px 0 8px}
+.kpi{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 18px 16px;position:relative;overflow:hidden}
+.kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent,var(--primary))}
+.kpi.k-loc{--accent:var(--gold)} .kpi.k-themes{--accent:var(--primary)} .kpi.k-tests{--accent:var(--pass)} .kpi.k-conf{--accent:var(--info)}
+.kpi .n{font-family:"IBM Plex Mono",monospace;font-size:2.05rem;font-weight:600;letter-spacing:-.02em;line-height:1}
+.kpi .n.loc{color:var(--gold)} .kpi .n.themes{color:var(--primary)} .kpi .n.tests{color:var(--pass)} .kpi .n.conf{color:var(--info)}
+.kpi .lab{margin-top:8px;font-size:.78rem;color:var(--text-dim)}
+.kpi .sub{font-size:.72rem;color:var(--text-faint);margin-top:3px;font-family:"IBM Plex Mono",monospace}
+
+/* sections */
+section{padding:42px 0;border-top:1px solid var(--border)}
+.section-label{font-family:"IBM Plex Mono",monospace;font-size:.74rem;letter-spacing:2px;text-transform:uppercase;color:var(--text-dim);
+  display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.section-label .dot{width:7px;height:7px;border-radius:50%;background:var(--gold)}
+.section-label .idx{color:var(--gold)}
+h2.sec{font-size:1.6rem;margin:.1em 0 .4em;letter-spacing:-.01em;font-weight:600}
+.lead{color:var(--text-dim);max-width:74ch;font-size:1.02rem}
+
+/* cards grid */
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:20px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px;min-width:0}
+.card h3{margin:.1em 0 .35em;font-size:1rem;display:flex;align-items:center;gap:9px}
+.card h3 .tag{font-family:"IBM Plex Mono",monospace;font-size:.66rem;padding:2px 7px;border-radius:5px;border:1px solid var(--border-strong);color:var(--text-dim)}
+.card p{margin:0;color:var(--text-dim);font-size:.9rem}
+.card .why{margin-top:10px;font-size:.82rem;color:var(--text-faint);border-top:1px dashed var(--border);padding-top:10px}
+.defense .icn{font-family:"IBM Plex Mono",monospace;color:var(--gold);font-weight:600}
+
+/* mermaid */
+.mermaid-wrap{position:relative;margin-top:20px;border:1px solid var(--border);border-radius:12px;background:
+  linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px),var(--recessed);
+  background-size:28px 28px,28px 28px,100% 100%;overflow:hidden}
+.mermaid-wrap .bar{display:flex;align-items:center;justify-content:space-between;padding:9px 13px;border-bottom:1px solid var(--border)}
+.mermaid-wrap .bar span{font-family:"IBM Plex Mono",monospace;font-size:.72rem;color:var(--text-dim)}
+.zoom{display:flex;gap:6px}
+.zoom button{font-family:"IBM Plex Mono",monospace;width:28px;height:26px;border-radius:6px;border:1px solid var(--border-strong);
+  background:var(--surface);color:var(--text-dim);cursor:pointer;font-size:.85rem;line-height:1}
+.zoom button:hover{color:var(--text);border-color:var(--primary)}
+.mermaid-view{overflow:hidden;cursor:grab;display:flex;justify-content:center;padding:18px}
+.mermaid-view.drag{cursor:grabbing}
+.mermaid{transform-origin:center top;transition:transform .05s linear}
+.hint{font-family:"IBM Plex Mono",monospace;font-size:.68rem;color:var(--text-faint);padding:0 13px 9px}
+
+/* tables */
+.tablewrap{margin-top:18px;border:1px solid var(--border);border-radius:12px;overflow:auto}
+table{border-collapse:collapse;width:100%;font-size:.88rem;min-width:560px}
+thead th{position:sticky;top:0;background:var(--surface2);text-align:left;font-family:"IBM Plex Mono",monospace;
+  font-size:.7rem;letter-spacing:.6px;text-transform:uppercase;color:var(--text-dim);padding:11px 14px;border-bottom:1px solid var(--border-strong);white-space:nowrap}
+tbody td{padding:11px 14px;border-bottom:1px solid var(--border);vertical-align:top}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even){background:color-mix(in srgb,var(--surface) 55%,transparent)}
+tbody tr:hover{background:var(--primary-dim)}
+td .mono,th .mono{font-size:.84em}
+.num{font-family:"IBM Plex Mono",monospace;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.del{color:var(--gold)} .add{color:var(--pass)}
+code{font-family:"IBM Plex Mono",monospace;font-size:.82em;background:var(--recessed);border:1px solid var(--border);
+  border-radius:5px;padding:1px 6px;color:var(--text)}
+small.dim{color:var(--text-faint);font-size:.82em;display:block;margin-top:3px}
+
+/* status pills */
+.pill{display:inline-flex;align-items:center;gap:6px;font-family:"IBM Plex Mono",monospace;font-size:.7rem;
+  padding:3px 9px;border-radius:20px;white-space:nowrap;border:1px solid transparent}
+.pill::before{content:"";width:7px;height:7px;border-radius:50%}
+.pill.pass{color:var(--pass);background:var(--pass-dim);border-color:color-mix(in srgb,var(--pass) 35%,transparent)}
+.pill.pass::before{background:var(--pass)}
+.pill.low{color:var(--pass);background:var(--pass-dim)} .pill.low::before{background:var(--pass)}
+.pill.med{color:var(--warn);background:var(--warn-dim)} .pill.med::before{background:var(--warn)}
+.pill.env{color:var(--info);background:var(--info-dim);border-color:color-mix(in srgb,var(--info) 35%,transparent)} .pill.env::before{background:var(--info)}
+.pill.kept{color:var(--gold);background:var(--gold-dim)} .pill.kept::before{background:var(--gold)}
+
+/* before/after */
+.ba{display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:stretch;margin-top:20px}
+.ba .col{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;min-width:0}
+.ba .col h4{margin:0 0 12px;font-family:"IBM Plex Mono",monospace;font-size:.78rem;letter-spacing:1px;text-transform:uppercase;display:flex;align-items:center;gap:8px}
+.ba .col.removed h4{color:var(--gold)} .ba .col.added h4{color:var(--pass)}
+.ba .col h4 .ct{margin-left:auto;color:var(--text-faint);font-size:.74rem}
+.flist{list-style:none;margin:0;padding:0}
+.flist li{font-family:"IBM Plex Mono",monospace;font-size:.78rem;padding:5px 0 5px 16px;position:relative;color:var(--text-dim);word-break:break-all}
+.flist li::before{content:"";position:absolute;left:0;top:11px;width:6px;height:6px;border-radius:1px}
+.removed .flist li::before{background:var(--gold)}
+.added .flist li::before{background:var(--pass)}
+.flist li b{color:var(--text)}
+.ba .arrow{display:flex;align-items:center;justify-content:center;color:var(--text-faint);font-family:"IBM Plex Mono",monospace}
+.ba .net{grid-column:1/-1;text-align:center;font-family:"IBM Plex Mono",monospace;color:var(--text-dim);font-size:.86rem;
+  border:1px dashed var(--border);border-radius:10px;padding:12px;background:var(--recessed)}
+.ba .net b{color:var(--gold)}
+
+/* callout */
+.callout{margin-top:20px;border:1px solid var(--border-strong);border-left:3px solid var(--gold);border-radius:10px;
+  background:var(--gold-dim);padding:16px 18px}
+.callout h4{margin:0 0 6px;font-size:.95rem;color:var(--text)}
+.callout p{margin:0;color:var(--text-dim);font-size:.9rem}
+
+/* workflow stat strip */
+.wstats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}
+.wstat{background:var(--recessed);border:1px solid var(--border);border-radius:10px;padding:14px}
+.wstat .n{font-family:"IBM Plex Mono",monospace;font-size:1.3rem;color:var(--text);font-weight:600}
+.wstat .l{font-size:.74rem;color:var(--text-faint);margin-top:3px}
+
+footer{padding:40px 0 70px;border-top:1px solid var(--border);color:var(--text-faint);font-size:.82rem}
+footer .mono{color:var(--text-dim)}
+
+.anim{opacity:0;transform:translateY(14px);animation:fadeUp .6s cubic-bezier(.2,.7,.2,1) forwards}
+@keyframes fadeUp{to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.anim{animation:none;opacity:1;transform:none}.mermaid{transition:none}}
+
+@media (max-width:880px){
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .grid3{grid-template-columns:1fr}
+  .wstats{grid-template-columns:repeat(2,1fr)}
+  .ba{grid-template-columns:1fr}
+  .ba .arrow{transform:rotate(90deg)}
+}
+</style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="wrap">
+    <span class="brand">opentraces <b>/</b> release-simplification</span>
+    <a class="lnk" href="#workflow">workflow</a>
+    <a class="lnk" href="#before-after">before/after</a>
+    <a class="lnk" href="#themes">themes</a>
+    <a class="lnk" href="#tests">tests</a>
+    <a class="lnk" href="#preserve">preserved</a>
+    <a class="pr" href="https://github.com/JayFarei/opentraces/pull/11" target="_blank" rel="noopener">PR #11 ↗</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow anim">Release-readiness pass · 2026-06-03</span>
+    <h1 class="anim" style="animation-delay:.05s">Simplifying OpenTraces for release<br>without changing one documented behaviour</h1>
+    <p class="sub anim" style="animation-delay:.1s">A dynamic multi-agent workflow: a feature-map contract drove six discovery agents, four synthesized themes were implemented in isolated worktrees and <b style="color:var(--text)">adversarially verified by separate agents in clean contexts</b>, then merged sequentially with zero conflicts.</p>
+    <div class="meta anim" style="animation-delay:.15s">
+      <span class="chip mono">base <b>d5d6bfd9b7</b></span>
+      <span class="chip mono">branch <b>simplify/release-readiness-v04</b></span>
+      <span class="chip mono">22 subagents · ~2.27M tokens</span>
+      <span class="chip mono">Sonnet = build · Opus = judge</span>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi k-loc anim" style="animation-delay:.2s"><div class="n loc mono">−4,857</div><div class="lab">net lines of code</div><div class="sub">+383 / −5,240 · 49 files</div></div>
+      <div class="kpi k-themes anim" style="animation-delay:.27s"><div class="n themes mono">4 / 4</div><div class="lab">themes verified &amp; merged</div><div class="sub">0 abandoned</div></div>
+      <div class="kpi k-tests anim" style="animation-delay:.34s"><div class="n tests mono">3,436</div><div class="lab">tests passing</div><div class="sub">35 env-only, all triaged</div></div>
+      <div class="kpi k-conf anim" style="animation-delay:.41s"><div class="n conf mono">0</div><div class="lab">merge conflicts</div><div class="sub">17 files removed · 2 added</div></div>
+    </div>
+  </div>
+</header>
+
+<!-- WORKFLOW -->
+<section id="workflow">
+  <div class="wrap">
+    <div class="section-label"><span class="dot"></span><span class="idx">01</span> The workflow</div>
+    <h2 class="sec">A contract-driven pipeline, defended against three failure modes</h2>
+    <p class="lead">The documented feature set was captured once as a non-regression contract and passed <em>verbatim</em> into every agent. No implementer ever judged its own output.</p>
+
+    <div class="grid3">
+      <div class="card defense">
+        <h3><span class="icn">[01]</span> Agentic laziness</h3>
+        <p>Every theme reaches a terminal state. A theme only "passes" with <code>status=pass</code> <b>and</b> zero blocker/major findings.</p>
+        <div class="why">Result: 4 verified, 0 declared-done-early.</div>
+      </div>
+      <div class="card defense">
+        <h3><span class="icn">[02]</span> Self-preferential bias</h3>
+        <p>Each worktree got a <b>separate Opus verifier in a clean context</b> that re-read the diff and re-ran the tests itself.</p>
+        <div class="why">Result: t4 caught + corrected during re-verification.</div>
+      </div>
+      <div class="card defense">
+        <h3><span class="icn">[03]</span> Goal drift</h3>
+        <p>The feature map (<code>FEATURE-MAP.json</code>) was the contract, threaded verbatim into discovery, implementation and verification.</p>
+        <div class="why">Result: full CLI surface + 3 version numbers intact.</div>
+      </div>
+    </div>
+
+    <div class="mermaid-wrap">
+      <div class="bar"><span>orchestration · phases 0 → 6</span>
+        <div class="zoom"><button data-z="out">−</button><button data-z="reset">⟲</button><button data-z="in">+</button></div>
+      </div>
+      <div class="mermaid-view"><div class="mermaid">
+flowchart TD
+  FM["PHASE 0 · Feature Map<br/><i>Opus · non-regression contract</i>"]:::contract
+  D["PHASE 1 · Discovery<br/><i>6 Sonnet agents · 6 areas</i>"]:::disc
+  S["PHASE 2 · Synthesis<br/><i>Opus · 4 themes / 13 dropped</i>"]:::disc
+  FM ==> D ==> S
+  S --> T1 & T2 & T3 & T4
+  subgraph IMPL ["PHASE 3-4 · implement in isolated worktree + separate adversarial verifier"]
+    direction LR
+    T1["t1 · docs / red-bar<br/>Sonnet → Opus ✓"]:::ok
+    T2["t2 · dead modules<br/>Sonnet → Opus ✓"]:::ok
+    T3["t3 · CLI dead-code<br/>Sonnet → Opus ✓"]:::ok
+    T4["t4 · core dedup<br/>Sonnet → Opus ✓"]:::ok
+  end
+  T1 & T2 & T3 & T4 --> M["PHASE 5 · sequential merge<br/>t1→t2→t3→t4 · 0 conflicts"]:::merge
+  M ==> G{"Integration gate<br/>3,436 tests · wheel build · CLI surface"}:::gate
+  G ==> PR["PHASE 6 · report + PR #11"]:::pr
+  classDef contract fill:#17314c,stroke:#d8ad48,stroke-width:1.5px,color:#e7eff7;
+  classDef disc fill:#13243a,stroke:#46b8e6,stroke-width:1px,color:#e7eff7;
+  classDef ok fill:#11241c,stroke:#3fcaa0,stroke-width:1px,color:#dff3ea;
+  classDef merge fill:#13243a,stroke:#7f9bd4,stroke-width:1px,color:#e7eff7;
+  classDef gate fill:#17314c,stroke:#d8ad48,stroke-width:1.5px,color:#e7eff7;
+  classDef pr fill:#11241c,stroke:#3fcaa0,stroke-width:1.5px,color:#dff3ea;
+      </div></div>
+      <div class="hint">Ctrl/⌘ + scroll to zoom · drag to pan</div>
+    </div>
+
+    <div class="wstats">
+      <div class="wstat"><div class="n mono">3</div><div class="l">background workflows chained</div></div>
+      <div class="wstat"><div class="n mono">22</div><div class="l">isolated subagents spawned</div></div>
+      <div class="wstat"><div class="n mono">~2.27M</div><div class="l">subagent tokens</div></div>
+      <div class="wstat"><div class="n mono">5</div><div class="l">git worktrees (4 themes + integration)</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- BEFORE / AFTER -->
+<section id="before-after">
+  <div class="wrap">
+    <div class="section-label"><span class="dot"></span><span class="idx">02</span> Before / after structure</div>
+    <h2 class="sec">Mostly subtraction: dead code out, two single-source modules in</h2>
+    <p class="lead">17 files removed (a deferred prototype, archived spikes, a broken shim, a noop build hook, dead CLI modules), 2 small modules added to kill duplication.</p>
+
+    <div class="ba">
+      <div class="col removed">
+        <h4>Removed <span class="ct mono">17 files · −5,240</span></h4>
+        <ul class="flist">
+          <li><b>capture/http_proxy/</b> — deferred prototype, 6 files (~1,625 LOC)</li>
+          <li><b>cli/publish.py</b> — 687 LOC (helpers relocated)</li>
+          <li><b>cli/import_hf.py</b> — 306 LOC (dropped command)</li>
+          <li><b>scripts/archive/</b> — 5 spike scripts, 0 callers</li>
+          <li><b>hatch_build.py</b> + test — gutted noop build hook</li>
+          <li><b>otc</b> — shim pointing at a deleted worktree</li>
+          <li><b>tools/badge-generator.html</b> · Makefile <b>build-viewer</b></li>
+        </ul>
+      </div>
+      <div class="arrow">→</div>
+      <div class="col added">
+        <h4>Added <span class="ct mono">2 files · +single sources</span></h4>
+        <ul class="flist">
+          <li><b>core/_time.py</b> — one <code>utc_now_str()</code>, replacing 7 byte-identical <code>_utc_now</code> copies across core/</li>
+          <li><b>core/query_helpers.py</b> — single source for <code>_fts_query</code> / <code>_page_offset</code> / <code>_recency_weighted_sort</code> / <code>_terms</code>, closing a <b>silent regex divergence</b> between the two search backends</li>
+        </ul>
+        <div class="why" style="color:var(--text-dim)">Also removed in place: 4 never-registered <code>trace_*</code> commands, the duplicate <code>_emit_json</code>, ~34 <code>_cli.*</code> forwarding shims, 2 no-op map-insert loops, 4 zero-caller <code>workflow.py</code> functions, stale drop-list entries.</div>
+      </div>
+      <div class="net">net: <b>49 files changed · +383 / −5,240 · ≈ −4,857 LOC</b> &nbsp;·&nbsp; merged as four labelled <span class="mono">--no-ff</span> commits</div>
+    </div>
+  </div>
+</section>
+
+<!-- THEMES -->
+<section id="themes">
+  <div class="wrap">
+    <div class="section-label"><span class="dot"></span><span class="idx">03</span> The four themes</div>
+    <h2 class="sec">Few, coherent, file-disjoint workstreams</h2>
+    <p class="lead">Distilled from the discovery candidates; 13 other candidates were dropped with written reasons (large-file splits, renames, broad CLI churn) as too risky for one overnight PR.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>ID</th><th>Theme</th><th class="num">Δ LOC</th><th>Risk</th><th>Adversarial verifier</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="mono" style="color:var(--gold)">t1</td>
+            <td><b>CI red-bar + doc accuracy</b><small class="dim">Fixed <code>SECURITY_VERSION</code> test (0.5.0→0.6.0); aligned version/tool/command docs to source.</small></td>
+            <td class="num"><span class="add">+78</span> / <span class="del">−11</span></td>
+            <td><span class="pill low">low</span></td>
+            <td><span class="pill pass">pass · 2 rounds</span></td>
+          </tr>
+          <tr>
+            <td class="mono" style="color:var(--gold)">t2</td>
+            <td><b>Remove dead modules &amp; cruft</b><small class="dim"><code>http_proxy/</code>, <code>scripts/archive/</code>, <code>otc</code>, noop <code>hatch_build.py</code>, orphan targets. Frozen <code>'proxy'</code> vocab kept.</small></td>
+            <td class="num"><span class="add">+8</span> / <span class="del">−3,657</span></td>
+            <td><span class="pill low">low</span></td>
+            <td><span class="pill pass">pass · 1 round</span></td>
+          </tr>
+          <tr>
+            <td class="mono" style="color:var(--gold)">t3</td>
+            <td><b>Delete dead CLI commands &amp; shims</b><small class="dim">Never-registered commands, dead <code>publish.py</code>/<code>import_hf.py</code> (helpers relocated to <code>core/publish_flow.py</code>), forwarding shims, drop-list.</small></td>
+            <td class="num"><span class="add">+148</span> / <span class="del">−1,370</span></td>
+            <td><span class="pill med">medium</span></td>
+            <td><span class="pill pass">pass · 1 round</span></td>
+          </tr>
+          <tr>
+            <td class="mono" style="color:var(--gold)">t4</td>
+            <td><b>Consolidate core helpers</b><small class="dim">utc/query helpers → single sources; removed no-op stubs + dead funcs; fixed latent <code>_terms</code> regex divergence.</small></td>
+            <td class="num"><span class="add">+149</span> / <span class="del">−202</span></td>
+            <td><span class="pill low">low</span></td>
+            <td><span class="pill pass">pass · 1 + polish</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <h4>One deliberate behaviour convergence (documented, not a regression)</h4>
+      <p>The two search backends had <b>already silently diverged</b> at base — <code>search_projection._terms</code> was <code>@</code>-aware, <code>trace_index._terms</code> was not. Unifying them necessarily changes one side; t4 keeps the <b>primary</b> backend byte-identical and brings <code>trace_index</code> into agreement. Observable change is limited to <code>@</code>-containing text in the secondary index; <b>all eval-baseline + 193 parity tests stay green.</b></p>
+    </div>
+  </div>
+</section>
+
+<!-- TESTS -->
+<section id="tests">
+  <div class="wrap">
+    <div class="section-label"><span class="dot"></span><span class="idx">04</span> Tests that passed</div>
+    <h2 class="sec">3,436 passing — every failure proven environmental</h2>
+    <p class="lead">Full <code>pytest tests/</code> on the integration branch. 35 failures all triaged to harness/environment artifacts (proven, not assumed): <code>35 = otbox(25) + perf(9) + s7(1)</code>, so the passing set covers the entire shippable surface.</p>
+
+    <div class="kpis" style="margin-top:22px">
+      <div class="kpi k-tests"><div class="n tests mono">3,436</div><div class="lab">passed</div><div class="sub">incl. cli · publish · e2e · core · security · trails · search_eval</div></div>
+      <div class="kpi k-conf"><div class="n conf mono">182</div><div class="lab">skipped</div><div class="sub">+ 2 xfailed</div></div>
+      <div class="kpi k-loc"><div class="n loc mono">35</div><div class="lab">failed → all environmental</div><div class="sub">0 caused by this change</div></div>
+      <div class="kpi k-themes"><div class="n themes mono">✓</div><div class="lab">wheel build</div><div class="sub">opentraces-0.4.0 · skill assets bundled</div></div>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Failure cluster</th><th class="num">#</th><th>Root cause</th><th>Proof it isn't ours</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="pill env">environment</span> <code>tests/perf/*</code></td>
+            <td class="num">9</td>
+            <td>Git worktrees carry no <code>.venv</code>, so the worktree <code>otd</code> shim falls back to a <code>python3</code> without opentraces → command <code>exit=1</code> before any timing.</td>
+            <td>With a functional <code>otd</code> the <b>entire perf suite passes (24 passed, 8 skipped, 0 failed)</b>. Perf has its own CI lane (<code>perf.yml --perf-lane smoke</code>).</td>
+          </tr>
+          <tr>
+            <td><span class="pill env">environment</span> <code>tests/otbox/*</code></td>
+            <td class="num">25</td>
+            <td>Ran against <b>stale machine-local cached checkpoint boxes</b> (86 under gitignored <code>.otbox/</code>; 0.37s cache hits, no rebuild).</td>
+            <td>Live CLI emits the asserted help string ("Search local retained traces"); that string is <b>unchanged by any theme</b>. otbox is a dev tool run via <code>make otbox-*</code>.</td>
+          </tr>
+          <tr>
+            <td><span class="pill env">environment</span> <code>migration s7</code></td>
+            <td class="num">1</td>
+            <td>Drives a separate isolated v0.3.3 venv at <code>/tmp/ot-v033-worktree</code> that is missing <code>pydantic</code>.</td>
+            <td><b>Fails identically on base</b> (<code>ModuleNotFoundError: No module named 'pydantic'</code>) — source-independent.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="wstats" style="margin-top:18px">
+      <div class="wstat"><div class="n mono">red-bar</div><div class="l">test_plan32 · 0.5.0 → 0.6.0 · now 2 passed</div></div>
+      <div class="wstat"><div class="n mono">193</div><div class="l">trace-query parity passed</div></div>
+      <div class="wstat"><div class="n mono">18 / 1skip</div><div class="l">search-eval baseline (digest stable)</div></div>
+      <div class="wstat"><div class="n mono">92</div><div class="l">publish + cli command tests passed</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- PRESERVED -->
+<section id="preserve">
+  <div class="wrap">
+    <div class="section-label"><span class="dot"></span><span class="idx">05</span> Feature preservation</div>
+    <h2 class="sec">The documented contract, checked item by item</h2>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Contract item</th><th>Status</th><th>Evidence</th></tr></thead>
+        <tbody>
+          <tr><td>Visible CLI surface (all groups + commands)</td><td><span class="pill pass">preserved</span></td><td>every subgroup <code>--help</code> resolves; <code>trail blame</code> still a group (<code>commit</code>/<code>pr</code>)</td></tr>
+          <tr><td>Hidden hook commands (<code>_capture</code>, <code>_run-post-commit-hook</code>, …)</td><td><span class="pill pass">preserved</span></td><td>all 35 top-level commands registered; <code>_capture --help</code> identical to base</td></tr>
+          <tr><td>Three version numbers</td><td><span class="pill pass">unchanged</span></td><td>CLI <code>0.4.0</code> · schema <code>0.6.0</code> · security <code>0.6.0</code></td></tr>
+          <tr><td>Security registry + 9-tool order</td><td><span class="pill pass">unchanged</span></td><td>registry untouched; red-bar test now asserts 0.6.0</td></tr>
+          <tr><td>Frozen <code>CAPTURE_METHOD_VALUES</code> keeps <code>'proxy'</code></td><td><span class="pill kept">kept</span></td><td><code>{hardcoded_template, live_capture, otel, proxy, transcript_reconstruction}</code></td></tr>
+          <tr><td>Event-log ref · anchor tiers · gzip mtime=0</td><td><span class="pill pass">untouched</span></td><td>no substrate code changed</td></tr>
+          <tr><td>Wheel bundles skill assets</td><td><span class="pill pass">verified</span></td><td>real build inspected: skill assets present, <code>http_proxy</code> absent</td></tr>
+          <tr><td>No tests/docs deleted to shrink</td><td><span class="pill pass">honored</span></td><td>only <code>test_hatch_build.py</code> removed (it tested deleted code)</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid3" style="margin-top:22px">
+      <div class="card">
+        <h3>Deferred <span class="tag">recorded</span></h3>
+        <p>Large-file splits (<code>trace_index.py</code> 4,263 · <code>bucket_store.py</code> 3,205 · <code>trails/sync.py</code>) — structural-only, no behaviour win.</p>
+        <div class="why">A dedicated session; collides with t4's edits.</div>
+      </div>
+      <div class="card">
+        <h3>Deferred <span class="tag">recorded</span></h3>
+        <p><code>workflow.py</code>/<code>workflows.py</code> rename; a CLI shared-option decorator across ~10 files.</p>
+        <div class="why">Coordination-heavy; broad churn for a cosmetic win.</div>
+      </div>
+      <div class="card">
+        <h3>Deferred <span class="tag">recorded</span></h3>
+        <p>Remaining <code>_utc_now</code> copies in <code>capture/</code> + <code>consumers/</code>; the <code>search_projection</code> datetime variant (correctly left alone).</p>
+        <div class="why">Out of the <code>core/</code> theme scope.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p class="mono">PR #11 · simplify/release-readiness-v04 → main · +383 / −5,240 · OPEN</p>
+    <p>Full artifacts: <span class="mono">runs/release-simplification/</span> — <span class="mono">FEATURE-MAP.json</span> · <span class="mono">THEMES.json</span> · <span class="mono">DISCOVERY-CANDIDATES.json</span> · <span class="mono">IMPL-VERIFY-RESULTS.json</span> · <span class="mono">RELEASE-READINESS-REPORT.md</span></p>
+    <p style="margin-top:14px">Orchestrated as a dynamic multi-agent workflow · Sonnet for mechanical work, Opus for synthesis and adversarial verification · isolated git worktrees · sequential conflict-free merges.</p>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script>
+  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  mermaid.initialize({
+    startOnLoad:true, securityLevel:'loose',
+    theme:'base', flowchart:{curve:'basis', padding:14, htmlLabels:true},
+    themeVariables:{
+      fontFamily:'IBM Plex Mono, monospace', fontSize:'15px',
+      lineColor: dark ? '#5e7895' : '#7b93b3',
+      primaryColor:'#13243a', primaryBorderColor:'#46b8e6', primaryTextColor: dark ? '#e7eff7' : '#15293c',
+      clusterBkg: dark ? 'rgba(70,184,230,.05)' : 'rgba(29,127,176,.05)',
+      clusterBorder:'#d8ad48', tertiaryColor:'transparent'
+    }
+  });
+  // zoom + pan
+  document.querySelectorAll('.mermaid-wrap').forEach(wrap=>{
+    const view=wrap.querySelector('.mermaid-view'), svg=wrap.querySelector('.mermaid');
+    let scale=1,tx=0,ty=0,dragging=false,sx=0,sy=0;
+    const apply=()=>svg.style.transform=`translate(${tx}px,${ty}px) scale(${scale})`;
+    wrap.querySelectorAll('.zoom button').forEach(b=>b.addEventListener('click',()=>{
+      const z=b.dataset.z; if(z==='in')scale=Math.min(scale*1.2,3); else if(z==='out')scale=Math.max(scale/1.2,.5); else {scale=1;tx=0;ty=0;} apply();
+    }));
+    view.addEventListener('wheel',e=>{ if(!(e.ctrlKey||e.metaKey))return; e.preventDefault();
+      scale=Math.min(3,Math.max(.5, scale*(e.deltaY<0?1.1:.9))); apply(); },{passive:false});
+    view.addEventListener('mousedown',e=>{dragging=true;sx=e.clientX-tx;sy=e.clientY-ty;view.classList.add('drag');});
+    window.addEventListener('mousemove',e=>{if(!dragging)return;tx=e.clientX-sx;ty=e.clientY-sy;apply();});
+    window.addEventListener('mouseup',()=>{dragging=false;view.classList.remove('drag');});
+  });
+  // active nav highlight
+  const links=[...document.querySelectorAll('nav.top a.lnk')];
+  const obs=new IntersectionObserver(es=>es.forEach(e=>{
+    if(e.isIntersecting){const id=e.target.id;links.forEach(l=>l.style.color=l.getAttribute('href')==='#'+id?'var(--gold)':'');}
+  }),{rootMargin:'-45% 0px -50% 0px'});
+  document.querySelectorAll('section[id]').forEach(s=>obs.observe(s));
+</script>
+</body>
+</html>

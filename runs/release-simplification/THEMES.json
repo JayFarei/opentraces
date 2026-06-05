@@ -1,0 +1,165 @@
+{
+  "themes": [
+    {
+      "id": "t1-ci-red-bar-and-doc-version-accuracy",
+      "title": "Fix the CI-breaking SECURITY_VERSION assertion and correct stale version/tool/command docs",
+      "rationale": "tests/e2e/test_plan32_integration.py::test_security_version_is_0_5_0 asserts SECURITY_VERSION == '0.5.0' but the shipped value is '0.6.0' (verified live: pytest FAILS today under testpaths=['tests']). This is a live red bar that blocks any clean release run. The same 0.5.0 drift exists in README.md:272, and the same family of doc-accuracy gaps (security tool tables omitting business_logic + capsule_scope, the well-known SKILL.md missing the Skill Verifier + Trace Intelligence sections, stale capsule/index notes) are all pure accuracy fixes against an authoritative source. Bundled because they are the highest-leverage release-prep items and touch a disjoint, doc-heavy fileset that will not collide with any code worktree.",
+      "simplification_types": [
+        "remove-stale",
+        "consolidate-duplication",
+        "doc-cleanup"
+      ],
+      "files": [
+        "tests/e2e/test_plan32_integration.py",
+        "README.md",
+        "web/site/docs/docs/cli/commands.md",
+        "web/site/public/.well-known/agent-skills/opentraces/SKILL.md",
+        "web/site/docs/docs/index.md",
+        "CHANGELOG.md",
+        "CLAUDE.md",
+        "AGENTS.md"
+      ],
+      "expected_benefit": "Restores green CI (the test_plan32 assertion is the only failing test verified in this pass), and makes every operator-facing version/tool/command surface agree with the authoritative sources (security/version.py = 0.6.0, security/tools/_registry.py = 9 tools, the installed skill/SKILL.md, and the shipped capsule/trace-discover CLI). Removes confident-but-wrong documentation right before a release.",
+      "regression_risk": "low",
+      "safety_proof": "SECURITY_VERSION 0.6.0 is the named three-version invariant; security/version.py:32 is authoritative and web docs (tiers.md:8, versioning.md:74) already say 0.6.0 — only README:272 and the test assertion are stale, so this aligns docs to truth rather than changing behaviour. The test only asserts a constant value and its 0.5.0 value contradicts the FEATURE_MAP invariant; fix to 0.6.0 (do NOT delete test_full_stack_integration — its EntityMap/ParseOutcome/StateManager/HF-token/TruffleHog paths run live and removing it is unnecessary scope). Security tool tables: tiers.md and _registry.py both list all 9 tools (business_logic, capsule_scope verified present); README/commands.md are the truncated copies. Well-known SKILL.md delta (0 Skill Verifier hits vs 13 in skill/SKILL.md) maps to real shipped commands in cli/skill_verifier.py and cli/trace.py (--waste/--run-intel/compare confirmed). No CLI surface, schema, security order, or event-log ref is touched.",
+      "est_effort": "short",
+      "depends_on": [],
+      "scope_boundary": "OUT: do NOT delete test_full_stack_integration or any test logic (only update the one constant); do NOT bump any actual version number; do NOT touch the security tool registry code or pipeline order; do NOT rewrite CHANGELOG history beyond adding the [Unreleased] header wrapper above the existing MERGED sections."
+    },
+    {
+      "id": "t2-remove-dead-modules-and-dev-cruft",
+      "title": "Remove genuinely dead modules and dev cruft (http_proxy prototype, archived spike scripts, otc shim, noop build hook, orphan Makefile target, badge tool)",
+      "rationale": "Several whole modules/files have zero production callers, verified by grep: capture/http_proxy/ (1625 LOC, only referenced in doc-comments inside otlp/__init__ and context_tree/contract; CLAUDE.md marks it 'deferred indefinitely, historical evidence'), scripts/archive/ (5 spikes, zero callers), the otc dev shim (PYTHONPATH points at /Users/jayfarei/src/tries/community-traces-capsule which does NOT exist), the noop hatch_build.py hook + its 3 noop-asserting tests, the orphan Makefile build-viewer target (not in build/release), and tools/badge-generator.html (zero callers). These are disjoint from every other theme's fileset and from the live CLI/core source, so they run cleanly in their own worktree.",
+      "simplification_types": [
+        "remove-stale",
+        "remove-dead-code"
+      ],
+      "files": [
+        "src/opentraces/capture/http_proxy/",
+        "src/opentraces/capture/otlp/__init__.py",
+        "src/opentraces/core/context_tree/contract.py",
+        "scripts/archive/",
+        "otc",
+        "hatch_build.py",
+        "pyproject.toml",
+        "tests/test_hatch_build.py",
+        "Makefile",
+        "tools/badge-generator.html"
+      ],
+      "expected_benefit": "Removes ~1700+ LOC of dead/prototype code plus a broken dev shim and a noop build hook from the shipped tree, eliminating the structural confusion of 'three capture sources' (only two are live) and a build hook that does nothing. Leaves git history as the recovery path.",
+      "regression_risk": "low",
+      "safety_proof": "http_proxy: grep confirms zero importers outside the module; the only references are doc-comments in otlp/__init__.py:5 and context_tree/contract.py:87. The capture_method='proxy' constant lives in context_tree/contract.py (schema vocab, NOT the module) and MUST be kept so the frozen CAPTURE_METHOD_VALUES set is unchanged — only delete the module dir and de-reference the doc-comment text. scripts/archive and badge-generator: grep across .py/.toml/.md/.yaml/Makefile returns zero callers. otc: hardcoded PYTHONPATH to a worktree confirmed absent ('No such file or directory'); canonical shim is otd. hatch_build.py: gutted to a bare noop in 2e6edaa6a6; the load-bearing skill/ force-include is declarative under [tool.hatch.build.targets.wheel.force-include] and independent of the hook — removing the [tool.hatch.build.hooks.custom] entry + file + the 3 noop-asserting tests changes no wheel contents (verify wheel build after). build-viewer: not invoked by build/release; viewer decommissioned. No VISIBLE or HIDDEN CLI command, event-log ref, security order, or schema field is touched.",
+      "est_effort": "short",
+      "depends_on": [],
+      "scope_boundary": "OUT: do NOT remove or alter any CAPTURE_METHOD_* constant or the CAPTURE_METHOD_VALUES frozenset (the 'proxy' literal stays); do NOT touch capture/otlp/ runtime code beyond deleting the dead doc-comment reference; do NOT remove scripts/ot-story or scripts/verify_blame_roundtrip.py; do NOT alter the wheel's skill/ force-include block."
+    },
+    {
+      "id": "t3-cli-dead-commands-shims-and-drop-list",
+      "title": "Delete dead CLI commands/modules and the parallel _cli forwarding shims; prune the stale legacy drop-list",
+      "rationale": "The CLI layer carries multiple disjoint dead-code clusters that all converge on cli/__init__.py and a small set of side-effect modules, so they must be ONE theme to avoid worktree collisions on __init__.py. Verified: trace.py:1852-2159 defines trace_show/reject/reset/discard as never-registered commands (tests/cli/test_cli_commands.py:149-173 already locks in that show/reject/reset/discard return 'No such command'); the __init__.py drop-list (4053-4075) contains 8 no-op entries for names never registered at root; publish.py and import_hf.py each register exactly ONE command (push/pull) that is immediately dropped; and 5 side-effect modules (publish/inspect/_debug/import_hf/installers, plus trace.py) carry 5-9 identical `return _cli.*` forwarding shims each (verified counts: publish 9, inspect 7, _debug 7, import_hf 5, installers 6).",
+      "simplification_types": [
+        "remove-dead-code",
+        "remove-stale",
+        "consolidate-duplication"
+      ],
+      "files": [
+        "src/opentraces/cli/__init__.py",
+        "src/opentraces/cli/trace.py",
+        "src/opentraces/cli/publish.py",
+        "src/opentraces/cli/import_hf.py",
+        "src/opentraces/cli/inspect.py",
+        "src/opentraces/cli/_debug.py",
+        "src/opentraces/cli/installers.py",
+        "src/opentraces/cli/_help.py",
+        "tests/publish/test_publish_flow.py",
+        "src/opentraces/core/publish_flow.py"
+      ],
+      "expected_benefit": "Removes ~308 dead lines from trace.py, ~993 lines across publish.py+import_hf.py, ~70 lines of forwarding-shim boilerplate, and 8 dead drop-list strings from the import-time hot path. Collapses the 'which emit_json' confusion (trace.py's duplicate _emit_json vs emit_json) into direct imports from cli/__init__.",
+      "regression_risk": "medium",
+      "safety_proof": "trace_show/reject/reset/discard are never added to any group (grep in __init__.py returns nothing) and tests/cli/test_cli_commands.py:149-173 already asserts they are absent — deletion is locked-in-safe. The 8 drop-list no-ops (show/reject/reset/discard/export/assess/blame/resume) pop keys that were never set (silent KeyError today); 'blame' stays a GROUP under trail_group untouched. publish.py/import_hf.py register only the dropped push/pull (verified: single @main.command each, dropped at __init__.py:4058-4059; migration journey migration-u-ds-3-pull-removed.toml asserts removal). BLOCKER handled in-scope: tests/publish/test_publish_flow.py imports _persist_push_target/_resolve_push_target/_resolve_push_visibility from cli.publish — relocate those three pure config/remote-resolution helpers into core/publish_flow.py (or a core module) and update the test import BEFORE deleting publish.py, so no live reference remains. Side-effect imports at __init__.py:2737-2738 for publish/import_hf must be removed in lockstep. Every other VISIBLE+HIDDEN command stays registered; no schema, security order, or event-log ref touched.",
+      "est_effort": "medium",
+      "depends_on": [],
+      "scope_boundary": "OUT: do NOT change any live command's behaviour, flags, or output; do NOT touch the publish/HF uploader CORE logic (publish/huggingface/*) — only relocate the 3 config-resolution helpers; do NOT remove drop-list entries that still drop real legacy roots (list/add/redact/web/tui/remote/stats/log/graph/llm-review); do NOT split trace.py into new files here (file-split is explicitly deferred)."
+    },
+    {
+      "id": "t4-core-helper-dedup-and-dead-stubs",
+      "title": "Consolidate duplicated core query/time helpers and remove no-op stub loops, with safe naming normalizations",
+      "rationale": "The core layer has high-confidence, low-risk duplication and dead code that does NOT require splitting the giant files: 8+ byte-identical _utc_now() copies, byte-identical _fts_query/_page_offset/_recency_weighted_sort across trace_index.py and search_projection.py (with a SILENT regex divergence in _terms already present: trace_index uses [a-zA-Z0-9_./-] vs search_projection [A-Za-z0-9_@./-]), two no-op stub loops in _rebuild_index_locked (_insert_map_node/_insert_map_edge return None), dead functions in core/workflow.py (stage_description, stage_label, legacy_mode_for_review_policy, review_policy_from_legacy_mode — verified zero call sites), and the leaky bucket_backend->bucket_store path-helper import (six helpers actually defined in bucket_layout). Grouped because they all live in core/ and are pure consolidation/removal with no behaviour change.",
+      "simplification_types": [
+        "consolidate-duplication",
+        "remove-dead-code",
+        "simplify-module-boundary"
+      ],
+      "files": [
+        "src/opentraces/core/trace_index.py",
+        "src/opentraces/core/search_projection.py",
+        "src/opentraces/core/workflow.py",
+        "src/opentraces/core/__init__.py",
+        "src/opentraces/cli/trace.py",
+        "src/opentraces/core/bucket_backend.py",
+        "src/opentraces/core/_time.py",
+        "src/opentraces/core/query_helpers.py"
+      ],
+      "expected_benefit": "Removes ~80-120 lines of verbatim duplication and ~25 lines of dead stubs/functions, and crucially fixes the latent divergence risk (the _terms regex has ALREADY drifted between the two search backends) by establishing a single source of truth for the pagination/tokenization contract. Tightens bucket_backend's dependency surface from the 3205-line bucket_store down to its two genuinely-owned symbols.",
+      "regression_risk": "low",
+      "safety_proof": "All consolidated helpers are private (underscore) and have zero external importers (verified). Behaviour-preserving: pick ONE canonical _terms regex and assert search-eval parity stays GREEN — the existing tests/search_eval harness + the trace-query parity suite (test_trace_query_parity.py, test_plan056) are the guard. The two _insert_map_* stubs return None and are called only at trace_index.py:309/311; the refresh path already omits them, so the rebuild path is the only one paying for no-op iterations — removal is provably side-effect-free. workflow.py dead funcs: grep confirms zero call sites for stage_description/stage_label/legacy_mode_for_review_policy/review_policy_from_legacy_mode (config.py inlines the migration rather than calling them); drop them from __all__ and the noqa import in trace.py:19. bucket_backend path helpers are re-exports of bucket_layout definitions — importing from the defining module is identity-preserving. No CLI surface, schema, security order, gzip mtime=0, or event-log ref changes. This theme does NOT split files, so it does not collide with any large-file-split work (deliberately none scheduled).",
+      "est_effort": "medium",
+      "depends_on": [],
+      "scope_boundary": "OUT: do NOT split trace_index.py / bucket_store.py / trails/sync.py into new modules (file-splitting is intentionally excluded as too risky for a single overnight PR and would collide with this theme on the same files); do NOT rename workflow.py vs workflows.py (deferred — touches many import sites + docs); do NOT change the canonical search ranking semantics, only deduplicate; pick the regex that keeps search-eval GREEN and document the choice."
+    }
+  ],
+  "dropped": [
+    {
+      "candidate": "Remove CAPTURE_METHOD_LIVE and CAPTURE_METHOD_TEMPLATE vocabulary constants from context_tree/contract.py",
+      "reason": "Both constants are MEMBERS of the frozen CAPTURE_METHOD_VALUES frozenset (verified contract.py:79-97), and the FEATURE_MAP plus CLAUDE.md treat the 'otel' addition as 'a single additive frozen-set widening' to a frozen contract whose changes require a schema_version bump. Removing entries NARROWS a frozen vocabulary set — that is a contract change, not additive-neutral, and the obsolescence proof is weak (they are speculative-but-reserved like 'proxy'). Not release-safe to touch the frozen set; keep as-is."
+    },
+    {
+      "candidate": "Split trace_index.py into trace_index_trail.py / trace_index_units.py (two candidates)",
+      "reason": "Both target the same 4263-line file and collide with t4's helper-dedup edits in the same file. File-splitting a 4000+ line index module is high-coordination, hard to review in a single overnight PR, and the benefit is structural-only (no behaviour win). Deferred to a dedicated future session; merging it into t4 would make t4 too large and risky."
+    },
+    {
+      "candidate": "Split bucket_store.py: extract context-tree projection into bucket_context_store.py",
+      "reason": "touches_documented_behavior=true: project_context_tree_to_bucket is named in CLAUDE.md plan-079/080 decisions and has 6+ live callers (ingest, bucket_remote, doctor, watcher/daemon, cli/bucket). A move-plus-re-export is doable but is medium-risk structural churn with no behaviour benefit, and competes for the same file as other bucket work. Deferred as a standalone refactor, not overnight-PR-safe."
+    },
+    {
+      "candidate": "Split trails/sync.py: extract survival helpers into trails/survival.py",
+      "reason": "Structural-only split of the survival state machine (alive/reverted/lost/...) which is a load-bearing FEATURE_MAP invariant area. Even with re-exports, moving the survival computation right before a release adds review burden with zero behaviour gain. Defer to a dedicated refactor session."
+    },
+    {
+      "candidate": "Rename core/workflow.py -> trace_stage.py (workflow.py vs workflows.py naming)",
+      "reason": "touches_documented_behavior=true: CLAUDE.md explicitly lists 'workflow.py/workflows.py/workflow_runner.py' as siblings. The rename ripples across ~10 import sites plus core/__init__ __all__ plus the CLAUDE.md/AGENTS.md references and would collide with t4's edits to workflow.py (dead-func removal) and t1's docs edits. The naming confusion is real but a rename is a separate, coordination-heavy change; do the dead-func removal now (t4) and defer the rename."
+    },
+    {
+      "candidate": "Remove branch_context.py compatibility shim",
+      "reason": "regression_risk=medium and the shim is STILL the active import path for the bundled pr-intent-summary-v1 workflow template (build_rows.py) and 5+ test sites. Already-installed workflow copies in user projects import opentraces.core.branch_context; removing the shim risks breaking installed consumers. The shim is doing its job; not release-safe to remove."
+    },
+    {
+      "candidate": "Rename core/capsule/test_extract.py to avoid pytest confusion",
+      "reason": "Real but low-leverage: testpaths=['tests'] means it is NOT collected today, so there is no active failure. The rename touches 3 importing test files for a purely hypothetical future-collection risk. Not worth a worktree this cycle; bundle into a future naming pass."
+    },
+    {
+      "candidate": "Use CAPTURE_METHOD_TRANSCRIPT constant instead of string literals in claude_code/context_tree_capture.py",
+      "reason": "Genuinely safe but very low-leverage (cosmetic constant substitution at 4 sites), and it touches context_tree capture code that the otbox journeys exercise. Defers cleanly to a naming pass; not high-leverage enough to justify its own overnight worktree and would add review surface to the capture path for zero behaviour benefit."
+    },
+    {
+      "candidate": "Two parallel LLMProvider definitions (security vs core) boundary clarification",
+      "reason": "Both Protocols genuinely differ (complete_json vs call_structured) and serve different call paths; the candidate itself concedes it is 'not a merge candidate.' A docstring/rename-only clarification is low-leverage and risks touching the LLM PII + PR-polish paths for no behaviour change. Defer."
+    },
+    {
+      "candidate": "bucket_layout.py legacy v1 path-helper separation / commenting",
+      "reason": "The candidate is documentation/naming-only and the legacy walk is STILL needed in production (trace_index.py:438 imports legacy_trace_records_root for the migration fallback). Cosmetic sectioning of a live-needed file is low-leverage and would collide with t4's bucket_backend boundary fix; defer."
+    },
+    {
+      "candidate": "project_dir shared option decorator + 78x json.dumps helper consolidation (CLI)",
+      "reason": "Attractive duplication wins but they fan across trail.py/ctx.py/trace.py/dataset.py/bucket.py/workflow.py/etc — exactly the files least amenable to a parallel worktree and overlapping t3's trace.py edits. The decorator/helper extraction is broad churn across ~10 CLI files with subtle help-text/TTY semantics; high collision + review surface for a cosmetic win. Defer to a focused CLI-ergonomics pass after the release."
+    },
+    {
+      "candidate": "Test-org moves: group test_context_tree_*.py into subdir; consolidate bucket test helpers; wire/relocate plan059/entry6/bench_reconcile/run_entry6 scripts; commit SEARCH-EVAL.md drift",
+      "reason": "Mostly low-risk but low-leverage test-tree tidying with regression_risk=medium on the context_tree directory move (11 files, import/collection churn) and unclear-benefit on the standalone-script wiring. SEARCH-EVAL.md is hardware-noise timing drift that t4's regex-dedup may legitimately change again, so committing it now is premature. None are release-blockers; defer to a dedicated test-hygiene session to keep the overnight PRs focused and collision-free."
+    },
+    {
+      "candidate": "Update stale 'pending' docstring in _captured_codex_pending.py; CHANGELOG [Unreleased] header (standalone)",
+      "reason": "The codex-pending docstring fix is trivially safe but isolated low-leverage; folded conceptually into the docs theme is possible but it is otbox-internal, not operator-facing. Kept out of t1 to keep t1 scoped to operator/agent-facing accuracy. The CHANGELOG [Unreleased] wrapper IS included in t1. The codex docstring alone does not warrant a worktree."
+    }
+  ]
+}

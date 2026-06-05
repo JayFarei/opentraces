@@ -1,0 +1,160 @@
+{
+  "summary": "OpenTraces non-regression contract",
+  "subsystems": [
+    {
+      "name": "Capture",
+      "purpose": "agent hooks, git post-commit correlator, attribution watcher, OTLP receiver",
+      "key_commands": [
+        "setup",
+        "setup git",
+        "setup watcher",
+        "setup capture-otlp",
+        "init",
+        "capture-otlp"
+      ]
+    },
+    {
+      "name": "Bucket",
+      "purpose": "private local-first store ~/.opentraces/bucket/ plan 080 v2",
+      "key_commands": [
+        "bucket status/manifest/verify/repair/rebuild/prune/prefetch/replay/remote",
+        "ctx list/info",
+        "setup bucket"
+      ]
+    },
+    {
+      "name": "Trace",
+      "purpose": "bounded BM25+semantic Trace Index",
+      "key_commands": [
+        "trace query/map/slice/get/index/teleport/discover"
+      ]
+    },
+    {
+      "name": "Trace Intelligence",
+      "purpose": "plan 086 derive-on-demand signals",
+      "key_commands": [
+        "trace map --waste/--run-intel",
+        "trace compare A B"
+      ]
+    },
+    {
+      "name": "Trail",
+      "purpose": "VCS-anchored lineage",
+      "key_commands": [
+        "trail blame commit",
+        "trail blame pr render/create/update",
+        "trail graph",
+        "trail track"
+      ]
+    },
+    {
+      "name": "Context Tree",
+      "purpose": "plan 077/078 substrate",
+      "key_commands": [
+        "ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step/list/info"
+      ]
+    },
+    {
+      "name": "Workflows/Datasets",
+      "purpose": "workflow-driven row projection",
+      "key_commands": [
+        "workflow create/list/templates/remove",
+        "dataset new/run/review/approve/reject/remote/publish/schedule/status/list/remove"
+      ]
+    },
+    {
+      "name": "Security",
+      "purpose": "versioned 0.6.0 flat registry, all default OFF",
+      "key_commands": [
+        "security sanitize/tools",
+        "setup trufflehog/privacy-filter/llm-review",
+        "doctor"
+      ]
+    },
+    {
+      "name": "Publish",
+      "purpose": "HF publisher sharded upload",
+      "key_commands": [
+        "dataset publish",
+        "dataset remote create",
+        "export --format atif"
+      ]
+    },
+    {
+      "name": "Consumers",
+      "purpose": "Capsule, Skill-verifier/SkillOpt, Intent PR, Standup, Spotlight",
+      "key_commands": [
+        "capsule",
+        "skill-verifier status/autoverify/align/score",
+        "workflow skill-intelligence/verifier-factory/optimize",
+        "trail blame pr"
+      ]
+    }
+  ],
+  "cli_surface": [
+    "setup (auth bucket capture-otlp claude-code codex-cli git llm-review pi privacy-filter skill trufflehog upgrade watcher)",
+    "auth",
+    "config",
+    "completions",
+    "init",
+    "status",
+    "doctor",
+    "remove",
+    "trace (query map slice get index teleport compare discover)",
+    "trail (blame[commit, pr render/create/update] graph track)",
+    "ctx (tree show step reads writes diff compactions prune resume resolve anchor-for-step list info)",
+    "bucket (status manifest verify repair rebuild prune prefetch replay remote)",
+    "dataset (new run review publish remote schedule status list remove)",
+    "workflow (create list templates remove optimize skill-intelligence verifier-factory)",
+    "skill-verifier (status autoverify align score)",
+    "security (sanitize tools)",
+    "capsule",
+    "capture-otlp (start stop restart status flush)",
+    "git-backfill",
+    "main --version --json --help"
+  ],
+  "hidden_but_callable": [
+    "trail explain",
+    "trail sync",
+    "trail timeline",
+    "trail teleport",
+    "trail resolve",
+    "trail attach",
+    "trail rebuild",
+    "trail diff",
+    "trail resume",
+    "trail mature",
+    "trail search",
+    "trail snapshots",
+    "trail snapshot checkout",
+    "_capture",
+    "_ingest-session",
+    "_scan",
+    "_run-post-commit-hook",
+    "_migrate-trace-ids",
+    "_assess-remote",
+    "_audit-run",
+    "_audit-spec",
+    "_pi-bridge",
+    "__complete",
+    "backfill",
+    "capabilities",
+    "context",
+    "discover (top-level)",
+    "introspect",
+    "migrate",
+    "parse",
+    "dataset approve",
+    "dataset reject",
+    "setup entity-parser"
+  ],
+  "invariants": [
+    "Event log ref refs/opentraces/local/events/v1 append-only; anchor exact-hash then structural-0.85; security order regex,entropy,trufflehog,privacy_filter,llm_pii,business_logic,path_anonymizer,capsule_scope,classifier (default OFF); gzip mtime=0 byte-identity; Trace Intelligence derive-on-demand."
+  ],
+  "schema_contracts": [
+    "SCHEMA_VERSION=0.6.0 additive-only; Outcome.patch removed 0.6.0 for TraceRecord.patches; frozen envelopes bump-on-change."
+  ],
+  "must_not_break": [
+    "Every VISIBLE + HIDDEN command stays callable (hooks run _run-post-commit-hook + _capture); trail blame stays a GROUP; event log ref, security order, schema additivity, three version numbers (CLI 0.4.0/schema 0.6.0/security 0.6.0) unchanged."
+  ]
+}
