@@ -540,6 +540,7 @@ def test_runner_codex_calls_prep_and_hook_install_before_tmux(tmp_path, monkeypa
         turns=[Turn(prompt="hi", expect_regex="ok", timeout_s=1.0)],
         output_dir=_output_dir(tmp_path),
         agent="codex",
+        mode="legacy",  # exercise the tmux + --print dispatch this test asserts on
     )
 
     assert result.verdict == "FAIL"

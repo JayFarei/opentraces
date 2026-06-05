@@ -74,6 +74,7 @@ from .prep import (  # noqa: F401 - re-exported for back-compat
     _strip_codex_project_tables,
     _toml_quote,
 )
+from . import drive  # the single termctrl drive core (imports prep, never runner)
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +124,10 @@ class ScenarioResult:
     pane_log_path: str
     error_message: str = ""
     pane_excerpt: str = field(default="", repr=False)
+    # Populated by the default interactive (terminal-control) lane so the caller
+    # (capture-refresh) can export footage from the SAME run. Empty in legacy mode.
+    termctrl_path: str = ""
+    mp4_path: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -454,8 +459,14 @@ def run_simulated_session(
     output_dir: Path,
     env_extra: dict[str, str] | None = None,
     agent: str | None = None,
+    mode: str = "interactive",
+    scenario: str = "session",
 ) -> ScenarioResult:
-    """Drive an interactive session with ``binary`` inside ``box`` via tmux.
+    """Drive an interactive session with ``binary`` inside ``box``.
+
+    Default ``mode="interactive"`` drives the real TUI via terminal-control and
+    records the session (one run yields both the trace capture and the footage).
+    ``mode="legacy"`` keeps the original tmux + claude/pi ``--print`` dispatch.
 
     Parameters
     ----------
@@ -504,6 +515,38 @@ def run_simulated_session(
     return cleanly as SKIP / FAIL rather than raising.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if mode == "interactive":
+        # Default lane: drive the real interactive TUI via terminal-control,
+        # recording the session as a byproduct (the .termctrl path is returned
+        # so capture-refresh can export an MP4 from the SAME run). This unifies
+        # the capture and footage lanes onto one driver. The legacy tmux +
+        # claude/pi --print dispatch below stays available via mode="legacy".
+        sr = drive.drive_session(
+            driver,
+            box,
+            binary,
+            turns,
+            output_dir=output_dir,
+            agent=agent,
+            initial_state_dir=initial_state_dir,
+            env_extra=env_extra,
+            scenario=scenario,
+            record_dir=output_dir,
+            export_mp4=False,
+        )
+        return ScenarioResult(
+            verdict=sr.verdict,
+            binary_path=sr.binary_path,
+            binary_version=sr.binary_version,
+            turn_count=sr.turn_count,
+            pane_log_path=sr.pane_log_path,
+            error_message=sr.error_message,
+            pane_excerpt=sr.pane_excerpt,
+            termctrl_path=sr.termctrl_path,
+            mp4_path=sr.mp4_path,
+        )
+
     pane_log_path = output_dir / "pane.log"
     # Truncate any prior log so a re-run starts clean.
     pane_log_path.write_text("", encoding="utf-8")

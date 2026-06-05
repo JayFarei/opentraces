@@ -577,6 +577,8 @@ def _capabilities(driver: Driver, box: Box) -> set[str]:
         caps.add("git")
     if shutil.which("tmux"):
         caps.add("tmux")
+    if shutil.which("termctrl"):
+        caps.add("termctrl")
     if os.environ.get("OT_OTBOX_TIER1") == "1":
         caps.add("tier1")
     if os.environ.get("OT_REAL_REPL") == "1":
@@ -778,6 +780,8 @@ def _run_step(
             driver, box, binary, turns,
             initial_state_dir=None, output_dir=output_dir,
             env_extra=step.get("env"), agent=step.get("agent"),
+            mode=str(step.get("mode") or "interactive"),
+            scenario=str(step.get("scenario") or step_id),
         )
         if save_transcript:
             _Path(save_transcript).parent.mkdir(parents=True, exist_ok=True)

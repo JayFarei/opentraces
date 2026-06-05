@@ -20,7 +20,7 @@ patches[] across all four substrates) are the documented manual-UAT follow-up.
 lane = "extended"
 tier = 1
 persona = "agent"
-requires = ["cli", "git", "tmux", "real_repl"]
+requires = ["cli", "git", "termctrl", "real_repl"]
 from_checkpoints = ["c-legacy-v033"]
 
 [preconditions]
