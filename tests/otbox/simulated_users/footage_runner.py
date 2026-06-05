@@ -194,18 +194,35 @@ def _tc_mark(session: str, marker: str, markers: list[str]) -> None:
     markers.append(marker)
 
 
-def _tc_send_prompt(session: str, prompt: str, *, pace_ms: int = 25) -> None:
-    """Type ``prompt`` (paced for readability) then press enter."""
+def _chunk_text(text: str, limit: int = 140) -> list[str]:
+    """Split ``text`` into <=limit-char chunks, preferring a space boundary."""
+    chunks: list[str] = []
+    rest = text
+    while len(rest) > limit:
+        cut = rest.rfind(" ", 0, limit + 1)
+        cut = cut + 1 if cut > 0 else limit
+        chunks.append(rest[:cut])
+        rest = rest[cut:]
+    if rest:
+        chunks.append(rest)
+    return chunks
+
+
+def _tc_send_prompt(session: str, prompt: str) -> None:
+    """Paste ``prompt`` fast (un-paced) then press enter.
+
+    Do NOT pace the keystrokes. termctrl ``--pace-ms`` typing is throttled by
+    the agent's per-keystroke TUI re-render to ~7 chars/s, so a >170-char prompt
+    takes >25s to type and codex's startup idle-timeout kills the session before
+    the prompt is ever submitted — the dominant footage-failure mode (the
+    recording ends mid-typing, then the poll loop spins on a dead session to the
+    timeout). Paste in <=140-char chunks instantly so submit lands within ~1s.
+    """
     try:
-        _tc(
-            "send",
-            session,
-            "--pace-ms",
-            str(pace_ms),
-            f"text:{prompt}",
-            "enter",
-            timeout=max(15.0, len(prompt) * (pace_ms / 1000.0) + 10.0),
-        )
+        for chunk in _chunk_text(prompt, limit=140):
+            _tc("send", session, f"text:{chunk}", timeout=20.0)
+            time.sleep(0.1)
+        _tc("send", session, "enter", timeout=10.0)
     except (subprocess.TimeoutExpired, OSError):
         return
 
@@ -591,7 +608,7 @@ def record_simulated_session(
             "--hide-cursor",
         ]
         try:
-            video = _tc(*video_argv, timeout=180.0)
+            video = _tc(*video_argv, timeout=max(360.0, duration_s * 4.0))
             if video.returncode == 0 and mp4_path.exists():
                 mp4_out = str(mp4_path)
             elif verdict == "PASS":
