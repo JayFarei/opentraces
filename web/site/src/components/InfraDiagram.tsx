@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import SectionRule from "./SectionRule";
 
 const agents = ["claude", "codex", "pi"];
@@ -41,31 +42,37 @@ const remoteStages = [
 const consumers = [
   {
     tag: "capsule",
+    color: "var(--c-write)",
     title: "Trace Capsule",
     desc: "Share a real usage episode with a third party — attach the actual agent experience to a GitHub issue, not just a summary of the bug.",
   },
   {
     tag: "skill eval",
+    color: "var(--c-exec)",
     title: "Skill Evaluation",
     desc: "Keep a versioned dataset of skill usage across traces, build a verifier per skill with the OT SDK, and score whether skill changes improve outcomes.",
   },
   {
     tag: "standup",
+    color: "var(--c-plan)",
     title: "Standup",
     desc: "A daily report rebuilt from yesterday's sessions: what was attempted, what landed, what failed, and what's still open before you start today.",
   },
   {
     tag: "spotlight",
+    color: "var(--c-read)",
     title: "Spotlight",
     desc: "QMD for agent traces. Search your traces mid-session, outside the loop, or for a handoff, so context travels between sessions without planning ahead.",
   },
   {
     tag: "alerts",
+    color: "var(--c-error)",
     title: "Alerts",
     desc: "Standing alerts and reports over trace usage: failure rate, context waste, third-party tools, secrets, policy violations, or any pattern you care about.",
   },
   {
     tag: "intent pr",
+    color: "var(--c-git)",
     title: "Intent Pull Request",
     desc: "Walk a PR's commits back to the originating sessions and compile the 'why' alongside the 'how' — intent, lineage, and evidence beside the diff.",
   },
@@ -193,7 +200,7 @@ export default function InfraDiagram() {
       </p>
       <div className="use-grid use-grid-consumers" style={{ marginTop: 20 }}>
         {consumers.map((c) => (
-          <div key={c.tag} className="use-card">
+          <div key={c.tag} className="use-card" style={{ "--cc": c.color } as CSSProperties}>
             <div className="use-card-tag">{c.tag}</div>
             <h4>{c.title}</h4>
             <p>{c.desc}</p>

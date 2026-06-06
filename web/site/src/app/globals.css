@@ -3003,6 +3003,29 @@ p {
 .pipe-card { background: var(--surface); border-color: var(--border); border-radius: var(--radius); overflow: hidden; }
 .pipe-harness, .pipe-remote-band { border-radius: var(--radius); }
 .pipe-tab, .pipe-tag, .pipe-chip, .pipe-inbox { border-radius: var(--radius-sm); }
+
+/* Feature cells — action-palette category tile per feature. */
+.feat-mark {
+  width: 26px; height: 26px; border-radius: 7px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in oklch, var(--fc) 16%, var(--surface-2));
+  border: 1px solid color-mix(in oklch, var(--fc) 26%, var(--border));
+  margin-bottom: 14px;
+}
+.feat-dot { width: 9px; height: 9px; border-radius: 3px; background: var(--fc); }
+
+/* Trace-consumer cards — colored tag + live-card left accent. */
+.use-card { border-left: 2px solid color-mix(in oklch, var(--cc, var(--border)) 55%, var(--border)); }
+.use-card-tag { color: var(--cc, var(--accent)); }
+
+/* Larger Hub demo — centered breakout wider than the text column. */
+.hub-teaser-wide {
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(1180px, 92vw);
+  margin: 4px 0 0;
+}
 .pipe-hf-mark {
   width: 14px; height: 14px; border-radius: 3px;
   background: var(--c-hf); display: inline-block; flex: 0 0 auto;

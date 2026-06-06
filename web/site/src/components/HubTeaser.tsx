@@ -21,7 +21,9 @@ export default function HubTeaser() {
         run health, all without leaving the page.
       </p>
 
-      <HubWindow clipHeight={460} lazy address="opentraces.ai/hub" />
+      <div className="hub-teaser-wide">
+        <HubWindow clipHeight={680} lazy address="opentraces.ai/hub" />
+      </div>
 
       <div className="hub-teaser-foot">
         <ul className="hub-teaser-bullets">
