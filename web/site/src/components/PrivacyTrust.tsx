@@ -55,16 +55,19 @@ const toolGroups = [
   {
     kind: "detectors",
     note: "emit redactable spans",
+    color: "var(--c-read)",
     tools: ["regex", "entropy", "trufflehog", "privacy_filter", "llm_pii", "business_logic"],
   },
   {
     kind: "transformers",
     note: "rewrite the record",
+    color: "var(--c-write)",
     tools: ["path_anonymizer", "capsule_scope"],
   },
   {
     kind: "judge",
     note: "verdict, no mutation",
+    color: "var(--c-plan)",
     tools: ["classifier"],
   },
 ];
@@ -128,7 +131,10 @@ export default function PrivacyTrust() {
             {toolGroups.map((g) => (
               <div key={g.kind} style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
                 <div style={{ flex: "0 0 92px", fontFamily: "var(--font-mono)" }}>
-                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-secondary)" }}>{g.kind}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-secondary)" }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: g.color, flexShrink: 0 }} />
+                    {g.kind}
+                  </div>
                   <div style={{ fontSize: 9, color: "var(--text-dim)" }}>{g.note}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flex: "1 1 0", minWidth: 0 }}>
@@ -140,7 +146,9 @@ export default function PrivacyTrust() {
                         alignItems: "center",
                         gap: 6,
                         border: "1px solid var(--border)",
-                        background: "var(--bg-alt)",
+                        borderLeft: `2px solid ${g.color}`,
+                        borderRadius: "var(--radius-sm)",
+                        background: `color-mix(in oklch, ${g.color} 8%, var(--surface))`,
                         padding: "4px 8px",
                         fontFamily: "var(--font-mono)",
                         fontSize: 11,
@@ -148,7 +156,7 @@ export default function PrivacyTrust() {
                       }}
                     >
                       {t}
-                      <span style={{ fontSize: 8, color: "var(--text-dim)", border: "1px solid var(--border)", padding: "0 4px", textTransform: "uppercase", letterSpacing: "0.06em" }}>off</span>
+                      <span style={{ fontSize: 8, color: "var(--text-dim)", border: "1px solid var(--border)", borderRadius: 2, padding: "0 4px", textTransform: "uppercase", letterSpacing: "0.06em" }}>off</span>
                     </span>
                   ))}
                 </div>

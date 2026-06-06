@@ -119,7 +119,7 @@ export default function InfraDiagram() {
             {/* Local stages: bucket → workflow → dataset */}
             <div className="pipe-grid">
               <div className="pipe-card">
-                <div className="pipe-card-head"><strong>bucket</strong> private capture store</div>
+                <div className="pipe-card-head"><strong style={{ color: "var(--c-read)" }}>bucket</strong> private capture store</div>
                 <Tree lines={bucketTree} />
               </div>
 
@@ -129,7 +129,7 @@ export default function InfraDiagram() {
               </div>
 
               <div className="pipe-card">
-                <div className="pipe-card-head"><strong>workflow</strong> projects the bucket</div>
+                <div className="pipe-card-head"><strong style={{ color: "var(--c-exec)" }}>workflow</strong> projects the bucket</div>
                 <div className="pipe-tabs">
                   {workflowTabs.map((t) => (
                     <span key={t} className="pipe-tab">{t}</span>
@@ -145,7 +145,7 @@ export default function InfraDiagram() {
 
               <div className="pipe-card">
                 <div className="pipe-card-head">
-                  <strong>dataset</strong> reviewed rows
+                  <strong style={{ color: "var(--c-push)" }}>dataset</strong> reviewed rows
                   <span className="pipe-inbox">inbox {"✓"}</span>
                 </div>
                 <div className="pipe-rows">
@@ -173,7 +173,7 @@ export default function InfraDiagram() {
                   <div key={s.name} className="pipe-remote-col" style={{ gridColumn: i * 2 + 1 }}>
                     <span className="pipe-cross">{"↓"} {s.verb}</span>
                     <div className="pipe-remote-chip">
-                      <span className="pipe-hf-emoji">{"🤗"}</span>
+                      <span className="pipe-hf-mark" aria-hidden="true" />
                       <span className="pipe-remote-name">{s.name}</span>
                     </div>
                   </div>

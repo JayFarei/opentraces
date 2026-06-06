@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "@opentraces/ui/tokens.css";
 
 /* ═══ OpenTraces Design System — tokens ═══
  * Default = warm light (Stacklane). [data-theme="dark"] = GitHub slate.
@@ -166,25 +165,21 @@
   border-color: #000000;
 }
 [data-theme="light"] .hero-metric-strip-hover {
-  background: #FFFFFF;
-  color: #000000;
+  background: var(--surface);
+  color: var(--text);
 }
-[data-theme="light"] .btn-accent {
-  background: #C2410C;
-  color: #fff;
-}
-[data-theme="light"] .ascii-header { color: #8A8885; }
-[data-theme="light"] .ascii-header .accent { color: #6B6B6B; }
-[data-theme="light"] .cta-ascii { color: #C5C3BF; }
+[data-theme="light"] .ascii-header { color: var(--text-dim); }
+[data-theme="light"] .ascii-header .accent { color: var(--text-muted); }
+[data-theme="light"] .cta-ascii { color: var(--border-strong); }
 [data-theme="light"] .hero-cli-input {
-  background: #D8D6D2;
-  color: #0A0A0A;
+  background: var(--bg-alt);
+  color: var(--text-secondary);
   font-weight: 500;
 }
 [data-theme="light"] .hero-pill {
-  border-color: #9A9895;
-  color: #4A4A4A;
-  background: #D8D6D2;
+  border-color: var(--border-strong);
+  color: var(--text-muted);
+  background: var(--surface);
 }
 
 /* ═══ Reset ═══ */
@@ -216,8 +211,7 @@ body {
 }
 .container > footer { margin-top: auto; }
 
-/* ═══ ZERO RADIUS EVERYWHERE ═══ */
-*, *::before, *::after { border-radius: 0 !important; }
+/* Radii follow the OT scale (4/6/8/12px); no global flattening. */
 
 /* ═══ ACCESSIBILITY: Focus Visible ═══ */
 :focus-visible {
@@ -2571,6 +2565,8 @@ html[data-audience="machine"] body,
 html[data-audience="machine"] .container {
   background-color: #000000;
 }
+/* No dot-grid texture in the immersive machine view. */
+html[data-audience="machine"] body { background-image: none; }
 
 /* Nav + footer fully hidden in machine mode — all viewports, fully immersive */
 html[data-audience="machine"] .nav,
@@ -2967,7 +2963,8 @@ p {
   font-weight: 500;
   letter-spacing: 0;
   border-radius: 6px;
-  padding: 9px 16px;
+  padding: 10px 18px;
+  min-height: 0;
   transition: background var(--duration-fast) var(--ease-out),
               border-color var(--duration-fast) var(--ease-out),
               color var(--duration-fast) var(--ease-out);
@@ -3001,3 +2998,31 @@ p {
 
 /* Pills / eyebrows that carried the old label font. */
 .hero-pill { font-family: var(--font-mono); letter-spacing: 0.16em; text-transform: uppercase; font-size: 10px; }
+
+/* Pipeline diagram → OT card surfaces + HF mark (no emoji). */
+.pipe-card { background: var(--surface); border-color: var(--border); border-radius: var(--radius); overflow: hidden; }
+.pipe-harness, .pipe-remote-band { border-radius: var(--radius); }
+.pipe-tab, .pipe-tag, .pipe-chip, .pipe-inbox { border-radius: var(--radius-sm); }
+.pipe-hf-mark {
+  width: 14px; height: 14px; border-radius: 3px;
+  background: var(--c-hf); display: inline-block; flex: 0 0 auto;
+}
+
+/* OT radii on the key surfaces (the old design relied on a zero-radius reset). */
+.terminal { border-radius: var(--radius); overflow: hidden; }
+.terminal-bar { border-radius: var(--radius) var(--radius) 0 0; }
+.hero-pill,
+.hero-cli-wrap,
+.gs-cmd-box,
+.attr-terminal,
+.attr-pane,
+.schema-table,
+.machine-table,
+.dataset-card,
+.metrics-grid,
+.stats-row { border-radius: var(--radius); }
+.hero-install-tab { border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+.btn, .hero-cli-copy, .gs-cmd-cp, .nav-theme-btn,
+.hero-metric-strip, .audience-toggle { border-radius: var(--radius-sm); }
+.feature-cell, .use-card { border-radius: 0; }
+.feature-grid, .use-grid { border-radius: var(--radius); overflow: hidden; }
