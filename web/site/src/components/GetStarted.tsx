@@ -21,17 +21,13 @@ function CopyBox({ cmd, desc }: { cmd: string; desc: string }) {
 
 const terminalSteps = [
   { cmd: "pipx install opentraces", desc: "install the CLI" },
-  { cmd: "opentraces setup && opentraces bucket status", desc: "connect capture integrations and inspect the private bucket" },
-  { cmd: "pi install npm:opentraces-pi && opentraces init --agent pi", desc: "optional Pi package install plus explicit repo consent" },
-  { cmd: "opentraces trace query --since 7d", desc: "find retained traces before loading full transcripts" },
-  { cmd: "opentraces workflow create my-workflow", desc: "project trace evidence into dataset rows" },
-  { cmd: "opentraces dataset new my-dataset --workflow ./workflows/my-workflow", desc: "bind the workflow to a local HF-shaped dataset" },
-  { cmd: "opentraces dataset run my-dataset", desc: "append projected rows from matching traces" },
-  { cmd: "opentraces dataset publish my-dataset", desc: "publish approved rows to your HuggingFace dataset" },
+  { cmd: "opentraces setup", desc: "one-time machine setup; repos auto-enroll on first session" },
+  { cmd: "opentraces trace query --since 7d", desc: "search the private bucket of captured traces" },
+  { cmd: "opentraces dataset publish my-dataset", desc: "project rows with a workflow, then publish approved ones to HF" },
 ];
 
 const agentSteps = [
-  { cmd: "set up opentraces for this project", desc: "walks install/auth/capture choices; Pi uses /ot-setup and explicit init consent" },
+  { cmd: "set up opentraces on my machine", desc: "walks install/auth/capture choices; repos then auto-enroll on first session" },
   { cmd: "scaffold a dataset and run it over my latest traces", desc: "agent calls dataset new + dataset run to populate rows from your traces" },
   { cmd: "review the dataset rows and approve the safe ones", desc: "agent walks each row, checks redactions, approves what's safe to share" },
   { cmd: "publish the approved rows to HuggingFace", desc: "uploads approved rows to the configured dataset remote" },

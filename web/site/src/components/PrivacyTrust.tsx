@@ -13,12 +13,13 @@ const modes = [
     terminal: [
       { p: "~$", c: "ot security tools list" },
       { gap: true },
-      { di: "[off] regex" },
-      { di: "[off] entropy" },
-      { di: "[off] path_anonymizer" },
+      { di: "[off] regex          detector" },
+      { di: "[off] business_logic detector" },
+      { di: "[off] path_anonymizer transformer" },
+      { di: "[off] classifier     judge" },
       { gap: true },
-      { p: "~$", c: "ot security sanitize", f: "--tools regex,entropy" },
-      { ok: "\u2713", di: " tools_applied = ", s: "[regex, entropy]" },
+      { p: "~$", c: "ot security sanitize", f: "--tools regex,business_logic" },
+      { ok: "\u2713", di: " tools_applied = ", s: "[regex, business_logic]" },
     ],
   },
   {
@@ -44,7 +45,28 @@ const redactionDemo = [
   { label: "API key", original: "sk-proj-abc123def456ghi789...", redacted: "[API_KEY_1]" },
   { label: "email", original: "jay@company.internal", redacted: "[EMAIL_1]" },
   { label: "DB URL", original: "postgresql://admin:pass@db.internal:5432/prod", redacted: "[DB_URL_1]" },
+  { label: "AWS account", original: "arn:aws:iam::123456789012:role/deploy", redacted: "arn:aws:iam::[AWS_ACCOUNT_1]:role/deploy" },
   { label: "path", original: "/Users/jayfarei/src/client-project/", redacted: "/Users/user/src/client-project/" },
+];
+
+// The full v0.6.0 security registry: nine per-record tools across three
+// protocols, run in a fixed canonical order, every one default off.
+const toolGroups = [
+  {
+    kind: "detectors",
+    note: "emit redactable spans",
+    tools: ["regex", "entropy", "trufflehog", "privacy_filter", "llm_pii", "business_logic"],
+  },
+  {
+    kind: "transformers",
+    note: "rewrite the record",
+    tools: ["path_anonymizer", "capsule_scope"],
+  },
+  {
+    kind: "judge",
+    note: "verdict, no mutation",
+    tools: ["classifier"],
+  },
 ];
 
 interface TermLine {
@@ -93,38 +115,44 @@ export default function PrivacyTrust() {
       {/* Redaction demo as the hero visual */}
       <div className="privacy-grid">
         <div style={{ display: "flex", flexDirection: "column" }}>
-          <p className="section-sub" style={{ marginBottom: 20 }}>
-            Per-record tools default off. Workflows can run regex, entropy, TruffleHog, privacy-filter, LLM PII, path anonymization, and classifier checks explicitly before dataset rows are approved. Pi raw provider bodies are also default-off; explicit opt-in keeps retained blobs local and security-gated before any remote sync.
+          <p className="section-sub" style={{ marginBottom: 16 }}>
+            Every per-record tool defaults off. A workflow opts into exactly the tools it needs, and they run in one fixed order: detectors that emit redactable spans, transformers that rewrite the record, then a judge that scores sensitivity without mutating anything. Pi raw provider bodies are default-off too, so retained blobs stay local and security-gated before any remote sync.
           </p>
 
-          {/* Pipeline flow: four connected boxes */}
-          <div style={{ display: "flex", alignItems: "stretch", flexWrap: "wrap", marginBottom: 20, fontFamily: "var(--font-mono)" }}>
-            {[
-              { n: "1", label: "regex" },
-              { n: "2", label: "entropy" },
-              { n: "3", label: "trufflehog" },
-              { n: "4", label: "privacy-filter" },
-            ].map((step, i, arr) => (
-              <span key={step.n} style={{ display: "inline-flex", alignItems: "stretch", flex: "1 1 0", minWidth: 0 }}>
-                <div style={{
-                  flex: "1 1 0",
-                  minWidth: 0,
-                  border: "1px solid var(--border)",
-                  background: "var(--bg-alt)",
-                  padding: "8px 10px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 2,
-                }}>
-                  <span style={{ fontSize: 9, color: "var(--text-dim)", letterSpacing: "0.1em", textTransform: "uppercase" }}>step {step.n}</span>
-                  <span style={{ fontSize: 12, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{step.label}</span>
+          <div style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)", letterSpacing: "0.04em", marginBottom: 12 }}>
+            9 tools {"\u00b7"} canonical order {"\u00b7"} default off {"\u00b7"} SECURITY_VERSION 0.6.0
+          </div>
+
+          {/* Tool registry: nine tools grouped by protocol, all default off */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+            {toolGroups.map((g) => (
+              <div key={g.kind} style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: "0 0 92px", fontFamily: "var(--font-mono)" }}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-secondary)" }}>{g.kind}</div>
+                  <div style={{ fontSize: 9, color: "var(--text-dim)" }}>{g.note}</div>
                 </div>
-                {i < arr.length - 1 && (
-                  <span style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20, color: "var(--text-dim)", fontSize: 12 }}>
-                    {"\u2192"}
-                  </span>
-                )}
-              </span>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", flex: "1 1 0", minWidth: 0 }}>
+                  {g.tools.map((t) => (
+                    <span
+                      key={t}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        border: "1px solid var(--border)",
+                        background: "var(--bg-alt)",
+                        padding: "4px 8px",
+                        fontFamily: "var(--font-mono)",
+                        fontSize: 11,
+                        color: "var(--text)",
+                      }}
+                    >
+                      {t}
+                      <span style={{ fontSize: 8, color: "var(--text-dim)", border: "1px solid var(--border)", padding: "0 4px", textTransform: "uppercase", letterSpacing: "0.06em" }}>off</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
             ))}
           </div>
 

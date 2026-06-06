@@ -1,0 +1,103 @@
+
+  <div class="rail-section verdict attention">
+    <div class="verdict-head"><div class="verdict-pulse"></div><div class="verdict-label">REVIEW WITH CARE</div></div>
+    <div class="verdict-detail">1 untraced commit · check manually.</div>
+    <div class="verdict-metrics">
+      <div class="vm"><span class="vm-v">4<small>/5</small></span><span class="vm-k">aligned</span></div>
+      <div class="vm"><span class="vm-v">4</span><span class="vm-k">tests prove intent</span></div>
+      <div class="vm"><span class="vm-v">60</span><span class="vm-k">trajectory steps</span></div>
+    </div>
+  </div>
+
+  <div class="rail-section">
+    <div class="rail-head"><span>INTENTS</span><span class="right">4/5</span></div>
+    <div class="nav-list">
+    <a class="nav-row" href="#intent-1">
+      <span class="nav-num">01</span>
+      <span class="nav-subj">feat: add `pulse summary` command</span>
+      <span class="nav-tests">3T</span>
+      <span class="nav-check" style="color: var(--c-git);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+    </a>
+    <a class="nav-row" href="#intent-2">
+      <span class="nav-num">02</span>
+      <span class="nav-subj">feat: add streak detection</span>
+      <span class="nav-tests">1T</span>
+      <span class="nav-check" style="color: var(--c-git);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+    </a>
+    <a class="nav-row" href="#intent-3">
+      <span class="nav-num">03</span>
+      <span class="nav-subj">fix: handle weekend gaps in streak</span>
+      
+      <span class="nav-check" style="color: var(--c-git);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+    </a>
+    <a class="nav-row" href="#intent-4">
+      <span class="nav-num">04</span>
+      <span class="nav-subj">test: streak counter — weekday + all-days modes</span>
+      
+      <span class="nav-check" style="color: var(--c-git);"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+    </a>
+    <span class="nav-row untraced">
+      <span class="nav-num">—</span>
+      <span class="nav-subj">docs: explain streak modes in README + CLI help</span>
+      <span class="nav-untraced-tag">untraced</span>
+    </span></div>
+  </div>
+
+  <div class="rail-section">
+    <div class="rail-head"><span>OPEN QUESTIONS</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+    
+    <div class="gap-row warn">
+      <span class="gap-dot"></span>
+      <div class="gap-body">
+        <div class="gap-label">1 commit without agent origin</div>
+        <div class="gap-detail">Could be docs / manual cleanup, or a gap in instrumentation.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rail-section">
+    <div class="rail-head"><span>REVIEW</span></div>
+    <div class="action-grid-rail">
+    <button class="action-btn variant-primary" title="Mark this PR as reviewed and approved.">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      <span>Approve PR</span>
+    </button>
+    <button class="action-btn variant-warn" title="Flag intent gaps or scope concerns.">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <span>Request changes</span>
+    </button>
+    <button class="action-btn variant-neutral" title="Write inline review feedback.">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span>Add comment</span>
+    </button></div>
+  </div>
+
+  <div class="rail-section">
+    <div class="rail-head"><span>INVESTIGATE</span><span class="right">copy cmd</span></div>
+    
+    <div class="invest-row" onclick="copyCmd(this, &quot;opentraces bucket remote pull&quot;)">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      <span class="label">Pull bucket locally</span>
+      <span class="cmd-hint"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+    </div>
+    <div class="invest-row" onclick="copyCmd(this, &quot;opentraces bucket replay --repo .&quot;)">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+      <span class="label">Replay trail in repo</span>
+      <span class="cmd-hint"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+    </div>
+    <div class="invest-row" onclick="copyCmd(this, &quot;opentraces trail blame pr render --base main&quot;)">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      <span class="label">Re-render alignment</span>
+      <span class="cmd-hint"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span>
+    </div>
+  </div>
+
+  <div class="rail-section">
+    <div class="rail-head"><span>PROVENANCE</span></div>
+    <div class="rail-prov">
+      <div class="row"><span class="k">workflow</span><span class="v">pr-intent-summary-v1</span></div>
+      <div class="row"><span class="k">polish</span><span class="v">claude-cli</span></div>
+      <div class="row"><span class="k">model</span><span class="v">claude-haiku-4-5-20251001</span></div>
+      <div class="row"><span class="k">scope</span><span class="v">02f4e566c20e</span></div>
+    </div>
+  </div>

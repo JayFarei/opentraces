@@ -98,6 +98,7 @@ export default function Nav({ stars }: { stars?: string }) {
       <div className={`nav-links${menuOpen ? " nav-links-open" : ""}`}>
         <Link href="/schema" className="nav-link" onClick={() => setMenuOpen(false)}>schema</Link>
         <Link href="/explorer" className="nav-link" onClick={() => setMenuOpen(false)}>explorer</Link>
+        <Link href="/hub" className="nav-link" onClick={() => setMenuOpen(false)}>hub</Link>
         <Link href="/docs" className="nav-link" onClick={() => setMenuOpen(false)}>docs</Link>
         <a href="/llms.txt" className="nav-link" target="_blank" rel="noopener noreferrer" onClick={() => setMenuOpen(false)}>/llms.txt</a>
         <a

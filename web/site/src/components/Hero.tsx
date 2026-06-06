@@ -44,212 +44,183 @@ function MetricIcon({ icon }: { icon: HeroMetricItem["icon"] }) {
   );
 }
 
-function SetupContent() {
-  const rows: [string, string, string][] = [
-    ["agents", "connect?", "claude · codex · pi"],
-    ["hooks", "install?", "hooks + Pi package"],
-    ["git hook", "install?", "post-commit"],
-    ["skill", "install?", "registered"],
-    ["watcher", "install?", "powers blame"],
-    ["bucket", "configure?", "remote sync"],
-    ["hf login", "log in?", "alice-dev"],
-    ["security", "optional?", "tools off"],
-    ["raw bodies", "default?", "off"],
-    ["llm review", "optional?", "configured later"],
-  ];
+// ── Unified tab panel model ──────────────────────────────────
+// Every tab renders the same shape: a prompt+command line, a framed
+// rail panel (pill header · subtitle · aligned rows · footer note),
+// then one or two suggested next commands. Tab content differs, the
+// structure never does.
+type PanelRow = {
+  label: string;
+  value: string;
+  valCls?: string; // di (default) · f · n · s · w · c
+  status?: string;
+  statusCls?: string; // ok (default) · di · w
+};
+
+type Panel = {
+  prompt: string;
+  command: string;
+  pill: string;
+  subtitle: string;
+  rows: PanelRow[];
+  footer: string;
+  next: string[];
+};
+
+const HERO_PANELS: Panel[] = [
+  {
+    prompt: "~$",
+    command: "opentraces setup",
+    pill: "opentraces",
+    subtitle: `machine setup · v${pkg.version}`,
+    rows: [
+      { label: "agents", value: "claude · codex · pi", valCls: "s", status: "ready" },
+      { label: "hooks", value: "session capture", status: "on" },
+      { label: "git + watcher", value: "post-commit · blame", status: "on" },
+      { label: "skill", value: "shared agent skill", status: "linked" },
+      { label: "hf login", value: "alice-dev", valCls: "s", status: "auth" },
+    ],
+    footer: "Global tracking on — repos auto-enroll on first capture",
+    next: ["code as usual — no per-repo init needed", "opentraces bucket status"],
+  },
+  {
+    prompt: "~/my-project$",
+    command: "opentraces bucket status",
+    pill: "bucket",
+    subtitle: "private capture store",
+    rows: [
+      { label: "traces", value: "128 envelopes", valCls: "f", status: "local" },
+      { label: "events", value: "42 batches", valCls: "f", status: "replayable" },
+      { label: "blobs", value: "1.8 GB", valCls: "n", status: "verified" },
+      { label: "agents", value: "claude · codex · pi", valCls: "s", status: "merged" },
+      { label: "remote", value: "alice/opentraces-bucket", valCls: "s", status: "manual", statusCls: "di" },
+    ],
+    footer: "Raw evidence stays private until you sync",
+    next: ["opentraces trace query --since 7d", "opentraces bucket remote push"],
+  },
+  {
+    prompt: "~/my-project$",
+    command: "opentraces trace query --since 7d",
+    pill: "trace",
+    subtitle: "search · map · slice",
+    rows: [
+      { label: "candidates", value: "12 found", valCls: "n", status: "index" },
+      { label: "tr_7f31", value: "fix billing webhook", valCls: "s", status: "alive_on_path" },
+      { label: "tr_c42a", value: "refactor auth middleware", valCls: "s", status: "alive_transformed" },
+      { label: "tr_91bb", value: "add settings page", valCls: "s", status: "unknown", statusCls: "w" },
+      { label: "facets", value: "skill · files · survival", status: "bounded", statusCls: "di" },
+    ],
+    footer: "Bounded packets — no full transcript load",
+    next: ["opentraces trace map tr_7f31 --bursts", "opentraces trace slice tr_7f31 --template bursts"],
+  },
+  {
+    prompt: "~/my-project$",
+    command: "opentraces trail blame commit ac01917",
+    pill: "trail",
+    subtitle: "git-anchored lineage",
+    rows: [
+      { label: "commit", value: "feat(viewer): hover actions", valCls: "f", status: "ac01917", statusCls: "di" },
+      { label: "s:6606fc1f", value: "server, graph_api +2", valCls: "w", status: "+8 ~12" },
+      { label: "s:fe8fe3fd", value: "PushModal", valCls: "w", status: "+6" },
+      { label: "s:5baac494", value: "ReviewView +1", valCls: "w", status: "+7" },
+      { label: "coverage", value: "3 sessions", valCls: "n", status: "100%" },
+    ],
+    footer: "Every commit resolves back to its sessions",
+    next: ["opentraces trail track tr_7f31", "opentraces trail graph"],
+  },
+  {
+    prompt: "~/my-project$",
+    command: "opentraces ctx step tr_7f31 7",
+    pill: "ctx",
+    subtitle: "what the agent saw",
+    rows: [
+      { label: "node", value: "sha256:9b2e…", valCls: "n", status: "resolved" },
+      { label: "layers", value: "system · messages · tools · state", valCls: "s", status: "4" },
+      { label: "reads", value: "14 observations", valCls: "n", status: "bounded", statusCls: "di" },
+      { label: "writes", value: "3 edits", valCls: "n", status: "tracked" },
+      { label: "compactions", value: "context trimmed once", status: "1", statusCls: "w" },
+    ],
+    footer: "Reconstruct the model's view at any step",
+    next: ["opentraces ctx resume sha256:9b2e…", "opentraces ctx diff tr_7f31"],
+  },
+  {
+    prompt: "~/my-project$",
+    command: "opentraces workflow create eval",
+    pill: "workflow",
+    subtitle: "project traces into rows",
+    rows: [
+      { label: "template", value: "command-trajectory-eval", valCls: "s", status: "bundled", statusCls: "di" },
+      { label: "script", value: "scripts/build_rows.py", status: "ready" },
+      { label: "input", value: "trace slices + bucket refs", status: "bounded", statusCls: "di" },
+      { label: "security", value: "regex · entropy", status: "opt-in", statusCls: "di" },
+      { label: "rows", value: "schema-valid projection", valCls: "n", status: "typed" },
+    ],
+    footer: "Workflows turn evidence into dataset rows",
+    next: ["opentraces dataset new eval --workflow ./workflows/eval/", "opentraces dataset run eval"],
+  },
+  {
+    prompt: "~/my-project$",
+    command: "opentraces dataset publish eval --check-only",
+    pill: "dataset",
+    subtitle: "reviewed rows to HF",
+    rows: [
+      { label: "rows", value: "18 projected", valCls: "n", status: "approved" },
+      { label: "rejected", value: "0 flagged", valCls: "n", status: "clean" },
+      { label: "security", value: "regex · entropy", status: "pass" },
+      { label: "bucket", value: "raw evidence", status: "retained private", statusCls: "di" },
+      { label: "remote", value: "alice/team-traces", valCls: "s", status: "bound", statusCls: "di" },
+    ],
+    footer: "Only approved rows leave the bucket",
+    next: ["opentraces dataset publish eval", "opentraces dataset schedule eval --daily"],
+  },
+];
+
+function NextLine({ text }: { text: string }) {
+  const isCommand = text.startsWith("opentraces") || text.startsWith("cd ");
   return (
-    <>
-      <span className="terminal-line"><span className="p">~$</span> <span className="c">opentraces setup</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <div className="rail-frame">
-        <span className="terminal-line rail-frame-label">
-          <span className="pill">opentraces</span>
-          <span className="di">  setup wizard v{pkg.version}</span>
-        </span>
-        {rows.map(([label, q, val]) => (
-          <span key={label} className="terminal-line wiz-row">
-            <span className="n wiz-bullet">{"\u25C7"}</span>
-            <span className="di wiz-label">{label}</span>
-            <span className="di wiz-q">{q}</span>
-            <span className="ok wiz-ok">{"\u2713"}</span>
-            <span className={label === "agents" || label === "hf login" ? "s wiz-val" : "di wiz-val"}>{val}</span>
-          </span>
-        ))}
-        <span className="terminal-line rail-frame-label">
-          <span className="di">Next steps</span>
-        </span>
-      </div>
-      <span className="terminal-line rail-frame-label">
-        <span className="di">{"\u2022"} </span>
-        <span className="c">cd my-project {"&&"} opentraces init</span>
-      </span>
-      <span className="terminal-line rail-frame-label">
-        <span className="di">{"\u2022"} </span>
-        <span className="c">opentraces doctor</span>
-      </span>
-    </>
+    <span className="terminal-line rail-frame-label">
+      <span className="di">{"•"} </span>
+      {isCommand ? <span className="c">{text}</span> : <span className="di">{text}</span>}
+    </span>
   );
 }
 
-function InitContent() {
-  type Row = { label: string; value: string; valCls: string; status?: string; statusCls?: string };
-  const rows: Row[] = [
-    { label: "traces", value: "128 envelopes", valCls: "f", status: "local", statusCls: "ok" },
-    { label: "events", value: "42 batches", valCls: "f", status: "replayable", statusCls: "ok" },
-    { label: "blobs", value: "1.8 GB", valCls: "n", status: "verified", statusCls: "ok" },
-    { label: "remote", value: "alice/opentraces-bucket", valCls: "s", status: "manual", statusCls: "di" },
-    { label: "datasets", value: "separate", valCls: "di", status: "projected rows", statusCls: "di" },
-  ];
+function TabPanel({ panel }: { panel: Panel }) {
   return (
     <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces bucket status</span></span>
+      <span className="terminal-line">
+        <span className="p">{panel.prompt}</span> <span className="c">{panel.command}</span>
+      </span>
       <span className="terminal-line terminal-line-gap" />
       <div className="rail-frame">
         <span className="terminal-line rail-frame-label">
-          <span className="pill">bucket</span>
-          <span className="di">  private capture store</span>
+          <span className="pill">{panel.pill}</span>
+          <span className="di">  {panel.subtitle}</span>
         </span>
-        {rows.map((r) => (
+        {panel.rows.map((r) => (
           <span key={r.label} className="terminal-line wiz-row">
-            <span className="n wiz-bullet">{"\u25C7"}</span>
+            <span className="n wiz-bullet">{"◇"}</span>
             <span className="di wiz-label">{r.label}</span>
-            <span className={`${r.valCls} wiz-val`}>{r.value}</span>
-            {r.status && <span className={`${r.statusCls} wiz-status`}>{r.status}</span>}
+            <span className={`${r.valCls ?? "di"} wiz-val`}>{r.value}</span>
+            {r.status && <span className={`${r.statusCls ?? "ok"} wiz-status`}>{r.status}</span>}
           </span>
         ))}
         <span className="terminal-line rail-frame-label">
-          <span className="di">Raw evidence is private until bucket sync</span>
+          <span className="di">{panel.footer}</span>
         </span>
       </div>
-      <span className="terminal-line rail-frame-label"><span className="di">{"\u2022"} traces/v1 envelopes + companions</span></span>
-      <span className="terminal-line rail-frame-label"><span className="di">{"\u2022"} blobs/v1 context + raw payloads</span></span>
+      {panel.next.map((n) => (
+        <NextLine key={n} text={n} />
+      ))}
     </>
   );
 }
-
-function StatusContent() {
-  return (
-    <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces trace query --cwd --since 7d</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  candidates </span><span className="n">12</span><span className="di">  source=</span><span className="s">index</span></span>
-      <span className="terminal-line"><span className="di">  facets: </span><span className="s">skill, files, survival, intent</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} </span><span className="n">tr_7f31</span><span className="di"> </span><span className="s">fix billing webhook</span><span className="di">  </span><span className="ok">alive_on_path</span></span>
-      <span className="terminal-line"><span className="di">  {"\u251C\u2500\u2500"} </span><span className="n">tr_c42a</span><span className="di"> </span><span className="s">refactor auth middleware</span><span className="di">  </span><span className="ok">alive_transformed</span></span>
-      <span className="terminal-line"><span className="di">  {"\u2514\u2500\u2500"} </span><span className="n">tr_91bb</span><span className="di"> </span><span className="s">add settings page</span><span className="di">  </span><span className="w">unknown</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  next: opentraces trace map tr_7f31 --bursts</span></span>
-    </>
-  );
-}
-
-function ReviewContent() {
-  return (
-    <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces ctx step tr_7f31 7</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  node </span><span className="n">sha256:9b2e...</span></span>
-      <span className="terminal-line"><span className="di">  layers </span><span className="s">system messages tool_registry runtime_state</span></span>
-      <span className="terminal-line"><span className="di">  reads  </span><span className="n">14</span><span className="di">  writes </span><span className="n">3</span><span className="di">  compactions </span><span className="n">1</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  next: </span><span className="c">opentraces ctx resume sha256:9b2e...</span></span>
-    </>
-  );
-}
-
-function BlameContent() {
-  return (
-    <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces trail blame commit ac019172</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">{"\u2502"}</span></span>
-      <span className="terminal-line">
-        <span className="di">{"\u251C\u2500 "}</span>
-        <span className="n">s:6606fc1f</span>
-        <span className="di">  </span>
-        <span className="ok">+8</span>
-        <span className="di"> </span>
-        <span className="w">~12</span>
-        <span className="di"> -2 fns  </span>
-        <span className="di">{" \u2502 "}</span>
-        <span className="di">server, graph_api, api +2</span>
-      </span>
-      <span className="terminal-line">
-        <span className="di">{"\u251C\u2500 "}</span>
-        <span className="n">s:fe8fe3fd</span>
-        <span className="di">  </span>
-        <span className="ok">+6</span>
-        <span className="di"> ~1 fns      </span>
-        <span className="di">{" \u2502 "}</span>
-        <span className="di">PushModal (+6)</span>
-      </span>
-      <span className="terminal-line">
-        <span className="di">{"\u251C\u2500 "}</span>
-        <span className="n">s:5baac494</span>
-        <span className="di">  </span>
-        <span className="ok">+7</span>
-        <span className="di"> ~1 fns      </span>
-        <span className="di">{" \u2502 "}</span>
-        <span className="di">ReviewView, TraceSecurityModal</span>
-      </span>
-      <span className="terminal-line">
-        <span className="di">{"\u2570\u2500\u25CF "}</span>
-        <span className="f">c:ac019172</span>
-        <span className="di">  feat(viewer): hover actions, two-stage push  </span>
-        <span className="ok">100%</span>
-      </span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line">
-        <span className="di">  3 sessions {"\u00B7"} tier=</span>
-        <span className="s">tool_emitted</span>
-        <span className="di"> {"\u00B7"} coverage=</span>
-        <span className="ok">100%</span>
-      </span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line">
-        <span className="di">  next: </span>
-        <span className="c">opentraces trace get 6606fc1f</span>
-      </span>
-    </>
-  );
-}
-
-function PushContent() {
-  return (
-    <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces workflow create eval --template skill-command-trajectory-eval-v1</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="ok">{"\u2713"}</span> <span className="di">created workflow </span><span className="s">eval</span></span>
-      <span className="terminal-line"><span className="di">    script: scripts/build_rows.py</span></span>
-      <span className="terminal-line"><span className="di">    input: Trace Slices + bucket refs</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  next: </span><span className="c">opentraces dataset new eval-rows --workflow ./workflows/eval/</span></span>
-    </>
-  );
-}
-
-function ConsumeContent() {
-  return (
-    <>
-      <span className="terminal-line"><span className="p">~/my-project$</span> <span className="c">opentraces dataset publish eval-rows --check-only</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  rows </span><span className="n">18</span><span className="di">  approved </span><span className="n">18</span><span className="di">  rejected </span><span className="n">0</span></span>
-      <span className="terminal-line"><span className="di">  security tools </span><span className="s">regex,entropy</span><span className="di">  policy </span><span className="s">pass</span></span>
-      <span className="terminal-line"><span className="di">  bucket evidence </span><span className="ok">retained private</span></span>
-      <span className="terminal-line terminal-line-gap" />
-      <span className="terminal-line"><span className="di">  next: </span><span className="c">opentraces dataset publish eval-rows</span></span>
-    </>
-  );
-}
-
-const tabContents = [SetupContent, InitContent, StatusContent, ReviewContent, BlameContent, PushContent, ConsumeContent];
 
 export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
   const [activeTab, setActiveTab] = useState(1);
   const [installIdx, setInstallIdx] = useState(0);
 
-  const ActiveContent = tabContents[activeTab];
+  const panel = HERO_PANELS[activeTab];
 
   return (
     <section className="hero">
@@ -284,7 +255,7 @@ export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
             >[cp]</span>
           </div>
           <div className="hero-actions">
-            <Link className="btn btn-primary hero-primary-cta" href="/docs/getting-started/quickstart">[init your project]</Link>
+            <Link className="btn btn-primary hero-primary-cta" href="/docs/getting-started/quickstart">[start capturing]</Link>
             <Link
               className="hero-metric-strip"
               href="/explorer"
@@ -315,7 +286,7 @@ export default function Hero({ metrics }: { metrics: HeroMetricItem[] }) {
             }))}
             onTabClick={setActiveTab}
           >
-            <ActiveContent />
+            <TabPanel panel={panel} />
           </Terminal>
         </div>
       </div>

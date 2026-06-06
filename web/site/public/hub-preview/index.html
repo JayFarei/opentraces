@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OpenTraces Hub · Trace Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="app.css" />
+<link rel="stylesheet" href="landing.css?v=4" />
+<link rel="stylesheet" href="pages.css?v=4" />
+<link rel="stylesheet" href="pages-pulls.css?v=3" />
+<link rel="stylesheet" href="run-intel.css?v=1" />
+<link rel="stylesheet" href="capsules.css?v=5" />
+<link rel="stylesheet" href="command-palette.css?v=1" />
+<script>
+  // Apply theme immediately to avoid flash of wrong theme
+  try {
+    var t = localStorage.getItem('ot-theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+</script>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="trace-utils.jsx"></script>
+<script type="text/babel" src="run-intel-data.jsx"></script>
+<script type="text/babel" src="run-intel.jsx"></script>
+<script type="text/babel" src="sidebar.jsx"></script>
+<script type="text/babel" src="topbar.jsx"></script>
+<script type="text/babel" src="header.jsx"></script>
+<script type="text/babel" src="trail.jsx"></script>
+<script type="text/babel" src="conversation.jsx"></script>
+<script type="text/babel" src="landing-data.jsx"></script>
+<script type="text/babel" src="landing-shared.jsx"></script>
+<script type="text/babel" src="landing-traces.jsx"></script>
+<script type="text/babel" src="compare.jsx"></script>
+<script type="text/babel" src="landing-repo.jsx"></script>
+<script type="text/babel" src="landing-repo-pulls.jsx"></script>
+<script type="text/babel" src="landing-dataset.jsx"></script>
+<script type="text/babel" src="pages-data.jsx"></script>
+<script type="text/babel" src="pages-shared.jsx"></script>
+<script type="text/babel" src="pages-intents.jsx"></script>
+<script type="text/babel" src="pages-evals.jsx"></script>
+<script type="text/babel" src="pages-spotlight.jsx"></script>
+<script type="text/babel" src="pages-capsules-data.jsx"></script>
+<script type="text/babel" src="pages-capsules-episode.jsx"></script>
+<script type="text/babel" src="pages-capsules.jsx"></script>
+<script type="text/babel" src="pages-capsules-watch.jsx"></script>
+<script type="text/babel" src="pages-capsules-detail.jsx"></script>
+<script type="text/babel" src="pages-capsules-table.jsx"></script>
+<script type="text/babel" src="pages-alerts.jsx"></script>
+<script type="text/babel" src="pages-improving.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel" src="pages-capsules-tweaks.jsx"></script>
+<script type="text/babel" src="command-palette.jsx"></script>
+
+<script type="text/babel">
+function App() {
+  const [trace, setTrace] = React.useState(null);
+  const [meta, setMeta] = React.useState(null);
+  const [loadErr, setLoadErr] = React.useState(null);
+
+  // App nav state
+  // view: 'trace' (existing trace viewer), 'traces-landing', 'repo', 'dataset'
+  const [view, setView] = React.useState("traces-landing");
+  const [activeNav, setActiveNav] = React.useState("traces");
+  const [expandedSections, setExpandedSections] = React.useState(["datasets", "repositories"]);
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [activeTraceId, setActiveTraceId] = React.useState(null);
+  const [activeDatasetId, setActiveDatasetId] = React.useState(null);
+  const [activeDatasetChild, setActiveDatasetChild] = React.useState(null);
+  const [expandedDataset, setExpandedDataset] = React.useState(null);
+  const [activeRepoId, setActiveRepoId] = React.useState(null);
+  const [expandedRepo, setExpandedRepo] = React.useState("jayfarei/opentraces");
+  const [activeRepoChild, setActiveRepoChild] = React.useState(null);
+  const [activeTab, setActiveTab] = React.useState("conversation");
+  const [focusedIdx, setFocusedIdx] = React.useState(0);
+  const [openedStep, setOpenedStep] = React.useState(null);
+  const [headerCompact, setHeaderCompact] = React.useState(false);
+  const [wasteFilter, setWasteFilter] = React.useState(false);
+  const [paletteOpen, setPaletteOpen] = React.useState(false);
+  const [spotlightQuery, setSpotlightQuery] = React.useState(null);
+  const mainScrollRef = React.useRef(null);
+  const [theme, setTheme] = React.useState(() => {
+    try { return localStorage.getItem("ot-theme") || "dark"; } catch (e) { return "dark"; }
+  });
+  const [sidebarCollapsed, setSidebarCollapsed] = React.useState(() => {
+    try { return localStorage.getItem("ot-sb-collapsed") === "1"; } catch (e) { return false; }
+  });
+  React.useEffect(() => {
+    try { localStorage.setItem("ot-sb-collapsed", sidebarCollapsed ? "1" : "0"); } catch (e) {}
+  }, [sidebarCollapsed]);
+  React.useEffect(() => {
+    const html = document.documentElement;
+    html.classList.add("theme-swap");
+    html.setAttribute("data-theme", theme);
+    try { localStorage.setItem("ot-theme", theme); } catch (e) {}
+    // remove the disable-transitions class after the swap commits
+    requestAnimationFrame(() => requestAnimationFrame(() => html.classList.remove("theme-swap")));
+  }, [theme]);
+
+  // Global ⌘K / Ctrl+K opens the command palette.
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen(o => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Filter state
+  const [filters, setFilters] = React.useState({
+    user: true, plan: true, think: true, checkpoint: true,
+    file_edits: true, bash: true, read: true, other: true,
+  });
+  const [expandedTools, setExpandedTools] = React.useState(true);
+  const [expandAllToolsTick, setExpandAllToolsTick] = React.useState(null);
+
+  React.useEffect(() => {
+    Promise.all([
+      fetch("trace-slim.json").then(r => r.json()),
+      fetch("data/meta.json").then(r => r.json()),
+    ]).then(([t, m]) => {
+      setTrace(t);
+      setMeta(m[t.trace_id]);
+    }).catch(e => setLoadErr(String(e)));
+  }, []);
+
+  const classes = React.useMemo(() => trace ? trace.steps.map(classifyStep) : [], [trace]);
+
+  // Keep the timeline grid-head pinned flush beneath the sticky trace header.
+  // The header's height changes (and animates) between expanded/compact, so we
+  // track its live height and feed it to the grid-head's sticky `top` as a CSS
+  // var — this is what makes the header "remain" and the hand-off jitter-free.
+  React.useLayoutEffect(() => {
+    if (view !== "trace") return;
+    const main = mainScrollRef.current;
+    const sticky = main && main.querySelector(".trace-sticky");
+    if (!main || !sticky) return;
+    let raf = 0;
+    const apply = () => {
+      raf = 0;
+      main.style.setProperty("--gh-top", sticky.offsetHeight + "px");
+    };
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(apply); };
+    apply();
+    const ro = new ResizeObserver(schedule);
+    ro.observe(sticky);
+    return () => { ro.disconnect(); if (raf) cancelAnimationFrame(raf); };
+  }, [view, trace, activeTab, headerCompact]);
+
+  // counts for filter sidebar
+  const counts = React.useMemo(() => {
+    const c = { user: 0, plan: 0, think: 0, checkpoint: 0, file_edits: 0, bash: 0, read: 0, other: 0, tools: 0 };
+    if (!trace) return c;
+    trace.steps.forEach(s => {
+      if (s.role === "user") c.user++;
+      else {
+        if (s.content && s.content.trim()) c.plan++;
+        else if (s.reasoning_content) c.think++;
+        (s.tool_calls || []).forEach(tc => {
+          c.tools++;
+          c[toolCategory(tc)]++;
+          if (tc.tool_name === "Bash" && /git\s+commit/.test(tc.input?.command || "")) c.checkpoint++;
+        });
+      }
+    });
+    return c;
+  }, [trace]);
+
+  const toggle = (k) => setFilters(f => ({ ...f, [k]: !f[k] }));
+  const toggleGroup = (ids, val) => setFilters(f => {
+    const n = { ...f };
+    ids.forEach(i => n[i] = val);
+    return n;
+  });
+
+  if (loadErr) return <div style={{padding: 40, fontFamily: "monospace"}}>load error: {loadErr}</div>;
+  if (!trace) return <div style={{padding: 40, color: "#9ba1a8"}}>Loading…</div>;
+
+  const handleNav = (id) => {
+    setActiveNav(id);
+    setActiveTraceId(null);
+    setActiveDatasetId(null);
+    setActiveRepoId(null);
+    setActiveRepoChild(null);
+    if (id === "traces")     setView("traces-landing");
+    else if (id === "intents")   setView("intents");
+    else if (id === "evals")     setView("evals");
+    else if (id === "spotlight") setView("spotlight");
+    else if (id === "capsules")  setView("capsules");
+    else if (id === "alerts")    setView("alerts");
+    else if (id === "improving") setView("improving");
+  };
+  const openTrace = (id) => {
+    setActiveTraceId(id);
+    setActiveDatasetId(null);
+    setActiveRepoId(null);
+    setActiveRepoChild(null);
+    setActiveNav("");
+    setView("trace");
+  };
+  const openDataset = (id, child) => {
+    setExpandedDataset(id);
+    setActiveDatasetId(id);
+    setActiveDatasetChild(child || "overview");
+    setActiveTraceId(null);
+    setActiveRepoId(null);
+    setActiveNav("");
+    setView("dataset");
+  };
+  const openRepo = (id, child) => {
+    setExpandedRepo(id);
+    setActiveRepoId(id);
+    setActiveRepoChild(child || "overview");
+    setActiveTraceId(null);
+    setActiveDatasetId(null);
+    setActiveNav("");
+    setView("repo");
+  };
+  const openCompare = () => {
+    setActiveTraceId(null);
+    setActiveDatasetId(null);
+    setActiveRepoId(null);
+    setActiveRepoChild(null);
+    setActiveNav("");
+    setView("compare");
+  };
+  const handleSelectStep = (i) => {    setFocusedIdx(i);
+    // scroll the active pane to the step row
+    const target = document.querySelector(`[data-step="${i}"]`);
+    if (target) {
+      const container = target.closest(".main, #conv-main");
+      if (container) {
+        const t = target.getBoundingClientRect();
+        const c = container.getBoundingClientRect();
+        const offset = (t.top - c.top) + container.scrollTop - (c.height / 2) + (t.height / 2);
+        container.scrollTo({ top: offset, behavior: "smooth" });
+      }
+    }
+  };
+  const handleJumpLatest = () => {
+    const stream = document.getElementById("conv-stream");
+    stream?.scrollTo({ top: stream.scrollHeight, behavior: "smooth" });
+  };
+
+  return (
+    <div className="app-shell" data-sb={sidebarCollapsed ? "collapsed" : "expanded"}>
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed(c => !c)}
+        activeNav={activeNav}
+        onNav={handleNav}
+        expandedSections={expandedSections}
+        onToggleSection={(id) => setExpandedSections(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])}
+        searchQuery={searchQuery}
+        onSearchQuery={setSearchQuery}
+        onActivateSearch={() => setPaletteOpen(true)}
+        expandedDataset={expandedDataset}
+        onExpandDataset={(id) => setExpandedDataset(id === expandedDataset ? null : id)}
+        activeDatasetId={activeDatasetId}
+        activeDatasetChild={activeDatasetChild}
+        onSelectDatasetChild={(did, cid) => openDataset(did, cid)}
+        expandedRepo={expandedRepo}
+        onExpandRepo={(id) => setExpandedRepo(id === expandedRepo ? null : id)}
+        activeRepo={activeRepoId}
+        activeRepoChild={activeRepoChild}
+        onSelectRepoChild={(rid, cid) => openRepo(rid, cid)}
+      />
+
+      <div style={{display: "flex", flexDirection: "column", minWidth: 0}}>
+        <Topbar
+          workspace="Jayfarei"
+          project="test3"
+          theme={theme}
+          view={view}
+          contextLabel={
+            view === "repo" ? activeRepoId :
+            view === "dataset" ? (DATASET_DEFS[activeDatasetId]?.name || "") : ""
+          }
+          onToggleTheme={() => setTheme(t => t === "dark" ? "light" : "dark")}
+          traceShortId={trace?.trace_id?.slice(0, 7) || ""}
+          onBack={() => setView("traces-landing")}
+        />
+
+        <div className="main" ref={mainScrollRef} onScroll={(e) => {
+          const y = e.currentTarget.scrollTop;
+          // Hysteresis: enter compact past 48px, leave only below 12px — a
+          // single threshold flip-flops while the header height animates.
+          setHeaderCompact(prev => {
+            if (!prev && y > 48) return true;
+            if (prev && y < 12) return false;
+            return prev;
+          });
+        }}>
+          {view === "traces-landing" && (
+            <TracesLanding onSelectTrace={openTrace} onSelectDataset={(id) => openDataset(id, "overview")} onCompare={openCompare} />
+          )}
+          {view === "compare" && (
+            <div className="main-inner"><CompareView traces={RECENT_TRACES} /></div>
+          )}
+          {view === "intents"   && <IntentsPage onSelectTrace={openTrace} />}
+          {view === "evals"     && <EvalsPage onSelectTrace={openTrace} />}
+          {view === "spotlight" && <SpotlightPage initialQuery={spotlightQuery} onConsumeQuery={() => setSpotlightQuery(null)} />}
+          {view === "capsules"  && <CapsulesPage onSelectTrace={openTrace} />}
+          {view === "alerts"    && <AlertsPage />}
+          {view === "improving" && <SelfImprovingPage onSelectRepo={(id) => openRepo(id, "overview")} />}
+          {view === "repo" && activeRepoId && (
+            activeRepoChild === "pulls"
+              ? <RepoPullsPage repoId={activeRepoId} />
+              : <RepoLanding repoId={activeRepoId} onSelectTrace={openTrace} />
+          )}
+          {view === "dataset" && activeDatasetId && (
+            <DatasetLanding datasetId={activeDatasetId} child={activeDatasetChild} onSelectTrace={openTrace} onSelectChild={(c) => openDataset(activeDatasetId, c)} />
+          )}
+          {view === "trace" && (
+          <div className="main-inner">
+            <div className="trace-sticky" data-compact={headerCompact}>
+              <TraceHeader
+                trace={trace}
+                meta={meta}
+                compact={headerCompact}
+                contextWaste={CONTEXT_WASTE}
+                runHealth={RUN_HEALTH}
+                wasteFilter={wasteFilter}
+                onToggleWasteFilter={() => { setActiveTab("trail"); setWasteFilter(v => !v); }}
+              />
+              <Minimap classes={classes} focusedIdx={focusedIdx} onSelect={handleSelectStep} />
+              <Tabs active={activeTab} onChange={setActiveTab} />
+            </div>
+
+            <div className="viewport" data-tab={activeTab}>
+              {activeTab === "trail" && (
+                <TrailView
+                  steps={trace.steps}
+                  classes={classes}
+                  focusedIdx={focusedIdx}
+                  onSelect={setFocusedIdx}
+                  onOpenStep={setOpenedStep}
+                  contextWaste={CONTEXT_WASTE}
+                  runHealth={RUN_HEALTH}
+                  wasteFilter={wasteFilter}
+                  compact={headerCompact}
+                />
+              )}
+              {activeTab === "conversation" && (
+                <div className="conv-shell">
+                  <div className="conv-main" id="conv-main">
+                    <ConversationView
+                      steps={trace.steps}
+                      filters={filters}
+                      onOpenStep={setOpenedStep}
+                      expandAllTools={expandAllToolsTick}
+                    />
+                  </div>
+                  <div className="conv-side">
+                    <FilterSidebar
+                      filters={filters}
+                      counts={counts}
+                      onToggle={toggle}
+                      onToggleGroup={toggleGroup}
+                      expandedTools={expandedTools}
+                      onExpandTools={() => setExpandedTools(v => !v)}
+                      onExpandAllTools={() => setExpandAllToolsTick(v => !v)}
+                      onJumpLatest={handleJumpLatest}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          )}
+        </div>
+      </div>
+
+      {openedStep != null && (
+        <>
+          <div className="drawer-overlay" onClick={() => setOpenedStep(null)} />
+          <div className="drawer">
+            <div className="drawer-h">
+              <div className="ttl">Step {String(openedStep).padStart(3, "0")} · {classes[openedStep]}</div>
+              <button className="tb-icon-btn" onClick={() => setOpenedStep(null)} aria-label="Close">
+                <Icon name="x" size={14} />
+              </button>
+            </div>
+            <div className="drawer-body">
+              {trace.steps[openedStep].content && (
+                <>
+                  <div style={{ fontSize: 11, color: "var(--fg-mute)", textTransform: "uppercase", letterSpacing: ".18em", marginBottom: 6 }}>Content</div>
+                  <div style={{ marginBottom: 16 }}>{renderRichText(trace.steps[openedStep].content, openedStep)}</div>
+                </>
+              )}
+              {trace.steps[openedStep].reasoning_content && (
+                <>
+                  <div style={{ fontSize: 11, color: "var(--fg-mute)", textTransform: "uppercase", letterSpacing: ".18em", marginBottom: 6 }}>Reasoning</div>
+                  <div style={{ marginBottom: 16, color: "var(--fg-dim)", fontStyle: "italic" }}>{renderRichText(trace.steps[openedStep].reasoning_content, openedStep)}</div>
+                </>
+              )}
+              {(trace.steps[openedStep].tool_calls || []).length > 0 && (
+                <>
+                  <div style={{ fontSize: 11, color: "var(--fg-mute)", textTransform: "uppercase", letterSpacing: ".18em", marginBottom: 6 }}>Tool calls</div>
+                  <pre>{JSON.stringify(trace.steps[openedStep].tool_calls, null, 2)}</pre>
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        actions={{
+          navPage: handleNav,
+          openTrace,
+          openDataset: (id) => openDataset(id, "overview"),
+          openRepo: (id) => openRepo(id, "overview"),
+          openCompare,
+          runSpotlight: (query) => { setSpotlightQuery(query); handleNav("spotlight"); },
+        }}
+      />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

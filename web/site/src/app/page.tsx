@@ -1,6 +1,7 @@
 import Nav from "@/components/Nav";
 import Hero from "@/components/Hero";
 import Features from "@/components/Features";
+import HubTeaser from "@/components/HubTeaser";
 import PrivacyTrust from "@/components/PrivacyTrust";
 import Attribution from "@/components/Attribution";
 import InfraDiagram from "@/components/InfraDiagram";
@@ -19,6 +20,7 @@ export default async function Home() {
         <Nav stars={stars} />
         <Hero metrics={metrics} />
         <Features />
+        <HubTeaser />
         <PrivacyTrust />
         <Attribution />
         <InfraDiagram />

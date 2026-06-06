@@ -1,70 +1,86 @@
-import Image from "next/image";
 import SectionRule from "./SectionRule";
 
-interface Agent {
-  name: string;
-  ready: boolean;
-}
+const agents = ["claude", "codex", "pi"];
 
-const devTimeAgents: Agent[] = [
-  { name: "Claude Code", ready: true },
-  { name: "Codex CLI", ready: true },
-  { name: "Pi", ready: true },
-  { name: "Cursor", ready: false },
-  { name: "OpenCode", ready: false },
+// What capture answers — each question maps to a substrate in the bucket.
+const captureQuestions = [
+  { q: "what have I done?", a: "trace" },
+  { q: "what have I seen?", a: "ctx" },
+  { q: "how did my environment change?", a: "trail" },
 ];
 
-const runTimeAgents: Agent[] = [
-  { name: "Hermes", ready: true },
-  { name: "NemoClaw", ready: false },
-  { name: "OpenClaw", ready: false },
-  { name: "DeepAgents", ready: false },
+type TreeLine = [glyph: string, name: string, note?: string];
+
+const bucketTree: TreeLine[] = [
+  ["", "bucket/"],
+  ["├─ ", "manifest.json", "the map"],
+  ["├─ ", "traces/v1/", "trace · trail · ctx"],
+  ["├─ ", "blobs/v1/", "context · raw"],
+  ["└─ ", "events/v1/", "replayable log"],
 ];
 
-const pipelineSteps = ["capture", "bucket", "trace", "trail", "ctx", "workflow", "dataset"];
-const pushModes = [
-  { name: "bucket", label: "raw private evidence, optional sync" },
-  { name: "dataset", label: "reviewed workflow rows to HF" },
+const workflowTabs = ["search API", "security tools", "custom"];
+const workflowTree: TreeLine[] = [
+  ["", "workflow/"],
+  ["├─ ", "SKILL.md"],
+  ["├─ ", "schemas/row.schema.json"],
+  ["├─ ", "scripts/build_rows.py"],
+  ["└─ ", "examples/ · tests/"],
 ];
 
-const useCases = [
+const datasetRows = ["pending", "pending", "approved", "pending"];
+
+// Each local stage syncs to its own Hugging Face destination.
+const remoteStages = [
+  { name: "HF private bucket", verb: "sync" },
+  { name: "ML Intern", verb: "run on HF" },
+  { name: "Hub dataset", verb: "push" },
+];
+
+// Trace consumers — what you build on top of capture + pipeline.
+const consumers = [
   {
-    tag: "training / sft",
-    title: "Fine-tune on real workflows",
-    desc: "Alternating role sequences, tool call/observation pairing, reasoning coverage. Validated against 10 quality checks before upload.",
+    tag: "capsule",
+    title: "Trace Capsule",
+    desc: "Share a real usage episode with a third party — attach the actual agent experience to a GitHub issue, not just a summary of the bug.",
   },
   {
-    tag: "rl / rlhf",
-    title: "Reward from outcomes",
-    desc: "Committed patches as reward proxies, per-step token costs for cost-penalized reward, sub-agent hierarchy for credit assignment.",
+    tag: "skill eval",
+    title: "Skill Evaluation",
+    desc: "Keep a versioned dataset of skill usage across traces, build a verifier per skill with the OT SDK, and score whether skill changes improve outcomes.",
   },
   {
-    tag: "analytics / eval",
-    title: "Observability and ground truth",
-    desc: "Cache hit rates, per-step token breakdowns, duration timelines, model distribution. Real production inputs with outcome signals become reproducible eval datasets for quality gating — no annotation queue required.",
+    tag: "standup",
+    title: "Standup",
+    desc: "A daily report rebuilt from yesterday's sessions: what was attempted, what landed, what failed, and what's still open before you start today.",
   },
   {
-    tag: "domain sourcing",
-    title: "Filter by ecosystem",
-    desc: "Language tags, extracted dependencies, VCS context, code snippets with language annotations. Build domain-specific datasets from HF queries.",
+    tag: "spotlight",
+    title: "Spotlight",
+    desc: "QMD for agent traces. Search your traces mid-session, outside the loop, or for a handoff, so context travels between sessions without planning ahead.",
+  },
+  {
+    tag: "alerts",
+    title: "Alerts",
+    desc: "Standing alerts and reports over trace usage: failure rate, context waste, third-party tools, secrets, policy violations, or any pattern you care about.",
+  },
+  {
+    tag: "intent pr",
+    title: "Intent Pull Request",
+    desc: "Walk a PR's commits back to the originating sessions and compile the 'why' alongside the 'how' — intent, lineage, and evidence beside the diff.",
   },
 ];
 
-function AgentGrid({ label, agents }: { label: string; agents: Agent[] }) {
+function Tree({ lines }: { lines: TreeLine[] }) {
   return (
-    <div className="arch-category">
-      <div className="arch-category-label">{label}</div>
-      <div className="arch-category-grid">
-        {agents.map((a) => (
-          <div
-            key={a.name}
-            className={`arch-agent-box${a.ready ? "" : " arch-agent-soon"}`}
-            {...(!a.ready && { title: "Coming soon" })}
-          >
-            {a.name}
-          </div>
-        ))}
-      </div>
+    <div className="pipe-tree">
+      {lines.map(([glyph, name, note], i) => (
+        <div key={i} className="pipe-tree-line">
+          <span className="g">{glyph}</span>
+          <span className={name.endsWith("/") ? "dir" : "fn"}>{name}</span>
+          {note && <span className="nt">{"  " + note}</span>}
+        </div>
+      ))}
     </div>
   );
 }
@@ -74,69 +90,109 @@ export default function InfraDiagram() {
     <section>
       <SectionRule label="how it works" />
 
-      <div className="arch">
-        {/* Source agents: two category boxes inside agent harness bracket */}
-        <div className="arch-harness">
-          <div className="arch-harness-label">agent harness</div>
-          <div className="arch-categories">
-            <AgentGrid label="dev-time agents" agents={devTimeAgents} />
-            <AgentGrid label="run-time agents" agents={runTimeAgents} />
-          </div>
-        </div>
-
-        <div className="arch-line" />
-        <div className="arch-label">Local sessions / hooks / Pi extension sidecars</div>
-        <div className="arch-line" />
-
-        {/* Core pipeline */}
-        <div className="arch-core">
-          <div className="arch-core-brand">
-            <span className="brand-open">open</span>
-            <span className="brand-traces">traces</span>
-          </div>
-
-          <div className="arch-pipeline">
-            {pipelineSteps.map((step, i) => (
-              <span key={step}>
-                {i > 0 && <span className="arch-arrow">{"\u2192"}</span>}
-                <span className="arch-step">{step}</span>
-              </span>
-            ))}
-          </div>
-
-          <div className="arch-line" style={{ marginTop: 12, marginBottom: 4 }} />
-          <div className="arch-label">egress surface</div>
-          <div className="arch-line" style={{ height: 12 }} />
-
-          <div className="arch-fork">
-            <div className="arch-fork-rail" />
-            {pushModes.map((m) => (
-              <div key={m.name} className="arch-fork-branch">
-                <div className="arch-fork-stem" />
-                <div className="arch-tier-box">
-                  <div className="arch-tier-name">{m.name}</div>
-                  <div className="arch-tier-label">{m.label}</div>
-                </div>
+      <div className="pipeline">
+        <div className="pipeline-scroll">
+          <div className="pipeline-inner">
+            {/* Agent harness — capture answers three questions into the bucket */}
+            <div className="pipe-harness">
+              <div className="pipe-harness-head">
+                <span className="pipe-harness-title">agent harness</span>
+                <span className="pipe-harness-chips">
+                  {agents.map((a) => (
+                    <span key={a} className="pipe-chip">{a}</span>
+                  ))}
+                </span>
               </div>
-            ))}
+              <div className="pipe-harness-cap">capture via hooks</div>
+              <div className="pipe-harness-q">
+                {captureQuestions.map((it) => (
+                  <div key={it.a} className="pipe-q-row">
+                    <span className="pipe-q-text">{it.q}</span>
+                    <span className="pipe-q-arrow">{"→"}</span>
+                    <span className="pipe-q-sub">{it.a}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="pipe-harness-write">write {"↓"}</div>
+            </div>
+
+            {/* Local stages: bucket → workflow → dataset */}
+            <div className="pipe-grid">
+              <div className="pipe-card">
+                <div className="pipe-card-head"><strong>bucket</strong> private capture store</div>
+                <Tree lines={bucketTree} />
+              </div>
+
+              <div className="pipe-col-arrow">
+                <span className="pipe-arrow-glyph">{"→"}</span>
+                <span className="pipe-arrow-lbl">project</span>
+              </div>
+
+              <div className="pipe-card">
+                <div className="pipe-card-head"><strong>workflow</strong> projects the bucket</div>
+                <div className="pipe-tabs">
+                  {workflowTabs.map((t) => (
+                    <span key={t} className="pipe-tab">{t}</span>
+                  ))}
+                </div>
+                <Tree lines={workflowTree} />
+              </div>
+
+              <div className="pipe-col-arrow">
+                <span className="pipe-arrow-glyph">{"→"}</span>
+                <span className="pipe-arrow-lbl">rows</span>
+              </div>
+
+              <div className="pipe-card">
+                <div className="pipe-card-head">
+                  <strong>dataset</strong> reviewed rows
+                  <span className="pipe-inbox">inbox {"✓"}</span>
+                </div>
+                <div className="pipe-rows">
+                  {datasetRows.map((state, i) => (
+                    <div key={i} className={`pipe-row${state === "approved" ? " pipe-row-approved" : ""}`}>
+                      {state === "approved" && <span className="pipe-row-check">{"✓"}</span>}
+                    </div>
+                  ))}
+                </div>
+                <div className="pipe-rows-foot">security tools · regex · entropy</div>
+              </div>
+            </div>
+
+            {/* Local | Remote boundary */}
+            <div className="pipe-boundary">
+              <span className="pipe-tag pipe-tag-local">local · your machine</span>
+              <span className="pipe-boundary-line" />
+              <span className="pipe-tag pipe-tag-remote">remote · hugging face</span>
+            </div>
+
+            {/* Remote band — each stage's HF destination, beneath its column */}
+            <div className="pipe-remote-band">
+              <div className="pipe-remote-grid">
+                {remoteStages.map((s, i) => (
+                  <div key={s.name} className="pipe-remote-col" style={{ gridColumn: i * 2 + 1 }}>
+                    <span className="pipe-cross">{"↓"} {s.verb}</span>
+                    <div className="pipe-remote-chip">
+                      <span className="pipe-hf-emoji">{"🤗"}</span>
+                      <span className="pipe-remote-name">{s.name}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="pipe-loop-label">eval · training · scoring</div>
+            </div>
           </div>
-        </div>
-
-        <div className="arch-line" />
-        <div className="arch-label">approved row shards, private or public</div>
-        <div className="arch-line" />
-
-        {/* HF Hub destination */}
-        <div className="arch-box arch-dest">
-          <Image src="/hf-logo.svg" alt="Hugging Face" width={18} height={18} className="hf-logo hf-logo-light" />
-          <Image src="/hf-logo-pirate.svg" alt="Hugging Face" width={18} height={18} className="hf-logo hf-logo-dark" />
-          <span>Hugging Face Hub</span>
         </div>
       </div>
 
-      {/* Use cases downstream of pipeline */}
-      <div className="use-grid" style={{ marginTop: 48 }}>
-        {useCases.map((c) => (
+      {/* Trace consumers — proof of value */}
+      <div className="pipe-proof-caption">trace consumers</div>
+      <p className="pipe-proof-sub">
+        Traces are not only logs. With capture and pipeline in place, they become retained evidence you can
+        search, secure, share, evaluate, and turn into new workflows.
+      </p>
+      <div className="use-grid use-grid-consumers" style={{ marginTop: 20 }}>
+        {consumers.map((c) => (
           <div key={c.tag} className="use-card">
             <div className="use-card-tag">{c.tag}</div>
             <h4>{c.title}</h4>

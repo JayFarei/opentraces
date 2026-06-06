@@ -1,0 +1,17 @@
+{
+  "d7e7e929-4159-48c9-9c57-6b93b9717574": {
+    "title": "Debug TUI · inbox empty",
+    "tag": "diagnose",
+    "summary": "Cloned the repo and investigated why the terminal UI showed an empty inbox while the web app worked — traced it through reader layer, tried fixes against the indexer, left unresolved without a commit."
+  },
+  "d9265698-170a-40a5-ae3d-0a9f40e5cdf9": {
+    "title": "Propagate changes to docs",
+    "tag": "rewrite",
+    "summary": "Ran the docs-update skill to detect recent code changes and propagate them across marketing site, mkdocs, llms.txt and README — surveyed 50+ doc surfaces, drafted edits, stopped before committing."
+  },
+  "6eaf9ff4-b9aa-4c15-95ee-08e79b470b6f": {
+    "title": "Redesign keyboard shortcuts",
+    "tag": "refactor",
+    "summary": "Reworked the web viewer's interactions: replaced single-letter shortcuts with hover control buttons, moved the push action into the staged panel, tightened graph shortcuts — landed one commit."
+  }
+}
