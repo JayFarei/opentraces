@@ -1709,8 +1709,8 @@ tr:hover td { background: var(--surface-hover); }
 
 /* ═══ Hub desktop window (interactive prototype embed) ═══ */
 .hub-window {
-  background: #0d1117;
-  border: 1px solid #30363d;
+  background: var(--bg);
+  border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
   box-shadow:
@@ -1728,8 +1728,8 @@ tr:hover td { background: var(--surface-hover); }
 .hub-window-bar {
   position: relative;
   height: 36px;
-  background: #161b22;
-  border-bottom: 1px solid #30363d;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   padding: 0 12px;
@@ -1749,20 +1749,20 @@ tr:hover td { background: var(--surface-hover); }
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.04em;
-  color: #6e7681;
+  color: var(--text-dim);
 }
 .hub-window-addr {
   margin-left: auto;
   flex: 0 0 auto;
   font-family: var(--font-mono);
   font-size: 10px;
-  color: #6e7681;
+  color: var(--text-dim);
   white-space: nowrap;
 }
 .hub-window-viewport {
   position: relative;
   overflow: hidden;
-  background: #0d1117;
+  background: var(--bg);
 }
 .hub-window-frame {
   position: absolute;
@@ -1793,8 +1793,8 @@ tr:hover td { background: var(--surface-hover); }
   justify-content: center;
   font-family: var(--font-mono);
   font-size: 12px;
-  color: #9ba1a8;
-  background: rgba(13, 17, 23, 0.4);
+  color: var(--text-muted);
+  background: color-mix(in oklch, var(--bg) 55%, transparent);
 }
 .hub-window-fade {
   position: absolute;
@@ -1803,7 +1803,7 @@ tr:hover td { background: var(--surface-hover); }
   bottom: 0;
   height: 96px;
   pointer-events: none;
-  background: linear-gradient(to bottom, rgba(13, 17, 23, 0), #0d1117);
+  background: linear-gradient(to bottom, transparent, var(--bg));
 }
 
 /* Homepage teaser */
