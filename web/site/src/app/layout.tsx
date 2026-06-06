@@ -1,33 +1,27 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, IBM_Plex_Mono, JetBrains_Mono, Space_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 import WebMcpTools from "@/components/WebMcpTools";
+
+// OpenTraces design system: Geist (body), Geist Mono (metadata), Space Grotesk (display).
+const geist = Geist({
+  subsets: ["latin"],
+  variable: "--font-body-loaded",
+  weight: ["300", "400", "500", "600", "700"],
+  display: "swap",
+});
+
+const geistMono = Geist_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono-loaded",
+  weight: ["400", "500"],
+  display: "swap",
+});
 
 const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
   variable: "--font-display-loaded",
   weight: ["300", "400", "500", "600", "700"],
-  display: "swap",
-});
-
-const ibmPlexMono = IBM_Plex_Mono({
-  subsets: ["latin"],
-  variable: "--font-body-loaded",
-  weight: ["300", "400", "500", "600"],
-  display: "swap",
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-mono-loaded",
-  weight: ["300", "400", "500", "600", "700"],
-  display: "swap",
-});
-
-const spaceMono = Space_Mono({
-  subsets: ["latin"],
-  variable: "--font-label-loaded",
-  weight: ["400", "700"],
   display: "swap",
 });
 
@@ -61,7 +55,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
-      className={`${spaceGrotesk.variable} ${ibmPlexMono.variable} ${jetbrainsMono.variable} ${spaceMono.variable}`}
+      className={`${geist.variable} ${geistMono.variable} ${spaceGrotesk.variable}`}
     >
       <head>
         <script
