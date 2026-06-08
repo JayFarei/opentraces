@@ -48,6 +48,19 @@ workflow projection over that evidence; they do not rewrite the original agent
 transcript or the raw capture bucket unless the workflow explicitly writes a
 new sanitized artifact.
 
+## Dataset Required Tools And Provenance
+
+A dataset carries a resolved security policy in its manifest, seeded from its
+workflow's `security:` contract. The policy's required tools must run for a row
+to be publishable: `opentraces dataset publish --check-only` blocks any row that
+does not satisfy them (block reason `required_security_tools_missing`).
+
+Row provenance records the policy tools applied per append (a `security_policy`
+block on the row), and `opentraces dataset run` exposes the resolved policy in
+the run packet (`run_packet.json` has a `security` block) so the executor knows
+which tools are required and enabled. Inspect or adjust a dataset's policy with
+`opentraces dataset security <name>`.
+
 ## Redaction Shape
 
 Detectors replace matched spans with redaction markers. The exact marker can

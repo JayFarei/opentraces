@@ -22,7 +22,7 @@ publishes reviewed dataset rows to HuggingFace remotes.
 - Context Tree: `opentraces ctx tree/show/step/reads/writes/diff/compactions/prune/resume/resolve/anchor-for-step`, plus `ctx list/info`
 - Bucket (portable capture store): `opentraces bucket status`, `opentraces bucket manifest`, `opentraces bucket verify`, `opentraces bucket repair`, `opentraces bucket rebuild`, `opentraces bucket prune`, `opentraces bucket prefetch`, `opentraces bucket remote push/pull/diff/status`, `opentraces bucket replay`
 - Dataset workflows: `opentraces workflow create`, `opentraces workflow list`, `opentraces workflow templates`, `opentraces workflow remove`, plus the internal `opentraces workflow skill-intelligence` eval over skill episodes
-- Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`.
+- Datasets: `opentraces dataset list/new/run/review/publish/remote/schedule/status/remove/security`. Review transitions are `opentraces dataset review approve|reject|reset <name> [row_id...]`. Per-dataset egress security is `opentraces dataset security <name> [--tool <t> --enable|--disable] [--unsafe-override --reason <text>]`.
 - Skill verifier (trace-grounded reward for SkillOpt): `opentraces skill-verifier status/autoverify/align/score`
 - Security tools: `opentraces security tools list/info`, `opentraces security sanitize --tools <names>` or `--use-config`
 - OTLP capture source: `opentraces setup capture-otlp`, `opentraces capture-otlp start|stop|status|restart|flush`
@@ -394,6 +394,26 @@ Registered inline tools are `regex`, `entropy`, `trufflehog`,
 `setup llm-review` but is a dataset publication reviewer, not part of the
 per-record sanitize registry.
 
+Security has two scopes. **Bucket security** (`opentraces bucket security`) is
+machine-wide bucket egress over global tool flags, applied before private bucket
+sync. **Dataset security** is per-dataset: each dataset's manifest carries a
+resolved policy seeded from its workflow's front-matter `security:` contract
+(`required_tools`, `optional_tools`, `default_enabled_tools`, `disallowed_tools`,
+`allow_disable_required`) and pinned to the workflow digest. Manage it with
+`opentraces dataset security <name>`: inspect the policy, toggle an optional tool
+on that dataset only (`--tool <t> --enable|--disable`, repeatable), and disable a
+required tool only when the contract sets `allow_disable_required: true` AND you
+pass `--unsafe-override` (else the command exits 2). It edits only that dataset's
+manifest; it is not a global config toggle and there is no `--policy` form on the
+dataset command. Required tools must run for rows to publish: `dataset publish
+--check-only` blocks rows missing them (`required_security_tools_missing`).
+`security sanitize --tools ...` / `--use-config` stays available for inline
+sanitization inside workflows and scripts.
+
+```bash
+opentraces dataset security <name> --json
+```
+
 ## JSON Mode
 
 Prefer `--json` for agent automation:
@@ -407,6 +427,7 @@ opentraces --json bucket status
 opentraces --json ctx tree <trace_id>
 opentraces security tools list --json
 opentraces --json dataset status <name>
+opentraces dataset security <name> --json
 ```
 
 ## Troubleshooting

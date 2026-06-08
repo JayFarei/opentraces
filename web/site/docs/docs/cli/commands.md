@@ -285,6 +285,9 @@ opentraces dataset new my-import --rows-file rows.jsonl --schema schema.json
 opentraces dataset run my-dataset --dry-run --limit 5 --json
 opentraces dataset run my-dataset --scope trace --trace <trace-id>
 opentraces dataset status my-dataset --json
+opentraces dataset security my-dataset --json
+opentraces dataset security my-dataset --tool business_logic --enable
+opentraces dataset security my-dataset --tool regex --disable --unsafe-override --reason "synthetic fixtures"
 opentraces dataset review my-dataset --json
 opentraces dataset review approve my-dataset <row-id>
 opentraces dataset review reject my-dataset <row-id>
@@ -306,6 +309,15 @@ accepted but return decommission notices.
 compatibility field for dataset row envelopes. It is not the security tool
 selection mechanism; use `opentraces security sanitize --tools ...` or
 `--use-config` in a workflow when explicit sanitization is required.
+
+`dataset security <name>` inspects or edits that dataset's resolved security
+policy, which is seeded from the workflow's front-matter security contract at
+`dataset new --workflow` and stored in the dataset manifest. It is scoped to one
+dataset, not a global config toggle, and there is no `--policy` form. Optional
+tools toggle with `--tool <name> --enable|--disable`; a required tool can only be
+disabled with `--unsafe-override` (and an optional `--reason`) when the workflow
+contract permits it. `dataset publish --check-only` blocks rows when a dataset's
+required security tools are not satisfied.
 
 ## Security Tools
 

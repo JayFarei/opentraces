@@ -96,6 +96,37 @@ For example, a command-trajectory workflow may include:
 - visible context from `ctx step` or `ctx resume`;
 - security metadata from an explicit `security sanitize` pass.
 
+## Security Contract
+
+A workflow declares the security posture of the rows it projects in its
+`SKILL.md` / `WORKFLOW.md` YAML front matter, under a `security:` block:
+
+```yaml
+security:
+  required_tools: [regex, entropy]
+  optional_tools: [business_logic, path_anonymizer, classifier]
+  default_enabled_tools: [business_logic]
+  disallowed_tools: []
+  allow_disable_required: false
+```
+
+| Key | Meaning |
+|-----|---------|
+| `required_tools` | MUST run; cannot be disabled unless the contract allows it |
+| `optional_tools` | MAY be toggled per dataset |
+| `default_enabled_tools` | On when a dataset is first seeded (subset of required ∪ optional) |
+| `disallowed_tools` | Never run |
+| `allow_disable_required` | Whether a downstream dataset may disable a required tool at all |
+
+Tool names come from the security tool registry (`regex`, `entropy`,
+`trufflehog`, `privacy_filter`, `llm_pii`, `business_logic`, `path_anonymizer`,
+`capsule_scope`, `classifier`). Unknown tools are rejected.
+
+When you bind a workflow to a dataset with `opentraces dataset new --workflow
+<path>`, this contract seeds the dataset's resolved manifest policy and is
+pinned to the workflow digest. After that, the policy is managed per-dataset
+with `opentraces dataset security <name>`.
+
 ## Security In Workflows
 
 Security tools are optional and default off. A workflow can invoke them

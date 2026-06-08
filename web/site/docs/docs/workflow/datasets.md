@@ -29,6 +29,50 @@ opentraces dataset run my-dataset --since-last-run
 Trace Index candidates, a project scope, the current working directory, or a
 specific trace.
 
+## Dataset Security Policy
+
+Each dataset carries its own resolved security policy in the manifest
+(`DatasetManifest.security`). It is seeded from the source workflow's
+front-matter `security:` contract at `dataset new --workflow <path>` and pinned
+to that workflow's digest (`source_workflow_digest`). The resolved
+`enabled_tools` start as the contract's required tools plus its
+`default_enabled_tools`, in canonical registry order.
+
+The policy is per-dataset, not a global config toggle. Toggling a tool on one
+dataset never affects another dataset or the bucket egress policy.
+
+```bash
+opentraces dataset security my-dataset
+opentraces dataset security my-dataset --json
+```
+
+`--json` emits the resolved policy under a `security` block: `source`,
+`source_workflow_digest`, `required_tools`, `optional_tools`, `enabled_tools`,
+`disallowed_tools`, `overrides`, `scope` (always `dataset`),
+`required_satisfied`, and `missing_required_tools`.
+
+Toggle an optional tool on a single dataset:
+
+```bash
+opentraces dataset security my-dataset --tool business_logic --enable
+opentraces dataset security my-dataset --tool path_anonymizer --disable
+```
+
+`--tool` is repeatable and requires `--enable` xor `--disable`. Only optional
+tools can be toggled this way. A required tool can be disabled only when the
+workflow contract sets `allow_disable_required: true` and you pass
+`--unsafe-override` (optionally with `--reason "<text>"`); the opt-out is
+recorded in the manifest as an override. If the contract forbids it, the command
+exits 2.
+
+```bash
+opentraces dataset security my-dataset --tool regex --disable --unsafe-override --reason "rows are synthetic fixtures"
+```
+
+This is distinct from `opentraces bucket security`, which governs the
+machine-wide bucket egress policy over global tool flags. Dataset security
+governs what a dataset's rows carry before dataset publication.
+
 ## Review States
 
 | State | Meaning |

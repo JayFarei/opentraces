@@ -2,6 +2,11 @@
 
 opentraces publishes to HuggingFace Hub. You need an HF account.
 
+Auth and sync are separate from egress security. What a dataset's rows are
+allowed to carry before publication is governed by that dataset's manifest
+policy (`opentraces dataset security <name>`), distinct from bucket auth and
+sync.
+
 ## Browser Login
 
 ```bash
