@@ -244,7 +244,18 @@ opentraces bucket remote diff --json
 opentraces bucket remote push --json
 opentraces bucket remote pull --json
 opentraces bucket replay --repo /path/to/git-clone --json
+opentraces bucket security
+opentraces bucket security --policy recommended
+opentraces bucket security --tool regex --enable
+opentraces bucket security --tool entropy --disable
+opentraces bucket security --json
 ```
+
+`bucket security` is the scoped bucket policy front-end. With no flags it is a
+read-only inspector. `--policy` applies a named bundle and accepts only
+`off|basic|recommended|strict`. `--tool ... --enable` / `--tool ... --disable`
+edits one tool at a time. It flips the same `cfg.security.<tool>.enabled` flags
+as `security tools` and `config set`, scoped to the bucket.
 
 The bucket is the private capture-time store. It is separate from datasets:
 bucket sync moves raw retained evidence, while dataset publish moves approved
@@ -313,6 +324,11 @@ tools explicitly enabled in the loaded config.
 
 Registered tools: `regex`, `entropy`, `trufflehog`, `privacy_filter`,
 `llm_pii`, `business_logic`, `path_anonymizer`, `capsule_scope`, and `classifier`.
+
+`security tools list|info` and `security sanitize` are the generic registry
+surface for introspection and explicit sanitization. `bucket security` is the
+scoped bucket policy front-end over the same `cfg.security.<tool>.enabled`
+flags, where `--policy` accepts only `off|basic|recommended|strict`.
 
 ## OTLP Capture
 

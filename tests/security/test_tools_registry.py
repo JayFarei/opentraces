@@ -112,6 +112,26 @@ class TestEnableState:
         cfg.security.classifier.enabled = False
         assert "classifier" not in {t.name for t in iter_enabled(cfg)}
 
+    def test_business_logic_and_capsule_scope_enable_flags_toggle_iter_enabled(self) -> None:
+        cfg = Config()
+        cfg.security.business_logic.enabled = True
+        cfg.security.capsule_scope.enabled = True
+        enabled = {t.name for t in iter_enabled(cfg)}
+        assert {"business_logic", "capsule_scope"} <= enabled
+
+    def test_business_logic_config_defaults_disabled(self) -> None:
+        cfg = Config()
+        assert cfg.security.business_logic.enabled is False
+
+    def test_capsule_scope_config_defaults(self) -> None:
+        cfg = Config()
+        assert cfg.security.capsule_scope.enabled is False
+        # The default field-exclusion set protects prompt-bearing fields.
+        assert cfg.security.capsule_scope.exclude == [
+            "context_resume_packet.system_layer",
+            "slice.steps.*.reasoning_content",
+        ]
+
     def test_no_cfg_yields_no_enabled_tools(self) -> None:
         """iter_enabled(None) has no implicit always-on tools."""
         assert {t.name for t in iter_enabled(None)} == set()

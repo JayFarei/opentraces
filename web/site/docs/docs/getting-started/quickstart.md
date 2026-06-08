@@ -24,7 +24,8 @@ opentraces setup
   supported harnesses such as Claude Code, Codex CLI, and Pi.
 - **git hook** and **watcher**, which mature Trace Trails after commits land.
 - **bucket remote**, optional private HuggingFace sync for raw retained
-  evidence.
+  evidence. `setup bucket` requires `opentraces auth login` first and prompts
+  for a bucket security policy before configuring remote sync.
 - **HuggingFace login**, needed for bucket sync and dataset remotes.
 - **optional security tools**, such as TruffleHog, privacy-filter, and
   LLM review. Per-record tools default off until a workflow or config enables
@@ -83,10 +84,14 @@ opentraces bucket manifest --json
 opentraces bucket verify --sample 100
 ```
 
-To sync the raw bucket to a private remote:
+To sync the raw bucket to a private remote, authenticate first. `setup bucket`
+exits with a `run 'opentraces auth login'` hint until you do, and it prompts for
+a bucket security policy that protects raw captured evidence before remote sync:
 
 ```bash
+opentraces auth login
 opentraces setup bucket
+opentraces bucket security --policy recommended
 opentraces bucket remote push
 opentraces bucket remote status
 ```

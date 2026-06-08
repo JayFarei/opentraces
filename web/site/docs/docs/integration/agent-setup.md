@@ -121,7 +121,7 @@ What each integration does:
 - `setup pi` checks or writes the Pi package entry; `pi install npm:opentraces-pi` is the primary package path. It supports `--project`, `--settings-file`, `--local`, `--dry-run`, `--remove`, and `--json`. Capture itself is opt-out: under global tracking (the default) Pi auto-enrolls each repo on first capture; `opentraces config tracking-mode manual` or a per-project `excluded` marker opts out.
 - `setup git` installs the post-commit correlator that powers `opentraces trail blame`
 - `setup skill` installs the vendor-neutral skill under `~/.agents/skills/opentraces/` and symlinks it into supported harnesses (currently `~/.claude/skills/opentraces`, `~/.codex/skills/opentraces`, and `~/.pi/agent/skills/opentraces`)
-- `setup bucket` configures the private bucket sync target (the workspace state that backs the trace index and Trace Trails)
+- `setup bucket` configures the private bucket sync target (the workspace state that backs the trace index and Trace Trails). It requires prior `opentraces auth login` (otherwise it exits with a `run 'opentraces auth login'` hint) and prompts for a bucket security policy (recommended / basic / strict / off / custom) before configuring remote sync. Set or inspect the policy later with `opentraces bucket security --policy recommended` or `opentraces bucket security`
 - `setup capture-otlp` enables the higher-fidelity Claude Code Context Tree capture source
 - `setup watcher` installs the background attribution daemon
 
@@ -138,6 +138,7 @@ opentraces --json trail track <trace-id>
 opentraces --json trail blame commit <sha>
 opentraces --json ctx tree <trace-id>
 opentraces security tools list --json
+opentraces bucket security --json
 ```
 
 That avoids scraping human-oriented terminal layouts. `trail track` returns the VCS-anchored evidence chain (Trace Patch, Git Anchor, Patch Trail) as structured JSON. To resolve an `ot://` resource directly, pass it to `opentraces trace get`.

@@ -256,7 +256,8 @@ Two capture sources feed the same substrate. The JSONL parser (harness-side) shi
 Every captured trace lands in a local-first private bucket under `~/.opentraces/bucket/`: a per-trace envelope (`trace.json` plus gzip-deterministic Trail/context/source companions), content-addressed blobs, a canonical event-log mirror, and a top-level manifest. The bucket is the self-sufficient unit — read verbs accept `--remote <hf-repo>` for symmetric local/remote access.
 
 - `bucket status`, `bucket manifest`, `bucket verify`, `bucket repair`, `bucket rebuild`, `bucket prune`, `bucket prefetch` inspect and maintain the local bucket.
-- `setup bucket` opts into remote-by-default sync against a private (S3-backed) HuggingFace bucket remote, reusing existing HF auth.
+- `setup bucket` opts into remote-by-default sync against a private (S3-backed) HuggingFace bucket remote, reusing existing HF auth. Run `opentraces auth login` first; without it `setup bucket` exits with a `run 'opentraces auth login'` hint. The wizard also prompts for a bucket security policy (recommended / basic / strict / off / custom) before configuring remote sync.
+- `bucket security` controls how raw captured evidence is protected before it syncs. Bucket security protects raw captured traces before they sync to the private bucket. `bucket security` with no flags is a read-only inspector; `bucket security --policy recommended` (also `basic`, `strict`, `off`) applies a named bundle; `bucket security --tool regex --enable` / `--tool entropy --disable` edits one tool at a time. A policy is just a named bundle over the same `cfg.security.<tool>.enabled` flags that `setup <tool>` and `config set security.<tool>.enabled` flip. Policy bundles: `off` (nothing), `basic` (regex, entropy), `recommended` (regex, entropy, business_logic, path_anonymizer, classifier), `strict` (regex, entropy, trufflehog, privacy_filter, business_logic, path_anonymizer, classifier).
 - `bucket remote push/pull/diff/status` syncs (push order: blobs → events → envelopes → manifest); `bucket replay --repo` reconstructs the canonical Git event ref byte-identically.
 
 ## Workflows and Datasets
@@ -285,6 +286,8 @@ The security pipeline is versioned independently from the CLI and schema (curren
 | `classifier` | judge | off | Heuristic sensitivity verdict without mutating content |
 
 Run `opentraces security tools list` to see the active config, and pipe JSON through `opentraces security sanitize --tools regex,entropy` when a workflow wants explicit sanitization. `--use-config` runs only tools you have enabled. Session-level LLM review (`opentraces dataset review`) is a separate, on-demand publication gate, not a per-record tool.
+
+Bucket security protects raw captured traces before they sync to the private bucket. `opentraces bucket security --policy recommended` (also `basic`, `strict`, `off`) applies a named bundle of these same tools; `opentraces bucket security --tool regex --enable` edits one tool at a time; `opentraces bucket security` with no flags is a read-only inspector. The `--policy` flag accepts only `off|basic|recommended|strict`. A bucket policy is a named bundle over the same `cfg.security.<tool>.enabled` flags shown above, while `security tools list|info` and `security sanitize` stay the generic registry surface. Dataset-row publication security is covered separately.
 
 See [security tools](https://opentraces.ai/docs/security/tiers) and [scanning details](https://opentraces.ai/docs/security/scanning).
 
@@ -350,7 +353,12 @@ Set up opentraces in this project.
    - `opentraces trail track <trace-id>`
 
 8. Private bucket sync (optional):
-   - `opentraces setup bucket` to configure the remote-by-default private bucket
+   - `opentraces auth login` first; `setup bucket` requires authentication
+   - `opentraces setup bucket` to configure the remote-by-default private
+     bucket; it prompts for a bucket security policy (recommended / basic /
+     strict / off / custom) before configuring remote sync
+   - `opentraces bucket security --policy recommended` to set the policy later,
+     or `opentraces bucket security` to inspect the active policy and tools
    - `opentraces bucket status` to inspect local bucket health
    - `opentraces bucket remote push/pull` to sync with the configured remote
 ~~~

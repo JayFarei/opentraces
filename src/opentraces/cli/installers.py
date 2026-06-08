@@ -13,6 +13,16 @@ import click
 import opentraces.cli as _cli
 from . import main
 from ._options import dump_json as _dump_json
+from ._security_flags import (
+    BUCKET_SECURITY_POLICIES,
+    RECOMMENDED_BUCKET_SECURITY_TOOLS,
+    SECURITY_TOOL_NAMES,
+    apply_bucket_security_policy,
+    apply_security_tool_flag_changes,
+    enabled_security_tool_names,
+    security_tool_state_payload,
+    set_security_tools_exact,
+)
 
 logger = logging.getLogger("opentraces.cli.installers")
 
@@ -100,6 +110,50 @@ def _wizard_confirm(prompt: str, *, default: bool, hint: str | None = None) -> b
         if raw in ("n", "no"):
             return False
         _cli.human_echo(f"{bar}  please answer y or n")
+
+
+def _prompt_bucket_security_policy(cfg) -> list[str]:
+    """Choose the bucket security policy before a private bucket can sync."""
+
+    _cli.human_echo("")
+    _cli.human_echo(_cli._bold("Bucket security policy"))
+    choices = [
+        ("recommended", "local redaction + business signals + path anonymizer + classifier"),
+        ("basic", "regex + entropy only"),
+        ("strict", "recommended plus TruffleHog and privacy-filter if configured"),
+        ("off", "no automatic bucket security tools"),
+        ("custom", "choose tools one by one"),
+    ]
+    for idx, (name, detail) in enumerate(choices, start=1):
+        tools = BUCKET_SECURITY_POLICIES.get(name)
+        suffix = f" ({', '.join(tools) if tools else 'no tools'})" if tools is not None else ""
+        _cli.human_echo(f"  {idx}. {name}{suffix}")
+        _cli.human_echo(f"     {_cli._dim(detail)}")
+
+    raw = click.prompt("choose bucket security policy", default="1", show_default=True)
+    try:
+        idx = int(str(raw).strip())
+    except ValueError:
+        raise click.BadParameter(f"expected a number, got {raw!r}")
+    if not (1 <= idx <= len(choices)):
+        raise click.BadParameter(f"choose a number from 1 to {len(choices)}")
+
+    policy = choices[idx - 1][0]
+    if policy == "custom":
+        enabled: list[str] = []
+        for tool_name in SECURITY_TOOL_NAMES:
+            default = tool_name in RECOMMENDED_BUCKET_SECURITY_TOOLS
+            if _wizard_confirm(f"enable {tool_name}?", default=default):
+                enabled.append(tool_name)
+        changes = set_security_tools_exact(cfg, enabled)
+    else:
+        changes = apply_bucket_security_policy(cfg, policy)
+    _cli.save_config(cfg)
+    _cli.human_echo(
+        "    security tools: "
+        + (", ".join(enabled_security_tool_names(cfg)) or "none")
+    )
+    return changes["enabled"]
 
 
 def _configure_bucket_local(cfg) -> dict:
@@ -201,6 +255,25 @@ def _configure_bucket_remote(
 @click.option("--push-now", is_flag=True, help="Upload the existing local bucket after setup.")
 @click.option("--pull-now", is_flag=True, help="Restore the local bucket from the remote after setup.")
 @click.option(
+    "--enable-security-tool",
+    "enable_security_tools",
+    multiple=True,
+    type=click.Choice(SECURITY_TOOL_NAMES),
+    help="Enable a named security tool before configuring or syncing the bucket.",
+)
+@click.option(
+    "--disable-security-tool",
+    "disable_security_tools",
+    multiple=True,
+    type=click.Choice(SECURITY_TOOL_NAMES),
+    help="Disable a named security tool before configuring or syncing the bucket.",
+)
+@click.option(
+    "--no-security-prompt",
+    is_flag=True,
+    help="Skip the interactive recommended security-tool prompt.",
+)
+@click.option(
     "--migrate",
     "migrate",
     is_flag=True,
@@ -218,6 +291,9 @@ def setup_bucket_cmd(
     sync_policy: str,
     push_now: bool,
     pull_now: bool,
+    enable_security_tools: tuple[str, ...],
+    disable_security_tools: tuple[str, ...],
+    no_security_prompt: bool,
     migrate: bool,
     as_json: bool,
 ) -> None:
@@ -239,10 +315,18 @@ def setup_bucket_cmd(
         return
 
     cfg = _cli.load_config()
+    security_changes: dict[str, list[str]] = {"enabled": [], "disabled": []}
     remote_sync: dict[str, object] | None = None
     from ..core.bucket_remote import BucketRemoteError
 
     try:
+        security_changes = apply_security_tool_flag_changes(
+            cfg,
+            enable=enable_security_tools,
+            disable=disable_security_tools,
+        )
+        if security_changes["enabled"] or security_changes["disabled"]:
+            _cli.save_config(cfg)
         if push_now and pull_now:
             raise ValueError("--push-now and --pull-now are mutually exclusive")
         if not remote_enabled and (push_now or pull_now):
@@ -252,8 +336,26 @@ def setup_bucket_cmd(
         else:
             if fake_root is not None:
                 provider = "fake"
-            identity = _cli._auth_identity(cfg.hf_token) if cfg.hf_token else None
-            username = str(identity.get("name")) if identity and identity.get("name") else None
+            username = None
+            if provider == "huggingface":
+                identity = _cli._auth_identity(cfg.hf_token) if cfg.hf_token else None
+                if identity is None:
+                    raise ValueError(
+                        "not authenticated; run 'opentraces auth login' before "
+                        "setting up a private HuggingFace bucket"
+                    )
+                username = str(identity.get("name")) if identity.get("name") else None
+            if (
+                provider != "fake"
+                and not as_json
+                and not no_security_prompt
+                and not enable_security_tools
+                and not disable_security_tools
+                and _cli._is_interactive_terminal()
+            ):
+                security_changes["enabled"].extend(
+                    _prompt_bucket_security_policy(cfg)
+                )
             bucket = _configure_bucket_remote(
                 cfg,
                 provider=provider,
@@ -272,14 +374,26 @@ def setup_bucket_cmd(
         click.echo(str(exc), err=True)
         sys.exit(3)
 
-    payload = {"status": "ok", "bucket": bucket}
+    payload = {
+        "status": "ok",
+        "bucket": bucket,
+        "security_tools": security_tool_state_payload(cfg),
+    }
+    if security_changes["enabled"] or security_changes["disabled"]:
+        payload["security_tool_changes"] = security_changes
     if remote_sync is not None:
         payload["remote_sync"] = remote_sync
     if as_json:
         click.echo(_dump_json(payload))
         return
     if bucket["storage"] == "remote":
-        _cli.human_echo(f"Private HuggingFace bucket remote: {bucket['remote']['url']}")
+        provider_label = "HuggingFace" if bucket["remote"]["provider"] == "huggingface" else bucket["remote"]["provider"]
+        _cli.human_echo(f"Private {provider_label} bucket remote: {bucket['remote']['url']}")
+        enabled_tools = enabled_security_tool_names(cfg)
+        _cli.human_echo(
+            "Security tools enabled: "
+            + (", ".join(enabled_tools) if enabled_tools else "none")
+        )
         _cli.human_echo("Dataset remotes remain explicit: opentraces dataset remote create ...")
         if remote_sync is not None:
             _cli.human_echo(f"Bucket remote sync: {remote_sync.get('state')}")
@@ -557,6 +671,8 @@ def _run_setup_wizard() -> None:
                 default=True,
                 hint="private HuggingFace bucket; local cache remains available",
             ):
+                if _cli._is_interactive_terminal():
+                    _prompt_bucket_security_policy(cfg)
                 configured = _configure_bucket_remote(
                     cfg,
                     provider="huggingface",

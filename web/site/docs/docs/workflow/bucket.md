@@ -90,6 +90,44 @@ Sync order is substrate-aware: blobs, then events, then envelopes, then the
 manifest. `prefetch` warms one trace's blobs before `trace get` or `ctx` loads
 them. A configured bucket remote does not publish dataset rows.
 
+`setup bucket` requires authentication: run `opentraces auth login` first, or it
+exits with a `run 'opentraces auth login'` hint. The wizard then prompts for a
+bucket security policy (recommended / basic / strict / off / custom) before
+configuring remote sync.
+
+## Bucket Security Policy
+
+Bucket security protects raw captured evidence before `bucket remote push`. The
+policy is a named bundle over the same `cfg.security.<tool>.enabled` flags that
+`setup <tool>` and `config set security.<tool>.enabled` flip, scoped to the
+bucket.
+
+```bash
+opentraces auth login
+opentraces setup bucket
+opentraces bucket security
+opentraces bucket security --policy recommended
+opentraces bucket security --tool regex --enable
+opentraces bucket security --tool entropy --disable
+opentraces bucket security --json
+```
+
+`bucket security` with no flags is a read-only inspector: it prints the active
+policy and enabled tools without writing config. `--policy` applies an exact
+bundle and accepts only `off|basic|recommended|strict`. `--tool ... --enable` or
+`--tool ... --disable` (repeatable, needs exactly one of enable/disable) edits
+one tool at a time. `--json` emits
+`{status, security:{enabled, tools, scope:"bucket", policy, available_policies}, changes:{enabled,disabled}}`.
+
+Policy bundles:
+
+| Policy | Tools |
+|--------|-------|
+| `off` | (nothing) |
+| `basic` | regex, entropy |
+| `recommended` | regex, entropy, business_logic, path_anonymizer, classifier |
+| `strict` | regex, entropy, trufflehog, privacy_filter, business_logic, path_anonymizer, classifier |
+
 ## Cleanup
 
 ```bash

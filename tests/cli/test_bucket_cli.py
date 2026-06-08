@@ -87,6 +87,17 @@ def test_setup_bucket_defaults_to_private_remote_when_authenticated(monkeypatch)
     assert load_config().bucket.remote.url == "hf://me/opentraces-bucket"
 
 
+def test_setup_bucket_requires_huggingface_auth(monkeypatch):
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["setup", "bucket", "--json"])
+
+    assert result.exit_code == 3
+    assert "opentraces auth login" in result.output
+
+
 def test_setup_bucket_local_only_opts_out():
     from opentraces.core.config import load_config
 
@@ -99,6 +110,122 @@ def test_setup_bucket_local_only_opts_out():
     assert bucket["local_cache"] is True
     assert bucket["remote"]["enabled"] is False
     assert load_config().bucket.storage == "local"
+
+
+def test_setup_bucket_security_tool_flags_toggle_config(tmp_path):
+    from opentraces.core.config import load_config
+
+    runner = CliRunner()
+    remote_root = tmp_path / "configured-fake-bucket"
+
+    result = runner.invoke(
+        main,
+        [
+            "setup",
+            "bucket",
+            "--provider",
+            "fake",
+            "--fake-root",
+            str(remote_root),
+            "--enable-security-tool",
+            "regex",
+            "--enable-security-tool",
+            "business_logic",
+            "--disable-security-tool",
+            "entropy",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["security_tool_changes"]["enabled"] == ["regex", "business_logic"]
+    assert payload["security_tool_changes"]["disabled"] == ["entropy"]
+    assert payload["security_tools"]["enabled"] == ["regex", "business_logic"]
+    cfg = load_config()
+    assert cfg.security.regex.enabled is True
+    assert cfg.security.business_logic.enabled is True
+    assert cfg.security.entropy.enabled is False
+
+
+def test_bucket_security_command_sets_policy_and_tools():
+    from opentraces.core.config import load_config
+
+    runner = CliRunner()
+
+    policy = runner.invoke(main, ["bucket", "security", "--policy", "basic", "--json"])
+    assert policy.exit_code == 0, policy.output
+    payload = json.loads(policy.output)
+    assert payload["security"]["scope"] == "bucket"
+    assert payload["security"]["policy"] == "basic"
+    assert payload["security"]["enabled"] == ["regex", "entropy"]
+
+    disable = runner.invoke(
+        main,
+        ["bucket", "security", "--tool", "entropy", "--disable", "--json"],
+    )
+    assert disable.exit_code == 0, disable.output
+    payload = json.loads(disable.output)
+    assert payload["changes"]["disabled"] == ["entropy"]
+    assert payload["security"]["enabled"] == ["regex"]
+    # An enabled set that matches no named bundle reports as 'custom'.
+    assert payload["security"]["policy"] == "custom"
+    cfg = load_config()
+    assert cfg.security.regex.enabled is True
+    assert cfg.security.entropy.enabled is False
+
+
+def test_bucket_security_reads_state_without_mutation():
+    """Bare `bucket security` is a read-only inspector (no flags)."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["bucket", "security", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["security"]["scope"] == "bucket"
+    assert payload["security"]["policy"] == "off"
+    assert payload["security"]["enabled"] == []
+    assert payload["changes"] == {"enabled": [], "disabled": []}
+
+
+def test_bucket_security_guard_errors_exit_2():
+    """Mutually-exclusive / malformed flag combinations exit 2."""
+    runner = CliRunner()
+    bad_combos = [
+        ["bucket", "security", "--enable", "--disable", "--tool", "regex"],
+        ["bucket", "security", "--policy", "basic", "--tool", "regex", "--enable"],
+        ["bucket", "security", "--policy", "basic", "--enable"],
+        ["bucket", "security", "--tool", "regex"],
+        ["bucket", "security", "--enable"],
+    ]
+    for argv in bad_combos:
+        result = runner.invoke(main, argv)
+        assert result.exit_code == 2, (argv, result.output)
+
+
+def test_setup_bucket_interactive_policy_prompt_applies_basic(monkeypatch):
+    from opentraces.core.config import load_config
+
+    monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+    monkeypatch.setattr(
+        "opentraces.cli._auth_identity",
+        lambda token: {"name": "me"} if token else None,
+    )
+    monkeypatch.setattr("opentraces.cli._is_interactive_terminal", lambda: True)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        main,
+        ["setup", "bucket"],
+        input="2\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Bucket security policy" in result.output
+    cfg = load_config()
+    assert cfg.bucket.remote.url == "hf://me/opentraces-bucket"
+    assert cfg.security.regex.enabled is True
+    assert cfg.security.entropy.enabled is True
+    assert cfg.security.business_logic.enabled is False
 
 
 def test_setup_bucket_fake_remote_feeds_bucket_remote_harness(tmp_path):

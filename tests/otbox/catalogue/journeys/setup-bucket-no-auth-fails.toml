@@ -1,0 +1,28 @@
+name = "setup-bucket-no-auth-fails"
+description = """
+Setup-bucket auth gate (plan 092 R1, Track 1): configuring a real HuggingFace
+private bucket requires authentication first. With no HF identity, `setup bucket
+--json` exits non-zero (rc=3) and points the user at `opentraces auth login` on
+stderr, rather than silently configuring an unauthenticated remote.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "setup-bucket-no-auth"
+argv = ["setup", "bucket", "--json"]
+expect_returncode = 3
+
+[[assertions]]
+kind = "returncode"
+step = "setup-bucket-no-auth"
+equals = 3
+
+[[assertions]]
+kind = "stderr_contains"
+step = "setup-bucket-no-auth"
+value = "opentraces auth login"

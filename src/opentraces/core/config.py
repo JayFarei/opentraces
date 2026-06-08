@@ -178,10 +178,28 @@ class LLMPIIConfig(BaseModel):
     timeout: float = 120.0
 
 
+class BusinessLogicConfig(BaseModel):
+    """Opt-in detector for internal infrastructure/business signals."""
+
+    enabled: bool = False
+
+
 class PathAnonymizerConfig(BaseModel):
     """Opt-in transformer that rewrites local usernames in paths."""
 
     enabled: bool = False
+
+
+class CapsuleScopeConfig(BaseModel):
+    """Opt-in field-exclusion transformer for prompt-bearing fields."""
+
+    enabled: bool = False
+    exclude: list[str] = Field(
+        default_factory=lambda: [
+            "context_resume_packet.system_layer",
+            "slice.steps.*.reasoning_content",
+        ],
+    )
 
 
 class ClassifierConfig(BaseModel):
@@ -219,7 +237,9 @@ class SecurityConfig(BaseModel):
     llm_review: LLMReviewConfig = Field(default_factory=LLMReviewConfig)
     llm_pii: LLMPIIConfig = Field(default_factory=LLMPIIConfig)
     privacy_filter: PrivacyFilterConfig = Field(default_factory=PrivacyFilterConfig)
+    business_logic: BusinessLogicConfig = Field(default_factory=BusinessLogicConfig)
     path_anonymizer: PathAnonymizerConfig = Field(default_factory=PathAnonymizerConfig)
+    capsule_scope: CapsuleScopeConfig = Field(default_factory=CapsuleScopeConfig)
     classifier: ClassifierConfig = Field(default_factory=ClassifierConfig)
 
     model_config = {"extra": "ignore"}  # silently drop legacy ``privacy_tier`` from on-disk configs

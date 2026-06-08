@@ -1,0 +1,46 @@
+name = "bucket-security-tool-disable-custom"
+description = """
+Bucket security custom editing (plan 092 R2, Track 1): starting from the `basic`
+policy, disabling one tool (`entropy`) drops the enabled set to a combination
+that matches no named policy, so the reported policy becomes `custom`. Step order
+matters: the disable runs against the prior `--policy basic` state in the same box.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["configure-bucket"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "enable-basic"
+argv = ["bucket", "security", "--policy", "basic", "--json"]
+
+[[steps]]
+type = "cli"
+id = "disable-entropy"
+argv = ["bucket", "security", "--tool", "entropy", "--disable", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "disable-entropy"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "disable-entropy"
+path = "security.policy"
+equals = "custom"
+
+[[assertions]]
+kind = "stdout_json_array_equals"
+step = "disable-entropy"
+path = "security.enabled"
+equals = ["regex"]
+
+[[assertions]]
+kind = "stdout_json_set_contains"
+step = "disable-entropy"
+path = "changes.disabled"
+equals = ["entropy"]

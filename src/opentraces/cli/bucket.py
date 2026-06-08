@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -10,11 +9,88 @@ import click
 
 from ._help import OpentracesCommand, OpentracesGroup
 from ._options import dump_json as _dump_json
+from ._security_flags import (
+    BUCKET_SECURITY_POLICIES,
+    SECURITY_TOOL_NAMES,
+    apply_bucket_security_policy,
+    apply_security_tool_flag_changes,
+    security_tool_change_payload,
+)
+from ..core.config import load_config, save_config
 
 
 @click.group("bucket", cls=OpentracesGroup)
 def bucket_group() -> None:
     """Inspect and troubleshoot the local trace bucket."""
+
+
+@bucket_group.command("security", cls=OpentracesCommand)
+@click.option(
+    "--policy",
+    type=click.Choice(tuple(BUCKET_SECURITY_POLICIES)),
+    default=None,
+    help="Set an exact bucket security policy.",
+)
+@click.option(
+    "--tool",
+    "tools",
+    multiple=True,
+    type=click.Choice(SECURITY_TOOL_NAMES),
+    help="Security tool to enable or disable for bucket capture/sync.",
+)
+@click.option("--enable", is_flag=True, help="Enable every --tool.")
+@click.option("--disable", is_flag=True, help="Disable every --tool.")
+@click.option("--json", "as_json", is_flag=True, help="Emit structured JSON.")
+def bucket_security_cmd(
+    policy: str | None,
+    tools: tuple[str, ...],
+    enable: bool,
+    disable: bool,
+    as_json: bool,
+) -> None:
+    """Inspect or change the private bucket security policy."""
+    cfg = load_config()
+    try:
+        if enable and disable:
+            raise ValueError("Use either --enable or --disable, not both")
+        if policy and tools:
+            raise ValueError("Use either --policy or --tool, not both")
+        if policy and (enable or disable):
+            raise ValueError("--policy already sets the policy; do not pass --enable/--disable")
+        if tools and not (enable or disable):
+            raise ValueError("--tool requires --enable or --disable")
+        if not tools and (enable or disable):
+            raise ValueError("--enable/--disable require at least one --tool")
+
+        if policy:
+            changes = apply_bucket_security_policy(cfg, policy)
+            save_config(cfg)
+        elif tools:
+            changes = apply_security_tool_flag_changes(
+                cfg,
+                enable=tools if enable else (),
+                disable=tools if disable else (),
+            )
+            save_config(cfg)
+        else:
+            changes = {"enabled": [], "disabled": []}
+    except ValueError as exc:
+        click.echo(str(exc), err=True)
+        sys.exit(2)
+
+    payload = security_tool_change_payload(cfg, scope="bucket", changes=changes)
+    if as_json:
+        click.echo(_dump_json(payload))
+        return
+
+    security = payload["security"]
+    click.echo(f"Bucket security policy: {security.get('policy', 'custom')}")
+    enabled_tools = security.get("enabled") or []
+    click.echo("  enabled: " + (", ".join(enabled_tools) if enabled_tools else "none"))
+    if changes["enabled"]:
+        click.echo("  changed on: " + ", ".join(changes["enabled"]))
+    if changes["disabled"]:
+        click.echo("  changed off: " + ", ".join(changes["disabled"]))
 
 
 @bucket_group.command("status", cls=OpentracesCommand)

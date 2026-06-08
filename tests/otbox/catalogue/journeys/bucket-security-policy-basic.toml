@@ -1,0 +1,40 @@
+name = "bucket-security-policy-basic"
+description = """
+Bucket security named policy (plan 092 R2, Track 1): `bucket security --policy
+basic --json` sets exactly the `regex` + `entropy` bucket tool bundle and reports
+the `basic` policy. The change delta lists both tools as newly enabled.
+"""
+lane = "core"
+tier = 0
+seed = "smoke"
+trajectories = ["configure-bucket"]
+persona = "both"
+requires = ["cli"]
+
+[[steps]]
+type = "cli"
+id = "policy-basic"
+argv = ["bucket", "security", "--policy", "basic", "--json"]
+
+[[assertions]]
+kind = "returncode"
+step = "policy-basic"
+equals = 0
+
+[[assertions]]
+kind = "stdout_json"
+step = "policy-basic"
+path = "security.policy"
+equals = "basic"
+
+[[assertions]]
+kind = "stdout_json_array_equals"
+step = "policy-basic"
+path = "security.enabled"
+equals = ["regex", "entropy"]
+
+[[assertions]]
+kind = "stdout_json_array_equals"
+step = "policy-basic"
+path = "changes.enabled"
+equals = ["regex", "entropy"]

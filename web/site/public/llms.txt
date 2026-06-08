@@ -89,7 +89,7 @@ teacher/student reinforcement learning, analytics, and attribution.
 | **[Schema](/docs/schema/overview)** | `TraceRecord` and schema `0.6.0` field semantics |
 | **[Clients](/docs/clients/overview)** | How consumers use rows or bucket evidence |
 | **[Agent Workflows](/docs/clients/agent-workflows)** | Context warmup and progressive session-history discovery |
-| **[Trace Capsule](/docs/clients/trace-capsule)** | Capsule preview/export and dataset-of-1 trace packets |
+| **[Trace Capsule](/docs/clients/trace-capsule)** | Share a single trace as a reproducible capsule; use `opentraces capsule` for the full CLI surface |
 
 ---
 
@@ -272,7 +272,8 @@ opentraces setup
   supported harnesses such as Claude Code, Codex CLI, and Pi.
 - **git hook** and **watcher**, which mature Trace Trails after commits land.
 - **bucket remote**, optional private HuggingFace sync for raw retained
-  evidence.
+  evidence. `setup bucket` requires `opentraces auth login` first and prompts
+  for a bucket security policy before configuring remote sync.
 - **HuggingFace login**, needed for bucket sync and dataset remotes.
 - **optional security tools**, such as TruffleHog, privacy-filter, and
   LLM review. Per-record tools default off until a workflow or config enables
@@ -331,10 +332,14 @@ opentraces bucket manifest --json
 opentraces bucket verify --sample 100
 ```
 
-To sync the raw bucket to a private remote:
+To sync the raw bucket to a private remote, authenticate first. `setup bucket`
+exits with a `run 'opentraces auth login'` hint until you do, and it prompts for
+a bucket security policy that protects raw captured evidence before remote sync:
 
 ```bash
+opentraces auth login
 opentraces setup bucket
+opentraces bucket security --policy recommended
 opentraces bucket remote push
 opentraces bucket remote status
 ```
@@ -513,8 +518,8 @@ opentraces setup upgrade
 ```
 
 Security setup commands only enable the tools you choose. Regex, entropy,
-path anonymization, classifier, TruffleHog, privacy-filter, and LLM PII are
-not on by default for per-record sanitization.
+TruffleHog, privacy-filter, LLM PII, business-logic signals, path anonymization,
+capsule scope, and classifier are not on by default for per-record sanitization.
 
 `opentraces setup codex-cli` supports:
 
@@ -681,7 +686,18 @@ opentraces bucket remote diff --json
 opentraces bucket remote push --json
 opentraces bucket remote pull --json
 opentraces bucket replay --repo /path/to/git-clone --json
+opentraces bucket security
+opentraces bucket security --policy recommended
+opentraces bucket security --tool regex --enable
+opentraces bucket security --tool entropy --disable
+opentraces bucket security --json
 ```
+
+`bucket security` is the scoped bucket policy front-end. With no flags it is a
+read-only inspector. `--policy` applies a named bundle and accepts only
+`off|basic|recommended|strict`. `--tool ... --enable` / `--tool ... --disable`
+edits one tool at a time. It flips the same `cfg.security.<tool>.enabled` flags
+as `security tools` and `config set`, scoped to the bucket.
 
 The bucket is the private capture-time store. It is separate from datasets:
 bucket sync moves raw retained evidence, while dataset publish moves approved
@@ -749,7 +765,12 @@ printf '%s\n' '{"record":{...}}' | opentraces security sanitize --use-config
 tools explicitly enabled in the loaded config.
 
 Registered tools: `regex`, `entropy`, `trufflehog`, `privacy_filter`,
-`llm_pii`, `path_anonymizer`, and `classifier`.
+`llm_pii`, `business_logic`, `path_anonymizer`, `capsule_scope`, and `classifier`.
+
+`security tools list|info` and `security sanitize` are the generic registry
+surface for introspection and explicit sanitization. `bucket security` is the
+scoped bucket policy front-end over the same `cfg.security.<tool>.enabled`
+flags, where `--policy` accepts only `off|basic|recommended|strict`.
 
 ## OTLP Capture
 
@@ -1307,6 +1328,44 @@ opentraces bucket prefetch <trace-id> --json
 Sync order is substrate-aware: blobs, then events, then envelopes, then the
 manifest. `prefetch` warms one trace's blobs before `trace get` or `ctx` loads
 them. A configured bucket remote does not publish dataset rows.
+
+`setup bucket` requires authentication: run `opentraces auth login` first, or it
+exits with a `run 'opentraces auth login'` hint. The wizard then prompts for a
+bucket security policy (recommended / basic / strict / off / custom) before
+configuring remote sync.
+
+## Bucket Security Policy
+
+Bucket security protects raw captured evidence before `bucket remote push`. The
+policy is a named bundle over the same `cfg.security.<tool>.enabled` flags that
+`setup <tool>` and `config set security.<tool>.enabled` flip, scoped to the
+bucket.
+
+```bash
+opentraces auth login
+opentraces setup bucket
+opentraces bucket security
+opentraces bucket security --policy recommended
+opentraces bucket security --tool regex --enable
+opentraces bucket security --tool entropy --disable
+opentraces bucket security --json
+```
+
+`bucket security` with no flags is a read-only inspector: it prints the active
+policy and enabled tools without writing config. `--policy` applies an exact
+bundle and accepts only `off|basic|recommended|strict`. `--tool ... --enable` or
+`--tool ... --disable` (repeatable, needs exactly one of enable/disable) edits
+one tool at a time. `--json` emits
+`{status, security:{enabled, tools, scope:"bucket", policy, available_policies}, changes:{enabled,disabled}}`.
+
+Policy bundles:
+
+| Policy | Tools |
+|--------|-------|
+| `off` | (nothing) |
+| `basic` | regex, entropy |
+| `recommended` | regex, entropy, business_logic, path_anonymizer, classifier |
+| `strict` | regex, entropy, trufflehog, privacy_filter, business_logic, path_anonymizer, classifier |
 
 ## Cleanup
 
@@ -3367,6 +3426,31 @@ opentraces setup llm-review --disable
 session or row reviewer used by dataset publication gates, not a per-record
 sanitize tool.
 
+## Bucket Security Policies
+
+`bucket security` is a scoped front-end that bundles the registry tools above
+into a few named policies for the private bucket. `security tools list|info` and
+`security sanitize` stay the generic registry surface; `bucket security` just
+applies a named bundle of the same `cfg.security.<tool>.enabled` flags.
+
+```bash
+opentraces bucket security
+opentraces bucket security --policy recommended
+opentraces bucket security --tool regex --enable
+opentraces bucket security --tool entropy --disable
+```
+
+| Policy | Tools |
+|--------|-------|
+| `off` | (nothing) |
+| `basic` | regex, entropy |
+| `recommended` | regex, entropy, business_logic, path_anonymizer, classifier |
+| `strict` | regex, entropy, trufflehog, privacy_filter, business_logic, path_anonymizer, classifier |
+
+`bucket security` with no flags inspects the active policy and tools. `--policy`
+accepts only `off|basic|recommended|strict`. This bucket policy vocabulary is
+unrelated to the `dataset run --privacy-tier off|low|medium|high` field.
+
 ## Review And Publication
 
 Dataset review remains explicit:
@@ -3461,6 +3545,34 @@ auditable from the command itself:
 printf '%s\n' '{"row":{"text":"..."}}' \
   | opentraces security sanitize --tools regex,entropy,path_anonymizer
 ```
+
+## Bucket Security Policy
+
+A bucket security policy is a named bundle over the same
+`cfg.security.<tool>.enabled` flags set above. It is not a second config system:
+applying a policy flips those same flags, scoped to the bucket, so the raw
+captured evidence is protected before `bucket remote push`.
+
+```bash
+opentraces bucket security
+opentraces bucket security --policy recommended
+opentraces bucket security --tool regex --enable
+opentraces bucket security --tool entropy --disable
+opentraces bucket security --json
+```
+
+`bucket security` with no flags is a read-only inspector. `--policy` applies an
+exact bundle and accepts only `off|basic|recommended|strict`. `--tool ...
+--enable` / `--tool ... --disable` (repeatable) edits one tool at a time. The
+`setup bucket` wizard also offers a `custom` walkthrough that toggles each tool
+individually; `custom` is not a `--policy` value.
+
+| Policy | Tools |
+|--------|-------|
+| `off` | (nothing) |
+| `basic` | regex, entropy |
+| `recommended` | regex, entropy, business_logic, path_anonymizer, classifier |
+| `strict` | regex, entropy, trufflehog, privacy_filter, business_logic, path_anonymizer, classifier |
 
 ## LLM Review
 
@@ -3711,7 +3823,7 @@ What each integration does:
 - `setup pi` checks or writes the Pi package entry; `pi install npm:opentraces-pi` is the primary package path. It supports `--project`, `--settings-file`, `--local`, `--dry-run`, `--remove`, and `--json`. Capture itself is opt-out: under global tracking (the default) Pi auto-enrolls each repo on first capture; `opentraces config tracking-mode manual` or a per-project `excluded` marker opts out.
 - `setup git` installs the post-commit correlator that powers `opentraces trail blame`
 - `setup skill` installs the vendor-neutral skill under `~/.agents/skills/opentraces/` and symlinks it into supported harnesses (currently `~/.claude/skills/opentraces`, `~/.codex/skills/opentraces`, and `~/.pi/agent/skills/opentraces`)
-- `setup bucket` configures the private bucket sync target (the workspace state that backs the trace index and Trace Trails)
+- `setup bucket` configures the private bucket sync target (the workspace state that backs the trace index and Trace Trails). It requires prior `opentraces auth login` (otherwise it exits with a `run 'opentraces auth login'` hint) and prompts for a bucket security policy (recommended / basic / strict / off / custom) before configuring remote sync. Set or inspect the policy later with `opentraces bucket security --policy recommended` or `opentraces bucket security`
 - `setup capture-otlp` enables the higher-fidelity Claude Code Context Tree capture source
 - `setup watcher` installs the background attribution daemon
 
@@ -3728,6 +3840,7 @@ opentraces --json trail track <trace-id>
 opentraces --json trail blame commit <sha>
 opentraces --json ctx tree <trace-id>
 opentraces security tools list --json
+opentraces bucket security --json
 ```
 
 That avoids scraping human-oriented terminal layouts. `trail track` returns the VCS-anchored evidence chain (Trace Patch, Git Anchor, Patch Trail) as structured JSON. To resolve an `ot://` resource directly, pass it to `opentraces trace get`.

@@ -76,6 +76,34 @@ printf '%s\n' '{"row":{"text":"..."}}' \
   | opentraces security sanitize --tools regex,entropy,path_anonymizer
 ```
 
+## Bucket Security Policy
+
+A bucket security policy is a named bundle over the same
+`cfg.security.<tool>.enabled` flags set above. It is not a second config system:
+applying a policy flips those same flags, scoped to the bucket, so the raw
+captured evidence is protected before `bucket remote push`.
+
+```bash
+opentraces bucket security
+opentraces bucket security --policy recommended
+opentraces bucket security --tool regex --enable
+opentraces bucket security --tool entropy --disable
+opentraces bucket security --json
+```
+
+`bucket security` with no flags is a read-only inspector. `--policy` applies an
+exact bundle and accepts only `off|basic|recommended|strict`. `--tool ...
+--enable` / `--tool ... --disable` (repeatable) edits one tool at a time. The
+`setup bucket` wizard also offers a `custom` walkthrough that toggles each tool
+individually; `custom` is not a `--policy` value.
+
+| Policy | Tools |
+|--------|-------|
+| `off` | (nothing) |
+| `basic` | regex, entropy |
+| `recommended` | regex, entropy, business_logic, path_anonymizer, classifier |
+| `strict` | regex, entropy, trufflehog, privacy_filter, business_logic, path_anonymizer, classifier |
+
 ## LLM Review
 
 `llm_review` is stored under `security.llm_review`, but it is not part of the

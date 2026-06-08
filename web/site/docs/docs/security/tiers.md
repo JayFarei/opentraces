@@ -96,6 +96,31 @@ opentraces setup llm-review --disable
 session or row reviewer used by dataset publication gates, not a per-record
 sanitize tool.
 
+## Bucket Security Policies
+
+`bucket security` is a scoped front-end that bundles the registry tools above
+into a few named policies for the private bucket. `security tools list|info` and
+`security sanitize` stay the generic registry surface; `bucket security` just
+applies a named bundle of the same `cfg.security.<tool>.enabled` flags.
+
+```bash
+opentraces bucket security
+opentraces bucket security --policy recommended
+opentraces bucket security --tool regex --enable
+opentraces bucket security --tool entropy --disable
+```
+
+| Policy | Tools |
+|--------|-------|
+| `off` | (nothing) |
+| `basic` | regex, entropy |
+| `recommended` | regex, entropy, business_logic, path_anonymizer, classifier |
+| `strict` | regex, entropy, trufflehog, privacy_filter, business_logic, path_anonymizer, classifier |
+
+`bucket security` with no flags inspects the active policy and tools. `--policy`
+accepts only `off|basic|recommended|strict`. This bucket policy vocabulary is
+unrelated to the `dataset run --privacy-tier off|low|medium|high` field.
+
 ## Review And Publication
 
 Dataset review remains explicit:
