@@ -17,10 +17,13 @@
 <script>
   // Apply theme immediately to avoid flash of wrong theme
   try {
-    var t = localStorage.getItem('ot-theme') || 'dark';
+    var t = localStorage.getItem('ot-theme');
+    if (!t) { t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; }
     document.documentElement.setAttribute('data-theme', t);
+    document.documentElement.style.colorScheme = t;
   } catch (e) {
     document.documentElement.setAttribute('data-theme', 'dark');
+    document.documentElement.style.colorScheme = 'dark';
   }
 </script>
 </head>
@@ -104,9 +107,38 @@ function App() {
     const html = document.documentElement;
     html.classList.add("theme-swap");
     html.setAttribute("data-theme", theme);
+    html.style.colorScheme = theme;
     try { localStorage.setItem("ot-theme", theme); } catch (e) {}
+    // When the Hub is embedded as the site's preview (same-origin iframe),
+    // propagate the theme UP to the parent site so its <html data-theme>,
+    // theme-dark/theme-light class, MutationObserver, and its own "theme" storage
+    // key stay in sync. Without this the Hub's own sun/moon toggle silently
+    // drifts from the site (the reported "click from the app vs site" bug).
+    try {
+      if (window.parent && window.parent !== window) {
+        const p = window.parent.document.documentElement;
+        p.setAttribute("data-theme", theme);
+        p.classList.remove("theme-dark", "theme-light");
+        p.classList.add(theme === "dark" ? "theme-dark" : "theme-light");
+        p.style.colorScheme = theme;
+        window.parent.localStorage.setItem("theme", theme);
+      }
+    } catch (e) {}
     // remove the disable-transitions class after the swap commits
     requestAnimationFrame(() => requestAnimationFrame(() => html.classList.remove("theme-swap")));
+  }, [theme]);
+
+  // Keep React theme state in sync when the parent site drives the Hub's theme
+  // (HubWindow sets data-theme on this iframe's <html> directly). This keeps the
+  // Hub's toggle direction correct after the site toggles.
+  React.useEffect(() => {
+    const html = document.documentElement;
+    const obs = new MutationObserver(() => {
+      const ext = html.getAttribute("data-theme");
+      if ((ext === "dark" || ext === "light") && ext !== theme) setTheme(ext);
+    });
+    obs.observe(html, { attributes: true, attributeFilter: ["data-theme"] });
+    return () => obs.disconnect();
   }, [theme]);
 
   // Global ⌘K / Ctrl+K opens the command palette.
