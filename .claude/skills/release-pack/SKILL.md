@@ -146,6 +146,7 @@ Release pack plan:
   Remote (live) versions:
     CLI:    v0.1.2  (PyPI + GitHub Release)
     Schema: v0.1.1  (PyPI)
+    Pi:     opentraces-pi@0.1.0  (npm)
     Site:   opentraces.ai shows v0.1.2
     Brew:   JayFarei/opentraces/opentraces @ 0.1.2
 
@@ -169,9 +170,10 @@ Release pack plan:
     1. Docs update (skill/SKILL.md is bundled in the wheel — must be correct before build)
     2. Regenerate llms.txt
     3. Release CLI → GitHub Release → PyPI + Homebrew  (v0.1.3)
-    4. Deploy site → Vercel
-    5. Wait ~120s for PyPI propagation
-    6. Verify: pipx  pip  brew
+    4. Release Pi extension → npm  (opentraces-pi, only if changed)
+    5. Deploy site → Vercel
+    6. Wait ~120s for PyPI propagation
+    7. Verify: pipx  pip  brew  npm
 
 Proceed? [Y/n]
 ```
@@ -327,6 +329,49 @@ gh run list --workflow=publish.yml --limit 2 --json status,conclusion,databaseId
 ```
 
 Tell the user both workflows are running. They can watch at the Actions tab. Continue to site deploy while PyPI publishes.
+
+---
+
+## Step 6b: Release Pi extension (npm)
+
+The `opentraces-pi` Pi extension publishes to **npm**, not PyPI — it is the package `pi install npm:opentraces-pi` resolves. It is NOT covered by `publish.yml`; it has its own `publish-npm.yml` workflow. Skipping this step is what historically left `opentraces-pi` unpublished (a 404 on `pi install`).
+
+### Decide whether to release
+
+```bash
+# Did the Pi package change since the last pi-v* tag?
+git log --oneline $(git tag -l 'pi-v*' --sort=-v:refname | head -1)..HEAD -- packages/opentraces-pi/ src/opentraces/capture/pi/
+```
+
+If there are no changes and `opentraces-pi` already exists on npm at the current version, skip. Otherwise release.
+
+### Bump, commit, tag, push
+
+Edit `packages/opentraces-pi/package.json` `version` to the new Pi version (independent of the CLI version — the Pi extension versions on its own cadence). Then:
+
+```bash
+PI_VERSION=$(cd packages/opentraces-pi && node -p "require('./package.json').version")
+git add packages/opentraces-pi/package.json
+git commit -m "release: opentraces-pi v$PI_VERSION"
+git tag -a "pi-v$PI_VERSION" -m "opentraces-pi v$PI_VERSION"
+git push origin main --tags
+```
+
+### Publish via workflow dispatch
+
+```bash
+gh workflow run publish-npm.yml
+gh run list --workflow=publish-npm.yml --limit 1 --json status,conclusion,databaseId
+# Wait until conclusion is "success"
+```
+
+**Prerequisite (one-time):** the repo needs an `NPM_TOKEN` Actions secret — a granular npm token with publish rights to `opentraces-pi` and **bypass-2FA enabled** (npm rejects token publishes from 2FA accounts otherwise). If the secret is missing, the workflow fails at the publish step; set it under Settings → Secrets → Actions and re-dispatch. As a local fallback, an npm-authed operator can `cd packages/opentraces-pi && npm publish --access public --otp=<code>`.
+
+### Verify
+
+```bash
+npm view opentraces-pi version   # should equal $PI_VERSION
+```
 
 ---
 

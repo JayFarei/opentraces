@@ -1,0 +1,52 @@
+name: Publish Pi extension (npm)
+
+# Publishes the `opentraces-pi` Pi extension to npm. Mirrors publish.yml
+# (PyPI) for the npm side of the release so `pi install npm:opentraces-pi`
+# resolves on every release.
+#
+# Triggers:
+#   - a published GitHub Release whose tag starts with `pi-v` (e.g. pi-v0.1.0)
+#   - manual workflow_dispatch (with an optional dry-run that only packs)
+#
+# Auth: needs an `NPM_TOKEN` repository secret — a granular npm access token
+# with publish rights to `opentraces-pi` and "bypass 2FA" enabled (npm blocks
+# token publishes otherwise). Set it under Settings → Secrets → Actions.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Pack only, do not publish"
+        type: boolean
+        default: false
+
+jobs:
+  publish-pi:
+    name: Publish opentraces-pi to npm
+    if: >-
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'pi-v')) ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/opentraces-pi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+      - name: Build and test
+        run: |
+          npm run build
+          npm test
+      - name: Publish (dry run)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: npm publish --access public --dry-run
+      - name: Publish
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
