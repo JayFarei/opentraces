@@ -1,0 +1,147 @@
+{
+  "schema_version": "opentraces.capsule.v1",
+  "capsule_id": "exampletracecap001",
+  "created_with": "opentraces public example",
+  "content_is_untrusted": true,
+  "source": {
+    "project_slug": "example-widget-service",
+    "project": "example-widget-service",
+    "trace_id": "trace-example-capsule",
+    "step_index": 5,
+    "agent": "codex-cli",
+    "start_step_index": 1,
+    "end_step_index": 8
+  },
+  "intent": {
+    "summary": "Reproduce a parser regression after a dependency upgrade"
+  },
+  "summary": {
+    "title": "Parser regression after dependency upgrade",
+    "is_failure": true,
+    "what_happened": "A fixture command failed before the dependency fix and passed after the fixed version was selected.",
+    "scope": "8 bounded synthetic steps",
+    "failure": {
+      "kind": "assertion_failure",
+      "message": "expected normalized duration string"
+    }
+  },
+  "test": {
+    "kind": "shell",
+    "cwd": ".",
+    "command": "pytest tests/test_duration_parser.py::test_accepts_iso_duration",
+    "expected": {
+      "kind": "error_string",
+      "value": "expected normalized duration string"
+    },
+    "fixed_when": "passes with humanduration v0.2.0"
+  },
+  "environment": {
+    "dependencies": [],
+    "language_ecosystem": "python",
+    "setup": []
+  },
+  "bundle": null,
+  "failing_step": {
+    "index": 5,
+    "type": "agent",
+    "error_excerpt": "AssertionError: expected normalized duration string",
+    "had_error_marker": true
+  },
+  "slice": {
+    "schema_version": "opentraces.trace_slice.v1",
+    "slice_id": "slice-example-capsule",
+    "trace_id": "trace-example-capsule",
+    "steps": [
+      {
+        "index": 4,
+        "role": "assistant",
+        "summary": "Ran the parser regression fixture."
+      },
+      {
+        "index": 5,
+        "role": "tool",
+        "summary": "pytest failed on normalized duration assertion."
+      }
+    ],
+    "limitations": [
+      "synthetic_public_example"
+    ]
+  },
+  "context_resume_packet": {
+    "schema_version": "opentraces.context_resume.v1",
+    "node_id": "ctx-example-capsule",
+    "system_layer": {
+      "content": {}
+    },
+    "messages_layer": {
+      "content": [
+        {
+          "role": "user",
+          "summary": "Reproduce the parser regression."
+        }
+      ]
+    },
+    "tool_registry_layer": {
+      "content": []
+    },
+    "runtime_state_layer": {
+      "content": {
+        "cwd": "."
+      }
+    }
+  },
+  "trail_anchors": [
+    {
+      "kind": "git_anchor",
+      "file_path": "src/duration_parser.py",
+      "survival_state": "alive_on_path"
+    }
+  ],
+  "repo_pin": {
+    "remote_url": "https://github.com/opentraces/example-widget-service",
+    "commit_sha": "abc123def4567890abc123def4567890abc123de",
+    "changed_files": [
+      "src/duration_parser.py",
+      "tests/test_duration_parser.py"
+    ]
+  },
+  "privacy_scope": {
+    "system_prompt_included": false,
+    "reasoning_included": false,
+    "tool_outputs_included": "bounded"
+  },
+  "redaction": {
+    "manifest": {
+      "schema_version": "opentraces.capsule.redaction.v1",
+      "floor": [
+        "regex",
+        "entropy",
+        "business_logic"
+      ],
+      "floor_satisfied": true,
+      "redactions_applied": 0,
+      "findings_total": 0,
+      "home_paths_scrubbed": 0,
+      "fields_excluded": 3,
+      "matched_text": false
+    }
+  },
+  "render_state": {
+    "redaction": "redacted_ok",
+    "closure": "closure_full",
+    "replay": "replay_unverified"
+  },
+  "limitations": [
+    "synthetic_public_example"
+  ],
+  "embedded": {
+    "context_resume": "opentraces.context_resume.v1",
+    "trace_slice": "opentraces.trace_slice.v1"
+  },
+  "share": {
+    "capsule_url": null,
+    "human_url": null,
+    "published_revision": null,
+    "issue_body_command": "opentraces capsule issue trace-example-capsule --project <repo> --issue-repo owner/project"
+  }
+}

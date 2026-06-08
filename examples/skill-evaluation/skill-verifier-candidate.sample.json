@@ -1,0 +1,45 @@
+{
+  "schema_version": "opentraces.skill_verifier_candidates.v1",
+  "generated_at": "2026-06-08T00:00:00Z",
+  "project": "example-public-fixture",
+  "total_skill_invocation_units": 4,
+  "skills": [
+    {
+      "skill_id": "review",
+      "usable_episodes": 4,
+      "agents": {
+        "codex-cli": 4
+      },
+      "sources": [
+        "synthetic-public-example"
+      ],
+      "archetypes": [
+        {
+          "archetype_id": "review_grounded_findings_v1",
+          "title": "Grounded review findings",
+          "markers": [
+            "findings cite concrete files",
+            "severity is justified",
+            "no invented bugs"
+          ],
+          "evidence_strength": "synthetic_demo",
+          "deficient_marker_frequency": {
+            "no invented bugs": 0
+          },
+          "recommended": false,
+          "creator_questions": [
+            "Did every finding cite current repo evidence?"
+          ],
+          "provenance": {
+            "source": "examples/skill-evaluation",
+            "privacy": "synthetic"
+          }
+        }
+      ],
+      "leakage_safe_split": true,
+      "source_refs": [
+        "trace:synthetic-review-1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "schema_version": "opentraces.candidate_packet.v1",
+  "query": "auth middleware regression",
+  "total_returned": 2,
+  "candidates": [
+    {
+      "trace_id": "trace-auth-regression",
+      "unit_id": "tu:trace-auth-regression:burst:1",
+      "score": 12.4,
+      "kind": "change_burst",
+      "headline": "Auth middleware regression fixed by tightening token parsing",
+      "why": "Matched auth middleware, failing test, and reverted branch notes",
+      "commands": [
+        "opentraces trace map trace-auth-regression --candidate tu:trace-auth-regression:burst:1 --json",
+        "opentraces trace slice trace-auth-regression --around-step 42 --json"
+      ]
+    },
+    {
+      "trace_id": "trace-login-followup",
+      "unit_id": "tu:trace-login-followup:step:7",
+      "score": 8.1,
+      "kind": "step",
+      "headline": "Follow-up login test coverage",
+      "why": "Matched login regression and test update",
+      "commands": [
+        "opentraces trace get tu:trace-login-followup:step:7 --json"
+      ]
+    }
+  ]
+}

@@ -41,6 +41,11 @@ skills-lock.json
 .context/
 tmp/
 .spec
+
+# Ad-hoc run logs are private by default. Promote sanitized, task ready
+# material to `examples/` before committing it to the public repo.
+runs/
+
 .agents/skills/agent-browser
 .claude/skills/agent-browser
 .agents/skills
