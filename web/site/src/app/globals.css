@@ -343,15 +343,15 @@ html { color-scheme: light; }
 .nav-hamburger {
   display: none;
   background: none;
-  border: 1px solid var(--border);
-  font-size: 20px;
+  border: none;
+  font-size: 22px;
   line-height: 1;
-  padding: 4px 10px;
+  padding: 4px 2px;
   cursor: pointer;
   color: var(--text-muted);
   font-family: var(--font-mono);
 }
-.nav-hamburger:hover { color: var(--text); border-color: var(--border-strong); }
+.nav-hamburger:hover { color: var(--text); }
 
 /* ═══ Nav star badge (desktop, next to github link) ═══ */
 .nav-star-badge {
@@ -3537,6 +3537,13 @@ a:hover .openmake-mark {
   .terminal-bar > span:last-child { display: none; }
   .hero-grid .terminal-body { font-size: 10.5px; padding: 12px; }
   .hero-grid .terminal-body .rail-frame-label { padding-left: 2.2ch; }
+}
+@media (max-width: 680px) {
+  /* Hero CTAs fill the column and hold a fixed 3:2 proportion as they expand. */
+  .hero-cta-stack { width: 100%; max-width: none; }
+  .hero-cta { flex-wrap: nowrap; width: 100%; gap: 10px; }
+  .hero-cta .cta-copy-prompt { flex: 3 1 0; padding: 0 16px; }
+  .hero-cta .cta-secondary { flex: 2 1 0; padding: 0 14px; justify-content: center; }
 }
 @media (max-width: 600px) {
   .feature-grid, .use-grid { grid-template-columns: 1fr; }
