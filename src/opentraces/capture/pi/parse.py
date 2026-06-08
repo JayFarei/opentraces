@@ -212,7 +212,7 @@ class PiSessionParser:
         provider: str | None = None
         model: str | None = None
         agent_version: str | None = None
-        usage_totals = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+        usage_totals = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "cost_usd": 0.0}
         children: dict[str | None, list[str]] = defaultdict(list)
         ids: set[str] = set()
         labels: dict[str, str] = {}
@@ -253,6 +253,12 @@ class PiSessionParser:
                 usage_totals["output"] += int(usage.get("output") or usage.get("output_tokens") or 0)
                 usage_totals["cache_read"] += int(usage.get("cacheRead") or usage.get("cache_read") or 0)
                 usage_totals["cache_write"] += int(usage.get("cacheWrite") or usage.get("cache_write") or 0)
+                cost = usage.get("cost")
+                if isinstance(cost, dict):
+                    try:
+                        usage_totals["cost_usd"] += float(cost.get("total") or 0)
+                    except (TypeError, ValueError):
+                        pass
                 if message.get("role") == "assistant":
                     provider = _string(message.get("provider")) or provider
                     model = _string(message.get("model")) or model
@@ -355,12 +361,21 @@ class PiSessionParser:
     @staticmethod
     def _build_metrics(metadata: dict[str, Any], steps: list[Step]) -> Metrics:
         usage = metadata.get("usage_totals") or {}
+        total_input = int(usage.get("input") or 0)
+        total_output = int(usage.get("output") or 0)
+        total_cache_read = int(usage.get("cache_read") or 0)
+        total_cache_creation = int(usage.get("cache_write") or 0)
+        denominator = total_input + total_cache_read
+        cache_hit_rate = round(total_cache_read / denominator, 4) if denominator > 0 else None
+        cost = float(usage.get("cost_usd") or 0)
         return Metrics(
             total_steps=len(steps),
-            total_input_tokens=int(usage.get("input") or 0),
-            total_output_tokens=int(usage.get("output") or 0),
-            total_cache_read_tokens=int(usage.get("cache_read") or 0),
-            total_cache_write_tokens=int(usage.get("cache_write") or 0),
+            total_input_tokens=total_input,
+            total_output_tokens=total_output,
+            total_cache_read_tokens=total_cache_read,
+            total_cache_creation_tokens=total_cache_creation,
+            cache_hit_rate=cache_hit_rate,
+            estimated_cost_usd=round(cost, 6) if cost > 0 else None,
         )
 
     def _parse_steps(self, rows: list[dict[str, Any]], session_path: Path) -> list[Step]:

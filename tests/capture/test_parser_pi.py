@@ -62,6 +62,8 @@ def test_fixture_parse_emits_valid_trace_record() -> None:
     assert record.metrics.total_input_tokens == 220
     assert record.metrics.total_output_tokens == 50
     assert record.metrics.total_cache_read_tokens == 5
+    assert record.metrics.total_cache_creation_tokens == 0
+    assert record.metrics.cache_hit_rate == 0.0222
 
 
 def test_fixture_steps_pair_tool_calls_and_outputs() -> None:
@@ -196,3 +198,48 @@ def test_parser_normalizes_pi_tool_kinds_and_user_bash(tmp_path: Path) -> None:
     assert any(step.content == "! git status --short" for step in record.steps)
     bash_step = next(step for step in record.steps if step.content == "! git status --short")
     assert bash_step.observations[0].source_call_id.startswith("pi-user-bash:")
+
+
+def test_parser_maps_pi_cache_write_and_actual_cost(tmp_path: Path) -> None:
+    project = tmp_path / "repo"
+    project.mkdir()
+    session = tmp_path / "cost-session.jsonl"
+    rows = [
+        {"type": "session", "version": 3, "id": "pi-cost-session", "timestamp": "2026-06-02T10:00:00Z", "cwd": str(project)},
+        {"type": "message", "id": "u1", "parentId": None, "timestamp": "2026-06-02T10:00:01Z", "message": {"role": "user", "content": "Report cost."}},
+        {
+            "type": "message",
+            "id": "a1",
+            "parentId": "u1",
+            "timestamp": "2026-06-02T10:00:02Z",
+            "message": {
+                "role": "assistant",
+                "provider": "anthropic",
+                "model": "claude-sonnet-4",
+                "usage": {
+                    "input": 100,
+                    "output": 20,
+                    "cacheRead": 25,
+                    "cacheWrite": 10,
+                    "cost": {"input": 0.01, "output": 0.02, "cacheRead": 0.003, "cacheWrite": 0.004, "total": 0.037},
+                },
+                "content": [
+                    {"type": "text", "text": "I'll inspect the file."},
+                    {"type": "toolCall", "id": "call-read", "name": "Read", "arguments": {"file_path": "src/app.py"}},
+                ],
+            },
+        },
+        {"type": "message", "id": "t1", "parentId": "a1", "timestamp": "2026-06-02T10:00:03Z", "message": {"role": "toolResult", "toolCallId": "call-read", "toolName": "Read", "content": [{"type": "text", "text": "print('ok')"}], "isError": False}},
+        {"type": "message", "id": "a2", "parentId": "t1", "timestamp": "2026-06-02T10:00:04Z", "message": {"role": "assistant", "provider": "anthropic", "model": "claude-sonnet-4", "content": [{"type": "text", "text": "Done."}]}},
+    ]
+    _write_jsonl(session, rows)
+
+    record = PiSessionParser().parse_session(session)
+
+    assert record is not None
+    assert record.metrics.total_input_tokens == 100
+    assert record.metrics.total_output_tokens == 20
+    assert record.metrics.total_cache_read_tokens == 25
+    assert record.metrics.total_cache_creation_tokens == 10
+    assert record.metrics.cache_hit_rate == 0.2
+    assert record.metrics.estimated_cost_usd == 0.037

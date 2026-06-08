@@ -466,11 +466,14 @@ class CodexCliParser:
         input_tokens = int(usage.get("input_tokens") or 0)
         output_tokens = int(usage.get("output_tokens") or 0)
         cache_read_tokens = int(usage.get("cached_input_tokens") or 0)
+        denominator = input_tokens + cache_read_tokens
+        cache_hit_rate = round(cache_read_tokens / denominator, 4) if denominator > 0 else None
         return Metrics(
             total_steps=len(steps),
             total_input_tokens=input_tokens,
             total_output_tokens=output_tokens,
             total_cache_read_tokens=cache_read_tokens,
+            cache_hit_rate=cache_hit_rate,
         )
 
 

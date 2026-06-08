@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from opentraces_schema.models import TraceRecord
+from opentraces_schema.models import Metrics, TraceRecord
 
 from .config import Config
 from .trace_derived import derive_outcome_and_git_links_from_patches
@@ -129,6 +129,64 @@ def _classifier_flag_count(report) -> int:
     return 0
 
 
+_USAGE_METRIC_FIELDS = (
+    "total_input_tokens",
+    "total_output_tokens",
+    "total_cache_read_tokens",
+    "total_cache_creation_tokens",
+)
+
+
+def _has_usage_metrics(metrics: Metrics) -> bool:
+    return any(getattr(metrics, field, 0) > 0 for field in _USAGE_METRIC_FIELDS)
+
+
+def _fill_cache_hit_rate(metrics: Metrics) -> None:
+    if metrics.cache_hit_rate is not None:
+        return
+    denominator = metrics.total_input_tokens + metrics.total_cache_read_tokens
+    if denominator > 0:
+        metrics.cache_hit_rate = round(metrics.total_cache_read_tokens / denominator, 4)
+
+
+def _merge_parser_and_step_metrics(parser_metrics: Metrics, step_metrics: Metrics) -> Metrics:
+    """Merge harness-level aggregate metrics with step-derived metrics.
+
+    Claude can attach token usage to individual assistant steps, so step-derived
+    totals are the source of truth there. Codex CLI and Pi currently expose
+    reliable usage at the session/message layer but do not place it on Step,
+    so a blind recompute from Step zeros out the parser's aggregate totals.
+    """
+    parser_has_usage = _has_usage_metrics(parser_metrics)
+    step_has_usage = _has_usage_metrics(step_metrics)
+
+    if step_has_usage:
+        merged = step_metrics.model_copy(deep=True)
+    elif parser_has_usage:
+        merged = parser_metrics.model_copy(deep=True)
+        merged.total_steps = step_metrics.total_steps or parser_metrics.total_steps
+    else:
+        merged = step_metrics.model_copy(deep=True)
+        merged.total_steps = step_metrics.total_steps or parser_metrics.total_steps
+
+    # Parser-level duration/cost often comes from the runtime's final accounting
+    # event, while step-derived duration/cost can only be reconstructed.
+    if parser_metrics.total_duration_s is not None:
+        merged.total_duration_s = parser_metrics.total_duration_s
+    elif merged.total_duration_s is None:
+        merged.total_duration_s = step_metrics.total_duration_s
+
+    if parser_metrics.estimated_cost_usd is not None:
+        merged.estimated_cost_usd = parser_metrics.estimated_cost_usd
+    elif merged.estimated_cost_usd is None:
+        merged.estimated_cost_usd = step_metrics.estimated_cost_usd
+
+    if merged.cache_hit_rate is None and parser_metrics.cache_hit_rate is not None:
+        merged.cache_hit_rate = parser_metrics.cache_hit_rate
+    _fill_cache_hit_rate(merged)
+    return merged
+
+
 def _run_privacy_pipeline(
     record: TraceRecord,
     cfg: Config,
@@ -209,7 +267,9 @@ def process_trace(
         merged = sorted(set(record.dependencies + fs_deps))
         record.dependencies = merged
 
-    record.metrics = compute_metrics(record.steps)
+    parser_metrics = record.metrics
+    step_metrics = compute_metrics(record.steps, model_fallback=record.agent.model)
+    record.metrics = _merge_parser_and_step_metrics(parser_metrics, step_metrics)
 
     # Plan 080 Resolution C: once patches[] has been populated (by the ingest
     # backfill from trail events, or by the post-commit hook on a re-process),
@@ -243,7 +303,7 @@ def process_imported_trace(
     _enrich_from_steps(record)
 
     if record.metrics.total_steps == 0 and record.metrics.total_input_tokens == 0:
-        record.metrics = compute_metrics(record.steps)
+        record.metrics = compute_metrics(record.steps, model_fallback=record.agent.model)
 
     # Plan 080 Resolution C: keep derived fields aligned with patches[].anchor
     # once any patch is anchored. Same conditional as ``process_trace``; see

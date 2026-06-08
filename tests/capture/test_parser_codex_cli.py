@@ -65,6 +65,8 @@ def test_fixture_parse_emits_valid_trace_record() -> None:
     assert record.task.description == "Add a small parser test for Codex CLI."
     assert record.metrics.total_input_tokens == 1000
     assert record.metrics.total_output_tokens == 120
+    assert record.metrics.total_cache_read_tokens == 200
+    assert record.metrics.cache_hit_rate == 0.1667
     assert record.environment.vcs.type == "git"
     assert record.environment.vcs.branch == "main"
 
